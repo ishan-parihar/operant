@@ -31,6 +31,7 @@ pub enum HostError {
 /// most-recent dump tree.
 pub struct HarnessHost {
     harness: Arc<Harness>,
+    max_active_providers: usize,
 }
 
 impl HarnessHost {
@@ -39,6 +40,7 @@ impl HarnessHost {
     pub fn new(options: crate::KernelOptions) -> Self {
         Self {
             harness: Arc::new(Harness::new(options)),
+            max_active_providers: 64,
         }
         // ponytail: Arc<Harness> + interior mutability keeps the host hand-off
         // uniform with downstream `Arc<HarnessHost>` sharing.
@@ -48,7 +50,16 @@ impl HarnessHost {
     /// operant-pk/operant-r16 dual-kernel migration uses this to share a
     /// single kernel across multiple holders).
     pub fn with_harness(harness: Arc<Harness>) -> Self {
-        Self { harness }
+        Self {
+            harness,
+            max_active_providers: 64,
+        }
+    }
+
+    /// C5 — cap on simultaneously active providers. Enforced in `mount_all`.
+    pub fn with_max_active_providers(mut self, max: usize) -> Self {
+        self.max_active_providers = max;
+        self
     }
 
     /// Read-only access to the underlying `Harness`.
@@ -59,6 +70,12 @@ impl HarnessHost {
     /// Register a seam sink. Must happen before providers that route
     /// installs through it are mounted.
     pub fn add_seam(&mut self, seam: Arc<dyn Seam>) {
+        // CONTRACT: add_seam is a pre-mount host setup call; sharing the Arc
+        // before registration is a programming error, not a runtime condition.
+        #[expect(
+            clippy::expect_used,
+            reason = "invariant: no shared Arc<Harness> clones exist at host setup"
+        )]
         Arc::get_mut(&mut self.harness)
             .expect("HarnessHost::add_seam requires exclusive ownership of the Arc<Harness>")
             .add_seam(seam);
@@ -88,6 +105,12 @@ impl HarnessHost {
             let provider = match builder.build_with(&Architecture {
                 rows: vec![row.clone()],
             }) {
+                // CONTRACT: `!ps.is_empty()` and one-element Architecture rows guarantee
+                // `pop()` returns Some.
+                #[expect(
+                    clippy::unwrap_used,
+                    reason = "guarded by !ps.is_empty() directly above"
+                )]
                 Ok(mut ps) if !ps.is_empty() => ps.pop().unwrap(),
                 Ok(_) => continue, // row produced no provider
                 Err(e) => return Err(e.into()),
@@ -103,6 +126,15 @@ impl HarnessHost {
     ) -> Result<Vec<String>, HostError> {
         let mut activated = Vec::new();
         for (provider, config) in providers {
+            // C5 — enforce max_active_providers before each mount.
+            if self.harness.dump().await.providers.len() >= self.max_active_providers {
+                return Err(crate::HarnessError::CompositionError(format!(
+                    "max_active_providers {} exceeded (provider {} rejected)",
+                    self.max_active_providers,
+                    provider.spec().id()
+                ))
+                .into());
+            }
             let id = provider.spec().id().to_string();
             match self.harness.mount_with_config(provider, config).await {
                 Ok(crate::MountReport::Mounted { activated: mut a }) => {

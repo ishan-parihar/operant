@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! G3: `BuilderWithFactories` dispatches `wasm` and `pool` source rows via
 //! host-registered factories. The kernel itself never knows how to build
 //! these rows — only that a factory was registered.
@@ -73,7 +74,10 @@ async fn factory_dispatches_wasm_row() {
     };
     let providers = b.build_with(&arch).expect("build_with wasm");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), ProviderSource::Wasm { path: None });
+    assert_eq!(
+        providers[0].spec().source(),
+        ProviderSource::Wasm { path: None }
+    );
     assert_eq!(providers[0].spec().id(), "wasm-row");
 }
 
@@ -87,7 +91,10 @@ async fn factory_dispatches_pool_row() {
     };
     let providers = b.build_with(&arch).expect("build_with pool");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), ProviderSource::Pool { name: None });
+    assert_eq!(
+        providers[0].spec().source(),
+        ProviderSource::Pool { name: None }
+    );
 }
 
 #[tokio::test]
@@ -101,7 +108,10 @@ async fn no_factory_falls_back_to_native_stub() {
     let providers = b.build_with(&arch).expect("build_with fallback");
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0].spec().id(), "fallback");
-    assert_eq!(providers[0].spec().source(), ProviderSource::Wasm { path: None });
+    assert_eq!(
+        providers[0].spec().source(),
+        ProviderSource::Wasm { path: None }
+    );
 }
 
 #[tokio::test]
@@ -143,7 +153,10 @@ pooled_sub_systems:
     };
     let providers = b.build_with(&arch).expect("build_with pool e2e");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), ProviderSource::Pool { name: None });
+    assert_eq!(
+        providers[0].spec().source(),
+        ProviderSource::Pool { name: None }
+    );
 }
 
 #[allow(dead_code)]

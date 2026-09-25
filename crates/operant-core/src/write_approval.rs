@@ -44,10 +44,7 @@ pub enum GateDecision {
     /// surface for skill_guard's hard blocks, not for staged approvals).
     Blocked { message: String },
     /// Write is staged for the user's approval.
-    Stage {
-        pending_id: String,
-        message: String,
-    },
+    Stage { pending_id: String, message: String },
 }
 
 /// Per-subsystem opt-in. Returns the current toggle (default `false`).
@@ -171,16 +168,26 @@ mod tests {
     // process and are not affected.
     use super::*;
     use crate::write_origin::{WriteOriginGuard, set_write_origin};
+    use std::sync::{Mutex, MutexGuard};
 
-    fn reset() {
+    /// Serializes the whole module: the globals (PENDING, ENABLED, origin slot)
+    /// are process-wide and tests run in parallel by default — one test's
+    /// `reset()` would wipe another's staged orders mid-assert (observed:
+    /// list_pending_orders_by_recency 0 vs 2 under parallelism). Every test
+    /// takes the lock via `reset()` and holds it for its duration.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset() -> MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_pending_for_tests();
         // Clear all enabled toggles.
         ENABLED.write().unwrap_or_else(|e| e.into_inner()).clear();
+        guard
     }
 
     #[test]
     fn interactive_origin_bypasses_gate() {
-        reset();
+        let _lock = reset();
         let _g = WriteOriginGuard::new("user");
         let d = gate("skills", "create skill foo");
         assert!(matches!(d, GateDecision::Allow));
@@ -189,7 +196,7 @@ mod tests {
 
     #[test]
     fn background_origin_and_disabled_subsystem_allows() {
-        reset();
+        let _lock = reset();
         let _g = WriteOriginGuard::new("background_review");
         let d = gate("skills", "create skill foo");
         assert!(matches!(d, GateDecision::Allow));
@@ -198,12 +205,15 @@ mod tests {
 
     #[test]
     fn background_origin_and_enabled_subsystem_stages() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         let _g = WriteOriginGuard::new("background_review");
         let d = gate("skills", "create skill foo");
         match d {
-            GateDecision::Stage { pending_id, message } => {
+            GateDecision::Stage {
+                pending_id,
+                message,
+            } => {
                 assert!(pending_id.starts_with("skills_"));
                 assert!(message.contains("staged for approval"));
                 assert_eq!(pending_count(), 1);
@@ -214,7 +224,7 @@ mod tests {
 
     #[test]
     fn gateway_origin_treated_as_background() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         let _g = WriteOriginGuard::new("gateway:telegram");
         let d = gate("skills", "create skill foo");
@@ -223,7 +233,7 @@ mod tests {
 
     #[test]
     fn cron_origin_treated_as_background() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         let _g = WriteOriginGuard::new("cron_job");
         let d = gate("skills", "create skill foo");
@@ -232,7 +242,7 @@ mod tests {
 
     #[test]
     fn list_pending_orders_by_recency() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         let _g = WriteOriginGuard::new("background_review");
         let _ = gate("skills", "first");
@@ -245,7 +255,7 @@ mod tests {
 
     #[test]
     fn discard_removes_by_id() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         let _g = WriteOriginGuard::new("background_review");
         let id = stage_write("skills", "background_review", "create skill bar");
@@ -253,12 +263,15 @@ mod tests {
         let removed = discard_pending(&id);
         assert!(removed.is_some());
         assert_eq!(pending_count(), 0);
-        assert!(discard_pending(&id).is_none(), "double-discard returns None");
+        assert!(
+            discard_pending(&id).is_none(),
+            "double-discard returns None"
+        );
     }
 
     #[test]
     fn get_pending_returns_clone() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         let _g = WriteOriginGuard::new("background_review");
         let id = stage_write("skills", "background_review", "create skill baz");
@@ -269,7 +282,7 @@ mod tests {
 
     #[test]
     fn empty_subsystem_allows_defensively() {
-        reset();
+        let _lock = reset();
         let _g = WriteOriginGuard::new("background_review");
         let d = gate("", "anything");
         assert!(matches!(d, GateDecision::Allow));
@@ -277,13 +290,13 @@ mod tests {
 
     #[test]
     fn write_approval_enabled_default_is_false() {
-        reset();
+        let _lock = reset();
         assert!(!write_approval_enabled("never_enabled"));
     }
 
     #[test]
     fn set_then_clear_round_trip() {
-        reset();
+        let _lock = reset();
         set_write_approval_enabled("skills", true);
         assert!(write_approval_enabled("skills"));
         set_write_approval_enabled("skills", false);
@@ -293,6 +306,8 @@ mod tests {
     #[test]
     fn set_write_origin_helper() {
         // Direct helper test — WriteOriginGuard is the public API.
+        // WRITE_ORIGIN is process-global, so serialize against the module.
+        let _lock = reset();
         set_write_origin("test_origin");
         assert_eq!(crate::write_origin::current_origin(), "test_origin");
         // The global state leaks across tests, so reset back to "user" to

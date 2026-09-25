@@ -26,6 +26,7 @@ pub mod provider;
 pub mod report;
 pub mod row;
 pub mod swap;
+pub mod wasm_provider;
 
 pub use claim::Claim;
 pub use composition::{
@@ -43,6 +44,7 @@ pub use pool::{
     load_and_compile as load_and_compile_pool,
 };
 pub use pool_provider::{PoolBundleProvider, PoolFamilyProvider};
+pub use wasm_provider::WasmProvider;
 pub use provider::{
     ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam, Source,
 };

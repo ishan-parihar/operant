@@ -8,7 +8,7 @@
 //! Rust is the single Harness, Python is its persistence seam.
 //!
 //! When the kernel is off (`global_runtime()==None`), `install` returns
-//! `MissingSeam` → PENDING, so lessons wait until the sidecar is available
+//! `SeamUnavailable` → PENDING, so lessons wait until the sidecar is available
 //! instead of being lost. This is the lazy deletion: no data loss on fallback.
 
 use async_trait::async_trait;
@@ -41,10 +41,10 @@ impl Seam for PersistenceSeam {
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError> {
         let rt = crate::tools::kernel::global_runtime()
             .cloned()
-            .ok_or_else(|| HarnessError::MissingSeam(self.kind.to_string()))?;
+            .ok_or_else(|| HarnessError::SeamUnavailable(self.kind.to_string()))?;
 
         if !rt.settings().enabled {
-            return Err(HarnessError::MissingSeam(self.kind.to_string()));
+            return Err(HarnessError::SeamUnavailable(self.kind.to_string()));
         }
 
         // Registration key is the entry title; config carries {content, scope, session_key?}.
@@ -82,13 +82,12 @@ impl Seam for PersistenceSeam {
             params["session_key"] = Value::String(sk);
         }
 
-        let result = rt
-            .request("harness_upsert", params)
-            .await
-            .map_err(|e| HarnessError::ActivationFailed {
+        let result = rt.request("harness_upsert", params).await.map_err(|e| {
+            HarnessError::ActivationFailed {
                 id: reg.provider_id.to_string(),
                 message: format!("persistence seam upsert failed: {e}"),
-            })?;
+            }
+        })?;
 
         let entry_id = result
             .get("id")
@@ -125,21 +124,33 @@ impl Seam for PersistenceSeam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use operant_harness::{
+        ActivateCx, KernelOptions, MountReport, Provider, ProviderSource, ProviderSpec,
+    };
     use std::sync::Arc;
-    use operant_harness::{ActivateCx, KernelOptions, Provider, ProviderSource, ProviderSpec};
 
     struct PromptProvider;
 
     impl ProviderSpec for PromptProvider {
-        fn id(&self) -> &str { "test-prompt" }
-        fn source(&self) -> ProviderSource { ProviderSource::ConfigRow }
-        fn provides(&self) -> &[operant_harness::Claim] { &[] }
-        fn requires(&self) -> &[operant_harness::Claim] { &[] }
+        fn id(&self) -> &str {
+            "test-prompt"
+        }
+        fn source(&self) -> ProviderSource {
+            ProviderSource::ConfigRow
+        }
+        fn provides(&self) -> &[operant_harness::Claim] {
+            &[]
+        }
+        fn requires(&self) -> &[operant_harness::Claim] {
+            &[]
+        }
     }
 
     #[async_trait]
     impl Provider for PromptProvider {
-        fn spec(&self) -> &dyn ProviderSpec { self }
+        fn spec(&self) -> &dyn ProviderSpec {
+            self
+        }
         async fn activate(&self, cx: &mut ActivateCx<'_>) -> Result<(), HarnessError> {
             cx.install("prompt", "test-title").await?;
             Ok(())
@@ -148,17 +159,21 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_seam_pends_when_kernel_off() {
-        // No global_runtime installed → MissingSeam → PENDING.
+        // No global_runtime installed → SeamUnavailable → PENDING.
         // This is the fallback path that keeps 016 dark-safe.
         let mut harness = operant_harness::Harness::new(KernelOptions { audit: false });
         harness.add_seam(Arc::new(PersistenceSeam::prompt()));
         harness.add_seam(Arc::new(PersistenceSeam::subagent()));
-        let err = harness
+        let report = harness
             .mount(Arc::new(PromptProvider) as Arc<dyn Provider>)
             .await
-            .unwrap_err();
-        assert!(matches!(err, HarnessError::MissingSeam(_)));
-        // The entry stays Pending, not Failed — will activate when seam appears.
+            .unwrap();
+        // Seam registered but runtime off ⇒ mount defers, it does not fail.
+        assert!(
+            matches!(report, MountReport::Pending { .. }),
+            "got {report:?}"
+        );
+        // The entry stays Pending, not Failed — will activate when the kernel appears.
         assert_eq!(
             harness.state_of("test-prompt").await,
             Some(operant_harness::ProviderState::Pending)

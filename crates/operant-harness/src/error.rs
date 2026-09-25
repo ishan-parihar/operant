@@ -17,6 +17,13 @@ pub enum HarnessError {
     #[error("no seam named `{0}` is registered with the kernel")]
     MissingSeam(String),
 
+    /// The seam IS registered but cannot service installs right now (e.g. the
+    /// backing runtime is off). Unlike [`HarnessError::MissingSeam`] this is
+    /// seam-originated provenance, so the kernel stores the entry as Pending
+    /// unconditionally instead of applying the genuine-missing heuristic.
+    #[error("seam `{0}` is registered but not currently serviceable")]
+    SeamUnavailable(String),
+
     #[error("activation of provider `{id}` failed: {message}")]
     ActivationFailed { id: String, message: String },
 

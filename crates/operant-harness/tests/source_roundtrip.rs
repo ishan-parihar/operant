@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! G11 — `ProviderSource` payload round-trip.
 //!
 //! A `Wasm` row's `path` and a `Pool` row's `name` must survive the
@@ -38,7 +39,10 @@ impl Provider for PathProvider {
     fn spec(&self) -> &dyn ProviderSpec {
         self
     }
-    async fn activate(&self, _cx: &mut ActivateCx<'_>) -> Result<(), operant_harness::HarnessError> {
+    async fn activate(
+        &self,
+        _cx: &mut ActivateCx<'_>,
+    ) -> Result<(), operant_harness::HarnessError> {
         Ok(())
     }
 }
@@ -53,10 +57,7 @@ async fn wasm_path_roundtrips_through_dump() {
             let source = ProviderSource::Wasm {
                 path: Some(path.clone()),
             };
-            Ok(Arc::new(PathProvider {
-                id: row.id,
-                source,
-            }) as Arc<dyn Provider>)
+            Ok(Arc::new(PathProvider { id: row.id, source }) as Arc<dyn Provider>)
         }),
     );
 
@@ -71,7 +72,10 @@ async fn wasm_path_roundtrips_through_dump() {
     };
     let providers = b.build_with(&arch).expect("build_with");
     let harness = Harness::new(KernelOptions { audit: false });
-    harness.mount(providers.into_iter().next().unwrap()).await.unwrap();
+    harness
+        .mount(providers.into_iter().next().unwrap())
+        .await
+        .unwrap();
 
     let tree = harness.dump().await;
     let row = &tree.providers[0];
@@ -112,7 +116,10 @@ async fn pool_name_roundtrips_through_dump() {
     };
     let providers = b.build_with(&arch).expect("build_with");
     let harness = Harness::new(KernelOptions { audit: false });
-    harness.mount(providers.into_iter().next().unwrap()).await.unwrap();
+    harness
+        .mount(providers.into_iter().next().unwrap())
+        .await
+        .unwrap();
 
     let tree = harness.dump().await;
     let row = &tree.providers[0];

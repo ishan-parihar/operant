@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! G1: host boot — `HarnessHost::boot(Architecture)` mounts every provider
 //! the `Builder` produces and returns the activated id list.
 

@@ -963,19 +963,25 @@ Workspace gate: clippy -D warnings green, core tests 1735 passing, gateway tests
 `cargo build.rustflags` never reach rustdoc, so the `approval.rs` doctest linked `-lsonic` with no search path. build.rs now emits `cargo:rustc-link-search=native=<payload>` (repo-local `local/lib`, gitignored, or `$OPERANT_NATIVE_LIB_DIR`), which covers rustc AND rustdoc. `.cargo/config.toml` carries no rustflags.
 - **Verify**: `cargo test -p operant-core --doc` green (was 0/1 link failure).
 
-### R39-3 — persistence seam dark-safe test fails at HEAD (OPEN — blocks deployment)
-`persistence_seam::tests::persistence_seam_pends_when_kernel_off` (persistence_seam.rs:160) asserts `mount` returns `MissingSeam` and entry stays `Pending`. At HEAD, `activate_locked` wraps every install error as `ActivationFailed` + state `Failed`, so the dark-safe "lessons wait, never lost" contract (file header lines 10–12) is unimplemented. The in-flight C6 WIP (`harness.rs:250,289`) adds a MissingSeam→Pending rescue but its guard (`!self.seams.contains_key(seam)`) cannot fire here: the `prompt` seam IS registered, only the kernel runtime is off. Needs a distinct inactive-seam error or MissingSeam provenance, not a textual heuristic.
-- **Status**: OPEN — part of user's 018 WIP; not fixed by the audit.
+### R39-3 — persistence seam dark-safe test fails at HEAD (FIXED)
+`persistence_seam::tests::persistence_seam_pends_when_kernel_off` (persistence_seam.rs:160) asserted `mount` returns `MissingSeam` and entry stays `Pending`, but `activate_locked` wrapped every install error as `ActivationFailed` + `Failed` — the dark-safe "lessons wait, never lost" contract (file header) was unimplemented.
+- **Fix**: seam-originated provenance — new `HarnessError::SeamUnavailable(String)` variant; `PersistenceSeam::install` returns it when the kernel runtime is absent or disabled; the harness maps it unconditionally to Pending (no textual heuristic) in `activate_locked`, `mount_locked` (→ `MountReport::Pending` with a `seam/<name>` claim) and `rescan_pending_locked` (kept pending, still rescuable). Landed with the user's C6 machinery (missing-seam heuristic stays for the never-registered case).
+- **Verify**: `cargo test -p operant-core --lib` 1789 passed / 0 failed (parallel); harness kernel suite green (29 tests).
 
-### R39-4 — write_approval recency test is order-dependent (OPEN — flake)
-`write_approval::tests::list_pending_orders_by_recency` (write_approval.rs:242) passes in isolation (`--test-threads=1`), fails in the parallel full-suite run (0 vs 2 pending orders). Shared global state in the write-approval module leaks between tests despite `reset()`; needs per-test isolation or a serial lock.
-- **Status**: OPEN — flake, not a functional bug.
+### R39-4 — write_approval recency test failed in parallel suite (FIXED, residual noted)
+`write_approval::tests::list_pending_orders_by_recency` failed only under parallel execution (`left: 0, right: 2` — another test's `reset()` wiped the global `PENDING` store mid-assert); passed with `--test-threads=1` (1788/1 serial).
+- **Fix**: module-level `TEST_LOCK: Mutex<()>` acquired in `reset()` (first call of every test) and held for each test's duration; `set_write_origin_helper` also takes the lock since it mutates the process-global `WRITE_ORIGIN`. The module's own "must run serially" contract is now enforced in-code instead of relying on runner flags.
+- **Verify**: `cargo test -p operant-core --lib -- write_approval` 12/0 across 5 consecutive parallel runs; full lib suite 1789/0 parallel.
+- **Residual (not blocking)**: `WRITE_ORIGIN` (`write_origin.rs:27`) is process-global and `write_origin.rs`'s own test module runs outside this lock — cross-module origin races remain possible in principle; the observed PENDING/ENABLED failure mode is closed.
 
-Deployment verdict this round: NOT DEPLOYABLE until R39-3 (and ideally R39-4) close — `cargo test --workspace --no-fail-fast` = operant-core lib 1787 passed / 2 failed; every other crate green.
+### R39-6 — `--all-features` clippy has ~46 unannotated unwrap/expect sites (OPEN — non-blocking, pre-existing debt)
+`scripts/clippy-warning-gate.sh` runs the workspace clippy with `-D clippy::unwrap_used -D clippy::expect_used`; on default features the tree is green, but with `--all-features` the gate reports 45 errors in `operant-core` (lib) and 1 in `operant-memory` (lib) — feature-gated code paths nobody has annotated yet. The allowlist (`.ci/clippy-allowlist.txt`) holds only 4 entries and does not cover this debt. This predates the R39 audit (the earlier HEAD gate run failed fast on operant-harness, masking the deeper debt).
+- **Status**: OPEN — needs a dedicated `expect-annotate.py` sweep across feature-gated crates; not a regression from this audit.
 
-### R39-5 — clippy gate red at HEAD: 2 unwrap/expect violations in committed host.rs (OPEN — blocks deployment)
-Reproduced on a clean detached checkout of HEAD (7debff11): `scripts/clippy-warning-gate.sh` fails with `could not compile operant-harness (lib)`:
-- `crates/operant-harness/src/host.rs:73` — `expect()` on `Option` ("HarnessHost::add_seam requires exclusive ownership")
-- `crates/operant-harness/src/host.rs:102` — `unwrap()` on `Option` (`ps.pop().unwrap()` after an `!ps.is_empty()` guard)
+Deployment verdict this round: operant-core lib **1789 passed / 0 failed** (parallel), harness kernel suite green, doctests green, harness clippy gate green on default features. Remaining before "deployable": R39-6 (`--all-features` clippy debt), plus landing the rest of the 018 CLI-side WIP (main.rs / cmd_architecture.rs / cmd_status.rs / harness_agent_integration.rs — uncommitted at time of audit).
 
-Both sites look like justified invariants (exclusive-ownership precondition; guarded pop) and per the gate protocol should carry `#[expect(clippy::unwrap_used/expect_used, reason = ...)]` escapes via `scripts/expect-annotate.py`. NOT annotated in the commit that introduced them (`42c5725a` G6 pool.bundle adapter). Deferred until the in-flight 018 WIP on `host.rs` lands — annotating the user's dirty working copy now would collide with their edits.
+### R39-5 — clippy gate red: 2 unwrap/expect violations in committed host.rs (FIXED on default features)
+- `crates/operant-harness/src/host.rs:73` — `expect()` ("HarnessHost::add_seam requires exclusive ownership") → annotated `#[expect(clippy::expect_used, reason = "invariant: no shared Arc<Harness> clones exist at host setup")]`
+- `crates/operant-harness/src/host.rs:102` — `unwrap()` (`ps.pop().unwrap()`) → annotated `#[expect(clippy::unwrap_used, reason = "guarded by !ps.is_empty() directly above")]`
+- Four harness test files (`builder_factories.rs`, `host_boot.rs`, `soak.rs`, `source_roundtrip.rs`) were missing the standard `#![allow(clippy::unwrap_used, clippy::expect_used)]` test-target header.
+- **Verify**: `cargo clippy -p operant-harness --all-targets -- -D clippy::unwrap_used -D clippy::expect_used` green (0 errors).

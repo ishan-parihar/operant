@@ -524,26 +524,43 @@ async fn t11_fair_pending_rescue() {
     );
 }
 
-// ── T12: missing seam surfaces as activation failure ───────────────────
-
+// ── T12: missing seam surfaces as Pending (late-bindable) ───────────────────
+// C6 — genuine missing seam (host capability not yet wired) is Pending, not Failed,
+// so rescan can rescue when the seam appears.
 #[tokio::test]
 async fn t12_missing_seam_contained() {
     let log = Log::default();
     let h = harness_with(&log, &[]); // no seams registered
-    let err = h
+    let report = h
         .mount(
             FakeProvider::new("lonely", vec![Claim::tool("t")])
                 .installs(&[("tool", "t")])
                 .arc(),
         )
         .await
-        .unwrap_err();
-    assert!(matches!(err, HarnessError::ActivationFailed { .. }));
+        .unwrap();
+    let MountReport::Pending { missing } = report else {
+        panic!("expected pending for missing seam, got mounted/err");
+    };
+    assert!(missing.iter().any(|c| c.seam == "seam" && c.key == "tool"));
     assert_eq!(
         h.state_of("lonely").await,
-        Some(operant_harness::ProviderState::Failed)
+        Some(operant_harness::ProviderState::Pending)
     );
     assert!(log.snapshot().is_empty());
+    // Rescue: adding the seam and mounting a dummy triggers rescan.
+    // Direct seam addition is via &mut Harness, so we test via a new harness
+    // that has the seam and mounting the same provider succeeds.
+    let mut h2 = harness_with(&log, &["tool"]);
+    let report = h2
+        .mount(
+            FakeProvider::new("lonely2", vec![Claim::tool("t")])
+                .installs(&[("tool", "t")])
+                .arc(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(report, MountReport::Mounted { .. }));
 }
 
 // ── T13: replace drops a claim ⇒ dependents cascade AFTER commit ──────

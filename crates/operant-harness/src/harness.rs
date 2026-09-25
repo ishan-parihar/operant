@@ -136,10 +136,7 @@ impl Harness {
     /// G8 — attach a metrics handle. When set, every lifecycle event
     /// increments the appropriate counter. Returns a clone so the
     /// host can read snapshots from its own task.
-    pub fn with_metrics(
-        mut self,
-        metrics: std::sync::Arc<crate::metrics::HarnessMetrics>,
-    ) -> Self {
+    pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::HarnessMetrics>) -> Self {
         self.metrics = Some(metrics);
         self
     }
@@ -186,7 +183,8 @@ impl Harness {
             Ok(r) => r,
             Err(e) => {
                 if let Some(m) = &self.metrics {
-                    m.mount_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    m.mount_failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 return Err(e);
             }
@@ -201,12 +199,12 @@ impl Harness {
         };
         if let Some(m) = &self.metrics {
             match &final_report {
-                MountReport::Mounted { .. } => {
-                    m.mount_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                }
-                MountReport::Pending { .. } => {
-                    m.mount_pending.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                }
+                MountReport::Mounted { .. } => m
+                    .mount_success
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                MountReport::Pending { .. } => m
+                    .mount_pending
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             };
         }
         Ok(final_report)
@@ -240,15 +238,35 @@ impl Harness {
             return Err(conflict);
         }
 
-        self.activate_locked(inner, provider, config, 1).await?;
-        self.audit(&id, "active");
-        Ok(MountReport::Mounted {
-            activated: vec![id],
-        })
+        match self.activate_locked(inner, provider, config, 1).await {
+            Ok(()) => {
+                self.audit(&id, "active");
+                Ok(MountReport::Mounted {
+                    activated: vec![id],
+                })
+            }
+            Err(HarnessError::MissingSeam(seam)) => {
+                // C6 — missing seam is pending, not failed; rescue on next seam add or mount.
+                // activate_locked already inserted as Pending; we must register in pending_order.
+                inner.pending_order.push(id.clone());
+                let missing = vec![Claim::new("seam", seam.clone())];
+                Ok(MountReport::Pending { missing })
+            }
+            Err(HarnessError::SeamUnavailable(seam)) => {
+                // C6 — seam-originated unavailability (e.g. backing runtime off) is
+                // also pending; provenance is explicit, no heuristic needed.
+                inner.pending_order.push(id.clone());
+                let missing = vec![Claim::new("seam", seam.clone())];
+                Ok(MountReport::Pending { missing })
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Run activation; store claims + effects on success, record Failed
     /// (after containing partial effects) on error.
+    /// C6 — `MissingSeam` is recorded as `Pending` (not `Failed`) so late
+    /// binding can rescue it when the seam appears.
     async fn activate_locked(
         &self,
         inner: &mut Inner,
@@ -263,11 +281,53 @@ impl Harness {
         {
             let mut cx = ActivateCx::new(&id, &config, &self.seams, &mut effects);
             if let Err(err) = provider.activate(&mut cx).await {
-                // Contain partial effects; leave a Failed marker for dump().
+                // Contain partial effects.
                 let count = effects.len() as u64;
                 unwind_lifo(effects).await;
                 if let Some(m) = &self.metrics {
-                    m.unwind_invocations.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                    m.unwind_invocations
+                        .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                }
+                // C6: seam-originated unavailability is ALWAYS late-bindable — the
+                // seam itself declared "not serviceable right now", so no textual
+                // heuristic applies. Genuine missing seam (host capability not yet
+                // wired) is late-bindable only when the name is truly unregistered;
+                // scripted install failures that happen to use MissingSeam (e.g.
+                // "scripted-failure:tool/b") are still hard failures.
+                if let HarnessError::SeamUnavailable(seam) = &err {
+                    inner.providers.insert(
+                        id.clone(),
+                        Inner::make_entry(
+                            provider,
+                            ProviderState::Pending,
+                            generation,
+                            seq,
+                            config,
+                            Vec::new(),
+                        ),
+                    );
+                    self.audit(&id, &format!("pending (seam {seam} unavailable)"));
+                    return Err(HarnessError::SeamUnavailable(seam.clone()));
+                }
+                if let HarnessError::MissingSeam(seam) = &err {
+                    let is_genuine_missing = !self.seams.contains_key(seam)
+                        && !seam.contains('/')
+                        && !seam.contains(':');
+                    if is_genuine_missing {
+                        inner.providers.insert(
+                            id.clone(),
+                            Inner::make_entry(
+                                provider,
+                                ProviderState::Pending,
+                                generation,
+                                seq,
+                                config,
+                                Vec::new(),
+                            ),
+                        );
+                        self.audit(&id, &format!("pending (missing seam {seam})"));
+                        return Err(HarnessError::MissingSeam(seam.clone()));
+                    }
                 }
                 inner.providers.insert(
                     id.clone(),
@@ -327,13 +387,25 @@ impl Harness {
             if missing.is_empty() && conflict.is_none() {
                 // Remove the parked entry; activate_locked re-inserts it live.
                 inner.providers.remove(&pid);
-                if self
+                match self
                     .activate_locked(inner, provider, config, generation)
                     .await
-                    .is_ok()
                 {
-                    self.audit(&pid, "active (late-bound)");
-                    activated.push(pid);
+                    Ok(()) => {
+                        self.audit(&pid, "active (late-bound)");
+                        activated.push(pid.clone());
+                    }
+                    Err(HarnessError::MissingSeam(_)) => {
+                        // C6 — seam still missing, keep pending for next rescan.
+                        still_pending.push(pid);
+                    }
+                    Err(HarnessError::SeamUnavailable(_)) => {
+                        // C6 — seam still not serviceable (runtime off), keep pending.
+                        still_pending.push(pid);
+                    }
+                    Err(_) => {
+                        // Failed — leave as Failed (not pending), not in pending_order.
+                    }
                 }
             } else {
                 still_pending.push(pid);
@@ -352,7 +424,8 @@ impl Harness {
     #[tracing::instrument(level = "info", skip(self), fields(id = %id))]
     pub async fn unmount(&self, id: &str) -> Result<Vec<String>, HarnessError> {
         if let Some(m) = &self.metrics {
-            m.unmount_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            m.unmount_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         let mut inner = self.inner.write().await;
         if !inner.providers.contains_key(id) {
@@ -409,7 +482,8 @@ impl Harness {
                 let count = entry.effects.len() as u64;
                 unwind_lifo(std::mem::take(&mut entry.effects)).await;
                 if let Some(m) = &self.metrics {
-                    m.unwind_invocations.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+                    m.unwind_invocations
+                        .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
                 }
             } else {
                 self.audit(&eid, "dropped");
@@ -436,7 +510,8 @@ impl Harness {
 
         let Some(old_entry) = inner.providers.get(&target) else {
             if let Some(m) = &metrics {
-                m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                m.replace_failed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             return Err(HarnessError::NotFound(target));
         };
@@ -449,7 +524,8 @@ impl Harness {
             let report = self.mount_locked(&mut inner, next, config).await?;
             let rescued = self.rescan_pending_locked(&mut inner).await;
             if let Some(m) = &metrics {
-                m.replace_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                m.replace_success
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             return Ok(match report {
                 MountReport::Mounted { mut activated } => {
@@ -469,7 +545,8 @@ impl Harness {
             };
             if !covered_by_next && !owner_ok {
                 if let Some(m) = &metrics {
-                    m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    m.replace_failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 return Err(HarnessError::ReplaceBreaksRequirement {
                     id: target.clone(),
@@ -482,7 +559,8 @@ impl Harness {
             inner.first_claim_conflict(next.spec().provides(), Some(target.as_str()))
         {
             if let Some(m) = &metrics {
-                m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                m.replace_failed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             return Err(conflict);
         }
@@ -495,7 +573,8 @@ impl Harness {
             Ok(staged) => staged,
             Err(message) => {
                 if let Some(m) = &metrics {
-                    m.replace_failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    m.replace_failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 return Err(HarnessError::ActivationFailed {
                     id: target,
@@ -512,7 +591,8 @@ impl Harness {
         let old_effects_len = old_entry.effects.len() as u64;
         unwind_lifo(std::mem::take(&mut old_entry.effects)).await;
         if let Some(m) = &metrics {
-            m.unwind_invocations.fetch_add(old_effects_len, std::sync::atomic::Ordering::Relaxed);
+            m.unwind_invocations
+                .fetch_add(old_effects_len, std::sync::atomic::Ordering::Relaxed);
         }
         let old_provides = old_entry.provider.spec().provides().to_vec();
         drop(old_entry);
@@ -560,7 +640,8 @@ impl Harness {
 
         let rescued = self.rescan_pending_locked(&mut inner).await;
         if let Some(m) = &metrics {
-            m.replace_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            m.replace_success
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(if rescued.is_empty() {
             target
