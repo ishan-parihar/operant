@@ -1,2 +1,6 @@
+# Native library search path for locally provisioned payloads (e.g. libsonic
+# for operant-tts). NOT tracked in this repo: provision the payload locally
+# (see local/), or set this path on each machine. An absent directory is
+# harmless unless a crate actually links against something inside it.
 [build]
-rustflags = ["-L", "native=/home/ishanp/Documents/github/my-projects/agentic-harness/operant/local/lib"]
+rustflags = ["-L", "native=local/lib"]
