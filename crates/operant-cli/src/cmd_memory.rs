@@ -8,6 +8,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
+use operant_core::database::Database;
 use operant_core::memory::{MemoryBlock, MemoryManager};
 use operant_core::platform::operant_home;
 
@@ -80,7 +81,7 @@ pub enum MemorySubcommand {
 }
 
 /// Dispatch a memory subcommand.
-pub async fn handle_memory_command(_config: &AppConfig, cmd: MemorySubcommand) -> Result<()> {
+pub async fn handle_memory_command(config: &AppConfig, cmd: MemorySubcommand) -> Result<()> {
     match cmd {
         MemorySubcommand::List => cmd_list().await,
         MemorySubcommand::Show { id } => cmd_show(&id).await,
@@ -93,7 +94,7 @@ pub async fn handle_memory_command(_config: &AppConfig, cmd: MemorySubcommand) -
         } => cmd_store(&key, &value, type_name, importance).await,
         MemorySubcommand::Get { id } => cmd_get(&id).await,
         MemorySubcommand::Delete { id } => cmd_delete(&id).await,
-        MemorySubcommand::Stats => cmd_stats().await,
+        MemorySubcommand::Stats => cmd_stats(config).await,
         MemorySubcommand::Profile => cmd_profile().await,
         MemorySubcommand::Import { source } => cmd_import(&source).await,
         MemorySubcommand::Export { output, format } => cmd_export(output, format).await,
@@ -296,13 +297,22 @@ async fn cmd_delete(id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_stats() -> Result<()> {
+async fn cmd_stats(config: &AppConfig) -> Result<()> {
     let mm = loaded_memory_manager().await?;
-    let sessions = mm.list_sessions().await;
     let all_memories = mm.search("").await;
 
+    // Session count comes from the canonical session store (database.db),
+    // not MemoryManager::sessions — that map is in-process only, populated
+    // during a live run and never persisted by save_to_disk, so a fresh CLI
+    // invocation would always report 0.
+    let db =
+        Database::init(config.database_path.clone()).context("Failed to open session database")?;
+    let session_count = db
+        .get_session_count()
+        .context("Failed to read session count")?;
+
     println!("Memory Statistics:");
-    println!("  Total sessions:      {}", sessions.len());
+    println!("  Total sessions:      {}", session_count);
     println!("  Total memory entries: {}", all_memories.len());
 
     let dir = operant_home();
