@@ -972,3 +972,10 @@ Workspace gate: clippy -D warnings green, core tests 1735 passing, gateway tests
 - **Status**: OPEN — flake, not a functional bug.
 
 Deployment verdict this round: NOT DEPLOYABLE until R39-3 (and ideally R39-4) close — `cargo test --workspace --no-fail-fast` = operant-core lib 1787 passed / 2 failed; every other crate green.
+
+### R39-5 — clippy gate red at HEAD: 2 unwrap/expect violations in committed host.rs (OPEN — blocks deployment)
+Reproduced on a clean detached checkout of HEAD (7debff11): `scripts/clippy-warning-gate.sh` fails with `could not compile operant-harness (lib)`:
+- `crates/operant-harness/src/host.rs:73` — `expect()` on `Option` ("HarnessHost::add_seam requires exclusive ownership")
+- `crates/operant-harness/src/host.rs:102` — `unwrap()` on `Option` (`ps.pop().unwrap()` after an `!ps.is_empty()` guard)
+
+Both sites look like justified invariants (exclusive-ownership precondition; guarded pop) and per the gate protocol should carry `#[expect(clippy::unwrap_used/expect_used, reason = ...)]` escapes via `scripts/expect-annotate.py`. NOT annotated in the commit that introduced them (`42c5725a` G6 pool.bundle adapter). Deferred until the in-flight 018 WIP on `host.rs` lands — annotating the user's dirty working copy now would collide with their edits.
