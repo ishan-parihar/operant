@@ -985,3 +985,14 @@ Deployment verdict this round: operant-core lib **1789 passed / 0 failed** (para
 - `crates/operant-harness/src/host.rs:102` — `unwrap()` (`ps.pop().unwrap()`) → annotated `#[expect(clippy::unwrap_used, reason = "guarded by !ps.is_empty() directly above")]`
 - Four harness test files (`builder_factories.rs`, `host_boot.rs`, `soak.rs`, `source_roundtrip.rs`) were missing the standard `#![allow(clippy::unwrap_used, clippy::expect_used)]` test-target header.
 - **Verify**: `cargo clippy -p operant-harness --all-targets -- -D clippy::unwrap_used -D clippy::expect_used` green (0 errors).
+
+### R39-7 — cron CLI and scheduler read different DBs: CLI-created jobs invisible to the runtime (FIXED)
+`cmd_cron.rs` opened the SHARED `database_path` (`~/.operant/database.db`, user_version=2, owned by the sessions migration family) while the runtime scheduler (`main.rs:974`) correctly used the dedicated `operant_cron.db`. Two user-facing failures: (a) `operant cron list` hard-failed on the shared-PRAGMA migration guard ("schema for cron is at version 2 but only 1 migrations are declared"); (b) any job created via the CLI was invisible to the scheduler — split-brain between CLI and runtime. Live data: 0 rows in the shared table, 6 real jobs in the dedicated file (all recovered by the fix).
+- **Fix**: `cron_db_path(config)` helper in `cmd_cron.rs` mirroring `main.rs` (`db_dir.join("operant_cron.db")`), all 11 `CronDb::init` call sites repointed.
+- **Verify**: `operant cron list` → 6 jobs, exit 0; release rebuilt + redeployed; `cargo check -p operant-cli` green.
+- **Design note (pre-existing, not fixed here)**: the migration runner keys on SQLite's file-wide `PRAGMA user_version`, so any second migration family pointed at the same file hits the same refusal — cron/kanban/sessions each need their own DB file (kanban already does).
+
+### R39-8 — AFT bridge accepted a dead PATH shim, shadowing the managed cache (FIXED)
+`aft_bridge.rs:121` (resolve step 2) accepted any `which("aft")` hit unverified. An orphaned mise shim (`~/.local/share/mise/shims/aft` — mise's registry has no `aft` tool, so the shim errored instantly) was accepted over the working managed cache (`~/.operant/aft/aft-v0.50.1/aft`, step 3), so EVERY `aft_*` tool call died with `failed to write to stdin: Broken pipe` while a healthy binary sat in the cache. A stale PATH entry defeated auto-provisioning entirely.
+- **Fix**: probe the PATH candidate once (`aft --version`) before accepting; on failure warn and fall through to cache/download. Orphan shim removed from the environment.
+- **Verify**: live tool turn through omp small-stack — `aft_bash` ran `echo tool-path-ok`, agent reported verbatim output `"tool-path-ok\n"`, exit 0.

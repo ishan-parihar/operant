@@ -117,9 +117,29 @@ pub async fn resolve_aft_binary() -> Result<PathBuf> {
         }
     }
 
-    // 2. On PATH
+    // 2. On PATH — but a PATH hit can be a dead shim (e.g. an orphaned mise
+    //    shim whose tool was never installed): it would be accepted here and
+    //    every spawn would die with a broken pipe. Probe it once before
+    //    accepting; on failure fall through to the managed cache (R39-8).
     if let Ok(path) = which::which("aft") {
-        return Ok(path);
+        let probe = path.clone();
+        let ran = tokio::task::spawn_blocking(move || {
+            std::process::Command::new(&probe)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+        })
+        .await;
+        let healthy = matches!(ran, Ok(Ok(out)) if out.status.success());
+        if healthy {
+            return Ok(path);
+        }
+        tracing::warn!(
+            path = %path.display(),
+            "aft on PATH is not runnable; falling back to managed cache"
+        );
     }
 
     // 4. Cached binary

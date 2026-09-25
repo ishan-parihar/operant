@@ -79,6 +79,18 @@ pub enum CronSubcommand {
     },
 }
 
+/// Cron DB path — MUST match `main.rs` (`db_dir.join("operant_cron.db")`).
+/// The runtime scheduler reads/writes this dedicated file; pointing the CLI at
+/// the shared `database_path` made CLI-created jobs invisible to the scheduler
+/// and tripped the shared-PRAGMA migration guard (R39-7).
+fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
+    config
+        .database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("operant_cron.db")
+}
+
 /// Dispatch a cron subcommand.
 pub async fn handle_cron_command(
     config: &AppConfig,
@@ -113,7 +125,7 @@ pub async fn handle_cron_command(
 }
 
 async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let jobs = db.list_jobs(true).context("Failed to list cron jobs")?;
 
     if json {
@@ -191,7 +203,7 @@ async fn cmd_create(
     command: &str,
     repeat: Option<i32>,
 ) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     // Normalize + validate the schedule up front: the cron crate only parses
     // 6-field expressions, so 5-field ("0 9 * * *") and interval ("every 6h")
     // forms are converted here. Invalid schedules fail at creation instead of
@@ -231,7 +243,7 @@ async fn cmd_create(
 }
 
 async fn cmd_get(config: &AppConfig, id: &str) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let job = db
         .get_job(id)
         .context("Failed to get cron job")?
@@ -271,7 +283,7 @@ async fn cmd_update(
     schedule: Option<String>,
     command: Option<String>,
 ) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
 
     db.get_job(id)
         .context("Failed to get cron job")?
@@ -318,7 +330,7 @@ async fn cmd_update(
 }
 
 async fn cmd_delete(config: &AppConfig, id: &str) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let deleted = db.delete_job(id).context("Failed to delete cron job")?;
 
     if deleted {
@@ -331,7 +343,7 @@ async fn cmd_delete(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_pause(config: &AppConfig, id: &str) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
 
     let job = db
         .get_job(id)
@@ -360,7 +372,7 @@ async fn cmd_pause(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
 
     let job = db
         .get_job(id)
@@ -389,7 +401,7 @@ async fn cmd_resume(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
 
     let job = db
         .get_job(id)
@@ -427,7 +439,7 @@ async fn cmd_run(config: &AppConfig, id: &str) -> Result<()> {
 }
 
 async fn cmd_status(config: &AppConfig) -> Result<()> {
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let all_jobs = db.list_jobs(true).context("Failed to list cron jobs")?;
 
     let total = all_jobs.len();
@@ -454,7 +466,7 @@ async fn cmd_tick(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     // Self-heal legacy schedules/next_run before checking due jobs.
     let healed = db
         .repair_schedules()
@@ -510,7 +522,7 @@ async fn cmd_blueprint(
     let schedule = operant_core::cronjobs::normalize_schedule(&schedule)
         .with_context(|| format!("invalid schedule '{schedule}'"))?;
 
-    let db = CronDb::init(config.database_path.clone()).context("Failed to open cron database")?;
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let id = db
         .create_job(operant_core::cronjobs::db::CreateJobParams {
             name: display_name.to_string(),
