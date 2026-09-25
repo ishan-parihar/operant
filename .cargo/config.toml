@@ -1,2 +1,2 @@
 [build]
-rustflags = ["-L", "native=/home/ishanp/Documents/github/my-projects/agentic-harness/operant-pk/local/lib"]
+rustflags = ["-L", "native=/home/ishanp/Documents/github/my-projects/agentic-harness/operant/local/lib"]

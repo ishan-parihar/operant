@@ -125,6 +125,7 @@ impl Seam for PersistenceSeam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use operant_harness::{ActivateCx, KernelOptions, Provider, ProviderSource, ProviderSpec};
 
     struct PromptProvider;
