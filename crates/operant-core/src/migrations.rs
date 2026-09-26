@@ -27,6 +27,24 @@
 //! Just the runner. The per-DB `MIGRATIONS` arrays live next to the
 //! DB they govern (e.g. `database.rs`, `cronjobs/db.rs`,
 //! `kanban/db.rs`); this module is the engine that consumes them.
+//!
+//! ## INVARIANT: one migration family per DB file
+//!
+//! `PRAGMA user_version` is **file-wide** in SQLite — there is no
+//! per-table or per-subsystem version. The runner therefore refuses
+//! to run when the file's version is already above the supplied
+//! family's length ("refusing to downgrade"). Consequence:
+//! **every subsystem that declares its own `MIGRATIONS` array MUST
+//! point at its own dedicated DB file.** Two families on one file
+//! hard-fail as soon as the other family bumps the shared version
+//! (observed: `cmd_cron.rs` opened the shared `database.db`, whose
+//! user_version=2 belongs to the sessions family, while cron
+//! declares 1 migration — every `operant cron` command died with
+//! "schema for cron is at version 2 but only 1 migrations are
+//! declared"; fixed in iter-330's R39-7 by `cron_db_path()`).
+//! Current file ownership: sessions → `~/.operant/database.db`,
+//! cron → `~/.operant/operant_cron.db` (via `cron_db_path(config)`),
+//! kanban → `~/.operant/operant_kanban.db`.
 
 use rusqlite::Connection;
 
