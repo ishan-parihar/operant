@@ -2010,6 +2010,10 @@ mod tests {
 
     #[test]
     fn record_usage_bridges_curator_tracker_on_create() {
+        // Serialize on the shared origin lock: this test sets the
+        // process-global WRITE_ORIGIN via the guard, and write_approval's
+        // tests assert on that same global in parallel runs.
+        let _origin_lock = crate::write_origin::origin_test_lock();
         let (_tmp, skills_dir) = setup_test_env();
         let tool = SkillManageTool::new(skills_dir.clone());
         // Simulate the background-review fork creating a skill.

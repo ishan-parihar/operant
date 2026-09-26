@@ -82,8 +82,10 @@ pub fn current_origin() -> String {
 /// `user` and in-process `assistant_tool` origins bypass the gate.
 pub fn is_background() -> bool {
     let origin = get_write_origin();
-    matches!(origin.as_str(), "background_review" | "gateway" | "cron" | "code_execution")
-        || origin.starts_with("gateway:")
+    matches!(
+        origin.as_str(),
+        "background_review" | "gateway" | "cron" | "code_execution"
+    ) || origin.starts_with("gateway:")
         || origin.starts_with("cron_")
 }
 
@@ -126,6 +128,18 @@ impl Drop for WriteOriginGuard {
 }
 
 #[cfg(test)]
+pub(crate) static ORIGIN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Test-only: take the cross-module lock that serializes every test
+/// touching the process-global `WRITE_ORIGIN` slot (write_approval,
+/// skills_tool, and this module's own tests). One owner for the rule —
+/// per-module test locks would let two tests race the same global.
+#[cfg(test)]
+pub(crate) fn origin_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    ORIGIN_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -134,6 +148,7 @@ mod tests {
     /// don't race on the global static.
     #[test]
     fn test_write_origin_roundtrip() {
+        let _lock = origin_test_lock();
         let before = get_write_origin();
 
         // ── set / reset ──
@@ -170,5 +185,36 @@ mod tests {
 
         reset_write_origin(outer);
         assert_eq!(get_write_origin(), before);
+    }
+
+    /// The cross-module test lock must actually serialize writers on the
+    /// global origin slot: two threads honoring `origin_test_lock()` and
+    /// doing set → assert → reset loops must never observe each other's
+    /// values. Mutation check (2026-09-27): removing one thread's lock
+    /// acquisition makes this fail within a few hundred iterations
+    /// ("b" observed while "a" was set); with both locks held it is green
+    /// across repeated runs.
+    #[test]
+    fn origin_test_lock_serializes_concurrent_writers() {
+        let a = std::thread::spawn(|| {
+            for _ in 0..2_000 {
+                let _lock = origin_test_lock();
+                let token = set_write_origin("thread_a");
+                std::thread::yield_now();
+                assert_eq!(get_write_origin(), "thread_a");
+                reset_write_origin(token);
+            }
+        });
+        let b = std::thread::spawn(|| {
+            for _ in 0..2_000 {
+                let _lock = origin_test_lock();
+                let token = set_write_origin("thread_b");
+                std::thread::yield_now();
+                assert_eq!(get_write_origin(), "thread_b");
+                reset_write_origin(token);
+            }
+        });
+        a.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+        b.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
     }
 }

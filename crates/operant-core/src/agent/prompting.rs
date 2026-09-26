@@ -274,7 +274,12 @@ impl OperantAgent {
             // This prevents the review agent from modifying protected
             // (bundled) or hub-installed skills. Matches hermes-agent's
             // _memory_write_origin = "background_review" pattern.
-            let _origin_token = crate::write_origin::set_write_origin("background_review");
+            //
+            // WriteOriginGuard (not a bare token): the guard's Drop resets
+            // the origin when this daemon task completes, so the global
+            // cannot stay poisoned as "background_review" for the rest
+            // of the process lifetime (R39-4 residual).
+            let _origin_guard = crate::write_origin::WriteOriginGuard::background_review();
             crate::tools::skills_tool::reset_review_read_marks();
 
             // ── Prompt cache parity (Phase 2) ─────────────────────

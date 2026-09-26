@@ -170,15 +170,16 @@ mod tests {
     use crate::write_origin::{WriteOriginGuard, set_write_origin};
     use std::sync::{Mutex, MutexGuard};
 
-    /// Serializes the whole module: the globals (PENDING, ENABLED, origin slot)
-    /// are process-wide and tests run in parallel by default — one test's
-    /// `reset()` would wipe another's staged orders mid-assert (observed:
-    /// list_pending_orders_by_recency 0 vs 2 under parallelism). Every test
-    /// takes the lock via `reset()` and holds it for its duration.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
+    /// Serializes every origin-touching test across modules: the globals
+    /// (PENDING, ENABLED, WRITE_ORIGIN) are process-wide and tests run in
+    /// parallel by default — one test's `reset()` would wipe another's
+    /// staged orders mid-assert (observed:
+    /// list_pending_orders_by_recency 0 vs 2 under parallelism). Every
+    /// test takes the lock via `reset()` and holds it for its duration.
+    /// The lock itself lives in `write_origin.rs` so other modules' tests
+    /// (e.g. skills_tool's curator-bridge test) serialize against these.
     fn reset() -> MutexGuard<'static, ()> {
-        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = crate::write_origin::origin_test_lock();
         clear_pending_for_tests();
         // Clear all enabled toggles.
         ENABLED.write().unwrap_or_else(|e| e.into_inner()).clear();
