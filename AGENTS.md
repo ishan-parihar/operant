@@ -120,7 +120,7 @@ gitignore is doing its job; leave them alone.
 
 ## Operant Project Context
 
-- Current release line: `0.1.4`
+- Current release line: `0.2.0`
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is
@@ -476,12 +476,14 @@ asked — the user has accepted them as documented gaps.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (38 subcommands — all have real handlers)
+### CLI (52 command variants — all have real handlers)
 run, chat, autonomous, tools, test, config, sessions, mcp, skills, model,
 completion, cron, kanban, gateway (16 sub-actions), checkpoints, memory,
 profile, auth/login/logout, version, doctor, status, dump, logs, backup,
 import, uninstall, update, insights, webhook, debug, plugins, curator,
-setup, acp, dashboard, trajectory
+setup, acp, dashboard, trajectory, architecture, channel, context, cookies,
+hardware, hooks, migrate, pause, peripheral, resume, service, sop,
+suggestions, tui
 
 ### Gateway (7 platform adapters — all have real code, platform registry)
 - Telegram: fully implemented (long-poll + Bot API)
@@ -556,6 +558,20 @@ setup, acp, dashboard, trajectory
 
 ## Iteration History (recent)
 
+- 2026-09-27: R39-9..R39-10 + R39-6 closed — memory stats reads the real
+  session count from database.db (iter-330); clippy gate green workspace-wide
+  under --all-features, 46 deny-sites annotated, allowlist refreshed, gate
+  script -D defect documented (iter-331); background review no longer poisons
+  WRITE_ORIGIN for process lifetime, one cross-module origin test lock,
+  mutation-proven regression test (iter-332); one-family-per-DB-file invariant
+  documented in migrations.rs (iter-333)
+- 2026-09-25/26: deployment-audit fixes R39-1..R39-8 (BUGS.md) — lib-test
+  compile, doctest link-search via build.rs, SeamUnavailable dark-safe seam,
+  write_approval test lock, clippy annotations, cron split-brain →
+  cron_db_path(), AFT dead-shim probe; live battery green against omp
+  small-stack endpoint; zeroclaw port survey delivered (uncommitted 018
+  CLI-side WIP lost to an unscoped checkout during iter-331 prep — recovery
+  exhausted, reconstructible from docs/audit/2026-09-02-r16-*.md + c8fc536f)
 - 2026-08-02/03: rust-best-practices plan + execution — clippy gate (4-entry
   baseline), 0 lib warnings (core+gateway), --all-targets clean, probe-rs
   vestige removed, anthropic Send fix, workspace fmt normalization (see
