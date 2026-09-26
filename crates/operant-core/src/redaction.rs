@@ -111,6 +111,10 @@ struct RedactPatterns {
     json_field: Regex,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 fn patterns() -> &'static RedactPatterns {
     static PATTERNS: OnceLock<RedactPatterns> = OnceLock::new();
     PATTERNS.get_or_init(|| {
@@ -254,6 +258,10 @@ fn patterns() -> &'static RedactPatterns {
 /// The needle set is a *superset* of every trigger the regexes can fire on
 /// (derived from each token-prefix's leading characters + the keyword list +
 /// structural markers), so a real secret is never skipped — a false positive
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 /// merely costs a regex pass, which is the pre-screen's safe direction.
 fn needs_redaction(input: &str) -> bool {
     const NEEDLES: [&str; 60] = [

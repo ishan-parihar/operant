@@ -36,6 +36,10 @@ impl MemoryProviderSeam {
     }
 
     /// The current selection (None when no provider is mounted).
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     pub fn current(&self) -> Option<Arc<dyn MemoryProvider>> {
         self.current.lock().expect("memory seam current").clone()
     }
@@ -53,6 +57,10 @@ impl Seam for MemoryProviderSeam {
         "memory.provider"
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: inner guard reuse is the intended recovery"
+    )]
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError> {
         let provider: Arc<dyn MemoryProvider> = reg
             .payload
@@ -101,6 +109,10 @@ impl std::fmt::Debug for ChannelAdapterSeam {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 impl ChannelAdapterSeam {
     /// Build from any `ChannelAdapterHost` (the real `Gateway` implements it).
     pub fn from_host<G>(gateway: Arc<PMutex<G>>) -> Self
@@ -180,6 +192,10 @@ impl GatewayCommandSeam {
     }
 
     /// Snapshot of dynamic commands installed via this seam.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: inner guard reuse is the intended recovery"
+    )]
     pub fn commands(&self) -> Vec<crate::plugins::PluginCommand> {
         self.commands
             .lock()
@@ -202,6 +218,11 @@ impl Seam for GatewayCommandSeam {
         "gateway.command"
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: guard-recovery is the intended seam rollback
+ semantic"
+    )]
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError> {
         let cmd: crate::plugins::PluginCommand = reg
             .payload

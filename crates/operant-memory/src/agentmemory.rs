@@ -100,6 +100,10 @@ impl AgentMemory {
     }
 
     /// Create a backend pointing at an explicit base URL (used by tests).
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     pub fn with_url(base_url: impl Into<String>, secret: Option<String>) -> Self {
         Self {
             client: reqwest::Client::builder()

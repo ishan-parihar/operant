@@ -20,6 +20,8 @@
 //! - D2 slash commands: `register_slash_commands` PUTs the command set to
 //!   Discord; the REST response must succeed.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::time::Duration;
 
 fn env(name: &str) -> Option<String> {

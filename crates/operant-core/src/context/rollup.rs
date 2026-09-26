@@ -40,6 +40,10 @@ impl RollupPeriod {
 
     /// (start, end) UTC-day boundaries for the period containing `anchor`,
     /// in unix millis. `end` is exclusive.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     pub fn window(self, anchor: NaiveDate) -> (i64, i64) {
         let start = self.period_start(anchor);
         let end = match self {

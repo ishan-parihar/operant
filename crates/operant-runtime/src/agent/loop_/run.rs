@@ -636,6 +636,10 @@ pub async fn run(
     } else {
         println!("🦀 Operant Interactive Mode");
         println!("Type /help for commands.\n");
+        #[expect(
+            clippy::expect_used,
+            reason = "startup invariant: register_cli_channel_fn is called before interactive entry"
+        )]
         let cli = CLI_CHANNEL_FN
             .get()
             .expect("CLI channel factory not registered — call register_cli_channel_fn at startup")(

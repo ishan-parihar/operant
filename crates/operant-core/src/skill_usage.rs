@@ -412,6 +412,10 @@ impl SkillUsageTracker {
     /// legacy `.usage.json` reader in `skills_tool::is_pinned`. A
     /// missing record returns `false` (the unpinned default) to
     /// match the previous semantics.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     pub fn is_pinned(&self, name: &str) -> bool {
         let inner = self
             .inner
@@ -480,6 +484,10 @@ impl SkillUsageTracker {
     /// Add `count` to a record's `patch_count` (creating the record
     /// if it doesn't exist), and bump `last_used`. The legacy
     /// `.usage.json` migration uses this to merge per-skill counts
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     /// into the curator store. (Plan 007)
     pub fn add_patch_count(&self, name: &str, count: u64) {
         let mut inner = self
@@ -976,11 +984,13 @@ mod tests {
         // Seed a curator record with a non-zero patch_count so we can
         // prove additive merge (not overwrite).
         let tracker = SkillUsageTracker::new(curator_path.clone());
-        tracker.with_exclusive_lock(|t| {
-            t.bump_patch("skill-a");
-            t.bump_patch("skill-a");
-            Ok(())
-        }).expect("seed");
+        tracker
+            .with_exclusive_lock(|t| {
+                t.bump_patch("skill-a");
+                t.bump_patch("skill-a");
+                Ok(())
+            })
+            .expect("seed");
         // After 2 bumps, skill-a.patch_count = 2.
 
         // Seed the legacy file: skill-a already at 2, legacy adds 3

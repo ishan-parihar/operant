@@ -53,6 +53,10 @@ where
     spawn_with(label.into(), fut);
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 fn spawn_with<F>(label: String, fut: F)
 where
     F: Future<Output = ()> + Send + 'static,
@@ -92,15 +96,18 @@ where
 
 /// Wait (up to `timeout`) for all daemons whose label matches `prefix` to
 /// finish. Intended for tests; never call from production paths. Returns
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 /// the number of daemons that completed within the window.
 pub async fn drain_for_label(prefix: &str, timeout: Duration) -> usize {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         let snapshot: Vec<(String, JoinHandle<()>)> = {
             let mut handles = HANDLES.lock().expect("daemon_pool HANDLES mutex poisoned");
-            let (matching, rest): (Vec<_>, Vec<_>) = handles
-                .drain(..)
-                .partition(|(label, _)| label == prefix);
+            let (matching, rest): (Vec<_>, Vec<_>) =
+                handles.drain(..).partition(|(label, _)| label == prefix);
             *handles = rest;
             matching
         };
@@ -141,6 +148,10 @@ impl ActiveGuard {
 }
 
 impl Drop for ActiveGuard {
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: inner guard reuse is the intended recovery"
+    )]
     fn drop(&mut self) {
         let mut active = ACTIVE.lock().expect("daemon_pool ACTIVE mutex poisoned");
         if let Some(n) = active.get_mut(&self.label) {
@@ -164,7 +175,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn active_count(label: &str) -> usize {
-        *ACTIVE.lock().expect("daemon_pool ACTIVE mutex poisoned").get(label).unwrap_or(&0)
+        *ACTIVE
+            .lock()
+            .expect("daemon_pool ACTIVE mutex poisoned")
+            .get(label)
+            .unwrap_or(&0)
     }
 
     #[tokio::test]
@@ -228,7 +243,13 @@ mod tests {
         for i in 0..(MAX_TRACKED + 1) {
             spawn(format!("evict-{i}"), async {});
         }
-        let remaining = HANDLES.lock().expect("daemon_pool HANDLES mutex poisoned").len();
-        assert!(remaining <= MAX_TRACKED, "cap must be honored, got {remaining}");
+        let remaining = HANDLES
+            .lock()
+            .expect("daemon_pool HANDLES mutex poisoned")
+            .len();
+        assert!(
+            remaining <= MAX_TRACKED,
+            "cap must be honored, got {remaining}"
+        );
     }
 }

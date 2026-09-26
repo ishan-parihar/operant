@@ -157,6 +157,10 @@ impl Drop for CdpBrowserSession {
 impl CdpBrowserSession {
     /// Spawn `obscura serve` on the shared (stealth) binary and wait for the
     /// CDP WebSocket URL on stdout.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     pub async fn start() -> Result<Self> {
         let binary = ObscuraProvider::ensure_binary().await?;
         let port = free_port();
@@ -595,6 +599,10 @@ pub async fn ensure_shared_page_session_id() -> Result<String> {
     Ok(page.session_id)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 /// Find an available TCP port on localhost.
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");

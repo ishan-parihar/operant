@@ -1331,6 +1331,10 @@ impl ContextEngine for LcmContextEngine {
 /// the token budget is exhausted. Returns (kept, compacted_count,
 /// compacted_tokens). The most recent message is always kept even if it
 /// alone exceeds the budget (never an empty tail).
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 fn split_for_lcm(messages: Vec<Message>, budget: usize) -> (Vec<Message>, usize, usize) {
     if messages.is_empty() {
         return (messages, 0, 0);

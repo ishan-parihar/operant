@@ -149,6 +149,10 @@ impl SessionSearchTool {
 
     /// Search sessions by query, deduped per session lineage, with the match
     /// window + bookends for the top hits.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned-lock / validation invariant — see site message"
+    )]
     fn search(&self, query: &str, role_filter: Option<&str>, limit: usize) -> ToolResult {
         debug!("Session search: query={}, limit={}", query, limit);
 

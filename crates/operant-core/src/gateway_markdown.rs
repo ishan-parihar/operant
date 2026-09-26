@@ -399,6 +399,10 @@ fn convert_markdown(text: &str) -> String {
 /// the whole message to the plain-text fallback (raw markdown). This is the
 /// last line of defense: if a converter edge case ever produces unbalanced
 /// tags, we bail to fully-escaped plain text instead of sending invalid HTML.
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 fn telegram_html_balanced(html: &str) -> bool {
     static TAG_RE: LazyLock<Regex> =
         LazyLock::new(|| rx(r"<(/)?([a-zA-Z][a-zA-Z0-9]*)(?:\s[^<>]*)?/?>"));

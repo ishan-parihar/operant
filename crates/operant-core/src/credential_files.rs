@@ -37,6 +37,10 @@ fn registry() -> &'static std::sync::RwLock<Vec<String>> {
 /// Returns an error message on rejection: absolute paths and `..` traversal
 /// are refused (a malicious skill must not be able to declare
 /// `../../.ssh/id_rsa` and then claim it as a "credential file").
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 pub fn register_credential_file(relative_path: &str) -> Result<(), String> {
     let trimmed = relative_path.trim();
     if trimmed.is_empty() {
@@ -62,6 +66,10 @@ pub fn register_credential_file(relative_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 /// List of registered credential files (for diagnostics / listing tools).
 pub fn registered_credential_files() -> Vec<String> {
     registry()

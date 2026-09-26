@@ -216,7 +216,10 @@ impl TelegramChannel {
         else {
             return;
         };
-        let mut cache = self.dm_topic_threads.lock().unwrap();
+        let mut cache = self
+            .dm_topic_threads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (chat, tid) in map {
             cache.insert(chat, tid);
         }
@@ -225,7 +228,11 @@ impl TelegramChannel {
     /// Persist the `chat_id -> thread_id` map to the state file.
     pub(crate) fn persist_dm_topic_state(&self) {
         let path = Self::dm_topic_state_path();
-        let map = self.dm_topic_threads.lock().unwrap().clone();
+        let map = self
+            .dm_topic_threads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -245,7 +252,12 @@ impl TelegramChannel {
         }
         let chat_id_int: i64 = chat_id.trim().parse().ok()?;
 
-        if let Some(&tid) = self.dm_topic_threads.lock().unwrap().get(chat_id) {
+        if let Some(&tid) = self
+            .dm_topic_threads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(chat_id)
+        {
             return Some(tid);
         }
 
@@ -294,7 +306,7 @@ impl TelegramChannel {
 
         self.dm_topic_threads
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(chat_id.to_string(), thread_id);
         self.persist_dm_topic_state();
         tracing::info!(

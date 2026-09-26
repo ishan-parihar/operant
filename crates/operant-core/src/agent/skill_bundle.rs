@@ -257,6 +257,10 @@ fn bundles_dir_mtime(dir: &Path) -> Option<SystemTime> {
 /// rescans. New bundles therefore appear without a process restart —
 /// unlike the previous `OnceLock` cache, which froze the scan for the
 /// lifetime of the process.
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 pub fn get_skill_bundles() -> Arc<HashMap<String, SkillBundle>> {
     let dir = bundles_dir();
     let current_mtime = bundles_dir_mtime(&dir);
@@ -279,6 +283,10 @@ pub fn get_skill_bundles() -> Arc<HashMap<String, SkillBundle>> {
 ///
 /// Returns the fresh map. Callers that mutate the bundles directory
 /// (e.g. a `/bundle` listing that wants to show just-added bundles)
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 /// can invoke this to bypass the mtime fast path.
 pub fn refresh_skill_bundles() -> Arc<HashMap<String, SkillBundle>> {
     let dir = bundles_dir();

@@ -174,7 +174,11 @@ pub async fn run_tool_call_loop(
             .map(|tool| tool.spec())
             .collect();
         if let Some(at) = activated_tools {
-            for spec in at.lock().unwrap().tool_specs() {
+            for spec in at
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .tool_specs()
+            {
                 if !excluded_tools.iter().any(|ex| ex == &spec.name) {
                     tool_specs.push(spec);
                 }

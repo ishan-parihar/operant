@@ -84,6 +84,10 @@ pub struct ContextReferenceResult {
 // `"`, `'`), optionally followed by a `:N-M` line range, or bare `\S+`.
 const REFERENCE_PATTERN: &str = r#"@(?:(?P<simple>diff|staged)\b|(?P<kind>file|folder|git|url):(?P<value>(?:`[^`\n]+`|"[^"\n]+"|'[^'\n]+')(?::\d+(?:-\d+)?)?|\S+))"#;
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "match arm guarantees last is Some when unwrap is reached"
+)]
 fn strip_trailing_punctuation(value: &str) -> String {
     let mut out = value
         .trim_end_matches([',', '.', ';', '!', '?'])
@@ -107,6 +111,10 @@ fn strip_trailing_punctuation(value: &str) -> String {
     out
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "len>=2 guard guarantees non-empty chars for first/last"
+)]
 fn strip_reference_wrappers(value: &str) -> String {
     if value.len() >= 2 {
         let first = value.chars().next().unwrap();
@@ -136,7 +144,9 @@ fn parse_file_reference_value(value: &str) -> (String, Option<usize>, Option<usi
         }
     } else {
         // Quoted: line range, if any, follows the closing quote.
-        let quote = value.chars().next().unwrap();
+        let Some(quote) = value.chars().next() else {
+            return (unquoted, None, None);
+        };
         let close_idx = value[1..].find(quote).map(|i| i + 1);
         match close_idx {
             Some(ci) => {
@@ -169,6 +179,10 @@ fn parse_file_reference_value(value: &str) -> (String, Option<usize>, Option<usi
 }
 
 /// Parse every `@…` reference in a message, in order.
+#[expect(
+    clippy::unwrap_used,
+    reason = "group 0 of a successful match is always present"
+)]
 pub fn parse_context_references(message: &str) -> Vec<ContextReference> {
     let mut refs = Vec::new();
     if message.is_empty() {

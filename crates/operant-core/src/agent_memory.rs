@@ -65,6 +65,10 @@ const SYNC_HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 /// `reqwest::blocking::Client` is cheap to clone (internally Arc-backed).
 static BLOCKING_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
 
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned-lock / validation invariant — see site message"
+)]
 fn shared_blocking_client() -> &'static reqwest::blocking::Client {
     BLOCKING_CLIENT.get_or_init(|| {
         // reqwest::blocking::Client::build() constructs an internal tokio
