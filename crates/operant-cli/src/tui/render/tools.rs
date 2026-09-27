@@ -84,7 +84,10 @@ pub(crate) fn render_tool_block_lines(
     let input_val: serde_json::Value =
         serde_json::from_str(&block.input_json).unwrap_or(serde_json::Value::Null);
     let normalized = block.name.to_ascii_lowercase();
-    let running = block.status == ToolStatus::Running;
+    // Queued = parsed but still waiting on a worker permit; it reads as
+    // in-flight (present-progressive titles) but renders muted, not shimmering.
+    let queued = block.status == ToolStatus::Queued;
+    let in_flight = block.status.is_pending();
     let mut summary = crate::messages::extract_tool_summary(&block.name, &input_val);
     let title = if normalized == "task" || normalized == "agent" {
         if let Some(description) = input_val
@@ -95,7 +98,7 @@ pub(crate) fn render_tool_block_lines(
         }
         crate::messages::subagent_title(&input_val)
     } else {
-        match (normalized.as_str(), running) {
+        match (normalized.as_str(), in_flight) {
             ("bash" | "powershell", true) => "Running command".to_string(),
             ("bash" | "powershell", false) => "Ran command".to_string(),
             ("read", true) => "Reading file".to_string(),
@@ -125,7 +128,22 @@ pub(crate) fn render_tool_block_lines(
         "   ~ ".to_string(),
         Style::default().fg(accent),
     )];
-    if running {
+    if queued {
+        // Distinct from Running: dim/gray, plus an explicit `queued` label so
+        // a tool waiting for a pool permit never reads as one already running.
+        header_spans.push(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ));
+        header_spans.push(Span::styled(
+            "  queued".to_string(),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM | Modifier::ITALIC),
+        ));
+    } else if in_flight {
         header_spans.extend(shimmer_spans(&title, frame_count));
     } else {
         header_spans.push(Span::styled(

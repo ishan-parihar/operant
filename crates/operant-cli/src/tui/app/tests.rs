@@ -200,6 +200,48 @@ fn test_tasks_slash_command_is_an_alias_for_agents() {
 }
 
 #[test]
+fn tasks_overlay_should_be_fully_removed() {
+    // The Ctrl+T tasks overlay was permanently empty: `tasks_overlay.tasks`
+    // was never populated and `TaskDisplay` was never constructed, and no
+    // reachable source existed to populate it within a sane diff. It was
+    // removed outright rather than left as a dead keybinding. This test is
+    // the runnable form of "grep -rn tasks_overlay" over every file that
+    // used to reference it — a reintroduction fails here.
+    let sources: [(&str, &str); 9] = [
+        ("tui/mod.rs", include_str!("../mod.rs")),
+        ("tui/app/mod.rs", include_str!("mod.rs")),
+        ("tui/app/init.rs", include_str!("init.rs")),
+        ("tui/app/commands.rs", include_str!("commands.rs")),
+        ("tui/app/key_handling.rs", include_str!("key_handling.rs")),
+        (
+            "tui/app/dialog_routing.rs",
+            include_str!("dialog_routing.rs"),
+        ),
+        ("tui/app/enums.rs", include_str!("enums.rs")),
+        ("tui/render/mod.rs", include_str!("../render/mod.rs")),
+        (
+            "tui/adapter_types/mod.rs",
+            include_str!("../adapter_types/mod.rs"),
+        ),
+    ];
+
+    for (path, source) in sources {
+        assert!(
+            !source.contains("tasks_overlay"),
+            "{path} still references the removed tasks overlay"
+        );
+        assert!(
+            !source.contains("TaskDisplay"),
+            "{path} still references the removed TaskDisplay type"
+        );
+        assert!(
+            !source.contains("render_tasks_overlay"),
+            "{path} still references the removed render_tasks_overlay"
+        );
+    }
+}
+
+#[test]
 fn test_fast_slash_command_toggles_fast_mode() {
     let mut app = make_app();
     assert!(!app.fast_mode);
@@ -1144,6 +1186,36 @@ fn test_streaming_agent_events_commit_message() {
 }
 
 #[test]
+fn retry_should_construct_system_api_error_block() {
+    use operant_core::agent::AgentEvent;
+
+    let mut app = make_app();
+    let before = app.messages.len();
+
+    app.handle_agent_event(AgentEvent::RetryScheduled {
+        attempt: 1,
+        max_attempts: 3,
+        reason: "context overflow".into(),
+    });
+
+    assert_eq!(app.messages.len(), before + 1, "retry must add one message");
+    let blocks = app.messages[before].content_blocks();
+    assert_eq!(blocks.len(), 1, "retry message carries exactly one block");
+    let ContentBlock::SystemAPIError {
+        message,
+        retry_secs,
+    } = &blocks[0]
+    else {
+        panic!("expected SystemAPIError, got {:?}", blocks[0]);
+    };
+    assert!(
+        message.contains("context overflow") && message.contains("1/3"),
+        "retry message must carry the reason and attempt count, got {message}"
+    );
+    assert!(retry_secs.is_none(), "loop retries are immediate");
+}
+
+#[test]
 fn test_command_palette_opens_via_ctrl_k() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -1215,4 +1287,40 @@ fn test_bundle_slash_command_handled_without_registry_fallback() {
     let mut app = make_app();
     assert!(app.intercept_slash_command("bundle"));
     assert!(app.pending_user_message.is_none());
+}
+
+// ---- Queued vs Running tool status ----
+
+#[test]
+fn tool_should_transition_queued_to_running_on_permit_acquire() {
+    let mut app = make_app();
+    let queued = AgentEvent::ToolStart {
+        tool_call_id: "call_1".to_string(),
+        name: "bash".to_string(),
+        arguments: r#"{"command":"ls"}"#.to_string(),
+    };
+    // The concurrent pool announces the call while it waits for a permit…
+    app.handle_agent_event(queued.clone());
+    assert_eq!(app.tool_use_blocks.len(), 1);
+    assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Queued);
+    assert!(app.tool_use_blocks[0].status.is_pending());
+
+    // …then re-announces it once the permit is in hand.
+    app.handle_agent_event(queued);
+    assert_eq!(app.tool_use_blocks.len(), 1, "no second block is created");
+    assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Running);
+    assert!(app.tool_use_blocks[0].status.is_pending());
+
+    // Settling the call ends the pending window.
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_1".to_string(),
+            name: "bash".to_string(),
+            success: true,
+            content: "ok".to_string(),
+            error: None,
+        },
+    });
+    assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Done);
+    assert!(!app.tool_use_blocks[0].status.is_pending());
 }

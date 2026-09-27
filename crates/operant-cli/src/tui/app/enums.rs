@@ -168,8 +168,6 @@ pub enum DialogPriority {
     SessionBrowser = 190,
     /// Session branching
     SessionBranching = 200,
-    /// Tasks overlay
-    Tasks = 210,
     /// Global search
     GlobalSearch = 220,
     /// History search overlay
@@ -195,11 +193,26 @@ pub enum DialogPriority {
 }
 
 /// Status of an active or completed tool call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
+    /// Tool call parsed and waiting for a worker permit from the
+    /// concurrent-execution pool. Set on the first `ToolStart` for a
+    /// tool call id; flipped to [`ToolStatus::Running`] by the second
+    /// `ToolStart`, which the agent emits once the permit is acquired.
+    Queued,
     Running,
     Done,
     Error,
+}
+
+impl ToolStatus {
+    /// True while the tool has not settled — queued for a permit OR
+    /// actively running. Every "is this turn still working?" check goes
+    /// through here so a queued tool is never mistaken for a finished
+    /// one.
+    pub fn is_pending(self) -> bool {
+        matches!(self, ToolStatus::Queued | ToolStatus::Running)
+    }
 }
 
 /// Represents an active or completed tool invocation visible in the UI.

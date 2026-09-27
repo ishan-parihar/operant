@@ -436,6 +436,12 @@ impl OperantAgent {
                             // a fresh consume() on the next loop iteration.
                             self.iteration_budget.refund();
                             retry_state.consume_retry();
+                            self.emit_retry_scheduled(
+                                retry_state.retry_count,
+                                retry_state.max_retries,
+                                "context overflow",
+                            )
+                            .await;
                             // Rebuild request with compressed messages
                             let tools = self
                                 .registry
@@ -464,6 +470,12 @@ impl OperantAgent {
                             if self.try_rotate_credential().is_some() {
                                 self.iteration_budget.refund();
                                 retry_state.consume_retry();
+                                self.emit_retry_scheduled(
+                                    retry_state.retry_count,
+                                    retry_state.max_retries,
+                                    "credential rotated",
+                                )
+                                .await;
                                 let tools = self
                                     .registry
                                     .get_schemas_for_request(
@@ -530,6 +542,12 @@ impl OperantAgent {
                                 // is the log side of the same event.)
                                 self.metrics.record_stream_drop();
                                 self.metrics.record_stream_retry();
+                                self.emit_retry_scheduled(
+                                    retry_state.retry_count,
+                                    retry_state.max_retries,
+                                    "stream dropped",
+                                )
+                                .await;
                                 warn!(
                                     error = %e,
                                     retry = retry_state.retry_count,
@@ -581,6 +599,12 @@ impl OperantAgent {
                             // was wasted on a context overflow.
                             self.iteration_budget.refund();
                             retry_state.consume_retry();
+                            self.emit_retry_scheduled(
+                                retry_state.retry_count,
+                                retry_state.max_retries,
+                                "context overflow",
+                            )
+                            .await;
                             let tools = self
                                 .registry
                                 .get_schemas_for_request(
@@ -608,6 +632,12 @@ impl OperantAgent {
                             if self.try_rotate_credential().is_some() {
                                 self.iteration_budget.refund();
                                 retry_state.consume_retry();
+                                self.emit_retry_scheduled(
+                                    retry_state.retry_count,
+                                    retry_state.max_retries,
+                                    "credential rotated",
+                                )
+                                .await;
                                 let tools = self
                                     .registry
                                     .get_schemas_for_request(
@@ -1275,6 +1305,23 @@ impl OperantAgent {
                                 result: result.clone(),
                             })
                             .await;
+                            // A `todo` write is the only way the model's plan
+                            // list changes shape — surface the new counts so
+                            // the UI can render a task-progress annotation
+                            // without re-reading the tool result.
+                            if result.name == "todo"
+                                && let Some((total, completed, in_progress)) =
+                                    crate::tools::todo_tool::todo_counts_from_result(
+                                        &result.content,
+                                    )
+                            {
+                                self.emit(AgentEvent::TodoUpdated {
+                                    total,
+                                    completed,
+                                    in_progress,
+                                })
+                                .await;
+                            }
                         } else {
                             self.emit(AgentEvent::ToolError {
                                 tool_call_id: result.tool_call_id.clone(),

@@ -125,6 +125,15 @@ static MAX_SPAWN_DEPTH: AtomicU32 = AtomicU32::new(DEFAULT_MAX_SPAWN_DEPTH);
 static ORCHESTRATOR_ENABLED: AtomicU32 = AtomicU32::new(1); // default true
 static MAX_CONCURRENT_CHILDREN: AtomicU32 = AtomicU32::new(DEFAULT_MAX_CONCURRENT_CHILDREN as u32);
 
+/// Monotonic counter behind the `sub-N` ids carried by
+/// `AgentEvent::SubagentStarted/Stopped`. Children run headless, so the id is
+/// the only thing that pairs a stop event back to its start.
+static SUBAGENT_SEQ: AtomicU32 = AtomicU32::new(1);
+
+fn next_subagent_id() -> String {
+    format!("sub-{}", SUBAGENT_SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
 /// Tool that delegates a focused task to an isolated child OperantAgent.
 pub struct SubAgentTool {
     client_config: ClientConfig,
@@ -307,9 +316,21 @@ impl SubAgentTool {
         }
     }
 
+    /// Best-effort send of a child-lifecycle event onto the parent channel.
+    /// `try_send` so a full/slow parent channel can never stall a child.
+    fn emit_subagent(&self, event: &AgentEvent) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(event.clone());
+        }
+    }
+
     /// Run a single child agent to completion with the given system prompt.
     /// Shared by the sync, batch, and background delegation paths so depth
     /// limits, tool inheritance, and result shaping stay in one place.
+    ///
+    /// Brackets the child run with `AgentEvent::SubagentStarted` /
+    /// `SubagentStopped` so the TUI can show lifecycle for headless children
+    /// (whose own events are deliberately not forwarded to the parent).
     async fn run_child(
         &self,
         system_prompt: String,
@@ -351,7 +372,24 @@ impl SubAgentTool {
 
         // Run with timeout
         let timeout_duration = Duration::from_secs(timeout_seconds.max(30));
+        let subagent_id = next_subagent_id();
+        self.emit_subagent(&AgentEvent::SubagentStarted {
+            subagent_id: subagent_id.clone(),
+            role: format!("{role:?}").to_lowercase(),
+            depth: self.parent_depth + 1,
+        });
         let result = timeout(timeout_duration, agent.run(goal)).await;
+
+        let (status, summary) = match &result {
+            Ok(Ok(message)) => ("completed", preview_of(&message.content, 200)),
+            Ok(Err(error)) => ("failed", preview_of(&error.to_string(), 200)),
+            Err(_) => ("timeout", format!("timed out after {timeout_seconds}s")),
+        };
+        self.emit_subagent(&AgentEvent::SubagentStopped {
+            subagent_id,
+            status: status.to_string(),
+            summary,
+        });
 
         match result {
             Ok(Ok(message)) => Ok(message.content),

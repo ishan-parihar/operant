@@ -117,6 +117,9 @@ enum ProgressAction {
     /// A message exists for this group — edit `msg_id` to `body` (the full
     /// group so far).
     Edit { msg_id: String, body: String },
+    /// This tool call id was already announced (it is re-announced once its
+    /// worker permit is acquired) — leave the platform message untouched.
+    Skip,
 }
 
 /// Tracks per-thread tool-progress messages with hermes' linearization
@@ -128,20 +131,30 @@ enum ProgressAction {
 ///   * the line cap keeps degenerate loops from growing the bubble forever.
 struct ToolProgressTracker {
     msgs: ProgressMap,
+    /// Tool call ids already turned into a status line. The agent announces
+    /// each call twice (queued, then running on permit acquire); without this
+    /// the second announcement would inflate the group's `×N` counter.
+    announced: HashSet<String>,
 }
 
 impl ToolProgressTracker {
     fn new() -> Self {
         Self {
             msgs: HashMap::new(),
+            announced: HashSet::new(),
         }
     }
 
     /// Record a tool line for `key`. Returns `New` when this starts a fresh
     /// group (no message yet — the previous group was closed by an
     /// intervening text/iteration/turn boundary), or `Edit` with the full
-    /// accumulated group when the group already has a message.
-    fn on_tool_start(&mut self, key: &ThreadKey, line: &str) -> ProgressAction {
+    /// accumulated group when the group already has a message. A repeated
+    /// `tool_call_id` (the agent re-announces a call once its worker permit
+    /// is acquired) is a no-op — `Skip`.
+    fn on_tool_start(&mut self, key: &ThreadKey, tool_call_id: &str, line: &str) -> ProgressAction {
+        if !self.announced.insert(tool_call_id.to_string()) {
+            return ProgressAction::Skip;
+        }
         match self.msgs.get_mut(key) {
             Some(g) => {
                 g.push(line);
@@ -154,6 +167,14 @@ impl ToolProgressTracker {
                 body: line.to_string(),
             },
         }
+    }
+
+    /// Id-less convenience for callers that have no tool call id (every call
+    /// is then its own tool call, so the line is always recorded).
+    #[cfg(test)]
+    fn on_tool_start_anon(&mut self, key: &ThreadKey, line: &str) -> ProgressAction {
+        let anon = format!("anon-{}", self.announced.len());
+        self.on_tool_start(key, &anon, line)
     }
 
     /// After a `New` send succeeds, attach the message id + first line so
@@ -1245,7 +1266,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
             match event {
                 AgentEvent::ToolStart {
-                    tool_call_id: _,
+                    tool_call_id,
                     name,
                     arguments,
                 } => {
@@ -1260,7 +1281,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // shredded alternating text/tool output into dozens of
                     // fragments during degenerate model loops.
 
-                    match progress_tracker.on_tool_start(&key, &line) {
+                    match progress_tracker.on_tool_start(&key, &tool_call_id, &line) {
                         ProgressAction::New { body } => {
                             // First tool of a group — send a NEW message.
                             let msg = OutgoingMessage::new(&channel_id, &body)
@@ -1288,6 +1309,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 .edit_message(&platform, &channel_id, &msg_id, msg)
                                 .await;
                         }
+                        ProgressAction::Skip => {}
                     }
                 }
                 AgentEvent::ToolComplete { result } => {
@@ -3209,7 +3231,7 @@ mod tool_progress_tests {
 
         // First tool of the group: New (send a fresh message).
         assert_eq!(
-            tracker.on_tool_start(&k, "⚙️ session_search: 5"),
+            tracker.on_tool_start_anon(&k, "⚙️ session_search: 5"),
             ProgressAction::New {
                 body: "⚙️ session_search: 5".into()
             }
@@ -3217,14 +3239,14 @@ mod tool_progress_tests {
         // After the message id is attached, the next tool appends.
         tracker.attach_message_id(&k, "msg_1".into(), "⚙️ session_search: 5");
         assert_eq!(
-            tracker.on_tool_start(&k, "⚙️ echo: hi"),
+            tracker.on_tool_start_anon(&k, "⚙️ echo: hi"),
             ProgressAction::Edit {
                 msg_id: "msg_1".into(),
                 body: "⚙️ session_search: 5\n⚙️ echo: hi".into(),
             }
         );
         assert_eq!(
-            tracker.on_tool_start(&k, "🧠 memory_store: fact"),
+            tracker.on_tool_start_anon(&k, "🧠 memory_store: fact"),
             ProgressAction::Edit {
                 msg_id: "msg_1".into(),
                 body: "⚙️ session_search: 5\n⚙️ echo: hi\n🧠 memory_store: fact".into(),
@@ -3237,9 +3259,9 @@ mod tool_progress_tests {
         let mut tracker = ToolProgressTracker::new();
         let k = key();
 
-        tracker.on_tool_start(&k, "⚙️ tool_a");
+        tracker.on_tool_start_anon(&k, "⚙️ tool_a");
         tracker.attach_message_id(&k, "msg_1".into(), "⚙️ tool_a");
-        tracker.on_tool_start(&k, "⚙️ tool_b");
+        tracker.on_tool_start_anon(&k, "⚙️ tool_b");
 
         // A mid-stream text response arrives → the group is closed. The
         // already-sent message stays in the chat; the next tool call must
@@ -3247,7 +3269,7 @@ mod tool_progress_tests {
         // messages around the text).
         tracker.close_group(&k);
         assert_eq!(
-            tracker.on_tool_start(&k, "⚙️ tool_c"),
+            tracker.on_tool_start_anon(&k, "⚙️ tool_c"),
             ProgressAction::New {
                 body: "⚙️ tool_c".into()
             },
@@ -3263,7 +3285,7 @@ mod tool_progress_tests {
         tracker.close_group(&k);
         tracker.close_group(&k);
         assert_eq!(
-            tracker.on_tool_start(&k, "⚙️ tool_a"),
+            tracker.on_tool_start_anon(&k, "⚙️ tool_a"),
             ProgressAction::New {
                 body: "⚙️ tool_a".into()
             }
@@ -3294,22 +3316,23 @@ mod tool_progress_tests {
         let mut tracker = ToolProgressTracker::new();
         let k = key();
 
-        let _ = tracker.on_tool_start(&k, "⏰ todo");
+        let _ = tracker.on_tool_start_anon(&k, "⏰ todo");
         tracker.attach_message_id(&k, "m".into(), "⏰ todo");
         for _ in 0..4 {
             assert!(matches!(
-                tracker.on_tool_start(&k, "⏰ todo"),
+                tracker.on_tool_start_anon(&k, "⏰ todo"),
                 ProgressAction::Edit { .. }
             ));
         }
-        if let ProgressAction::Edit { msg_id, body } = tracker.on_tool_start(&k, "⏰ todo") {
+        if let ProgressAction::Edit { msg_id, body } = tracker.on_tool_start_anon(&k, "⏰ todo") {
             assert_eq!(msg_id, "m");
             assert_eq!(body, "⏰ todo (×6)");
         } else {
             panic!("expected Edit");
         }
         // A different tool breaks the streak and renders normally.
-        if let ProgressAction::Edit { body, .. } = tracker.on_tool_start(&k, "🔧 debug_env") {
+        if let ProgressAction::Edit { body, .. } = tracker.on_tool_start_anon(&k, "🔧 debug_env")
+        {
             assert!(body.ends_with("\n🔧 debug_env"));
         } else {
             panic!("expected Edit");
@@ -3321,12 +3344,12 @@ mod tool_progress_tests {
         let mut tracker = ToolProgressTracker::new();
         let k = key();
 
-        tracker.on_tool_start(&k, "t0");
+        tracker.on_tool_start_anon(&k, "t0");
         tracker.attach_message_id(&k, "m".into(), "t0");
         for i in 1..(MAX_STATUS_LINES + 5) {
-            tracker.on_tool_start(&k, &format!("t{}", i));
+            tracker.on_tool_start_anon(&k, &format!("t{}", i));
         }
-        if let ProgressAction::Edit { body, .. } = tracker.on_tool_start(&k, "final") {
+        if let ProgressAction::Edit { body, .. } = tracker.on_tool_start_anon(&k, "final") {
             assert!(body.starts_with("… +6 earlier\n"));
             assert!(body.lines().count() == MAX_STATUS_LINES + 1);
             assert!(body.ends_with("\nfinal"));
@@ -3344,13 +3367,13 @@ mod tool_progress_tests {
         // attach_message_id was never called. The next tool start must
         // retry a fresh send rather than editing a phantom message.
         assert_eq!(
-            tracker.on_tool_start(&k, "⚙️ tool_a"),
+            tracker.on_tool_start_anon(&k, "⚙️ tool_a"),
             ProgressAction::New {
                 body: "⚙️ tool_a".into()
             }
         );
         assert_eq!(
-            tracker.on_tool_start(&k, "⚙️ tool_b"),
+            tracker.on_tool_start_anon(&k, "⚙️ tool_b"),
             ProgressAction::New {
                 body: "⚙️ tool_b".into()
             },
@@ -3364,11 +3387,11 @@ mod tool_progress_tests {
         let k1 = key();
         let k2: ThreadKey = ("telegram".into(), "-100abc".into(), Some(91739));
 
-        tracker.on_tool_start(&k1, "⚙️ a");
+        tracker.on_tool_start_anon(&k1, "⚙️ a");
         tracker.attach_message_id(&k1, "m1".into(), "⚙️ a");
         // Topic 2 starts its own group.
         assert_eq!(
-            tracker.on_tool_start(&k2, "⚙️ b"),
+            tracker.on_tool_start_anon(&k2, "⚙️ b"),
             ProgressAction::New {
                 body: "⚙️ b".into()
             }
@@ -3377,7 +3400,7 @@ mod tool_progress_tests {
         tracker.close_group(&k1);
         tracker.attach_message_id(&k2, "m2".into(), "⚙️ b");
         assert_eq!(
-            tracker.on_tool_start(&k2, "⚙️ c"),
+            tracker.on_tool_start_anon(&k2, "⚙️ c"),
             ProgressAction::Edit {
                 msg_id: "m2".into(),
                 body: "⚙️ b\n⚙️ c".into(),

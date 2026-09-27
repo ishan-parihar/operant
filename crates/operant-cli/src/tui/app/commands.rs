@@ -35,7 +35,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 35] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 34] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -59,7 +59,6 @@ impl App {
             ("model_picker", self.model_picker.visible),
             ("session_browser", self.session_browser.visible),
             ("session_branching", self.session_branching.visible),
-            ("tasks_overlay", self.tasks_overlay.visible),
             ("export_dialog", self.export_dialog.visible),
             ("context_viz", self.context_viz.visible),
             ("mcp_approval", self.mcp_approval.visible),
@@ -114,25 +113,30 @@ impl App {
         })
     }
 
-    /// Push `text` into the live steer queue if the agent is streaming, and
-    /// return a status string describing the outcome. Mirrors the live steer
-    /// path in adapter_types.rs, but uses `try_lock` because this runs on the
+    /// Push `text` into the live steer queue and return a status string
+    /// describing the outcome. The same queue serves both states: while
+    /// streaming the agent drains it at the next iteration boundary, while
+    /// idle the loop drains it on the next turn — so /steer and /queue
+    /// are meaningful either way. Mirrors the live steer path in
+    /// adapter_types.rs, but uses `try_lock` because this runs on the
     /// sync slash-command path while the queue is a tokio Mutex.
     /// (iter-240 — wires /steer and /queue <text> to the real steer queue.)
     fn queue_steer(&mut self, text: &str) -> String {
-        const NOT_STREAMING: &str = "Steer is only available while the agent is streaming.";
-        if !self.is_streaming {
-            return NOT_STREAMING.to_string();
-        }
+        const NO_QUEUE: &str = "Steer is unavailable (no live agent).";
+        const QUEUE_BUSY: &str = "Queue is busy (agent is draining it).";
         match self.steer_queue_handle.as_ref() {
             Some(handle) => match handle.try_lock() {
                 Ok(mut q) => {
                     q.push(text.to_string());
-                    format!("Steer queued: {}", text)
+                    if self.is_streaming {
+                        format!("Steer queued: {}", text)
+                    } else {
+                        format!("Steer queued for the next turn: {}", text)
+                    }
                 }
-                Err(_) => NOT_STREAMING.to_string(),
+                Err(_) => QUEUE_BUSY.to_string(),
             },
-            None => NOT_STREAMING.to_string(),
+            None => NO_QUEUE.to_string(),
         }
     }
 
@@ -1481,7 +1485,6 @@ impl App {
         self.model_picker.close();
         self.session_browser.close();
         self.session_branching.close();
-        self.tasks_overlay.close();
         self.export_dialog.dismiss();
         self.context_viz.close();
         self.connect_dialog.close();
@@ -1721,4 +1724,97 @@ impl App {
     }
 
     // Add a message directly (e.g. from a non-streaming source).
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::adapter_types::config::Settings;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use operant_core::config::AppConfig;
+
+    fn make_app() -> App {
+        let config = AppConfig::default();
+        let settings = Settings::default();
+        let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
+        let command_registry = crate::commands::CommandRegistry::new();
+        App::new(config, settings, cost_tracker, command_registry)
+    }
+
+    fn make_steer_queue() -> std::sync::Arc<tokio::sync::Mutex<Vec<String>>> {
+        std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()))
+    }
+
+    fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    // ---- /steer must land in the steer queue in BOTH states ----------------
+    // The queue is the whole contract: the loop drains it at the next
+    // iteration boundary (run.rs `drain_steers`). Previously the Enter arm
+    // was gated on `!is_streaming` while `queue_steer` refused when idle,
+    // so /steer was a guaranteed no-op in either state.
+
+    #[test]
+    fn steer_should_queue_when_streaming() {
+        let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+        app.is_streaming = true;
+
+        let status = app.queue_steer("focus on the parser");
+
+        assert_eq!(
+            queue.try_lock().unwrap().as_slice(),
+            ["focus on the parser".to_string()]
+        );
+        assert_eq!(status, "Steer queued: focus on the parser");
+    }
+
+    #[test]
+    fn steer_should_apply_when_idle() {
+        let mut app = make_app();
+        let queue = make_steer_queue();
+        app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+        app.is_streaming = false;
+
+        let status = app.queue_steer("use the CLI instead");
+
+        // Same queue — idle, the loop drains it on the next turn.
+        assert_eq!(
+            queue.try_lock().unwrap().as_slice(),
+            ["use the CLI instead".to_string()]
+        );
+        assert_eq!(
+            status,
+            "Steer queued for the next turn: use the CLI instead"
+        );
+    }
+
+    #[test]
+    fn steer_should_submit_while_streaming() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.set_prompt_text("/steer focus on the parser".to_string());
+
+        // Submit must be reachable mid-turn, otherwise the steering text can
+        // never reach `queue_steer` while a turn is streaming.
+        assert!(app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn plain_prompt_should_not_submit_while_streaming() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.set_prompt_text("keep going".to_string());
+
+        // Opening the gate for /steer must not let ordinary prompts start a
+        // second turn while one is already streaming.
+        assert!(!app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
+    }
 }

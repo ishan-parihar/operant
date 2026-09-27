@@ -12,7 +12,6 @@ pub fn select_tip(seed: u64) -> Option<String> {
         "Press Ctrl+A to open the model picker without typing /model.",
         "Use /skills to browse installed skills, or install one with: operant skills install <url>",
         "The agent remembers across sessions via agentmemory — use /journey to see what it knows.",
-        "Press Ctrl+T to see active subagent tasks.",
         "Use /context to check how much of your context window is used.",
         "Type ! before a message to run it as a shell command (bash prefix mode).",
         "Use /diff to review what the agent changed in your project.",

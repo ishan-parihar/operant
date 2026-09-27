@@ -67,9 +67,6 @@ impl App {
         if self.session_branching.visible {
             return Some(DialogPriority::SessionBranching);
         }
-        if self.tasks_overlay.visible {
-            return Some(DialogPriority::Tasks);
-        }
         if self.global_search.visible {
             return Some(DialogPriority::GlobalSearch);
         }

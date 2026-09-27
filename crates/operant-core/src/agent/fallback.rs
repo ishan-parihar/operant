@@ -12,8 +12,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use super::AgentEvent;
 use crate::error::Error;
 
 /// Export the full error classification from error_classifier module.
@@ -48,6 +50,11 @@ pub struct FallbackModelClient {
     fallback_enabled: bool,
     /// Optional provider registry for cross-provider fallback on auth/billing errors.
     provider_registry: Option<Arc<ProviderRegistry>>,
+    /// Optional UI event sink. When set, a model/provider switch surfaces as
+    /// `AgentEvent::ModelFallback` so the TUI can show which model answered.
+    /// Sends are `try_send` (best-effort) — a full parent channel must never
+    /// stall a provider request.
+    event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
 
 impl FallbackModelClient {
@@ -73,6 +80,23 @@ impl FallbackModelClient {
             fallback_models,
             fallback_enabled,
             provider_registry: None,
+            event_tx: None,
+        }
+    }
+
+    /// Attach a UI event sink so fallback switches are reported.
+    pub fn with_event_tx(mut self, tx: mpsc::Sender<AgentEvent>) -> Self {
+        self.event_tx = Some(tx);
+        self
+    }
+
+    fn emit_fallback(&self, to: &str, reason: &str) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(AgentEvent::ModelFallback {
+                from: self.primary_model.clone(),
+                to: to.to_string(),
+                reason: reason.to_string(),
+            });
         }
     }
 
@@ -96,6 +120,7 @@ impl FallbackModelClient {
             to_model = %next_provider.model,
             "Auth/billing error — switching to fallback provider"
         );
+        self.emit_fallback(&next_provider.model, "auth or billing failure");
         let result = next_client.chat(fallback_req).await;
         if result.is_err() {
             registry.arm_cooldown(&next_provider.name);
@@ -136,6 +161,7 @@ impl FallbackModelClient {
             to_model = %next_provider.model,
             "Auth/billing error — switching to fallback provider"
         );
+        self.emit_fallback(&next_provider.model, "auth or billing failure");
         let result = next_client.chat_streaming(fallback_req).await;
         if result.is_err() {
             registry.arm_cooldown(&next_provider.name);
@@ -260,6 +286,13 @@ impl FallbackModelClient {
                 }
                 Err(e) => {
                     if Self::is_fallback_error(&e) {
+                        // The switch itself is the reportable event: the primary
+                        // (or an earlier fallback) just failed, so this model is
+                        // about to be attempted instead.
+                        if *model != self.primary_model {
+                            let reason = Self::classify_error(&e).reason.to_string();
+                            self.emit_fallback(model, &reason);
+                        }
                         warn!(
                             primary = %self.primary_model,
                             model = %model,

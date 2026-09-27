@@ -1,5 +1,5 @@
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
-use crate::tui::app::{App, ToolStatus, ToolUseBlock, TurnMetadata};
+use crate::tui::app::{App, ToolUseBlock, TurnMetadata};
 
 #[derive(Debug)]
 pub struct TranscriptTurn<'a> {
@@ -169,7 +169,7 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
             || last
                 .tool_blocks
                 .iter()
-                .any(|block| block.status == ToolStatus::Running);
+                .any(|block| block.status.is_pending());
     }
 
     turns

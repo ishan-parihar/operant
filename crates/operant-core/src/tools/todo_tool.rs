@@ -283,6 +283,23 @@ pub fn todo_injection_for_session(session_id: &str) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+/// Counts `(total, completed, in_progress)` read back from a `todo` tool
+/// result payload. The agent loop uses this to emit
+/// `AgentEvent::TodoUpdated`; returns `None` for any other tool result.
+pub fn todo_counts_from_result(content: &str) -> Option<(usize, usize, usize)> {
+    let payload: Value = serde_json::from_str(content).ok()?;
+    let todos = payload.get("todos")?.as_array()?;
+    let completed = todos
+        .iter()
+        .filter(|t| t.get("status").and_then(Value::as_str) == Some("completed"))
+        .count();
+    let in_progress = todos
+        .iter()
+        .filter(|t| t.get("status").and_then(Value::as_str) == Some("in_progress"))
+        .count();
+    Some((todos.len(), completed, in_progress))
+}
+
 /// True if a message content is a prior todo-injection snapshot row. Context
 /// compression strips these before appending a fresh snapshot so repeated
 /// compactions refresh rather than accumulate (hermes conversation_compression.py).

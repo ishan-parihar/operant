@@ -720,24 +720,6 @@ impl App {
             return false;
         }
 
-        // Tasks overlay intercepts navigation and Esc
-        if self.tasks_overlay.visible {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => self.tasks_overlay.close(),
-                KeyCode::Up => self.tasks_overlay.select_prev(),
-                KeyCode::Down => self.tasks_overlay.select_next(),
-                KeyCode::Enter => {
-                    if let Some((task_id, new_status)) =
-                        self.tasks_overlay.cycle_and_persist_status()
-                    {
-                        self.status_message = Some(format!("Task {} → {}", task_id, new_status));
-                    }
-                }
-                _ => {}
-            }
-            return false;
-        }
-
         // Export dialog key handling
         if self.export_dialog.visible {
             match key.code {
@@ -1253,11 +1235,6 @@ impl App {
                 self.refresh_global_search();
             }
 
-            // ---- Tasks overlay (Ctrl+T) --------------------------------
-            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.tasks_overlay.toggle();
-            }
-
             // ---- Session branching (Ctrl+B) -----------------------------
             // Bug #6 from iter-82 audit: Ctrl+B was documented in the help
             // overlay comment but had no keybinding. session_branching.open()
@@ -1451,7 +1428,18 @@ impl App {
                 self.prompt_input.insert_newline();
                 self.refresh_prompt_input();
             }
-            KeyCode::Enter if !self.is_streaming => {
+            // Plain Enter submits. The gate opens for `/steer` + `/queue`
+            // even while streaming: those are the one input that is
+            // meaningful in both states — streaming, they feed the agent's
+            // steer queue which the loop drains at the next iteration
+            // boundary; idle, they queue for the next turn. The modifier
+            // arm above stays `!is_streaming` so composing a multi-line
+            // prompt mid-stream is unaffected.
+            KeyCode::Enter
+                if !self.is_streaming
+                    || (key.modifiers == KeyModifiers::NONE
+                        && is_steer_command_input(&self.prompt_input.text)) =>
+            {
                 use crate::tui::prompt_input::AcceptForSubmitOutcome;
                 // Phase 1.3: Auto-select first suggestion when visible but none selected.
                 if !self.prompt_input.suggestions.is_empty()
@@ -1914,4 +1902,17 @@ impl App {
     //   `Y` → AllowSession
     //   `p` (persistent) → AllowSession (no persistent store wired yet —
     //       session-scoped is the closest equivalent)
+}
+
+/// True when the prompt holds a `/steer` or `/queue` command — the only
+/// input the loop steers on rather than starting a new turn, so Enter
+/// must reach the submit path even while a turn is streaming.
+fn is_steer_command_input(text: &str) -> bool {
+    let Some(rest) = text.trim().strip_prefix('/') else {
+        return false;
+    };
+    matches!(
+        rest.split_whitespace().next().unwrap_or_default(),
+        "steer" | "queue"
+    )
 }

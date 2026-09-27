@@ -87,7 +87,6 @@ impl App {
                     self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
                 }
                 self.is_streaming = true;
-                self.status_message = Some(format!("Running {}…", name));
 
                 // When a tool starts, flush any accumulated streaming text/thinking
                 // as a completed message. This prevents content from accumulating
@@ -101,26 +100,44 @@ impl App {
                 let tool_id = tool_call_id.clone();
                 let tool_name = name.clone();
                 let input_json = arguments;
-                if let Some(existing) = self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id) {
+                // The first ToolStart for an id only means "parsed"; the agent
+                // re-announces it once it holds a worker permit. So: a new
+                // block is Queued, an existing one transitions to Running.
+                let started = if let Some(existing) =
+                    self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id)
+                {
                     existing.turn_index = turn_index;
                     existing.status = ToolStatus::Running;
                     existing.output_preview = None;
                     existing.input_json = input_json;
+                    true
                 } else {
+                    // First ToolStart for this id — the call is parsed but
+                    // still waiting on the concurrent pool. It stays Queued
+                    // until the agent re-announces it with a permit in hand.
                     self.tool_use_blocks.push(ToolUseBlock {
                         id: tool_id.clone(),
                         name: tool_name.clone(),
                         turn_index,
-                        status: ToolStatus::Running,
+                        status: ToolStatus::Queued,
                         output_preview: None,
                         input_json,
                     });
-                }
+                    false
+                };
+                self.status_message = Some(format!(
+                    "{} {}…",
+                    if started { "Running" } else { "Queued" },
+                    tool_name
+                ));
 
                 // Track subagent spawns for the status-bar HUD.
                 if tool_name == "delegate_task" || tool_name == "spawn_subagent" {
                     self.agent_status.retain(|(id, _)| id != &tool_id);
-                    self.agent_status.push((tool_id, "running".to_string()));
+                    self.agent_status.push((
+                        tool_id,
+                        if started { "running" } else { "queued" }.to_string(),
+                    ));
                 }
 
                 self.invalidate_transcript();
@@ -248,12 +265,13 @@ impl App {
                 } else {
                     self.flush_streamed_assistant_message();
                 }
-                // Mark any remaining Running blocks as Done — they completed
-                // but the ToolComplete event either fired before the Done event
-                // or was never emitted (fast tool / race condition). Pruning
-                // them silently dropped the tool trail from the user's view.
+                // Mark any remaining pending (queued OR running) blocks as
+                // Done — they completed but the ToolComplete event either
+                // fired before the Done event or was never emitted (fast tool
+                // / race condition). Pruning them silently dropped the tool
+                // trail from the user's view.
                 for block in &mut self.tool_use_blocks {
-                    if block.status == ToolStatus::Running {
+                    if block.status.is_pending() {
                         block.status = ToolStatus::Done;
                     }
                 }
@@ -370,6 +388,86 @@ impl App {
             } => {
                 self.push_system_message(
                     format!("Async delegation {delegation_id} {status}: {summary}"),
+                    SystemMessageStyle::Info,
+                );
+            }
+
+            AgentEvent::CompactionStarted { tokens_before } => {
+                // Compact style = the compact-boundary marker (teardrop rule),
+                // the same lane /compact already renders.
+                self.push_system_message(
+                    format!("Compacting context ({tokens_before} tokens) …"),
+                    SystemMessageStyle::Compact,
+                );
+            }
+
+            AgentEvent::CompactionCompleted {
+                tokens_before,
+                tokens_after,
+                messages_before,
+                messages_after,
+            } => {
+                self.push_system_message(
+                    format!(
+                        "Compacted context: {tokens_before} → {tokens_after} tokens, \
+                         {messages_before} → {messages_after} messages"
+                    ),
+                    SystemMessageStyle::Compact,
+                );
+            }
+
+            AgentEvent::RetryScheduled {
+                attempt,
+                max_attempts,
+                reason,
+            } => {
+                // Reuse the SystemAPIError block so retries get the same
+                // boxed renderer as API failures instead of plain text.
+                let block = ContentBlock::SystemAPIError {
+                    message: format!("{reason} — retry {attempt}/{max_attempts}"),
+                    retry_secs: None,
+                };
+                self.messages.push(Message::assistant_blocks(vec![block]));
+                self.invalidate_transcript();
+                self.on_new_message();
+            }
+
+            AgentEvent::ModelFallback { from, to, reason } => {
+                self.push_system_message(
+                    format!("Model fallback: {from} → {to} ({reason})"),
+                    SystemMessageStyle::Info,
+                );
+            }
+
+            AgentEvent::SubagentStarted {
+                subagent_id,
+                role,
+                depth,
+            } => {
+                self.push_system_message(
+                    format!("Subagent {subagent_id} started ({role}, depth {depth})"),
+                    SystemMessageStyle::Info,
+                );
+            }
+
+            AgentEvent::SubagentStopped {
+                subagent_id,
+                status,
+                summary,
+            } => {
+                self.push_system_message(
+                    format!("Subagent {subagent_id} {status}: {summary}"),
+                    SystemMessageStyle::Info,
+                );
+            }
+
+            AgentEvent::TodoUpdated {
+                total,
+                completed,
+                in_progress,
+            } => {
+                self.push_system_message(
+                    format!("Todos: {completed}/{total} done, {in_progress} in progress"),
                     SystemMessageStyle::Info,
                 );
             }

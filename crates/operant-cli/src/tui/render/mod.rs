@@ -43,7 +43,6 @@ use crate::tui::export_dialog::render_export_dialog;
 use crate::tui::model_picker::render_model_picker;
 use crate::tui::session_branching::render_session_branching;
 use crate::tui::session_browser::render_session_browser;
-use crate::tui::tasks_overlay::render_tasks_overlay;
 // (iter-211: feedback_survey render import deleted — no telemetry backend)
 use crate::tui::ask_user_dialog::render_ask_user_dialog;
 use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
@@ -194,11 +193,6 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // Rewind flow (takes over screen)
     if app.rewind_flow.visible {
         render_rewind_flow(frame, &app.rewind_flow, size);
-    }
-
-    // Tasks overlay (Ctrl+T)
-    if app.tasks_overlay.visible {
-        render_tasks_overlay(frame, &app.tasks_overlay, size);
     }
 
     // New help overlay

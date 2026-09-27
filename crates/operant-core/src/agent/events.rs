@@ -127,6 +127,23 @@ impl OperantAgent {
             .await;
     }
 
+    /// Emit `AgentEvent::RetryScheduled` when the turn loop is about to
+    /// re-issue the LLM request. One-line wrapper so each of the five retry
+    /// sites in `run.rs` stays a single call.
+    pub(crate) async fn emit_retry_scheduled(
+        &self,
+        attempt: usize,
+        max_attempts: usize,
+        reason: &str,
+    ) {
+        self.emit(AgentEvent::RetryScheduled {
+            attempt,
+            max_attempts,
+            reason: reason.to_string(),
+        })
+        .await;
+    }
+
     /// Add a message to the conversation history
     pub async fn add_message(&self, message: Message) {
         let mut conv = self.conversation.write().await;

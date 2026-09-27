@@ -17,7 +17,6 @@ pub mod output_styles;
 pub mod provider_id;
 pub mod spinner;
 pub mod tips;
-pub mod tools;
 pub mod tui_app;
 pub mod types;
 pub mod voice;

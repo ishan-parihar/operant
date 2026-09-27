@@ -43,7 +43,6 @@ pub mod skills_view;
 pub mod slash_usage;
 pub mod state;
 pub mod stats_dialog;
-pub mod tasks_overlay;
 pub mod terminal;
 pub mod transcript_turn;
 pub mod virtual_list;

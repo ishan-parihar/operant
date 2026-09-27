@@ -881,6 +881,7 @@ fn create_model_client_with_fallback(
     provider: &str,
     model: &str,
     config: &AppConfig,
+    event_tx: Option<tokio::sync::mpsc::Sender<AgentEvent>>,
 ) -> (
     Box<dyn operant_core::agent::ModelClient>,
     Option<std::sync::Arc<operant_core::credential_pool::CredentialPoolRegistry>>,
@@ -911,6 +912,10 @@ fn create_model_client_with_fallback(
         build_provider_registry(config, provider, model, &primary_cfg, &pool_registry)
     {
         fallback = fallback.with_provider_registry(registry);
+    }
+    // Surface model/provider switches to the TUI (AgentEvent::ModelFallback).
+    if let Some(tx) = event_tx {
+        fallback = fallback.with_event_tx(tx);
     }
     (Box::new(fallback), Some(pool_registry))
 }
@@ -1549,8 +1554,12 @@ pub(crate) async fn create_runtime_agent(
 
     let provider = crate::tui::provider::infer_provider_from_model(&behavior.model)
         .unwrap_or_else(|| "openai".to_string());
-    let (model_client, pool_registry) =
-        create_model_client_with_fallback(&provider, &behavior.model, config);
+    let (model_client, pool_registry) = create_model_client_with_fallback(
+        &provider,
+        &behavior.model,
+        config,
+        Some(event_tx.clone()),
+    );
 
     let context_window = core.agent_config.context_window;
     Ok({
@@ -1633,7 +1642,7 @@ pub(crate) async fn create_agent_without_events(
     let provider = crate::tui::provider::infer_provider_from_model(&config.agent.model)
         .unwrap_or_else(|| "openai".to_string());
     let (model_client, pool_registry) =
-        create_model_client_with_fallback(&provider, &config.agent.model, config);
+        create_model_client_with_fallback(&provider, &config.agent.model, config, None);
 
     let context_window = core.agent_config.context_window;
     Ok({
@@ -2152,13 +2161,19 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
 
     // Spawn task to display tool events in real-time
     tokio::spawn(async move {
+        // A tool call is announced twice (queued, then running once a worker
+        // permit is acquired). Print it once.
+        let mut announced: std::collections::HashSet<String> = std::collections::HashSet::new();
         while let Some(event) = event_rx.recv().await {
             match event {
                 AgentEvent::ToolStart {
-                    tool_call_id: _,
+                    tool_call_id,
                     name,
                     arguments,
                 } => {
+                    if !announced.insert(tool_call_id) {
+                        continue;
+                    }
                     let preview = preview_tool_args(&arguments)
                         .map(|a| format!("{}: {}", name, a))
                         .unwrap_or_else(|| name);
@@ -2887,7 +2902,7 @@ mod tests {
         let mut config = test_config_with_providers();
         config.agent.fallback_on_errors = false;
         let (client, _pool_registry) =
-            create_model_client_with_fallback("free", "laguna-s-2.1-free", &config);
+            create_model_client_with_fallback("free", "laguna-s-2.1-free", &config, None);
         // Smoke: the returned client is usable and reports a provider.
         assert!(!client.provider_name().is_empty());
 

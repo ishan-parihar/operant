@@ -1,7 +1,7 @@
 use crate::tui::adapter_types::types::Role;
 // render/messages.rs — Message pane rendering, turn items, live content.
 
-use crate::tui::app::{App, ToolStatus};
+use crate::tui::app::App;
 use crate::tui::messages::{
     RenderContext, render_thinking_live_content, render_transcript_assistant_message_tagged,
     render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
@@ -321,7 +321,7 @@ pub(crate) fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineIte
     let has_running_tool_blocks = app
         .tool_use_blocks
         .iter()
-        .any(|block| block.status == ToolStatus::Running);
+        .any(|block| block.status.is_pending());
     let cacheable = !streaming && !has_running_tool_blocks;
 
     // Fast path: nothing live — use the full-result cache (ptr-stable check).
@@ -490,10 +490,7 @@ pub(crate) fn append_live_content(
     if app.is_streaming
         && app.streaming_text.is_empty()
         && app.streaming_thinking.is_empty()
-        && app
-            .tool_use_blocks
-            .iter()
-            .all(|b| b.status != ToolStatus::Running)
+        && app.tool_use_blocks.iter().all(|b| !b.status.is_pending())
     {
         let mut spans = vec![Span::raw("  ")];
         spans.extend(shimmer_spans("Thinking", app.frame_count));

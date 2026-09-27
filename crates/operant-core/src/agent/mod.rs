@@ -260,6 +260,61 @@ pub enum AgentEvent {
         /// Result summary or error text.
         summary: String,
     },
+    /// Context compaction began. Emitted before the LLM compressor or the
+    /// deterministic eviction pass runs so the CLI/TUI can mark the boundary
+    /// instead of showing a silent stall.
+    CompactionStarted {
+        /// Estimated prompt tokens at the moment compaction was triggered.
+        tokens_before: usize,
+    },
+    /// Context compaction finished. `tokens_after` can exceed
+    /// `tokens_before` when a summarizer pads its own summary — the payload
+    /// is a report, not a guarantee.
+    CompactionCompleted {
+        tokens_before: usize,
+        tokens_after: usize,
+        messages_before: usize,
+        messages_after: usize,
+    },
+    /// A retry was scheduled after a classified failure. The loop re-issues
+    /// the request immediately (no sleep), so `attempt`/`max_attempts` are
+    /// the whole story the UI needs.
+    RetryScheduled {
+        /// 1-based retry attempt within the turn.
+        attempt: usize,
+        max_attempts: usize,
+        /// Short machine reason: "context overflow", "credential rotated",
+        /// "stream dropped".
+        reason: String,
+    },
+    /// A fallback model served the request after the primary failed with a
+    /// retryable error. Emitted by `FallbackModelClient` so the user sees
+    /// which model actually answered.
+    ModelFallback {
+        from: String,
+        to: String,
+        /// Short classified reason (the `FailoverReason` display form).
+        reason: String,
+    },
+    /// A child subagent started running.
+    SubagentStarted {
+        subagent_id: String,
+        role: String,
+        depth: u32,
+    },
+    /// A child subagent finished. `status` is "completed", "failed", or
+    /// "timeout".
+    SubagentStopped {
+        subagent_id: String,
+        status: String,
+        summary: String,
+    },
+    /// The session todo list changed shape after a `todo` tool write.
+    TodoUpdated {
+        total: usize,
+        completed: usize,
+        in_progress: usize,
+    },
 }
 
 /// Operant Agent for tool orchestration
@@ -1383,6 +1438,50 @@ mod tests {
         assert_eq!(first, "Halo ");
         assert_eq!(second, "operant!");
         assert_eq!(rest, "");
+    }
+
+    #[tokio::test]
+    async fn compaction_should_emit_started_and_completed_events() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let db = Database::init(std::path::PathBuf::from("test_compaction_events.sqlite")).unwrap();
+        let agent = OperantAgent::with_events(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+            tx,
+        );
+
+        // No llm_compressor attached → the deterministic eviction pass runs,
+        // so the test needs no network.
+        let messages = vec![Message::user("a".repeat(40_000))];
+        agent.compress_context_overflow(messages).await;
+
+        let mut seen_started = None;
+        let mut seen_completed = None;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::CompactionStarted { tokens_before } => {
+                    seen_started = Some(tokens_before)
+                }
+                AgentEvent::CompactionCompleted {
+                    tokens_after,
+                    messages_after,
+                    ..
+                } => seen_completed = Some((tokens_after, messages_after)),
+                _ => {}
+            }
+        }
+        assert!(seen_started.is_some(), "CompactionStarted must be emitted");
+        assert!(
+            seen_completed.is_some(),
+            "CompactionCompleted must be emitted"
+        );
     }
 
     #[test]

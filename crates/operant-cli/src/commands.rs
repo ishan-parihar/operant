@@ -135,7 +135,7 @@ pub enum CommandResult {
     OpenStats,
     /// Open the MCP server browser.
     OpenMcp,
-    /// Open the agents/tasks overlay.
+    /// Open the agents overlay.
     OpenAgents,
     /// Open the diff viewer.
     OpenDiff,

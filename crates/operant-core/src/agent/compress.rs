@@ -15,7 +15,21 @@ impl OperantAgent {
     /// compactions (hermes conversation_compression.py:
     /// `todo_snapshot = agent._todo_store.format_for_injection()`).
     pub(crate) async fn compress_context_overflow(&self, messages: Vec<Message>) -> Vec<Message> {
+        let tokens_before = self.estimate_current_tokens(&messages);
+        let messages_before = messages.len();
+        self.emit(AgentEvent::CompactionStarted { tokens_before })
+            .await;
         let compressed = self.compress_context_overflow_inner(messages).await;
+        // `estimate_current_tokens` prefers the last *reported* prompt count,
+        // which is the pre-compaction value — use the char/4 heuristic so
+        // `tokens_after` actually reflects the compressed history.
+        self.emit(AgentEvent::CompactionCompleted {
+            tokens_before,
+            tokens_after: crate::context_management::estimate_total_tokens(&compressed),
+            messages_before,
+            messages_after: compressed.len(),
+        })
+        .await;
         self.reinject_todos_after_compression(compressed)
     }
 

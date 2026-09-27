@@ -145,8 +145,12 @@ async fn execute_acp_command_inner(
     // provider's pool instance.
     let provider_name = crate::tui::provider::infer_provider_from_model(&config.agent.model)
         .unwrap_or_else(|| "openai".to_string());
-    let (model_client, pool_registry) =
-        crate::create_model_client_with_fallback(&provider_name, &config.agent.model, &config);
+    let (model_client, pool_registry) = crate::create_model_client_with_fallback(
+        &provider_name,
+        &config.agent.model,
+        &config,
+        None,
+    );
 
     let mut agent =
         operant_core::agent::OperantAgent::new(agent_config, model_client, registry, database)

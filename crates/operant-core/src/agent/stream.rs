@@ -819,6 +819,15 @@ impl OperantAgent {
                     .clone()
                     .unwrap_or_else(|| "default".to_string()),
             );
+            // Permit is already in hand (single-tool path skips the pool), so
+            // re-announce the call: the TUI shows Queued from the first
+            // ToolStart and flips to Running on this one.
+            self.emit(AgentEvent::ToolStart {
+                tool_call_id: tool_call.id.clone(),
+                name: name.clone(),
+                arguments: normalized_tool_args(&tool_call),
+            })
+            .await;
             let tool_future = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
             // Interactive tools (clarify / approval_request) block waiting
             // for a human — the generic tool timeout (30s) would kill the
@@ -882,6 +891,19 @@ impl OperantAgent {
                         }
 
                         let name = tool_call.function.name.clone();
+                        // Re-announce the call now that a permit is held: the
+                        // first ToolStart (emitted at parse time) only means
+                        // "queued", this one means "running". Without it a tool
+                        // that sat in the pool reads as queued until it finishes.
+                        // ponytail: rides the existing ToolStart event instead of
+                        // a new variant — swap for AgentEvent::ToolRunning if
+                        // AgentEvent is ever free to change again.
+                        self.emit(AgentEvent::ToolStart {
+                            tool_call_id: tool_call.id.clone(),
+                            name: name.clone(),
+                            arguments: normalized_tool_args(&tool_call),
+                        })
+                        .await;
                         // Plan 015: session-keyed ToolContext for kernel tools.
                         let tool_ctx = ToolContext::default().with_metadata(
                             "session_id",
@@ -965,5 +987,16 @@ impl OperantAgent {
                 }
             }
         }
+    }
+}
+
+/// Re-announcement payload for a `ToolStart`: the same arguments string the
+/// first (parse-time) `ToolStart` carried, with the empty case normalised to
+/// `"{}"` so consumers can always parse it as JSON.
+fn normalized_tool_args(tool_call: &ToolCall) -> String {
+    if tool_call.function.arguments.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        tool_call.function.arguments.clone()
     }
 }

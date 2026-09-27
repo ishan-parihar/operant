@@ -39,7 +39,6 @@ use crate::tui::render;
 use crate::tui::session_browser::SessionBrowserState;
 use crate::tui::settings_screen::SettingsScreen;
 use crate::tui::stats_dialog::StatsDialogState;
-use crate::tui::tasks_overlay::TasksOverlay;
 use crate::tui::theme_screen::ThemeScreen;
 use crate::tui::{
     agents_view::{AgentInfo, AgentStatus, AgentsMenuState, AgentsRoute},
@@ -297,8 +296,6 @@ pub struct App {
     pub session_browser: SessionBrowserState,
     /// Session branching overlay (Ctrl+B) — create and switch branches.
     pub session_branching: crate::tui::session_branching::SessionBranchingState,
-    /// Task progress overlay (Ctrl+T) — shows task status with toggle capability.
-    pub tasks_overlay: TasksOverlay,
     /// Export format picker dialog (/export).
     pub export_dialog: ExportDialogState,
     /// Context window / rate limit visualization overlay (/context).

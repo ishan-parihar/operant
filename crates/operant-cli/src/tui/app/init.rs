@@ -156,7 +156,6 @@ impl App {
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
             session_branching: crate::tui::session_branching::SessionBranchingState::new(),
-            tasks_overlay: TasksOverlay::new(),
             export_dialog: ExportDialogState::new(),
             context_viz: ContextVizState::new(),
             mcp_approval: McpApprovalDialogState::new(),
