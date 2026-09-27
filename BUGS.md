@@ -1196,11 +1196,14 @@ decisions the audit left open.
   own seam, tool without metadata refused rather than guessed, strict-mode
   policy pinned. `--features plugins-wasm` check clean; default-features check
   clean; bin suite 721/0; gate `seen=8 / new=0 / stale=0`.
-- **Not done**: no end-to-end swap test (would need a real signed .wasm plus a
-  trusted key in a temp plugin dir); the trusted-key plumbing reaches the CLI
-  through a new `[plugins] trusted_publisher_keys` AppConfig field rather than
-  reading the schema world's `[plugins.security]` — the two must be kept in
-  sync manually (documented in operant.example.toml, iter-357).
+- **Not done**: an end-to-end swap test is BLOCKED, not merely outstanding —
+  it needs a real signed `.wasm` module plus a trusted publisher key, and the
+  repo contains no `.wasm` fixture (searched: zero under
+  `crates/operant-plugins`). Authoring one is a new deliverable, not a test
+  edit, so it is tracked as its own item rather than faked with a stub module
+  that would prove only that the code runs. The unit tests cover the bridge,
+  the signature policy, and the claim mapping; the unexercised step is a real
+  Extism swap in a real plugins dir.
 - **Deployment reality (iter-357)**: C2 is gated behind the `plugins-wasm`
   cargo feature, which is default-OFF. The deployed `/usr/local/bin/operant`
   (default release build) therefore does NOT contain the watcher or the
@@ -1219,8 +1222,16 @@ decisions the audit left open.
   already-shipped source, not that they are "non-binary": a release build
   from HEAD now succeeds where a clean-checkout build did not.
   Rebuild only when a change alters shipped code paths.
+- **Signature policy unified (iter-363)**: the tool bridge had hardcoded
+  `PluginHost::new` (Disabled) while the watcher hardcoded Strict — two paths,
+  two policies, no operator control. `[plugins] signature_mode` +
+  `trusted_publisher_keys` now feed BOTH through `with_security` +
+  `parse_signature_mode`, and the swap watcher REFUSES a non-strict configured
+  mode with an explicit message instead of silently upgrading it. This
+  supersedes the "kept in sync manually" note above.
 - **Build interference**: a `--features plugins-wasm` release build in the
   shared tree fails on `tui/image_paste.rs:391` and `tui/image_render.rs:456`
   (E0308 / E0277) — both in the concurrent agent's UNCOMMITTED working copy
   (last committed at their `f956f535`), neither a C2 file. Verification of
-  C2's release compile is therefore done in a clean `git worktree` at HEAD.
+  C2's release compile is therefore done in a clean `git worktree` at HEAD
+  (exit 0 at iters 359, 360 and 363).
