@@ -1137,10 +1137,18 @@ While isolating the R40-9 fix, I overwrote `crates/operant-core/src/lib.rs`
 with a copy derived from HEAD instead of adding one line to the existing file.
 That destroyed the concurrent agent's UNCOMMITTED edits in the same file:
 * `pub mod terminal_hints;` relocated from just after `pub mod daemon_pool;`
-  down to just after `pub mod gateway_pipeline;`
+  down to just after `pub mod gateway_pipeline;` (both the `-` and `+` lines
+  were visible in the diff)
 * de-indentation (one leading space removed) of `pub mod mcp_oauth;`,
   `pub mod memory;`, `pub mod memory_provider;`, `pub mod migrations;`
-* `pub mod persistence_seam;` relocated after `pub mod interrupt;`
+  (both sides visible)
+* `pub mod persistence_seam;` removed from its position between
+  `harness_seams_r3` and `interrupt` — the `-` line was visible but the
+  re-add fell beyond the 40 lines of diff I had read, so its new position is
+  NOT known from my capture. It is NOT a deletion: `persistence_seam` is
+  declared exactly once at HEAD (lib.rs:79) and the module itself is intact
+  (last touched by `c8fc536f`, iter-018), so treat this as a relocation whose
+  destination must be re-established from the peer's own editor history.
 All five are cosmetic (module ordering / whitespace); no functional change was
 lost. **The content is not recoverable from git** — those edits were never
 staged, stashed, or hashed, and no matching dangling blob exists (searched via
@@ -1200,6 +1208,13 @@ decisions the audit left open.
   AppConfig field is not feature-gated) but `watch_wasm refused` is absent.
   Shipping the hot-swap requires a feature-enabled release build
   (`--features plugins-wasm`). C2 is "landed and compiling", not "deployed".
+- **Deploy predates iter-359/360 (no rebuild owed)**: the deployed binary
+  (md5 `39e6c798…`) was built from a commit before the missing-module fix and
+  the builder-dispatch test. Both of those are non-binary changes — a
+  `pub mod` declaration that restores compilation, and a test body — so the
+  shipped artifact is functionally identical to HEAD; the byte difference is
+  only that the build now succeeds from a clean tree. Rebuild only when a
+  change touches shipped code paths.
 - **Build interference**: a `--features plugins-wasm` release build in the
   shared tree fails on `tui/image_paste.rs:391` and `tui/image_render.rs:456`
   (E0308 / E0277) — both in the concurrent agent's UNCOMMITTED working copy
