@@ -2,8 +2,8 @@
 //!
 //! Contains all enum and struct definitions used throughout the app module:
 //! `SystemMessageStyle`, `ContextMenuKind`, `ContextMenuState`, `ContextMenuItem`,
-//! `KeyContext`, `DialogPriority`, `ToolStatus`, `ToolUseBlock`, `TurnMetadata`,
-//! `FocusTarget`, `SystemAnnotation`, and `ACCENT_BUILD`.
+//! `KeyContext`, `DialogPriority`, `ToolStatus`, `TurnState`, `ToolUseBlock`,
+//! `TurnMetadata`, `FocusTarget`, `SystemAnnotation`, and `ACCENT_BUILD`.
 
 /// Visual style for inline system messages in the conversation pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +212,72 @@ impl ToolStatus {
     /// one.
     pub fn is_pending(self) -> bool {
         matches!(self, ToolStatus::Queued | ToolStatus::Running)
+    }
+}
+
+/// Where the current agent turn is in its lifecycle.
+///
+/// `App::is_streaming` collapses every in-flight state below into one
+/// boolean, which is why "awaiting approval", "retrying", "compacting" and
+/// "errored" used to be indistinguishable from "thinking". `TurnState` is
+/// what the status line reads so the specific phase survives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TurnState {
+    /// No turn in flight.
+    #[default]
+    Idle,
+    /// The request was handed to the agent; nothing has come back yet.
+    Sending,
+    /// The provider transport is opening (connect / first byte).
+    ///
+    /// No `AgentEvent` signals the pre-first-byte window yet — the agent
+    /// emits nothing between `run()` being called and the first Content
+    /// event — so nothing assigns this today. Kept because the lifecycle is
+    /// modelled in full and a provider-connect event will land in it.
+    #[expect(dead_code, reason = "no pre-first-byte event exists to drive it yet")]
+    Connecting,
+    /// The model is reasoning; no assistant text yet.
+    Thinking,
+    /// Assistant text is arriving.
+    Streaming,
+    /// A tool call is executing (or queued on the worker pool).
+    RunningTool,
+    /// A permission dialog is blocking the turn.
+    WaitingForApproval,
+    /// A retry is scheduled or rate limited — nothing is moving on the wire.
+    WaitingForNetwork,
+    /// Context compaction is rewriting the transcript.
+    Compacting,
+}
+
+impl TurnState {
+    /// Short human label for the transient status line. The renderer appends
+    /// the ellipsis, so no variant carries a trailing `…`.
+    pub fn label(self) -> &'static str {
+        match self {
+            TurnState::Idle => "Idle",
+            TurnState::Sending => "Sending",
+            TurnState::Connecting => "Connecting",
+            TurnState::Thinking => "Thinking",
+            TurnState::Streaming => "Streaming",
+            TurnState::RunningTool => "Running tool",
+            TurnState::WaitingForApproval => "Awaiting approval",
+            TurnState::WaitingForNetwork => "Retrying",
+            TurnState::Compacting => "Compacting context",
+        }
+    }
+
+    /// True when the state names something the generic shimmer can't
+    /// express, so the status line must show it even when `status_message`
+    /// is empty.
+    pub fn is_noteworthy(self) -> bool {
+        matches!(
+            self,
+            TurnState::RunningTool
+                | TurnState::WaitingForApproval
+                | TurnState::WaitingForNetwork
+                | TurnState::Compacting
+        )
     }
 }
 

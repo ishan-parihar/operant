@@ -1,12 +1,47 @@
 // app/turn_state.rs — Per-turn snapshot and metadata sync helpers.
 //
-// Extracted from the app/mod.rs monolith. Turn lifecycle helpers: agent-mode
-// snapshots, user-turn begin/complete, transcript metadata sync, rewind flow
-// entry, and onboarding persistence.
+// Extracted from the app/mod.rs monolith. Turn lifecycle helpers: the
+// `TurnState` machine (`begin_turn` / `display_turn_state` /
+// `record_turn_usage`), agent-mode snapshots, user-turn begin/complete,
+// transcript metadata sync, rewind flow entry, and onboarding persistence.
 
 use super::*;
 
 impl App {
+    /// Anchor a new turn: zero the per-turn footer counters, stamp the
+    /// metrics clock, and move the lifecycle to `Sending` (the request is in
+    /// flight, nothing has come back yet). Called from every turn-submit
+    /// site in `TuiApp`, so the footer metrics never straddle two turns.
+    pub(crate) fn begin_turn(&mut self) {
+        self.turn_started_at = Some(std::time::Instant::now());
+        self.turn_input_tokens = 0;
+        self.turn_output_tokens = 0;
+        self.turn_cache_read_tokens = 0;
+        self.turn_cache_write_tokens = 0;
+        self.turn_state = TurnState::Sending;
+    }
+
+    /// The turn state to surface right now.
+    ///
+    /// `is_streaming` is still the authority on "is a turn live": the cancel
+    /// paths flip it directly without going through the event stream, so an
+    /// event-set `turn_state` can outlive its turn. Collapsing to `Idle` here
+    /// keeps a cancelled turn from showing "Streaming…" forever without
+    /// touching those call sites.
+    pub fn display_turn_state(&self) -> TurnState {
+        if self.is_streaming {
+            self.turn_state
+        } else {
+            TurnState::Idle
+        }
+    }
+
+    /// Add this turn's usage to the per-turn footer counters.
+    pub(crate) fn record_turn_usage(&mut self, input_tokens: u32, output_tokens: u32) {
+        self.turn_input_tokens = self.turn_input_tokens.saturating_add(input_tokens as u64);
+        self.turn_output_tokens = self.turn_output_tokens.saturating_add(output_tokens as u64);
+    }
+
     pub(crate) fn current_agent_mode_snapshot(&self) -> String {
         self.agent_mode
             .clone()

@@ -84,7 +84,39 @@ pub struct App {
     pub input: String,
     pub prompt_input: PromptInputState,
     pub scroll_offset: usize,
+    /// Coarse "a turn is in flight" flag.
+    ///
+    /// **Compat shim.** It is still the authority on whether a turn is live
+    /// (the cancel paths — `/stop`, Esc, run completion — flip it directly,
+    /// outside the event stream) and it is kept in sync at the same sites
+    /// that set it today, so its meaning is unchanged for its ~49 read
+    /// sites across 14 files. It stays a plain field on purpose: turning it
+    /// into a method or `Deref` would break every one of those sites.
+    ///
+    /// New code should read [`App::turn_state`] instead, which can tell
+    /// "retrying" / "awaiting approval" / "compacting" apart from "thinking".
     pub is_streaming: bool,
+    /// Specific point in the current turn's lifecycle. Driven by the
+    /// `AgentEvent` stream in `app/agent_events.rs` and the permission-drain
+    /// path; see [`TurnState`].
+    pub turn_state: TurnState,
+    /// Anchor for the per-turn footer metrics (duration, tokens/second).
+    /// Set when a turn is submitted and kept until the next one starts, so
+    /// the footer keeps showing the finished turn's numbers. Distinct from
+    /// `turn_start`, which is `take()`n on `Done` for the transcript's
+    /// "Worked for 2m 5s" line.
+    pub turn_started_at: Option<std::time::Instant>,
+    /// Per-turn token deltas for the footer, zeroed at each turn submit by
+    /// `App::begin_turn`.
+    ///
+    /// The two cache counters stay 0 for now: the `Usage` event carries only
+    /// input/output/total, and cache accounting today exists solely on the
+    /// persisted `StatsEntry` path, which the TUI never receives live. The
+    /// footer hides them while they are 0.
+    pub turn_input_tokens: u64,
+    pub turn_output_tokens: u64,
+    pub turn_cache_read_tokens: u64,
+    pub turn_cache_write_tokens: u64,
     pub streaming_text: String,
     pub streaming_thinking: String,
     /// Whether reasoning/thinking blocks are expanded by default in the
@@ -1057,6 +1089,9 @@ impl App {
                         );
                         self.permission_request = Some(dialog);
                         self.pending_permission_response_tx = Some(req.response_tx);
+                        // The turn is blocked on the user's answer, not on the
+                        // model — the status line says so.
+                        self.turn_state = TurnState::WaitingForApproval;
                     }
                 }
             }

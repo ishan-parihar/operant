@@ -183,6 +183,9 @@ pub(crate) fn should_render_status_row(app: &App) -> bool {
         || app.last_turn_elapsed.is_some()
         || (!app.is_streaming && app.status_message.is_some())
         || (app.is_streaming && interesting_stream_status)
+        // Retrying / compacting / awaiting approval set no status_message —
+        // the lifecycle state is the only thing that can name them.
+        || app.display_turn_state().is_noteworthy()
 }
 
 pub(crate) fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
@@ -198,10 +201,13 @@ pub(crate) fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )]
-    } else if app.is_streaming {
-        // Pick a label: use the status message if it has real content,
-        // otherwise show a default "Thinking" shimmer so the user always
-        // sees that the model is working.
+    } else if app.is_streaming || app.display_turn_state().is_noteworthy() {
+        // Pick a label: a real status message wins (it names the tool, e.g.
+        // "Queued bash…"), then the lifecycle state when it is specific
+        // enough to beat the random spinner verb, then the verb, then a
+        // default "Thinking" shimmer so the user always sees that the model
+        // is working.
+        let turn_state = app.display_turn_state();
         let raw_label = app
             .status_message
             .as_deref()
@@ -211,8 +217,14 @@ pub(crate) fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
                     && !t.eq_ignore_ascii_case(STATUS_THINKING)
                     && !t.eq_ignore_ascii_case(STATUS_THINKING_ELLIPSIS)
             })
-            .or(app.spinner_verb.as_deref())
-            .unwrap_or("Thinking");
+            .map(|s| s.to_string())
+            .or_else(|| {
+                turn_state
+                    .is_noteworthy()
+                    .then(|| turn_state.label().to_string())
+            })
+            .or_else(|| app.spinner_verb.as_deref().map(str::to_string))
+            .unwrap_or_else(|| turn_state.label().to_string());
 
         let mut s = vec![Span::styled(
             spinner_char(app.frame_count).to_string(),
@@ -454,6 +466,57 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 format!("${:.2}", app.cost_usd)
             };
             parts.push(Span::styled(cost_str, Style::default().fg(Color::DarkGray)));
+        }
+
+        // 3b. Per-turn metrics — wall clock for the turn in flight (kept
+        //     after Done so the last turn stays readable), its output rate,
+        //     and the token deltas since the turn was submitted. Zeroed by
+        //     `App::begin_turn` at every submit.
+        if let Some(started) = app.turn_started_at {
+            let secs = started.elapsed().as_secs_f64();
+            let total_secs = secs as u64;
+            if !parts.is_empty() {
+                parts.push(Span::raw("  "));
+            }
+            parts.push(Span::styled(
+                format!("{}:{:02}", total_secs / 60, total_secs % 60),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            // A sub-second turn has no meaningful rate yet (and the division
+            // would blow up to a nonsense number), so hold the rate back.
+            if secs >= 1.0 {
+                if !parts.is_empty() {
+                    parts.push(Span::raw("  "));
+                }
+                parts.push(Span::styled(
+                    format!("{:.0} tok/s", app.turn_output_tokens as f64 / secs),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            if app.turn_input_tokens > 0
+                || app.turn_output_tokens > 0
+                || app.turn_cache_read_tokens > 0
+                || app.turn_cache_write_tokens > 0
+            {
+                if !parts.is_empty() {
+                    parts.push(Span::raw("  "));
+                }
+                let mut deltas = format!(
+                    "\u{2191}{} \u{2193}{}",
+                    app.turn_input_tokens, app.turn_output_tokens
+                );
+                // Cache counters are only fed by providers that report them;
+                // stay hidden at 0 rather than printing a permanent "0".
+                if app.turn_cache_read_tokens > 0 {
+                    deltas.push_str(&format!(" \u{21bb}{}", app.turn_cache_read_tokens));
+                }
+                if app.turn_cache_write_tokens > 0 {
+                    deltas.push_str(&format!(" \u{21ba}{}", app.turn_cache_write_tokens));
+                }
+                parts.push(Span::styled(deltas, Style::default().fg(Color::DarkGray)));
+            }
         }
 
         // 4. Rate limits

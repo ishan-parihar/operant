@@ -786,6 +786,75 @@ fn test_usage_total_tokens_not_dropped() {
 }
 
 #[test]
+fn turn_state_should_reflect_retry_event() {
+    let mut app = make_app();
+    assert_eq!(app.turn_state, TurnState::Idle);
+
+    // A retry scheduled outside a live turn must not invent one: the
+    // compat shim keeps its pre-existing meaning (untouched by this event).
+    app.handle_agent_event(AgentEvent::RetryScheduled {
+        attempt: 1,
+        max_attempts: 3,
+        reason: "stream dropped".to_string(),
+    });
+    assert_eq!(app.turn_state, TurnState::WaitingForNetwork);
+    assert!(
+        !app.is_streaming,
+        "RetryScheduled must not flip is_streaming — it fires mid-turn, where the flag is already true"
+    );
+    assert_eq!(
+        app.display_turn_state(),
+        TurnState::Idle,
+        "a state set with no live turn collapses to Idle for display"
+    );
+
+    // The real case: a retry inside a live turn keeps the turn streaming and
+    // only adds the specificity the status line needs.
+    app.handle_agent_event(AgentEvent::Thinking {
+        content: "re-planning".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::RetryScheduled {
+        attempt: 2,
+        max_attempts: 3,
+        reason: "context overflow".to_string(),
+    });
+    assert!(app.is_streaming, "the turn is still live");
+    assert_eq!(app.turn_state, TurnState::WaitingForNetwork);
+    assert_eq!(app.display_turn_state(), TurnState::WaitingForNetwork);
+    assert_eq!(TurnState::WaitingForNetwork.label(), "Retrying");
+}
+
+#[test]
+fn footer_metrics_should_reset_each_turn() {
+    let mut app = make_app();
+    app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));
+    app.turn_input_tokens = 1_200;
+    app.turn_output_tokens = 340;
+    app.turn_cache_read_tokens = 7;
+    app.turn_cache_write_tokens = 9;
+
+    // Usage accumulates into the per-turn counters...
+    app.record_turn_usage(1_200, 340);
+    assert_eq!(app.turn_input_tokens, 2_400);
+
+    // ...and the next submit wipes them so the footer never straddles turns.
+    app.begin_turn();
+    assert_eq!(app.turn_input_tokens, 0);
+    assert_eq!(app.turn_output_tokens, 0);
+    assert_eq!(app.turn_cache_read_tokens, 0);
+    assert_eq!(app.turn_cache_write_tokens, 0);
+    assert!(
+        app.turn_started_at.is_some(),
+        "a submitted turn must be anchored for the duration/tps readout"
+    );
+    assert_eq!(
+        app.turn_state,
+        TurnState::Sending,
+        "a submitted turn starts in Sending until the first event lands"
+    );
+}
+
+#[test]
 fn test_usage_event_pushes_token_warning_notification() {
     // iter-255: check_token_warnings() was never called from the Usage
     // handler despite its doc comment saying to call it after updating

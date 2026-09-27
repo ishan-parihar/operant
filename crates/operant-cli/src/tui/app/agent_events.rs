@@ -41,6 +41,7 @@ impl App {
                     self.streaming_text.clear();
                 }
                 self.is_streaming = true;
+                self.turn_state = TurnState::Thinking;
                 self.stall_start = None;
                 // If we already have streaming text, this is a NEW iteration —
                 // the model is thinking again after a tool call. Clear the old
@@ -70,6 +71,7 @@ impl App {
                     self.streaming_text.clear();
                 }
                 self.is_streaming = true;
+                self.turn_state = TurnState::Streaming;
                 self.stall_start = None;
                 // Accumulate streaming text. (Boundary flushes are handled by
                 // AgentEvent::Thinking and AgentEvent::ToolStart.)
@@ -87,6 +89,7 @@ impl App {
                     self.spinner_verb = Some(sample_spinner_verb(seed as u64).to_string());
                 }
                 self.is_streaming = true;
+                self.turn_state = TurnState::RunningTool;
 
                 // When a tool starts, flush any accumulated streaming text/thinking
                 // as a completed message. This prevents content from accumulating
@@ -179,6 +182,9 @@ impl App {
                     }
                 }
                 self.invalidate_transcript();
+                // The tool settled; the model has to re-plan before the next
+                // Content event, so the turn is back to Thinking.
+                self.turn_state = TurnState::Thinking;
                 if is_error {
                     self.status_message = Some(format!("Tool error: {}", result_text));
                 } else {
@@ -214,6 +220,7 @@ impl App {
                     }
                 }
                 self.invalidate_transcript();
+                self.turn_state = TurnState::Thinking;
                 self.status_message = Some(format!("Tool error: {}", result_text));
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
@@ -227,6 +234,7 @@ impl App {
                 // assistant message. Now: if streaming_text is empty, use
                 // Done.message.content as the source of truth.)
                 self.is_streaming = false;
+                self.turn_state = TurnState::Idle;
                 self.spinner_verb = None;
 
                 // Record elapsed time and pick a completion verb
@@ -291,6 +299,7 @@ impl App {
 
             AgentEvent::Error { error } => {
                 self.is_streaming = false;
+                self.turn_state = TurnState::Idle;
                 self.spinner_verb = None;
                 self.streaming_text.clear();
                 self.streaming_thinking.clear();
@@ -315,6 +324,10 @@ impl App {
                 let turn_tokens = total_tokens.max(input_tokens + output_tokens);
                 self.context_used_tokens =
                     self.context_used_tokens.saturating_add(turn_tokens as u64);
+                // Per-turn footer deltas. Cache tokens aren't reported by this
+                // event, so the cache counters stay at 0 and the footer hides
+                // them (see the App field docs).
+                self.record_turn_usage(input_tokens, output_tokens);
                 if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
                     tracker.record_usage(input_tokens, output_tokens);
                 }
@@ -326,6 +339,7 @@ impl App {
             AgentEvent::RateLimitNotice { retry_after_secs } => {
                 // T3: surface the rate-limit state as a non-blocking
                 // notification (hermes `_capture_rate_limits` parity).
+                self.turn_state = TurnState::WaitingForNetwork;
                 let msg = match retry_after_secs {
                     Some(secs) if secs > 0 => {
                         format!("Rate limit reached — retry in ~{secs}s")
@@ -395,6 +409,7 @@ impl App {
             AgentEvent::CompactionStarted { tokens_before } => {
                 // Compact style = the compact-boundary marker (teardrop rule),
                 // the same lane /compact already renders.
+                self.turn_state = TurnState::Compacting;
                 self.push_system_message(
                     format!("Compacting context ({tokens_before} tokens) …"),
                     SystemMessageStyle::Compact,
@@ -407,6 +422,9 @@ impl App {
                 messages_before,
                 messages_after,
             } => {
+                // Compaction is done; the (possibly re-sent) request follows,
+                // so the turn is back with the model.
+                self.turn_state = TurnState::Thinking;
                 self.push_system_message(
                     format!(
                         "Compacted context: {tokens_before} → {tokens_after} tokens, \
@@ -421,6 +439,7 @@ impl App {
                 max_attempts,
                 reason,
             } => {
+                self.turn_state = TurnState::WaitingForNetwork;
                 // Reuse the SystemAPIError block so retries get the same
                 // boxed renderer as API failures instead of plain text.
                 let block = ContentBlock::SystemAPIError {
@@ -433,6 +452,8 @@ impl App {
             }
 
             AgentEvent::ModelFallback { from, to, reason } => {
+                // The fallback request is being re-sent.
+                self.turn_state = TurnState::Sending;
                 self.push_system_message(
                     format!("Model fallback: {from} → {to} ({reason})"),
                     SystemMessageStyle::Info,
