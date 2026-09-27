@@ -1062,3 +1062,53 @@ R14-4 claimed Slack signature verification "implemented in the same file" was un
 `release.yml` read `CHANGELOG.md` at repo root while the file lives in `docs/`; `docs/CHANGELOG.md` had no `## [0.2.0]` section (newest 0.1.4) while `Cargo.toml` says 0.2.0; `build.yml` cloned `../tdg-rust` for a path dependency removed from the workspace. A `v0.2.0` tag push would have run build → release → changelog extraction and exited 1 with nothing published.
 - **Fix**: release.yml path → `docs/CHANGELOG.md`; `## [0.2.0]` section added covering iters 331–347; tdg-rust clone step dropped from build.yml (workspace is self-contained — AGENTS.md Path Dependencies).
 - **Verify**: workflow YAML parses (`python3 -c yaml.safe_load` on both); changelog section matches the release-notes extraction format; no tag pushed (tagging is the operator's call).
+
+### R40-6 — C1: prompt/hook kernel seams had no live consumer (FIXED iter-349/350)
+The r16 audit's highest-value topology gap: `prompt` and `hook` providers could
+install into slots nothing read, so only the `tool` family evolved at runtime
+("the harness title is still a bus"). Both seam types already existed in
+`operant-runtime` (`agent::prompt_seam` / `hooks::harness_seam`) but their only
+constructors are tests, and the runtime `Agent` is not the CLI's agent — the
+live path is `operant-core`'s `OperantAgent` with its own frozen prefix and its
+own event-based `HookRegistry` (whose `with_hook_registry` had **zero**
+production callers, so the loop's `emit` calls were no-ops).
+- **Fix (iter-349)**: `operant-core::harness_slots` — `PromptSlot` +
+  `HookSlot` with their seams, `Effect`-undo uninstall, bounded prompt slot
+  (default 32). Sections render into `build_frozen_prefix` (the review fork
+  inherits them for free); a new `HookEvent::Hooks("*")` registry pattern lets
+  one `bridge_handler` see every live event, and `build_harness_host` returns
+  both slots so `AgentCore` hands them to both agent factories. The hook
+  registry is constructed only when the harness boots — the disabled-harness
+  path stays byte-identical.
+- **Verify (iter-349)**: `frozen_prefix_includes_kernel_prompt_sections`,
+  `prompt_seam_mount_lands_in_slot_and_unmount_clears_it` (real kernel
+  mount/unmount through the seam), `hook_bridge_fires_kernel_hooks_on_live_events`;
+  core lib 1801/0; CLI check clean.
+- **Gate record (iter-350)**: the post-commit gate caught 2 new lints in the
+  C1 diff (`len_without_is_empty` on both slots, `redundant_closure` in the
+  test) — both fixed in iter-350, re-verified green (slots 2/0, prefix 3/0).
+  The first "fix" used `Arc::new(String::from)` as the test's render closure:
+  that renders an empty string, which `render()` filters out, so the
+  assertion would have passed vacuously — caught and replaced with a named
+  `fn render() -> String` returning a real payload.
+- **Not fixed here**: the gate's 3 remaining new warnings
+  (`format_in_format_args` commands.rs:167, `manual_is_multiple_of`
+  key_handling.rs:1675, `unnecessary_sort_by` keybindings/report.rs:198) are
+  in the concurrent agent's uncommitted TUI work. Unlike iter-345 (a
+  committed, stale file), editing uncommitted in-flight files would mix
+  their code into this tree and conflict with their next push; that gate red
+  belongs to their iteration.
+
+### R40-7 — CI is tag-only; fmt debt blocks enabling a main-branch trigger (OPEN, deferred)
+All four workflows fire only on `push: tags: ['v*']` (+ dispatch) — no
+`branches: [main]`, no `pull_request`. Turning a main-branch trigger on is
+blocked by two facts, not by preference: `ci.yml` runs `cargo fmt --all
+--check` with `RUSTFLAGS: -Dwarnings`, and the committed tree carries fmt debt
+(`cargo fmt --all --check` currently reports 17 files), so a trigger + a
+sweep must land together; and `ci.yml`'s clippy step disagrees with
+`scripts/clippy-warning-gate.sh`'s allowlist model, so "CI green" and "local
+gate green" are different predicates. **Local gate is authoritative** (it is
+the repo's only pre-merge rule); a CI trigger would have to call the gate
+script, not raw clippy. Deferred while the concurrent agent is active in the
+shared tree — a 17-file reformat over their working copy is the same class of
+mistake that destroyed the 018 WIP.
