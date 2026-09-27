@@ -111,9 +111,16 @@ struct ApiKeyProbeConfig {
     env_var: &'static str,
 }
 
+/// A provider env var qualifies as an API-key source only. Base-URL override
+/// vars (`*_BASE_URL`) share the `env_vars` list but are never credentials;
+/// without this filter the sweep can send a URL as the Bearer token when the
+/// real key vars are unset (e.g. google with only `GEMINI_BASE_URL` set).
+fn is_key_env_var(name: &str) -> bool {
+    !name.ends_with("_BASE_URL")
+}
+
 /// Decide which URL (if any) a generic provider probe should hit, given the
 /// configured active endpoint (`config.client.base_url` after env overrides).
-///
 /// - `Some(<base>/models)` when the provider should be probed.
 /// - `None` when the probe must be skipped: this provider's key came from
 ///   `OPENAI_API_KEY` — the var `apply_env_overrides` routes to
@@ -325,12 +332,16 @@ pub async fn run_api_checks(config: &AppConfig, issues: &mut Vec<String>) {
                 && !p.default_base_url.is_empty()
         })
         .filter_map(|p| {
-            let (env_used, key) = p.env_vars.iter().find_map(|ev| {
-                std::env::var(ev)
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .map(|k| (*ev, k))
-            })?;
+            let (env_used, key) =
+                p.env_vars
+                    .iter()
+                    .filter(|ev| is_key_env_var(ev))
+                    .find_map(|ev| {
+                        std::env::var(ev)
+                            .ok()
+                            .filter(|s| !s.is_empty())
+                            .map(|k| (*ev, k))
+                    })?;
             let url = generic_probe_url(
                 env_used,
                 p.name,
@@ -445,7 +456,18 @@ pub async fn run_api_checks(config: &AppConfig, issues: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::generic_probe_url;
+    use super::{generic_probe_url, is_key_env_var};
+
+    #[test]
+    fn key_env_vars_exclude_base_url_overrides() {
+        // `env_vars` mixes credentials with base-URL overrides (google:
+        // GOOGLE_API_KEY, GEMINI_API_KEY, GEMINI_BASE_URL) — only the former
+        // may be used as Bearer tokens.
+        assert!(is_key_env_var("OPENAI_API_KEY"));
+        assert!(is_key_env_var("GEMINI_API_KEY"));
+        assert!(!is_key_env_var("GEMINI_BASE_URL"));
+        assert!(!is_key_env_var("OPENAI_BASE_URL"));
+    }
 
     #[test]
     fn omp_gateway_skips_openai_env_key_probes() {
