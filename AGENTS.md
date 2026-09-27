@@ -558,6 +558,22 @@ suggestions, tui
 
 ## Iteration History (recent)
 
+- 2026-09-27 (deployment-audit closeout, iters 335–345, interleaved with a
+  concurrent agent's 2c3c00b9/e716d7f3/a8a11bc5): doctor probes the configured
+  endpoint not the provider default — omp omniroute gateway no longer reports a
+  false `✗ OpenAI (invalid API key)` (iter-336); gate script self-diagnosis —
+  deny violations now reach the allowlist comparison and the gate prints the
+  offending site (iter-337, immediately caught iter-332's orphaned import);
+  background review no longer poisons WRITE_ORIGIN for the process lifetime —
+  task-local TASK_ORIGIN + scope_background_review, mutation-proven regression
+  test (iter-338, R39-10 residual); lost 018 CLI-side WIP rebuilt as audit C3 —
+  MetricsSnapshot on `operant status --json` + `architecture dump --live`, C6
+  test contract repinned (iter-339, R39-12); doctor key scan can no longer send
+  a base URL as Bearer token (iter-344, R39-11 companion); concurrent agent's
+  EchoTool unit-struct lint fixed to unblock the gate (iter-345). Zeroclaw
+  ports 1–2 landed: configurable CacheTtl (iter-340), WhatsApp markdown
+  dialect via shared asterisk_dialect (iter-341); ports 3–8 blocked pending
+  upstream source access.
 - 2026-09-27: R39-9..R39-10 + R39-6 closed — memory stats reads the real
   session count from database.db (iter-330); clippy gate green workspace-wide
   under --all-features, 46 deny-sites annotated, allowlist refreshed, gate
