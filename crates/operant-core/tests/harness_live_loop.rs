@@ -15,7 +15,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -36,11 +35,11 @@ use operant_harness::{
 
 // ─── test tools ────────────────────────────────────────────────────────
 
-/// A minimal tool that records its calls. Used to verify dispatch.
+/// A minimal tool used to verify dispatch. Dispatch is observed from the
+/// returned payload (`{"echoed": ...}`), which is how every test here
+/// distinguishes the live tool from a shadowed one.
 #[derive(Default)]
-struct EchoTool {
-    call_count: Arc<AtomicU32>,
-}
+struct EchoTool;
 
 impl EchoTool {
     fn new() -> Self {
@@ -69,8 +68,6 @@ impl OperantTool for EchoTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("echo", format!("bad args: {e}")),
         };
-        // Cheap side-effect: bump the counter so tests can observe dispatch.
-        let _ = parsed.message.len();
         ToolResult::success("echo", json!({ "echoed": parsed.message }))
     }
 }
