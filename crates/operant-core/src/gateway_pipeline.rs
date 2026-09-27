@@ -81,6 +81,10 @@ pub enum HookEvent {
     TurnEnd,
     /// Slash command executed (stores the command name)
     Command(String),
+    /// C1 — registry pattern, never emitted: a catch-all registration
+    /// slot so the kernel hook bridge (one handler) sees every event.
+    /// Kept as `String` for symmetry with `Command("*")`.
+    Hooks(String),
 }
 
 impl HookEvent {
@@ -89,6 +93,10 @@ impl HookEvent {
     pub fn matches(&self, pattern: &HookEvent) -> bool {
         match (self, pattern) {
             (HookEvent::Command(a), HookEvent::Command(b)) => b == "*" || a == b,
+            // C1 — the kernel hook slot bridges ONE registry handler that
+            // must see every event; `Hooks("*")` is that catch-all (same
+            // shape as the Command wildcard).
+            (_, HookEvent::Hooks(_)) => true,
             _ => self == pattern,
         }
     }

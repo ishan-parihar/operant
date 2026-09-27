@@ -69,6 +69,7 @@ impl OperantAgent {
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
             hook_registry: None,
+            harness_prompt_slot: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
             database,
@@ -131,6 +132,7 @@ impl OperantAgent {
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
             hook_registry: None,
+            harness_prompt_slot: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
             database,
@@ -281,6 +283,35 @@ impl OperantAgent {
         hook_registry: Arc<crate::gateway_pipeline::HookRegistry>,
     ) -> Self {
         self.hook_registry = Some(hook_registry);
+        self
+    }
+
+    /// Attach the kernel's shared prompt-section slot (audit C1). Sections
+    /// installed through the harness `prompt` seam are rendered into the
+    /// frozen prefix at every cache refresh.
+    pub fn with_harness_prompt_slot(mut self, slot: Arc<crate::harness_slots::PromptSlot>) -> Self {
+        self.harness_prompt_slot = Some(slot);
+        self
+    }
+
+    /// Same as [`Self::with_harness_prompt_slot`] for the optional slot
+    /// carried by the CLI's `AgentCore` (harness disabled = `None`).
+    pub fn with_harness_prompt_slot_opt(
+        mut self,
+        slot: Option<Arc<crate::harness_slots::PromptSlot>>,
+    ) -> Self {
+        self.harness_prompt_slot = slot;
+        self
+    }
+
+    /// Attach the optional hook registry from the CLI's `AgentCore` (C1;
+    /// `None` when the harness is disabled, preserving the pre-C1
+    /// no-hook-emission behavior).
+    pub fn with_hook_registry_opt(
+        mut self,
+        hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
+    ) -> Self {
+        self.hook_registry = hook_registry;
         self
     }
 

@@ -354,6 +354,18 @@ impl OperantAgent {
             // for free (byte-stable => prompt cache hits preserved).
             frozen.push_str(SKILLS_GUIDANCE);
         }
+        // C1 — kernel-evolved prompt sections. Appended to the frozen
+        // prefix (not to the per-turn system message) so provider
+        // installs change the same bytes the review fork inherits, and a
+        // provider swap invalidates the cache exactly like a skill list
+        // change does.
+        if let Some(slot) = &self.harness_prompt_slot {
+            let sections = slot.render();
+            if !sections.trim().is_empty() {
+                frozen.push_str("\n\n");
+                frozen.push_str(&sections);
+            }
+        }
         frozen
     }
 }

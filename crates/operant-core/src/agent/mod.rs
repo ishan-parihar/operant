@@ -362,6 +362,13 @@ pub struct OperantAgent {
     /// Hook registry for lifecycle events (AgentStart, AgentEnd, etc.).
     /// When set, the agent emits events at key lifecycle points.
     hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
+    /// Kernel-evolved prompt sections (audit C1). When the harness boot
+    /// constructs a `PromptSlot` and registers `PromptSlotSeam` against
+    /// it, every provider's `prompt.section` install lands here and is
+    /// rendered into the frozen prefix below. `None` = no harness
+    /// prompt evolution; the prompt is byte-identical to the
+    /// pre-harness path.
+    harness_prompt_slot: Option<Arc<crate::harness_slots::PromptSlot>>,
     /// /steer directive queue (iter-65). When the user sends a steer
     /// message during a multi-iteration tool-calling loop, it's queued
     /// here. The run() loop drains pending steers between iterations
@@ -1081,6 +1088,49 @@ mod tests {
         assert!(prefix.contains("check_only=true"));
         assert!(prefix.contains("## Skill Safety Rule"));
         assert!(prefix.contains("skill_view"));
+    }
+
+    #[test]
+    fn frozen_prefix_includes_kernel_prompt_sections() {
+        // C1 — a provider's `prompt.section` install must reach the live
+        // agent's system prompt, and a provider unmount must remove it.
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+        use crate::harness_slots::PromptSlot;
+
+        let slot = Arc::new(PromptSlot::new());
+        let db = Database::init(std::path::PathBuf::from("test_c1_slot.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_harness_prompt_slot(Arc::clone(&slot));
+
+        // Before any provider installs, the prompt is byte-identical to
+        // the non-harness path.
+        assert!(!agent.build_frozen_prefix().contains("kernel-section"));
+
+        assert!(slot.install("ops/one", Arc::new(|| "kernel-section payload".to_string())));
+        let prefix = agent.build_frozen_prefix();
+        assert!(
+            prefix.contains("kernel-section payload"),
+            "installed section must render into the frozen prefix"
+        );
+
+        // Uninstall (the seam's undo) removes it from the next refresh.
+        assert!(slot.remove("ops/one"));
+        assert!(!agent.build_frozen_prefix().contains("kernel-section"));
+
+        // The slot is bounded: a distinct id past the cap is refused.
+        let small = PromptSlot::with_max_items(1);
+        assert!(small.install("a", Arc::new(|| String::new())));
+        assert!(!small.install("b", Arc::new(|| String::new())));
+        // Replacing an existing id is always allowed.
+        assert!(small.install("a", Arc::new(|| String::new())));
     }
 
     #[test]

@@ -1319,6 +1319,14 @@ struct AgentCore {
     /// `config.harness.enabled = true`; `None` (dark-merge default) keeps
     /// the existing `ToolRegistry` / `HookRunner` paths untouched.
     harness: Option<Arc<operant_harness::Harness>>,
+    /// C1 — kernel prompt-section slot, present only when the harness
+    /// booted; handed to the agent builder so provider-installed sections
+    /// render into the frozen prefix.
+    harness_prompt_slot: Option<Arc<operant_core::harness_slots::PromptSlot>>,
+    /// C1 — hook registry carrying the kernel hook bridge. `None` when
+    /// the harness is disabled (the agent then emits no hook events, as
+    /// before this wiring).
+    hook_registry: Option<Arc<operant_core::gateway_pipeline::HookRegistry>>,
 }
 
 /// Build the shared core components needed by both agent constructors.
@@ -1370,6 +1378,30 @@ async fn build_agent_core(
     // `harness` stays None and the agent loop is byte-identical to the
     // pre-harness path.
     let harness = build_harness_host(config, registry.clone()).await;
+    // C1 — the kernel's slots ride alongside the harness. The prompt slot
+    // is attached to the agent builder (its sections render into the
+    // frozen prefix); the hook slot is bridged onto the agent's hook
+    // registry, which previously had no production constructor at all —
+    // provider-installed hooks had nowhere to fire.
+    let harness_prompt_slot = harness
+        .as_ref()
+        .map(|(_, slot, _)| std::sync::Arc::clone(slot));
+    let hook_registry = match harness.as_ref() {
+        Some((_, _, hook_slot)) => {
+            let registry = Arc::new(operant_core::gateway_pipeline::HookRegistry::new());
+            operant_core::gateway_pipeline::HookRegistry::register(
+                &registry,
+                operant_core::gateway_pipeline::HookEvent::Hooks("*".to_string()),
+                operant_core::harness_slots::HookSlot::bridge_handler(std::sync::Arc::clone(
+                    hook_slot,
+                )),
+            )
+            .await;
+            Some(registry)
+        }
+        None => None,
+    };
+    let harness = harness.map(|(h, _, _)| h);
     // S2 — make harness_dump/mount/unmount visible to the model. The
     // tools themselves gate mount/unmount on approval (ToolContext.metadata["approval"]).
     if let Some(h) = &harness {
@@ -1388,6 +1420,8 @@ async fn build_agent_core(
         memory_provider,
         skill_manager,
         harness,
+        harness_prompt_slot,
+        hook_registry,
     })
 }
 
@@ -1405,13 +1439,18 @@ async fn build_agent_core(
 async fn build_harness_host(
     config: &AppConfig,
     registry: ToolRegistry,
-) -> Option<Arc<operant_harness::Harness>> {
+) -> Option<(
+    Arc<operant_harness::Harness>,
+    Arc<operant_core::harness_slots::PromptSlot>,
+    Arc<operant_core::harness_slots::HookSlot>,
+)> {
     if !config.harness.enabled {
         return None;
     }
 
     use operant_core::harness_adapters::ToolSeam;
     use operant_core::harness_seams_r3::{GatewayCommandSeam, MemoryProviderSeam};
+    use operant_core::harness_slots::{HookSlot, HookSlotSeam, PromptSlot, PromptSlotSeam};
     use operant_harness::{
         BuilderWithFactories, Harness, HarnessHost, HarnessMetrics, KernelOptions,
         PoolBundleProvider, PoolFamilyProvider,
@@ -1427,9 +1466,19 @@ async fn build_harness_host(
     // S1 — R3 seams (tool-adjacent families) — additive, no host required.
     host.add_seam(std::sync::Arc::new(MemoryProviderSeam::new()));
     host.add_seam(std::sync::Arc::new(GatewayCommandSeam::new()));
-    // Hook/prompt/channel seams require runtime hosts (HookRunner, PromptSections, Gateway)
-    // and are wired in operant-runtime's Agent builder; the harness slot is valid
-    // for them even when not mounted here (late binding will rescue if they appear).
+    // C1 — prompt/hook seams against slots the live agent consumes: the
+    // prompt slot lands in the agent's frozen prefix, the hook slot is
+    // bridged onto the agent's HookRegistry (kernel hooks fire on the
+    // live loop's events). Provider-installed sections/hooks stay inert
+    // until the caller attaches the slot — boot is safe on its own.
+    let prompt_slot = std::sync::Arc::new(PromptSlot::new());
+    host.add_seam(std::sync::Arc::new(PromptSlotSeam::new(
+        std::sync::Arc::clone(&prompt_slot),
+    )));
+    let hook_slot = std::sync::Arc::new(HookSlot::new());
+    host.add_seam(std::sync::Arc::new(HookSlotSeam::new(
+        std::sync::Arc::clone(&hook_slot),
+    )));
 
     // S1+S5 — factories for wasm/pool. Pool dispatches by kind so family
     // late-binding and bundle tool materialization both work.
@@ -1468,7 +1517,11 @@ async fn build_harness_host(
                     error = %e,
                     "harness: architecture.toml + patches failed to resolve — kernel will start empty"
                 );
-                return Some(host.harness().clone());
+                return Some((
+                    host.harness().clone(),
+                    std::sync::Arc::clone(&prompt_slot),
+                    std::sync::Arc::clone(&hook_slot),
+                ));
             }
         }
     } else {
@@ -1529,7 +1582,7 @@ async fn build_harness_host(
         Err(e) => warn!(error = %e, "harness: boot_with_factories failed"),
     }
 
-    Some(host.harness().clone())
+    Some((host.harness().clone(), prompt_slot, hook_slot))
 }
 
 pub(crate) async fn create_runtime_agent(
@@ -1585,6 +1638,8 @@ pub(crate) async fn create_runtime_agent(
         )
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
+        .with_harness_prompt_slot_opt(core.harness_prompt_slot)
+        .with_hook_registry_opt(core.hook_registry)
         .with_interrupt_flag(flag)
         .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
             context_window,
@@ -1663,6 +1718,8 @@ pub(crate) async fn create_agent_without_events(
         )
         .with_memory_manager(core.memory_manager)
         .with_skill_manager(core.skill_manager)
+        .with_harness_prompt_slot_opt(core.harness_prompt_slot)
+        .with_hook_registry_opt(core.hook_registry)
         .with_interrupt_flag(flag)
         .with_llm_compressor(operant_core::agent::llm_compressor::LlmCompressorConfig {
             context_window,
