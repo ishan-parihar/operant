@@ -1222,13 +1222,23 @@ decisions the audit left open.
   already-shipped source, not that they are "non-binary": a release build
   from HEAD now succeeds where a clean-checkout build did not.
   Rebuild only when a change alters shipped code paths.
-- **Signature policy unified (iter-363)**: the tool bridge had hardcoded
-  `PluginHost::new` (Disabled) while the watcher hardcoded Strict — two paths,
-  two policies, no operator control. `[plugins] signature_mode` +
-  `trusted_publisher_keys` now feed BOTH through `with_security` +
-  `parse_signature_mode`, and the swap watcher REFUSES a non-strict configured
-  mode with an explicit message instead of silently upgrading it. This
-  supersedes the "kept in sync manually" note above.
+- **Signature policy unified (iter-363), runtime-verified (iter-365)**: the
+  tool bridge had hardcoded `PluginHost::new` (Disabled) while the watcher
+  hardcoded Strict — two paths, two policies, no operator control. `[plugins]
+  signature_mode` + `trusted_publisher_keys` now feed BOTH through
+  `with_security` + `parse_signature_mode`, and the swap watcher REFUSES a
+  non-strict configured mode with an explicit message instead of silently
+  upgrading it. This supersedes the "kept in sync manually" note above.
+  iter-363 was compile-verified only (clean-worktree `--features
+  plugins-wasm` check); iter-365 adds the missing runtime exercise:
+  `configured_mode_reaches_the_host_and_the_key_set_is_honoured` pins the
+  whole `parse_signature_mode` mapping, asserts the AppConfig default equals
+  the schema world's so the two surfaces cannot drift, and builds a real host.
+  It failed on first run — the test assumed `with_security` errors on a
+  missing plugins dir, but it creates one and returns Ok (host.rs:41-44);
+  the assertion now matches the real contract. Bridge suite 6/0. The tool
+  bridge also logs the enforced mode + key count at info, so strict-with-
+  empty-keys (which silently loads nothing) is visible rather than inferred.
 - **Build interference**: a `--features plugins-wasm` release build in the
   shared tree fails on `tui/image_paste.rs:391` and `tui/image_render.rs:456`
   (E0308 / E0277) — both in the concurrent agent's UNCOMMITTED working copy
