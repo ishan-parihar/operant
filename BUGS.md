@@ -1112,3 +1112,46 @@ the repo's only pre-merge rule); a CI trigger would have to call the gate
 script, not raw clippy. Deferred while the concurrent agent is active in the
 shared tree — a 17-file reformat over their working copy is the same class of
 mistake that destroyed the 018 WIP.
+
+### R40-8 — C2: WASM hot-swap was kernel-only by absence of a bridge (FIXED iter-353/354/355)
+The r16 audit's C2 said P4 was kernel-only until the WASM watcher was wired
+into `Harness::replace` with an Extism factory. Every piece it named exists
+(`extism 1.21` declared in operant-plugins, `create_plugin`,
+`validate_skill_bundle`, `Watcher::run_until`, `Harness::replace`, per-scan
+Ed25519 re-verification). What was missing was the mapping from a watcher
+`ManifestChange` to a kernel-mountable `ArchitectureRow`, plus the two policy
+decisions the audit left open.
+- **Bridge (iter-353)**: `plugin_tools.rs` (the only module seeing both
+  operant-plugins and operant-harness — operant-plugins must not depend on the
+  kernel) converts a verified change into a row whose `config["claims"]` match
+  what `WasmProvider` materializes. Claims are PAIRED with their seam and the
+  tool name is read from the module's `tool_metadata` export, not mapped from
+  `PluginCapability` (Tool/Channel/Memory/Observer/Skill is a coarser
+  vocabulary; a guessed name would install a tool the agent cannot call). A
+  first draft cross-producted every name under every seam — caught in review,
+  now guarded by a test.
+- **Watcher (iter-354)**: opt-in via `[harness] watch_wasm` (default false) —
+  a permanent poller whose every detected change re-instantiates the module
+  must not start as a side effect of `[harness].enabled`. Runs
+  `SignatureMode::Strict` unconditionally and refuses an empty
+  `[plugins] trusted_publisher_keys` (which would mark every plugin
+  `Untrusted` and silently never swap). First-time plugins are MOUNTED, not
+  replaced (`Harness::replace` only swaps a mounted provider; there is no
+  `get_provider`, so membership comes from `dump()`).
+- **Dead code (iter-355)**: the gate caught `assert_verifying_host` — called
+  with the `SignatureMode::Strict` constant, so it could never fail, i.e. a
+  tautology dressed as a security check — plus the variant only it constructed
+  and an unread `KernelRow::claims`. All three deleted; the policy stays where
+  it is actually enforced (the `with_signature(Strict, keys)` construction and
+  the empty-key refusal) and is pinned by a test instead of a helper nobody
+  called.
+- **Verify**: bridge tests 5/0 (`--features plugins-wasm`): unverified verdicts
+  never become rows, skill/observer unmapped, memory manifest claims only its
+  own seam, tool without metadata refused rather than guessed, strict-mode
+  policy pinned. `--features plugins-wasm` check clean; default-features check
+  clean; bin suite 721/0; gate `seen=8 / new=0 / stale=0`.
+- **Not done**: no end-to-end swap test (would need a real signed .wasm plus a
+  trusted key in a temp plugin dir); the trusted-key plumbing reaches the CLI
+  through a new `[plugins] trusted_publisher_keys` AppConfig field rather than
+  reading the schema world's `[plugins.security]` — the two must be kept in
+  sync manually.
