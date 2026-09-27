@@ -168,7 +168,7 @@ mod tests {
     // process and are not affected.
     use super::*;
     use crate::write_origin::{WriteOriginGuard, set_write_origin};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
 
     /// Serializes every origin-touching test across modules: the globals
     /// (PENDING, ENABLED, WRITE_ORIGIN) are process-wide and tests run in

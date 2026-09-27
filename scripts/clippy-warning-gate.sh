@@ -71,14 +71,18 @@ echo "[clippy-gate] collecting warnings..."
 # cargo rejects `lints` manifest keys), so the denies are applied explicitly;
 # justified sites carry `#[expect(clippy::unwrap_used/expect_used)]` with a
 # reason, and test targets are exempted via cfg_attr(test) allows / headers.
+# `|| true`: under the -D denies, cargo exits 101 whenever an unannotated
+# unwrap/expect fires — that's the gate's DATA, not a script failure. Without
+# this, `set -e` kills the script at the cargo line, the trap deletes
+# ${tmp_json}, and the gate exits 101 with zero diagnostics (BUGS.md R39-6).
 cargo clippy --workspace --all-targets --all-features --message-format=json \
-  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}"
+  -- -D clippy::unwrap_used -D clippy::expect_used "${EXTRA_ARGS[@]}" > "${tmp_json}" || true
 
 jq -r '
   select(.reason == "compiler-message")
   | . as $root
   | .message as $m
-  | select($m.level == "warning")
+  | select($m.level == "warning" or $m.level == "error")
   | ($root.target.name // "unknown_target") as $target
   | (
       $m.spans
