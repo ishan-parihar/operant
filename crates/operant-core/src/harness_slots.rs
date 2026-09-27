@@ -128,6 +128,14 @@ impl PromptSlot {
             .len()
     }
 
+    /// True when no section is installed (the agent appends nothing).
+    pub fn is_empty(&self) -> bool {
+        self.entries
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    }
+
     /// Render every section, joined with blank lines. Empty when the slot
     /// is empty — the caller appends nothing and the prompt stays
     /// byte-identical to the non-harness path.
@@ -293,6 +301,14 @@ impl HookSlot {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .len()
+    }
+
+    /// True when no hook is installed.
+    pub fn is_empty(&self) -> bool {
+        self.entries
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
     }
 
     /// Dispatch to every installed hook in insertion order. Returns the

@@ -1099,6 +1099,7 @@ mod tests {
         use crate::harness_slots::PromptSlot;
 
         let slot = Arc::new(PromptSlot::new());
+        const SECTION_PAYLOAD: &str = "kernel-section payload";
         let db = Database::init(std::path::PathBuf::from("test_c1_slot.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
@@ -1112,25 +1113,35 @@ mod tests {
 
         // Before any provider installs, the prompt is byte-identical to
         // the non-harness path.
-        assert!(!agent.build_frozen_prefix().contains("kernel-section"));
+        assert!(!agent.build_frozen_prefix().contains(SECTION_PAYLOAD));
 
-        assert!(slot.install("ops/one", Arc::new(|| "kernel-section payload".to_string())));
+        // A named fn pointer renders a fixed payload — a closure literal
+        // would trip clippy::redundant_closure in this test.
+        fn render() -> String {
+            SECTION_PAYLOAD.to_string()
+        }
+        let render: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(render);
+
+        assert!(
+            slot.install("ops/one", Arc::clone(&render)),
+            "install must accept the section"
+        );
         let prefix = agent.build_frozen_prefix();
         assert!(
-            prefix.contains("kernel-section payload"),
-            "installed section must render into the frozen prefix"
+            prefix.contains(SECTION_PAYLOAD),
+            "installed section payload must render into the frozen prefix"
         );
 
         // Uninstall (the seam's undo) removes it from the next refresh.
         assert!(slot.remove("ops/one"));
-        assert!(!agent.build_frozen_prefix().contains("kernel-section"));
+        assert!(!agent.build_frozen_prefix().contains(SECTION_PAYLOAD));
 
         // The slot is bounded: a distinct id past the cap is refused.
         let small = PromptSlot::with_max_items(1);
-        assert!(small.install("a", Arc::new(|| String::new())));
-        assert!(!small.install("b", Arc::new(|| String::new())));
+        assert!(small.install("a", Arc::clone(&render)));
+        assert!(!small.install("b", Arc::clone(&render)));
         // Replacing an existing id is always allowed.
-        assert!(small.install("a", Arc::new(|| String::new())));
+        assert!(small.install("a", Arc::clone(&render)));
     }
 
     #[test]
