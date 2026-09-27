@@ -1210,11 +1210,15 @@ decisions the audit left open.
   (`--features plugins-wasm`). C2 is "landed and compiling", not "deployed".
 - **Deploy predates iter-359/360 (no rebuild owed)**: the deployed binary
   (md5 `39e6c798…`) was built from a commit before the missing-module fix and
-  the builder-dispatch test. Both of those are non-binary changes — a
-  `pub mod` declaration that restores compilation, and a test body — so the
-  shipped artifact is functionally identical to HEAD; the byte difference is
-  only that the build now succeeds from a clean tree. Rebuild only when a
-  change touches shipped code paths.
+  the builder-dispatch test. iter-359 is NOT a cosmetic change — it restores
+  compilation: at that commit a clean checkout could not produce ANY binary
+  (`E0433` in operant-core). The deployed artifact was still built and
+  verified, because it was compiled in the shared working tree where the
+  declaration was present but uncommitted. iter-360 is test-only. So no
+  rebuild is owed, but the reason is that both changes restore/build from
+  already-shipped source, not that they are "non-binary": a release build
+  from HEAD now succeeds where a clean-checkout build did not.
+  Rebuild only when a change alters shipped code paths.
 - **Build interference**: a `--features plugins-wasm` release build in the
   shared tree fails on `tui/image_paste.rs:391` and `tui/image_render.rs:456`
   (E0308 / E0277) — both in the concurrent agent's UNCOMMITTED working copy
