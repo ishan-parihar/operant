@@ -319,96 +319,11 @@ fn read_image_windows() -> Option<PastedImage> {
 // ---------------------------------------------------------------------------
 // Clipboard text writing
 // ---------------------------------------------------------------------------
-
-/// Write text to the system clipboard. Returns `true` on success.
-pub fn write_clipboard_text(text: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        write_text_macos_w(text)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        write_text_windows_w(text)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        write_text_linux_w(text)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn write_text_macos_w(text: &str) -> bool {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = match Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes());
-    }
-    child.wait().map(|s| s.success()).unwrap_or(false)
-}
-
-#[cfg(target_os = "windows")]
-fn write_text_windows_w(text: &str) -> bool {
-    use std::io::Write;
-    use std::process::Stdio;
-    // PowerShell Set-Clipboard reads from stdin via pipe
-    let script =
-        format!("[Console]::InputEncoding = [System.Text.Encoding]::UTF8; $input | Set-Clipboard");
-    let mut child = match Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
-        .stdin(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes());
-    }
-    child.wait().map(|s| s.success()).unwrap_or(false)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn write_text_linux_w(text: &str) -> bool {
-    let clipboard_ok = write_text_linux_selection(text, false);
-    let primary_ok = write_text_linux_selection(text, true);
-    clipboard_ok || primary_ok
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn write_text_linux_selection(text: &str, primary: bool) -> bool {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let commands: &[(&str, &[&str])] = if primary {
-        &[
-            ("wl-copy", &["--primary"]),
-            ("xclip", &["-selection", "primary"]),
-            ("xsel", &["--primary", "--input"]),
-        ]
-    } else {
-        &[
-            ("wl-copy", &[]),
-            ("xclip", &["-selection", "clipboard"]),
-            ("xsel", &["--clipboard", "--input"]),
-        ]
-    };
-
-    for (prog, args) in commands {
-        if let Ok(mut child) = Command::new(prog).args(*args).stdin(Stdio::piped()).spawn() {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            if child.wait().map(|s| s.success()).unwrap_or(false) {
-                return true;
-            }
-        }
-    }
-    false
-}
+//
+// There is deliberately no write path here any more. This used to carry a
+// third copy of the wl-copy/xclip/xsel chain (which also wrote the X11 primary
+// selection). Every clipboard write in the TUI now goes through
+// [`crate::tui::clipboard`], so there is exactly one chain to keep correct.
 
 fn make_temp_png() -> Option<PathBuf> {
     let tmp_dir = std::env::temp_dir();

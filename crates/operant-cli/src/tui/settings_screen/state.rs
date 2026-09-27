@@ -319,7 +319,7 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
         SettingsEntry {
             key: "auto_copy_enabled",
             label: "Auto-copy on highlight",
-            description: "Automatically copy highlighted text to clipboard.",
+            description: "Automatically copy highlighted text to clipboard. Ctrl+T enters drag-select copy mode.",
             kind: SettingKind::Bool,
             value: if screen.auto_copy_enabled {
                 "true"

@@ -695,20 +695,23 @@ impl App {
                     .find(|m| m.role == Role::Assistant)
                     .map(|m| m.get_all_text());
                 if let Some(text) = last {
-                    // Try xclip/xsel/pbcopy/clip.exe for clipboard; fall back to notification.
-                    let copied = try_copy_to_clipboard(&text);
-                    if copied {
+                    // One clipboard chain, one report: the outcome names the
+                    // mechanism that worked, or every mechanism that did not
+                    // and why.
+                    let outcome = crate::tui::clipboard::copy(&text);
+                    if outcome.is_copied() {
                         self.push_notification(
                             NotificationKind::Info,
-                            "Copied to clipboard.".to_string(),
+                            outcome.status_message(),
                             Some(3),
                         );
                     } else {
                         self.push_notification(
                             NotificationKind::Info,
                             format!(
-                                "Last response: {} chars (clipboard unavailable)",
-                                text.len()
+                                "Last response: {} chars. {}",
+                                text.len(),
+                                outcome.status_message()
                             ),
                             Some(5),
                         );
@@ -1554,11 +1557,8 @@ impl App {
                             _ => None,
                         })
                         .collect();
-                    if try_copy_to_clipboard(&text) {
-                        self.status_message = Some("Copied to clipboard.".to_string());
-                    } else {
-                        self.status_message = Some("Failed to copy to clipboard.".to_string());
-                    }
+                    let outcome = crate::tui::clipboard::copy(&text);
+                    self.status_message = Some(outcome.status_message());
                 }
                 true
             }

@@ -1018,10 +1018,35 @@ impl App {
         // cancel_chord() was a no-op. The entire block was dead code that
         // always fell through to the hardcoded handlers.)
 
-        // Clear any active text selection on key press (except Ctrl+C which copies it).
-        let is_copy =
-            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-        if !is_copy && self.selection_anchor.is_some() {
+        // ---- Drag-select copy mode (Ctrl+T) ----------------------------
+        // Placed after every modal handler so an open dialog still owns its
+        // own keys. While copy mode is on, composer keys are swallowed and the
+        // exit chords still work; leaving copy mode restores normal key
+        // handling because the gate is the only thing that took it away.
+        if self.copy_mode_active() {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            match key.code {
+                KeyCode::Esc => {
+                    self.exit_copy_mode();
+                }
+                KeyCode::Char('t') if ctrl => {
+                    self.exit_copy_mode();
+                }
+                KeyCode::Char('c') if ctrl => {
+                    self.copy_current_selection();
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        // Clear any active text selection on key press, except the two chords
+        // that act *on* a selection: Ctrl+C copies it, Ctrl+T enters copy mode
+        // (which has to hand the prior selection back on exit).
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let is_copy = key.code == KeyCode::Char('c') && ctrl;
+        let is_copy_mode = key.code == KeyCode::Char('t') && ctrl;
+        if !is_copy && !is_copy_mode && self.selection_anchor.is_some() {
             self.selection_anchor = None;
             self.selection_focus = None;
             *self.selection_text.borrow_mut() = String::new();
@@ -1188,17 +1213,19 @@ impl App {
                 let sel_text = self.selection_text.borrow().clone();
                 if self.selection_anchor.is_some() && !sel_text.is_empty() {
                     // Text is selected: copy to clipboard.
-                    let copied = crate::image_paste::write_clipboard_text(&sel_text);
+                    let outcome = crate::tui::clipboard::copy(&sel_text);
                     self.selection_anchor = None;
                     self.selection_focus = None;
                     *self.selection_text.borrow_mut() = String::new();
-                    if copied {
-                        self.push_notification(
-                            NotificationKind::Info,
-                            "Copied to clipboard".to_string(),
-                            Some(2),
-                        );
-                    }
+                    self.push_notification(
+                        if outcome.is_copied() {
+                            NotificationKind::Info
+                        } else {
+                            NotificationKind::Warning
+                        },
+                        outcome.status_message(),
+                        Some(2),
+                    );
                 } else if self.is_streaming {
                     // Cancel streaming.
                     self.is_streaming = false;
@@ -1340,6 +1367,12 @@ impl App {
             // takes the one Ctrl letter nothing claims.
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.recall_queued_message();
+            }
+            // ---- Drag-select copy mode (Ctrl+T) -------------------------
+            // Every other Ctrl letter in the composer is taken (a b c d g k
+            // n p r s u w x y z); t is the one that reads as "text".
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.enter_copy_mode();
             }
 
             // ---- Alt/Meta key text editing operations -------------------

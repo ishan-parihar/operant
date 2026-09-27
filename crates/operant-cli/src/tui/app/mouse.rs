@@ -119,6 +119,89 @@ impl App {
         *self.selection_text.borrow_mut() = String::new();
     }
 
+    // ---- Drag-select copy mode (Ctrl+T) ----------------------------------
+    //
+    // Copy mode does not model a selection of its own: it reuses the
+    // selection the mouse already drives (`selection_anchor` /
+    // `selection_focus` / `selection_text`) and only adds the behaviour on
+    // top — every drag frame streams the selection to the clipboard, and
+    // dragging past the viewport edge scrolls so the drag can reach text that
+    // is not currently on screen. Enter and exit both go through the clipboard
+    // module, which owns the saved state.
+
+    /// Is drag-select copy mode on?
+    pub fn copy_mode_active(&self) -> bool {
+        crate::tui::clipboard::copy_mode_active()
+    }
+
+    /// Turn copy mode on, remembering the scroll position, the tail-follow
+    /// flag and any live selection so `exit_copy_mode` can put them back.
+    pub fn enter_copy_mode(&mut self) {
+        crate::tui::clipboard::enter_copy_mode(
+            self.selection_anchor,
+            self.selection_focus,
+            &self.selection_text.borrow(),
+            self.scroll_offset,
+            self.auto_scroll,
+        );
+        self.status_message =
+            Some("Copy mode: drag to select (Esc or Ctrl+T to exit).".to_string());
+    }
+
+    /// Turn copy mode off and restore scroll offset, tail-follow and the
+    /// selection that was live before it was entered.
+    pub fn exit_copy_mode(&mut self) {
+        let saved = crate::tui::clipboard::exit_copy_mode();
+        self.scroll_offset = saved.saved_scroll_offset;
+        self.auto_scroll = saved.saved_auto_scroll;
+        self.selection_anchor = saved.saved_anchor;
+        self.selection_focus = saved.saved_focus;
+        *self.selection_text.borrow_mut() = saved.saved_selection_text;
+        self.status_message = Some("Copy mode off.".to_string());
+    }
+
+    /// Copy the current selection and report it, leaving the selection intact
+    /// (copy mode is a copy mode, not a one-shot).
+    pub fn copy_current_selection(&mut self) {
+        let sel_text = self.selection_text.borrow().clone();
+        if sel_text.is_empty() {
+            self.status_message = Some("Nothing selected to copy.".to_string());
+            return;
+        }
+        let outcome = crate::tui::clipboard::copy(&sel_text);
+        self.status_message = Some(outcome.status_message());
+    }
+
+    /// Scroll the transcript by one step when a drag has gone past the top or
+    /// bottom edge of the selectable viewport, so a drag can pull in text that
+    /// is off screen. Returns `true` when it scrolled.
+    pub fn copy_mode_edge_autoscroll(&mut self, raw_row: u16) -> bool {
+        let area = self.last_selectable_area.get();
+        if area.width == 0 || area.height == 0 {
+            return false;
+        }
+        let last_row = area.y.saturating_add(area.height).saturating_sub(1);
+        let step = self.scroll_step();
+        if raw_row < area.y {
+            let off = self.scroll_offset.saturating_add(step);
+            self.auto_scroll = false;
+            if off != self.scroll_offset {
+                self.scroll_offset = off;
+                return true;
+            }
+        } else if raw_row > last_row {
+            let off = self.scroll_offset.saturating_sub(step);
+            if off != self.scroll_offset {
+                self.scroll_offset = off;
+                if off == 0 {
+                    self.auto_scroll = true;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
     // Show context menu at the given position.
     pub(super) fn show_context_menu(&mut self, x: u16, y: u16, kind: ContextMenuKind) {
         self.context_menu_state = Some(ContextMenuState {
@@ -230,19 +313,20 @@ impl App {
                 };
 
                 if let Some(text) = text {
-                    if crate::message_copy::copy_to_clipboard(&text) {
-                        self.push_notification(
-                            NotificationKind::Info,
-                            format!("Copied {} chars to clipboard.", text.len()),
-                            Some(3),
-                        );
-                    } else {
-                        self.push_notification(
-                            NotificationKind::Warning,
-                            "Failed to copy to clipboard.".to_string(),
-                            Some(3),
-                        );
-                    }
+                    let outcome = crate::tui::clipboard::copy(&text);
+                    self.push_notification(
+                        if outcome.is_copied() {
+                            NotificationKind::Info
+                        } else {
+                            NotificationKind::Warning
+                        },
+                        if outcome.is_copied() {
+                            format!("Copied {} chars to clipboard.", text.len())
+                        } else {
+                            outcome.status_message()
+                        },
+                        Some(3),
+                    );
                     debug!("Copy action triggered, text: {} chars", text.len());
                 }
             }
@@ -759,6 +843,13 @@ impl App {
                 if self.selection_anchor.is_some() {
                     let selectable_area = self.last_selectable_area.get();
                     if selectable_area.width > 0 && selectable_area.height > 0 {
+                        // Copy mode scrolls when the drag leaves the viewport,
+                        // so the selection can reach text that is not on screen.
+                        // Done before the clamp below, which would otherwise
+                        // throw the out-of-bounds row away.
+                        if self.copy_mode_active() {
+                            self.copy_mode_edge_autoscroll(mouse_event.row);
+                        }
                         let clamped_col = mouse_event.column.max(selectable_area.x).min(
                             selectable_area
                                 .x
@@ -773,10 +864,28 @@ impl App {
                         );
                         self.selection_focus = Some((clamped_col, clamped_row));
                         self.click_count = 0; // Reset on drag to prevent further double-clicks
+                        // Stream the selection to the clipboard as it grows.
+                        // `selection_text` is filled by the renderer from the
+                        // previous frame, so this trails the pointer by one
+                        // frame — imperceptible, and it avoids re-extracting
+                        // the text the renderer already has.
+                        if self.copy_mode_active() {
+                            let sel_text = self.selection_text.borrow().clone();
+                            crate::tui::clipboard::copy_selection_live(&sel_text);
+                        }
                     }
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // Copy mode stays on across clicks so a second drag can start
+                // without re-entering; Esc or Ctrl+T leaves it. Flush the final
+                // selection first — the last drag frame may not have moved the
+                // text, and the user is done dragging now.
+                if self.copy_mode_active() && self.selection_anchor != self.selection_focus {
+                    let sel_text = self.selection_text.borrow().clone();
+                    crate::tui::clipboard::copy_selection_live(&sel_text);
+                    return;
+                }
                 // Clear if no actual drag (single click = no selection)
                 if self.selection_anchor == self.selection_focus {
                     self.clear_selection();
@@ -784,12 +893,18 @@ impl App {
                     // Auto-copy finalized selection to clipboard.
                     let sel_text = self.selection_text.borrow().clone();
                     if !sel_text.is_empty() {
-                        let copied = crate::image_paste::write_clipboard_text(&sel_text);
-                        if copied {
+                        let outcome = crate::tui::clipboard::copy(&sel_text);
+                        if outcome.is_copied() {
                             self.push_notification(
                                 NotificationKind::Info,
-                                "Copied to clipboard".to_string(),
+                                outcome.status_message(),
                                 Some(1),
+                            );
+                        } else {
+                            self.push_notification(
+                                NotificationKind::Warning,
+                                outcome.status_message(),
+                                Some(4),
                             );
                         }
                     }

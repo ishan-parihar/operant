@@ -1905,3 +1905,148 @@ fn queued_message_recall_should_move_head_into_composer() {
     assert_eq!(app.prompt_input.text, "second queued");
     assert!(queue.try_lock().unwrap().is_empty());
 }
+
+// ---- Clipboard chain + drag-select copy mode (iter-351) ----
+
+/// The fallback decision is a pure function of availability, so the whole
+/// preference order is assertable without touching `$PATH` or a terminal —
+/// including the part that never changes: OSC 52 is last, always.
+#[test]
+fn clipboard_should_prefer_earlier_mechanism_in_chain() {
+    use crate::tui::clipboard::{CHAIN, Mechanism, plan};
+
+    assert_eq!(
+        CHAIN,
+        [
+            Mechanism::Arboard,
+            Mechanism::WlCopy,
+            Mechanism::Xclip,
+            Mechanism::Xsel,
+            Mechanism::Osc52
+        ],
+        "chain order changed — OSC 52 must stay the last resort"
+    );
+
+    // Every mechanism available, listed in the worst possible order: the plan
+    // must still come back as the full chain, in preference order.
+    assert_eq!(
+        plan(&[
+            Mechanism::Xsel,
+            Mechanism::Osc52,
+            Mechanism::Xclip,
+            Mechanism::WlCopy,
+            Mechanism::Arboard
+        ]),
+        CHAIN.to_vec()
+    );
+
+    // A later mechanism available does not promote it above an earlier one.
+    assert_eq!(
+        plan(&[Mechanism::Xsel, Mechanism::Osc52]),
+        vec![Mechanism::Xsel, Mechanism::Osc52]
+    );
+    assert_eq!(plan(&[Mechanism::Osc52]), vec![Mechanism::Osc52]);
+    assert!(plan(&[]).is_empty());
+}
+
+#[test]
+fn clipboard_should_report_all_attempted_mechanisms_on_total_failure() {
+    use crate::tui::clipboard::{Attempt, CHAIN, failure_summary};
+
+    // What a total failure has to look like: every mechanism named, each with a
+    // reason, all on one line. Built from the real chain so the test breaks if
+    // a mechanism is added without a reason for why it failed.
+    let attempts: Vec<Attempt> = CHAIN
+        .iter()
+        .map(|m| Attempt {
+            mechanism: *m,
+            reason: format!("{} unavailable here", m.label()),
+        })
+        .collect();
+    let line = failure_summary(&attempts);
+
+    assert!(!line.contains('\n'), "report must be one line: {line}");
+    for m in CHAIN {
+        assert!(
+            line.contains(m.label()),
+            "report omits {}: {line}",
+            m.label()
+        );
+    }
+    // The one line names each mechanism AND the reason it failed.
+    for m in CHAIN {
+        assert!(
+            line.contains(&format!("{} ({} unavailable here)", m.label(), m.label())),
+            "report omits the reason for {}: {line}",
+            m.label()
+        );
+    }
+}
+
+#[test]
+fn copy_mode_should_restore_state_on_exit() {
+    let mut app = make_app();
+
+    // Baseline: nothing active, and the composer owns the keyboard.
+    assert!(!app.copy_mode_active());
+    app.scroll_offset = 12;
+    app.auto_scroll = false;
+
+    // Enter with a live selection that copy mode is about to take over.
+    app.selection_anchor = Some((3, 4));
+    app.selection_focus = Some((30, 9));
+    *app.selection_text.borrow_mut() = "selected before copy mode".to_string();
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(app.copy_mode_active(), "Ctrl+T did not enter copy mode");
+
+    // While copy mode is on, composer keys are swallowed — typing 'x' must not
+    // reach the composer, and the transcript scroll stays put.
+    let before_scroll = app.scroll_offset;
+    app.handle_key_event(press_key(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(
+        app.prompt_input.is_empty(),
+        "copy mode leaked a keystroke into the composer"
+    );
+    assert_eq!(app.scroll_offset, before_scroll);
+
+    // Drag-select moves the scroll position; copy mode has to put it back.
+    app.scroll_offset = 99;
+    app.auto_scroll = true;
+    app.selection_anchor = Some((3, 4));
+    app.selection_focus = Some((3, 5));
+    *app.selection_text.borrow_mut() = "dragged".to_string();
+
+    // Esc leaves copy mode.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.copy_mode_active(), "Esc did not exit copy mode");
+
+    // Every piece of pre-entry state is back: scroll offset, tail-follow flag,
+    // and the selection that was live on entry.
+    assert_eq!(app.scroll_offset, 12, "scroll offset not restored");
+    assert!(!app.auto_scroll, "tail-follow flag not restored");
+    assert_eq!(app.selection_anchor, Some((3, 4)));
+    assert_eq!(app.selection_focus, Some((30, 9)));
+    assert_eq!(
+        app.selection_text.borrow().as_str(),
+        "selected before copy mode"
+    );
+
+    // Key handling is restored: the composer takes 'x' again.
+    app.handle_key_event(press_key(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(
+        !app.prompt_input.is_empty(),
+        "key handling not restored after leaving copy mode"
+    );
+}
+
+#[test]
+fn copy_mode_should_toggle_with_ctrl_t() {
+    let mut app = make_app();
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(app.copy_mode_active());
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(
+        !app.copy_mode_active(),
+        "Ctrl+T did not toggle copy mode off"
+    );
+}
