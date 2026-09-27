@@ -1,7 +1,7 @@
 use crate::tui::adapter_types::types::Role;
 // render/messages.rs — Message pane rendering, turn items, live content.
 
-use crate::tui::app::App;
+use crate::tui::app::{App, ToolUseBlock};
 use crate::tui::messages::{
     RenderContext, render_thinking_live_content, render_transcript_assistant_message_tagged,
     render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
@@ -15,10 +15,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::cache::*;
+use super::tools::{render_tool_items_lines, tool_group_ranges};
 use super::{ACCENT_PRIMARY, RenderedLineItem};
-use super::{
-    build_tool_names, render_system_annotation_lines, render_tool_block_lines, shimmer_spans,
-};
+use super::{build_tool_names, render_system_annotation_lines, shimmer_spans};
 
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
@@ -247,6 +246,13 @@ pub(crate) fn append_turn_items(
     let msg_count = turn.assistant_messages.len();
     let tool_count = turn.tool_blocks.len();
     let max_len = msg_count.max(tool_count);
+    // Adjacent same-name tool blocks in this turn collapse into one batched
+    // block. Groups are ordered, so a cursor over them replaces the per-block
+    // slots they occupy: the group renders at its start index, and every later
+    // index it covers has no assistant message of its own (that is exactly
+    // what makes them adjacent) and is skipped.
+    let groups = tool_group_ranges(&turn.tool_blocks, msg_count);
+    let mut group_cursor = 0usize;
 
     for i in 0..max_len {
         // Render assistant message at this position (if it exists)
@@ -267,10 +273,16 @@ pub(crate) fn append_turn_items(
         }
 
         // Render tool block at this position (if it exists)
-        if i < tool_count {
-            let block = turn.tool_blocks[i];
+        if i < tool_count
+            && let Some(group) = groups.get(group_cursor).filter(|group| group.start == i)
+        {
+            group_cursor += 1;
             let mut lines = Vec::new();
-            render_tool_block_lines(&mut lines, block, frame_count);
+            render_tool_items_lines(
+                &mut lines,
+                &turn.tool_blocks[group.start..group.end],
+                frame_count,
+            );
             if !lines.is_empty() {
                 sections.push((
                     SectionContent::Plain(lines),
@@ -412,9 +424,17 @@ pub(crate) fn render_message_items(app: &App, width: u16) -> Vec<RenderedLineIte
         }
 
         if total == 0 && !app.tool_use_blocks.is_empty() {
-            for block in &app.tool_use_blocks {
+            // No user message means no turn to partition on, but a batch that
+            // arrived before the first message still reads as one group —
+            // assistant_count 0 means every adjacent same-name run is batched.
+            let blocks: Vec<&ToolUseBlock> = app.tool_use_blocks.iter().collect();
+            for group in tool_group_ranges(&blocks, 0) {
                 let mut lines = Vec::new();
-                render_tool_block_lines(&mut lines, block, app.frame_count);
+                render_tool_items_lines(
+                    &mut lines,
+                    &blocks[group.start..group.end],
+                    app.frame_count,
+                );
                 push_rendered_items(&mut items, lines, None, false);
                 push_blank_item(&mut items);
             }

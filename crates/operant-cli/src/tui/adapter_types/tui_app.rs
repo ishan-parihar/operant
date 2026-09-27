@@ -679,6 +679,7 @@ impl TuiApp {
                             content: MessageContent::Text(input.clone()),
                         });
                         self.app.is_streaming = true;
+                        self.app.begin_turn();
                         self.app.streaming_text.clear();
                         self.app.streaming_thinking.clear();
 
@@ -724,6 +725,7 @@ impl TuiApp {
             content: MessageContent::Text(text.clone()),
         });
         self.app.is_streaming = true;
+        self.app.begin_turn();
         self.app.streaming_text.clear();
         self.app.streaming_thinking.clear();
         let agent_clone = std::sync::Arc::clone(agent);
@@ -777,6 +779,7 @@ impl TuiApp {
                 }
                 drop(agent_tx);
                 self.app.is_streaming = true;
+                self.app.begin_turn();
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel();
                 let _ = done_tx.send(Ok(()));
                 self.app.run_complete_rx = Some(done_rx);
@@ -834,6 +837,7 @@ impl TuiApp {
                 content: MessageContent::Text(query.clone()),
             });
             self.app.is_streaming = true;
+            self.app.begin_turn();
             self.app.streaming_text.clear();
             self.app.streaming_thinking.clear();
 
@@ -886,6 +890,7 @@ impl TuiApp {
                             content: MessageContent::Text(input.clone()),
                         });
                         self.app.is_streaming = true;
+                        self.app.begin_turn();
                         self.app.streaming_text.clear();
                         self.app.streaming_thinking.clear();
 

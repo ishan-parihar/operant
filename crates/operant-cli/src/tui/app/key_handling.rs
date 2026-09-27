@@ -1244,6 +1244,14 @@ impl App {
                 self.session_branching.open(vec![], self.messages.len());
             }
 
+            // ---- Scroll bookmark (Ctrl+G) -------------------------------
+            // Toggles: first press remembers the current spot, second press
+            // jumps back to it and disarms. The status row names the state so
+            // the toggle is discoverable without opening the help overlay.
+            KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_scroll_bookmark();
+            }
+
             // ---- Context menu (Ctrl+Shift+M) ----------------------------
             KeyCode::Char('m')
                 if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1467,17 +1475,21 @@ impl App {
             // ---- Message boundary navigation (Alt+Up/Alt+Down) ----------
             KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Jump up by ~20 lines (approximate message boundary).
+                let prev = self.scroll_offset;
                 self.scroll_offset = self.scroll_offset.saturating_add(20);
                 self.auto_scroll = false;
+                self.note_user_scroll(prev);
             }
             KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
                 // Jump down by ~20 lines (approximate message boundary).
+                let prev = self.scroll_offset;
                 let new_off = self.scroll_offset.saturating_sub(20);
                 self.scroll_offset = new_off;
                 if new_off == 0 {
                     self.auto_scroll = true;
                     self.new_messages_while_scrolled = 0;
                 }
+                self.note_user_scroll(prev);
             }
 
             // ---- Input history navigation ------------------------------
@@ -1557,11 +1569,14 @@ impl App {
 
             // ---- Scroll ------------------------------------------------
             KeyCode::PageUp => {
+                let prev = self.scroll_offset;
                 self.scroll_offset = self.scroll_offset.saturating_add(10);
                 // Scrolling up disables auto-follow.
                 self.auto_scroll = false;
+                self.note_user_scroll(prev);
             }
             KeyCode::PageDown => {
+                let prev = self.scroll_offset;
                 let new_off = self.scroll_offset.saturating_sub(10);
                 self.scroll_offset = new_off;
                 if new_off == 0 {
@@ -1569,6 +1584,7 @@ impl App {
                     self.auto_scroll = true;
                     self.new_messages_while_scrolled = 0;
                 }
+                self.note_user_scroll(prev);
             }
 
             // ---- Toggle last thinking block (t key) -------------------

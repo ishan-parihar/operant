@@ -1393,3 +1393,217 @@ fn tool_should_transition_queued_to_running_on_permit_acquire() {
     assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Done);
     assert!(!app.tool_use_blocks[0].status.is_pending());
 }
+
+// ---- Batched tool-call grouping ----
+//
+// A concurrent batch (6 same-name calls in one turn) must render as one block
+// with a progress meter, not as N undifferentiated siblings. The two cases
+// that matter for correctness are the merge itself and the boundary it must
+// never cross.
+use crate::tui::render::tools::{render_tool_group_lines, tool_group_ranges};
+use crate::tui::transcript_turn::build_transcript_turns;
+
+/// Drive one call through the real event path: the first `ToolStart` means
+/// "parsed" (Queued), the pool's re-announcement means the permit is held
+/// (Running). Emitting the same `AgentEvent` twice is how a real call reaches
+/// Running, so the tests use it rather than hand-building blocks.
+fn start_tool(app: &mut App, id: &str, name: &str, arguments: &str) {
+    let event = AgentEvent::ToolStart {
+        tool_call_id: id.to_string(),
+        name: name.to_string(),
+        arguments: arguments.to_string(),
+    };
+    app.handle_agent_event(event.clone());
+    app.handle_agent_event(event);
+}
+
+#[test]
+fn tool_group_should_merge_adjacent_same_name_blocks() {
+    let mut app = make_app();
+    app.messages
+        .push(Message::user("read the tree".to_string()));
+    start_tool(&mut app, "call_1", "read", r#"{"file_path":"src/a.rs"}"#);
+    start_tool(&mut app, "call_2", "read", r#"{"file_path":"src/b.rs"}"#);
+    // The double ToolStart is a state transition, not two tools: still one
+    // block per call id, so there is nothing to double-count.
+    assert_eq!(app.tool_use_blocks.len(), 2, "one block per call id");
+
+    let turns = build_transcript_turns(&app);
+    assert_eq!(turns.len(), 1);
+    let turn = &turns[0];
+    let groups = tool_group_ranges(&turn.tool_blocks, turn.assistant_messages.len());
+    assert_eq!(groups.len(), 1, "adjacent same-name calls form one group");
+    assert_eq!(groups[0], 0..2, "the group covers both calls");
+
+    // The group renders as one block: a progress-meter header plus one status
+    // row per sub-call, not two sibling blocks.
+    let mut lines = Vec::new();
+    render_tool_group_lines(&mut lines, &turn.tool_blocks[0..2], 0);
+    assert_eq!(lines.len(), 3, "one header + one row per sub-call");
+    let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(header.contains("read"), "header names the tool: {header}");
+    assert!(
+        header.contains("0/2 done"),
+        "header carries the progress meter: {header}"
+    );
+    assert!(
+        header.contains("running:"),
+        "header names what is still running: {header}"
+    );
+    // Per-sub-call rows identify each call, and both are running.
+    for (row, path) in lines[1..].iter().zip(["src/a.rs", "src/b.rs"]) {
+        let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains(path), "row names its call: {text}");
+    }
+}
+
+#[test]
+fn tool_group_should_not_merge_across_user_message_boundary() {
+    let mut app = make_app();
+    app.messages.push(Message::user("read a".to_string()));
+    start_tool(&mut app, "call_1", "read", r#"{"file_path":"src/a.rs"}"#);
+    app.messages.push(Message::user("read b".to_string()));
+    start_tool(&mut app, "call_2", "read", r#"{"file_path":"src/b.rs"}"#);
+    assert_eq!(app.tool_use_blocks.len(), 2);
+
+    let turns = build_transcript_turns(&app);
+    assert_eq!(turns.len(), 2, "one turn per user message");
+    assert_eq!(turns[0].tool_blocks.len(), 1);
+    assert_eq!(turns[1].tool_blocks.len(), 1);
+
+    // Grouping is per turn, so two same-name calls on either side of a user
+    // message stay two groups of one. A transcript-global grouping that ignored
+    // the turn would collapse them into a single group of two and fail here.
+    let batch_sizes: Vec<usize> = turns
+        .iter()
+        .flat_map(|turn| {
+            tool_group_ranges(&turn.tool_blocks, turn.assistant_messages.len())
+                .into_iter()
+                .map(|group| group.len())
+        })
+        .collect();
+    assert_eq!(
+        batch_sizes,
+        vec![1, 1],
+        "same-name calls in different turns must not batch together"
+    );
+}
+
+// ---- Scroll bookmark + reflow anchor (Ctrl+G) --------------------------
+//
+// These drive the two halves of the reading-position state in
+// `app/scroll_anchor.rs`. The render path is what measures the transcript, so
+// the tests stand in for it: setting `last_render_scroll_offset` to the row a
+// frame *would* paint, then calling `reconcile_scroll_anchor`, is exactly what
+// `App::run` does after `terminal.draw`.
+
+/// Stand in for a rendered frame: the viewport is at the top of a transcript
+/// with `scrollback` rows of scrollable height, then reconcile.
+fn paint_frame_at_top(app: &mut App, scrollback: usize) {
+    app.last_render_scroll_offset.set(0);
+    app.scroll_offset = scrollback;
+    app.reconcile_scroll_anchor();
+}
+
+#[test]
+fn scroll_bookmark_should_toggle_and_restore() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    paint_frame_at_top(&mut app, 42);
+
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 42, "first press only arms");
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Bookmark on")
+    );
+
+    // Reader wanders off, then asks to come back.
+    app.scroll_offset = 5;
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 42, "second press restores the bookmark");
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Bookmark off")
+    );
+
+    // It is a toggle, not a sticky mark: the third press arms again at the
+    // current spot instead of jumping back a second time.
+    app.scroll_offset = 7;
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 7);
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Bookmark on")
+    );
+}
+
+#[test]
+fn scroll_bookmark_should_clamp_when_transcript_shrank() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    paint_frame_at_top(&mut app, 300);
+
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 300);
+
+    // `/clear`, `/rewind` or a compacted turn drops the scrollback to 40 rows.
+    paint_frame_at_top(&mut app, 40);
+
+    // Restoring row 300 of a 40-row transcript must land in range, not past
+    // the end (which would render a blank or clamped view with no explanation).
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert_eq!(
+        app.scroll_offset, 40,
+        "restored offset is clamped to the range"
+    );
+}
+
+#[test]
+fn anchor_should_hold_position_when_content_grows_above() {
+    let mut app = make_app();
+    paint_frame_at_top(&mut app, 0);
+
+    // Reader parks 10 rows up: PageUp drops auto-follow and pins the row that
+    // is on screen.
+    app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
+    assert!(!app.auto_scroll);
+    app.reconcile_scroll_anchor();
+    assert_eq!(
+        app.scroll_offset, 10,
+        "no reflow yet, so nothing to correct"
+    );
+
+    // 20 rows of new output land above the viewport. The next paint would
+    // therefore show the pinned row 20 lines lower than the reader left it.
+    app.last_render_scroll_offset.set(20);
+    app.reconcile_scroll_anchor();
+
+    // Offset grew by the same 20, and the transcript is now 20 + 10 = 30 rows
+    // of scrollback, so the pinned row paints at 30 - 30 = 0 again: the same
+    // content, in the same place.
+    assert_eq!(app.scroll_offset, 30);
+}
+
+#[test]
+fn user_scroll_should_cancel_the_anchor() {
+    let mut app = make_app();
+    paint_frame_at_top(&mut app, 0);
+    app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::NONE));
+    app.reconcile_scroll_anchor();
+    assert_eq!(app.scroll_offset, 10);
+
+    // A scroll the reader makes outside the keyboard arms — the mouse wheel
+    // writes `scroll_offset` directly — is a new reading position, so the old
+    // pin is void and later reflow must not drag the view back.
+    app.scroll_offset = 15;
+    app.last_render_scroll_offset.set(20);
+    app.reconcile_scroll_anchor();
+    assert_eq!(app.scroll_offset, 15, "a user scroll drops the anchor");
+}

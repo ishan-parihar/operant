@@ -12,6 +12,7 @@ mod messaging;
 mod mouse;
 mod prompt;
 mod providers;
+mod scroll_anchor;
 mod turn_state;
 
 #[cfg(test)]
@@ -1130,6 +1131,13 @@ impl App {
                 self.debug_hub.record_frame(render_ms);
                 crate::osc8::scan_buffer_for_urls(completed.buffer)
             };
+
+            // Reflow bookkeeping. The just-painted row is only known now that
+            // the transcript has been measured, so this is the first point
+            // where "new output shifted the content above the reader" is
+            // observable; it nudges the offset back so the anchored row stays
+            // under the cursor on the next paint.
+            self.reconcile_scroll_anchor();
 
             // Post-paint OSC 8 overlay: re-emit URL cells wrapped in
             // hyperlink escapes so terminals that support OSC 8 (Windows

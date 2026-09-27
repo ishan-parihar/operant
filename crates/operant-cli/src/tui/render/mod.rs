@@ -26,7 +26,7 @@ pub(crate) use messages::render_messages;
 pub(crate) use selection::{
     apply_selection_highlight, cache_selectable_row_text, render_context_menu,
 };
-pub(crate) use tools::{build_tool_names, render_system_annotation_lines, render_tool_block_lines};
+pub(crate) use tools::{build_tool_names, render_system_annotation_lines};
 pub(crate) use utils::{
     is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color, truncate_end,
     truncate_middle, truncate_text,
