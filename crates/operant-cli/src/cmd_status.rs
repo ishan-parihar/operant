@@ -41,6 +41,20 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
                 if let Ok(arch) = operant_harness::Architecture::from_toml(&raw) {
                     hs["row_count"] = json!(arch.rows.len());
                     hs["active_count"] = json!(arch.active().count());
+                    // C3 (018 rebuild): best-effort live boot so the harness
+                    // line exposes the mount outcome counters (Active vs
+                    // Pending at boot) instead of only file row counts —
+                    // the r16 audit S6 "half-observable" gap.
+                    let snap = crate::cmd_architecture::boot_metrics_snapshot(&arch).await;
+                    hs["metrics"] = json!({
+                        "mount_success": snap.mount_success,
+                        "mount_pending": snap.mount_pending,
+                        "mount_failed": snap.mount_failed,
+                        "replace_success": snap.replace_success,
+                        "replace_failed": snap.replace_failed,
+                        "unmount_calls": snap.unmount_calls,
+                        "unwind_invocations": snap.unwind_invocations,
+                    });
                 }
             }
         }
@@ -159,10 +173,26 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
         if let Some(h) = status.get("harness") {
             let enabled = h["enabled"].as_bool().unwrap_or(false);
             if enabled {
-                let arch = h["architecture_file"].as_str().unwrap_or("architecture.toml");
+                let arch = h["architecture_file"]
+                    .as_str()
+                    .unwrap_or("architecture.toml");
                 let rows = h.get("row_count").and_then(|v| v.as_u64()).unwrap_or(0);
                 let active = h.get("active_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                println!("Harness: enabled ({}: {} rows, {} active)", arch, rows, active);
+                let m = &h["metrics"];
+                let metrics_line = if m.is_object() {
+                    format!(
+                        ", boot: {} ok / {} pending / {} failed",
+                        m["mount_success"].as_u64().unwrap_or(0),
+                        m["mount_pending"].as_u64().unwrap_or(0),
+                        m["mount_failed"].as_u64().unwrap_or(0)
+                    )
+                } else {
+                    String::new()
+                };
+                println!(
+                    "Harness: enabled ({}: {} rows, {} active{})",
+                    arch, rows, active, metrics_line
+                );
             } else {
                 println!("Harness: disabled (set [harness].enabled=true to adopt)");
             }

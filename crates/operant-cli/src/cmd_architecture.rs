@@ -10,7 +10,9 @@ use anyhow::{Context, Result, anyhow};
 use clap::Subcommand;
 use serde_json::json;
 
-use operant_harness::{Architecture, Builder, Composition, HarnessError, Patch};
+use operant_harness::{
+    Architecture, Builder, BuilderWithFactories, Composition, HarnessError, Patch,
+};
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ArchitectureSubcommand {
@@ -67,12 +69,19 @@ pub async fn handle_architecture_command(cmd: ArchitectureSubcommand) -> Result<
         ArchitectureSubcommand::Validate { file, patch } => {
             handle_validate_command(file, patch).await
         }
-        ArchitectureSubcommand::Dump { file, patch, json, watch_secs, live } => {
-            handle_dump_command(file, patch, json, watch_secs, live).await
-        }
-        ArchitectureSubcommand::PoolImport { path, json, apply, file } => {
-            handle_pool_import_command(path, json, apply, file).await
-        }
+        ArchitectureSubcommand::Dump {
+            file,
+            patch,
+            json,
+            watch_secs,
+            live,
+        } => handle_dump_command(file, patch, json, watch_secs, live).await,
+        ArchitectureSubcommand::PoolImport {
+            path,
+            json,
+            apply,
+            file,
+        } => handle_pool_import_command(path, json, apply, file).await,
     }
 }
 
@@ -95,8 +104,7 @@ pub async fn handle_pool_import_command(
         let mut arch = if file.exists() {
             let raw = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading architecture file {}", file.display()))?;
-            operant_harness::Architecture::from_toml(&raw)
-                .map_err(|e| anyhow!(e.to_string()))?
+            operant_harness::Architecture::from_toml(&raw).map_err(|e| anyhow!(e.to_string()))?
         } else {
             operant_harness::Architecture::default()
         };
@@ -141,9 +149,7 @@ pub async fn handle_pool_import_command(
                 .build_with(&arch)
                 .map_err(|e| anyhow!(format!("validate after apply: {e}")))?;
         }
-        let toml_str = arch
-            .to_toml()
-            .map_err(|e| anyhow!(e.to_string()))?;
+        let toml_str = arch.to_toml().map_err(|e| anyhow!(e.to_string()))?;
         std::fs::write(&file, toml_str)
             .with_context(|| format!("writing architecture file {}", file.display()))?;
         println!(
@@ -219,33 +225,19 @@ pub async fn handle_dump_command(
 }
 
 async fn dump_live(file: &Path, patches: &[PathBuf], json: bool) -> Result<()> {
-    use operant_harness::{
-        BuilderWithFactories, Harness, HarnessHost, KernelOptions, PoolBundleProvider,
-        PoolFamilyProvider,
-    };
+    use operant_harness::{Harness, HarnessHost, HarnessMetrics, KernelOptions};
     let arch = load_and_resolve(file, patches)
         .with_context(|| format!("loading architecture from {}", file.display()))?;
-    // Build a live harness with the same factories as production boot.
-    let mut builder = BuilderWithFactories::new();
-    builder.register_factory(
-        "pool",
-        std::sync::Arc::new(|row: operant_harness::ArchitectureRow| {
-            match row.kind.as_deref() {
-                Some("pool.bundle") => Ok(std::sync::Arc::new(PoolBundleProvider::new(row))
-                    as std::sync::Arc<dyn operant_harness::Provider>),
-                Some("pool.family") | None => Ok(std::sync::Arc::new(PoolFamilyProvider::new(row))
-                    as std::sync::Arc<dyn operant_harness::Provider>),
-                Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
-                    row.id.clone(),
-                    other.to_string(),
-                )),
-            }
-        }),
-    );
+    // C3 (018 rebuild): attach HarnessMetrics so the dump also exposes the
+    // mount/replace/unmount/unwind counters — MetricsSnapshot previously
+    // never left the Harness (r16 audit S6: operator could not alert on
+    // PENDING churn).
+    let metrics = std::sync::Arc::new(HarnessMetrics::new());
+    let builder = pool_builder();
     // Live dump builds a real Harness so provider states/claims are visible.
-    let mut host = HarnessHost::with_harness(std::sync::Arc::new(Harness::new(KernelOptions {
-        audit: false,
-    })));
+    let mut host = HarnessHost::with_harness(std::sync::Arc::new(
+        Harness::new(KernelOptions { audit: false }).with_metrics(metrics.clone()),
+    ));
     {
         use operant_core::harness_adapters::ToolSeam;
         use operant_core::tools::ToolRegistry;
@@ -256,8 +248,16 @@ async fn dump_live(file: &Path, patches: &[PathBuf], json: bool) -> Result<()> {
         // best-effort and dump regardless of boot error.
         let _ = host.boot_with_factories(&builder, &arch).await;
         let tree = host.dump().await;
+        let snap = metrics.snapshot();
         if json {
-            println!("{}", tree.to_json());
+            let mut val = serde_json::to_value(tree).unwrap_or_else(|_| serde_json::json!({}));
+            if let serde_json::Value::Object(map) = &mut val {
+                map.insert(
+                    "metrics".into(),
+                    serde_json::to_value(snap).unwrap_or_else(|_| serde_json::json!({})),
+                );
+            }
+            println!("{}", serde_json::to_string_pretty(&val)?);
         } else {
             println!("Live Harness Dump ({}):", file.display());
             for p in &tree.providers {
@@ -266,10 +266,70 @@ async fn dump_live(file: &Path, patches: &[PathBuf], json: bool) -> Result<()> {
                     p.state, p.id, p.source, p.generation, p.effects
                 );
             }
-            println!("{} providers, {} claims", tree.providers.len(), tree.claims.len());
+            println!(
+                "{} providers, {} claims",
+                tree.providers.len(),
+                tree.claims.len()
+            );
+            println!(
+                "Metrics: mounts {} ok / {} pending / {} failed, replaces {} ok / {} failed, unmounts {}, unwinds {}",
+                snap.mount_success,
+                snap.mount_pending,
+                snap.mount_failed,
+                snap.replace_success,
+                snap.replace_failed,
+                snap.unmount_calls,
+                snap.unwind_invocations
+            );
         }
     }
     Ok(())
+}
+
+/// Shared `BuilderWithFactories` with the production pool factories —
+/// used by `dump --live` and by the status metrics boot (C3).
+fn pool_builder() -> BuilderWithFactories {
+    use operant_harness::{BuilderWithFactories, PoolBundleProvider, PoolFamilyProvider};
+    let mut builder = BuilderWithFactories::new();
+    builder.register_factory(
+        "pool",
+        std::sync::Arc::new(
+            |row: operant_harness::ArchitectureRow| match row.kind.as_deref() {
+                Some("pool.bundle") => Ok(std::sync::Arc::new(PoolBundleProvider::new(row))
+                    as std::sync::Arc<dyn operant_harness::Provider>),
+                Some("pool.family") | None => Ok(std::sync::Arc::new(PoolFamilyProvider::new(row))
+                    as std::sync::Arc<dyn operant_harness::Provider>),
+                Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
+                    row.id.clone(),
+                    other.to_string(),
+                )),
+            },
+        ),
+    );
+    builder
+}
+
+/// C3 (018 rebuild): best-effort live boot of the resolved architecture with
+/// `HarnessMetrics` attached, returning the boot's counter snapshot. This is
+/// how `MetricsSnapshot` leaves the Harness for one-shot CLI surfaces
+/// (`operant status`): Active vs Pending at boot is the PENDING-churn signal
+/// the r16 audit S6 finding asked for. Failures degrade to a zeroed snapshot.
+pub async fn boot_metrics_snapshot(
+    arch: &operant_harness::Architecture,
+) -> operant_harness::MetricsSnapshot {
+    use operant_harness::{Harness, HarnessHost, HarnessMetrics, KernelOptions};
+    let metrics = std::sync::Arc::new(HarnessMetrics::new());
+    let mut host = HarnessHost::with_harness(std::sync::Arc::new(
+        Harness::new(KernelOptions { audit: false }).with_metrics(metrics.clone()),
+    ));
+    {
+        use operant_core::harness_adapters::ToolSeam;
+        use operant_core::tools::ToolRegistry;
+        let registry = ToolRegistry::new(std::time::Duration::from_secs(30));
+        host.add_seam(std::sync::Arc::new(ToolSeam::new(registry)));
+    }
+    let _ = host.boot_with_factories(&pool_builder(), arch).await;
+    metrics.snapshot()
 }
 
 fn dump_once(file: &Path, patches: &[PathBuf], json: bool) -> Result<()> {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use operant_core::tools::ToolRegistry;
-use operant_harness::{Architecture, ArchitectureRow, Harness, KernelOptions};
+use operant_harness::{Architecture, ArchitectureRow, Harness, KernelOptions, MountReport};
 use serde_json::json;
 
 #[tokio::test]
@@ -23,9 +23,18 @@ async fn harness_tools_visible_when_enabled() {
         .expect("register harness tools");
     let schemas = registry.get_schemas().await;
     let names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
-    assert!(names.contains(&"harness_dump".to_string()), "harness_dump missing: {names:?}");
-    assert!(names.contains(&"harness_mount".to_string()), "harness_mount missing");
-    assert!(names.contains(&"harness_unmount".to_string()), "harness_unmount missing");
+    assert!(
+        names.contains(&"harness_dump".to_string()),
+        "harness_dump missing: {names:?}"
+    );
+    assert!(
+        names.contains(&"harness_mount".to_string()),
+        "harness_mount missing"
+    );
+    assert!(
+        names.contains(&"harness_unmount".to_string()),
+        "harness_unmount missing"
+    );
 }
 
 #[tokio::test]
@@ -63,14 +72,23 @@ async fn prompt_section_config_row_buildable() {
     let providers = operant_harness::Builder::build(&arch).expect("build prompt.section");
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0].spec().id(), "hello-prompt");
-    // Mount without a prompt seam should mark Failed (MissingSeam) — that's correct
-    // because the seam lives in operant-runtime. The important thing is Builder no longer rejects.
+    // C6 (harness-side 018, c8fc536f): a missing seam is PENDING, not Failed —
+    // late-bindable on the next seam add or mount, mirroring t12. The prompt
+    // seam lives in operant-runtime; without it the row mounts Pending with an
+    // explicit seam claim instead of erroring.
     let harness = Harness::new(KernelOptions { audit: false });
     let res = harness.mount(providers.into_iter().next().unwrap()).await;
-    // Without seam, activation fails -> Failed state, but mount returns error.
-    assert!(res.is_err(), "expected MissingSeam without prompt seam");
+    match res {
+        Ok(MountReport::Pending { missing }) => {
+            assert_eq!(missing, vec![operant_harness::Claim::new("seam", "prompt")]);
+        }
+        other => panic!("expected Pending without prompt seam, got {other:?}"),
+    }
     let tree = harness.dump().await;
-    assert_eq!(tree.providers[0].state, operant_harness::ProviderState::Failed);
+    assert_eq!(
+        tree.providers[0].state,
+        operant_harness::ProviderState::Pending
+    );
 }
 
 #[tokio::test]
@@ -92,22 +110,25 @@ pooled_sub_systems:
     assert_eq!(compiled.bundle_rows[0].kind.as_deref(), Some("pool.bundle"));
 
     let arch = Architecture {
-        rows: vec![compiled.family_row, compiled.bundle_rows.into_iter().next().unwrap()],
+        rows: vec![
+            compiled.family_row,
+            compiled.bundle_rows.into_iter().next().unwrap(),
+        ],
     };
     let mut builder = operant_harness::BuilderWithFactories::new();
     builder.register_factory(
         "pool",
-        Arc::new(|row: ArchitectureRow| {
-            match row.kind.as_deref() {
-                Some("pool.bundle") => Ok(Arc::new(operant_harness::PoolBundleProvider::new(row))
-                    as Arc<dyn operant_harness::Provider>),
-                Some("pool.family") | None => Ok(Arc::new(operant_harness::PoolFamilyProvider::new(row))
-                    as Arc<dyn operant_harness::Provider>),
-                Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
-                    row.id.clone(),
-                    other.to_string(),
-                )),
+        Arc::new(|row: ArchitectureRow| match row.kind.as_deref() {
+            Some("pool.bundle") => Ok(Arc::new(operant_harness::PoolBundleProvider::new(row))
+                as Arc<dyn operant_harness::Provider>),
+            Some("pool.family") | None => {
+                Ok(Arc::new(operant_harness::PoolFamilyProvider::new(row))
+                    as Arc<dyn operant_harness::Provider>)
             }
+            Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
+                row.id.clone(),
+                other.to_string(),
+            )),
         }),
     );
     let providers = builder.build_with(&arch).expect("build_with pool");
@@ -121,11 +142,20 @@ pooled_sub_systems:
     )));
     // Family has no tool config, so plain mount works. Bundle needs its
     // row config to materialize the tool path, so we thread it via mount_with_config.
-    let bundle_config = arch.rows.iter().find(|r| r.kind.as_deref() == Some("pool.bundle")).unwrap().config.clone();
+    let bundle_config = arch
+        .rows
+        .iter()
+        .find(|r| r.kind.as_deref() == Some("pool.bundle"))
+        .unwrap()
+        .config
+        .clone();
     for p in providers {
         let id = p.spec().id().to_string();
         if id.contains(".items") {
-            harness.mount_with_config(p, bundle_config.clone()).await.expect("mount pool bundle");
+            harness
+                .mount_with_config(p, bundle_config.clone())
+                .await
+                .expect("mount pool bundle");
         } else {
             harness.mount(p).await.expect("mount pool family");
         }
@@ -134,4 +164,46 @@ pooled_sub_systems:
     assert_eq!(tree.providers.len(), 2);
     assert!(tree.claims.iter().any(|c| c.claim.key == "query.items"));
     assert_eq!(registry.get_schemas().await.len(), 1);
+}
+
+/// C3 (018 rebuild) — `MetricsSnapshot` must leave the Harness: mounting a
+/// provider whose `requires` claim nobody provides lands Pending, and that
+/// outcome must be observable through the attached counters AND through the
+/// serialized snapshot — the exact surface `operant status` and
+/// `architecture dump --live` now expose to operators (r16 audit S6).
+#[tokio::test]
+async fn metrics_snapshot_exposes_pending_mounts() {
+    use operant_harness::{HarnessMetrics, MountReport, PoolFamilyProvider};
+
+    let metrics = Arc::new(HarnessMetrics::new());
+    let harness = Harness::new(KernelOptions { audit: false }).with_metrics(metrics.clone());
+
+    // A pool.family row that REQUIRES a claim nothing provides → the mount
+    // must land Pending (late-bindable), not Failed.
+    let row = ArchitectureRow {
+        id: "dep.family".into(),
+        source: "test".into(),
+        disabled: false,
+        kind: Some("pool.family".into()),
+        config: json!({ "claims": [], "requires": ["nobody-provides-this"] }),
+    };
+    let report = harness
+        .mount(Arc::new(PoolFamilyProvider::new(row)))
+        .await
+        .expect("mount");
+    let MountReport::Pending { .. } = report else {
+        panic!("expected pending, got {report:?}");
+    };
+
+    let snap = metrics.snapshot();
+    assert_eq!(snap.mount_pending, 1, "pending mount must be counted");
+    assert_eq!(snap.mount_success, 0);
+    assert_eq!(snap.mount_failed, 0);
+
+    // The snapshot must serialize with the counter the CLI surfaces.
+    let serialized = serde_json::to_string(&snap).expect("serialize snapshot");
+    assert!(
+        serialized.contains("\"mount_pending\":1"),
+        "serialized snapshot must expose mount_pending, got: {serialized}"
+    );
 }
