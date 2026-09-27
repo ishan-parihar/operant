@@ -8,15 +8,19 @@
 //! Pure functions — no class state, no agent dependency.
 //! Ported from hermes-agent `agent/prompt_caching.py`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// Cache TTL options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CacheTtl {
     /// 5-minute cache (default for Anthropic).
     #[default]
+    #[serde(rename = "5m")]
     FiveMinutes,
     /// 1-hour cache (longer-lived).
+    #[serde(rename = "1h")]
     OneHour,
 }
 
@@ -175,6 +179,39 @@ mod tests {
         let mut msgs = vec![system_msg("You are helpful"), user_msg("Hi")];
         apply_cache_control(&mut msgs, CacheTtl::default(), true);
         assert_eq!(msgs[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn ttl_is_configurable_via_serde() {
+        // zeroclaw CacheTtl port: the TTL must round-trip through the config
+        // representation ("5m" / "1h") so client.prompt_cache_ttl parses.
+        assert_eq!(
+            serde_json::from_str::<CacheTtl>("\"1h\"").unwrap(),
+            CacheTtl::OneHour
+        );
+        assert_eq!(
+            serde_json::from_str::<CacheTtl>("\"5m\"").unwrap(),
+            CacheTtl::FiveMinutes
+        );
+        assert_eq!(serde_json::to_string(&CacheTtl::OneHour).unwrap(), "\"1h\"");
+        assert_eq!(CacheTtl::default(), CacheTtl::FiveMinutes);
+    }
+
+    #[test]
+    fn one_hour_ttl_marks_breakpoints_with_ttl_field() {
+        // A 1h-configured cache must actually carry ttl:"1h" on every
+        // breakpoint — a stale default would silently cap sessions at 5m.
+        let mut msgs = vec![
+            system_msg("prompt"),
+            user_msg("1"),
+            assistant_msg("2"),
+            user_msg("3"),
+            assistant_msg("4"),
+        ];
+        apply_cache_control(&mut msgs, CacheTtl::OneHour, true);
+        assert_eq!(msgs[0]["cache_control"]["ttl"], "1h");
+        assert_eq!(msgs[2]["cache_control"]["ttl"], "1h");
+        assert_eq!(msgs[4]["cache_control"]["ttl"], "1h");
     }
 
     #[test]

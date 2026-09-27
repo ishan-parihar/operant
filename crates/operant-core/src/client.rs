@@ -39,6 +39,8 @@ pub struct ClientConfig {
     pub max_context_length: usize,
     /// Rate limit settings for outbound requests.
     pub rate_limit: crate::config::RateLimitSettings,
+    /// TTL for prompt-cache breakpoints (zeroclaw port: configurable).
+    pub prompt_cache_ttl: crate::agent::clients::prompt_caching::CacheTtl,
 }
 
 impl Default for ClientConfig {
@@ -55,6 +57,7 @@ impl From<&ClientSettings> for ClientConfig {
             timeout: Duration::from_secs(settings.timeout_secs),
             max_context_length: settings.max_context_length,
             rate_limit: settings.rate_limit.clone(),
+            prompt_cache_ttl: settings.prompt_cache_ttl,
         }
     }
 }
@@ -195,6 +198,7 @@ impl OpenAIClient {
             timeout: Duration::from_secs(base.client.timeout_secs),
             max_context_length: base.client.max_context_length,
             rate_limit: base.client.rate_limit.clone(),
+            prompt_cache_ttl: base.client.prompt_cache_ttl,
         }))
     }
 
@@ -616,7 +620,7 @@ impl OpenAIClient {
         if self.config.base_url.contains("openrouter") {
             crate::agent::clients::prompt_caching::apply_cache_control(
                 &mut api_messages,
-                crate::agent::clients::prompt_caching::CacheTtl::default(),
+                self.config.prompt_cache_ttl,
                 false, // envelope layout (OpenRouter)
             );
         }
@@ -1618,6 +1622,7 @@ mod tests {
                 bucket_capacity: 100,
                 bucket_refill_rate: 100.0,
             },
+            prompt_cache_ttl: Default::default(),
         };
         let client = OpenAIClient::new(config);
 

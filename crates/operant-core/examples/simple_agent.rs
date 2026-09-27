@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
         timeout: Duration::from_secs(60),
         max_context_length: 128_000,
         rate_limit: Default::default(),
+        prompt_cache_ttl: Default::default(),
     };
 
     let client = OpenAIClient::new(config);

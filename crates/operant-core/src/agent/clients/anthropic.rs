@@ -23,6 +23,9 @@ pub struct AnthropicModelClient {
     api_key: Arc<RwLock<String>>,
     base_url: String,
     http: Client,
+    /// TTL for the `system_and_3` cache breakpoints. Configurable since the
+    /// zeroclaw CacheTtl port; defaults to Anthropic's 5-minute ephemeral.
+    cache_ttl: CacheTtl,
 }
 
 impl AnthropicModelClient {
@@ -40,7 +43,15 @@ impl AnthropicModelClient {
             api_key: Arc::new(RwLock::new(api_key)),
             base_url: "https://api.anthropic.com".to_string(),
             http,
+            cache_ttl: CacheTtl::default(),
         }
+    }
+
+    /// Override the prompt-cache TTL (zeroclaw port: `client.prompt_cache_ttl`
+    /// in operant.toml — "5m" or "1h").
+    pub fn with_cache_ttl(mut self, ttl: CacheTtl) -> Self {
+        self.cache_ttl = ttl;
+        self
     }
 
     pub fn with_base_url(mut self, url: String) -> Self {
@@ -130,7 +141,7 @@ impl AnthropicModelClient {
         // messages, reducing input token costs by ~75% on multi-turn
         // conversations (ported from hermes-agent prompt_caching.py).
         if let Some(msgs) = body["messages"].as_array_mut() {
-            apply_cache_control(msgs, CacheTtl::default(), true);
+            apply_cache_control(msgs, self.cache_ttl, true);
         }
 
         if let Some(temp) = request.temperature {

@@ -195,6 +195,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_context_length: 128_000,
             rate_limit: Default::default(),
+            prompt_cache_ttl: Default::default(),
         });
         let client: Arc<dyn ModelClient> = Arc::new(OpenAIModelClient::new(raw_client));
         let dir = test_dir("persist");

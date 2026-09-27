@@ -14,6 +14,9 @@ base_url = "https://api.openai.com/v1"
 # api_key = "set me or use OPENAI_API_KEY"
 timeout_secs = 60
 max_context_length = 128000
+# TTL for provider prompt-cache breakpoints: "5m" (default) or "1h".
+# Applies to OpenRouter-compatible endpoints and the Anthropic adapter.
+# prompt_cache_ttl = "5m"
 
 [client.rate_limit]
 # Maximum retries after a 429 or transient server error (0 = no retries)

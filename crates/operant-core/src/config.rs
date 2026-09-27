@@ -115,6 +115,11 @@ pub struct ClientSettings {
     pub max_context_length: usize,
     /// Rate limit configuration for outbound API requests.
     pub rate_limit: RateLimitSettings,
+    /// TTL for provider prompt-cache breakpoints ("5m" or "1h"). Drives the
+    /// `cache_control` markers applied by the OpenAI/OpenRouter and Anthropic
+    /// adapters (zeroclaw port: was hardcoded to the 5-minute default).
+    #[serde(default)]
+    pub prompt_cache_ttl: crate::agent::clients::prompt_caching::CacheTtl,
 }
 
 impl Default for ClientSettings {
@@ -126,6 +131,7 @@ impl Default for ClientSettings {
             timeout_secs: 60,
             max_context_length: 128_000,
             rate_limit: RateLimitSettings::default(),
+            prompt_cache_ttl: Default::default(),
         }
     }
 }
@@ -1843,10 +1849,9 @@ max_active_providers = 128
 
         // Re-serialize: settings survive a write/read cycle (proves
         // the surface is stable for the Phase 3 composition layer).
-        let round_tripped =
-            toml::to_string(&parsed.harness).expect("HarnessSettings serializes");
-        let reparsed: HarnessSettings = toml::from_str(&round_tripped)
-            .expect("HarnessSettings round-trips through TOML");
+        let round_tripped = toml::to_string(&parsed.harness).expect("HarnessSettings serializes");
+        let reparsed: HarnessSettings =
+            toml::from_str(&round_tripped).expect("HarnessSettings round-trips through TOML");
         assert!(reparsed.enabled, "round-trip preserves enabled=true");
         assert_eq!(reparsed.max_active_providers, 128);
 
@@ -1879,6 +1884,38 @@ wonderful_unknown_key = 42
             err.is_err(),
             "deny_unknown_fields must reject unknown [harness] keys"
         );
+    }
+
+    #[test]
+    fn client_prompt_cache_ttl_parses_and_defaults() {
+        use crate::agent::clients::prompt_caching::CacheTtl;
+
+        // zeroclaw CacheTtl port: an explicit "1h" must reach the adapters.
+        let raw = r#"
+[client]
+base_url = "https://openrouter.ai/api/v1"
+timeout_secs = 30
+max_context_length = 1000
+prompt_cache_ttl = "1h"
+"#;
+        let parsed = parse_config_str(raw, std::path::Path::new("ttl.toml"))
+            .expect("valid TOML with prompt_cache_ttl parses");
+        assert_eq!(parsed.client.prompt_cache_ttl, CacheTtl::OneHour);
+
+        // Round-trip: the field survives a write/read cycle.
+        let round_tripped = toml::to_string(&parsed.client).expect("ClientSettings serializes");
+        let reparsed: ClientSettings =
+            toml::from_str(&round_tripped).expect("ClientSettings round-trips through TOML");
+        assert_eq!(reparsed.prompt_cache_ttl, CacheTtl::OneHour);
+
+        // Absent → 5-minute default (previous hardcoded behavior).
+        let no_ttl = r#"
+[client]
+base_url = "https://api.openai.com/v1"
+"#;
+        let parsed = parse_config_str(no_ttl, std::path::Path::new("default-ttl.toml"))
+            .expect("valid TOML without prompt_cache_ttl parses");
+        assert_eq!(parsed.client.prompt_cache_ttl, CacheTtl::FiveMinutes);
     }
 
     /// Plan 015 / Phase 0: prove the [pk] TOML section round-trips

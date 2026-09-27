@@ -662,7 +662,9 @@ fn create_model_client(
         "anthropic" => {
             let api_key = std::env::var("ANTHROPIC_API_KEY")
                 .unwrap_or_else(|_| config.client.api_key.clone().unwrap_or_default());
-            Box::new(AnthropicModelClient::new(api_key))
+            Box::new(
+                AnthropicModelClient::new(api_key).with_cache_ttl(config.client.prompt_cache_ttl),
+            )
         }
         _ => {
             // Default to OpenAI-compatible client for openai, deepseek, and others
@@ -1366,7 +1368,9 @@ async fn build_agent_core(
     // S2 — make harness_dump/mount/unmount visible to the model. The
     // tools themselves gate mount/unmount on approval (ToolContext.metadata["approval"]).
     if let Some(h) = &harness {
-        if let Err(e) = operant_core::tools::harness_tools::register_harness_tools(&registry, h.clone()).await {
+        if let Err(e) =
+            operant_core::tools::harness_tools::register_harness_tools(&registry, h.clone()).await
+        {
             warn!(error = %e, "harness: tool registration failed");
         }
     }
@@ -1495,13 +1499,17 @@ async fn build_harness_host(
             if example.exists() {
                 match operant_harness::resolve_boot_architecture(&example, patch_dir.as_deref()) {
                     Ok(a) => {
-                        tracing::info!("harness: using architecture.toml.example (copy to architecture.toml to customize)");
+                        tracing::info!(
+                            "harness: using architecture.toml.example (copy to architecture.toml to customize)"
+                        );
                         a
                     }
                     Err(_) => operant_harness::Architecture::default(),
                 }
             } else {
-                tracing::info!("harness: enabled but no architecture.toml found — kernel is empty (create one or set [harness].architecture_toml)");
+                tracing::info!(
+                    "harness: enabled but no architecture.toml found — kernel is empty (create one or set [harness].architecture_toml)"
+                );
                 operant_harness::Architecture::default()
             }
         }
@@ -2796,6 +2804,7 @@ mod tests {
             timeout: Duration::from_secs(60),
             max_context_length: 200_000,
             rate_limit: Default::default(),
+            prompt_cache_ttl: Default::default(),
         };
         let profile = ModelProviderConfig {
             base_url: Some("https://zen.example/v1".to_string()),
