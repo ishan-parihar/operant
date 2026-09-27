@@ -38,12 +38,11 @@ use operant_harness::{
 /// A minimal tool used to verify dispatch. Dispatch is observed from the
 /// returned payload (`{"echoed": ...}`), which is how every test here
 /// distinguishes the live tool from a shadowed one.
-#[derive(Default)]
 struct EchoTool;
 
 impl EchoTool {
     fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
