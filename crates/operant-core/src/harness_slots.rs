@@ -393,6 +393,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn config_row_prompt_section_lands_in_slot_and_clears_on_unmount() {
+        // Production payload shape, not a synthetic one: a real
+        // `ConfigRowProvider` (the kind `BuilderWithFactories` mounts for
+        // `kind = "prompt.section"`) installs its content as
+        // `Arc<String>` and passes `payload.as_ref()`, so the seam must
+        // downcast `String`. A private test payload would have passed
+        // while the real row silently failed.
+        let slot = Arc::new(PromptSlot::new());
+        let mut harness = Harness::new(KernelOptions { audit: false });
+        harness.add_seam(Arc::new(PromptSlotSeam::new(Arc::clone(&slot))));
+
+        let row = operant_harness::ArchitectureRow {
+            id: "cfg-section".to_string(),
+            source: "config".to_string(),
+            kind: Some("prompt.section".to_string()),
+            config: serde_json::json!({ "content": "row-installed section" }),
+            disabled: false,
+        };
+        harness
+            .mount(Arc::new(operant_harness::row::ConfigRowProvider::new(row)))
+            .await
+            .unwrap();
+        assert_eq!(slot.len(), 1, "config row must install into the slot");
+        assert!(
+            slot.render().contains("row-installed section"),
+            "the row's content must render (got {:?})",
+            slot.render()
+        );
+
+        harness.unmount("cfg-section").await.unwrap();
+        assert!(slot.is_empty(), "unmount must clear the row's section");
+    }
+
+    #[tokio::test]
     async fn prompt_seam_mount_lands_in_slot_and_unmount_clears_it() {
         // C1 end-to-end: a provider mounting through the kernel installs
         // a prompt section in the shared slot; the kernel unmount (the

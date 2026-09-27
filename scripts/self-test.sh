@@ -46,6 +46,11 @@ run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 # 5. CLI version
 run_test "CLI version" "./target/release/operant --version 2>&1"
 
+# 5b. The shipped architecture example must stay valid (r16 audit C5:
+# without this, a malformed example can ship unnoticed — the CI half was
+# dropped with harness.yml, so self-test.sh is the only automated gate).
+run_test "Validate architecture example" "./target/release/operant architecture validate --file architecture.toml.example 2>&1"
+
 # 6. CLI help
 run_test "CLI help" "./target/release/operant --help 2>&1"
 
