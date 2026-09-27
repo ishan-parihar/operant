@@ -468,6 +468,13 @@ impl Config {
             .ok()
             .filter(|u| !u.trim().is_empty())
             .unwrap_or_else(|| "http://localhost:3111".to_string());
+        // Supply-chain: pin the npm package — never resolve `@latest` at
+        // runtime. Mirrors the AGENTMEMORY_URL env pattern (the schema
+        // `[memory]` section intentionally has no agentmemory fields).
+        let version = std::env::var("AGENTMEMORY_VERSION")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| crate::DEFAULT_AGENTMEMORY_VERSION.to_string());
         let mut env = std::collections::HashMap::new();
         env.insert("AGENTMEMORY_URL".to_string(), url);
         if let Some(secret) = std::env::var("AGENTMEMORY_SECRET")
@@ -482,7 +489,7 @@ impl Config {
             transport: McpTransport::Stdio,
             url: None,
             command: "npx".to_string(),
-            args: vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
+            args: vec!["-y".to_string(), format!("@agentmemory/mcp@{version}")],
             env,
             headers: std::collections::HashMap::new(),
             tool_timeout_secs: None,

@@ -360,6 +360,10 @@ enabled = false
 #                and, when this provider is active, auto-registers the
 #                `@agentmemory/mcp` server natively under [mcp.servers] so the
 #                full 53-tool memory surface is available to every agent path
+# agentmemory_version pins the npm package for every spawn (auto-spawn + MCP
+# entries); default is the pinned 0.9.29. Never `@latest` — a cold boot must
+# not fetch whatever npm serves and run it with your privileges.
+# agentmemory_version = "0.9.29"
 #                (CLI, gateway, runtime agent) — no manual MCP config needed.
 #                Lifecycle parity with the hermes-agent memory plugin:
 #                session/start on init, observe on sync_turn, session/end on

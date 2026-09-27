@@ -261,14 +261,25 @@ unsigned even when a secret was configured.
   signature → **401**, correct `sha256=` HMAC → **200** and the payload is
   forwarded to the channel. Live-verified passing.
 
-### R14-4 — Slack `_signing_secret` is a dead field; SlackAdapter gets `None` (FLAGGED)
+### R14-4 — Slack `_signing_secret` is a dead field (WITHDRAWN as misread, fixed iter-347)
 
-`gateway/mod.rs` defines `_signing_secret` (underscore-prefixed — Rust treats it
-as intentionally-unused, so no dead-code warning fires), and the CLI wires
-`SlackAdapter::new(token, None)`. Slack's own webhook signature verification
-(implemented in the same file) can therefore never be reached through the Slack
-adapter. Same root pattern as R14-3; left FLAGGED because wiring it requiresa `slack_signing_secret` schema field + adapter plumbing (higher churn), and the
-webhook adapter now honors its secret.
+**Original finding**: `SlackAdapter` held a `_signing_secret` the CLI always
+wired as `None`, and "Slack's own webhook signature verification (implemented
+in the same file) can therefore never be reached."
+
+**Correction**: the verification is in `gateway/webhook.rs` (iter-125), not
+the Slack adapter, and it IS reachable — Slack-over-HTTP ingress is served by
+`WebhookAdapter`, which verifies `x-slack-signature` (HMAC-SHA256 of
+`v0:<ts>:<body>`) against `gateway.webhooks_secret`. `SlackAdapter` is
+Socket Mode only: authenticated by the bot token over the WebSocket, no
+signed requests exist on that transport, so a signing secret there had no
+consumer — wiring one would have laundered a dead credential, not closed a
+security gap.
+
+**Fix**: dead `_signing_secret` field + constructor parameter removed
+(`SlackAdapter::new(token)`; call sites gateway_runner.rs + mod.rs test
+updated). No schema field needed: the credential for Slack webhook ingress
+is the existing `webhooks_secret`.
 
 ### R14-5 — `WhatsAppAdapter::with_phone_number_id` is dead-wired (FLAGGED)
 
@@ -1023,3 +1034,31 @@ The uncommitted 018 CLI-side WIP (main.rs / cmd_architecture.rs / cmd_status.rs 
 - **Rebuild**: `architecture dump --live` now attaches `HarnessMetrics`, prints the counter block in text mode and adds a `metrics` key to the JSON dump; `operant status` best-effort boots the configured architecture (shared `pool_builder()` + `boot_metrics_snapshot()`) and exposes `harness.metrics` in `--json` plus a `boot: X ok / Y pending / Z failed` human suffix; `prompt_section_config_row_buildable` updated to the C6 contract landed in `c8fc536f` (MissingSeam → `Ok(MountReport::Pending)` with a `seam/prompt` claim, state Pending — the stale test asserted the pre-C6 error/Failed behavior and had been failing at HEAD since `c8fc536f`, hidden because `cargo test --lib` does not run integration targets).
 - **Verify**: `cargo test -p operant-core --test harness_agent_integration` 5/0 (incl. new `metrics_snapshot_exposes_pending_mounts`: pending mount counted + serialized snapshot contains `"mount_pending":1`); live `architecture dump --live architecture.toml.example` → `Metrics: mounts 1 ok / 0 pending / 1 failed, …`; live `operant status` (isolated HOME, harness enabled) → `Harness: enabled (…: 2 rows, 2 active, boot: 1 ok / 0 pending / 1 failed)` and `status --json | jq .harness.metrics` shows all 7 counters.
 - **Behavior caveat**: `operant status` now best-effort boots a harness when `[harness].enabled=true` — a new (local-only, no-network, pool rows are passive) cost on a previously read-only command; scripts polling `status` will feel it. The counters describe that boot, not a long-lived agent process — the audit's churn-alerting story still needs a live-process surface (dashboard route) if it ever matters at 250 pools.
+
+## Round 40 (2026-09-27) — production-readiness audit (supply-chain, secret-at-rest, mount-loop, R14-4 withdrawal)
+
+### R40-1 — secret-at-rest files chmod'd after the write (FIXED)
+Two writers created secret files with the umask default (0644 under umask 022) and only then tightened to 0600 — a window where the key/token is world-readable on disk. `operant-channels`' matrix writer already had the correct atomic form (`OpenOptions::…mode(0o600)` in one `open(2)`).
+- **Sites**: `operant-config/src/secrets.rs` key-file write (master ChaCha key, hex at rest); `operant-channels/src/wechat.rs write_private` (sync cursor).
+- **Fix**: both ported to the atomic 0600 `OpenOptions` form (`write_secret_file` / `write_private`), matching `matrix.rs::write_with_owner_only`; redundant post-write `set_permissions` removed (Windows keeps the icacls step — new-file ACLs are user-scoped there).
+- **Verify**: `cargo test -p operant-config --lib secrets` 50/0 incl. new `write_secret_file_creates_owner_only_perms` (asserts mode 0o600 regardless of umask). **Caveat, recorded honestly**: `wechat.rs`/`matrix.rs` sit behind the undeclared `channels-vendor` cfg (vendor deps — `matrix_sdk` etc. — are not declared in Cargo.toml, same dark-code pattern as hardware-vendor), so the wechat port is verified by inspection + the identical compiled twin in secrets.rs; it cannot compile in any shipped configuration until the vendor SDK deps are declared.
+
+### R40-2 — runtime npx spawns resolved `@latest` / unpinned (supply-chain; FIXED)
+Every cold boot could fetch whatever npm served at that moment and run it with the operator's privileges, on default paths:
+- `agent_memory.rs:219` auto-spawn ran `npx -y @agentmemory/agentmemory@latest` (default memory provider, auto-spawn default true);
+- `config.rs ensure_default_mcp_servers` and `operant-config/schema/config_impl.rs` both registered `npx -y @agentmemory/mcp` with no version at all (deferred, but spawned on first connect).
+- **Fix**: `DEFAULT_AGENTMEMORY_VERSION = "0.9.29"` pinned const in `operant-config` (crate root); `[memory] agentmemory_version` config override (`MemorySettings::agentmemory_package_spec`/`agentmemory_mcp_spec`, whitespace-only falls back to the const); schema world mirrors its documented env pattern with `AGENTMEMORY_VERSION`. Auto-spawn logs the pinned package spec. All three spawn sites now emit `@agentmemory/<pkg>@0.9.29` (or the operator's pin). Auto-spawn itself is untouched (AGENTS.md mandate).
+- **Verify**: core `agentmemory_version_pins_package_specs` + updated MCP-injection tests (spec is pinned, never `@latest`/bare) 2/0; `operant-config` ensure_default 3/0; `operant.example.toml` documents the knob. Version 0.9.29 = `npm view` current at fix time.
+
+### R40-3 — C5 mount-cap check rebuilt the full DumpTree per mount, O(n²) across a 250-pool boot (FIXED)
+`host.rs` checked `self.harness.dump().await.providers.len()` before each mount; `Harness::dump` clones every provider spec (provides/requires `.to_vec()`), builds claims, and sorts both — per mount, over a growing tree.
+- **Fix**: `Harness::provider_count()` — a bare `len()` on the read lock; the cap check uses it.
+- **Verify**: `cargo test -p operant-harness --test host_boot` 4/0 incl. new `mount_all_rejects_past_max_active_providers` (cap 1, two rows → `CompositionError` naming the cap and rejected provider, first mount survives) and a `provider_count == dump().providers.len()` parity assertion.
+
+### R40-4 — R14-4 withdrawn as misread; dead `_signing_secret` removed (FIXED)
+R14-4 claimed Slack signature verification "implemented in the same file" was unreachable through the Slack adapter. It is in `webhook.rs` (iter-125) and IS reachable: Slack-over-HTTP is served by `WebhookAdapter`, which verifies `x-slack-signature` against `gateway.webhooks_secret`. `SlackAdapter` is Socket Mode only (WS, bot-token auth) — no signed requests exist there, so a wiring iteration would have laundered a dead credential. Dead field + constructor parameter removed (`SlackAdapter::new(token)`); both call sites updated. No schema field needed: the Slack-webhook credential is the existing `webhooks_secret`.
+
+### R40-5 — tagged-release pipeline broken end-to-end (FIXED same round)
+`release.yml` read `CHANGELOG.md` at repo root while the file lives in `docs/`; `docs/CHANGELOG.md` had no `## [0.2.0]` section (newest 0.1.4) while `Cargo.toml` says 0.2.0; `build.yml` cloned `../tdg-rust` for a path dependency removed from the workspace. A `v0.2.0` tag push would have run build → release → changelog extraction and exited 1 with nothing published.
+- **Fix**: release.yml path → `docs/CHANGELOG.md`; `## [0.2.0]` section added covering iters 331–347; tdg-rust clone step dropped from build.yml (workspace is self-contained — AGENTS.md Path Dependencies).
+- **Verify**: workflow YAML parses (`python3 -c yaml.safe_load` on both); changelog section matches the release-notes extraction format; no tag pushed (tagging is the operator's call).

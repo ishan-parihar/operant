@@ -6883,7 +6883,10 @@ async fn ensure_default_mcp_servers_injects_agentmemory_when_backend_selects_it(
     assert_eq!(server.command, "npx");
     assert_eq!(
         server.args,
-        vec!["-y".to_string(), "@agentmemory/mcp".to_string()]
+        vec![
+            "-y".to_string(),
+            format!("@agentmemory/mcp@{}", crate::DEFAULT_AGENTMEMORY_VERSION)
+        ]
     );
     assert_eq!(
         server.env.get("AGENTMEMORY_URL").map(String::as_str),

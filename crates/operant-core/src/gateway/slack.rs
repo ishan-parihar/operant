@@ -13,19 +13,17 @@ use super::*;
 pub struct SlackAdapter {
     token: Option<String>,
     enabled: bool,
-    /// Signing secret for verifying Slack request signatures (used in webhook mode)
-    _signing_secret: Option<String>,
 }
 
 impl SlackAdapter {
-    /// Create a new Slack adapter
-    pub fn new(token: Option<String>, signing_secret: Option<String>) -> Self {
+    /// Create a new Slack adapter (Socket Mode — authenticated by the bot
+    /// token over the WebSocket; signed-request verification is not part
+    /// of this transport. Slack-over-HTTP ingress is served by
+    /// `WebhookAdapter`, which verifies `x-slack-signature` against
+    /// `gateway.webhooks_secret` — see webhook.rs).
+    pub fn new(token: Option<String>) -> Self {
         let enabled = token.is_some();
-        Self {
-            token,
-            enabled,
-            _signing_secret: signing_secret,
-        }
+        Self { token, enabled }
     }
 }
 

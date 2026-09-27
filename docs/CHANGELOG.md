@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-27
 
 ### Added
 
@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LCM agent tools (P2)** — `lcm_recall` (verbatim FTS recall), `lcm_stats` (engine diagnostics), `lcm_assert` (durable, conflict-preserving fact store with active-state resolution and contradiction reporting), and `lcm_recall_round` (multi-round evidence-gated retrieval with cumulative exact evidence and search leads).
 - **LCM adaptive auto-recall (P3)** — one bounded retrieval round per assemble against the latest user message injects a system "pre-answer evidence" block (`context_lcm_auto_recall`, default on).
 - **AFT tool bridge** — optional native integration that surfaces the AFT code-toolkit (`aft_read`/`aft_write`/etc.) to the agent when the `aft` binary is available, with natural fallback to operant-native tools.
+- **Harness kernel surfaces** — `operant status --json` exposes `harness.metrics` (mount ok/pending/failed counters, best-effort boot) and `architecture dump --live` attaches the same `HarnessMetrics` block, so operators can see mount outcomes and alert on PENDING churn.
+- **Configurable prompt-cache TTL** — `client.prompt_cache_ttl = "5m" | "1h"` (OpenRouter path honors it; Anthropic clients mark breakpoints with the ttl field).
+- **WhatsApp markdown** — outbound WhatsApp messages optionally convert `*bold*`/`_italic_`/`~strike~`/fences when `parse_markdown` is set (shared `asterisk_dialect` with Slack mrkdwn).
+- **Pinned agentmemory spawns** — every runtime `npx @agentmemory/*` spawn (auto-spawn + MCP entries) uses the pinned `DEFAULT_AGENTMEMORY_VERSION` (0.9.29), overridable via `[memory] agentmemory_version` / `AGENTMEMORY_VERSION`. A cold boot no longer fetches whatever npm serves at that moment.
+- **Mount-cap enforcement** — `max_active_providers` is enforced per mount (config default 64) with a cheap `provider_count()` check, preventing OOM from runaway mounts at large pool counts.
 
 ### Fixed
 
@@ -23,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **memory tool guidance** — `memory_store`/`memory_search`/`memory_recall` descriptions now state they target the builtin MEMORY.md store and point to `memory_save`/`memory_smart_search` for the agentmemory backend, so agents route to the correct memory surface.
 - **`OPERANT_CONFIG_DIR` honored by every load path** — `default_config_paths()` (operant-core) now resolves `<OPERANT_CONFIG_DIR>/operant.toml` before the XDG/`~/.operant` fallbacks, matching the schema layer. Previously `operant run` (and the `config_manage` tool) silently ignored the env var and loaded the real `~/.operant/operant.toml`, so supposedly-isolated runs could mutate the user's real config.
 - **Agentic self-management guidance** — `SKILLS_GUIDANCE` gains a Self-Management Protocol: consult the `operant` self-skill and `operant <cmd> --help` for CLI syntax, never read the Rust source to discover flags, trust command output (no re-runs), prefer the validating CLI over hand-edited TOML, and restore the baseline after management tasks.
+- **Deployment-audit closeout (R39 series)** — doctor probes the configured endpoint rather than every provider's public default (custom gateways no longer report false `✗ (invalid API key)`); the clippy gate script survives deny violations and prints the offending site; background review no longer poisons the write-origin for the process lifetime (task-local scope); memory stats read the real session count from `database.db`; the doctor key scan can no longer send a base URL as a Bearer token.
+- **Secret files created 0600 at open** — the memory master-key file and channel session stores are written with `OpenOptions::mode(0o600)` in one `open(2)` instead of a post-write `set_permissions` that left a umask-default window.
+- **Dead Slack `_signing_secret` removed** — R14-4 withdrawn as a misread: Slack signature verification lives in the webhook adapter (verified against `webhooks_secret`), and the Socket-Mode adapter has no signed requests to verify.
+- **Tagged-release pipeline repaired** — release workflow reads `docs/CHANGELOG.md` (was a nonexistent root path) and the dead `tdg-rust` clone step is gone from build; a `v*` tag push now produces notes and artifacts instead of exiting 1.
 
 ### Changed
 

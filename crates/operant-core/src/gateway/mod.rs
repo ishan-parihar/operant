@@ -1158,7 +1158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_slack_adapter_disabled() {
-        let adapter = SlackAdapter::new(None, None);
+        let adapter = SlackAdapter::new(None);
         assert!(!adapter.is_enabled());
     }
 

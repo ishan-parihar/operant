@@ -127,7 +127,10 @@ impl HarnessHost {
         let mut activated = Vec::new();
         for (provider, config) in providers {
             // C5 — enforce max_active_providers before each mount.
-            if self.harness.dump().await.providers.len() >= self.max_active_providers {
+            // provider_count(): a bare len() on the read-lock — dump()
+            // would clone every spec + sort both collections per mount
+            // (O(n²) across the loop).
+            if self.harness.provider_count().await >= self.max_active_providers {
                 return Err(crate::HarnessError::CompositionError(format!(
                     "max_active_providers {} exceeded (provider {} rejected)",
                     self.max_active_providers,

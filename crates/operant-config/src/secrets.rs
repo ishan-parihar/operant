@@ -187,16 +187,9 @@ impl SecretStore {
             if let Some(parent) = self.key_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(&self.key_path, hex_encode(&key))
+            write_secret_file(&self.key_path, hex_encode(&key).as_bytes())
                 .context("Failed to write secret key file")?;
 
-            // Set restrictive permissions
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&self.key_path, fs::Permissions::from_mode(0o600))
-                    .context("Failed to set key file permissions")?;
-            }
             #[cfg(windows)]
             {
                 // On Windows, use icacls to restrict permissions to current user only
@@ -293,6 +286,30 @@ fn hex_encode(data: &[u8]) -> String {
     s
 }
 
+/// Write a secret file owner-only (0o600) on Unix in a single `open(2)` —
+/// a plain `fs::write` followed by `set_permissions` leaves a window where
+/// the umask default (typically 0644) exposes the key (same fix as
+/// `operant-channels`' matrix/wechat writers).
+#[cfg(unix)]
+fn write_secret_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(data)
+}
+
+/// Windows falls back to the std-lib write; the caller's icacls step applies
+/// the restrictive ACL.
+#[cfg(not(unix))]
+fn write_secret_file(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    fs::write(path, data)
+}
+
 /// Build the `/grant` argument for `icacls` using a normalized username.
 /// Returns `None` when the username is empty or whitespace-only.
 #[cfg(any(windows, test))]
@@ -323,6 +340,23 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn write_secret_file_creates_owner_only_perms() {
+        // The key file holds the master encryption key in hex; it must be
+        // 0o600 at creation regardless of umask, not fixed up after a
+        // world-readable write.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("secret.key");
+        write_secret_file(&p, b"deadbeef").unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "expected 0o600, got {mode:o}; key file must be owner-only"
+        );
+    }
 
     // ── SecretStore basics ─────────────────────────────────────
 

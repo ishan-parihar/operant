@@ -52,7 +52,7 @@ jobs:
 
           tag = "${{ steps.tag.outputs.tag }}"
           version = tag.lstrip("v")
-          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          changelog = pathlib.Path("docs/CHANGELOG.md").read_text(encoding="utf-8")
           pattern = rf"^## \[{re.escape(version)}\] - .*$([\s\S]*?)(?=^## \[|\Z)"
           match = re.search(pattern, changelog, flags=re.MULTILINE)
           if not match:

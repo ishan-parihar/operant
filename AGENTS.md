@@ -558,6 +558,15 @@ suggestions, tui
 
 ## Iteration History (recent)
 
+- 2026-09-27 (production-readiness round, iters 347+): secret files
+  created 0600 at open not chmod'd after the write (secrets.rs + wechat.rs,
+  matrix.rs form); @agentmemory spawns pinned to 0.9.29 with
+  `[memory] agentmemory_version` override (supply-chain); C5 mount cap
+  uses cheap `provider_count()` not a full DumpTree per mount; R14-4
+  Slack signing-secret finding withdrawn as misread (verification lives in
+  the webhook adapter against `webhooks_secret`; dead `_signing_secret`
+  field removed); tagged-release pipeline repaired (docs/CHANGELOG.md path,
+  0.2.0 section, dead tdg-rust clone dropped).
 - 2026-09-27 (deployment-audit closeout, iters 335–345, interleaved with a
   concurrent agent's 2c3c00b9/e716d7f3/a8a11bc5): doctor probes the configured
   endpoint not the provider default — omp omniroute gateway no longer reports a

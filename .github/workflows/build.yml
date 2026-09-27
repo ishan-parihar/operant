@@ -45,14 +45,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Path dependencies live outside this repo — clone them to the relative
-      # paths that Cargo.toml expects (../../tdg-rust from the workspace root).
-      # Must run before rust-cache which resolves workspace manifests.
-      - name: Clone path dependencies
-        shell: bash
-        run: |
-          git clone --depth 1 https://github.com/ishan-parihar/tdg-rust.git "$GITHUB_WORKSPACE/../tdg-rust"
-
+      # The workspace is self-contained (AGENTS.md "Path Dependencies": no
+      # external git path deps). The historical tdg-rust clone step was
+      # removed with them.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}

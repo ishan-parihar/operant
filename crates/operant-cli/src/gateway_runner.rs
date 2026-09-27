@@ -638,10 +638,7 @@ fn platform_registry() -> Vec<PlatformEntry> {
         PlatformEntry {
             factory: |config| {
                 if config.slack_enabled {
-                    Some(Arc::new(SlackAdapter::new(
-                        config.slack_token.clone(),
-                        None,
-                    )))
+                    Some(Arc::new(SlackAdapter::new(config.slack_token.clone())))
                 } else {
                     None
                 }

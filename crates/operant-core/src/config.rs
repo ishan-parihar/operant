@@ -1064,6 +1064,39 @@ pub struct MemorySettings {
     pub agentmemory_secret: Option<String>,
     /// Auto-spawn `npx @agentmemory/agentmemory` when the server is unreachable
     pub agentmemory_auto_spawn: Option<bool>,
+    /// Pinned npm package version for `@agentmemory/*` spawns (auto-spawn
+    /// and the MCP entries). `None` →
+    /// `operant_config::DEFAULT_AGENTMEMORY_VERSION` (supply-chain: never
+    /// resolve `@latest` at runtime).
+    pub agentmemory_version: Option<String>,
+}
+
+impl MemorySettings {
+    /// The resolved `@agentmemory/agentmemory@<version>` package spec used
+    /// by the auto-spawner — configured pin or the pinned default, never
+    /// `@latest`.
+    pub fn agentmemory_package_spec(&self) -> String {
+        format!(
+            "@agentmemory/agentmemory@{}",
+            self.agentmemory_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .unwrap_or(operant_config::DEFAULT_AGENTMEMORY_VERSION)
+        )
+    }
+
+    /// The resolved `@agentmemory/mcp@<version>` package spec for MCP entries.
+    pub fn agentmemory_mcp_spec(&self) -> String {
+        format!(
+            "@agentmemory/mcp@{}",
+            self.agentmemory_version
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .unwrap_or(operant_config::DEFAULT_AGENTMEMORY_VERSION)
+        )
+    }
 }
 
 impl Default for MemorySettings {
@@ -1074,6 +1107,7 @@ impl Default for MemorySettings {
             agentmemory_url: None,
             agentmemory_secret: None,
             agentmemory_auto_spawn: Some(true),
+            agentmemory_version: None,
         }
     }
 }
@@ -1561,7 +1595,7 @@ pub fn ensure_default_mcp_servers(config: &mut AppConfig) {
         url: None,
         auth_token: None,
         command: Some("npx".to_string()),
-        args: vec!["-y".to_string(), "@agentmemory/mcp".to_string()],
+        args: vec!["-y".to_string(), config.memory.agentmemory_mcp_spec()],
         env,
         enabled: true,
         // Deferred (lazy): the provider's own memory tools are registered
@@ -2129,6 +2163,42 @@ obscura_stealth = false
     }
 
     #[test]
+    fn agentmemory_version_pins_package_specs() {
+        // Default: pinned constant, never @latest.
+        let mem = MemorySettings::default();
+        assert!(mem.agentmemory_version.is_none());
+        assert_eq!(
+            mem.agentmemory_package_spec(),
+            format!(
+                "@agentmemory/agentmemory@{}",
+                operant_config::DEFAULT_AGENTMEMORY_VERSION
+            )
+        );
+        assert_eq!(
+            mem.agentmemory_mcp_spec(),
+            format!(
+                "@agentmemory/mcp@{}",
+                operant_config::DEFAULT_AGENTMEMORY_VERSION
+            )
+        );
+
+        // Configured pin wins; whitespace-only falls back to the default.
+        let mem: MemorySettings = toml::from_str("agentmemory_version = \"1.2.3\"").expect("parse");
+        assert_eq!(
+            mem.agentmemory_package_spec(),
+            "@agentmemory/agentmemory@1.2.3"
+        );
+        let mem: MemorySettings = toml::from_str("agentmemory_version = \"  \"").expect("parse");
+        assert_eq!(
+            mem.agentmemory_mcp_spec(),
+            format!(
+                "@agentmemory/mcp@{}",
+                operant_config::DEFAULT_AGENTMEMORY_VERSION
+            )
+        );
+    }
+
+    #[test]
     fn ensure_default_mcp_servers_injects_agentmemory_when_provider_active() {
         // Default config has provider=agentmemory → the agentmemory stdio
         // MCP server is injected natively so all agent paths expose the
@@ -2147,7 +2217,20 @@ obscura_stealth = false
         assert!(server.enabled);
         assert_eq!(server.transport, McpTransportKind::Stdio);
         assert_eq!(server.command.as_deref(), Some("npx"));
-        assert!(server.args.iter().any(|a| a == "@agentmemory/mcp"));
+        assert!(
+            server
+                .args
+                .iter()
+                .any(|a| a == &config.memory.agentmemory_mcp_spec())
+        );
+        // Supply-chain: the spec is pinned — never `@latest` or bare.
+        let spec = server
+            .args
+            .iter()
+            .find(|a| a.starts_with("@agentmemory/mcp"))
+            .expect("pinned mcp spec");
+        assert!(spec.ends_with(operant_config::DEFAULT_AGENTMEMORY_VERSION));
+        assert!(!spec.ends_with("latest"));
         // Deferred (lazy): never spawn npx on agent startup — the provider's
         // own memory tools are registered directly instead.
         assert!(server.deferred);

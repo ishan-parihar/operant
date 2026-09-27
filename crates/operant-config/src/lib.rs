@@ -3,6 +3,15 @@
 
 //! Configuration schema, secrets, and related types for Operant.
 
+/// Pinned `@agentmemory` npm package version used by every spawn site
+/// (auto-spawn of the memory server in `operant-core`, the MCP server entries
+/// here and in `operant-core`'s AppConfig path). Pinning keeps a cold boot
+/// from fetching whatever npm serves at that moment and running it with the
+/// operator's privileges; bump deliberately when you want the new version.
+/// Overridable per deployment via `[memory] agentmemory_version` (AppConfig)
+/// or `AGENTMEMORY_VERSION` (schema/env world).
+pub const DEFAULT_AGENTMEMORY_VERSION: &str = "0.9.29";
+
 pub mod api_error;
 /// Autonomy levels and agent control settings.
 pub mod autonomy;

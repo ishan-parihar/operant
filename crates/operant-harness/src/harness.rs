@@ -693,6 +693,14 @@ impl Harness {
     }
 
     /// Serializable resolved tree (sorted deterministically).
+    /// Mounted-provider count without building the full `DumpTree`
+    /// (spec/claim clones + two sorts). Count-only callers — the C5
+    /// mount-cap check in `Host::mount_all`, which runs per mount — must
+    /// not pay O(n·log n) each time.
+    pub async fn provider_count(&self) -> usize {
+        self.inner.read().await.providers.len()
+    }
+
     pub async fn dump(&self) -> DumpTree {
         let inner = self.inner.read().await;
         let mut providers: Vec<ProviderEntryInfo> = inner

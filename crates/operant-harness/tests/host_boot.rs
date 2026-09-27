@@ -105,6 +105,36 @@ async fn host_dump_reflects_active_providers() {
     let tree = host.dump().await;
     assert_eq!(tree.providers.len(), 1);
     assert_eq!(tree.providers[0].id, "noop-dump");
+    // Count-only accessor — used by the C5 mount cap; must stay in sync
+    // with the dump without paying the full DumpTree build.
+    assert_eq!(host.harness().provider_count().await, 1);
+}
+
+#[tokio::test]
+async fn mount_all_rejects_past_max_active_providers() {
+    // C5: the per-mount cap rejects a provider that would exceed
+    // max_active_providers with a CompositionError naming the cap and
+    // the rejected provider (guards the 250-pool OOM story).
+    let mut host = HarnessHost::new(KernelOptions { audit: false }).with_max_active_providers(1);
+    host.add_seam(Arc::new(CaptureSeam::new()));
+    let arch = Architecture {
+        rows: vec![native_row("cap-first"), native_row("cap-second")],
+    };
+    let err = host
+        .boot(&arch)
+        .await
+        .expect_err("second mount must hit the cap");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("max_active_providers 1 exceeded"),
+        "error must name the cap: {msg}"
+    );
+    assert!(
+        msg.contains("cap-second"),
+        "error must name the rejected provider: {msg}"
+    );
+    // The first mount landed; the tree holds exactly the cap.
+    assert_eq!(host.harness().provider_count().await, 1);
 }
 
 #[tokio::test]

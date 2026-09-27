@@ -413,14 +413,27 @@ struct SyncData {
 }
 
 /// Write bytes to a file with owner-only permissions (0o600) on Unix.
+/// The file is created with the final mode in one `open(2)` — a plain
+/// `fs::write` followed by `set_permissions` leaves a window where the
+/// umask default (typically 0644) exposes the contents (same fix as
+/// `matrix.rs::write_with_owner_only`).
+#[cfg(unix)]
 fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, data)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(data)
+}
+
+/// Windows falls back to default ACLs (the std-lib write).
+#[cfg(not(unix))]
+fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, data)
 }
 
 /// Generate a random X-WECHAT-UIN header value.
@@ -2025,6 +2038,23 @@ impl Channel for WeChatChannel {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_creates_owner_only_perms() {
+        // The sync cursor sits under ~/.operant; it must be 0o600 at creation
+        // regardless of umask, not fixed up after a world-readable write
+        // (port of matrix.rs::save_creates_owner_only_perms).
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("sync.json");
+        write_private(&p, b"{}").unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "expected 0o600, got {mode:o}; secret file must be owner-only"
+        );
+    }
 
     #[test]
     fn wechat_channel_name() {

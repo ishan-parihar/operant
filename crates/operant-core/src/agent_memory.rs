@@ -97,6 +97,10 @@ pub struct AgentMemoryProvider {
     base_url: String,
     secret: Option<String>,
     auto_spawn: bool,
+    /// Pinned `@agentmemory/agentmemory@<version>` spec used by auto-spawn —
+    /// never `@latest` (supply-chain: a cold boot must not fetch and run
+    /// whatever npm serves at that moment).
+    package_spec: String,
     /// Handle to the auto-spawned server process (None when an external
     /// server is used or spawn failed).
     spawned: Arc<tokio::sync::Mutex<Option<tokio::process::Child>>>,
@@ -143,6 +147,7 @@ impl AgentMemoryProvider {
                 .unwrap_or_else(|| DEFAULT_AGENTMEMORY_URL.to_string()),
             secret: mem.agentmemory_secret.clone(),
             auto_spawn: mem.agentmemory_auto_spawn.unwrap_or(true),
+            package_spec: mem.agentmemory_package_spec(),
             spawned: Arc::new(tokio::sync::Mutex::new(None)),
             reachable: Arc::new(AtomicBool::new(false)),
             session_id: std::sync::Mutex::new(None),
@@ -166,6 +171,10 @@ impl AgentMemoryProvider {
             base_url: base_url.into(),
             secret: None,
             auto_spawn: false,
+            package_spec: format!(
+                "@agentmemory/agentmemory@{}",
+                operant_config::DEFAULT_AGENTMEMORY_VERSION
+            ),
             spawned: Arc::new(tokio::sync::Mutex::new(None)),
             reachable: Arc::new(AtomicBool::new(false)),
             session_id: std::sync::Mutex::new(None),
@@ -214,10 +223,11 @@ impl AgentMemoryProvider {
         }
         if spawned.is_none() {
             tracing::info!(
-                "agentmemory server unreachable — auto-spawning npx @agentmemory/agentmemory"
+                package = %self.package_spec,
+                "agentmemory server unreachable — auto-spawning pinned package"
             );
             let mut cmd = tokio::process::Command::new("npx");
-            cmd.args(["-y", "@agentmemory/agentmemory@latest"])
+            cmd.args(["-y", self.package_spec.as_str()])
                 .env("CI", "1")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
