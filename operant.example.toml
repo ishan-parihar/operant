@@ -313,6 +313,23 @@ max_timeout_secs = 300
 enabled = false
 # architecture_toml = "~/.operant/architecture.toml"
 # max_active_providers = 64
+# watch_wasm: hot-swap verified WASM plugin providers into the running kernel
+# (default off — a permanent background poller whose every detected change
+# re-instantiates the module, so it must be an explicit opt-in). Requires
+# the `plugins-wasm` build feature AND [plugins].trusted_publisher_keys
+# below: the swap path always verifies signatures in Strict mode, and an
+# empty key set would mark every plugin Untrusted and silently never swap.
+# watch_wasm = false
+
+[plugins]
+# Directories scanned for plugin manifests.
+# plugin_dirs = ["~/.operant/plugins"]
+# Hex-encoded Ed25519 public keys of trusted plugin publishers. Required for
+# [harness] watch_wasm (Strict mode needs a non-empty key set). Note this is
+# the AppConfig key, distinct from the schema layer's
+# [plugins.security].trusted_publisher_keys — the two are kept in sync
+# manually.
+# trusted_publisher_keys = []
 
 [tools.kernel]
 # Persistent kernel — session-persistent Python execution and learned state.
