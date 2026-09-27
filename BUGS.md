@@ -1113,6 +1113,44 @@ script, not raw clippy. Deferred while the concurrent agent is active in the
 shared tree — a 17-file reformat over their working copy is the same class of
 mistake that destroyed the 018 WIP.
 
+### R40-9 — `pub mod harness_slots;` never committed: nine uncompilable commits on origin/main (FIXED iter-359)
+iter-349 created `crates/operant-core/src/harness_slots.rs` and wired the C1
+agent, but its explicit-path `git add` did not list
+`crates/operant-core/src/lib.rs`, so the module declaration stayed uncommitted
+in the working tree. Every commit from iter-350 to 358 — on `origin/main` —
+failed to compile for anyone who cloned: E0433 `cannot find harness_slots in
+crate` at `agent/mod.rs:371` and `agent/builders.rs:292/301`. Found only by
+compiling from a CLEAN WORKTREE; every local test run shared the working tree
+where the line existed uncommitted, which is why 9 pushes of green local tests
+never caught it.
+- **Fix**: iter-359 adds exactly the one missing line. Verified with
+  `git worktree add` at the fix commit: `cargo check --release -p operant-cli
+  --bin operant --features plugins-wasm` → exit 0, zero errors.
+- **Durable rule**: after any commit made with `git add <explicit paths>`, the
+  staged file list must cover every file the change creates or edits —
+  `git diff --cached --name-only` is not enough if the mental list is wrong.
+  The reliable check is a clean-worktree compile of HEAD, since a shared
+  working tree masks missing declarations entirely.
+
+### R40-10 — peer working-copy clobbered by an unscoped `cp` (iter-359, disclosed)
+While isolating the R40-9 fix, I overwrote `crates/operant-core/src/lib.rs`
+with a copy derived from HEAD instead of adding one line to the existing file.
+That destroyed the concurrent agent's UNCOMMITTED edits in the same file:
+* `pub mod terminal_hints;` relocated from just after `pub mod daemon_pool;`
+  down to just after `pub mod gateway_pipeline;`
+* de-indentation (one leading space removed) of `pub mod mcp_oauth;`,
+  `pub mod memory;`, `pub mod memory_provider;`, `pub mod migrations;`
+* `pub mod persistence_seam;` relocated after `pub mod interrupt;`
+All five are cosmetic (module ordering / whitespace); no functional change was
+lost. **The content is not recoverable from git** — those edits were never
+staged, stashed, or hashed, and no matching dangling blob exists (searched via
+`git fsck --lost-found`). They are reconstructible from the `git diff` output
+quoted in the session transcript. Root cause: overwriting a file that another
+agent holds uncommitted work in, in a shared tree — the same class of mistake
+as the over-broad checkout that destroyed the 018 WIP (R39-12). Correct move
+would have been `git diff`-ing the file first, applying a targeted edit, and
+staging only the intended hunk (`git add -p`).
+
 ### R40-8 — C2: WASM hot-swap was kernel-only by absence of a bridge (FIXED iter-353/354/355)
 The r16 audit's C2 said P4 was kernel-only until the WASM watcher was wired
 into `Harness::replace` with an Extism factory. Every piece it named exists

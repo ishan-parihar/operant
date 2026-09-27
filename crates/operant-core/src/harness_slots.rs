@@ -355,7 +355,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use operant_harness::{
-        ActivateCx, Claim, Harness, KernelOptions, Provider, ProviderSource, ProviderSpec,
+        ActivateCx, BuilderWithFactories, Claim, Harness, KernelOptions, Provider, ProviderSource,
+        ProviderSpec,
     };
 
     use super::*;
@@ -404,17 +405,30 @@ mod tests {
         let mut harness = Harness::new(KernelOptions { audit: false });
         harness.add_seam(Arc::new(PromptSlotSeam::new(Arc::clone(&slot))));
 
-        let row = operant_harness::ArchitectureRow {
-            id: "cfg-section".to_string(),
-            source: "config".to_string(),
-            kind: Some("prompt.section".to_string()),
-            config: serde_json::json!({ "content": "row-installed section" }),
-            disabled: false,
+        // Driven through `BuilderWithFactories` — the same dispatch
+        // `build_harness_host` uses — so row validation AND the
+        // `source == "config_row"` -> ConfigRowProvider routing are
+        // covered. Mounting the provider directly (as this test once did)
+        // would have passed with `source = "config"`, a tag the builder
+        // routes to the factory lookup instead: the seam would look proven
+        // while a row of that shape mounts nothing.
+        let arch = operant_harness::Architecture {
+            rows: vec![operant_harness::ArchitectureRow {
+                id: "cfg-section".to_string(),
+                source: "config_row".to_string(),
+                kind: Some("prompt.section".to_string()),
+                config: serde_json::json!({ "content": "row-installed section" }),
+                disabled: false,
+            }],
         };
-        harness
-            .mount(Arc::new(operant_harness::row::ConfigRowProvider::new(row)))
-            .await
-            .unwrap();
+        arch.validate().expect("row is valid");
+        let providers = BuilderWithFactories::new()
+            .build_with(&arch)
+            .expect("builder accepts a config_row prompt.section");
+        assert_eq!(providers.len(), 1, "one provider for the row");
+        for p in providers {
+            harness.mount(p).await.unwrap();
+        }
         assert_eq!(slot.len(), 1, "config row must install into the slot");
         assert!(
             slot.render().contains("row-installed section"),
