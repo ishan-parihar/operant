@@ -5,9 +5,22 @@
 //! manager can enforce write guards (no editing protected/hub skills, no
 //! creating skills outside the review's scope).
 //!
-//! Uses `Arc<RwLock<String>>` so the origin survives Tokio task migration
-//! across OS threads. Thread-local storage would lose the value if a task
-//! is polled on a different thread by the work-stealing runtime.
+//! Two tiers, read in this order:
+//!
+//! 1. **Task-local** (`TASK_ORIGIN`): [`scope_background_review`] runs a
+//!    future with the origin set for that task only. The production review
+//!    daemon uses this — while it runs, a concurrent main-agent turn (a
+//!    different Tokio task) still reads the global origin, so its skill
+//!    writes are not write-guarded (R39-10 residual, closed iter-338).
+//! 2. **Process-global** (`WRITE_ORIGIN`, `Arc<RwLock<String>>`): the
+//!    fallback for non-Tokio contexts (sync code, `std::thread` test
+//!    harnesses) and the tier tests drive via `set_write_origin` /
+//!    [`WriteOriginGuard`].
+//!
+//! The global keeps `Arc<RwLock<String>>` (not a thread-local) because a
+//! Tokio task can be polled on different OS threads by the work-stealing
+//! runtime; the task-local tier is runtime-managed and survives migration
+//! by construction.
 //!
 //! # Usage
 //!
@@ -22,10 +35,29 @@
 
 use std::sync::{Arc, LazyLock, RwLock};
 
-/// Shared origin string. `Arc` so it can be cloned into spawned tasks;
-/// `RwLock` so reads (the hot path) don't block and writes are rare.
+tokio::task_local! {
+    /// Task-local origin tier: visible only inside the task whose future was
+    /// wrapped by [`scope_background_review`]. Preferred by every read.
+    static TASK_ORIGIN: String;
+}
+
+/// Shared origin string (process-global fallback tier). `Arc` so it can be
+/// cloned into spawned tasks; `RwLock` so reads (the hot path) don't block
+/// and writes are rare.
 static WRITE_ORIGIN: LazyLock<Arc<RwLock<String>>> =
     LazyLock::new(|| Arc::new(RwLock::new("assistant_tool".to_string())));
+
+/// Run `fut` with the write origin set to `"background_review"` for THAT
+/// TASK ONLY — the process-global origin is not touched, so concurrent
+/// tasks (a live TUI/gateway turn, another daemon) keep reading their own
+/// origin while the review runs. This is the production entry point for the
+/// background-review fork (see `agent/prompting.rs`).
+pub fn scope_background_review<F>(fut: F) -> impl Future<Output = F::Output>
+where
+    F: Future + Send,
+{
+    TASK_ORIGIN.scope("background_review".to_string(), fut)
+}
 
 /// Token returned by [`set_write_origin`] for scoped reset.
 #[derive(Debug, Clone)]
@@ -58,9 +90,15 @@ pub fn reset_write_origin(token: WriteOriginToken) {
 }
 
 /// Get the current write origin string.
+///
+/// Task-local tier first (set by [`scope_background_review`]); falls back to
+/// the process-global slot when the caller runs outside a scoped Tokio task
+/// (sync code, `std::thread`, unscoped tests).
 pub fn get_write_origin() -> String {
-    let lock = WRITE_ORIGIN.read().unwrap_or_else(|e| e.into_inner());
-    lock.clone()
+    TASK_ORIGIN.try_with(Clone::clone).unwrap_or_else(|_| {
+        let lock = WRITE_ORIGIN.read().unwrap_or_else(|e| e.into_inner());
+        lock.clone()
+    })
 }
 
 /// Returns `true` when the current execution context is the background review
@@ -216,5 +254,48 @@ mod tests {
         });
         a.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
         b.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+    }
+
+    /// Regression test for the R39-10 production race: while a background
+    /// review daemon holds the `background_review` origin in ITS task, a
+    /// concurrent task (a live TUI/gateway turn) must still read its own
+    /// origin. The old process-global set made the concurrent turn read
+    /// `background_review` and silently write-guard its skill writes for the
+    /// whole review window; the task-local scope keeps them isolated.
+    /// Synchronization is deterministic: `entered_rx` guarantees the review
+    /// scope is live before the main-task assertion, `release_tx` lets it end.
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only serialization: the lock must span the await window so other modules' origin tests cannot park values mid-assertion; the current_thread test runtime never migrates this task"
+    )]
+    #[tokio::test]
+    async fn task_scoped_origin_does_not_leak_to_concurrent_tasks() {
+        let _lock = origin_test_lock();
+        // Capture whatever the process-global tier currently holds (other
+        // test modules legitimately park values like "user" in it); the
+        // invariant under test is that the review scope does NOT change it.
+        let main_before = current_origin();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let review = tokio::spawn(scope_background_review(async move {
+            let _ = entered_tx.send(());
+            let _ = release_rx.await;
+            current_origin()
+        }));
+
+        let _ = entered_rx.await;
+        // While the review scope is active in its own task, THIS task must
+        // still read exactly what it read before the scope existed — not the
+        // review's background_review origin (the old process-global bug).
+        assert_eq!(
+            current_origin(),
+            main_before,
+            "concurrent task saw the review's background_review origin"
+        );
+        let _ = release_tx.send(());
+
+        let scoped_origin = review.await.unwrap_or_default();
+        assert_eq!(scoped_origin, "background_review");
     }
 }
