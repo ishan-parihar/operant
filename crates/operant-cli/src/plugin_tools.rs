@@ -120,8 +120,12 @@ pub async fn register_plugin_tools(
     // confirm it is enforced, and one running disabled should see that plugin
     // code is unverified. The key count matters because strict with an empty
     // list marks every plugin Untrusted — the silent "nothing loads" mode.
+    // The PARSED mode is logged, not the raw config string: an unrecognized
+    // value maps to Disabled, so logging the raw string would print
+    // `mode = "Strict "` while the host silently ran unverified.
     tracing::info!(
-        mode = %config.plugins.signature_mode,
+        configured = %config.plugins.signature_mode,
+        effective = ?signature_mode,
         trusted_keys = config.plugins.trusted_publisher_keys.len(),
         plugins_dir = %plugins_dir.display(),
         "plugins: signature policy for the CLI tool bridge"
