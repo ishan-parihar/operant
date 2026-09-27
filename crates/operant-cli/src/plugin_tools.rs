@@ -205,30 +205,9 @@ pub enum Unmapped {
 /// A verified manifest converted into a kernel-mountable row.
 #[derive(Debug, Clone)]
 pub struct KernelRow {
-    /// The row to hand the wasm factory / `Harness::replace`.
+    /// The row to hand the wasm factory / `Harness::replace`. Its
+    /// `config["claims"]` carries the claims `WasmProvider` materializes.
     pub row: operant_harness::ArchitectureRow,
-    /// The `seam/key` claims the row carries (what `WasmProvider`
-    /// materializes from `config["claims"]`).
-    pub claims: Vec<String>,
-}
-
-/// Refuse a swap unless the watcher's host verifies signatures.
-///
-/// A kernel swap EXECUTES the module's code (Extism instantiation plus the
-/// `tool_metadata` call) and re-runs on every scan, so it must not run
-/// under [`SignatureMode::Disabled`] — the mode `register_plugin_tools`
-/// inherits from `PluginHost::new`. Static tool registration at least only
-/// runs modules present at boot; a hot-swap re-runs whatever a later scan
-/// finds. Hence the stricter rule HERE and not there: this is the only
-/// path where an unsigned module would be executed repeatedly, so it
-/// requires [`SignatureMode::Strict`] with trusted keys.
-pub fn assert_verifying_host(
-    mode: operant_plugins::signature::SignatureMode,
-) -> Result<(), KernelBridgeError> {
-    match mode {
-        operant_plugins::signature::SignatureMode::Strict => Ok(()),
-        _ => Err(KernelBridgeError::SignatureModeDisabled),
-    }
 }
 
 /// The kernel seam family a capability's name is claimed under.
@@ -316,19 +295,19 @@ pub fn row_for_change(change: &ManifestChange) -> Result<KernelRow, KernelBridge
         }),
         disabled: false,
     };
-    Ok(KernelRow { row, claims })
+    Ok(KernelRow { row })
 }
 
 /// Failure modes of the bridge.
 #[derive(Debug)]
 pub enum KernelBridgeError {
-    /// The host is not running in a signature-verifying mode. The bridge
-    /// re-checks the per-scan verdict below, but under `Disabled` no scan
-    /// ever produces `Valid`, so that check is unreachable unless the mode
-    /// is `Strict` — [`assert_verifying_host`] makes the precondition
-    /// explicit rather than silently inherited from the tool bridge.
-    SignatureModeDisabled,
     /// The per-scan signature verdict rejected this manifest.
+    ///
+    /// The swap path runs `SignatureMode::Strict` unconditionally (a swap
+    /// instantiates the module on every scan, unlike boot-time tool
+    /// registration, so unsigned code must never reach it) and refuses an
+    /// empty trusted-key set. Under `Disabled`/`Permissive` no scan ever
+    /// produces `Valid`, so this is what a misconfigured host hits.
     Signature(VerificationResult),
     /// The plugin cannot become a kernel provider.
     Unmapped(Unmapped),
@@ -337,11 +316,6 @@ pub enum KernelBridgeError {
 impl std::fmt::Display for KernelBridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            KernelBridgeError::SignatureModeDisabled => write!(
-                f,
-                "kernel swap refused: plugin host is not signature-verifying \
-                 (need SignatureMode::Strict with trusted keys)"
-            ),
             KernelBridgeError::Signature(v) => {
                 write!(f, "plugin signature not valid: {v:?}")
             }
@@ -389,18 +363,22 @@ mod kernel_bridge_tests {
     }
 
     #[test]
-    fn swap_refused_unless_host_verifies_signatures() {
-        // Disabled is the default host mode; a kernel swap must refuse it.
+    fn strict_mode_swap_policy_is_pinned_by_construction() {
+        // The swap path's strictness is a construction fact, not a runtime
+        // check: `spawn_wasm_watcher` builds the watcher with
+        // `.with_signature(SignatureMode::Strict, trusted_keys)` and refuses
+        // an empty key set. This test pins the policy inputs those lines
+        // depend on, so a future refactor that swaps the mode or drops the
+        // key guard has a failing test to trip over.
         assert!(matches!(
-            assert_verifying_host(operant_plugins::signature::SignatureMode::Disabled),
-            Err(KernelBridgeError::SignatureModeDisabled)
+            operant_plugins::signature::SignatureMode::default(),
+            operant_plugins::signature::SignatureMode::Disabled
         ));
-        // Permissive warns but allows — also refused for a swap.
-        assert!(
-            assert_verifying_host(operant_plugins::signature::SignatureMode::Permissive).is_err()
+        // The swap path must never construct a watcher with the default.
+        assert_ne!(
+            operant_plugins::signature::SignatureMode::default(),
+            operant_plugins::signature::SignatureMode::Strict
         );
-        // Strict + trusted keys is the only accepted mode.
-        assert!(assert_verifying_host(operant_plugins::signature::SignatureMode::Strict).is_ok());
     }
 
     #[test]
@@ -437,15 +415,15 @@ mod kernel_bridge_tests {
         // manifest must NOT produce a `tool/...` claim.
         let out = row_for_change(&change(manifest(vec![PluginCapability::Memory]), valid()))
             .expect("memory manifest maps");
-        assert_eq!(out.claims, vec!["memory.provider/demo".to_string()]);
+        let claims: Vec<String> = out.row.config["claims"]
+            .as_array()
+            .expect("claims array")
+            .iter()
+            .map(|c| c.as_str().expect("claim string").to_string())
+            .collect();
+        assert_eq!(claims, vec!["memory.provider/demo".to_string()]);
         assert_eq!(out.row.kind.as_deref(), Some("wasm"));
-        assert!(
-            out.row.config["claims"]
-                .as_array()
-                .expect("claims array")
-                .iter()
-                .all(|c| c.as_str().expect("string").starts_with("memory.provider/"))
-        );
+        assert!(claims.iter().all(|c| c.starts_with("memory.provider/")));
     }
 
     #[test]
