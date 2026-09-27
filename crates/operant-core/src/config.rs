@@ -674,20 +674,31 @@ impl Default for GatewaySettings {
 pub struct PluginSettings {
     /// Directories to scan for plugin manifests (`plugin.toml` / `plugin.yaml`).
     pub plugin_dirs: Vec<PathBuf>,
-    /// C2 — hex-encoded Ed25519 public keys of trusted plugin publishers.
-    /// Only consulted when `[harness] watch_wasm = true`: the kernel swap
-    /// path runs `SignatureMode::Strict` unconditionally, and an empty key
-    /// set would mark every plugin `Untrusted` (so the watcher would never
-    /// swap anything). Mirrors the schema world's
-    /// `[plugins.security].trusted_publisher_keys`.
+    /// Signature enforcement: "disabled" (default), "permissive", or
+    /// "strict". Parsed by `PluginHost::parse_signature_mode`. Applies to
+    /// the tool bridge AND the kernel swap watcher, so the two can never
+    /// disagree about whether code is verified.
+    #[serde(default = "default_plugin_signature_mode")]
+    pub signature_mode: String,
+    /// Hex-encoded Ed25519 public keys of trusted plugin publishers.
+    /// Required by both strict mode (tool bridge) and the kernel swap path
+    /// (which always verifies — see `spawn_wasm_watcher`). Mirrors the
+    /// schema world's `[plugins.security].trusted_publisher_keys`.
     #[serde(default)]
     pub trusted_publisher_keys: Vec<String>,
+}
+
+/// Signature-mode default; mirrors the schema world's
+/// `[plugins.security].signature_mode` default.
+fn default_plugin_signature_mode() -> String {
+    "disabled".to_string()
 }
 
 impl Default for PluginSettings {
     fn default() -> Self {
         Self {
             plugin_dirs: vec![platform::operant_home().join("plugins")],
+            signature_mode: default_plugin_signature_mode(),
             trusted_publisher_keys: Vec::new(),
         }
     }
@@ -1847,6 +1858,24 @@ mod tests {
 
     fn env_lock() -> &'static Mutex<()> {
         ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn plugin_signature_policy_is_configurable_and_defaults_disabled() {
+        // Both the tool bridge and the kernel swap watcher read ONE policy
+        // surface, so they can never disagree about whether plugin code is
+        // verified. Absent = disabled, matching the schema world's
+        // [plugins.security] default.
+        let plugins = PluginSettings::default();
+        assert_eq!(plugins.signature_mode, "disabled");
+        assert!(plugins.trusted_publisher_keys.is_empty());
+
+        let parsed: PluginSettings = toml::from_str(
+            "signature_mode = \"strict\"\ntrusted_publisher_keys = [\"ab\", \"cd\"]",
+        )
+        .expect("valid plugin policy");
+        assert_eq!(parsed.signature_mode, "strict");
+        assert_eq!(parsed.trusted_publisher_keys, vec!["ab", "cd"]);
     }
 
     #[test]

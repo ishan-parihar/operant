@@ -111,11 +111,16 @@ pub async fn register_plugin_tools(
         .parent()
         .context("plugins dir has no parent — cannot build plugin host")?;
 
-    // The CLI-level PluginSettings carries only `plugin_dirs`; signature
-    // policy lives in the runtime schema config ([plugins.security]), which
-    // the runtime skill loader enforces. Default (disabled) verification is
-    // consistent with the config default and keeps the CLI bridge simple.
-    let host = match operant_plugins::host::PluginHost::new(parent) {
+    // Signature policy: `[plugins] signature_mode` / `trusted_publisher_keys`
+    // in the AppConfig. Defaults to Disabled, matching the schema world's
+    // `[plugins.security]` default, and it keeps the CLI bridge simple.
+    let signature_mode =
+        operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+    let host = match operant_plugins::host::PluginHost::with_security(
+        parent,
+        signature_mode,
+        config.plugins.trusted_publisher_keys.clone(),
+    ) {
         Ok(host) => host,
         Err(e) => {
             tracing::warn!(error = %e, "plugin host failed to initialize; skipping plugin tools");

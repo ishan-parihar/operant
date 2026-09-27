@@ -324,11 +324,15 @@ enabled = false
 [plugins]
 # Directories scanned for plugin manifests.
 # plugin_dirs = ["~/.operant/plugins"]
-# Hex-encoded Ed25519 public keys of trusted plugin publishers. Required for
-# [harness] watch_wasm (Strict mode needs a non-empty key set). Note this is
-# the AppConfig key, distinct from the schema layer's
-# [plugins.security].trusted_publisher_keys — the two are kept in sync
-# manually.
+# Signature enforcement for plugin code: "disabled" (default), "permissive",
+# or "strict". Read by BOTH the tool bridge and the kernel WASM swap watcher,
+# so the two can never disagree about whether code is verified. Note this is
+# the AppConfig key, distinct from the schema layer's [plugins.security] of
+# the same name.
+# signature_mode = "disabled"
+# Hex-encoded Ed25519 public keys of trusted plugin publishers. Required by
+# strict mode, and mandatory for [harness] watch_wasm (the swap path always
+# verifies and refuses to start without a non-empty key list).
 # trusted_publisher_keys = []
 
 [tools.kernel]

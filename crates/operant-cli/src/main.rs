@@ -1626,13 +1626,29 @@ fn spawn_wasm_watcher(config: &AppConfig, harness: std::sync::Arc<operant_harnes
         );
         return;
     }
-    let Ok(host) = PluginHost::new(parent) else {
-        warn!("harness: watch_wasm — plugin host failed to initialize");
-        return;
+    let host = match PluginHost::new(parent) {
+        Ok(host) => host,
+        Err(e) => {
+            warn!("harness: watch_wasm — plugin host failed to initialize");
+            return;
+        }
     };
     // Strict is the ONLY mode the swap path accepts (see
     // assert_verifying_host): a swap instantiates the module on every
     // scan, so unsigned code must never reach it.
+    // The swap path always verifies, whatever the tool bridge's configured
+    // mode: a swap instantiates the module on every scan, so unsigned code
+    // must never reach it. An operator who configured permissive/disabled
+    // gets an explicit refusal rather than a silent upgrade.
+    let configured = PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+    if !matches!(configured, SignatureMode::Strict) {
+        warn!(
+            mode = %config.plugins.signature_mode,
+            "harness: watch_wasm refused — the kernel swap path requires signature_mode = \"strict\" \
+             (a swap executes the module on every scan); set [plugins] signature_mode = \"strict\""
+        );
+        return;
+    }
     let mut watcher = Watcher::new(host, operant_plugins::watcher::WatcherConfig::default())
         .with_signature(SignatureMode::Strict, trusted_keys);
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
