@@ -72,7 +72,6 @@ pub(crate) use tui::free_mode_dialog;
 pub(crate) use tui::image_paste;
 pub(crate) use tui::input;
 pub(crate) use tui::mcp_view;
-pub(crate) use tui::message_copy;
 pub(crate) use tui::messages;
 pub(crate) use tui::notifications;
 pub(crate) use tui::osc8;
@@ -1582,7 +1581,116 @@ async fn build_harness_host(
         Err(e) => warn!(error = %e, "harness: boot_with_factories failed"),
     }
 
+    // C2 — opt-in WASM hot-swap. Off by default: this is a permanent
+    // background poll that re-instantiates a module on every detected
+    // change, so it must never start as a side effect of `[harness]
+    // .enabled`. Requires the plugins-wasm feature AND a verifying
+    // signature mode (assert_verifying_host refuses Disabled/Permissive —
+    // a swap EXECUTES the module on every scan).
+    #[cfg(feature = "plugins-wasm")]
+    if config.harness.watch_wasm {
+        spawn_wasm_watcher(config, host.harness().clone());
+    }
+
     Some((host.harness().clone(), prompt_slot, hook_slot))
+}
+
+/// C2 — start the plugin-directory watcher and hot-swap verified plugins
+/// into the running kernel. `harness` must be the live harness Arc so
+/// `Harness::replace` affects the agent's actual providers.
+///
+/// Trusted publisher keys come from `[plugins.security]` — an empty key set
+/// under `SignatureMode::Strict` would mark every signed plugin `Untrusted`
+/// and the watcher would never swap anything, so an empty set is refused up
+/// front rather than left as a silent no-op.
+#[cfg(feature = "plugins-wasm")]
+fn spawn_wasm_watcher(config: &AppConfig, harness: std::sync::Arc<operant_harness::Harness>) {
+    use operant_plugins::{host::PluginHost, signature::SignatureMode, watcher::Watcher};
+
+    use crate::plugin_tools::row_for_change;
+
+    let Some(dir) = config.plugins.plugin_dirs.first().cloned() else {
+        warn!("harness: watch_wasm enabled but plugins.plugin_dirs is empty — no watcher");
+        return;
+    };
+    let Some(parent) = dir.parent() else {
+        warn!(dir = %dir.display(), "harness: watch_wasm — plugins dir has no parent");
+        return;
+    };
+    let trusted_keys: Vec<String> = config.plugins.trusted_publisher_keys.clone();
+    if trusted_keys.is_empty() {
+        warn!(
+            "harness: watch_wasm refused — Strict signature mode needs trusted publisher keys \
+             (set [plugins] trusted_publisher_keys; an empty key set would mark every plugin \
+             Untrusted and never swap)"
+        );
+        return;
+    }
+    let Ok(host) = PluginHost::new(parent) else {
+        warn!("harness: watch_wasm — plugin host failed to initialize");
+        return;
+    };
+    // Strict is the ONLY mode the swap path accepts (see
+    // assert_verifying_host): a swap instantiates the module on every
+    // scan, so unsigned code must never reach it.
+    let mut watcher = Watcher::new(host, operant_plugins::watcher::WatcherConfig::default())
+        .with_signature(SignatureMode::Strict, trusted_keys);
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        tracing::info!(dir = %dir.display(), "harness: wasm watcher started");
+        watcher
+            .run_until(stop_rx, |changes| {
+                for change in changes {
+                    match row_for_change(change) {
+                        Ok(bridged) => {
+                            let provider = std::sync::Arc::new(
+                                operant_harness::wasm_provider::WasmProvider::new(bridged.row),
+                            );
+                            let id = operant_harness::Provider::spec(provider.as_ref())
+                                .id()
+                                .to_string();
+                            let harness = harness.clone();
+                            // replace() is async; the watcher callback is
+                            // sync, so hop onto the runtime.
+                            tokio::spawn(async move {
+                                // `replace` only swaps an ALREADY-MOUNTED
+                                // provider; a first-time plugin must be
+                                // mounted instead. No `get_provider`
+                                // accessor exists on Harness, so membership
+                                // comes from the dump the metrics surface
+                                // already uses.
+                                let already =
+                                    harness.dump().await.providers.iter().any(|p| p.id == id);
+                                let result = if already {
+                                    harness.replace(provider).await
+                                } else {
+                                    harness.mount(provider).await.map(|_| "mounted".to_string())
+                                };
+                                match result {
+                                    Ok(outcome) => tracing::info!(
+                                        id = %id,
+                                        outcome = %outcome,
+                                        "harness: wasm provider applied"
+                                    ),
+                                    Err(e) => {
+                                        warn!(id = %id, error = %e, "harness: wasm swap failed")
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            warn!(
+                                plugin = %change.manifest.name,
+                                error = %e,
+                                "harness: plugin not eligible for a kernel swap"
+                            );
+                        }
+                    }
+                }
+            })
+            .await;
+        drop(stop_tx);
+    });
 }
 
 pub(crate) async fn create_runtime_agent(

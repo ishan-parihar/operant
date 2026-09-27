@@ -674,12 +674,21 @@ impl Default for GatewaySettings {
 pub struct PluginSettings {
     /// Directories to scan for plugin manifests (`plugin.toml` / `plugin.yaml`).
     pub plugin_dirs: Vec<PathBuf>,
+    /// C2 — hex-encoded Ed25519 public keys of trusted plugin publishers.
+    /// Only consulted when `[harness] watch_wasm = true`: the kernel swap
+    /// path runs `SignatureMode::Strict` unconditionally, and an empty key
+    /// set would mark every plugin `Untrusted` (so the watcher would never
+    /// swap anything). Mirrors the schema world's
+    /// `[plugins.security].trusted_publisher_keys`.
+    #[serde(default)]
+    pub trusted_publisher_keys: Vec<String>,
 }
 
 impl Default for PluginSettings {
     fn default() -> Self {
         Self {
             plugin_dirs: vec![platform::operant_home().join("plugins")],
+            trusted_publisher_keys: Vec::new(),
         }
     }
 }
@@ -724,6 +733,14 @@ pub struct HarnessSettings {
     /// 64. Mirrors the 016 plan's "kernel" guardrail; keeps a single
     /// `Harness` instance from absorbing unbounded WASM modules.
     pub max_active_providers: usize,
+    /// C2 — watch the plugin directory and hot-swap verified WASM
+    /// providers into the kernel. Default `false`: the watcher is a
+    /// permanent background poll (and every scan re-instantiates the
+    /// module), so it must be an explicit opt-in rather than a surprise
+    /// cost on every harness-enabled boot. Requires the plugin host to run
+    /// in `SignatureMode::Strict` with trusted keys.
+    #[serde(default)]
+    pub watch_wasm: bool,
 }
 
 impl Default for HarnessSettings {
@@ -732,6 +749,7 @@ impl Default for HarnessSettings {
             enabled: false,
             architecture_toml: None,
             max_active_providers: 64,
+            watch_wasm: false,
         }
     }
 }
@@ -1880,6 +1898,11 @@ max_active_providers = 128
             Some(std::path::Path::new("/etc/operant/arch.toml"))
         );
         assert_eq!(parsed.harness.max_active_providers, 128);
+        // C2 — the WASM watcher is opt-in: absent means off, so an
+        // existing config never starts a background poller.
+        assert!(!parsed.harness.watch_wasm);
+        let watched: HarnessSettings = toml::from_str("watch_wasm = true").expect("watch flag");
+        assert!(watched.watch_wasm);
 
         // Re-serialize: settings survive a write/read cycle (proves
         // the surface is stable for the Phase 3 composition layer).
