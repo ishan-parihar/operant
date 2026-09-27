@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// How many counted key presses between flushes of the usage store.
+///
+/// The store is already written on every slash command, so this only bounds
+/// the loss window for a long session that never runs one.
+const KEY_USAGE_FLUSH_EVERY: u32 = 64;
+
 impl App {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         // ── F12: toggle debug overlay (highest priority, never blocked) ──
@@ -21,6 +27,11 @@ impl App {
             modifiers: key.modifiers.bits(),
             at: crate::tui::debug::event_bus::now_secs(),
         });
+
+        // Count this press against the binding registry (feeds /hotkeys).
+        // Placed here so every accepted key is counted exactly once, ahead of
+        // the dispatcher below, including presses consumed by an overlay.
+        self.record_keybinding_usage(&key);
 
         // Dismiss error modal with Esc
         if key.code == KeyCode::Esc && self.notifications.current_is_error() {
@@ -1307,6 +1318,30 @@ impl App {
                 self.refresh_prompt_input();
             }
 
+            // ---- Input stash (Ctrl+S) -----------------------------------
+            // jcode parity. Parks the composer so a half-written prompt is
+            // not lost when the composer has to be free; the same chord
+            // restores it. Allowed while streaming — the composer is
+            // editable mid-turn, so parking it is equally safe.
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_input_stash();
+            }
+            // ---- Composer burst undo (Ctrl+Z) ---------------------------
+            // Reverts a run of edits to the previous snapshot, not one
+            // keystroke (see UNDO_COALESCE in prompt_input).
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.undo_input_burst();
+            }
+            // ---- Queued-message recall (Ctrl+X) -------------------------
+            // Pulls the next message from the queue /steer and /queue write
+            // to, so it can be edited instead of spent on the agent. Ctrl+Q
+            // would be the mnemonic choice but the (non-dispatched) binding
+            // table already documents it as "Quit application", so this
+            // takes the one Ctrl letter nothing claims.
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.recall_queued_message();
+            }
+
             // ---- Alt/Meta key text editing operations -------------------
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt_input.yank_pop();
@@ -1604,6 +1639,47 @@ impl App {
     }
 
     // (iter-164: fn current_key_context deleted — unused after keybinding processor removal)
+
+    /// Count one accepted key press against the binding registry, so `/hotkeys`
+    /// can split the catalogue into muscle memory vs undiscovered.
+    ///
+    /// Only chords that actually resolve to a binding are counted. A bare
+    /// modifier press, a function key the table does not bind, and ordinary
+    /// free text all fail the lookup and are dropped — otherwise the report
+    /// would fill up with noise the user never chose to bind.
+    ///
+    /// Bounded by construction: a counter only ever appears for a chord the
+    /// table already defines, so the map can hold at most one entry per
+    /// binding (~120), never unbounded.
+    ///
+    /// Counters live in the shared `UsageStore` under a `key:` namespace,
+    /// which is what makes them survive a restart — same JSON file, same
+    /// load/save path as the slash-command stats.
+    fn record_keybinding_usage(&mut self, key: &KeyEvent) {
+        use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, usage_key};
+
+        // `find` checks the given context first, then the global set, so one
+        // lookup covers globals too.
+        let context = if self.any_modal_open() {
+            BindingContext::Dialog
+        } else {
+            BindingContext::Prompt
+        };
+        let Some(binding) = DEFAULT_KEYBINDINGS.find(key, context) else {
+            return;
+        };
+        let name = usage_key(&binding.chord());
+        self.slash_usage.record(&name);
+        // The store is flushed by every slash command already; this only
+        // bounds the extra loss window for a session that never runs one.
+        if self
+            .slash_usage
+            .frequency_rank(&name)
+            .is_multiple_of(KEY_USAGE_FLUSH_EVERY)
+        {
+            self.slash_usage.save();
+        }
+    }
 
     // -------------------------------------------------------------------
     // New overlay key handlers

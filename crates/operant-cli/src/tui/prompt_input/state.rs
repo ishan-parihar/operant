@@ -37,6 +37,10 @@ impl PromptInputState {
             vim_quit_requested: false,
             pending_images: Vec::new(),
             kill_ring: KillRing::new(),
+            stash: None,
+            burst_undo: Vec::new(),
+            burst_anchor: (String::new(), 0),
+            burst_edits: 0,
         }
     }
 
@@ -87,5 +91,103 @@ impl PromptInputState {
 
     pub fn is_empty(&self) -> bool {
         self.text.trim().is_empty()
+    }
+
+    // -----------------------------------------------------------------------
+    // Stash (Ctrl+S) — park the composer, then bring it back
+    // -----------------------------------------------------------------------
+
+    /// Park the current contents and empty the composer. One slot: a stash
+    /// held while another is stashed is replaced (not stacked), so a stray
+    /// second Ctrl+S can never strand a prompt in a hidden stack. Moved out
+    /// with `mem::take`, so parking costs no clone.
+    pub fn stash_input(&mut self) {
+        self.stash = Some(std::mem::take(&mut self.text));
+        self.clear();
+    }
+
+    /// Bring the held stash back and clear it. `false` when nothing is held.
+    pub fn restore_stash(&mut self) -> bool {
+        match self.stash.take() {
+            Some(text) => {
+                self.text = text;
+                self.cursor = self.text.len();
+                self.history_pos = None;
+                self.suggestion_index = None;
+                self.update_token_estimate();
+                true
+            }
+            None => false,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Burst undo (Ctrl+Z) — revert a run of edits, not one keystroke
+    // -----------------------------------------------------------------------
+
+    /// Count one composer mutation. Called from the app's single
+    /// post-edit sync point, so it is the one place a snapshot can be
+    /// taken. Nothing is cloned here: the stack only grows when a burst
+    /// closes, and it stores `burst_anchor` — the state the burst started
+    /// from — so one Ctrl+Z reverts the whole run.
+    pub fn record_edit(&mut self) {
+        self.burst_edits += 1;
+        if self.burst_edits < UNDO_COALESCE {
+            return;
+        }
+        self.close_burst();
+    }
+
+    /// Snapshot the open burst's start state and re-arm the anchor at the
+    /// current state. Skips the push when the anchor already matches the
+    /// top of the stack, so a run of no-op edits (backspace at offset 0)
+    /// cannot fill the stack with identical states and make Ctrl+Z look
+    /// broken.
+    fn close_burst(&mut self) {
+        self.burst_edits = 0;
+        if self
+            .burst_undo
+            .last()
+            .is_none_or(|(text, _)| *text != self.burst_anchor.0)
+        {
+            self.burst_undo.push(self.burst_anchor.clone());
+            if self.burst_undo.len() > UNDO_STACK_MAX {
+                self.burst_undo.remove(0);
+            }
+        }
+        self.burst_anchor = (self.text.clone(), self.cursor);
+    }
+
+    /// Revert to the previous burst snapshot. `false` when there is nothing
+    /// to revert, so the caller can say so instead of silently doing nothing.
+    pub fn undo_burst(&mut self) -> bool {
+        // The run in progress starts at the anchor, which is by definition
+        // not on the stack yet, so the first Ctrl+Z after typing reverts that
+        // run instead of waiting for UNDO_COALESCE edits to land.
+        if self.burst_edits > 0 && self.burst_anchor.0 != self.text {
+            let (text, cursor) = self.burst_anchor.clone();
+            self.restore_snapshot(text, cursor);
+            return true;
+        }
+        // Otherwise walk one closed burst back. A run of no-op edits
+        // (backspace at offset 0) lands here and reports honestly rather
+        // than "reverting" to an identical buffer.
+        self.burst_edits = 0;
+        let Some((text, cursor)) = self.burst_undo.pop() else {
+            return false;
+        };
+        self.restore_snapshot(text, cursor);
+        true
+    }
+
+    /// Put a snapshot back into the composer and re-arm the burst anchor at
+    /// it, so the next undo walks further back instead of redoing this step.
+    fn restore_snapshot(&mut self, text: String, cursor: usize) {
+        self.text = text;
+        self.cursor = cursor.min(self.text.len());
+        self.history_pos = None;
+        self.update_token_estimate();
+        self.burst_anchor = (self.text.clone(), self.cursor);
+        self.burst_edits = 0;
     }
 }

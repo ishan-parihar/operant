@@ -168,7 +168,33 @@ pub struct PromptInputState {
     pub pending_images: Vec<crate::image_paste::PastedImage>,
     /// Emacs-style kill ring for Ctrl+K, Ctrl+U, Ctrl+W operations.
     pub kill_ring: KillRing,
+    /// Contents parked by `stash_input` (Ctrl+S). One slot, not a stack: a
+    /// second stash while one is held replaces it. `None` = nothing held.
+    pub stash: Option<String>,
+    /// Coalesced composer snapshots for the burst undo (Ctrl+Z). Separate
+    /// from `undo_stack` above, which is vim's per-operation `:undo`.
+    pub burst_undo: Vec<(String, usize)>,
+    /// Composer state the open burst started from — the value `burst_undo`
+    /// receives when a burst closes.
+    pub burst_anchor: (String, usize),
+    /// Edits recorded since the last snapshot, via `record_edit`.
+    pub burst_edits: usize,
 }
+
+/// Snapshots retained by the burst undo. 64 bursts is ~500 keystrokes of
+/// history at [`UNDO_COALESCE`] edits each, at one `String` clone per burst.
+///
+/// ponytail: fixed ceiling — 64 bursts (≈500 edits) is what a real prompt
+/// needs. If someone ever wants deeper history, make this a config field
+/// rather than growing the constant; the stack is already bounded in one
+/// place.
+pub const UNDO_STACK_MAX: usize = 64;
+
+/// Edits that coalesce into one undo step. A snapshot per keystroke would
+/// make Ctrl+Z useless (one keypress per step), so the counter closes a
+/// burst instead. Count-based rather than time-based: no clock, and a test
+/// can drive an exact number of edits without sleeping.
+pub const UNDO_COALESCE: usize = 8;
 
 impl Default for PromptInputState {
     fn default() -> Self {

@@ -209,13 +209,6 @@ impl KeyBindingRegistry {
             DefaultBinding {
                 key: KeyCode::Char('v'),
                 modifiers: KeyModifiers::ALT,
-                action: KeyAction::VimEnterNormal,
-                context: BindingContext::Prompt,
-                description: "Enter Vim normal mode",
-            },
-            DefaultBinding {
-                key: KeyCode::Char('v'),
-                modifiers: KeyModifiers::ALT,
                 action: KeyAction::ToggleVimMode,
                 context: BindingContext::Prompt,
                 description: "Toggle Vim mode",
@@ -412,13 +405,10 @@ impl KeyBindingRegistry {
                 context: BindingContext::VimNormal,
                 description: "Delete char left",
             },
-            DefaultBinding {
-                key: KeyCode::Char('d'),
-                modifiers: KeyModifiers::NONE,
-                action: KeyAction::VimDeleteLine,
-                context: BindingContext::VimNormal,
-                description: "Delete line",
-            },
+            // `d` (delete word) has a single vim-normal binding: it used to be
+            // declared twice — once as VimDeleteLine, once as VimDeleteWord —
+            // which made `find` order-dependent for the same chord. VimDeleteLine
+            // stays reachable via `D` below.
             DefaultBinding {
                 key: KeyCode::Char('D'),
                 modifiers: KeyModifiers::SHIFT,

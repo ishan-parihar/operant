@@ -1607,3 +1607,301 @@ fn user_scroll_should_cancel_the_anchor() {
     app.reconcile_scroll_anchor();
     assert_eq!(app.scroll_offset, 15, "a user scroll drops the anchor");
 }
+
+// ---- keybinding registry: /keys and /hotkeys ------------------------
+
+/// Rendered system text of the most recent system annotation.
+fn last_system_text(app: &App) -> String {
+    app.system_annotations
+        .last()
+        .map(|a| a.text.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn keys_command_should_report_registry_bindings() {
+    use crate::tui::keybindings::KeyBindingRegistry;
+
+    let mut app = make_app();
+    let before = app.system_annotations.len();
+
+    assert!(app.intercept_slash_command("keys"));
+    assert_eq!(
+        app.system_annotations.len(),
+        before + 1,
+        "/keys reports through the transcript, not the status line"
+    );
+
+    let text = last_system_text(&app);
+    // Sourced from the registry, not a hand-maintained list: the header count
+    // must equal the number of rows the registry actually catalogues.
+    let expected_total = KeyBindingRegistry::with_defaults().catalogue().len();
+    assert!(
+        text.contains(&format!("{expected_total} binding(s) from the registry")),
+        "header must count the registry catalogue, got: {text}"
+    );
+    // Spot-check one binding per shape: a plain key, a modified chord, and a
+    // context group, all of which exist in the default table.
+    assert!(text.contains("[prompt]"), "context groups are labelled");
+    assert!(text.contains("Enter"), "a plain key binding is listed");
+    assert!(text.contains("Ctrl+"), "a modified chord is listed");
+    // A known table row must appear verbatim with its own description.
+    assert!(
+        text.contains("Submit prompt"),
+        "description comes from the default table, got: {text}"
+    );
+    // Ctrl+C is a real tty-level intercept and must be flagged inline.
+    assert!(
+        text.contains("⚠ SIGINT"),
+        "the inline flag names the mechanism, got: {text}"
+    );
+    assert!(
+        text.contains("may be intercepted by the terminal") && text.contains("Ctrl+c"),
+        "the summary lists the conflicting chords, got: {text}"
+    );
+    // The flag is not blanket-applied: Enter is a real binding that no
+    // terminal intercepts, so it must not be reported as a conflict.
+    assert!(
+        crate::tui::keybindings::os_conflict_reason("Enter").is_none(),
+        "Enter must not be flagged — the conflict list is not a catch-all"
+    );
+}
+
+#[test]
+fn hotkey_usage_should_distinguish_used_from_never_used() {
+    use crate::tui::keybindings::{KeyBindingRegistry, usage_key};
+    use crate::tui::slash_usage::UsageStore;
+
+    // 1. The split itself, on a synthetic store: exactly the chords we
+    //    recorded are "used", everything else is "never used".
+    let registry = KeyBindingRegistry::with_defaults();
+    let mut usage = UsageStore::default();
+    usage.record(&usage_key("Ctrl+p"));
+    usage.record(&usage_key("Ctrl+p"));
+    usage.record(&usage_key("Alt+v"));
+
+    let report = registry.usage_report(&usage);
+    assert_eq!(report.used.len() + report.never_used.len(), report.total);
+    assert_eq!(
+        report.used.iter().map(|v| v.count).collect::<Vec<_>>(),
+        vec![2, 1],
+        "used is ordered most-pressed first"
+    );
+    // Per-chord, not per row: `Ctrl+p` is bound in two contexts in the table
+    // (global palette, prompt history-prev) but is one key the user presses,
+    // so it must appear exactly once in the used list.
+    assert_eq!(
+        report
+            .used
+            .iter()
+            .map(|v| v.chord.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["Alt+v", "Ctrl+p"]),
+        "a chord bound in several contexts is one chord"
+    );
+    assert!(
+        report.never_used.iter().all(|v| v.count == 0),
+        "never-used rows all have a zero count"
+    );
+    assert!(
+        !report.used.is_empty() && !report.never_used.is_empty(),
+        "a partially-used table must populate both halves"
+    );
+    // The catalogue itself still lists every row, so /keys (a catalogue) and
+    // /hotkeys (a chord report) legitimately differ in totals.
+    assert!(
+        registry.catalogue().len() > report.total,
+        "the catalogue has more rows than the table has distinct chords"
+    );
+
+    // 2. The live path: a real key press through the accept point is counted,
+    //    an unbound chord is not, and both halves render. `Up` is bound in the
+    //    prompt context; `Ctrl+PageUp` is not in the table at all.
+    let mut app = make_app();
+    let up_before = app.slash_usage.frequency_rank(&usage_key("Up"));
+
+    app.handle_key_event(press_key(KeyCode::PageUp, KeyModifiers::CONTROL));
+    assert_eq!(
+        app.slash_usage.frequency_rank(&usage_key("Ctrl+PageUp")),
+        0,
+        "an unbound chord must not be counted"
+    );
+
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(
+        app.slash_usage.frequency_rank(&usage_key("Up")),
+        up_before + 1,
+        "a bound chord is counted exactly once per accepted press"
+    );
+
+    assert!(app.intercept_slash_command("hotkeys"));
+    let text = last_system_text(&app);
+    assert!(
+        text.contains("chord(s) used"),
+        "/hotkeys leads with the used/never split, got: {text}"
+    );
+    assert!(
+        text.contains("You have used:") && text.contains("Never used (undiscovered):"),
+        "both halves are rendered, got: {text}"
+    );
+    assert!(
+        text.contains("Up"),
+        "the chord just pressed shows up in the used half, got: {text}"
+    );
+}
+
+#[test]
+fn keybinding_registry_should_have_no_duplicate_default_bindings() {
+    use crate::tui::keybindings::KeyBindingRegistry;
+    use std::collections::HashSet;
+
+    let registry = KeyBindingRegistry::with_defaults();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut dupes: Vec<String> = Vec::new();
+
+    for (context, binding) in registry.catalogue() {
+        // The lookup key is exactly what `find` compares: key code +
+        // modifiers, scoped to one context.
+        let ident = (
+            context.label().to_string(),
+            format!("{:?}/{:?}", binding.key, binding.modifiers),
+        );
+        if !seen.insert(ident.clone()) {
+            dupes.push(format!("{} twice in [{}]", ident.1, ident.0));
+        }
+    }
+    assert!(
+        dupes.is_empty(),
+        "a duplicate chord makes `find` order-dependent and ambiguous: {dupes:?}"
+    );
+
+    // The table must not be trivially empty — otherwise the check above would
+    // pass vacuously.
+    assert!(
+        registry.catalogue().len() > 100,
+        "expected a full default table, got {} rows",
+        registry.catalogue().len()
+    );
+}
+
+// ---- Input affordances: stash / burst undo / queued-message recall ----
+
+/// Ctrl+S parks the composer and empties it; the same chord brings the
+/// contents back and clears the stash. A stash held while another is
+/// stashed is replaced — one slot, so a prompt can never be stranded.
+#[test]
+fn input_stash_should_hold_and_restore_contents() {
+    let mut app = make_app();
+    app.set_prompt_text("half-written prompt".to_string());
+
+    let stash = press_key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    assert!(!app.handle_key_event(stash));
+    assert!(app.prompt_input.is_empty(), "stash must empty the composer");
+    assert_eq!(
+        app.prompt_input.stash.as_deref(),
+        Some("half-written prompt")
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Input stashed — Ctrl+S brings it back.")
+    );
+
+    // Stashing while a stash is held replaces it — one slot, never a stack
+    // that could strand an earlier prompt. (Set through the primitive: the
+    // chord itself restores when something is held, which is the toggle.)
+    app.set_prompt_text("second draft".to_string());
+    app.prompt_input.stash_input();
+    assert_eq!(app.prompt_input.stash.as_deref(), Some("second draft"));
+
+    // Same chord restores and clears the stash.
+    app.handle_key_event(press_key(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt_input.text, "second draft");
+    assert!(app.prompt_input.stash.is_none());
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Stash restored into the composer.")
+    );
+}
+
+/// A run of keystrokes collapses into one undo step. Twelve keystrokes are
+/// two bursts, so two Ctrl+Z reach the empty composer — not twelve steps.
+#[test]
+fn input_undo_should_revert_coalesced_edits() {
+    let mut app = make_app();
+
+    for c in "abcdefghijkl".chars() {
+        app.handle_key_event(press_key(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(app.prompt_input.text, "abcdefghijkl");
+
+    app.handle_key_event(press_key(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt_input.text, "abcdefgh", "8 edits = 1 undo step");
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Reverted the last edit burst.")
+    );
+
+    app.handle_key_event(press_key(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt_input.text, "", "second burst back to empty");
+
+    // Stack drained — and the key says so instead of doing nothing quietly.
+    app.handle_key_event(press_key(KeyCode::Char('z'), KeyModifiers::CONTROL));
+    assert_eq!(app.status_message.as_deref(), Some("Nothing to undo."));
+}
+
+/// The stack is capped, so a long editing session cannot grow it without
+/// limit; the oldest burst is the one that goes.
+#[test]
+fn input_undo_should_respect_stack_bound() {
+    use crate::tui::prompt_input::{UNDO_COALESCE, UNDO_STACK_MAX};
+
+    let mut app = make_app();
+    // Comfortably past the cap: each outer tick is one closed burst.
+    for _ in 0..UNDO_STACK_MAX + 8 {
+        for _ in 0..UNDO_COALESCE {
+            app.refresh_prompt_input();
+        }
+        app.prompt_input.insert_char('x');
+    }
+
+    assert!(
+        app.prompt_input.burst_undo.len() <= UNDO_STACK_MAX,
+        "burst stack grew to {} entries, cap is {UNDO_STACK_MAX}",
+        app.prompt_input.burst_undo.len()
+    );
+    assert_eq!(app.prompt_input.burst_undo.len(), UNDO_STACK_MAX);
+}
+
+/// Ctrl+X takes the head of the real steer queue (FIFO — the same order the
+/// agent would drain it in) rather than a second, private queue.
+#[test]
+fn queued_message_recall_should_move_head_into_composer() {
+    let mut app = make_app();
+    let queue = std::sync::Arc::new(tokio::sync::Mutex::new(vec![
+        "first queued".to_string(),
+        "second queued".to_string(),
+    ]));
+    app.steer_queue_handle = Some(std::sync::Arc::clone(&queue));
+
+    app.handle_key_event(press_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt_input.text, "first queued");
+    assert_eq!(
+        queue.try_lock().unwrap().as_slice(),
+        ["second queued".to_string()],
+        "recall removes the message instead of copying it"
+    );
+
+    // A non-empty composer is never overwritten: stash first, then recall.
+    app.handle_key_event(press_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Composer is not empty — Ctrl+S stashes it before recall.")
+    );
+    assert_eq!(app.prompt_input.text, "first queued");
+
+    // Stash, then recall picks up where the queue left off.
+    app.handle_key_event(press_key(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    assert_eq!(app.prompt_input.text, "second queued");
+    assert!(queue.try_lock().unwrap().is_empty());
+}

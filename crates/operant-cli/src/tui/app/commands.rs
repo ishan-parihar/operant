@@ -140,6 +140,104 @@ impl App {
         }
     }
 
+    /// Render `/keys`: the full active catalogue grouped by context, with the
+    /// chords a terminal is likely to intercept flagged inline.
+    fn render_keys_report(
+        &self,
+        registry: &crate::tui::keybindings::KeyBindingRegistry,
+        report: &crate::tui::keybindings::KeyUsageReport,
+    ) -> String {
+        use crate::tui::keybindings::{BindingContext, os_conflict_reason};
+
+        let mut out = format!(
+            "Keybindings — {} binding(s) from the registry. /hotkeys shows what you have used.\n",
+            registry.catalogue().len()
+        );
+        let mut current: Option<BindingContext> = None;
+        for (context, binding) in registry.catalogue() {
+            if current != Some(context) {
+                current = Some(context);
+                out.push_str(&format!("\n[{}]\n", context.label()));
+            }
+            let flag = match os_conflict_reason(&binding.chord()) {
+                Some(why) => format!("  ⚠ {}", why),
+                None => String::new(),
+            };
+            let description = binding.description.as_deref().unwrap_or("");
+            let action = format!("{:?}", binding.action);
+            out.push_str(&format!(
+                "  {:<16} {:<34} {}{}\n",
+                binding.chord(),
+                description,
+                action,
+                flag
+            ));
+        }
+        if !report.conflicts.is_empty() {
+            out.push_str(&format!(
+                "\n⚠ {} binding(s) may be intercepted by the terminal: {}\n",
+                report.conflicts.len(),
+                report
+                    .conflicts
+                    .iter()
+                    .map(|(c, _)| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        out
+    }
+
+    /// Render `/hotkeys`: chords you have pressed vs chords you never have.
+    /// The never-used list is the point — it is the undiscovered surface.
+    fn render_hotkeys_report(&self, report: &crate::tui::keybindings::KeyUsageReport) -> String {
+        let used = report.used.len();
+        let mut out = format!(
+            "Keybinding usage — {used} of {} chord(s) used, {} never used.\n",
+            report.total,
+            report.never_used.len()
+        );
+
+        if used == 0 {
+            out.push_str(
+                "\nNo chords recorded yet — press a bound key, then run /hotkeys again.\n",
+            );
+        } else {
+            out.push_str("\nYou have used:\n");
+            for v in &report.used {
+                out.push_str(&format!(
+                    "  {:<16} {:>4}x  {}\n",
+                    v.chord,
+                    v.count,
+                    if v.description.is_empty() {
+                        v.action.as_str()
+                    } else {
+                        v.description.as_str()
+                    }
+                ));
+            }
+        }
+
+        out.push_str("\nNever used (undiscovered):\n");
+        if report.never_used.is_empty() {
+            out.push_str("  (none — every bound chord has been pressed)\n");
+        } else {
+            for v in &report.never_used {
+                out.push_str(&format!(
+                    "  {:<16} [{}] {}\n",
+                    v.chord,
+                    v.context.label(),
+                    if v.description.is_empty() {
+                        v.action.as_str()
+                    } else {
+                        v.description.as_str()
+                    }
+                ));
+            }
+        }
+        out
+    }
+
     /// Implementation that receives both cmd and args. Most slash commands
     /// ignore args; a few (like /personality <name>) consume them.
     fn intercept_slash_command_with_args_impl(&mut self, cmd: &str, args: &str) -> bool {
@@ -701,6 +799,23 @@ impl App {
                 if let Err(e) = open_file_externally(&keybindings_path) {
                     eprintln!("Failed to open keybindings file: {}", e);
                 }
+                true
+            }
+            // /keys — the active binding catalogue, read from the registry.
+            // /hotkeys — the same catalogue split by whether you have pressed
+            // it. Distinct from /keybindings above, which edits the JSON file.
+            "keys" | "hotkeys" => {
+                let registry = &*crate::tui::keybindings::DEFAULT_KEYBINDINGS;
+                let report = registry.usage_report(&self.slash_usage);
+                // Flush here so a freshly-pressed chord is always reflected,
+                // rather than waiting for the next periodic flush.
+                self.slash_usage.save();
+                let text = if cmd == "keys" {
+                    self.render_keys_report(registry, &report)
+                } else {
+                    self.render_hotkeys_report(&report)
+                };
+                self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
                 true
             }
             "help" => {
