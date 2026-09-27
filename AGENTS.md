@@ -476,7 +476,7 @@ asked — the user has accepted them as documented gaps.
 
 ## What IS Working (verified functional — iter-68 audit)
 
-### CLI (52 command variants — all have real handlers)
+### CLI (52 command variants — real handlers, except the two accepted stubs below)
 run, chat, autonomous, tools, test, config, sessions, mcp, skills, model,
 completion, cron, kanban, gateway (16 sub-actions), checkpoints, memory,
 profile, auth/login/logout, version, doctor, status, dump, logs, backup,
