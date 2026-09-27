@@ -724,6 +724,24 @@ mod tests {
 ///
 /// (iter-102 — closes Bug #15 from iter-98 audit.)
 pub fn markdown_to_slack_mrkdwn(text: &str) -> String {
+    asterisk_dialect(text)
+}
+
+/// Convert standard markdown to WhatsApp's formatting dialect.
+///
+/// WhatsApp's markup subset — `*bold*`, `_italic_`, `~strike~`, triple-backtick
+/// code blocks — coincides exactly with Slack mrkdwn for the constructs the
+/// gateway emits, so this shares the same fence-aware pass. zeroclaw port:
+/// the WhatsApp adapter previously sent raw markdown and `**bold**` reached
+/// users as literal asterisks (WhatsApp renders neither `**` nor `~~`).
+pub fn markdown_to_whatsapp(text: &str) -> String {
+    asterisk_dialect(text)
+}
+
+/// Shared fence-aware pass for the `*bold*` / `_italic_` / `~strike~`
+/// dialect family (Slack mrkdwn, WhatsApp). Code fences pass through
+/// verbatim — formatting conversion applies only outside them.
+fn asterisk_dialect(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut in_code_block = false;
 
@@ -778,6 +796,23 @@ pub fn markdown_to_slack_mrkdwn(text: &str) -> String {
 #[cfg(test)]
 mod slack_tests {
     use super::*;
+
+    #[test]
+    fn whatsapp_bold_italic_strike_match_slack_dialect() {
+        // zeroclaw WhatsApp port: the mapped subset coincides with mrkdwn.
+        assert_eq!(
+            markdown_to_whatsapp("**bold** and *italic* and ~~gone~~"),
+            "*bold* and _italic_ and ~gone~"
+        );
+    }
+
+    #[test]
+    fn whatsapp_code_blocks_pass_through_verbatim() {
+        // Fences are protection boundaries: markdown inside a code block
+        // must reach WhatsApp verbatim (WhatsApp renders ``` as mono).
+        let src = "```rs\nlet x = **not bold**;\n```";
+        assert_eq!(markdown_to_whatsapp(src), src);
+    }
 
     #[test]
     fn test_slack_bold() {

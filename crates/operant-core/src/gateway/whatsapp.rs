@@ -88,11 +88,20 @@ impl PlatformAdapter for WhatsAppAdapter {
             phone_number_id
         );
 
+        // zeroclaw WhatsApp port: WhatsApp renders neither `**` nor `~~` —
+        // convert the mapped subset when markdown parsing is enabled for this
+        // message (OutgoingMessage::new defaults parse_markdown=true).
+        let body_text = if message.parse_markdown {
+            crate::gateway_markdown::markdown_to_whatsapp(&message.content)
+        } else {
+            message.content.clone()
+        };
+
         let body = json!({
             "messaging_product": "whatsapp",
             "to": phone,
             "type": "text",
-            "text": {"body": message.content}
+            "text": {"body": body_text}
         });
 
         let resp = client
