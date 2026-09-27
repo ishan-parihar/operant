@@ -1154,4 +1154,16 @@ decisions the audit left open.
   trusted key in a temp plugin dir); the trusted-key plumbing reaches the CLI
   through a new `[plugins] trusted_publisher_keys` AppConfig field rather than
   reading the schema world's `[plugins.security]` — the two must be kept in
-  sync manually.
+  sync manually (documented in operant.example.toml, iter-357).
+- **Deployment reality (iter-357)**: C2 is gated behind the `plugins-wasm`
+  cargo feature, which is default-OFF. The deployed `/usr/local/bin/operant`
+  (default release build) therefore does NOT contain the watcher or the
+  bridge — verified by `strings`: `trusted_publisher_keys` is present (the
+  AppConfig field is not feature-gated) but `watch_wasm refused` is absent.
+  Shipping the hot-swap requires a feature-enabled release build
+  (`--features plugins-wasm`). C2 is "landed and compiling", not "deployed".
+- **Build interference**: a `--features plugins-wasm` release build in the
+  shared tree fails on `tui/image_paste.rs:391` and `tui/image_render.rs:456`
+  (E0308 / E0277) — both in the concurrent agent's UNCOMMITTED working copy
+  (last committed at their `f956f535`), neither a C2 file. Verification of
+  C2's release compile is therefore done in a clean `git worktree` at HEAD.
