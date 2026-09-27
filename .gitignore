@@ -111,3 +111,6 @@ skills/.curator/
 .sisyphus/
 .oh-my-opencode/
 .history/
+
+# agent session scratch (plans, run-continuation state)
+.omo/
