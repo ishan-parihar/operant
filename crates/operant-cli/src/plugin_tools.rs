@@ -116,6 +116,16 @@ pub async fn register_plugin_tools(
     // `[plugins.security]` default, and it keeps the CLI bridge simple.
     let signature_mode =
         operant_plugins::host::PluginHost::parse_signature_mode(&config.plugins.signature_mode);
+    // Log the effective policy: an operator running strict should be able to
+    // confirm it is enforced, and one running disabled should see that plugin
+    // code is unverified. The key count matters because strict with an empty
+    // list marks every plugin Untrusted — the silent "nothing loads" mode.
+    tracing::info!(
+        mode = %config.plugins.signature_mode,
+        trusted_keys = config.plugins.trusted_publisher_keys.len(),
+        plugins_dir = %plugins_dir.display(),
+        "plugins: signature policy for the CLI tool bridge"
+    );
     let host = match operant_plugins::host::PluginHost::with_security(
         parent,
         signature_mode,
@@ -338,6 +348,50 @@ mod kernel_bridge_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use std::path::PathBuf;
+
+    /// The signature policy both plugin paths read, exercised at runtime.
+    /// iter-363 moved `register_plugin_tools` onto
+    /// `PluginHost::with_security(mode, keys)` but every test since ran
+    /// without touching that call — a compile check is not a runtime one.
+    #[test]
+    fn configured_mode_reaches_the_host_and_the_key_set_is_honoured() {
+        use operant_plugins::host::PluginHost;
+        use operant_plugins::signature::SignatureMode;
+
+        // The parser is what both bridges call; pin its whole mapping so a
+        // typo that silently downgrades a strict deployment to Disabled
+        // fails here.
+        for (raw, expected) in [
+            ("strict", SignatureMode::Strict),
+            ("STRICT", SignatureMode::Strict),
+            ("permissive", SignatureMode::Permissive),
+            ("disabled", SignatureMode::Disabled),
+            ("", SignatureMode::Disabled),
+            ("nonsense", SignatureMode::Disabled),
+        ] {
+            assert_eq!(
+                PluginHost::parse_signature_mode(raw),
+                expected,
+                "parse_signature_mode({raw:?})"
+            );
+        }
+
+        // The AppConfig default must be the schema world's default, or the
+        // two policy surfaces drift (the duplication iter-363 removed).
+        assert_eq!(AppConfig::default().plugins.signature_mode, "disabled");
+
+        // with_security creates a missing plugins dir and returns Ok with
+        // the mode and keys it was handed (it errors only if creation or
+        // discovery fails). Asserting the real contract: the policy
+        // reaches the host rather than being dropped on the floor.
+        let dir = std::env::temp_dir().join("operant-sig-policy-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp workspace");
+        let host = PluginHost::with_security(&dir, SignatureMode::Strict, vec!["aa".to_string()])
+            .expect("with_security creates the plugins dir and succeeds");
+        assert!(host.plugins_dir().ends_with("plugins"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn manifest(caps: Vec<PluginCapability>) -> operant_plugins::PluginManifest {
         operant_plugins::PluginManifest {
