@@ -1699,10 +1699,20 @@ siblings rather than stated by them. It belongs in their commit.
 (`baae1e9d`) predates the breakage, so `operant --version` and `operant doctor`
 still work and `target/release/operant` is a valid build — but any rebuild from
 the current tree fails at `operant-core`, costing ~9 minutes to learn nothing.
-- **Repro**: `git worktree add --detach /tmp/owc origin/main && cd /tmp/owc &&
+- **Repro (re-confirmed at origin/main, iter-399)**:
+  `git worktree add --detach /tmp/owv origin/main && cd /tmp/owv &&
   git submodule update --init --recursive && cargo check -p operant-core --lib`
-  → 10 errors. The submodule init matters: without it the failure is masked by
-  a different crate failing first.
+  → `could not find cache_monitor in clients` at run.rs, 8 errors,
+  `could not compile operant-core (lib)`. The submodule init matters: without
+  it the failure is masked by a different crate failing first.
+- **The fix already exists — UNCOMMITTED in the concurrent agent's working
+  copy.** `crates/operant-core/src/agent/clients/mod.rs` in the shared tree
+  contains `pub mod cache_monitor;` as a 1-line uncommitted diff, and it is
+  correct. So this is not a missed fix, it is a **fix that was never pushed**:
+  `origin/main` is broken while the local tree compiles. Anyone reading the
+  ledger should NOT add the declaration — that line is already in the working
+  copy, and adding it again from a clean checkout is a duplicate. The action is
+  to get that commit pushed (or cherry-picked onto main), not to re-apply it.
 - **Pattern worth naming**: this is the third time `origin/main` has been
   pushed uncompilable (iter-359 → R40-9, iter-357 → R40-11, now iter-391), and
   a clean-worktree compile at HEAD was the only thing that caught it each time.
