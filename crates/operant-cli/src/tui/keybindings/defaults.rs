@@ -61,12 +61,18 @@ impl KeyBindingRegistry {
                 context: BindingContext::Global,
                 description: "Toggle usage overlay",
             },
+            // iter-429: this entry said "Command palette", but the arm at
+            // key_handling.rs opens `global_search`, and the command palette is
+            // Ctrl+K. The chord was right and the description was not, so
+            // `/keys` sent users to the wrong feature. Dispatched on the
+            // keycode rather than through the KeyAction registry, hence
+            // `Custom(3)`.
             DefaultBinding {
                 key: KeyCode::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::ShowCommandPalette,
+                action: KeyAction::Custom(3),
                 context: BindingContext::Global,
-                description: "Command palette",
+                description: "Global search",
             },
             DefaultBinding {
                 key: KeyCode::Char('v'),
@@ -132,13 +138,12 @@ impl KeyBindingRegistry {
                 context: BindingContext::Prompt,
                 description: "History next",
             },
-            DefaultBinding {
-                key: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::HistoryPrevious,
-                context: BindingContext::Prompt,
-                description: "History previous",
-            },
+            // iter-429: the Ctrl+P "History previous" entry is GONE. It never
+            // worked — the Ctrl+P arm opens global search. History previous is
+            // reachable via Up (the arm above), so removing the claim loses
+            // nothing and stops `/keys` describing a chord that does something
+            // else. iter-409 removed phantom chords for the same reason; here
+            // the chord is real but the claim about it was not.
             DefaultBinding {
                 key: KeyCode::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
@@ -153,12 +158,18 @@ impl KeyBindingRegistry {
                 context: BindingContext::Prompt,
                 description: "History search",
             },
+            // iter-429: moved from Prompt/"Move to start" to here. Ctrl+A
+            // never moved the cursor — key_handling.rs opens the model picker
+            // in an earlier block, so a Rust `match` never reaches the prompt.
+            // The feature was real and useful but UNDISCOVERABLE, because no
+            // entry described it correctly. `Custom(2)` for the same reason as
+            // the F8 and Ctrl+P entries: dispatched on the keycode.
             DefaultBinding {
                 key: KeyCode::Char('a'),
                 modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::MoveCursorHome,
-                context: BindingContext::Prompt,
-                description: "Move to start",
+                action: KeyAction::Custom(2),
+                context: BindingContext::Global,
+                description: "Open model picker",
             },
             DefaultBinding {
                 key: KeyCode::Char('e'),
@@ -167,12 +178,16 @@ impl KeyBindingRegistry {
                 context: BindingContext::Prompt,
                 description: "Move to end",
             },
+            // iter-429: moved from Prompt/"Word left" to Global. Ctrl+B opens
+            // the session branch browser, and `test_ctrl_b`-style coverage for
+            // it does not exist, so before this the branch browser was
+            // reachable only by reading the source. `Custom(4)`.
             DefaultBinding {
                 key: KeyCode::Char('b'),
                 modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::MoveCursorWordLeft,
-                context: BindingContext::Prompt,
-                description: "Word left",
+                action: KeyAction::Custom(4),
+                context: BindingContext::Global,
+                description: "Open session branch browser",
             },
             DefaultBinding {
                 key: KeyCode::Char('f'),
@@ -195,12 +210,20 @@ impl KeyBindingRegistry {
                 context: BindingContext::Prompt,
                 description: "Delete line",
             },
+            // iter-429: moved from Prompt/"Delete to end" to Global. Ctrl+K
+            // opens the command palette, and
+            // `test_ctrl_k_shortcut_opens_command_palette_even_with_input`
+            // pins that as DELIBERATE — it asserts the palette opens even with
+            // text in the prompt. So the dispatch was right and the catalogue
+            // entry was the thing that was wrong. It keeps a real action
+            // variant rather than a `Custom`, because ShowCommandPalette is
+            // exactly what it does.
             DefaultBinding {
                 key: KeyCode::Char('k'),
                 modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::DeleteToLineEnd,
-                context: BindingContext::Prompt,
-                description: "Delete to end",
+                action: KeyAction::ShowCommandPalette,
+                context: BindingContext::Global,
+                description: "Command palette",
             },
             DefaultBinding {
                 key: KeyCode::Char('y'),
