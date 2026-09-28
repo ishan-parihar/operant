@@ -30,12 +30,22 @@ use self::check_result::{print_banner, print_summary};
 /// Both lists count. `issues` are auto-fixable and `manual_issues` need a human,
 /// but neither means the system is healthy, and a caller gating on the exit code
 /// has no way to tell the two apart without parsing the output.
-fn doctor_exit_code(issues: &[String], manual_issues: &[String]) -> i32 {
-    if issues.is_empty() && manual_issues.is_empty() {
-        0
-    } else {
-        1
-    }
+/// Machine-readable exit status.
+///
+/// Only `issues` — genuine problems — produce a non-zero code.
+/// `_manual_issues` are ADVISORIES: "git not found (recommended)", "Nous Portal
+/// auth (not logged in)", "~/.operant/cron/ will be created on first use".
+/// Counting them made `operant doctor` exit 1 on a perfectly working install
+/// that simply had not configured optional integrations — 13 advisories were
+/// present on a working machine, so the exit code was permanently 1 and
+/// carried no information. That is the mirror image of the bug this function
+/// was written to fix (a doctor that could never fail), and just as useless to
+/// anything scripting it. A check that always fails carries no more
+/// information than one that never does.
+///
+/// Exit 1 = something is wrong. Exit 0 = healthy, advisories displayed.
+fn doctor_exit_code(issues: &[String], _manual_issues: &[String]) -> i32 {
+    if issues.is_empty() { 0 } else { 1 }
 }
 
 /// Dispatch handle — called from `main.rs` for `operant doctor [--fix] [--json]`.
@@ -102,10 +112,23 @@ mod tests {
     }
 
     /// Manual issues count too — a caller gating on the exit code cannot tell
-    /// them apart from auto-fixable ones without parsing the output.
+    /// Manual issues are advisories ("git not found (recommended)"), not
+    /// failures. Counting them meant a healthy install with unconfigured
+    /// optional integrations could never exit 0 — 13 such advisories were
+    /// present on a working machine — so the exit code carried no information
+    /// at all. This pins the corrected contract: advisories are displayed, and
+    /// they do not gate a caller.
     #[test]
-    fn manual_issues_also_exit_nonzero() {
-        assert_eq!(doctor_exit_code(&[], &issues(1)), 1);
+    fn manual_issues_do_not_fail_the_run() {
+        assert_eq!(doctor_exit_code(&[], &issues(1)), 0);
+        assert_eq!(doctor_exit_code(&[], &issues(13)), 0);
+    }
+
+    /// …but a real issue still fails even alongside advisories, which is the
+    /// half of the contract that matters for scripting.
+    #[test]
+    fn real_issue_fails_even_with_advisories_present() {
+        assert_eq!(doctor_exit_code(&issues(1), &issues(5)), 1);
     }
 
     #[test]
