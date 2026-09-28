@@ -50,6 +50,17 @@ export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$LOCAL_DIR/pkgconfig}"
 # Runtime linker path so the built binary can find libonnxruntime + libasound
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib:$ORT_DIR/lib}"
 
+# Embed the ONNX Runtime path in the binary as an rpath. Without it the shipped
+# executable carries no record of where its shared library lives: `ldd` reports
+# "libonnxruntime.so.1 => not found" and the binary exits 127 unless the shell
+# that runs it happens to have sourced this file. An installed binary must not
+# depend on the caller's environment — that is the whole difference between a
+# build and a deployment. (Static linking is not an option: ort-sys cannot link
+# the prebuilt ONNX Runtime that way.)
+if [ -z "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-}" ] && [ -d "$ORT_DIR/lib" ]; then
+  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-L native=$ORT_DIR/lib -C link-arg=-Wl,-rpath,$ORT_DIR/lib"
+fi
+
 # pip-installed cmake lands in a venv. Prepend it only if it is actually there —
 # a PATH entry pointing at a nonexistent directory is noise, and the old value
 # hardcoded a different user's home.
