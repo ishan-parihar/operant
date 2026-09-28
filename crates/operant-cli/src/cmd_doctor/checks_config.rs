@@ -70,7 +70,11 @@ fn has_provider_env_config(content: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Run all config & directory checks, appending actionable items to `issues`.
-pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
+pub fn run_config_checks(
+    config: &AppConfig,
+    issues: &mut Vec<String>,
+    manual_issues: &mut Vec<String>,
+) {
     let hh = operant_home();
     let dhh = display_home();
 
@@ -87,8 +91,19 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
                 if has_provider_env_config(&content) {
                     check_ok("API key or custom endpoint configured", "");
                 } else {
-                    check_warn(&format!("No API key found in {}/.env", dhh), "");
-                    issues.push("Run 'operant setup' to configure API keys".to_string());
+                    // No key in .env — but the credential may live elsewhere (env
+                    // var, keyring, a gateway). The live turn is what proves
+                    // whether operant can actually call a model, so the advice
+                    // is actionable but not a failure on its own. A .env that is
+                    // absent entirely is handled below with check_fail.
+                    check_warn(
+                        &format!(
+                            "No API key found in {}/.env (other sources may be configured)",
+                            dhh
+                        ),
+                        "run: operant setup",
+                    );
+                    manual_issues.push("Run 'operant setup' to configure API keys".to_string());
                 }
             }
             Err(e) => {
@@ -151,7 +166,9 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
                     ),
                     "(check ~/.operant/.env or run 'operant setup')",
                 );
-                issues.push(
+                // ⚠ above, so advisory: an unrecognised base_url still works if
+                // the provider is reachable, and the live turn is what proves it.
+                manual_issues.push(
                     "client.base_url does not match a known provider. ".to_string()
                         + "Run 'operant setup' to configure a supported provider.",
                 );
@@ -159,7 +176,7 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
         }
     } else {
         check_warn("client.base_url is not configured", "");
-        issues.push("Run 'operant setup' to configure a provider and base URL".to_string());
+        manual_issues.push("Run 'operant setup' to configure a provider and base URL".to_string());
     }
 
     let set_providers: Vec<&str> = PROVIDERS
@@ -176,7 +193,7 @@ pub fn run_config_checks(config: &AppConfig, issues: &mut Vec<String>) {
         );
     } else {
         check_warn("No provider API keys found in environment", "");
-        issues.push(
+        manual_issues.push(
             "No provider API keys configured. Run 'operant setup' or set the appropriate *_API_KEY in .env"
                 .to_string(),
         );

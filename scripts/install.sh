@@ -43,6 +43,25 @@ echo "=== Building Operant Release Binary ==="
 cargo build --release -p operant-cli
 
 echo ""
+echo "=== Installing Runtime Libraries ==="
+# The binary embeds an rpath to this directory (see scripts/dev-env.sh). If the
+# library is not copied here, `operant` exits 127 with
+# "libonnxruntime.so.1: cannot open shared object file" on every invocation
+# except inside a shell that happens to have sourced dev-env.sh. The rpath must
+# point somewhere that outlives the build tree, not into a checkout or tmpfs.
+RUNTIME_LIB_DIR="${RUNTIME_LIB_DIR:-$HOME/.local/lib/operant}"
+ORT_DIR="local/onnxruntime-linux-x64-1.20.1/lib"
+if [ -d "$ORT_DIR" ]; then
+    mkdir -p "$RUNTIME_LIB_DIR"
+    cp -a "$ORT_DIR"/libonnxruntime.so* "$RUNTIME_LIB_DIR"/ 2>/dev/null \
+        && echo "  ok   libonnxruntime -> $RUNTIME_LIB_DIR" \
+        || echo "  WARN could not copy libonnxruntime; operant may not start"
+else
+    echo "  WARN no local ONNX Runtime at $ORT_DIR — run scripts/provision-build-deps.sh"
+    echo "       before installing, or operant will not start on this machine."
+fi
+
+echo ""
 echo "=== Installing to /usr/local/bin/ ==="
 sudo cp target/release/operant /usr/local/bin/operant
 sudo chmod +x /usr/local/bin/operant

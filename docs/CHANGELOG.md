@@ -257,30 +257,6 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
   runs at all six spawn sites. Deliberately a denylist, not an allowlist: an
   allowlist would strip `PATH`/`HOME` and break arbitrary user commands.
 
-### Fixed
-
-- **Piping any long-output command aborted with a core dump** (SIGPIPE
-  disposition). `operant doctor | head` now exits 0.
-- **`operant chat` looped forever on a non-TTY stdin**; EOF is now terminal.
-- **`operant doctor` always exited 0**, printing failures and reporting success,
-  so nothing could gate on it. It can now fail — and advisories ("install git",
-  "not logged in") are explicitly *not* counted as failures, so a healthy install
-  with unconfigured optional integrations still exits 0.
-- **The build could not succeed on a machine that had never built operant.**
-  `dev-env.sh` pointed at another developer's home directory and died sourcing a
-  `~/.cargo/env` that does not exist outside rustup installs; the dependency
-  provisioner was Debian-only and failed outright without `dpkg-deb`.
-  Both now detect what the host actually has.
-- **`/keys` advertised four chords that did something else**, and three prompt
-  bindings that were documented but never provided.
-
-### Changed
-
-- Best-effort cross-target builds no longer veto a release, and the release no
-  longer depends on a third-party submodule being reachable.
-- A 7.6 MB platform-specific `libclang.deb` is no longer committed to the
-  repository; the provisioner fetches it on demand.
-
 ### Added
 
 - **Lossless Context Management (LCM) engine** (`agent.context_engine = "lcm"`) — hermes-lcm parity: an append-only SQLite DAG keeps every message verbatim (FTS5-indexed) while the fresh-tail (D0) window stays in context. Opt-in; the built-in `compact` engine remains the default.
@@ -297,6 +273,20 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ### Fixed
 
+- **Piping any long-output command aborted with a core dump** (SIGPIPE
+  disposition). `operant doctor | head` now exits 0.
+- **`operant chat` looped forever on a non-TTY stdin**; EOF is now terminal.
+- **`operant doctor` always exited 0**, printing failures and reporting success,
+  so nothing could gate on it. It can now fail — and advisories ("install git",
+  "not logged in") are explicitly *not* counted as failures, so a healthy install
+  with unconfigured optional integrations still exits 0.
+- **The build could not succeed on a machine that had never built operant.**
+  `dev-env.sh` pointed at another developer's home directory and died sourcing a
+  `~/.cargo/env` that does not exist outside rustup installs; the dependency
+  provisioner was Debian-only and failed outright without `dpkg-deb`.
+  Both now detect what the host actually has.
+- **`/keys` advertised four chords that did something else**, and three prompt
+  bindings that were documented but never provided.
 - **web_search per-provider timeout** — every candidate engine is now bounded by `search_timeout_secs` (`run_provider_chain`), so a hung provider (e.g. a stalled igs subprocess whose own timeout can reach 60s) fails over to the next engine instead of killing the whole search at the agent-loop tool timeout. Timeouts/errors/empty results all fall through and the timeout is surfaced in the error.
 - **agentmemory default alignment** — schema `MemoryConfig::default()` backend was `sqlite` while the core AppConfig default, docs, and `operant.example.toml` said `agentmemory`; the schema default is now `agentmemory` so the daemon/gateway path matches the CLI path (the injected MCP server stays deferred, and `ensure_backend` degrades gracefully with a warning when Node.js/npx is unavailable).
 - **memory tool guidance** — `memory_store`/`memory_search`/`memory_recall` descriptions now state they target the builtin MEMORY.md store and point to `memory_save`/`memory_smart_search` for the agentmemory backend, so agents route to the correct memory surface.
@@ -309,6 +299,18 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ### Changed
 
+- Best-effort cross-target builds no longer veto a release, and the release no
+  longer depends on a third-party submodule being reachable.
+- A 7.6 MB platform-specific `libclang.deb` is no longer committed to the
+  repository; the provisioner fetches it on demand.
+- The installed binary is self-contained. It previously carried no rpath, so
+  `~/.local/bin/operant` exited 127 with "libonnxruntime.so.1: cannot open
+  shared object file" unless the shell that ran it had sourced `dev-env.sh` —
+  a build artifact with a dependency on the caller's environment. The build now
+  embeds a RUNPATH to `~/.local/lib/operant`, which `install.sh` populates —
+  deliberately not the build tree, since an rpath into a checkout or a tmpfs
+  dies the moment that directory is removed. (Static linking is not available:
+  `ort-sys` cannot link the prebuilt ONNX Runtime that way.)
 - **Version 0.2.0** — workspace bumped from 0.1.4 so `operant --version` distinguishes freshly built binaries from stale installs (stale builds reject configs containing newer fields).
 
 ### Verified
