@@ -102,14 +102,23 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 - **Hybrid retrieval scoring is unproven and deliberately unwired.** Measured
   recall got *worse* (R@3 2/5 → 1/5). A mutation-proven gate fails the build if
   anything outside `retrieval.rs` calls it.
-- Most renderers still use hardcoded colours rather than the theme palette, so
-  themes and colour quantization apply only to the shared semantic layer.
-  Measured precisely: 89 explicit `Color::Rgb`/`Color::Indexed` literals outside
-  the palette definitions and the quantizer, plus 563 uses of *named* ratatui
-  variants (`DarkGray` 194, `White` 111, `Yellow` 75, `Cyan` 69, `Red` 39). The
-  named ones are a mechanical migration — the variant name already states the
-  intent — so the bulk of the work is tractable. The 89 literals are ~80
-  distinct values and are a design decision, not a refactor.
+- **Themes still do not reach the whole TUI.** iter-414 migrated every
+  foreground `Color::{White,Yellow,Cyan,Red,Green}` to a palette accessor
+  (accessor calls 236 → 530), so the bulk of the named variants are now themed.
+  Still unmigrated: 89 explicit `Color::Rgb`/`Color::Indexed` literals (~80
+  distinct values, each a design decision rather than a refactor), plus
+  `DarkGray` (194) and `Black` (28), which are context-dependent between
+  border/muted/disabled and between bg and fg-on-selection. Five foreground sites
+  are intentionally left hardcoded where the colour means a *syntax* or *tool
+  category* role the palette does not model.
+- **`operant acp` does not implement the Agent Client Protocol.** It is a
+  hand-rolled JSON-RPC with four methods — `ping`, `status`, `command`, `stop`
+  behind a version-validated envelope — and shares only a name with ACP. It has
+  no `initialize`, `session/new`, `session/prompt`, `session/cancel` or streaming
+  `session/update`, so it would not interoperate with any real ACP client.
+- **There is no SDK server and no harness-api-server.** The `operant-harness`
+  crate exposes no API surface; `operant status --json` and
+  `architecture dump --live` are the only machine-readable surfaces today.
 
 
 ## [0.2.0] - 2026-09-27
