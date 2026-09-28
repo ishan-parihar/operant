@@ -185,6 +185,35 @@ the definition and doc references. `operant-cli`, the only binary, contains
 **zero** references to `operant_config::`. The only production consumers of that
 crate are in `operant-channels`, which is itself unreachable.
 
+*Verification note, because this claim carries the most weight in the document
+and rests on absence.* Checking one loader name is not enough — `Config` could
+be built by other means. The construction paths were enumerated:
+
+- `Config::load` — 1 non-test hit, and it is `CliConfig::load()` at
+  `main.rs:2534`, a **different type** caught by the name match.
+- `toml::from_str::<Config>` — 2 non-test hits. `config_impl.rs:288` is inside
+  `Config::unknown_keys`, a probe that deserializes one key at a time to test
+  whether it is *consumed*; it is a validity check, not a loader.
+  `operant-gateway/src/api_config.rs:399` is the HTTP facade in the unreachable
+  crate.
+- `from_str::<schema::Config>`, `Config::from_str`, `parse::<Config>` — 0.
+- Every `pub fn` in `impl Config` (`config_impl.rs:217+`) enumerated: the only
+  constructor-shaped entry point is `load_or_init`; the rest are accessors
+  (`combined_pricing`), validators (`validate`, `collect_warnings`), mutators
+  (`apply_env_overrides`, `ensure_fallback_provider`), `unknown_keys`, and
+  `save`.
+- `Config::default()` — 1,100 non-test hits workspace-wide. The 73 in
+  `operant-cli` construct `AppConfig` (20), `CliConfig` (6),
+  `ImageRenderConfig`, `GatewayConfig`, `WebsiteBlocklistConfig`; **not one** is
+  the schema type. The only `operant_config::schema::Config::default()` sites
+  are in `operant-channels/src/orchestrator/tests.rs`, constructing test
+  fixtures. A `Default` is not a loader in any case — it never reads the file.
+- `operant-channels` never deserializes the config itself; it receives
+  `Config` as a parameter. Its `from_str` hits are all
+  `serde_json::from_str::<serde_json::Value>` for tool-argument parsing.
+
+So one loader exists, and it is uncalled.
+
 The consequence: **the 1,043-field schema is dead, and so is every field in
 it.** Not write-only — wholly unreachable. Any knob set in the shape that
 schema describes has never been read by a release binary. That subsumes and
