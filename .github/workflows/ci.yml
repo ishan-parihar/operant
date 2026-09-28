@@ -61,12 +61,13 @@ jobs:
   doc:
     name: Documentation
     # GATED OFF until red: `RUSTDOCFLAGS=-Dwarnings cargo doc --workspace
-    # --no-deps --all-features --keep-going` reports 44 errors. Most are
-    # rustdoc MECHANICS, not claim defects: angle-bracket generics and
-    # keybinding prose like `[Esc]` parsed as HTML or as intra-doc links
-    # (21 unclosed-HTML-tag, ~14 single-letter/number "links"). Only ~8 are
-    # claim-must-match-code — comments naming a renamed, private, or
-    # never-implemented item. Both breakdowns: BUGS.md R40-19.
+    # --no-deps --all-features --keep-going` reports 74 errors, recounted
+    # iter-415 on a compiling tree (the earlier 44 was a floor: a crate that
+    # fails to compile never reports its doc errors). Measured breakdown:
+    # 34 unresolved intra-doc links, 19 unclosed HTML tags, 9 links to private
+    # items, 6 bare URLs. operant-config, operant-api, operant-macros,
+    # operant-tool-call-parser and operant-infra are clean. Source of truth is
+    # BUGS.md R40-19; keep that number and this one in step.
     # Left visible rather than deleted so the gap is explicit; re-enable by
     # removing this line once the count is zero.
     if: ${{ false }}

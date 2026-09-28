@@ -1616,7 +1616,31 @@ single push — it stays blocked for as long as the peer has these files open.
   change and collides with their next several commits. Same shape as the
   expected clippy red in R40-21: a check reporting work that is not ours.
 
-### R40-19 — the `doc` CI job is GATED OFF: 44 rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, measured iter-391)
+### R40-19 — the `doc` CI job is GATED OFF: **74** rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, recounted iter-415 at `c3dfa1ab`)
+
+**Recounted iter-415, on a tree that finally compiles.** The previous figure was
+44 (iter-391), explicitly recorded as a floor. The real number is **74**, and the
+increase is explained rather than alarming: `cargo doc --keep-going` halts per
+crate, and at iter-391 a crate that failed to compile never reported its doc
+errors at all. R40-21 made the tree compile, so five crates now report
+(`operant-harness`, `operant-core`, `operant-channels`, `operant-gateway`,
+`operant-cli`) that previously contributed nothing.
+
+Measured with:
+`RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features --keep-going`
+in a worktree at `c3dfa1ab` with submodules initialised.
+
+Breakdown by class: **34** unresolved intra-doc links, **19** unclosed HTML
+tags (generics like `HashMap<K, V>` and prose containing `<` in keybinding
+contexts), **9** "public documentation for X links to private item", **6** bare
+URLs that should be hyperlinks. Five "could not document" lines are the per-crate
+aborts above, not additional lint findings.
+
+Independently confirmed clean under the same flags: `operant-config`,
+`operant-api`, `operant-macros`, `operant-tool-call-parser`, `operant-infra` —
+0 errors each.
+
+Original finding, retained:
 `ci.yml`'s doc job (`RUSTDOCFLAGS=-Dwarnings`, `cargo doc --workspace --no-deps
 --all-features`) is **disabled, not deferred**. The main-branch trigger landed
 at iter-391/392 and `fmt` + `clippy` are live on pushes to `main`; `doc` carries
@@ -1626,10 +1650,6 @@ reaches zero. (An earlier version of this entry said the trigger was "still
 deferred" for this job — that was true when written and stopped being true at
 iter-392.)
 Two errors were fixed in iter-389
-(`PgKnowledgeGraph` linking a private item; `operant-hardware/src/datasheet.rs`
-unqualified module-doc links). **44 remain, as of iter-391** — see the
-addendum at the end of this entry, which explains why that number is a floor
-rather than a total and cannot be re-measured until R40-21 is fixed. Full
 breakdown by class is in that addendum; the two largest are 21 unclosed-HTML-tag
 (generics and bracketed prose parsed as HTML) and ~14 single-letter or keybinding
 "links", only ~8 of which are genuine claim-must-match-code defects. Measured
@@ -1776,20 +1796,28 @@ the current tree fails at `operant-core`, costing ~9 minutes to learn nothing.
   the first one CI would have caught automatically — provided the push lands
   after the trigger is live on the remote.
 
-### R40-19 addendum — recount is blocked by R40-21, and the earlier 44 was measured on a pre-R40-21 tree (iter-396)
-The 44 in R40-19 and in the `ci.yml` gate comment was measured at iter-391 with
-`--keep-going` on a tree that compiled. It is a **floor**, not a total, for two
-reasons now measured rather than assumed:
-1. plain `cargo doc` halts at the first failing crate (that is why
-   `--keep-going` is the only reliable invocation), and
-2. with `operant-core` failing to compile (R40-21), its doc errors are never
-   reached at all — a recount in a clean worktree returned **4**, which is the
-   count for the crates that still build, not the workspace.
-So the honest figure is: **44 as of iter-391, and the true number is higher and
-unmeasurable until R40-21 is fixed.** Re-run
-`RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features
---keep-going` in a worktree at HEAD **with `git submodule update --init
---recursive`** once the tree compiles, and treat that as the baseline.
+### R40-19 addendum — the recount is DONE: 74, as of iter-415 (supersedes iter-396)
+
+**Resolved iter-415.** R40-21 cleared, so the recount this addendum asked for was
+run, exactly as specified: `RUSTDOCFLAGS=-Dwarnings cargo doc --workspace
+--no-deps --all-features --keep-going`, in a worktree at `c3dfa1ab`, with
+`git submodule update --init --recursive`, libclang available.
+
+**Result: 74 errors.** The prediction this addendum made — that the true number
+was higher than 44 because a non-compiling crate never reports its doc errors —
+was correct. Five crates now report (`operant-harness`, `operant-core`,
+`operant-channels`, `operant-gateway`, `operant-cli`); at iter-391 they
+contributed nothing. `operant-config`, `operant-api`, `operant-macros`,
+`operant-tool-call-parser` and `operant-infra` are clean.
+
+The "4" recorded at iter-396 was the count for crates that still built while
+`operant-core` was broken — not a workspace figure, exactly as this addendum
+warned.
+
+Note for the next recount: `ci.yml`'s gate comment still cites 44. Both files now
+carry a different number, which is the stale-duplicate-figure failure this
+ledger has hit before; update the comment and the entry together, or cite only
+the entry.
 
 ### R40-22 — three remotes point at the same URL, so tracking refs go stale silently (process note, iter-404/405)
 `git remote -v` shows `origin`, `github` and `gitlab` — and all three resolve
