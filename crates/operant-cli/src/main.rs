@@ -1643,7 +1643,7 @@ fn spawn_wasm_watcher(config: &AppConfig, harness: std::sync::Arc<operant_harnes
     let host = match PluginHost::new(parent) {
         Ok(host) => host,
         Err(e) => {
-            warn!("harness: watch_wasm — plugin host failed to initialize");
+            warn!(error = %e, "harness: watch_wasm — plugin host failed to initialize");
             return;
         }
     };
