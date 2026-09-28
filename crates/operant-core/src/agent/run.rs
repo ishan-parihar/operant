@@ -1776,6 +1776,21 @@ impl OperantAgent {
             messages = crate::context_management::evict_to_budget(messages, effective_budget);
         }
 
+        // Both eviction paths above keep a head and a recency tail rather than a
+        // prefix, so a cut can land between an assistant message that requested
+        // a tool call and the `tool` message answering it. Either half alone is
+        // malformed and providers reject it — and an unanswered request leaves
+        // the model waiting, so it reissues the call and burns a turn. The
+        // repair is shape-independent, so it holds for the lossy path, the
+        // engine path, and whatever eviction runs next.
+        let orphan_repairs = message_safety::drop_orphaned_tool_messages(&mut messages);
+        if orphan_repairs > 0 {
+            info!(
+                repairs = orphan_repairs,
+                "Dropped tool-call halves orphaned by context eviction"
+            );
+        }
+
         let seq_repairs = message_safety::repair_message_sequence(&mut messages);
         if seq_repairs > 0 {
             info!(

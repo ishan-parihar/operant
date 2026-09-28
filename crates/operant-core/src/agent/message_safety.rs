@@ -8,6 +8,7 @@
 //! Ported from `hermes-agent/agent/message_sanitization.py`.
 
 use regex::Regex;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use crate::client::{Message, Role};
@@ -424,9 +425,111 @@ fn sanitize_tool_name_for_strict(name: &str) -> String {
     crate::schema::sanitize_tool_name(name)
 }
 
+// ---------------------------------------------------------------------------
+// Orphaned tool-call repair
+// ---------------------------------------------------------------------------
+
+/// Drop tool-call halves whose partner did not survive context eviction.
+///
+/// Context eviction keeps a head and a recency tail rather than a prefix, so a
+/// cut can land *between* an assistant message that requested a tool call and
+/// the `tool` message that answered it. Either half surviving alone is
+/// malformed: providers reject a `tool` message with no matching `tool_use`,
+/// and reject a `tool_use` with no matching `tool_result`. The second case is
+/// worse than it sounds — the model is left waiting for an answer to a call it
+/// believes it made, and typically reissues it, which costs a turn.
+///
+/// This runs as a REPAIR rather than as a smarter cut on purpose. It is
+/// shape-independent, so it holds for the lossy `evict_to_budget` path, for the
+/// lossless context engine's `assemble`, and for whatever eviction runs next.
+/// Putting the guarantee in the cut instead would mean every future caller has
+/// to remember it.
+///
+/// `repair_message_sequence` does not cover this: it fixes role alternation
+/// (`tool -> user`, `user -> user`, `assistant -> assistant`), which is a
+/// different failure. `close_interrupted_tool_sequence` covers a transcript
+/// that *ends* on a tool message, which is the Ctrl-C case, not mid-history.
+///
+/// Returns the number of messages removed plus tool calls stripped.
+pub fn drop_orphaned_tool_messages(messages: &mut Vec<Message>) -> usize {
+    if messages.is_empty() {
+        return 0;
+    }
+
+    let mut repairs = 0;
+
+    // Ids requested by every surviving assistant message. Collected as owned
+    // Strings so the set does not borrow `messages`, which is mutated below.
+    let requested: HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .filter_map(|m| m.tool_calls.as_deref())
+        .flatten()
+        .map(|call| call.id.clone())
+        .collect();
+
+    // Direction 1: a tool RESULT whose request was evicted. A tool message with
+    // no id at all can never be matched, so it is dropped too.
+    let before = messages.len();
+    messages.retain(
+        |m| match (m.role == Role::Tool, m.tool_call_id.as_deref()) {
+            (true, Some(id)) => requested.contains(id),
+            (true, None) => false,
+            _ => true,
+        },
+    );
+    repairs += before - messages.len();
+
+    // Recompute from the SURVIVING tool messages: direction 1 may have removed
+    // some, and a request must not be kept alive by a result we just dropped.
+    let answered: HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .filter_map(|m| m.tool_call_id.clone())
+        .collect();
+
+    // Direction 2: a REQUEST whose result was evicted.
+    for m in messages.iter_mut().filter(|m| m.role == Role::Assistant) {
+        let Some(calls) = m.tool_calls.as_mut() else {
+            continue;
+        };
+        let before = calls.len();
+        calls.retain(|call| answered.contains(&call.id));
+        repairs += before - calls.len();
+    }
+
+    // Direction 3: an assistant message stripped to nothing is not a message.
+    // `retain`'s predicate means KEEP, so one that still has prose or reasoning
+    // is kept — it says something even with no surviving call.
+    let before = messages.len();
+    messages.retain(|m| {
+        if m.role != Role::Assistant {
+            return true;
+        }
+        match m.tool_calls.as_ref() {
+            Some(calls) if calls.is_empty() => {
+                !(m.content.trim().is_empty() && m.reasoning.is_none())
+            }
+            _ => true,
+        }
+    });
+    repairs += before - messages.len();
+
+    // A kept assistant message with prose should not advertise an empty call
+    // list; providers read `Some([])` differently from `None`.
+    for m in messages.iter_mut() {
+        if m.tool_calls.as_ref().is_some_and(|calls| calls.is_empty()) {
+            m.tool_calls = None;
+        }
+    }
+
+    repairs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::{ToolCall, ToolCallFunction};
 
     #[test]
     fn test_repair_tool_call_arguments_empty() {
@@ -698,5 +801,196 @@ mod tests {
             .arguments;
         let parsed: serde_json::Value = serde_json::from_str(args).unwrap();
         assert!(parsed.is_object());
+    }
+
+    // -----------------------------------------------------------------------
+    // Orphaned tool-call repair
+    // -----------------------------------------------------------------------
+
+    fn call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            function: ToolCallFunction {
+                name: "read_file".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    fn assistant_with_calls(ids: &[&str]) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_calls: Some(ids.iter().map(|id| call(id)).collect()),
+            ..Default::default()
+        }
+    }
+
+    fn result(id: &str) -> Message {
+        Message {
+            role: Role::Tool,
+            content: "ok".to_string(),
+            tool_call_id: Some(id.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Every surviving `tool` message must have a surviving request, and every
+    /// surviving request must have a surviving result. This is the invariant
+    /// providers actually enforce.
+    fn assert_no_orphans(messages: &[Message]) {
+        let requested: HashSet<&str> = messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .filter_map(|m| m.tool_calls.as_deref())
+            .flatten()
+            .map(|c| c.id.as_str())
+            .collect();
+        let answered: HashSet<&str> = messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        for id in &requested {
+            assert!(answered.contains(id), "request {id} has no result");
+        }
+        for m in messages.iter().filter(|m| m.role == Role::Tool) {
+            let id = m.tool_call_id.as_deref();
+            assert!(
+                id.is_some_and(|id| requested.contains(id)),
+                "result {id:?} has no request"
+            );
+        }
+    }
+
+    #[test]
+    fn orphan_repair_should_drop_a_result_whose_request_was_evicted() {
+        let mut messages = vec![
+            Message::user("go"),
+            result("tc1"),
+            Message::assistant("done"),
+        ];
+        let repairs = drop_orphaned_tool_messages(&mut messages);
+        assert!(repairs > 0, "the orphaned result should be dropped");
+        assert!(messages.iter().all(|m| m.role != Role::Tool));
+        assert_no_orphans(&messages);
+    }
+
+    #[test]
+    fn orphan_repair_should_strip_a_request_whose_result_was_evicted() {
+        let mut messages = vec![
+            Message::user("go"),
+            assistant_with_calls(&["tc1", "tc2"]),
+            result("tc1"),
+            Message::assistant("done"),
+        ];
+        drop_orphaned_tool_messages(&mut messages);
+        let calls = messages
+            .iter()
+            .filter_map(|m| m.tool_calls.as_deref())
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1, "tc2 should be stripped, tc1 kept");
+        assert_eq!(calls[0].id, "tc1");
+        assert_no_orphans(&messages);
+    }
+
+    #[test]
+    fn orphan_repair_should_keep_an_assistant_message_that_still_has_prose() {
+        let mut messages = vec![
+            Message::user("go"),
+            Message {
+                role: Role::Assistant,
+                content: "calling a tool".to_string(),
+                tool_calls: Some(vec![call("tc1")]),
+                ..Default::default()
+            },
+            Message::assistant("done"),
+        ];
+        drop_orphaned_tool_messages(&mut messages);
+        let kept = messages
+            .iter()
+            .find(|m| m.content == "calling a tool")
+            .expect("the prose must survive");
+        assert!(
+            kept.tool_calls.is_none(),
+            "an empty call list should normalise to None, not Some([])"
+        );
+        assert_no_orphans(&messages);
+    }
+
+    #[test]
+    fn orphan_repair_should_drop_a_tool_message_with_no_id() {
+        let mut messages = vec![
+            Message::user("go"),
+            Message {
+                role: Role::Tool,
+                content: "ok".to_string(),
+                tool_call_id: None,
+                ..Default::default()
+            },
+            Message::assistant("done"),
+        ];
+        assert!(drop_orphaned_tool_messages(&mut messages) > 0);
+        assert!(messages.iter().all(|m| m.role != Role::Tool));
+    }
+
+    #[test]
+    fn orphan_repair_should_be_a_no_op_on_a_well_formed_history() {
+        let original = vec![
+            Message::system("sys"),
+            Message::user("go"),
+            assistant_with_calls(&["tc1", "tc2"]),
+            result("tc1"),
+            result("tc2"),
+            Message::assistant("done"),
+        ];
+        let mut messages = original.clone();
+        assert_eq!(drop_orphaned_tool_messages(&mut messages), 0);
+        assert_eq!(messages.len(), original.len());
+        assert_no_orphans(&messages);
+    }
+
+    /// The regression this exists for: a real eviction cut between the request
+    /// and the response, which is what a head+tail eviction actually produces.
+    #[test]
+    fn orphan_repair_should_fix_a_real_head_tail_eviction_cut() {
+        let mut messages = vec![
+            Message::system("sys"),
+            Message::user("first"),
+            assistant_with_calls(&["old1"]),
+            result("old1"),
+            assistant_with_calls(&["keep1"]),
+            result("keep1"),
+            Message::assistant("mid answer"),
+            // the tail the cut lands inside:
+            assistant_with_calls(&["split"]),
+            result("split"),
+            Message::assistant("final"),
+        ];
+        // Simulate the cut dropping the result but keeping the request.
+        messages.retain(|m| m.tool_call_id.as_deref() != Some("split"));
+        assert_no_orphans_allowing_the_known_break(&messages);
+        drop_orphaned_tool_messages(&mut messages);
+        assert_no_orphans(&messages);
+        assert!(
+            messages.iter().all(|m| m
+                .tool_calls
+                .as_deref()
+                .is_none_or(|c| !c.iter().any(|c| c.id == "split"))),
+            "the split request must not survive without its result"
+        );
+    }
+
+    fn assert_no_orphans_allowing_the_known_break(messages: &[Message]) {
+        // Sanity: the fixture really did start broken, so the test above is not
+        // vacuously passing on an already-valid history.
+        let broken = messages.iter().any(|m| {
+            m.role == Role::Assistant
+                && m.tool_calls
+                    .as_deref()
+                    .is_some_and(|c| c.iter().any(|c| c.id == "split"))
+        });
+        assert!(broken, "fixture must start with an orphaned request");
     }
 }
