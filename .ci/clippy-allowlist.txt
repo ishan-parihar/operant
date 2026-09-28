@@ -4,5 +4,4 @@ operant_core|clippy::question_mark|crates/operant-core/src/pool_adapter.rs
 operant|clippy::bool_assert_comparison|crates/operant-cli/src/config.rs
 operant|clippy::collapsible_if|crates/operant-cli/src/cmd_status.rs
 operant|clippy::collapsible_if|crates/operant-cli/src/main.rs
-operant|unused_mut|crates/operant-cli/src/cmd_architecture.rs
 pool_bundle_e2e|unused_imports|crates/operant-core/tests/pool_bundle_e2e.rs
