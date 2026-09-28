@@ -39,9 +39,20 @@ jobs:
             archive: zip
 
     steps:
+      # NOTE: no `submodules: recursive` here, deliberately — and it is NOT an
+      # oversight to be "fixed" by copying the test workflow. `vendor/prime-agent`
+      # is only used by the `[pk]` sidecar, which ships `enabled = false`, and
+      # this was verified rather than assumed: in a worktree with
+      # `git submodule status` showing `-` (uninitialised) and `vendor/prime-agent/`
+      # empty, `cargo build --workspace` — the exact command below — completes
+      # with exit 0.
+      #
+      # It is worth the asymmetry because a submodule is a hard external
+      # dependency on a third-party repo being reachable. If that repo is renamed,
+      # made private, or briefly unavailable, every release breaks for a component
+      # nobody enabled. test.yml still initialises submodules, because the 6
+      # `tools::kernel` tests genuinely need it at RUN time and fail without it.
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -121,9 +132,10 @@ jobs:
             artifact: operant-freebsd-x86_64
 
     steps:
+      # See the note in the `native` job: submodules are deliberately not
+      # initialised, and `cargo build --workspace` was verified to succeed
+      # without them.
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
         with:
