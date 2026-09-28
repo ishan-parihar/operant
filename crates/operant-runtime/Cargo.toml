@@ -85,6 +85,26 @@ pdf-extract = { version = "0.10", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { version = "0.4", optional = true }
 
+# `src/tools/skill_tool.rs` has a `#[cfg(windows)] mod win_job` that drives the
+# Win32 Job Object API to kill a process TREE on timeout. The module compiled
+# away on every platform anyone tested, so the missing dependency went unnoticed
+# until CI: `Native (Windows x86_64)` failed with three `E0433` ("cannot find
+# module or crate `windows`") and the crate has therefore never built on
+# Windows. That leg is in the release-gating `native` job, so it blocks every
+# release.
+#
+# Pinned to 0.54 to match the version already resolved in Cargo.lock as a
+# transitive dependency, so this adds no new download and cannot perturb the
+# dependency graph. The three features are exactly the modules the module
+# imports — `windows` gates its entire API surface behind per-module features, so
+# an incomplete list fails to compile rather than degrading quietly.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.54", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [features]
 default = ["schema-export"]
 schema-export = ["operant-config/schema-export"]
