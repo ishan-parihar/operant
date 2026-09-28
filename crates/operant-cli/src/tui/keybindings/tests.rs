@@ -210,8 +210,14 @@ fn global_bindings_should_be_dispatched_in_key_handling() {
 /// complete literals rather than arm grammar also means this survives
 /// reformatting, an arm being split or combined, or a key moving between the
 /// match and the equality tests — none of which are the defect being guarded.
+///
+/// Extended across the visual, command and search contexts after auditing each
+/// remaining one: all 33 of their `Char`/`Esc` entries resolve in the same two
+/// files, and the registry has no unreachable duplicate (the `Tab`+NONE vs
+/// `Tab`+SHIFT and `v`+NONE vs `V`+SHIFT pairs are disambiguated by modifiers,
+/// so `find()` reaches both).
 #[test]
-fn every_vim_normal_binding_is_reachable_in_the_dispatcher() {
+fn every_string_dispatched_vim_binding_is_reachable() {
     let registry = KeyBindingRegistry::with_defaults();
     let sources = [
         include_str!("../prompt_input/vim.rs"),
@@ -225,30 +231,69 @@ fn every_vim_normal_binding_is_reachable_in_the_dispatcher() {
         .flat_map(|src| rust_string_literals(src))
         .collect();
 
+    // Arrow keys are EXCLUDED on purpose, and it is worth being explicit about
+    // why rather than leaving a silent hole. The vim state machine receives a
+    // `&str`, so a literal is the right check for it — but the arrow bindings
+    // advertised by the three visual contexts are dispatched by the CALLER on
+    // `KeyCode`, at `key_handling.rs`'s `KeyCode::Up` arm, which checks SHIFT
+    // plus a visual-mode match and calls `move_visual_up`. They appear as no
+    // literal in either vim file, so including them here would report four false
+    // positives per visual context.
+    const STRING_DISPATCHED: [BindingContext; 6] = [
+        BindingContext::VimNormal,
+        BindingContext::VimVisual,
+        BindingContext::VimVisualLine,
+        BindingContext::VimVisualBlock,
+        BindingContext::VimCommand,
+        BindingContext::VimSearch,
+    ];
+
     let mut missing = Vec::new();
-    for binding in registry.get_bindings(BindingContext::VimNormal) {
-        // The catalogue is `KeyCode`-shaped; the dispatcher is `&str`-shaped.
-        // Only these two kinds have a string form to look for, and both are
-        // mapped the way the caller's conversion maps them (`Esc` becomes
-        // "Escape", a plain char becomes itself).
-        let wanted = match binding.key {
-            KeyCode::Char(c) => c.to_string(),
-            KeyCode::Esc => "Escape".to_string(),
-            _ => continue,
-        };
-        if !live_literals.contains(&wanted) {
-            missing.push(format!(
-                "{:?} {} — \"{}\" appears in no match arm or `if key ==` in \
-                 prompt_input/vim.rs or prompt_input/vim_command.rs",
-                binding.key, binding.modifiers, wanted
-            ));
+    let mut checked = 0usize;
+    for context in STRING_DISPATCHED {
+        for binding in registry.get_bindings(context) {
+            // The catalogue is `KeyCode`-shaped; the dispatcher is `&str`-shaped.
+            // `Esc` and `Enter` both have string forms in the two files — the
+            // first is an `if key == "Escape"` at `apply_vim_key`, the second a
+            // pair of literals in `vim_command.rs` backing "Execute command" and
+            // "Next match".
+            let wanted = match binding.key {
+                KeyCode::Char(c) => c.to_string(),
+                KeyCode::Esc => "Escape".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                _ => continue,
+            };
+            checked += 1;
+            if !live_literals.contains(&wanted) {
+                missing.push(format!(
+                    "{:?} {context:?} {} — \"{wanted}\" appears in no match arm or \
+                     `if key ==` in prompt_input/vim.rs or \
+                     prompt_input/vim_command.rs",
+                    binding.key, binding.modifiers
+                ));
+            }
         }
     }
 
+    // A pin that silently stops covering its contexts is the failure mode this
+    // assertion exists to prevent, and a HARDCODED floor goes stale the moment a
+    // binding is added. So the bound is derived from the registry: the pin must
+    // have examined the large majority of the bindings in these six contexts.
+    // It is `<`, not `==`, because the arrow keys are deliberately excluded.
+    let total: usize = STRING_DISPATCHED
+        .iter()
+        .map(|context| registry.get_bindings(*context).len())
+        .sum();
+    assert!(
+        checked * 2 >= total,
+        "the pin examined only {checked} of {total} bindings across the vim \
+         contexts — too few for a green result here to mean anything"
+    );
+
     assert!(
         missing.is_empty(),
-        "these VimNormal bindings are advertised by /keys but unreachable by the \
-         vim state machine. Pressing them does nothing while the help screen \
+        "these vim bindings are advertised by /keys but unreachable by the \
+         state machine. Pressing them does nothing while the help screen \
          claims otherwise. Either add the dispatch or drop the catalogue \
          entry:\n  {}",
         missing.join("\n  ")
