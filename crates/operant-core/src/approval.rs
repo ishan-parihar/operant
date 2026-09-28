@@ -729,10 +729,6 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
         // there is no `content` key, so sharing the `file_write` arm left it
         // extracting "file_write: <path> content: " with an empty payload
         // and the text it actually writes was never gated.
-        // `patch` is `path`/`find`/`replace` (tools/patch_tool.rs:20-27) —
-        // there is no `content` key, so sharing the `file_write` arm left it
-        // extracting "file_write: <path> content: " with an empty payload
-        // and the text it actually writes was never gated.
         "patch" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let find = args.get("find").and_then(|v| v.as_str()).unwrap_or("");
