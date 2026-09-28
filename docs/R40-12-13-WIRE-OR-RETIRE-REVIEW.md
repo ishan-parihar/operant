@@ -64,9 +64,6 @@ non-test caller, `send_channel_message` (`factory.rs:508`), which itself has
 zero callers. `CRON_CHANNEL_REGISTRY` is written once at `startup.rs:454` and
 read once at `mod.rs:220`.
 
-The adapters are **35 `impl Channel for` sites, not the 23 the ledger
-estimated** — they are reachable from
-
 This is the same root cause as **R15-1**, which the ledger already subsumes
 under R40-13.
 
@@ -236,10 +233,31 @@ differently and two of them will not do what you want:
 
 | mechanism | pulls at build? | stays current? | honest verdict |
 |---|---|---|---|
-| **cargo git dependency** | yes, at every build | yes, within the ref/branch you name | **this is what you want** |
+| **cargo git dependency** | yes, at every build | **only after `cargo update`** | **this is what you want** |
 | git submodule | no — pinned commit | no, drifts silently | fails your requirement |
 | git subtree / `vendor/` dir | no — copied static source | no | exactly what you rejected |
 | runtime auto-download (today's IGS) | no — at first use | yes, but *unreviewed* | supply-chain risk |
+
+**The "stays current" cell above is the caveat that matters.** Cargo resolves a
+git dependency and writes the result into `Cargo.lock`; every later build reuses
+that lock. A fresh upstream commit is *not* picked up until someone runs
+`cargo update`. Operant's own `Cargo.lock` currently has **0** git-sourced
+entries, so this would be the first git dependency in the workspace and the
+lockfile interaction is unproven here. A build-time pull gives you *pinned
+freshness on a schedule you control*, not continuous freshness.
+
+**Which surface a dependency would take** — decide this before promising
+build-time pull, because the two targets differ:
+- `sourcehound` ships **two targets**: a lib named `sourcehound_mcp`
+  (`Cargo.toml:72-75`, `path = "src/lib.rs"`) and a bin named `sourcehound`
+  (`[[bin]]`, `path = "src/cli.rs"`). A cargo dependency takes the **lib**;
+  a subprocess contract like today's IGS needs the **bin**. Which one you
+  integrate decides whether this is a code dependency at all.
+- Its manifest declares `[package]` at line 1 and `[workspace]` at line 18 in
+  the same file, with members being only `vendor/*` and `toon-helper`. The root
+  package is its own workspace root while shipping ~196k lines of vendored
+  obscura as members. It resolves today, but a git dependency on it pulls that
+  vendor tree along — static source inside the thing meant to stay current.
 
 **Use a cargo git dependency.** It re-resolves on every build, so the harness
 genuinely always tracks upstream.
@@ -255,9 +273,8 @@ Four failure modes you are accepting, stated plainly:
    real cost of the requirement, and it is the price of "always up to date".
 2. **Unreviewed upstream code lands in your binary.** A build-time pull is
    *less* auditable than a pin, not more. Nothing reviews a new upstream commit
-   before it compiles into your release. The `.bench` in `api_config.rs` below
-   is unrelated, but the same principle applies: you are trading auditability
-   for freshness, and freshness is what you asked for.
+   before it compiles into your release. You are trading auditability for
+   freshness, and freshness is what you asked for.
 3. **Version skew.** A harness that expects response field `X` against a server
    that renamed it fails at runtime, not at build time. Pin the major version and
    add a contract test.
@@ -288,6 +305,10 @@ local source. Push it to a remote first.
    Hindsight-shaped schema. This is the one item that could make the plan fail.
 5. **Vendoring policy: branch (fresh, non-reproducible) or tag (reproducible,
    needs manual bumps)?** And confirm you accept builds requiring network.
+6. **Which `sourcehound` surface do you want** — the `sourcehound_mcp` lib
+   (a real code dependency) or the `sourcehound` bin (keeping today's subprocess
+   contract)? And who pushes `sourcehound` to a remote, since it currently has
+   none?
 
 ## What I did not do
 
