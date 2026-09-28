@@ -1509,3 +1509,41 @@ operant` on that tree is green.
 - **Process note**: nothing in CI runs on a push to main (all workflows are
   tag-triggered), so a broken `origin/main` is only caught if an agent happens
   to run `cargo check`. This is the second time (first: iter-359) — see R40-7.
+
+### R40-17 — CI cannot be enabled on main yet: the jobs are red, not just untriggered (OPEN, MEDIUM, measured iter-385)
+The obvious fix for R40-7 is adding `branches: ['main']` to the workflows. **Do
+not do that yet** — I built the patch, then ran each job locally, and two of
+them are already red, so enabling the trigger turns every push red and trains
+everyone to ignore CI.
+- `ci.yml` `doc` job (`RUSTDOCFLAGS=-Dwarnings`, `cargo doc --workspace
+  --no-deps --all-features`): **10 broken intra-doc links** under
+  `-Dwarnings`, including `crates/operant-core/src/agent/provider_registry.rs:10`
+  (a `NoopProvider` that does not exist) and 4 in `operant-harness`
+  (`composition.rs:95,104,386`, `discovery.rs:11` — `Composition` not in
+  scope). Several are in the peer's iter-382 code. These are claim-must-match-
+  code defects: doc comments citing items that are not there.
+- `test.yml` runs `cargo test --workspace --all-features` on a 3-OS matrix
+  including `--release`, plus `cargo tarpaulin`. It is red regardless of the
+  trigger: `tools::kernel::tests::ping_roundtrip` and
+  `harness_apply_and_rollback_roundtrip` require the `vendor/prime-agent`
+  submodule, and **no workflow passes `submodules: recursive` to
+  `actions/checkout`**. That is ~6 red jobs per push the moment the trigger
+  lands. Fix the checkout step first.
+- `ci.yml` `fmt` and `clippy` jobs were verified green and would be safe to
+  trigger. `release.yml` needs no change — it fires on `workflow_run` of
+  `Build`, so it inherits the main-branch trigger transitively.
+- Cheapest honest sequence: add `submodules: recursive` to the checkout steps,
+  fix the 10 doc links, then add `branches: ['main']`. Splitting the trigger
+  onto `fmt`+`clippy` only would still be a partial fix with a confusing
+  signal, so it is not recommended.
+
+### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (OPEN, LOW, measured iter-385)
+`cargo fmt --all --check` reports 22 dirty files at HEAD (down from 66 — recent
+commits cleared most of the debt). The sweep was produced and verified in an
+isolated worktree: `cargo fmt --all --check` clean afterwards and
+`cargo check -p operant-core --lib` still compiles, so it is a pure line-wrap.
+It could not be applied because **all 22 files are dirty in the shared
+working tree** (36 dirty files total, 100% overlap). Applying a whole-file
+reformat over in-flight edits is the R40-10 clobber class, so it was dropped
+rather than forced. Once the concurrent agent's work lands, this is a single
+`cargo fmt --all && git commit`.
