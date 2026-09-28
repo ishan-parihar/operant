@@ -1114,6 +1114,13 @@ receive the literal string `"code_execution"`, which matches nothing.
 No test covers this extractor, which is why the mismatch survived. `terminal`
 and `process` are unaffected — verify their arg structs before changing the
 match.
+- **Why this is HIGH and not cosmetic**: `code_execution` runs UNSANDBOXED on
+  the host with the operant process's own permissions (already recorded as
+  R12-1 / BUGS.md:135 — it writes a temp file and invokes python3/node/bash
+  directly, with timeout + kill_on_drop + the approval gate as the only
+  mitigations). The approval extractor being dead means the last of those
+  mitigations is inert for this tool. Fix this alongside R12-1's unsandboxed
+  note, not independently of it.
 
 ### R40-15 — secondary provider keys (`api_keys`) are written to config.toml in plaintext (OPEN, HIGH)
 `crates/operant-config/src/schema/core.rs`: `api_key` (line 43) carries
@@ -1206,13 +1213,18 @@ but **the field was never declared on that struct** —
 error[E0609]: no field `max_tool_result_share` on type `&BehaviorSettings`
   --> crates/operant-core/src/agent/mod.rs:170:45
 ```
-- **Repro, measured**: a clean worktree of HEAD (`/tmp/owcheck`) fails
-  `cargo check -p operant-cli --bin operant` with the above. The shared
-  working tree does NOT fail, because the concurrent agent's UNCOMMITTED
-  `crates/operant-core/src/config.rs` contains the missing field declaration,
+- **Repro, measured**: a clean worktree of HEAD fails
+  `cargo check -p operant-cli --bin operant` with the above. To reproduce:
+  `git worktree add --detach /tmp/owrepro HEAD && cd /tmp/owrepro && cargo check -p operant-cli --bin operant` (the worktree used for the original measurement, `/tmp/owcheck`, has since been removed; any pristine checkout reproduces it).
+  The concurrent agent's UNCOMMITTED
+  `crates/operant-core/src/config.rs` does contain the missing field declaration,
   its `#[serde(default = "default_max_tool_result_share")]` attribute, the
-  `default_max_tool_result_share()` helper, and the `Default` impl entry. The
-  build is being kept alive by work that exists nowhere but one machine's disk.
+  `default_max_tool_result_share()` helper, and the `Default` impl entry.
+  **Superseded**: an earlier revision of this entry claimed the shared tree
+  stayed green only because of that uncommitted file. That is no longer true —
+  the shared tree now carries its OWN 12 errors from the peer's in-flight
+  refactor (E0107/E0277/E0308/E0369/E0593/E0631), so NEITHER tree compiles.
+  Their uncommitted file remains the *intended* fix, not a working one.
   This is the SECOND time `origin/main` has been left uncompilable by an
   explicit-path commit (first: iter-359, R40-9) — same failure class.
 - **Blast radius beyond compilation**: even once the field lands, the
@@ -1222,10 +1234,10 @@ error[E0609]: no field `max_tool_result_share` on type `&BehaviorSettings`
 - **Both independent pre-merge mechanisms would have caught it**: the clean
   clippy gate on HEAD reports `seen=2 / new=1 / stale=7` — the `new` entry is
   `operant_core|E0609|crates/operant-core/src/agent/mod.rs`, the identical
-  error. So the repo's ONLY pre-merge rule already fails on this commit, and
-  the reason nobody noticed is the same reason the fmt debt went unnoticed:
-  CI is tag-triggered only (R40-7). The gap is not a missing check, it is a
-  check that never runs on a normal push.
+  error. Neither check is a pre-merge RULE in any enforced sense — both are
+  local, author-run, and nothing forces either to execute on a push (all four
+  workflows are tag-triggered; R40-7). The gap is not a missing check; it is
+  a check that nothing runs automatically.
 
 - **Not fixed here on purpose**: the one-line fix lives in a file the
   concurrent agent is actively editing, and the field they wrote is theirs to
