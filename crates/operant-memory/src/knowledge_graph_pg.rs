@@ -43,7 +43,7 @@ pub struct PgEdge {
 ///
 /// Uses plain SQL with recursive CTEs rather than the AGE extension. All
 /// blocking `postgres` calls run on OS threads to avoid nested Tokio runtime
-/// panics (see [`run_on_os_thread`]).
+/// panics (see the private `run_on_os_thread` helper).
 pub struct PgKnowledgeGraph {
     client: Arc<Mutex<Client>>,
     schema: String,

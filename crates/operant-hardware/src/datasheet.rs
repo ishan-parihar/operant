@@ -1,7 +1,8 @@
 //! Datasheet management for industry devices connected via Aardvark.
 //!
 //! When a user identifies a new device (e.g. "I have an LM75 temperature
-//! sensor"), the [`DatasheetTool`] calls [`DatasheetManager`] to:
+//! sensor"), the [`DatasheetTool`](crate::datasheet::DatasheetTool) calls
+//! [`DatasheetManager`](crate::datasheet::DatasheetManager) to:
 //!
 //! 1. **search** — query the web for the device datasheet PDF URL.
 //! 2. **download** — fetch the PDF and save it to
