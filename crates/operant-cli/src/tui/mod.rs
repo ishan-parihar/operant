@@ -37,6 +37,7 @@ pub mod model_picker;
 pub mod notifications;
 pub mod osc8;
 pub mod overlays;
+pub mod pinned_images;
 pub mod plugins_hub;
 pub mod prompt_input;
 pub mod redraw;

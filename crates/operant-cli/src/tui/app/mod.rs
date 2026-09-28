@@ -143,12 +143,15 @@ pub struct App {
     /// alt screen + raw mode and clears this field.
     pub pending_shell_command: Option<Vec<String>>,
 
-    /// Pasted/dropped images waiting for the post-paint inline-graphics emit.
+    /// Pasted/dropped images waiting to be pinned into the persistent graphics
+    /// strip.
     ///
     /// Terminal image protocols (Kitty/Sixel/iTerm2) paint outside ratatui's
-    /// cell grid, so the escape sequence can only be written after the frame is
-    /// flushed — the same post-paint path the OSC 8 hyperlink overlay uses.
-    /// Drained once per entry by `render_app` (which only has `&App`).
+    /// cell grid, so a graphic written once is destroyed by the next redraw
+    /// that touches its cells. The queue is drained exactly once by
+    /// `render_app` (which only has `&App`) — the *attachment* is consumed, but
+    /// the graphic it produces goes into `App::pinned_images` and is re-emitted
+    /// every frame.
     pub pending_inline_images: RefCell<Vec<crate::tui::image_paste::PastedImage>>,
 
     // Extended state
@@ -354,6 +357,10 @@ pub struct App {
     /// settled ones, read from the process-wide delegation registry each frame.
     /// See `tui::background_tasks`.
     pub background_tasks: crate::tui::background_tasks::BackgroundTaskRegistry,
+    /// Pinned terminal graphics: pasted attachments and mermaid rasters, kept
+    /// because the cell grid cannot represent them. Re-emitted every frame so a
+    /// redraw cannot destroy them. See `tui::pinned_images`.
+    pub pinned_images: crate::tui::pinned_images::PinnedImageRegistry,
     /// MCP server approval dialog.
     pub mcp_approval: McpApprovalDialogState,
     /// Go to Line dialog (Ctrl+G in message pane).
@@ -1180,6 +1187,13 @@ impl App {
             if let Err(err) = crate::osc8::emit_hits(&osc8_hits) {
                 tracing::debug!(target: "osc8", "hyperlink overlay write failed: {err}");
             }
+
+            // Pinned graphics, written here for the same reason the OSC 8 overlay
+            // is: `terminal.draw` flushes its cell diff after the closure returns,
+            // so a graphic written from inside `render_app` is overwritten by that
+            // diff. The matching half — laying out and blanking the strip's cells —
+            // runs inside the closure, in `render_app`.
+            crate::tui::pinned_images::emit_strip(&self.pinned_images);
 
             // Replay a key that was saved by try_detect_paste_burst in a
             // previous iteration (e.g. a modifier key that terminated a burst).

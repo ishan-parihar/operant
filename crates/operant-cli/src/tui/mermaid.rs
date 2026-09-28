@@ -29,7 +29,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use crate::tui::image_render::{self, GraphicsProtocol, ImageRenderConfig};
+use crate::tui::image_render::{self, GraphicsProtocol};
 use crate::tui::messages::cache::hash_content;
 use crate::tui::theme_colors;
 
@@ -493,19 +493,33 @@ fn clamp_error(mut text: String) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Post-paint emission
+// Post-paint hand-off
 // ---------------------------------------------------------------------------
 
-/// Paint every raster that landed since the last frame, and report whether the
-/// transcript now needs rebuilding.
+/// What finished resolving since the last frame.
+#[derive(Debug, Default)]
+pub struct LandedRasters {
+    /// A diagram left the `Pending` slot this frame, so the memoized transcript
+    /// lines are stale and the caller must rebuild them. True even when the
+    /// ladder landed on source text rather than a raster — the "rendering…"
+    /// placeholder was replaced either way.
+    pub resolved: bool,
+    /// PNG paths to hand to the pinned-graphics registry, oldest first.
+    pub pngs: Vec<PathBuf>,
+}
+
+/// Hand over every raster that landed since the last frame.
 ///
-/// Called from the post-paint pass for the same reason inline images are: the
-/// graphics protocols paint outside ratatui's cell grid, so the escape sequence
-/// has to be written after the frame is flushed. The caller drops its memoized
-/// transcript lines when this returns true, because a diagram just replaced the
-/// placeholder that was standing in for it.
-pub fn drain_ready_images() -> bool {
-    let mut painted = false;
+/// The `Pending` -> `Done` promotion happens here and nowhere else, so a diagram
+/// is handed over exactly once. What the caller does with it is deliberately
+/// NOT this module's business: the escape sequence has to be re-emitted on
+/// every frame, because a painted image lives outside the cell grid and the next
+/// redraw that touches its cells would destroy it. `tui::pinned_images` owns
+/// that registry, so the write happens there.
+///
+/// Returns an empty report when nothing landed, which is the common case.
+pub fn drain_ready_rasters() -> LandedRasters {
+    let mut landed = LandedRasters::default();
     CACHE.with(|cache| {
         for slot in cache.borrow_mut().values_mut() {
             let Slot::Pending(inner) = slot else {
@@ -514,27 +528,14 @@ pub fn drain_ready_images() -> bool {
             let Some(done) = inner.lock().ok().and_then(|ready| ready.clone()) else {
                 continue;
             };
-            *slot = Slot::Done(done.clone());
-            painted = true;
             if let Some(png) = done.png() {
-                emit_inline(png);
+                landed.pngs.push(png.to_path_buf());
             }
+            *slot = Slot::Done(done);
+            landed.resolved = true;
         }
     });
-    painted
-}
-
-/// Encode the PNG with the existing graphics path and write it to stdout, then
-/// remove the file — the escape sequence is the only thing anyone reads after
-/// this point.
-fn emit_inline(png: &Path) {
-    let rendered = image_render::render_image(&png.to_path_buf(), &ImageRenderConfig::default());
-    if rendered.success {
-        let mut out = std::io::stdout();
-        let _ = out.write_all(rendered.escape_sequence.as_bytes());
-        let _ = out.flush();
-    }
-    let _ = std::fs::remove_file(png);
+    landed
 }
 
 // ---------------------------------------------------------------------------

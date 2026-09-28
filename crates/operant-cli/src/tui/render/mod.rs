@@ -456,25 +456,30 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         tracing::debug!("OSC8 hyperlink emission failed: {e}");
     }
 
-    // ---- Inline graphics (post-paint pass) ------------------------------
-    // Kitty/Sixel/iTerm2 images paint outside ratatui's cell grid, so the
-    // escape sequence has to be written after the frame is flushed — same
-    // window as the OSC 8 pass above. Drained so each attachment is emitted
-    // once; terminals with no graphics protocol simply render nothing here and
-    // the user already got the named placeholder in the paste notification.
-    let queued: Vec<_> = app.pending_inline_images.borrow_mut().drain(..).collect();
-    for image in queued {
-        let _ = crate::tui::image_paste::emit_inline_image(&image);
-    }
+    // ---- Pinned graphics (per-frame pass) ---------------------------------
+    // Terminal graphics protocols (Kitty/Sixel/iTerm2) paint outside ratatui's
+    // cell grid, so nothing in the buffer represents a painted image. The old
+    // pass drained each producer — `pending_inline_images` was emptied and a
+    // mermaid raster consumed — wrote the sequence once, and had nothing left to
+    // restore from, so any redraw touching those cells destroyed the image
+    // permanently. Both producers now go into a persistent registry that
+    // re-emits every graphic EVERY frame at a fixed rect; the queue is still
+    // drained once, because the attachment is consumed, but the graphic it
+    // produced is not. See `tui::pinned_images`.
+    crate::tui::pinned_images::pin_pasted(&app.pinned_images, &app.pending_inline_images);
 
-    // ---- Mermaid diagrams (post-paint pass) ------------------------------
     // A ```mermaid block rasterises on a worker thread, so the picture lands
-    // here some frames after the transcript first showed the diagram. Same
-    // window as the inline-graphics pass above, for the same reason: graphics
-    // protocols paint outside ratatui's cell grid. When a raster lands the
-    // memoized transcript lines are stale — a "rendering…" placeholder just
-    // became the real thing — so drop them and let the next frame rebuild.
-    if crate::tui::mermaid::drain_ready_images() {
+    // here some frames after the transcript first showed the diagram. When a
+    // raster lands the memoized transcript lines are stale — a "rendering…"
+    // placeholder just became the real thing — so drop them and let the next
+    // frame rebuild.
+    let landed = crate::tui::mermaid::drain_ready_rasters();
+    if landed.resolved {
         crate::tui::render::cache::MESSAGE_LINES_CACHE.with(|cache| cache.borrow_mut().take());
     }
+    crate::tui::pinned_images::pin_rasters(&app.pinned_images, &landed);
+
+    // Re-emit every pinned graphic, and blank the cells it owns so the flush
+    // ratatui runs after this closure has nothing to rewrite underneath it.
+    crate::tui::pinned_images::prepare_strip(frame.buffer_mut(), &app.pinned_images, chunks[0]);
 }

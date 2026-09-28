@@ -10,7 +10,6 @@
 //   Linux  : xclip / wl-paste
 //   Windows: PowerShell Get-Clipboard
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -413,11 +412,19 @@ fn image_format_of(path: &PathBuf, label: &str) -> String {
     }
 }
 
-/// Render a pasted attachment for the current terminal.
+/// Render the attachment for the current terminal, WITHOUT writing anything.
+///
+/// This is the render half of the split, and the only half that exists: the
+/// decision of when and where to write belongs to
+/// [`crate::tui::pinned_images`], which re-emits every pinned graphic on every
+/// frame. A write-once helper cannot be used for that — a graphic painted
+/// outside the cell grid is destroyed by the next redraw that touches its cells,
+/// and a helper that had already forgotten the sequence could not put it back.
 ///
 /// Delegates to [`image_render::render_image`], which auto-detects the protocol
 /// in the order Kitty -> iTerm2 -> Sixel. On failure the result carries a
-/// textual placeholder rather than raw bytes or silence.
+/// textual placeholder rather than raw bytes or silence, and a placeholder is
+/// not a graphic, so the registry declines to pin it.
 pub fn render_attachment(img: &PastedImage) -> RenderedImage {
     let rendered = image_render::render_image(&img.path, &ImageRenderConfig::default());
     if rendered.success {
@@ -429,22 +436,6 @@ pub fn render_attachment(img: &PastedImage) -> RenderedImage {
         height_cells: 0,
         success: false,
     }
-}
-
-/// Render the attachment and, when the terminal speaks a graphics protocol,
-/// write the escape sequence to stdout.
-///
-/// Terminal graphics protocols paint outside ratatui's cell grid, so this is
-/// the same post-paint write path the OSC 8 hyperlink overlay uses. Returns
-/// the rendered image (or the placeholder) so the caller can report it.
-pub fn emit_inline_image(img: &PastedImage) -> RenderedImage {
-    let rendered = render_attachment(img);
-    if rendered.success {
-        let mut out = std::io::stdout();
-        let _ = out.write_all(rendered.escape_sequence.as_bytes());
-        let _ = out.flush();
-    }
-    rendered
 }
 
 /// Human-readable one-liner describing what happened to a pasted image.
