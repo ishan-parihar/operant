@@ -61,11 +61,14 @@ jobs:
   doc:
     name: Documentation
     # GATED OFF until red: `RUSTDOCFLAGS=-Dwarnings cargo doc --workspace
-    # --no-deps --all-features --keep-going` reports 44 errors, all
-    # claim-must-match-code (doc comments naming items that were renamed, that
-    # never existed, or that are private). See BUGS.md R40-19 for the
-    # measured breakdown. Left visible here rather than deleted so the gap is
-    # explicit; re-enable by removing this line once the count is zero.
+    # --no-deps --all-features --keep-going` reports 44 errors. Most are
+    # rustdoc MECHANICS, not claim defects: angle-bracket generics and
+    # keybinding prose like `[Esc]` parsed as HTML or as intra-doc links
+    # (21 unclosed-HTML-tag, ~14 single-letter/number "links"). Only ~8 are
+    # claim-must-match-code — comments naming a renamed, private, or
+    # never-implemented item. Both breakdowns: BUGS.md R40-19.
+    # Left visible rather than deleted so the gap is explicit; re-enable by
+    # removing this line once the count is zero.
     if: ${{ false }}
     runs-on: ubuntu-latest
     env:

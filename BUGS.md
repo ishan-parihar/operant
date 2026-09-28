@@ -1582,13 +1582,17 @@ everyone to ignore CI.
     checkout step is the whole fix. An earlier version of this entry asserted
     the mechanism without running it; it is now verified both ways (fail
     without the submodule, pass with it).
-- `ci.yml` `fmt` and `clippy` jobs were verified green and would be safe to
-  trigger. `release.yml` needs no change — it fires on `workflow_run` of
-  `Build`, so it inherits the main-branch trigger transitively.
-- Cheapest honest sequence: add `submodules: recursive` to the checkout steps,
-  fix the 10 doc links, then add `branches: ['main']`. Splitting the trigger
-  onto `fmt`+`clippy` only would still be a partial fix with a confusing
-  signal, so it is not recommended.
+- `ci.yml` `fmt` and `clippy` jobs were verified green. `release.yml` needs no
+  change — it fires on `workflow_run` of `Build`, so it inherits the
+  main-branch trigger transitively.
+- **This sequence is done** (supersedes the "cheapest honest sequence" advice
+  that stood here before iter-391): submodules landed at iter-389, the trigger
+  landed at iter-391, and `doc` + `msrv` are explicitly gated off with their
+  reasons at iter-392. The advice that a partial trigger "would still be a
+  partial fix with a confusing signal, so it is not recommended" was wrong on
+  the evidence — the gate comments name the reason, so the signal is legible
+  rather than confusing. What is still outstanding is fixing the 44 doc errors
+  (R40-19) and re-enabling the two gated jobs, in that order.
 
 ### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (OPEN, LOW, measured iter-385)
 `cargo fmt --all --check` reports 22 dirty files at HEAD (down from 66 — recent
