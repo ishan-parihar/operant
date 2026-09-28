@@ -1655,3 +1655,51 @@ uncommitted work in both files: a rustfmt reflow of `ProviderFactory`'s
   BEFORE restoring anything, and say so in the ledger — a silent overwrite of
   a peer's uncommitted work is the R40-10 class, and repeating it is how
   R40-10 happened in the first place.
+
+### R40-21 — `origin/main` does not compile AGAIN: peer's iter-391 omitted a `mod` declaration (OPEN, HIGH, measured iter-396)
+Third occurrence of the R40-9/iter-359 failure class. The peer's
+`d68ea308` (iter-391, "cache-miss detection") added
+`crates/operant-core/src/agent/clients/cache_monitor.rs` and referenced it
+from four places, but **never declared the module**:
+- referenced: `agent/builders.rs` (2), `agent/run.rs` (5),
+  `agent/clients/anthropic.rs` (3), and the file itself
+- not declared: `agent/mod.rs:8-26` lists every sibling
+  (`background_review`, `chat_provider`, `error_classifier`, …) and has no
+  `mod cache_monitor`
+- errors: 8× `E0433: cannot find cache_monitor in clients`, plus
+  `E0432: unresolved import super::cache_monitor` and
+  `E0433: cannot find cache_monitor in super` — 10 total, `operant-core (lib)`
+  fails.
+**Not fixed here on purpose.** The file is the concurrent agent's in-flight
+work and the missing declaration belongs with it. Adding `mod cache_monitor`
+myself is a one-line guess about intent (public vs `pub(crate)`, and whether it
+re-exports from `clients`) that would land as a second unverified edit to
+someone else's module. The fix is theirs: declare it in the parent module
+alongside the rest of their change.
+- **Repro**: `git worktree add --detach /tmp/owc origin/main && cd /tmp/owc &&
+  git submodule update --init --recursive && cargo check -p operant-core --lib`
+  → 10 errors. The submodule init matters: without it the failure is masked by
+  a different crate failing first.
+- **Pattern worth naming**: this is the third time `origin/main` has been
+  pushed uncompilable (iter-359 → R40-9, iter-357 → R40-11, now iter-391), and
+  a clean-worktree compile at HEAD was the only thing that caught it each time.
+  Since iter-391, `ci.yml` runs on pushes to `main` with the clippy gate as a
+  job, and on a broken tree that gate reports the compile error as a new
+  warning and exits non-zero (measured at iter-373). So the third occurrence is
+  the first one CI would have caught automatically — provided the push lands
+  after the trigger is live on the remote.
+
+### R40-19 addendum — recount is blocked by R40-21, and the earlier 44 was measured on a pre-R40-21 tree (iter-396)
+The 44 in R40-19 and in the `ci.yml` gate comment was measured at iter-391 with
+`--keep-going` on a tree that compiled. It is a **floor**, not a total, for two
+reasons now measured rather than assumed:
+1. plain `cargo doc` halts at the first failing crate (that is why
+   `--keep-going` is the only reliable invocation), and
+2. with `operant-core` failing to compile (R40-21), its doc errors are never
+   reached at all — a recount in a clean worktree returned **4**, which is the
+   count for the crates that still build, not the workspace.
+So the honest figure is: **44 as of iter-391, and the true number is higher and
+unmeasurable until R40-21 is fixed.** Re-run
+`RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features
+--keep-going` in a worktree at HEAD **with `git submodule update --init
+--recursive`** once the tree compiles, and treat that as the baseline.
