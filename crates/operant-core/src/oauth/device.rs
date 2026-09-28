@@ -24,6 +24,10 @@
 //! [`Clock`] makes the timing observable without real sleeping, which is what
 //! lets the cadence be asserted in a unit test.
 
+// `Arc`/`Mutex` back `VirtualClock` and the test HTTP endpoint, both of which
+// are `#[cfg(test)]`; importing them unconditionally would warn in a normal
+// build. `Duration`/`Instant` are used by the production `Clock` trait.
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -246,23 +250,34 @@ pub async fn poll(
 /// A [`Clock`] that never sleeps: it records the requested durations and
 /// advances a virtual instant. Test-only; lives here so the trait and its
 /// fake stay together.
+///
+/// Gated so the fake does not ship in the library. It was ungated until
+/// iter-411, which put a test double on the public API and dragged its
+/// `Mutex::lock().expect(..)` poison recovery into production — where the
+/// clippy gate (`-D clippy::expect_used`) correctly flagged it. The production
+/// clock is `SystemClock`; this exists only to make the device flow's polling
+/// interval testable without real sleeps.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct VirtualClock {
     state: Arc<Mutex<VirtualState>>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct VirtualState {
     now: Instant,
     slept: Vec<Duration>,
 }
 
+#[cfg(test)]
 impl Default for VirtualClock {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 impl VirtualClock {
     /// A clock starting at the process origin.
     pub fn new() -> Self {
@@ -280,6 +295,7 @@ impl VirtualClock {
     }
 }
 
+#[cfg(test)]
 impl Clock for VirtualClock {
     fn sleep(&self, duration: Duration) -> SleepFuture<'_> {
         let state = self.state.clone();
