@@ -32,7 +32,23 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The gate script is the repo's ONLY pre-merge lint rule, so CI must
+      # run the same predicate rather than a second, stricter one. Raw
+      # `clippy -D warnings` disagrees with .ci/clippy-allowlist.txt: it
+      # would fail on the 8 pre-existing warnings the allowlist absorbs,
+      # making "CI green" and "local gate green" different statements.
+      - name: Install jq (gate dependency)
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Clippy gate
+        # RUSTFLAGS is cleared for this step: the workflow sets -Dwarnings
+        # globally, and cargo applies it on top of the gate's own
+        # -D clippy::unwrap_used -D clippy::expect_used. That would promote
+        # every non-deny warning the allowlist absorbs to a hard error, so
+        # CI would fail where the local gate passes — the exact divergence
+        # this change removes.
+        env:
+          RUSTFLAGS: ""
+        run: bash scripts/clippy-warning-gate.sh
 
   doc:
     name: Documentation

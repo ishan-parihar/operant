@@ -1099,19 +1099,30 @@ production callers, so the loop's `emit` calls were no-ops).
   their code into this tree and conflict with their next push; that gate red
   belongs to their iteration.
 
-### R40-7 — CI is tag-only; fmt debt blocks enabling a main-branch trigger (OPEN, deferred)
+### R40-7 — CI predicate aligned to the local gate; the main-branch trigger is still fmt-blocked (PARTIAL, iter-369)
 All four workflows fire only on `push: tags: ['v*']` (+ dispatch) — no
-`branches: [main]`, no `pull_request`. Turning a main-branch trigger on is
-blocked by two facts, not by preference: `ci.yml` runs `cargo fmt --all
---check` with `RUSTFLAGS: -Dwarnings`, and the committed tree carries fmt debt
-(`cargo fmt --all --check` currently reports 17 files), so a trigger + a
-sweep must land together; and `ci.yml`'s clippy step disagrees with
-`scripts/clippy-warning-gate.sh`'s allowlist model, so "CI green" and "local
-gate green" are different predicates. **Local gate is authoritative** (it is
-the repo's only pre-merge rule); a CI trigger would have to call the gate
-script, not raw clippy. Deferred while the concurrent agent is active in the
-shared tree — a 17-file reformat over their working copy is the same class of
-mistake that destroyed the 018 WIP.
+`branches: [main]`, no `pull_request`.
+- **Predicate divergence FIXED (iter-369)**: `ci.yml`'s clippy job called
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  a DIFFERENT and stricter rule than
+  `scripts/clippy-warning-gate.sh` + `.ci/clippy-allowlist.txt` — so
+  "CI green" and "local gate green" were different statements about the same
+  tree, and the gate is the repo's only pre-merge rule. The job now installs
+  `jq` and runs the gate script. Two subtleties that made a naive swap fail:
+  the workflow sets `RUSTFLAGS: -Dwarnings` globally, and cargo applies that
+  ON TOP of the gate's own `-D clippy::unwrap_used -D clippy::expect_used` —
+  it would promote every allowlist-absorbed warning to a hard error, so the
+  step sets `RUSTFLAGS: ""` (step-level env overrides workflow-level in GitHub
+  Actions); and the gate needs `jq`, which is not in the toolchain image.
+- **Still open**: a `branches: [main]` trigger cannot land until the fmt debt
+  is cleared, because `ci.yml` runs `cargo fmt --all --check` under
+  `-Dwarnings` and the committed tree carries fmt debt (17 files at last
+  measure). The sweep and the trigger must land together.
+- **Why the sweep is still deferred**: the concurrent agent holds uncommitted
+  work in the shared tree — `git status` showed 77 modified files. Their TUI
+  lint warnings cleared because they FIXED those lints, not because they
+  stopped. A 17-file reformat over their working copy is the same class of
+  mistake that destroyed the 018 WIP (R39-12).
 
 ### R40-9 — `pub mod harness_slots;` never committed: nine uncompilable commits on origin/main (FIXED iter-359)
 iter-349 created `crates/operant-core/src/harness_slots.rs` and wired the C1
