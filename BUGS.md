@@ -1886,3 +1886,58 @@ same stale ref, not a reverted file.
   with two agents committing to `main` a force-push would discard peer work.
   Every push this session was a fast-forward, verified with
   `git merge-base --is-ancestor` before pushing and `git ls-remote` after.
+
+### R40-23 — 12 wiremock tests flake under parallel load; mechanism not pinned (iter-449, measured not fixed)
+
+`operant-tools` starts 12 `wiremock` `MockServer::start()` servers across
+`web_fetch.rs`, `web_search_tool.rs` and `jira_tool.rs`, all on OS-assigned
+ephemeral ports. Under `cargo test` parallelism they intermittently fail with
+`Connection refused (os error 111)`, which surfaces as a request that never
+reaches its own mock.
+
+Measured, not assumed:
+
+| run mode | runs | result |
+|---|---|---|
+| default (parallel) | 3 | `1161 ok` / `5 failed` / `1 failed` |
+| `--test-threads=1` | 4 | `1161 passed, 0 failed` — every time |
+
+So it is a concurrency defect in those tests, not the environment. Ruled out
+port exhaustion: the ephemeral range is 32768–60999 (~28k) and the suite runs in
+~5s, so 12 servers cannot plausibly collide on volume.
+
+**Not fixed, and the mechanism is genuinely unidentified.** Two candidates were
+not distinguished: a bind/rebind TOCTOU on the ephemeral port (bind `:0`, read
+the assigned port, close, rebind — a classic wiremock race), or runtime
+starvation where the server task is not being scheduled. Writing a fix for a
+race I cannot reproduce on demand is how a test suite ends up permanently serial
+and slow, which is a worse outcome than a recorded flake. The measurement above
+is the actionable artifact: re-run with `--test-threads=1` to confirm any change
+actually helped, because "it passed once" proves nothing against a 1-in-3 rate.
+
+Blocks nothing. `ci.yml` runs no test job, and `release.yml` gates on the Build
+workflow, not on tests. Severity is test-hygiene, not correctness.
+
+### R40-24 — `$HOME/.operant/` written into the repo root; creator not identified (iter-449, observed)
+
+An 8.8 MB untracked directory literally named `$HOME` sits in the repo root,
+containing `.operant/skills/…`. It appeared during a workspace test run.
+
+Ruled out, by reading rather than guessing: it is **not** in a source tarball
+(`git archive` contains 0 matching entries, since it is untracked), so the
+release is unaffected; and it is not created by
+`operant-tools/src/browser.rs::ensure_browser_env`, which sets `HOME=/tmp` when
+the variable is missing rather than writing a literal path. The
+`operant-runtime/src/service/mod.rs:1000` `getent passwd` path was checked and
+`fields[5]` is correct — index 5 of a passwd entry *is* the home directory.
+
+**Creator not identified.** The fix for the related class of bug did land at
+iter-449: four tests in `browser.rs` mutated process-global `HOME` and
+`CHROMIUM_FLAGS` with no lock, three of them contradicting each other by design.
+That is fixed and verified, but it is not proven to be the cause of this
+directory, so the two are recorded separately rather than conflated.
+
+Interim handling: not gitignored yet, because adding an ignore rule without
+knowing what writes the path risks hiding a live bug rather than fixing it. The
+directory is untracked, so it cannot enter a release. Worth `.gitignore`-ing
+once the creator is known.
