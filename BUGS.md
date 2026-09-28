@@ -1194,6 +1194,10 @@ never called.
   `default` and delete the crates if genuinely retired. Per R40-12 the
   adapters are real implementations, so (b) discards working code. Operator
   decision, its own iteration.
+
+### R40-11 — `origin/main` does not compile: iter-357 shipped a reader without its field (OPEN, HIGH)
+`0482fa1b` (peer, `fix(iter-357)`) added
+`max_tool_result_share: settings.max_tool_result_share` at
 `crates/operant-core/src/agent/mod.rs:170`, sourced from `BehaviorSettings`,
 but **the field was never declared on that struct** —
 `crates/operant-core/src/config.rs:193` (`BehaviorSettings`) has no
