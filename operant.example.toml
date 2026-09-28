@@ -37,6 +37,13 @@ tool_timeout_secs = 30
 request_timeout_secs = 120
 stream = true
 context_window = 128000
+# Largest share of `context_window` that ONE tool result may occupy before its
+# bulk is withheld behind an explicit marker (iter-357). The kept head, the
+# token count, the per-token price and the number of tokens removed are all
+# stated in the marker, because a silently shortened tool result is worse than
+# a failed one: the model cannot tell it is not reading what the tool returned.
+# 0.05 = 5%.
+max_tool_result_share = 0.05
 max_healing_attempts = 3
 show_reasoning = true
 tool_progress = "auto"

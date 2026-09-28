@@ -5,6 +5,107 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Parity work against the `jcode` reference agent (iters 347-409). The TUI
+gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
+
+### Fixed
+
+- **`/steer` was a guaranteed no-op.** Submitting it required `Enter` while not
+  streaming, but the queue path rejected exactly that state — the two halves
+  were mutually exclusive, so the command had never worked despite being
+  documented. The core loop's steering was fully implemented and unreachable.
+- **A compaction cut could orphan a `tool_use`/`tool_result` pair.** Eviction
+  keeps a head and a recency tail, so a cut could land between a request and its
+  answer; providers reject either half alone, and an unanswered request leaves
+  the model waiting so it reissues the call and burns a turn. A shape-independent
+  repair now runs at the single chokepoint both eviction paths pass through.
+- **`/keys` advertised two chords that never worked.** `Ctrl+H`/`Ctrl+L`
+  ("previous/next history") had no dispatch arm anywhere, and cannot be bound
+  anyway — `Ctrl+h` is ASCII 8 (backspace) and `Ctrl+l` is readline's
+  clear-screen. The claims were removed and both chords added to the terminal
+  conflict list that `/hotkeys` uses to explain unavailability.
+- **`operant-core`'s `simple_agent` example did not compile** (a config field
+  added in iter-357 was missing from its struct literal). Note that
+  `cargo check --workspace` does NOT catch this — only `cargo test --workspace`
+  builds example targets.
+
+### Added
+
+- **Turn lifecycle state machine** — a 9-state `TurnState` (idle, sending,
+  connecting, thinking, streaming, running-tool, awaiting-approval,
+  waiting-for-network, compacting) replaces the single `is_streaming` bool for
+  display, plus per-turn wall-clock, tokens/sec, and input/output/cache deltas
+  in the footer.
+- **Tool-call grouping** — concurrent calls group with an `N/M done` meter and
+  per-sub-call status, and a call waiting on the tool-pool semaphore now
+  renders as queued rather than running.
+- **Real markdown rendering** — `pulldown-cmark` drives lists (nested, ordered,
+  task), italic, strikethrough, horizontal rules and footnotes. Previously
+  `- item` printed literally and the renderer claimed italic support it did not
+  have.
+- **One clipboard path** with a five-mechanism fallback chain
+  (arboard → wl-copy → xclip → xsel → OSC 52). Writes previously failed
+  silently over plain SSH. Drag-select copy mode added.
+- **Eight live themes** including a deuteranopia-safe palette, `reduce_motion`
+  now honoured by the animation path, and Kitty/iTerm2/Sixel image rendering
+  wired to paste.
+- **Truecolor detection** with perceptual xterm-256 quantization, and
+  grapheme-cluster + cell-width measurement (a CJK ideograph is one cluster but
+  two cells, so cluster counting alone is still wrong).
+- **Mermaid diagrams** render as images through the existing image stack, with
+  text and raw-source fallbacks, on a background worker.
+- **Provider factory registry** — a provider is now one trait impl plus one
+  line, with a structural `RuntimeKey` (not a display string) and a typed
+  `FailoverDecision` distinguishing a rate limit from a broken model.
+- **OAuth PKCE + device-code login** with an account pool that stores only keys
+  and order (never tokens) and a per-account single-flight refresh coordinator,
+  so N concurrent requests cannot each spend the same single-use rotating
+  refresh token.
+- **Destructive-command gate** hooked into the existing approval path —
+  structural blast-radius classification, a justification gate that measures
+  substance rather than length, and system-path denial. Defense-in-depth, not a
+  sandbox.
+- **Cache-miss detection** — a prefix tracker over the stable prefix (system
+  prompt + tools + skills), with proven and inferred verdicts reported
+  separately. A detector reporting a hit it cannot know is worse than none.
+- **Tool-name recovery** — a hallucinated or near-miss tool name is recovered by
+  bounded Levenshtein, and the model is told the recovery happened. It refuses
+  on an equidistant tie, because arbitrarily choosing is how you get a
+  confidently wrong action.
+- **Swarm workers** — real headless workers running their own agent loop, with a
+  spawn guard that checks depth and a *global* breadth cap before spawning and
+  releases its count on every exit path.
+- **Keybinding registry wired** — `/keys` and `/hotkeys` read the catalogue and
+  count real usage; input stash (`Ctrl+S`), burst undo (`Ctrl+Z`) and queued
+  message recall.
+
+### Changed
+
+- **Oversized tool results are withheld, never silently truncated.** A result
+  that would exceed `agent.max_tool_result_share` (default 5% of the context
+  window) is replaced by a marker stating the kept head, the token count, the
+  per-token price and the tokens removed.
+- **1146 net lines of dead TUI deleted** — `voice_capture.rs`, `state.rs` and
+  `terminal.rs` removed outright, `messages/cache.rs` superseded. Three sibling
+  files had carried `#![allow(dead_code)] // wired in Phase 2I` with zero
+  consumers.
+
+### Known limitations
+
+- **MCP turn-triggered materialisation is net-negative on short turns.** On a
+  realistic 40-tool catalog a 4-token generic turn materialises 24 of them, so
+  it *increases* the visible schema. Kept as a convenience (a relevant tool
+  without a discovery turn), not a token optimisation; the number is pinned in
+  a test.
+- **Hybrid retrieval scoring is unproven and deliberately unwired.** Measured
+  recall got *worse* (R@3 2/5 → 1/5). A mutation-proven gate fails the build if
+  anything outside `retrieval.rs` calls it.
+- Most renderers still use inline `Color::*` rather than the theme palette, so
+  themes and colour quantization apply only to the shared semantic layer.
+
+
 ## [0.2.0] - 2026-09-27
 
 ### Added
