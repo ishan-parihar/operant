@@ -1,7 +1,11 @@
 //! Static file serving for the web dashboard.
 //!
-//! Serves the compiled `web/dist/` directory from the filesystem at runtime.
-//! The directory path is configured via `gateway.web_dist_dir`.
+//! Serves the compiled dashboard directory from the filesystem at runtime. The
+//! directory path is configured via `gateway.web_dist_dir`.
+//!
+//! When the `embedded-web` feature is on AND `build.rs` found the compiled
+//! output, the assets are baked into the binary instead — so the path here MUST
+//! stay in sync with the one in `build.rs`.
 
 use axum::{
     extract::State,
@@ -17,8 +21,14 @@ use include_dir::{Dir, include_dir};
 
 // Only embedded when the compiled frontend actually exists (see build.rs);
 // otherwise the runtime filesystem fallback below serves the dashboard.
+//
+// This path used to be `$CARGO_MANIFEST_DIR/../../web/dist`, which does not exist
+// in this layout — the Vite build writes to `crates/operant-cli/src/dashboard`
+// per its `outDir`. So the embed was never reachable and the feature silently
+// degraded to the filesystem fallback everywhere.
 #[cfg(all(feature = "embedded-web", embedded_web_dist_available))]
-static EMBEDDED_WEB_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../web/dist");
+static EMBEDDED_WEB_DIST: Dir<'_> =
+    include_dir!("$CARGO_MANIFEST_DIR/../operant-cli/src/dashboard");
 
 /// Serve static files from `/_app/*` path
 pub async fn handle_static(State(state): State<AppState>, uri: Uri) -> Response {
