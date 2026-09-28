@@ -2319,6 +2319,31 @@ fn preview_tool_args(args: &str) -> Option<String> {
     None
 }
 
+/// Read one line, returning `None` on EOF.
+///
+/// `read_line` reports a BYTE COUNT, and 0 means the stream is exhausted. That
+/// is not the same as a blank line: an empty `String` could mean "the user
+/// pressed Enter" or "there is no more input", and collapsing the two makes an
+/// exhausted stdin indistinguishable from an idle one.
+///
+/// That distinction was a live hang. `operant chat` with stdin closed or
+/// redirected reprints its `You: ` prompt forever — measured at 33 MB of output
+/// in 20 seconds, never exiting — because EOF produced an empty string, the
+/// blank-line `continue` fired, and the loop spun. It never surfaced in
+/// interactive use, where a human supplies the terminating `/exit`, which is
+/// exactly why it survived: the exit path that everyone exercises is not the
+/// exit path a script or a CI job takes.
+///
+/// Generic over `BufRead` so the three cases are testable without replacing
+/// process-wide stdin.
+fn read_line_or_eof(reader: &mut impl std::io::BufRead) -> std::io::Result<Option<String>> {
+    let mut buf = String::new();
+    if reader.read_line(&mut buf)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(buf))
+}
+
 async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result<()> {
     let mcp_manager = McpManager::new();
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(256);
@@ -2389,9 +2414,15 @@ async fn chat_non_tui(config: &AppConfig, system_prompt: Option<&str>) -> Result
     loop {
         print!("You: ");
         io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim().to_string();
+        // EOF breaks the loop. A blank line still continues, because in
+        // interactive use pressing Enter should just reprint the prompt.
+        // `Stdin` itself does not implement `BufRead` (its `read_line` is an
+        // inherent method), so the lock guard is what satisfies the bound.
+        let Some(raw) = read_line_or_eof(&mut io::stdin().lock())? else {
+            println!();
+            break;
+        };
+        let input = raw.trim().to_string();
 
         if input.is_empty() {
             continue;
@@ -2902,6 +2933,64 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    /// The regression this pins: with stdin closed, `operant chat` spun forever
+    /// printing `You: ` because EOF and a blank line both produced an empty
+    /// string. EOF must be `None`.
+    #[test]
+    fn read_line_reports_eof_as_none() {
+        let mut empty = Cursor::new(b"");
+        assert_eq!(
+            read_line_or_eof(&mut empty).unwrap(),
+            None,
+            "an exhausted stream must be None, or the chat loop spins forever"
+        );
+    }
+
+    /// A blank line is NOT EOF. The chat loop's `continue` on a blank line is
+    /// correct interactive behaviour — pressing Enter should just reprint the
+    /// prompt — so collapsing the two cases would fix the hang by breaking
+    /// that.
+    #[test]
+    fn read_line_distinguishes_blank_line_from_eof() {
+        let mut blank = Cursor::new(b"\n");
+        assert_eq!(
+            read_line_or_eof(&mut blank).unwrap(),
+            Some("\n".to_string()),
+            "a blank line must read as Some, not None"
+        );
+    }
+
+    #[test]
+    fn read_line_returns_input() {
+        let mut input = Cursor::new(b"hello world\n");
+        assert_eq!(
+            read_line_or_eof(&mut input).unwrap(),
+            Some("hello world\n".to_string())
+        );
+    }
+
+    /// The exact loop shape: one real line, then a blank line, then EOF. This
+    /// is what a piped stdin that ends in a newline produces, and it is the
+    /// sequence that hung.
+    #[test]
+    fn read_line_walks_a_piped_stream_to_eof() {
+        let mut reader = Cursor::new(b"first\n\n");
+        assert_eq!(
+            read_line_or_eof(&mut reader).unwrap(),
+            Some("first\n".to_string())
+        );
+        assert_eq!(
+            read_line_or_eof(&mut reader).unwrap(),
+            Some("\n".to_string())
+        );
+        assert_eq!(
+            read_line_or_eof(&mut reader).unwrap(),
+            None,
+            "the stream must terminate rather than yield blank lines forever"
+        );
+    }
 
     #[test]
     fn rich_tui_without_log_file_uses_sink() {
