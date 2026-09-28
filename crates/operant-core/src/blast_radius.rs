@@ -20,7 +20,7 @@
 //! can still reach a destructive command through a form this parser does not
 //! model — shell metacharacter nesting, indirection through a script file or
 //! an interpreter (`sh -c`, `python -c`), a variable expanded at runtime, a
-//! binary whose behavior is not in [`VerbKind`]. It raises the cost of a
+//! binary whose behavior is not in `VerbKind`. It raises the cost of a
 //! careless `rm -rf /`; it does not make destructive commands impossible.
 //! Real isolation lives in `operant-runtime`'s sandbox backends (landlock,
 //! bubblewrap, firejail, docker, sandbox-exec — `SandboxBackend`).

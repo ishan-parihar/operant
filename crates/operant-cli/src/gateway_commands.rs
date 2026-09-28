@@ -58,7 +58,7 @@ pub struct CommandDef {
     pub aliases: &'static [&'static str],
     /// Display category for grouping in `/help`.
     pub category: &'static str,
-    /// Argument hint shown in usage (e.g. "[name]", "" for none).
+    /// Argument hint shown in usage (e.g. "`<name>`", "" for none).
     pub args_hint: &'static str,
     /// Whether this command requires admin privileges.
     pub admin_only: bool,

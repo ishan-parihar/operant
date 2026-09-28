@@ -299,13 +299,13 @@ pub struct App {
     /// (iter-270 — wires /retry to real state.)
     pub pending_retry_query: Option<String>,
     /// If set, the run loop submits this text as a fresh user message on the
-    /// next iteration. Used by /skill <name> and /bundle <name> to inject the
+    /// next iteration. Used by /skill `<name>` and /bundle `<name>` to inject the
     /// hermes-parity skill-invocation expansion into the turn.
     /// (iter-320 — wires skill/bundle slash expansion to real state.)
     pub pending_user_message: Option<String>,
 
     // ---- Visual mode indicators -------------------------------------------
-    /// Plan mode — input border turns blue, [PLAN] shown in status bar.
+    /// Plan mode — input border turns blue, `PLAN` shown in status bar.
     pub plan_mode: bool,
     /// "While you were away" summary text shown on the welcome screen.
     /// When streaming stalled (used to turn the spinner red after 3 s).

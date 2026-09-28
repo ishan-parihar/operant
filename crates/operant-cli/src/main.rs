@@ -204,9 +204,9 @@ enum Commands {
         record_trajectory: bool,
 
         /// Enable a Mixture-of-Agents turn (hermes /moa parity, G5): the
-        /// configured [moa] reference models advise on the query, an
+        /// configured `moa` reference models advise on the query, an
         /// aggregator synthesizes their guidance, and it is injected into
-        /// the agent's context for this run. Requires [moa] enabled and at
+        /// the agent's context for this run. Requires `moa` enabled and at
         /// least one reference model configured.
         #[arg(long, action = ArgAction::SetTrue)]
         moa: bool,
@@ -785,7 +785,7 @@ fn wrap_pooled(
     ))
 }
 
-/// Build a [`ProviderRegistry`] from the `[providers]` section — hermes
+/// Build a [`ProviderRegistry`](crate::provider::ProviderRegistry) from the `[providers]` section — hermes
 /// `fallback_providers` parity for cross-provider switching.
 ///
 /// Chain order: primary (entry 0), then `providers.fallback_chain` in

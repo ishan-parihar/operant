@@ -210,7 +210,7 @@ impl KernelRuntime {
     }
 
     /// Session GC: prune per-session harness dirs older than ttl_hours.
-    /// Scans <state_dir>/sessions/<id>/ and removes stale session subdirs.
+    /// Scans `<state_dir>/sessions/<id>/` and removes stale session subdirs.
     /// Best-effort: logs warnings, never fails the caller.
     pub async fn gc_sessions(&self) {
         let ttl_hours = self.settings.session_gc_ttl_hours;

@@ -62,7 +62,7 @@ pub fn estimate_total_tokens(messages: &[Message]) -> usize {
 // ---------------------------------------------------------------------------
 
 /// A message that *requests* tool calls: an assistant turn carrying at least
-/// one [`ToolCall`]. Each `ToolCall::id` is the id the provider expects to see
+/// one [`ToolCall`](crate::client::ToolCall). Each `ToolCall::id` is the id the provider expects to see
 /// answered by a [`Message::tool_call_id`].
 pub fn is_tool_use(msg: &Message) -> bool {
     msg.role == crate::client::Role::Assistant
@@ -196,7 +196,7 @@ pub fn compaction_goal(messages: &[Message]) -> Option<String> {
 ///
 /// `kept` is a *selection of groups*, not a prefix of `messages`: that is the
 /// whole point of the semantic stage. The safety net is applied afterwards and
-/// recorded in [`head_cut`] — see [`semantic_compaction_cutoff`].
+/// recorded in `head_cut` — see [`semantic_compaction_cutoff`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticCut {
     /// Indices into the ORIGINAL `messages` that survive, ascending. Every
@@ -280,7 +280,7 @@ impl SemanticCut {
 ///
 /// ## Degradation
 ///
-/// `embedder: None`, an empty goal, more than [`SEMANTIC_MAX_GROUPS`] groups,
+/// `embedder: None`, an empty goal, more than `SEMANTIC_MAX_GROUPS` groups,
 /// an embedding error, or a vector that is empty / non-finite / the wrong
 /// width all yield `semantic: false` and the pure recency cut `0..cap`.
 /// Embeddings are the optional part; a compaction path that failed without

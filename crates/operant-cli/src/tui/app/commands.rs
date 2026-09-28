@@ -120,7 +120,7 @@ impl App {
     /// are meaningful either way. Mirrors the live steer path in
     /// adapter_types.rs, but uses `try_lock` because this runs on the
     /// sync slash-command path while the queue is a tokio Mutex.
-    /// (iter-240 — wires /steer and /queue <text> to the real steer queue.)
+    /// (iter-240 — wires /steer and /queue `<text>` to the real steer queue.)
     fn queue_steer(&mut self, text: &str) -> String {
         const NO_QUEUE: &str = "Steer is unavailable (no live agent).";
         const QUEUE_BUSY: &str = "Queue is busy (agent is draining it).";
@@ -239,7 +239,7 @@ impl App {
     }
 
     /// Implementation that receives both cmd and args. Most slash commands
-    /// ignore args; a few (like /personality <name>) consume them.
+    /// ignore args; a few (like /personality `<name>`) consume them.
     fn intercept_slash_command_with_args_impl(&mut self, cmd: &str, args: &str) -> bool {
         self.close_secondary_views();
         self.dismiss_error_notifications();
@@ -1308,7 +1308,7 @@ impl App {
         }
     }
 
-    /// Interpret a [`CommandResult`] and apply the corresponding side effect
+    /// Interpret a [`CommandResult`](crate::commands::CommandResult) and apply the corresponding side effect
     /// in the TUI. This is the single dispatch point for all slash commands
     /// that go through the `CommandRegistry`.
     ///

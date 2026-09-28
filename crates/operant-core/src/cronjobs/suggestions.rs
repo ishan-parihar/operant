@@ -11,7 +11,7 @@
 //!   * `catalog` — the curated starter automations seeded via
 //!     `operant suggestions catalog` (and on first setup),
 //!   * `learning` — a future self-improvement review hook: recurring work
-//!     noticed by the background review can call [`add`].
+//!     noticed by the background review can call `add`.
 //!
 //! Storage mirrors the cron database location: `<data_dir>/cron/
 //! suggestions.json`, written atomically (tmp file + rename).

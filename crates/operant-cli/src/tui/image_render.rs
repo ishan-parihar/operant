@@ -159,7 +159,7 @@ pub fn render_image(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage
 }
 
 /// Kitty Graphics Protocol rendering.
-/// See: https://sw.kovidgoyal.net/kitty/graphics-protocol/
+/// See: <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 fn render_kitty(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
     // Read image data
     let data = match std::fs::read(path) {
@@ -255,7 +255,7 @@ fn render_sixel(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
 }
 
 /// iTerm2 proprietary inline image protocol.
-/// See: https://iterm2.com/documentation-images.html
+/// See: <https://iterm2.com/documentation-images.html>
 fn render_iterm2(path: &PathBuf, config: &ImageRenderConfig) -> RenderedImage {
     let data = match std::fs::read(path) {
         Ok(d) => d,

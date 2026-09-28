@@ -134,7 +134,7 @@ impl OpenAIClient {
     /// Swap the runtime API key (credential-pool rotation).
     ///
     /// The override takes precedence over `config.api_key` in
-    /// [`build_headers`](Self::build_headers) until cleared. Setting an empty
+    /// `build_headers` until cleared. Setting an empty
     /// string clears the override and falls back to the configured key.
     pub fn set_api_key(&self, api_key: &str) {
         let value = if api_key.trim().is_empty() {

@@ -7,7 +7,7 @@
 //! Identity is structural: a chain entry is turned into a
 //! [`RuntimeKey`] (vendor + model + pinned revision) and the anti-thrash
 //! bookkeeping is keyed by [`VendorId`], not by whatever display string a
-//! config file happened to contain. See [`chat_provider`] for how a provider is
+//! config file happened to contain. See `chat_provider` for how a provider is
 //! registered.
 
 use std::collections::HashMap;

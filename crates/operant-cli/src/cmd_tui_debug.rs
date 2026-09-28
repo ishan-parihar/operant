@@ -50,7 +50,7 @@ pub enum TuiSubcommand {
     /// `operant tui effort` shows the current level;
     /// `operant tui effort set high` sets it.
     Effort {
-        /// Optional subcommand: 'set <level>'. If omitted, shows the current level.
+        /// Optional subcommand: 'set `<level>`'. If omitted, shows the current level.
         #[command(subcommand)]
         cmd: Option<EffortSubcommand>,
     },
@@ -114,7 +114,7 @@ pub enum ThemeSubcommand {
     List,
     /// Set the theme.
     Set {
-        /// Theme name: dark | light | default | deuteranopia | <custom-name>.
+        /// Theme name: dark | light | default | deuteranopia | `<custom-name>`.
         name: String,
     },
 }
@@ -147,7 +147,7 @@ pub enum TuiDebugSubcommand {
 
     /// Headless TUI simulator to replay a key sequence and assert correctness.
     Simulate {
-        /// Keystroke sequence to replay (e.g. "hello\n/quit\n" or "<up><enter>").
+        /// Keystroke sequence to replay (e.g. "hello\n/quit\n" or `"<up><enter>"`).
         #[arg(long)]
         keys: String,
 

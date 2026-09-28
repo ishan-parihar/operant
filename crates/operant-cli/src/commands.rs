@@ -390,7 +390,7 @@ pub struct CommandDef {
     pub category: &'static str,
     /// Alternative names that resolve to this command.
     pub aliases: &'static [&'static str],
-    /// Argument hint shown in help (e.g. "<prompt>", "[key] [value]").
+    /// Argument hint shown in help (e.g. `"<prompt>"`, `"<key> <value>"`).
     pub args_hint: &'static str,
     /// Detailed help text shown by `/help <command>`.
     #[allow(dead_code)] // Prepared for /help <command> detailed view
@@ -1239,7 +1239,7 @@ fn load_skill_commands_from_disk() -> Vec<TuiSlashCommand> {
 ///
 /// This `LazyLock` ensures filesystem I/O happens only once, not on every
 /// typeahead keystroke. The cache is immutable for the process lifetime;
-/// use [`reload_skill_cache`] (when implemented) to invalidate.
+/// use `reload_skill_cache` (when implemented) to invalidate.
 static CACHED_SKILL_COMMANDS: LazyLock<Vec<TuiSlashCommand>> =
     LazyLock::new(load_skill_commands_from_disk);
 

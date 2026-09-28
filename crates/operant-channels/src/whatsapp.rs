@@ -87,7 +87,7 @@ impl WhatsAppChannel {
     }
 
     /// Access the process-wide pending-approvals map shared across every
-    /// `WhatsAppChannel` instance. See [`PENDING_APPROVALS`] for why this
+    /// `WhatsAppChannel` instance. See `PENDING_APPROVALS` for why this
     /// must be a static rather than per-instance.
     pub fn pending_approvals(&self) -> &Arc<PendingApprovalsMap> {
         &PENDING_APPROVALS

@@ -1,6 +1,6 @@
 //! IGS (Intelligence Gathering System) integration.
 //!
-//! IGS is a Rust MCP server + CLI (https://github.com/ishan-parihar/igs-rust)
+//! IGS is a Rust MCP server + CLI (<https://github.com/ishan-parihar/igs-rust>)
 //! that provides web search, scraping, crawling, and headless-browser
 //! automation with zero API keys (DuckDuckGo + Obscura). Operant talks to
 //! it over the `igs` CLI with `--format json` output.

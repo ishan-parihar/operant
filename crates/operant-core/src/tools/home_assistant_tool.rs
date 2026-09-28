@@ -4,7 +4,7 @@
 //! discover available services, and call services (turn_on/off, set temperature, etc.).
 //!
 //! Configured via environment variables at call time:
-//! - `HASS_URL`  (default: http://homeassistant.local:8123)
+//! - `HASS_URL`  (default: <http://homeassistant.local:8123>)
 //! - `HASS_TOKEN` (required for authentication)
 //!
 //! Security:

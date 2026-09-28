@@ -195,7 +195,7 @@ impl ObscuraProvider {
     ///    machines that never installed IGS).
     ///
     /// Returns the first path that exists; `None` when no binary is installed
-    /// (callers then fall back to [`Self::download_binary`], which installs to
+    /// (callers then fall back to `Self::download_binary`, which installs to
     /// the operant-managed copy).
     pub fn resolve_obscura_binary() -> Option<std::path::PathBuf> {
         Self::resolve_obscura_binary_with(runtime_config().tools.obscura_binary_path.as_deref())

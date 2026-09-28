@@ -123,7 +123,7 @@ pub enum KeyAction {
     Clear,
 }
 
-/// [K]eep/[R]eplace/[C]lear prompt for existing API keys.
+/// `K`eep / `R`eplace / `C`lear prompt for existing API keys.
 /// Shows masked key, returns Keep/Replace/Clear decision.
 pub fn prompt_key_action(label: &str, key: &str) -> Result<KeyAction> {
     let masked = if key.len() > 8 {

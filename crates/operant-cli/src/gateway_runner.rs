@@ -215,7 +215,7 @@ fn seal_split_point(text: &str, budget: usize) -> usize {
 }
 
 /// Pending permission requests, keyed by channel_id: outer std Mutex guards
-/// the inner tokio Mutex<HashMap>, shared via Arc so multiple tasks can
+/// the inner tokio `Mutex<HashMap>`, shared via Arc so multiple tasks can
 /// insert/remove while the gateway runner holds the store.
 ///
 /// `pub(crate)` so gateway_commands can type the resolve helper that
@@ -608,7 +608,7 @@ struct PlatformEntry {
 /// 2. Add an entry here with a factory function
 /// 3. Add config fields to GatewayConfig
 ///
-/// The factory returns Option<Arc<dyn PlatformAdapter>> — None means the
+/// The factory returns `Option<Arc<dyn PlatformAdapter>>` — None means the
 /// platform is disabled in config, Some means it's enabled and constructed.
 fn platform_registry() -> Vec<PlatformEntry> {
     vec![

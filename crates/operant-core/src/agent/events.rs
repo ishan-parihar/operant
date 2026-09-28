@@ -291,8 +291,8 @@ impl OperantAgent {
     /// closes ponytail-audit gap B36: 'model_override is read but
     /// never applied — the agent's config.model is private.')
     ///
-    /// Takes &self (not &mut self) so it works through Arc<OperantAgent>.
-    /// Uses Arc<RwLock<String>> for the model override, checked at each
+    /// Takes &self (not &mut self) so it works through `Arc<OperantAgent>`.
+    /// Uses `Arc<RwLock<String>>` for the model override, checked at each
     /// run() call.
     pub fn set_model(&self, model: impl Into<String>) {
         let new_model = model.into();

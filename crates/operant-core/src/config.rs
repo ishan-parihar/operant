@@ -1479,10 +1479,10 @@ pub struct KernelSettings {
     /// Python ≥3.11 for the sidecar. None ⇒ platform::find_python() then PATH.
     pub python: Option<PathBuf>,
     /// vendored submodule root containing rlm runtime/src/rlm.
-    /// None ⇒ <repo>/vendor/prime-agent resolved from CARGO_MANIFEST_DIR at
+    /// None ⇒ `<repo>`/vendor/prime-agent resolved from CARGO_MANIFEST_DIR at
     /// build time with a ./vendor fallback.
     pub vendor_dir: Option<PathBuf>,
-    /// Harness store root (<state_dir>/<scope>/). None ⇒
+    /// Harness store root (`<state_dir>/<scope>/`). None ⇒
     /// ~/.local/share/operant/kernel/harness.
     pub state_dir: Option<PathBuf>,
     pub sidecar_idle_secs: u64,

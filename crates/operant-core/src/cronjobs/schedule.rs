@@ -10,7 +10,7 @@
 //!
 //!   * 6-field cron expression   → passed through unchanged
 //!   * 5-field cron expression   → seconds `0` prepended ("0 9 * * *" → "0 0 9 * * *")
-//!   * "every N<s|m|h|d|w>"      → interval expansion (see [`every_interval`])
+//!   * "every N<s|m|h|d|w>"      → interval expansion (see `every_interval`)
 //!
 //! Callers: `cmd_cron create` and `suggestions accept` validate/normalize
 //! before persisting; the scheduler re-normalizes at compute time so

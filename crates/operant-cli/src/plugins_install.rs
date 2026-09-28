@@ -53,7 +53,7 @@ pub async fn install_plugin(identifier: &str, plugins_dir: &Path, force: bool) -
 }
 
 /// Resolve an identifier to a git URL.
-/// Supports: full URLs, owner/repo shorthand -> https://github.com/owner/repo
+/// Supports: full URLs, owner/repo shorthand -> <https://github.com/owner/repo>
 fn resolve_git_url(identifier: &str) -> String {
     if identifier.starts_with("http://")
         || identifier.starts_with("https://")

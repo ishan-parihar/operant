@@ -60,17 +60,23 @@ jobs:
 
   doc:
     name: Documentation
-    # GATED OFF until red: `RUSTDOCFLAGS=-Dwarnings cargo doc --workspace
-    # --no-deps --all-features --keep-going` reports 74 errors, recounted
-    # iter-415 on a compiling tree (the earlier 44 was a floor: a crate that
-    # fails to compile never reports its doc errors). Measured breakdown:
-    # 34 unresolved intra-doc links, 19 unclosed HTML tags, 9 links to private
-    # items, 6 bare URLs. operant-config, operant-api, operant-macros,
-    # operant-tool-call-parser and operant-infra are clean. Source of truth is
-    # BUGS.md R40-19; keep that number and this one in step.
-    # Left visible rather than deleted so the gap is explicit; re-enable by
-    # removing this line once the count is zero.
-    if: ${{ false }}
+    # Previously gated off with an `if:` that was always false, because this
+    # reported 72 errors. The count is now zero (iter-441), so the gate is
+    # live and rustdoc regressions fail CI instead of accumulating silently.
+    #
+    # What the 72 were: 19 unclosed HTML tags (generic-type syntax and
+    # placeholder angles in doc comments, which rustdoc parses as HTML), 6
+    # bare URLs, 16 square brackets used as decoration in ASCII-art dialog
+    # previews (a bracketed key reads as an intra-doc link), 9 public-docs
+    # links to private items, and 22 stale or unresolvable symbol references.
+    #
+    # This comment used to cite "BUGS.md R40-19" as the source of truth for
+    # the count. No such entry exists in BUGS.md — it was never filed there,
+    # so the number was only ever recorded here. Replaced rather than
+    # re-pointed, since there was nothing to point at.
+    #
+    # Measure with --all-features. Without it the count is a FLOOR, not a
+    # truth: a crate that fails to compile never reports its doc errors.
     runs-on: ubuntu-latest
     env:
       RUSTDOCFLAGS: -Dwarnings

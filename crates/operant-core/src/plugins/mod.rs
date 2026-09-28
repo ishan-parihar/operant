@@ -1,11 +1,11 @@
 //! Plugin command system — discovery, registration, and dispatch.
 //!
-//! Provides a thread-safe [`PluginRegistry`] for plugins to register custom
+//! Provides a thread-safe `PluginRegistry` for plugins to register custom
 //! Telegram gateway commands alongside the built-in `/` prefixed commands.
 //!
 //! # Architecture
 //!
-//! A global [`PluginRegistry`] holds all registered plugin commands, backed
+//! A global `PluginRegistry` holds all registered plugin commands, backed
 //! by [`std::sync::RwLock`] for concurrent read access from the gateway's
 //! command dispatch path.  Commands are function pointers
 //! (`fn(&str) -> String`) — no async, no trait objects.

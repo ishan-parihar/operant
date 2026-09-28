@@ -1,6 +1,6 @@
 //! agentmemory provider — hybrid semantic memory via the agentmemory server.
 //!
-//! agentmemory (https://github.com/rohitg00/agentmemory) is a local memory
+//! agentmemory (<https://github.com/rohitg00/agentmemory>) is a local memory
 //! server for AI coding agents built on the iii engine. It exposes a REST API
 //! on port 3111 and an MCP server with 53 tools (BM25 + local-embedding hybrid
 //! retrieval, 4-tier consolidation, decay, knowledge graph).

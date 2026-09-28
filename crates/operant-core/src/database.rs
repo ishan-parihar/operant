@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(ex
 ";
 
 /// Database manager for persistent storage.
-/// Thread-safe via Arc<Mutex<Connection>> pattern.
+/// Thread-safe via `Arc<Mutex<Connection>>` pattern.
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Mutex<Connection>>,

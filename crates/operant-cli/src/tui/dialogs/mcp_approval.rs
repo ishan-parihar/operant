@@ -152,9 +152,9 @@ impl Default for McpApprovalDialogState {
 /// │    • tool_two                                     │
 /// │    • tool_three                                   │
 /// │                                                   │
-/// │  ▶ [1] Allow this session                         │
-/// │    [2] Always allow                               │
-/// │    [3] Deny                                       │
+/// │  ▶ `1` Allow this session                         │
+/// │    `2` Always allow                               │
+/// │    `3` Deny                                       │
 /// └───────────────────────────────────────────────────┘
 pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, buf: &mut Buffer) {
     if !state.visible {

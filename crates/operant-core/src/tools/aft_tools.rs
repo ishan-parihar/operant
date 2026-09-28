@@ -3,7 +3,7 @@
 //! Each tool calls `AftBridge::call(command, params)` under the hood,
 //! translating the agent's tool-call args into aft's NDJSON protocol
 //! (v0.49.x: params FLAT at top level, except `bash` which is nested and
-//! async — see [`AftBridge::bash`]) and aft's flat response back into a
+//! async — see `AftBridge::bash`) and aft's flat response back into a
 //! `ToolResult`.
 //!
 //! Tools are registered via `register_aft_tools()`, which takes an

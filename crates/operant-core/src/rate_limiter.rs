@@ -131,7 +131,7 @@ impl TokenBucket {
 
     /// Minimum wall-clock duration until the next token becomes available.
     ///
-    /// Returns [`Duration::ZERO`] when tokens are already available.
+    /// Returns [`Duration::ZERO`](std::time::Duration::ZERO) when tokens are already available.
     pub fn time_until_next_token(&self) -> std::time::Duration {
         if self.remaining > 0 {
             return std::time::Duration::ZERO;

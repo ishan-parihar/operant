@@ -632,7 +632,7 @@ pub(crate) async fn step_provider_and_model(config: &mut AppConfig, full: bool) 
     Ok(())
 }
 
-/// Handle API key entry with [K]eep/[R]eplace/[C]lear for an existing key.
+/// Handle API key entry with `K`eep / `R`eplace / `C`lear for an existing key.
 fn step_api_key(config: &mut AppConfig, provider_key: &str, provider_name: &str) -> Result<()> {
     let provider_info = provider_by_name(provider_key);
 

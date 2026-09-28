@@ -24,7 +24,7 @@ use std::time::Instant;
 const INDEX_HTML: &str = include_str!("dashboard/index.html");
 
 /// Embedded static assets (JS, CSS, fonts, images).
-/// These are served at /assets/<filename> so the index.html script/link tags resolve.
+/// These are served at `/assets/<filename>` so the index.html script/link tags resolve.
 static ASSETS: &[(&str, &[u8], &str)] = &[
     (
         "index-BB4BRelo.js",

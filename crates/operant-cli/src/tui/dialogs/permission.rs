@@ -443,14 +443,14 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
 ///   │  This will execute a shell command.             │
 ///   │  This may modify system-wide security policy.   │
 ///   │                                                │
-///   │  [1] Yes, allow once                           │
-///   │  [2] Yes, allow this session                   │
-///   │▶ [3] Yes, always allow (persistent)            │
-///   │  [4] No, deny                                  │
+///   │  `1` Yes, allow once                           │
+///   │  `2` Yes, allow this session                   │
+///   │▶ `3` Yes, always allow (persistent)            │
+///   │  `4` No, deny                                  │
 ///   └────────────────────────────────────────────────┘
 ///
 /// For `Bash` with a `suggested_prefix`, a 5th option is shown:
-///   │  [5] Allow commands matching git*              │
+///   │  `5` Allow commands matching git*              │
 ///
 /// For `FileRead`, only 3 options (once / session / deny).
 /// For `FileWrite`, 4 options (once / session / project / deny).

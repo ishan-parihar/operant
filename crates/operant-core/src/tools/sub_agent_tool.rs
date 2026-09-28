@@ -10,7 +10,7 @@
 //!   (`agent/stream.rs::execute_tools`);
 //! * background — dispatched to a spawned task, polled by id.
 //!
-//! Recursive spawning is closed by [`SpawnPermit`], which reserves capacity in
+//! Recursive spawning is closed by `SpawnPermit`, which reserves capacity in
 //! the **process-wide** live-worker count BEFORE a worker is built. Depth and
 //! breadth are both refused up front; a checked-after-spawning guard is not a
 //! guard. Because a worker is one model stream and one slice of the parent's

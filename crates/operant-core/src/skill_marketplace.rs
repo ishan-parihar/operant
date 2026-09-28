@@ -80,7 +80,7 @@ pub struct SkillRegistryEntry {
     /// Direct download URL for the SKILL.md file
     pub download_url: String,
     /// Optional SHA-256 checksum of the SKILL.md content
-    /// (format: "sha256:<hex>"). If present, the download is verified.
+    /// (format: `"sha256:<hex>"`). If present, the download is verified.
     #[serde(default)]
     pub checksum: Option<String>,
 }

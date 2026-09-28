@@ -159,7 +159,7 @@ impl OAuthRefresher {
     /// Refresh OAuth tokens for a credential entry.
     ///
     /// Concurrent refreshes of the **same account** are coalesced into a
-    /// single provider round trip — see [`refresh_coalesced`]. A rotating
+    /// single provider round trip — see [`Self::refresh_coalesced`]. A rotating
     /// (single-use) refresh token may only be spent once, so N concurrent
     /// callers each spending it would kill the account; this is the guard.
     pub async fn refresh(
