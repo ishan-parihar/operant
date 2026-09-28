@@ -96,7 +96,10 @@ pub(crate) fn render_tool_use_inner(
             return {
                 let mut task_lines = Vec::new();
                 task_lines.push(Line::from(vec![
-                    Span::styled("  ~ ".to_string(), Style::default().fg(ACCENT_PRIMARY)),
+                    Span::styled(
+                        "  ~ ".to_string(),
+                        Style::default().fg(theme_colors::accent()),
+                    ),
                     Span::styled(
                         subagent_title(input),
                         Style::default()
@@ -117,7 +120,10 @@ pub(crate) fn render_tool_use_inner(
     };
 
     lines.push(Line::from(vec![
-        Span::styled("  ~ ".to_string(), Style::default().fg(ACCENT_PRIMARY)),
+        Span::styled(
+            "  ~ ".to_string(),
+            Style::default().fg(theme_colors::accent()),
+        ),
         Span::styled(
             title.to_string(),
             Style::default()

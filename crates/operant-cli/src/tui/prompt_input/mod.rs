@@ -33,9 +33,15 @@ pub use typeahead::{
 };
 pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_key};
 
+// Only `tests.rs` needs this in scope (it resolves `Color` through
+// `use super::*`); production code reads its colours from `theme_colors`.
+#[cfg(test)]
 use ratatui::style::Color;
 
-const ACCENT_PRIMARY: Color = Color::Rgb(255, 191, 0);
+// `Color` stays imported: `tests.rs` picks it up through `use super::*`.
+// The accent is read through `theme_colors::accent()` at its use site in
+// `render.rs` — the accessors are runtime `fn`s, so a `const` would pin every
+// theme to the default theme's amber.
 const PROMPT_POINTER: &str = "❯";
 
 pub fn handle_paste(content: &str, paste_counter: &mut u32) -> (String, Option<String>) {

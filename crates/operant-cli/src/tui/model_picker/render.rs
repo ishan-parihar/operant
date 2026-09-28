@@ -16,10 +16,9 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
 
     use ratatui::prelude::Stylize;
 
-    let _pink = Color::Rgb(255, 191, 0);
     let dim = Color::Rgb(90, 90, 90);
     let dialog_bg = theme_colors::panel_bg();
-    let highlight_bg = Color::Rgb(255, 191, 0);
+    let highlight_bg = theme_colors::selection_bg();
     let highlight_fg = theme_colors::text();
 
     // ── Dark overlay ──

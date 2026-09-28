@@ -127,8 +127,8 @@ pub fn render_prompt_input(
     }
 
     let accent = match mode {
-        InputMode::Readonly => ACCENT_PRIMARY, // locked while streaming — always pink
-        _ => accent_override,                  // use mode-aware accent color
+        InputMode::Readonly => theme_colors::accent(), // locked while streaming — theme accent
+        _ => accent_override,                          // use mode-aware accent color
     };
     let prompt_prefix = format!("{PROMPT_POINTER} ");
     let prefix_width = UnicodeWidthStr::width(prompt_prefix.as_str()) as u16;

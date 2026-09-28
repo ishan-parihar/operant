@@ -208,7 +208,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
         return;
     }
 
-    let pink = Color::Rgb(255, 191, 0);
+    let accent = theme_colors::accent();
     let dim = Color::Rgb(90, 90, 90);
     let muted = Color::Rgb(180, 180, 180);
     let tip = Color::Rgb(120, 210, 150);
@@ -255,7 +255,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
     lines.push(Line::from(vec![
         Span::styled(
             format!(" {}", title_text),
-            Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>width$}", "esc ", width = title_pad),
@@ -314,7 +314,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
 
         let label_padded = format!("{:<width$}", field.upstream.title, width = row_label_width);
         lines.push(Line::from(vec![
-            Span::styled(format!(" {} ", marker), Style::default().fg(pink)),
+            Span::styled(format!(" {} ", marker), Style::default().fg(accent)),
             Span::styled(label_padded, label_style),
             Span::styled("   ", Style::default()),
             Span::styled(field.upstream.key_url.to_string(), url_style),
@@ -334,7 +334,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
         lines.push(Line::from(vec![
             Span::styled("     ", Style::default()),
             Span::styled(masked, input_style),
-            Span::styled(cursor.to_string(), Style::default().fg(pink)),
+            Span::styled(cursor.to_string(), Style::default().fg(accent)),
         ]));
     }
 

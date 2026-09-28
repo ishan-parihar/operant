@@ -172,7 +172,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
         return;
     }
 
-    let pink = Color::Rgb(255, 191, 0);
+    let accent = theme_colors::accent();
     let dim = Color::Rgb(90, 90, 90);
     let dialog_bg = theme_colors::panel_bg();
     let green = Color::Rgb(80, 200, 120);
@@ -212,7 +212,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
     lines.push(Line::from(vec![
         Span::styled(
             format!(" {}", title_text),
-            Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>width$}", "esc ", width = title_pad),
@@ -252,7 +252,9 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
                 Span::styled(" at ", Style::default().fg(dim)),
                 Span::styled(
                     state.verification_uri.clone(),
-                    Style::default().fg(pink).add_modifier(Modifier::UNDERLINED),
+                    Style::default()
+                        .fg(accent)
+                        .add_modifier(Modifier::UNDERLINED),
                 ),
             ]));
             lines.push(Line::from(""));
@@ -280,7 +282,9 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
                     let s = String::from_utf8_lossy(chunk).into_owned();
                     lines.push(Line::from(Span::styled(
                         format!(" {}", s),
-                        Style::default().fg(pink).add_modifier(Modifier::UNDERLINED),
+                        Style::default()
+                            .fg(accent)
+                            .add_modifier(Modifier::UNDERLINED),
                     )));
                 }
                 lines.push(Line::from(""));

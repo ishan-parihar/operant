@@ -196,9 +196,9 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
 
     let dim = Color::Rgb(90, 90, 90);
     let dialog_bg = theme_colors::panel_bg();
-    let highlight_bg = Color::Rgb(255, 191, 0); // pink highlight bar
+    let highlight_bg = theme_colors::selection_bg(); // selected-row bar
     let highlight_fg = Color::White;
-    let category_fg = Color::Rgb(255, 191, 0); // pink category names
+    let category_fg = theme_colors::accent(); // category headers
 
     // ── Darken the entire background ──
     render_dark_overlay(frame, area);

@@ -57,7 +57,7 @@ pub(crate) fn apply_block_style(mut line: Line<'static>, width: u16) -> Line<'st
     }
 
     let mut spans = vec![
-        Span::styled("▏", Style::default().fg(ACCENT_PRIMARY).bg(bg)),
+        Span::styled("▏", Style::default().fg(theme_colors::accent()).bg(bg)),
         Span::styled(" ", Style::default().bg(bg)),
     ];
     spans.extend(line.spans);
@@ -77,7 +77,7 @@ pub(crate) fn empty_block_line(width: u16) -> Line<'static> {
     apply_block_style(Line::from(""), width)
 }
 pub(crate) fn render_attachment_chip(kind: &str, label: String) -> Line<'static> {
-    render_attachment_chip_colored(kind, label, ACCENT_PRIMARY, Color::Black)
+    render_attachment_chip_colored(kind, label, theme_colors::accent(), Color::Black)
 }
 
 pub(crate) fn render_file_chip(label: String) -> Line<'static> {

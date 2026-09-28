@@ -247,7 +247,7 @@ pub fn render_task_assignment(id: &str, subject: &str, desc: &str) -> Vec<Line<'
         subject.trim()
     };
     lines.push(Line::from(vec![
-        Span::styled("  ~ ", Style::default().fg(ACCENT_PRIMARY)),
+        Span::styled("  ~ ", Style::default().fg(theme_colors::accent())),
         Span::styled(
             title.to_string(),
             Style::default()

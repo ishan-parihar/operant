@@ -13,17 +13,18 @@
 //!
 //! Used by `render::render_banner_block` (above the welcome panel).
 
+use crate::tui::theme_colors;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-/// The accent color used for the banner wordmark — matches `rustle::accent_style`
-/// so the logo and the mascot read as one design system.
-pub const BANNER_ACCENT: Color = Color::Rgb(255, 191, 0);
 const BANNER_DIM: Color = Color::Rgb(140, 110, 0);
 
+/// The banner wordmark reads the active theme's accent — the same accessor
+/// `rustle::accent_style` uses, so the logo and the mascot stay one design
+/// system under every theme rather than freezing on the default theme's amber.
 fn accent() -> Style {
     Style::default()
-        .fg(BANNER_ACCENT)
+        .fg(theme_colors::accent())
         .add_modifier(Modifier::BOLD)
 }
 
@@ -198,5 +199,173 @@ mod tests {
     fn banner_lines_narrow_returns_one_line_fallback() {
         let lines = banner_lines(30);
         assert_eq!(lines.len(), 1, "<40 cols falls back to single styled line");
+    }
+
+    // ── Theme-driven accent ────────────────────────────────────────────────
+    //
+    // `BANNER_ACCENT` used to be a `const` pinned to the default theme's
+    // amber, and `ACCENT_PRIMARY` was a second, duplicate `const` in
+    // `messages/mod.rs` and a third in `prompt_input/mod.rs`. The
+    // `theme_colors` accessors are runtime `fn`s (the active palette lives
+    // behind a lock), so none of the three could be a `const` and all three
+    // had to be deleted. The wordmark now reads the active palette.
+
+    /// Run `f` with `theme` active, then restore the default palette. Shares
+    /// the palette lock the other theme-mutating tests serialize on. The
+    /// palette is process-global, so both the render call and the expected
+    /// colour must be read *inside* the closure.
+    fn with_theme<T>(theme: &str, f: impl FnOnce() -> T) -> T {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::tui::theme_colors::set_active_theme(theme);
+        let out = f();
+        crate::tui::theme_colors::set_active_theme("default");
+        out
+    }
+
+    /// Foreground of the first span of the first banner line.
+    fn first_wordmark_fg(width: u16) -> Color {
+        banner_lines(width)
+            .into_iter()
+            .next()
+            .and_then(|line| {
+                line.spans
+                    .first()
+                    .map(|s| s.style.fg.unwrap_or(Color::Reset))
+            })
+            .unwrap_or(Color::Reset)
+    }
+
+    /// The wordmark foreground must come from the palette, so switching theme
+    /// repaints it. Before the fix it was the default theme's amber under every
+    /// theme.
+    #[test]
+    fn banner_wordmark_follows_the_active_theme_accent() {
+        let (nord_fg, nord_accent) =
+            with_theme("nord", || (first_wordmark_fg(100), theme_colors::accent()));
+        assert_eq!(
+            nord_fg, nord_accent,
+            "wordmark must render the active palette accent"
+        );
+
+        let (monokai_fg, monokai_accent) = with_theme("monokai", || {
+            (first_wordmark_fg(100), theme_colors::accent())
+        });
+        assert_eq!(monokai_fg, monokai_accent);
+        assert_ne!(
+            nord_fg, monokai_fg,
+            "switching theme must repaint the wordmark, not leave default amber"
+        );
+
+        // The narrow (<40 col) fallback path styles the same way.
+        let (narrow_fg, narrow_accent) =
+            with_theme("nord", || (first_wordmark_fg(30), theme_colors::accent()));
+        assert_eq!(
+            narrow_fg, narrow_accent,
+            "narrow fallback must use the accent too"
+        );
+    }
+
+    // ── The durable gate: no hardcoded default-theme amber anywhere else ───
+    //
+    // The 13 sites this replaced were all *individually* reasonable-looking
+    // `Color::Rgb(255, 191, 0)` literals; nothing flagged them, so they came
+    // back. This walks the whole crate so the next one fails the build.
+
+    /// The palette that defines the colour, plus `app/enums.rs::ACCENT_BUILD`
+    /// — a tracked hardcode owned by a separate change. Remove that second
+    /// entry when `ACCENT_BUILD` is migrated to `theme_colors::accent()`.
+    const AMBER_EXEMPT: [&str; 2] = ["src/tui/theme_colors.rs", "src/tui/app/enums.rs"];
+
+    /// Assembled at runtime so this file — which lives inside the tree being
+    /// walked — never holds a needle in live code and trips its own gate. The
+    /// gate strips `//` comments, so the prose above can still name what was
+    /// removed.
+    fn needles() -> Vec<String> {
+        vec![
+            format!("Color::Rgb({}, {}, {})", 255, 191, 0),
+            format!("ACCENT_{}", "PRIMARY"),
+            format!("BANNER_{}", "ACCENT"),
+        ]
+    }
+
+    /// Recursively collect `needle` hits as `(path relative to the crate, line)`.
+    /// Trailing `//` comments are stripped: a literal in a comment cannot
+    /// paint anything, and prose about the old hardcodes is worth keeping.
+    fn grep_tree(root: &std::path::Path, needle: &str) -> Vec<(String, usize)> {
+        let mut hits = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(root.parent().unwrap_or(root))
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                if AMBER_EXEMPT.iter().any(|e| rel == *e) {
+                    continue;
+                }
+                let Ok(src) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for (i, line) in src.lines().enumerate() {
+                    if line
+                        .split("//")
+                        .next()
+                        .is_some_and(|code| code.contains(needle))
+                    {
+                        hits.push((rel.clone(), i + 1));
+                    }
+                }
+            }
+        }
+        hits.sort();
+        hits
+    }
+
+    fn crate_src() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+    }
+
+    /// No renderer may hardcode the default theme's accent amber, and the
+    /// duplicate accent `const`s must stay deleted. Both `ACCENT_PRIMARY`
+    /// definitions plus `BANNER_ACCENT` were `const`s, so the palette is now
+    /// the only source; a surviving one would reintroduce the same theme bug
+    /// under a different name.
+    ///
+    /// Fix a hit by calling the `theme_colors` accessor that matches what the
+    /// colour does — `accent()` for an accent foreground, `selection_bg()` for
+    /// a selected-row background. Do not freeze a palette value into a `const`:
+    /// the accessors are runtime `fn`s (the palette lives behind a lock), so a
+    /// `const` pins every theme to default amber.
+    #[test]
+    fn tui_sources_must_not_hardcode_the_default_theme_amber() {
+        let mut failures = Vec::new();
+        for needle in needles() {
+            let hits = grep_tree(&crate_src(), &needle);
+            if !hits.is_empty() {
+                failures.push(format!("`{needle}`: {hits:?}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "default-theme amber leaked into live TUI code again:\n  {}\n\
+             Call the `theme_colors` accessor that matches what the colour does \
+             (`accent()` for an accent foreground, `selection_bg()` for a \
+             selected-row background) — never a `const`.",
+            failures.join("\n  ")
+        );
     }
 }

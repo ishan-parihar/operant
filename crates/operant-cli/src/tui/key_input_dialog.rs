@@ -92,7 +92,7 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
         return;
     }
 
-    let pink = Color::Rgb(255, 191, 0);
+    let accent = theme_colors::accent();
     let dim = Color::Rgb(90, 90, 90);
     let dialog_bg = theme_colors::panel_bg();
 
@@ -123,7 +123,7 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
     lines.push(Line::from(vec![
         Span::styled(
             format!(" {}", title_text),
-            Style::default().fg(pink).add_modifier(Modifier::BOLD),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>width$}", "esc ", width = title_pad),
@@ -160,7 +160,7 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
 
     lines.push(Line::from(vec![
         Span::styled(format!(" {}", masked), input_style),
-        Span::styled("_", Style::default().fg(pink)), // cursor
+        Span::styled("_", Style::default().fg(accent)), // cursor
     ]));
 
     // Blank line
