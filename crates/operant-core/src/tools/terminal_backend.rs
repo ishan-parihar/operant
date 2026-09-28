@@ -728,11 +728,26 @@ mod tests {
         // the safe var proves the scrub is a filter and not a blanket wipe.
         // SAFETY: single-threaded setup before the spawn; no other thread
         // reads the environment during this window.
+        // `let _ =` is deliberate — it discards set_var's unit return rather
+        // than binding it — so the lint is silenced at the lint, not by
+        // dropping the marker that documents the intent.
         #[expect(unsafe_code, reason = "test fixture needs a parent-side secret")]
+        #[expect(
+            clippy::let_unit_value,
+            reason = "let _ = marks a discarded unit return"
+        )]
         let _ = unsafe { std::env::set_var("OPERANT_TEST_API_KEY", "super-secret-value") };
         #[expect(unsafe_code, reason = "test fixture needs a parent-side safe var")]
+        #[expect(
+            clippy::let_unit_value,
+            reason = "let _ = marks a discarded unit return"
+        )]
         let _ = unsafe { std::env::set_var("OPERANT_TEST_SAFE_VAR", "visible-value") };
         #[expect(unsafe_code, reason = "test fixture pins that SSH_AUTH_SOCK survives")]
+        #[expect(
+            clippy::let_unit_value,
+            reason = "let _ = marks a discarded unit return"
+        )]
         let _ = unsafe { std::env::set_var("SSH_AUTH_SOCK", "/tmp/fake-agent.sock") };
 
         let backend = LocalBackend;
@@ -766,10 +781,22 @@ mod tests {
         );
 
         #[expect(unsafe_code, reason = "restores the parent environment")]
+        #[expect(
+            clippy::let_unit_value,
+            reason = "let _ = marks a discarded unit return"
+        )]
         let _ = unsafe { std::env::remove_var("OPERANT_TEST_API_KEY") };
         #[expect(unsafe_code, reason = "restores the parent environment")]
+        #[expect(
+            clippy::let_unit_value,
+            reason = "let _ = marks a discarded unit return"
+        )]
         let _ = unsafe { std::env::remove_var("OPERANT_TEST_SAFE_VAR") };
         #[expect(unsafe_code, reason = "restores the parent environment")]
+        #[expect(
+            clippy::let_unit_value,
+            reason = "let _ = marks a discarded unit return"
+        )]
         let _ = unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
     }
 
