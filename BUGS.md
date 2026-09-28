@@ -1123,11 +1123,25 @@ error[E0609]: no field `max_tool_result_share` on type `&BehaviorSettings`
   config surface must also reach `operant-config`'s schema, or the knob will
   be unreadable/settable-from-nothing — the same two-file thread that
   `agentmemory_version` needed (iter-347). Verify, do not assume.
+- **Both independent pre-merge mechanisms would have caught it**: the clean
+  clippy gate on HEAD reports `seen=2 / new=1 / stale=7` — the `new` entry is
+  `operant_core|E0609|crates/operant-core/src/agent/mod.rs`, the identical
+  error. So the repo's ONLY pre-merge rule already fails on this commit, and
+  the reason nobody noticed is the same reason the fmt debt went unnoticed:
+  CI is tag-triggered only (R40-7). The gap is not a missing check, it is a
+  check that never runs on a normal push.
+
 - **Not fixed here on purpose**: the one-line fix lives in a file the
   concurrent agent is actively editing, and the field they wrote is theirs to
   land with their surrounding work (default value + schema + example config
   are all part of the same change). Committing a partial version would be the
   R40-10 mistake in reverse.
+- **A config test would NOT have caught it**: `BehaviorSettings` is
+  `#[serde(default, deny_unknown_fields)]` with a hand-written `Default`
+  (`config.rs:191-193`), so a round-trip test passes as long as the struct is
+  self-consistent — the failure was a *reader* reading a field the struct
+  never had, which only `cargo check` can see. Do not add a test expecting
+  to cover this class.
 
 ### R40-7 — CI predicate aligned to the local gate; the main-branch trigger is still fmt-blocked (PARTIAL, iter-369)
 All four workflows fire only on `push: tags: ['v*']` (+ dispatch) — no
