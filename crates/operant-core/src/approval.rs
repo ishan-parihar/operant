@@ -693,12 +693,27 @@ pub fn check_tool_approval(
 /// Extract a command string from tool arguments.
 ///
 /// Different tools use different argument keys for their commands:
-/// - `terminal` / `code_execution` → `"command"`
+/// - `terminal` / `process` → `"command"`
+/// - `code_execution` / `kernel_exec` → `"code"`
 /// - `file_write` → `"path"` + `"content"` joined
+/// - `patch` → `"path"` + `"find"`/`"replace"` joined
 /// - Other tools → just the tool name
 fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
     match tool_name {
-        "terminal" | "code_execution" | "process" => args
+        // `code_execution`'s arg is `code`, NOT `command` — see
+        // `CodeExecutionArgs` (tools/code_execution.rs:42-46, camelCase).
+        // Reading `command` here fell through to `.unwrap_or(tool_name)`, so
+        // the hardline blocklist and dangerous-pattern layer were handed the
+        // literal string "code_execution" and matched nothing, leaving this
+        // tool ungated. It is also documented as running UNSANDBOXED on the
+        // host (BUGS.md R12-1), so the approval gate is its main mitigation
+        // (BUGS.md R40-14). `kernel_exec` below was already correct.
+        "code_execution" => args
+            .get("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tool_name)
+            .to_string(),
+        "terminal" | "process" => args
             .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or(tool_name)
@@ -710,7 +725,21 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or(tool_name)
             .to_string(),
-        "file_write" | "patch" => {
+        // `patch` is `path`/`find`/`replace` (tools/patch_tool.rs:20-27) —
+        // there is no `content` key, so sharing the `file_write` arm left it
+        // extracting "file_write: <path> content: " with an empty payload
+        // and the text it actually writes was never gated.
+        // `patch` is `path`/`find`/`replace` (tools/patch_tool.rs:20-27) —
+        // there is no `content` key, so sharing the `file_write` arm left it
+        // extracting "file_write: <path> content: " with an empty payload
+        // and the text it actually writes was never gated.
+        "patch" => {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let find = args.get("find").and_then(|v| v.as_str()).unwrap_or("");
+            let replace = args.get("replace").and_then(|v| v.as_str()).unwrap_or("");
+            format!("file_write: {path} find: {find} replace: {replace}")
+        }
+        "file_write" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
             if content.len() > 100 {
@@ -1282,5 +1311,95 @@ mod tests {
             Some("off"),
         );
         assert_eq!(result.verdict, "allowed");
+    }
+
+    /// R40-14: `code_execution` was never actually gated. Its argument is
+    /// `code`, but the extractor read `command`, so the payload fell through
+    /// to the literal tool name and matched nothing in the hardline
+    /// blocklist. Since `code_execution` runs unsandboxed on the host
+    /// (BUGS.md R12-1), this was the last real mitigation.
+    ///
+    /// Uses the DEFAULT ("smart") mode deliberately: `manual` returns
+    /// "requires_approval" for every tool regardless of the payload, which
+    /// would make an end-to-end assertion pass even with the bug present.
+    /// In smart mode the verdict depends entirely on whether the extracted
+    /// string reaches the blocklist, so this discriminates.
+    #[test]
+    fn code_execution_is_gated_by_the_hardline_blocklist() {
+        let blocked = check_tool_approval(
+            "code_execution",
+            &serde_json::json!({
+                // Must hit HARDLINE_BLOCKLIST by name: the literal pattern is
+                // "rm -rf /*" and the regex alternative requires the WHOLE
+                // string to be `rm -rf /`, so wrapping it in os.system(...) or
+                // dropping the trailing `*` would fall through to the weaker
+                // pattern layer instead of proving the hardline path.
+                "code": "rm -rf /*",
+                "language": "shell"
+            }),
+            None,
+        );
+        assert_eq!(
+            blocked.verdict, "blocked",
+            "hardline-blocked code_execution payload was not blocked (blocked_by={:?}, reason={:?})",
+            blocked.blocked_by, blocked.reason
+        );
+        assert_eq!(blocked.blocked_by.as_deref(), Some("hardline"));
+    }
+
+    /// The control: the same tool with a benign payload is allowed, so the
+    /// test above is observing the blocklist and not a blanket denial.
+    #[test]
+    fn benign_code_execution_is_still_allowed_in_smart_mode() {
+        let allowed = check_tool_approval(
+            "code_execution",
+            &serde_json::json!({"code": "print(1)", "language": "python"}),
+            None,
+        );
+        assert_eq!(allowed.verdict, "allowed");
+    }
+
+    /// The regression guard for the exact bug: a benign `code_execution` must
+    /// still be extracted (not silently replaced by the tool name), so the
+    /// blocklist is reached at all.
+    #[test]
+    fn code_execution_arg_key_is_code_not_command() {
+        let extracted = extract_command_from_args(
+            "code_execution",
+            &serde_json::json!({"code": "print(1)", "language": "python"}),
+        );
+        assert_eq!(extracted, "print(1)");
+    }
+
+    /// `terminal` shares the arm and must be unaffected by the split.
+    #[test]
+    fn terminal_still_extracts_its_command_arg() {
+        let extracted =
+            extract_command_from_args("terminal", &serde_json::json!({"command": "ls -la"}));
+        assert_eq!(extracted, "ls -la");
+    }
+
+    /// `patch` is `path`/`find`/`replace` with no `content` key. Sharing the
+    /// `file_write` arm extracted an empty payload, so the text it writes was
+    /// never gated (same class as R40-14, found while fixing it).
+    #[test]
+    fn patch_extracts_find_and_replace_not_content() {
+        let extracted = extract_command_from_args(
+            "patch",
+            &serde_json::json!({"path": "/etc/passwd", "find": "root", "replace": "x"}),
+        );
+        assert!(extracted.contains("find: root"), "got: {extracted}");
+        assert!(extracted.contains("replace: x"), "got: {extracted}");
+    }
+
+    /// `file_write` keeps its own arm and must still join path + content.
+    #[test]
+    fn file_write_still_extracts_path_and_content() {
+        let extracted = extract_command_from_args(
+            "file_write",
+            &serde_json::json!({"path": "/tmp/a", "content": "hello"}),
+        );
+        assert!(extracted.contains("/tmp/a"), "got: {extracted}");
+        assert!(extracted.contains("hello"), "got: {extracted}");
     }
 }
