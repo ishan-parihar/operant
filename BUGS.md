@@ -1642,7 +1642,18 @@ my doc edits would be the only thing staged. That destroyed the peer's
 uncommitted work in both files: a rustfmt reflow of `ProviderFactory`'s
 `dyn Fn(...)` signature, and a batch of `map_err`/`format!` reflows plus a
 `Composition::resolve` call-site change in discovery.rs.
-- **Recovered, not lost**: the pre-revert copies were preserved at
+- **CORRECTED (iter-396): nothing hand-written was lost.** I ran plain
+  `cargo fmt --all` on HEAD and diffed the result against the preserved
+  backups: the `dyn Fn(...)` reflow and every `map_err`/`format!` reflow in
+  both files are reproduced byte-for-byte by `cargo fmt`. That is R40-18's
+  fmt-sweep output sitting uncommitted in the shared tree, not the concurrent
+  agent's own editing — so the peer had nothing to recover, and re-running
+  `cargo fmt --all` regenerates it. The restore below was still correct (it
+  put the fmt output back), but describing it as recovering "their work"
+  overstated it. The disclosure stands for the method, not the damage: a
+  `git checkout` on a peer-dirty file is unsafe regardless of what the file
+  happens to contain.
+- **Recovered**: the pre-revert copies were preserved at
   `/tmp/comp_worktree_version.rs` and `/tmp/disc_worktree_version.rs`, and
   both were restored into the working tree. Their work is present and
   uncommitted, exactly as it was.
