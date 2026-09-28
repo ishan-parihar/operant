@@ -2,6 +2,13 @@
 
 terminal_backend = "local"
 
+# Config format version. `None` means legacy v0 (no version field); the app
+# writes 2. You do not normally need to set this by hand.
+# version = 2
+
+# SQLite database location. Defaults to `~/.operant/database.db`.
+# database_path = "~/.operant/database.db"
+
 # Tool-approval allowlist (hermes `command_allowlist` parity). Patterns match
 # tool names exactly or via `*`/`?` globs (e.g. "file_*"). A matching tool
 # skips the permission prompt in every session. "Always allow" choices made
@@ -478,3 +485,24 @@ provider = "igs"
 # [[providers.fallback_chain]]
 # provider = "gemini"
 # model = "gemini-2.5-flash"
+
+# [checkpoints]
+# Filesystem checkpoints. When enabled, the agent snapshots working directories
+# into an isolated shadow git store under `base_dir` before mutating
+# operations, so no git state leaks into your project repository.
+#
+# This is ON by default (the `checkpoint` tool is registered for every agent).
+# The values below are the built-in defaults.
+# enabled = true
+# base_dir = "~/.operant/checkpoints"
+# max_snapshots = 20
+
+# [pk]
+# Prime Kernel sidecar. Dark-merged: `enabled` defaults to false and the
+# sidecar is not spawned at all, so the `code_execution` tempfile path remains
+# the only Python surface until you opt in. Requires a working
+# `sidecar_script` and a built `vendor/prime-agent` submodule.
+# enabled = false
+# sidecar_script = "pk-sidecar/main.py"
+# ndjson_socket = "~/.operant/run/pk.sock"
+# exec_timeout_secs = 30
