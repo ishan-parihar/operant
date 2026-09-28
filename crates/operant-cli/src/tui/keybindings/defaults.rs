@@ -16,9 +16,17 @@ impl KeyBindingRegistry {
             // they cannot be bound anyway — `Ctrl+h` is ASCII 8 (backspace) and
             // `Ctrl+l` is readline's clear-screen, so the terminal layer takes
             // them first. Both are now in `OS_CONFLICTS` instead, which is how
-            // `/hotkeys` explains an unavailable chord. Note there is no other
-            // history-navigation binding: the capability does not exist yet,
-            // so nothing was lost by dropping the claim.
+            // `/hotkeys` explains an unavailable chord.
+            //
+            // CORRECTION (iter-412): the iter-409 commit body also claimed
+            // "there is no other history-navigation binding, so nothing was
+            // lost". That was wrong, and the reasoning was not checked before
+            // it was written. History navigation exists four times over in
+            // `BindingContext::Prompt` below — `Up`, `Down`, `Ctrl+p`, `Ctrl+n`
+            // — and is dispatched at `app/key_handling.rs:1602`/`:1634` into
+            // `prompt_input::history_up`/`history_down`. The Global entries
+            // were duplicate false claims, not the only claim. The conclusion
+            // (remove them) stands; the supporting claim did not.
             DefaultBinding {
                 key: KeyCode::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
