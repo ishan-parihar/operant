@@ -3127,6 +3127,37 @@ mod pending_permissions_tests {
         }
     }
 
+    /// Serialises the tests in this module that INSTALL a store.
+    ///
+    /// `PENDING_PERMISSIONS` is a process-global `OnceLock`, and Rust's test
+    /// harness runs tests in parallel threads within one process. Two tests
+    /// that each call `store_pending_permissions` therefore race: one can
+    /// overwrite the global between the other's store and its assert, and the
+    /// assert then reads the wrong store and fails.
+    ///
+    /// This was not theoretical. `store_overwrites_early_none_init_and_taps_see_
+    /// entries` failed exactly once across a long stretch of full-suite runs,
+    /// while passing 3/3 in isolation and on re-run both with and without an
+    /// unrelated change in flight — the signature of an order-dependent test.
+    /// A full green run therefore proves nothing about this module, which is
+    /// worse than a known failure: the next unrelated change that trips it will
+    /// be blamed on that change.
+    ///
+    /// Cleanup at the end of each test is NOT sufficient on its own, and the
+    /// original cleanup comment assumed it was: emptying the map leaves the
+    /// global still pointing at the previous test's `Arc`, so a concurrent
+    /// reader sees a valid store with the wrong contents. Only mutual
+    /// exclusion fixes that.
+    static PERMISSIONS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Acquire the module lock, recovering from poisoning rather than
+    /// panicking: a panic in one test must not cascade into unrelated ones.
+    fn permissions_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        PERMISSIONS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Regression: `init_pending_permissions()` seeds the static with `None`
     /// BEFORE the permission receiver builds its Arc. The old code then did
     /// `PENDING_PERMISSIONS.get_or_init(|| Mutex::new(Some(arc)))`, which is a
@@ -3137,6 +3168,7 @@ mod pending_permissions_tests {
     /// Option so the static reflects the live store.
     #[test]
     fn store_overwrites_early_none_init_and_taps_see_entries() {
+        let _serialised = permissions_test_guard();
         // Reproduce the production init order: seed the globals first.
         init_pending_permissions();
 
@@ -3168,11 +3200,18 @@ mod pending_permissions_tests {
         // A store that was never installed (or was seeded but never
         // overwritten by the receiver) must read as "no pending" rather
         // than panicking or looping.
+        //
+        // Deliberately does NOT take `PERMISSIONS_TEST_LOCK`: it installs
+        // nothing, and it queries a key ("whatever") that no sibling test ever
+        // stores, so a concurrent installer cannot change its answer. Taking
+        // the lock here would serialise the module for no gain and would
+        // obscure which tests actually mutate the global.
         assert!(!pending_permission_exists("whatever"));
     }
 
     #[test]
     fn response_tx_resolves_from_stored_request() {
+        let _serialised = permissions_test_guard();
         // End-to-end of the resolution contract: the request stored in the
         // shared map must deliver its ToolPermissionResponse when resolved.
         let (tx, mut rx) = tokio::sync::oneshot::channel();
