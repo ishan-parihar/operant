@@ -173,7 +173,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
     }
 
     let accent = theme_colors::accent();
-    let dim = Color::Rgb(90, 90, 90);
+    let dim = theme_colors::DIALOG_DIM;
     let dialog_bg = theme_colors::panel_bg();
     let green = Color::Rgb(80, 200, 120);
 
@@ -238,7 +238,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " Enter this code:",
-                Style::default().fg(Color::Rgb(180, 180, 180)),
+                Style::default().fg(theme_colors::DIALOG_MUTED),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -273,7 +273,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     " If browser didn't open, visit:",
-                    Style::default().fg(Color::Rgb(180, 180, 180)),
+                    Style::default().fg(theme_colors::DIALOG_MUTED),
                 )));
                 lines.push(Line::from(""));
                 // Wrap URL to dialog width

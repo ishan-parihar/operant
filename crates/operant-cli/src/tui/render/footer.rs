@@ -42,7 +42,7 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
         };
 
         let pink = app.accent_color;
-        let dim = Color::Rgb(110, 110, 124);
+        let dim = theme_colors::FOOTER_DIM;
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([

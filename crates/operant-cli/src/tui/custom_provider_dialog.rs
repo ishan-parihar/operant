@@ -6,7 +6,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -115,8 +115,8 @@ pub fn render_custom_provider_dialog(
     }
 
     let accent = theme_colors::accent();
-    let dim = Color::Rgb(90, 90, 90);
-    let muted = Color::Rgb(180, 180, 180);
+    let dim = theme_colors::DIALOG_DIM;
+    let muted = theme_colors::DIALOG_MUTED;
     let dialog_bg = theme_colors::panel_bg();
 
     render_dark_overlay(frame, area);

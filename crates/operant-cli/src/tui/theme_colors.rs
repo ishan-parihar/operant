@@ -377,6 +377,38 @@ pub fn disabled() -> Color {
     with_active(|p| p.disabled)
 }
 
+// ---------------------------------------------------------------------------
+// Fixed neutral greys — deliberately NOT palette roles
+// ---------------------------------------------------------------------------
+//
+// These three are the same colour repeated across the UI: six dialogs each
+// declared `let dim = Color::Rgb(90, 90, 90)`, two declared
+// `let muted = Color::Rgb(180, 180, 180)`, and the footer declared its own
+// `let dim = Color::Rgb(110, 110, 124)`.
+//
+// They are constants, not accessors, on purpose. Routing them through the
+// palette would CHANGE their appearance: this palette's `muted()` is
+// `Rgb(204, 155, 31)` — a dim amber — under the default theme, and
+// `disabled()` is `Rgb(189, 189, 189)` under the light theme, which is nearly
+// invisible on that theme's `Rgb(248, 248, 248)` background. These greys are
+// the neutral, theme-invariant tier the dialogs actually want. Making them
+// themed is a per-theme design decision, not a refactor, and it is deliberately
+// not made here.
+//
+// The two greys that both read as "dim" are kept apart on purpose: the footer's
+// is a different value, and a single `dim` name across seven files is a trap
+// for whoever eventually does that design work.
+
+/// The dimmest text tier used by the dialogs. Was `Rgb(90, 90, 90)`.
+pub const DIALOG_DIM: Color = Color::Rgb(90, 90, 90);
+
+/// The mid-strength text tier used by the dialogs. Was `Rgb(180, 180, 180)`.
+pub const DIALOG_MUTED: Color = Color::Rgb(180, 180, 180);
+
+/// The footer's own dim tier. Was `Rgb(110, 110, 124)`, and was named `dim`
+/// like the dialogs' `Rgb(90, 90, 90)` despite being a different colour.
+pub const FOOTER_DIM: Color = Color::Rgb(110, 110, 124);
+
 /// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`].
 pub fn on_selection() -> Color {
     with_active(|p| p.text_dark)

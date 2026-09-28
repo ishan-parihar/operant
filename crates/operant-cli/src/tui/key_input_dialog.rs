@@ -6,7 +6,7 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -93,7 +93,7 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
     }
 
     let accent = theme_colors::accent();
-    let dim = Color::Rgb(90, 90, 90);
+    let dim = theme_colors::DIALOG_DIM;
     let dialog_bg = theme_colors::panel_bg();
 
     // ── Darken the entire background ──
@@ -137,7 +137,7 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
     // "API Key:" label
     lines.push(Line::from(vec![Span::styled(
         " API Key:",
-        Style::default().fg(Color::Rgb(180, 180, 180)),
+        Style::default().fg(theme_colors::DIALOG_MUTED),
     )]));
 
     // Masked key display (show last 4 chars, mask the rest)

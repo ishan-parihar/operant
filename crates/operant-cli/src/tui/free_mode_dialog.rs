@@ -209,8 +209,8 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
     }
 
     let accent = theme_colors::accent();
-    let dim = Color::Rgb(90, 90, 90);
-    let muted = Color::Rgb(180, 180, 180);
+    let dim = theme_colors::DIALOG_DIM;
+    let muted = theme_colors::DIALOG_MUTED;
     let tip = Color::Rgb(120, 210, 150);
     let dialog_bg = theme_colors::panel_bg();
 

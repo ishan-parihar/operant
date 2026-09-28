@@ -194,7 +194,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         return;
     }
 
-    let dim = Color::Rgb(90, 90, 90);
+    let dim = theme_colors::DIALOG_DIM;
     let dialog_bg = theme_colors::panel_bg();
     let highlight_bg = theme_colors::selection_bg(); // selected-row bar
     let highlight_fg = Color::White;
