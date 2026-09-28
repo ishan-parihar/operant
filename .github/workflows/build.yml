@@ -92,11 +92,81 @@ jobs:
             cmake \
             pkg-config
 
+      - name: Provision ONNX Runtime
+        # operant-core depends on kokoro-tiny unconditionally, so ort-sys always
+        # links and a runner without the runtime fails at the link step
+        # ("linking with `cc` failed" -- measured). The apt list above installs
+        # no ONNX Runtime, so the Linux artifact was unbuildable without this.
+        # Linux only: the tarball below is the Linux x64 build, and the native
+        # job gates the release, so an unconditional download would break the
+        # macOS and Windows legs rather than just skipping them.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ONNX_VERSION="1.20.1"
+          mkdir -p local
+          curl -fsSL -o /tmp/onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz"
+          tar -xzf /tmp/onnxruntime.tgz -C local
+          echo "ORT_LIB_LOCATION=$PWD/local/onnxruntime-linux-x64-${ONNX_VERSION}/lib" \
+            >> "$GITHUB_ENV"
+
       - name: Build
-        run: cargo build --workspace --release --target ${{ matrix.target }}
+        # RUSTFLAGS carries the rpath so the published binary knows where its
+        # shared library lives. scripts/dev-env.sh sets this, but CI never
+        # sources it, so without this line the artifacts depend on the caller's
+        # environment to find libonnxruntime -- the same defect iter-425 removed
+        # from ~/.local/bin/operant.
+        #
+        # $ORIGIN/lib/operant, not $ORIGIN/../lib/operant: the tarball places
+        # lib/ beside the binary, so the parent-relative form does not resolve.
+        # Measured both ways -- the ../ form leaves 1 unresolved library and an
+        # extracted copy exits 127; this form leaves 0.
+        run: |
+          RUSTFLAGS="-L native=$ORT_LIB_LOCATION -C link-arg=-Wl,-rpath,\$ORIGIN/lib/operant" \
+            cargo build --workspace --release --target ${{ matrix.target }}
 
       - name: Package (unix)
-        if: runner.os != 'Windows'
+        # Linux only. ONNX Runtime is provisioned only on the Linux leg (the
+        # tarball above is the Linux x64 build), and the loader check below is
+        # `ldd`, which cannot read a Mach-O at all. Both halves of this step are
+        # Linux-specific; running it on macOS would exit 1 on an unset
+        # ORT_LIB_LOCATION and turn a release fix into a release break.
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.bin }}"
+          # The rpath baked into the binary is $ORIGIN/lib/operant, so the
+          # shared library has to travel with it or every published artifact
+          # exits 127 with "cannot open shared object file". Ship both.
+          if [ -d "$ORT_LIB_LOCATION" ]; then
+            mkdir -p dist/lib/operant
+            cp -a "$ORT_LIB_LOCATION"/libonnxruntime.so* dist/lib/operant/
+          else
+            echo "::error::ORT_LIB_LOCATION unset; packaging a binary that cannot start" >&2
+            exit 1
+          fi
+          # Unpack exactly as a user would, then let the loader decide whether
+          # the artifact works. An artifact that was never executed is an
+          # assumption, and assuming is what produced the 127 in iter-425.
+          ( cd dist && tar -czf "artifact.tar.gz" "${{ matrix.bin }}" lib )
+          rm -rf /tmp/artifact-check && mkdir -p /tmp/artifact-check
+          tar -xzf dist/artifact.tar.gz -C /tmp/artifact-check
+          MISSING=$(ldd "/tmp/artifact-check/${{ matrix.bin }}" | grep -c 'not found' || true)
+          if [ "$MISSING" != "0" ]; then
+            echo "::error::artifact has $MISSING unresolved shared libraries" >&2
+            ldd "/tmp/artifact-check/${{ matrix.bin }}" >&2
+            exit 1
+          fi
+          mv dist/artifact.tar.gz "dist/${{ matrix.artifact }}.tar.gz"
+          rm -rf "dist/${{ matrix.bin }}" dist/lib /tmp/artifact-check
+
+      - name: Package (macOS)
+        # No ONNX provisioning and no ldd check here: the Linux-only step above
+        # does not run on this leg, and ldd cannot read Mach-O. Packaging is the
+        # pre-existing behaviour, unchanged.
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p dist
