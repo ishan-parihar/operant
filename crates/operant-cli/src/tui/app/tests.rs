@@ -2050,3 +2050,153 @@ fn copy_mode_should_toggle_with_ctrl_t() {
         "Ctrl+T did not toggle copy mode off"
     );
 }
+
+// ---- Behavioural keybinding drift (iter-420) ----
+//
+// `tui/keybindings/tests.rs::global_bindings_should_be_dispatched_in_key_handling`
+// is a SOURCE-level pin: it greps `key_handling.rs` for the key token. That
+// catches a deleted or renamed dispatch arm, and it says plainly that it cannot
+// see two things:
+//
+//   - that the right MODIFIER is required. A bare `x` press satisfies a
+//     catalogue entry for `Ctrl+X` just as well.
+//   - that the press lands in the right BRANCH.
+//
+// Both are answerable here, because `make_app`/`press_key` are three lines each
+// — the doc comment claimed App construction was "a large fixture", which is
+// stale. So this presses the chord and asserts the App state actually moved,
+// and then presses the SAME KEY WITHOUT ITS MODIFIER and asserts nothing moved.
+// The negative half is the part the source pin cannot do: it is what proves
+// `Ctrl+K` is not really just a bare `k` that happens to be caught by an
+// unrelated arm.
+//
+// Scope is the Global-context chords, matching the source pin, because Global
+// is where a false advertisement hurts most: the user presses a chord from
+// anywhere, nothing happens, and `/keys` said otherwise. The other eleven
+// `BindingContext`s dispatch in `prompt_input/vim.rs`, `typeahead.rs` and
+// `suggestions.rs`, and are not covered by either test.
+
+/// One Global chord plus how to observe that it fired.
+struct DriftedBinding {
+    key: KeyCode,
+    modifiers: KeyModifiers,
+    /// Plain-English chord, for the failure message.
+    chord: &'static str,
+    /// Whether the chord carries a modifier the bare key does not.
+    requires_modifier: bool,
+    fired: fn(&mut App) -> bool,
+}
+
+fn help_is_open(app: &mut App) -> bool {
+    app.show_help
+}
+
+fn usage_overlay_is_open(app: &mut App) -> bool {
+    app.usage_overlay.visible
+}
+
+fn command_palette_is_open(app: &mut App) -> bool {
+    app.command_palette.visible
+}
+
+fn copy_mode_is_on(app: &mut App) -> bool {
+    app.copy_mode_active()
+}
+
+fn drifted_bindings() -> Vec<DriftedBinding> {
+    vec![
+        DriftedBinding {
+            key: KeyCode::F(1),
+            modifiers: KeyModifiers::NONE,
+            chord: "F1",
+            requires_modifier: false,
+            fired: help_is_open,
+        },
+        DriftedBinding {
+            key: KeyCode::F(8),
+            modifiers: KeyModifiers::NONE,
+            chord: "F8",
+            requires_modifier: false,
+            fired: usage_overlay_is_open,
+        },
+        DriftedBinding {
+            key: KeyCode::Char('k'),
+            modifiers: KeyModifiers::CONTROL,
+            chord: "Ctrl+K",
+            requires_modifier: true,
+            fired: command_palette_is_open,
+        },
+        DriftedBinding {
+            key: KeyCode::Char('t'),
+            modifiers: KeyModifiers::CONTROL,
+            chord: "Ctrl+T",
+            requires_modifier: true,
+            fired: copy_mode_is_on,
+        },
+    ]
+}
+
+#[test]
+fn global_bindings_should_fire_their_action_behaviourally() {
+    let mut inert = Vec::new();
+    for b in drifted_bindings() {
+        let mut app = make_app();
+        assert!(
+            !(b.fired)(&mut app),
+            "{}: fixture starts already in the state the chord should reach, so the \
+             test cannot tell a working binding from a no-op",
+            b.chord
+        );
+        app.handle_key_event(press_key(b.key, b.modifiers));
+        if !(b.fired)(&mut app) {
+            inert.push(b.chord);
+        }
+    }
+    assert!(
+        inert.is_empty(),
+        "these Global chords are advertised by /keys but pressing them does not change \
+         any App state — the help screen claims a capability that does not exist:\n  {}",
+        inert.join("\n  ")
+    );
+}
+
+#[test]
+fn a_modified_binding_must_not_fire_on_the_bare_key() {
+    let mut leaked = Vec::new();
+    for b in drifted_bindings() {
+        if !b.requires_modifier {
+            continue;
+        }
+        // Same key, no modifier. If this still fires, the modifier in the
+        // catalogue is decorative and the source-level pin cannot see it,
+        // because it only greps for the key token.
+        let mut app = make_app();
+        app.handle_key_event(press_key(b.key, KeyModifiers::NONE));
+        if (b.fired)(&mut app) {
+            leaked.push(b.chord);
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "these bindings are registered WITH a modifier but also fire on the bare key, \
+         so the chord in /keys is not what actually gates the action — a bare press \
+         will trigger it by accident:\n  {}",
+        leaked.join("\n  ")
+    );
+}
+
+/// The two tests above pass if `make_app` returns an `App` whose key handling is
+/// dead, because every assertion would then be "nothing happened". This proves
+/// the harness can still observe a firing binding, so an inert result above
+/// means the binding is broken rather than the fixture.
+#[test]
+fn the_behavioural_harness_can_observe_a_binding_firing() {
+    let mut app = make_app();
+    assert!(!app.show_help, "precondition: help starts closed");
+    app.handle_key_event(press_key(KeyCode::F(1), KeyModifiers::NONE));
+    assert!(
+        app.show_help,
+        "F1 did not open help, so the drift tests above cannot be trusted: they would \
+         pass for every binding if no key ever reached the dispatch chain"
+    );
+}
