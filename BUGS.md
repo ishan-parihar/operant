@@ -1132,6 +1132,16 @@ in plaintext to `config.toml` on each `save()`. The doc comment on `api_key`
 claim-must-match-code defect, not just a gap. Compare the hardened reference
 implementation, `operant-config/src/secrets.rs:294-301`, which writes with
 `OpenOptionsExt::mode(0o600)` at creation.
+- **The fix is NOT one attribute (corrected iter-379)**: the derive macro
+  documents its supported types at `crates/operant-macros/src/lib.rs:43` —
+  "`#[secret]` on a `String` or `Option<String>` field". `api_keys` is a
+  `Vec<String>`, so annotating it would be silently ignored. The real work is
+  extending the macro's generated `secret_fields` / `set_secret` /
+  `encrypt_secrets` / `decrypt_secrets` (`operant-macros/src/lib.rs:847`)
+  to handle a collection, and only then annotating the field. Budget it as a
+  macro iteration, and the test must assert a pooled key round-trips
+  encrypt→save→load as ciphertext — a config round-trip test is NOT enough,
+  because `skip_serializing_if` means a leaked key can look correct.
 
 ### R40-16 — subprocesses inherit the full parent environment, including API keys (OPEN, MEDIUM)
 `crates/operant-core/src/tools/terminal_backend.rs:95-100` reads
@@ -1227,6 +1237,18 @@ error[E0609]: no field `max_tool_result_share` on type `&BehaviorSettings`
   Their uncommitted file remains the *intended* fix, not a working one.
   This is the SECOND time `origin/main` has been left uncompilable by an
   explicit-path commit (first: iter-359, R40-9) — same failure class.
+- **BOTH repair sites are peer-dirty (corrected iter-379)**: the plan had
+  proposed reverting the reader at `agent/mod.rs:170` to
+  `DEFAULT_MAX_TOOL_RESULT_SHARE` as a "HEAD-owned, unblocks today" fix.
+  Measured: `git status` shows BOTH `crates/operant-core/src/agent/mod.rs`
+  and `crates/operant-core/src/config.rs` are modified by the concurrent
+  agent (36 dirty files at last count). So neither the revert nor the field
+  declaration can be applied without editing a file the peer holds — the
+  R40-10 clobber class. **There is no clean one-line repair available until
+  the peer's working tree is committed or cleared.** Options: (a) wait, (b)
+  ask the peer to land `config.rs` (their field, with its example-toml line),
+  (c) if a repair becomes urgent, coordinate explicitly before touching either
+  file rather than racing it.
 - **Blast radius beyond compilation**: even once the field lands, the
   config surface must also reach `operant-config`'s schema, or the knob will
   be unreadable/settable-from-nothing — the same two-file thread that
