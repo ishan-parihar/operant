@@ -57,8 +57,14 @@ export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib:$ORT_DIR/lib}"
 # depend on the caller's environment — that is the whole difference between a
 # build and a deployment. (Static linking is not an option: ort-sys cannot link
 # the prebuilt ONNX Runtime that way.)
-if [ -z "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS:-}" ] && [ -d "$ORT_DIR/lib" ]; then
-  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-L native=$ORT_DIR/lib -C link-arg=-Wl,-rpath,$ORT_DIR/lib"
+#
+# RUNTIME_LIB_DIR, not ORT_DIR: the build tree may be a disposable worktree or a
+# checkout on a tmpfs, and an rpath into one makes every install die the moment
+# that directory goes away. The runtime copy is what install.sh provisions into
+# the user's library directory, which outlives any checkout.
+RUNTIME_LIB_DIR="${RUNTIME_LIB_DIR:-$HOME/.local/lib/operant}"
+if [ -d "$RUNTIME_LIB_DIR" ] && [ -d "$ORT_DIR/lib" ]; then
+  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-L native=$ORT_DIR/lib -C link-arg=-Wl,-rpath,$RUNTIME_LIB_DIR"
 fi
 
 # pip-installed cmake lands in a venv. Prepend it only if it is actually there —

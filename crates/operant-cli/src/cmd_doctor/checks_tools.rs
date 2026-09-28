@@ -351,7 +351,7 @@ pub fn run_tool_checks(
 pub fn run_platform_checks(
     config: &AppConfig,
     issues: &mut Vec<String>,
-    _manual_issues: &mut Vec<String>,
+    manual_issues: &mut Vec<String>,
 ) {
     // =====================================================================
     // C. Tool Availability
@@ -436,7 +436,12 @@ pub fn run_platform_checks(
     }
 
     if any_unavailable {
-        issues.push(
+        // Rendered as ⚠ above, so it is an advisory: a missing provider key is
+        // a setup task, not a broken install — the credential may come from an
+        // env var, a keyring, or a gateway, and the live turn is what actually
+        // proves whether a model can be reached. The genuine failures (no .env
+        // at all, unreadable config) still use check_fail and exit non-zero.
+        manual_issues.push(
             "Run 'operant setup' to configure missing API keys for full tool access".to_string(),
         );
     }
@@ -495,7 +500,9 @@ pub fn run_platform_checks(
             "Skills Hub directory not initialized",
             "(run: operant skills list)",
         );
-        issues.push("Initialize skills hub with 'operant skills list'".to_string());
+        // Advisory: rendered as ⚠, and an uninitialized hub costs the user a
+        // lazily-created directory, not a working install.
+        manual_issues.push("Initialize skills hub with 'operant skills list'".to_string());
     }
 
     // =====================================================================
@@ -526,7 +533,10 @@ pub fn run_platform_checks(
                 "No GITHUB_TOKEN",
                 "(60 req/hr rate limit — set in .env for better rates)",
             );
-            issues.push("Set GITHUB_TOKEN in .env for authenticated GitHub API access".to_string());
+            // Advisory, matching the ⚠ above: unauthenticated GitHub access
+            // works, it is just rate-limited. Not an install failure.
+            manual_issues
+                .push("Set GITHUB_TOKEN in .env for authenticated GitHub API access".to_string());
         }
     }
 
