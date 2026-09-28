@@ -1775,3 +1775,28 @@ unmeasurable until R40-21 is fixed.** Re-run
 `RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features
 --keep-going` in a worktree at HEAD **with `git submodule update --init
 --recursive`** once the tree compiles, and treat that as the baseline.
+
+### R40-22 — three remotes point at the same URL, so tracking refs go stale silently (process note, iter-404)
+`git remote -v` shows `origin`, `github` and `gitlab` — and all three resolve
+to the same `https://github.com/ishan-parihar/operant.git`. The two GitHub ones
+track `main` under different local ref names, and neither ref is refreshed by a
+push to the other.
+**The failure this caused, twice in one session**: `git push` reported
+"Everything up-to-date" while `git log origin/main` showed the commit as
+absent, and `git merge-base --is-ancestor <mine> origin/main` returned false
+for a commit the server actually had. Both looked like a peer force-push
+having discarded the work, and both were false alarms. A third alarming
+reading — `git show origin/main:BUGS.md` displaying pre-edit content — was the
+same stale ref, not a reverted file.
+- **Ground truth is the server, not a local ref**:
+  `git ls-remote <remote> refs/heads/main`. Use it after any push whose result
+  you actually need to confirm.
+- **Habit**: `git fetch --prune <remote> main` after pushing, before reading
+  `origin/main`. A push that reports success is not proof it landed; this is
+  the second time this session a nominally successful operation did not do what
+  it reported (the first was the clippy gate's "exit 0" while linting 1 of 8
+  warnings — R40-7, iter-370).
+- **No force-push ever occurred**, and none should: AGENTS.md forbids it, and
+  with two agents committing to `main` a force-push would discard peer work.
+  Every push this session was a fast-forward, verified with
+  `git merge-base --is-ancestor` before pushing and `git ls-remote` after.
