@@ -30,6 +30,73 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
   added in iter-357 was missing from its struct literal). Note that
   `cargo check --workspace` does NOT catch this — only `cargo test --workspace`
   builds example targets.
+- **`operant chat` never exited on a non-TTY stdin.** `read_line` reports a byte
+  count and `0` means EOF, but the loop discarded it, so EOF was indistinguishable
+  from a blank line and the `continue` spun forever — 33 MB of `You: ` in 20 s
+  with stdin on `/dev/null`. `operant run --query` handled the same condition
+  correctly, so the fallback existed and was simply not wired to `chat`/`tui`.
+- **`operant <cmd> | head` aborted with a core dump.** Rust's runtime sets
+  `SIGPIPE` to `SIG_IGN` before `main`, so the first write to a closed pipe
+  returns `EPIPE`, which `println!` treats as a broken invariant and panics on;
+  the release profile's `panic = "abort"` then turns that into SIGABRT plus a
+  core file. Restoring the default disposition makes a closed pipe behave like
+  every other Unix tool (exit 141, silent), matching `yes | head -1`.
+- **`embedded-web` embedded nothing, on any machine, ever.** The build script and
+  the `include_dir!` both pointed at `<repo-root>/web/dist`, a path that has never
+  existed in this layout; the Vite project writes to `crates/operant-cli/src/dashboard`.
+  Because the build script only sets its cfg when the dist exists, the `include_dir!`
+  was never even compiled, so the feature silently degraded to the filesystem
+  fallback while passing `--all-features`. A feature that reads as wired and
+  reaches nothing.
+- **`/terminal-setup` was a stub that hid the problem.** It printed "No manual
+  setup needed" while a real interoperability gap sat behind it: without
+  kitty-protocol parsing, most terminals cannot send a distinguishable Shift+Enter.
+  The command now reports the terminal's actual capabilities.
+- **vim `j` and `k` were advertised and dead.** `/keys` listed `VimMotionDown`/
+  `VimMotionUp` for the two most fundamental vertical motions; `vim_normal` had
+  no arm for either, the `apply_vim_command` referenced in a comment did not
+  exist, and every `motion_*` helper in the file was horizontal.
+- **Sixel was claimed from a multiplexer's `$TERM`.** Detection inferred
+  graphics capability from tmux's own terminfo rather than the outer terminal, so
+  it was wrong in both directions — the common `$TERM` never matched, and
+  `tmux-256color` claimed Sixel unconditionally. Pinned graphics re-emit every
+  frame, so a wrong claim turned a one-shot glitch into a permanently mangled
+  image.
+- **`operant doctor` always exited 0**, printing "Found 4 issue(s) to address" and
+  then reporting success, so `operant doctor && operant chat` walked straight
+  into the failure doctor had just described. A diagnostic that cannot fail is a
+  diagnostic nobody can gate on.
+- **The default theme's accent leaked past the palette in 14 places.** Banner,
+  prompt input, spinner, model-picker highlight and four dialogs hardcoded
+  `Rgb(255,191,0)` — the *default* theme's accent — so all 7 other themes showed
+  them amber.
+- **Four `/keys` entries named the right chord with the wrong action.** The chord
+  was dispatched, just not as advertised: Ctrl+A was catalogued "move to start" but
+  opened the model picker, Ctrl+B "word left" opened the session branch browser,
+  and Ctrl+P was wrong twice. A wrong-action key is worse than a dead one — a dead
+  key is visibly dead.
+- **Three advertised prompt bindings did nothing** (Ctrl+E, Ctrl+F, Ctrl+N).
+  `/keys` listed them, the dispatcher had no arms.
+- **A test double shipped in the production library.** `VirtualClock` was `pub`
+  with no `#[cfg(test)]`, dragging `Mutex::lock().expect()` in with it.
+- **The build scripts only worked on one machine.** `dev-env.sh` and
+  `provision-build-deps.sh` hardcoded `/home/z/my-project/local`, so on any other
+  host every export resolved to a nonexistent directory. Both now derive every
+  path from one `LOCAL_DIR` defaulting to the repo's own `local/` — which is where
+  `operant-core/build.rs` already searched. `install.sh` now preflights and names
+  the missing package instead of failing 200 lines into a linker error.
+- **A dangling symlink was committed.** `provision-build-deps.sh` created
+  `local/lib/libsonic.so` with an unconditional `ln -sf`, which succeeds even when
+  the target is absent; the resulting dead link was then committed, past
+  `.gitignore`. It was never load-bearing — the build resolves from the committed
+  `libsonic.a` alone.
+- **The first error a new user saw named no remedy.** `operant run --query` on a
+  fresh machine printed an internal-sounding pool error with no hint that
+  `operant setup` was the fix. `operant doctor` got this right; the path a new user
+  actually takes did not.
+- **`operant doctor` advised a command that cannot work.** It probed a
+  `tinker-atropos` submodule that exists in neither the repository nor
+  `.gitmodules`, and recommended `git submodule update --init --recursive`.
 
 ### Added
 
@@ -81,8 +148,54 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
   count real usage; input stash (`Ctrl+S`), burst undo (`Ctrl+Z`) and queued
   message recall.
 
+- **A deployability plan** (`docs/DEPLOYABILITY-PLAN.md`) recording, from verified
+  evidence rather than inference, what actually blocks shipping: two crashes on
+  non-interactive paths, a native build chain that only resolved on one machine,
+  a release that has never been cut, and a `main` branch that had been continuously
+  red. The headline is that feature work is essentially done and deployability is
+  not — nothing is wrong with what is *in* the tree; everything around it was.
+- **A usage overlay** (F8) and **background task rows** showing live delegation
+  state, both fed by data that already existed but was never surfaced.
+- **`/terminal-setup` reports real terminal capabilities** instead of claiming
+  there is nothing to do.
+- **Behavioural keybinding tests** across the prompt, global and vim contexts, and
+  a tokenizer-based reachability pin covering all 69 vim bindings.
+
 ### Changed
 
+- **`operant acp` gained the real protocol surface** — `initialize`, `session/new`,
+  `session/prompt`, `session/cancel`, and streaming `session/update` notifications.
+  The four original methods are gone; the envelope validation (including the
+  notification-vs-explicit-null-`id` distinction) is kept.
+- **Pinned graphics survive redraw.** Pasted images and Mermaid rasters were
+  written to stdout once and forgotten, so both vanished on the first scroll — any
+  redraw destroyed them permanently. They are now laid out in the frame and
+  re-emitted after ratatui's flush, positioned with an explicit cursor move
+  (Kitty escape sequences carry no coordinates), reserved in the cell grid so they
+  cannot overlap the usage overlay or task rows.
+- **LaTeX fences render** via a background worker (`dvipng` when present, a
+  Unicode typesetter otherwise), so the render loop never blocks on a subprocess.
+  Pending results report as pending rather than appearing blank.
+- **The release pipeline can publish.** `release.yml` gates on the whole Build
+  workflow's conclusion, so one unbuildable cross target (Android needs an NDK,
+  FreeBSD needs a sysroot) silently blocked every release while the native
+  binaries sat complete and unpublishable. The cross job is now explicitly
+  best-effort; the native job still gates, because those three artifacts *are*
+  the release.
+- **The release build no longer depends on a third-party submodule.**
+  `submodules: recursive` meant every release required `vendor/prime-agent` to be
+  reachable, for a `[pk]` component that ships `enabled = false`. Verified
+  (`cargo build --workspace` completes with the submodule uninitialised) rather
+  than assumed. `test.yml` still initialises it — the kernel tests genuinely need
+  it at run time.
+- **284 foreground colour sites moved onto the theme palette** (accessor calls
+  236 → 530), so the bulk of the named `Color::*` variants are themed rather than
+  hardcoded. Five sites are intentionally left alone where the colour encodes a
+  syntax or tool-category role the palette does not model.
+- **Keybinding drift is guarded behaviourally, not just structurally.** Binding
+  catalogues are now checked by pressing the chord and asserting the resulting
+  state, because a source-level grep passes for a binding that is dispatched to
+  the *wrong action* — which is the failure mode that actually bit `/keys`.
 - **Oversized tool results are withheld, never silently truncated.** A result
   that would exceed `agent.max_tool_result_share` (default 5% of the context
   window) is replaced by a marker stating the kept head, the token count, the
@@ -104,18 +217,23 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
   anything outside `retrieval.rs` calls it.
 - **Themes still do not reach the whole TUI.** iter-414 migrated every
   foreground `Color::{White,Yellow,Cyan,Red,Green}` to a palette accessor
-  (accessor calls 236 → 530), so the bulk of the named variants are now themed.
-  Still unmigrated: 89 explicit `Color::Rgb`/`Color::Indexed` literals (~80
-  distinct values, each a design decision rather than a refactor), plus
-  `DarkGray` (194) and `Black` (28), which are context-dependent between
-  border/muted/disabled and between bg and fg-on-selection. Five foreground sites
-  are intentionally left hardcoded where the colour means a *syntax* or *tool
-  category* role the palette does not model.
-- **`operant acp` does not implement the Agent Client Protocol.** It is a
-  hand-rolled JSON-RPC with four methods — `ping`, `status`, `command`, `stop`
-  behind a version-validated envelope — and shares only a name with ACP. It has
-  no `initialize`, `session/new`, `session/prompt`, `session/cancel` or streaming
-  `session/update`, so it would not interoperate with any real ACP client.
+  (accessor calls 236 → 530), and later work removed the accent leak that kept
+  14 sites amber on every non-default theme. Still unmigrated: ~89 explicit
+  `Color::Rgb`/`Color::Indexed` literals (~80 distinct values), plus `DarkGray`
+  and `Black` sites. These are deliberately NOT queued as a mechanical sweep:
+  `DarkGray`/`Black` are fixed ANSI palette slots and therefore theme-invariant by
+  construction, the default theme's `muted()` is a dim *amber*, and the transcript
+  uses a deliberate cool-grey scheme — so a name-based mapping would repaint the
+  UI. Each remaining site is a per-theme appearance decision, not a refactor.
+- **`operant acp` implements only part of the Agent Client Protocol.** It now
+  handles `initialize`, `session/new`, `session/prompt` and `session/cancel`,
+  and streams `session/update` notifications with content blocks — previously it
+  was a hand-rolled JSON-RPC with four unrelated methods that shared only a name
+  with ACP. Dispatch was widened (`DispatchOutcome` + a `SessionRegistry`) because
+  ACP's methods carry session state and `session/update` is a notification, which
+  a single `RpcResponse` return could not express. Still missing versus the real
+  protocol: `session/load`, `authenticate`, and a proper permission
+  request/response round-trip.
 - **There is no SDK server and no harness-api-server.** The `operant-harness`
   crate exposes no API surface; `operant status --json` and
   `architecture dump --live` are the only machine-readable surfaces today.
