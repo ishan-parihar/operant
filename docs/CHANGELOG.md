@@ -102,8 +102,14 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 - **Hybrid retrieval scoring is unproven and deliberately unwired.** Measured
   recall got *worse* (R@3 2/5 → 1/5). A mutation-proven gate fails the build if
   anything outside `retrieval.rs` calls it.
-- Most renderers still use inline `Color::*` rather than the theme palette, so
+- Most renderers still use hardcoded colours rather than the theme palette, so
   themes and colour quantization apply only to the shared semantic layer.
+  Measured precisely: 89 explicit `Color::Rgb`/`Color::Indexed` literals outside
+  the palette definitions and the quantizer, plus 563 uses of *named* ratatui
+  variants (`DarkGray` 194, `White` 111, `Yellow` 75, `Cyan` 69, `Red` 39). The
+  named ones are a mechanical migration — the variant name already states the
+  intent — so the bulk of the work is tractable. The 89 literals are ~80
+  distinct values and are a design decision, not a refactor.
 
 
 ## [0.2.0] - 2026-09-27
