@@ -436,11 +436,9 @@ pub fn run_platform_checks(
     }
 
     if any_unavailable {
-        // Rendered as ⚠ above, so it is an advisory: a missing provider key is
-        // a setup task, not a broken install — the credential may come from an
-        // env var, a keyring, or a gateway, and the live turn is what actually
-        // proves whether a model can be reached. The genuine failures (no .env
-        // at all, unreadable config) still use check_fail and exit non-zero.
+        // Advisory, matching the ⚠ above: a missing provider key is a setup
+        // task, not a broken install. The glyph is the whole justification —
+        // this says nothing about where a credential might otherwise live.
         manual_issues.push(
             "Run 'operant setup' to configure missing API keys for full tool access".to_string(),
         );

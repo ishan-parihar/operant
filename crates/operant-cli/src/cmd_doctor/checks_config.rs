@@ -69,6 +69,37 @@ fn has_provider_env_config(content: &str) -> bool {
 // Main entry point
 // ---------------------------------------------------------------------------
 
+/// Check whether the *process environment* supplies a provider credential or
+/// endpoint. Without this, a doctor warning that says "other sources may be
+/// configured" is a claim nothing in the file can back: `has_provider_env_config`
+/// only ever reads `.env`, so a key exported as `OPENAI_API_KEY` in the shell
+/// that launched operant would be reported as missing.
+///
+/// Takes the environment as a slice rather than reading it inline, so a test can
+/// supply it. Reading `std::env::vars()` inside made the test's outcome depend on
+/// whichever credentials the machine running it happened to have.
+fn has_ambient_provider_config(env: &[(String, String)]) -> bool {
+    for (key, value) in env {
+        if value.is_empty() {
+            continue;
+        }
+        let upper = key.to_uppercase();
+        if upper.contains("API_KEY")
+            || upper.contains("APIKEY")
+            || upper.contains("APITOKEN")
+            || upper.contains("TOKEN")
+            || upper.contains("SECRET")
+            || upper.contains("PASSWORD")
+            || upper.contains("BASE_URL")
+            || upper.contains("ENDPOINT")
+            || upper.contains("HOST")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Run all config & directory checks, appending actionable items to `issues`.
 pub fn run_config_checks(
     config: &AppConfig,
@@ -88,22 +119,20 @@ pub fn run_config_checks(
         check_ok(&format!("{}/.env file exists", dhh), "");
         match std::fs::read_to_string(&env_path) {
             Ok(content) => {
-                if has_provider_env_config(&content) {
+                if has_provider_env_config(&content)
+                    || has_ambient_provider_config(&std::env::vars().collect::<Vec<_>>())
+                {
                     check_ok("API key or custom endpoint configured", "");
                 } else {
-                    // No key in .env — but the credential may live elsewhere (env
-                    // var, keyring, a gateway). The live turn is what proves
-                    // whether operant can actually call a model, so the advice
-                    // is actionable but not a failure on its own. A .env that is
-                    // absent entirely is handled below with check_fail.
-                    check_warn(
-                        &format!(
-                            "No API key found in {}/.env (other sources may be configured)",
-                            dhh
-                        ),
+                    // Neither .env nor the process environment holds a
+                    // credential. There is no third source being assumed here:
+                    // with both empty, no model can be called, so this is a
+                    // failure (✗) and not a degraded-but-working install.
+                    check_fail(
+                        &format!("No API key found in {} or the environment", dhh),
                         "run: operant setup",
                     );
-                    manual_issues.push("Run 'operant setup' to configure API keys".to_string());
+                    issues.push("Run 'operant setup' to configure API keys".to_string());
                 }
             }
             Err(e) => {
@@ -166,8 +195,9 @@ pub fn run_config_checks(
                     ),
                     "(check ~/.operant/.env or run 'operant setup')",
                 );
-                // ⚠ above, so advisory: an unrecognised base_url still works if
-                // the provider is reachable, and the live turn is what proves it.
+                // Advisory, matching the ⚠ above: an unrecognised base_url may
+                // still address a local or custom gateway, so this is worth
+                // flagging but is not a broken install.
                 manual_issues.push(
                     "client.base_url does not match a known provider. ".to_string()
                         + "Run 'operant setup' to configure a supported provider.",
@@ -175,8 +205,12 @@ pub fn run_config_checks(
             }
         }
     } else {
-        check_warn("client.base_url is not configured", "");
-        manual_issues.push("Run 'operant setup' to configure a provider and base URL".to_string());
+        // No endpoint configured anywhere. The built-in provider defaults only
+        // apply when a provider is resolved from config or the environment, so
+        // with an empty base_url this machine cannot address a model at all —
+        // a failure, and the ✗ now matches that verdict.
+        check_fail("client.base_url is not configured", "run: operant setup");
+        issues.push("Run 'operant setup' to configure a provider and base URL".to_string());
     }
 
     let set_providers: Vec<&str> = PROVIDERS
@@ -415,6 +449,107 @@ pub fn run_config_checks(
                     "(install systemd or manage gateway manually)",
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// A `.env` holding no credential, with an empty process environment, is a
+    /// machine that cannot call a model. Both scans must agree it is
+    /// unconfigured, because `run_config_checks` fails (exit 1) exactly when
+    /// their conjunction is false.
+    ///
+    /// This is the case iter-426 got wrong: the check consulted only `.env`, so
+    /// a key exported in the launching shell was invisible and a real
+    /// credential-less install reported healthy.
+    #[test]
+    fn empty_env_file_and_empty_process_env_is_unconfigured() {
+        let content = "# comment\nFOO=bar\n";
+        assert!(!has_provider_env_config(content));
+        assert!(!has_ambient_provider_config(&env(&[])));
+        // The conjunction the caller evaluates:
+        assert!(
+            !(has_provider_env_config(content) || has_ambient_provider_config(&env(&[]))),
+            "nothing configured anywhere must not satisfy the credential check"
+        );
+    }
+
+    /// The ambient scan is the one that makes an exported key count. If it ever
+    /// stops matching, the caller silently falls back to reading `.env` only and
+    /// reports a working machine as broken.
+    #[test]
+    fn ambient_scan_detects_exported_credential() {
+        assert!(has_ambient_provider_config(&env(&[(
+            "OPENAI_API_KEY",
+            "sk-x"
+        )])));
+        assert!(has_ambient_provider_config(&env(&[(
+            "ANTHROPIC_API_KEY",
+            "sk-x"
+        )])));
+        assert!(has_ambient_provider_config(&env(&[(
+            "OPENAI_BASE_URL",
+            "http://h/v1"
+        )])));
+        assert!(has_ambient_provider_config(&env(&[(
+            "GITHUB_TOKEN",
+            "ghp_x"
+        )])));
+    }
+
+    /// An empty value is not a credential, and an unrelated variable is not
+    /// either — otherwise a bare `export OPENAI_API_KEY=` would satisfy the
+    /// check and mask a genuinely unusable install.
+    #[test]
+    fn ambient_scan_rejects_empty_and_unrelated_values() {
+        assert!(!has_ambient_provider_config(&env(&[(
+            "OPENAI_API_KEY",
+            ""
+        )])));
+        assert!(!has_ambient_provider_config(&env(&[("EDITOR", "vim")])));
+        assert!(!has_ambient_provider_config(&env(&[("PAGER", "less")])));
+    }
+
+    /// The two scans must classify the same keys the same way, or the weaker one
+    /// decides the exit code and the disagreement is invisible.
+    #[test]
+    fn both_scans_classify_the_same_keys_identically() {
+        for key in [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_BASE_URL",
+            "GITHUB_TOKEN",
+            "NOTION_API_TOKEN",
+            "SOME_SECRET",
+            "IGS_HOST",
+        ] {
+            let in_file = has_provider_env_config(&format!("{key}=value\n"));
+            let in_ambient = has_ambient_provider_config(&env(&[(key, "value")]));
+            assert_eq!(
+                in_file, in_ambient,
+                "{key} is classified differently by the .env and ambient scans"
+            );
+        }
+    }
+
+    /// And the negative side: nothing may be accepted by one scan and not the
+    /// other, in the direction that would let a broken install pass.
+    #[test]
+    fn both_scans_reject_the_same_non_credentials() {
+        for key in ["EDITOR", "PAGER", "HOME", "PATH"] {
+            let in_file = has_provider_env_config(&format!("{key}=value\n"));
+            let in_ambient = has_ambient_provider_config(&env(&[(key, "value")]));
+            assert_eq!(in_file, in_ambient, "{key} disagrees between the two scans");
         }
     }
 }
