@@ -458,10 +458,10 @@ pub fn render_history_search_overlay(
         Span::styled(
             overlay.query.clone(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("\u{2588}", Style::default().fg(Color::White)),
+        Span::styled("\u{2588}", Style::default().fg(theme_colors::text())),
         Span::raw("  "),
         Span::styled(
             result_count_str,
@@ -523,11 +523,11 @@ pub fn render_history_search_overlay(
                 (
                     "  \u{25BA} ",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                ("    ", Style::default().fg(Color::White))
+                ("    ", Style::default().fg(theme_colors::text()))
             };
 
             // Build highlighted spans for the entry text
@@ -546,7 +546,7 @@ pub fn render_history_search_overlay(
                 row_spans.push(Span::styled(
                     "\u{2605} ", // ★
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme_colors::warning())
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -577,7 +577,7 @@ pub fn render_history_search_overlay(
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" History Search ")
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme_colors::accent()));
 
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, dialog_area);
@@ -612,7 +612,7 @@ fn build_highlighted_spans<'a>(
         if is_hl != current_highlighted && !current_text.is_empty() {
             let style = if current_highlighted {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD)
             } else {
                 base_style
@@ -626,7 +626,7 @@ fn build_highlighted_spans<'a>(
     if !current_text.is_empty() {
         let style = if current_highlighted {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme_colors::warning())
                 .add_modifier(Modifier::BOLD)
         } else {
             base_style

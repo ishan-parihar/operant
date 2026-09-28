@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -272,11 +273,11 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
 
             let title_style = if is_selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme_colors::accent())
                     .bg(row_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme_colors::text())
             };
 
             let meta_style = if is_selected {
@@ -316,28 +317,28 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                 Span::styled(
                     "\u{2191}\u{2193}",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     "Enter",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("=resume  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     "r",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("=rename  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     "Esc",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("=close", Style::default().fg(Color::DarkGray)),
@@ -352,13 +353,13 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                 Span::styled(
                     label,
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme_colors::warning())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     input_display,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                         .add_modifier(Modifier::BOLD),
                 ),
             ]));
@@ -367,14 +368,14 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                 Span::styled(
                     "Enter",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("=confirm  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     "Esc",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("=cancel", Style::default().fg(Color::DarkGray)),
@@ -386,7 +387,7 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
         .borders(Borders::ALL)
         .title(" Sessions ")
         .title_alignment(Alignment::Center)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme_colors::accent()));
 
     let para = Paragraph::new(lines)
         .block(block)

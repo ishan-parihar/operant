@@ -155,7 +155,7 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             Span::styled(
                 " Esc ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("cancel"),
@@ -179,7 +179,7 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             Span::styled(
                 " Esc ",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("close"),

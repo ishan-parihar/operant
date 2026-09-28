@@ -155,7 +155,7 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
     let input_style = if state.input.is_empty() {
         Style::default().fg(dim)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme_colors::text())
     };
 
     lines.push(Line::from(vec![

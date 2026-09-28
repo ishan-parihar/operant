@@ -46,10 +46,10 @@ impl McpViewStatus {
     }
     pub fn color(&self) -> Color {
         match self {
-            Self::Connected => Color::Green,
-            Self::Connecting => Color::Yellow,
+            Self::Connected => theme_colors::success(),
+            Self::Connecting => theme_colors::warning(),
             Self::Disconnected => Color::DarkGray,
-            Self::Error => Color::Red,
+            Self::Error => theme_colors::error(),
         }
     }
 }
@@ -451,7 +451,7 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                     let short: String = err.chars().take(area.width as usize - 4).collect();
                     Paragraph::new(Line::from(vec![Span::styled(
                         format!("    {}", short),
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(theme_colors::error()),
                     )]))
                     .render(
                         Rect {
@@ -617,7 +617,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         Block::default()
             .title(" Error Detail [e: close] ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red))
+            .border_style(Style::default().fg(theme_colors::error()))
             .style(
                 Style::default()
                     .bg(theme_colors::panel_bg())
@@ -635,7 +635,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             .map(|l| {
                 Line::from(vec![Span::styled(
                     l.to_string(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme_colors::text()),
                 )])
             })
             .collect();
@@ -730,7 +730,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             for resource in server.resources.iter().take(3) {
                 lines.push(Line::from(vec![Span::styled(
                     format!("  - {}", resource),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme_colors::text()),
                 )]));
             }
         }
@@ -743,7 +743,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             for prompt in server.prompts.iter().take(3) {
                 lines.push(Line::from(vec![Span::styled(
                     format!("  - {}", prompt),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme_colors::text()),
                 )]));
             }
         }

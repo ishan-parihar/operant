@@ -20,6 +20,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::theme_colors;
 
 /// What view stage the overlay is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -167,7 +168,7 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(theme_colors::accent()))
         .title(Span::styled(
             " Skills ",
             Style::default().add_modifier(Modifier::BOLD),
@@ -183,12 +184,14 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
         let lines = vec![
             Line::from(Span::styled(
                 "Could not load skills:",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme_colors::error())
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 state.last_error.clone(),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -205,7 +208,7 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
             Line::from(Span::styled(
                 "No skills installed.",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
@@ -214,7 +217,7 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
             Line::from(""),
             Line::from(Span::styled(
                 "  operant skills install <path-or-url>",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme_colors::accent()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -269,7 +272,7 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme_colors::text())
         };
         let name = truncate(skill.name.as_str(), 24);
         let cat = truncate(skill.category.as_str(), 14);
@@ -292,7 +295,7 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     if let Some(skill) = state.current_skill() {
         lines.push(Line::from(Span::styled(
             truncate_to_width(&skill.description, area.width as usize - 2),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme_colors::warning()),
         )));
     } else {
         lines.push(Line::from(""));
@@ -317,22 +320,31 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
         Span::styled(
             skill.name.clone(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Category:    ", Style::default().fg(Color::DarkGray)),
-        Span::styled(skill.category.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            skill.category.clone(),
+            Style::default().fg(theme_colors::accent()),
+        ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Version:     ", Style::default().fg(Color::DarkGray)),
-        Span::styled(skill.version.clone(), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            skill.version.clone(),
+            Style::default().fg(theme_colors::warning()),
+        ),
     ]));
     if !skill.tags.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("Tags:        ", Style::default().fg(Color::DarkGray)),
-            Span::styled(skill.tags.join(", "), Style::default().fg(Color::White)),
+            Span::styled(
+                skill.tags.join(", "),
+                Style::default().fg(theme_colors::text()),
+            ),
         ]));
     }
     if !skill.platforms.is_empty() {
@@ -340,7 +352,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
             Span::styled("Platforms:   ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 skill.platforms.join(", "),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme_colors::text()),
             ),
         ]));
     }
@@ -349,7 +361,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
             Span::styled("Env vars:    ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 skill.prerequisites_env.join(", "),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             ),
         ]));
     }
@@ -358,7 +370,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
             Span::styled("Commands:    ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 skill.prerequisites_commands.join(", "),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             ),
         ]));
     }
@@ -383,7 +395,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     for line in &body_lines[start..end] {
         lines.push(Line::from(Span::styled(
             line.to_string(),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme_colors::text()),
         )));
     }
 

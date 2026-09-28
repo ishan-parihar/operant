@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::tui::model_picker::EffortLevel;
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::theme_colors;
 
 #[derive(Debug, Default, Clone)]
 pub struct EffortPickerState {
@@ -90,7 +91,7 @@ pub fn render_effort_picker(frame: &mut Frame, state: &EffortPickerState, area: 
                 .bg(Color::Magenta)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme_colors::text())
         };
         lines.push(Line::from(vec![
             Span::styled(format!("  {} ", prefix), style),

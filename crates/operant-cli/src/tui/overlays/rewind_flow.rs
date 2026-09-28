@@ -5,7 +5,7 @@
 use super::*;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -119,7 +119,7 @@ fn render_rewind_confirm(frame: &mut Frame, message_idx: usize, area: Rect) {
             Span::styled(
                 format!("#{}", message_idx),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("?"),
@@ -129,14 +129,16 @@ fn render_rewind_confirm(frame: &mut Frame, message_idx: usize, area: Rect) {
             Span::styled(
                 "  [y] ",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme_colors::success())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("Yes, rewind"),
             Span::raw("    "),
             Span::styled(
                 "[n] ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme_colors::error())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("Cancel"),
         ]),
@@ -146,7 +148,7 @@ fn render_rewind_confirm(frame: &mut Frame, message_idx: usize, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Confirm Rewind ")
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme_colors::warning()));
 
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, dialog_area);

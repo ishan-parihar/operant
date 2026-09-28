@@ -20,7 +20,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
     let dim = Color::Rgb(90, 90, 90);
     let dialog_bg = theme_colors::panel_bg();
     let highlight_bg = Color::Rgb(255, 191, 0);
-    let highlight_fg = Color::White;
+    let highlight_fg = theme_colors::text();
 
     // ── Dark overlay ──
     for y in area.y..area.y + area.height {
@@ -45,7 +45,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_char(' ');
                 cell.set_bg(dialog_bg);
-                cell.set_fg(Color::White);
+                cell.set_fg(theme_colors::text());
             }
         }
     }
@@ -87,7 +87,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
         Span::styled(
             format!(" {}", state.title),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -102,7 +102,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
         &state.filter,
         "Search",
         dim,
-        Color::White,
+        theme_colors::text(),
     ));
 
     let header_para = Paragraph::new(header_lines).bg(dialog_bg);
@@ -122,7 +122,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
                 " \u{26a1} Fast mode ON ({})",
                 state.fast_mode_model.as_deref().unwrap_or("current model")
             ),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme_colors::warning()),
         )]));
     }
 
@@ -160,7 +160,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
             let (fg, bg) = if is_selected {
                 (highlight_fg, highlight_bg)
             } else {
-                (Color::White, dialog_bg)
+                (theme_colors::text(), dialog_bg)
             };
 
             let mut spans: Vec<Span<'static>> = Vec::new();
@@ -169,7 +169,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
             if model.is_current {
                 spans.push(Span::styled(
                     " \u{25cf} ",
-                    Style::default().fg(Color::Green).bg(bg),
+                    Style::default().fg(theme_colors::success()).bg(bg),
                 ));
             } else {
                 spans.push(Span::styled("   ", Style::default().bg(bg)));

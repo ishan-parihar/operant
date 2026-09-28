@@ -3,6 +3,7 @@
 // Shown when the user's account has voice mode available but it isn't yet
 // enabled. Appears as a one-time dismissable notice below the welcome header.
 
+use crate::tui::theme_colors;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -83,28 +84,31 @@ pub fn render_voice_mode_notice(state: &VoiceModeNoticeState, area: Rect, buf: &
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" \u{1f3a4} ", Style::default().fg(Color::Cyan)),
+            Span::styled(" \u{1f3a4} ", Style::default().fg(theme_colors::accent())),
             Span::styled(
                 "Voice mode is available! Use ",
-                Style::default().fg(Color::White),
+                Style::default().fg(theme_colors::text()),
             ),
             Span::styled(
                 "Alt+V",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 " to start recording, or ",
-                Style::default().fg(Color::White),
+                Style::default().fg(theme_colors::text()),
             ),
             Span::styled(
                 "/voice",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to configure.  ", Style::default().fg(Color::White)),
+            Span::styled(
+                " to configure.  ",
+                Style::default().fg(theme_colors::text()),
+            ),
             Span::styled("[Esc to dismiss]", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(""),

@@ -138,17 +138,17 @@ pub fn render_custom_provider_dialog(
 
     let url_style = if state.active_field == CustomProviderField::Url {
         Style::default()
-            .fg(Color::White)
+            .fg(theme_colors::text())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme_colors::text())
     };
     let key_style = if state.active_field == CustomProviderField::ApiKey {
         Style::default()
-            .fg(Color::White)
+            .fg(theme_colors::text())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme_colors::text())
     };
 
     let url_text = if state.url_input.is_empty() {

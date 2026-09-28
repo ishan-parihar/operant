@@ -112,7 +112,7 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
     lines.push(Line::from(vec![Span::styled(
         "  Select a message to rewind to:",
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme_colors::warning())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
@@ -131,9 +131,9 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
             let is_selected = real_i == overlay.selected_idx;
 
             let role_color = if msg.role == "user" {
-                Color::Cyan
+                theme_colors::accent()
             } else {
-                Color::Green
+                theme_colors::success()
             };
 
             let tool_tag = if msg.has_tool_use { " [tool]" } else { "" };
@@ -148,7 +148,7 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
             let prefix = if is_selected { "  \u{25BA} " } else { "    " };
             let idx_style = if is_selected {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
@@ -170,12 +170,15 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
                 Span::styled(
                     preview,
                     if is_selected {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(theme_colors::text())
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },
                 ),
-                Span::styled(tool_tag.to_string(), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    tool_tag.to_string(),
+                    Style::default().fg(theme_colors::warning()),
+                ),
             ]));
         }
     }
@@ -191,7 +194,7 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Rewind — Select Message ")
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme_colors::warning()));
 
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, dialog_area);

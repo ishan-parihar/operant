@@ -2,6 +2,7 @@
 //
 // Mirrors upstream bridge_state.rs with Operant-specific styling.
 
+use crate::tui::theme_colors;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
@@ -77,7 +78,7 @@ impl BridgeConnectionState {
             BridgeConnectionState::Failed { .. } => Some(Span::styled(
                 " BRIDGE ✗ ".to_string(),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme_colors::text())
                     .bg(Color::Red)
                     .add_modifier(Modifier::BOLD),
             )),

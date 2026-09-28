@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
@@ -74,11 +74,11 @@ pub fn render_context_viz(
         0.0
     };
     let ctx_color = if ctx_pct > 0.95 {
-        Color::Red
+        theme_colors::error()
     } else if ctx_pct > 0.80 {
-        Color::Yellow
+        theme_colors::warning()
     } else {
-        Color::Green
+        theme_colors::success()
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -126,16 +126,16 @@ pub fn render_context_viz(
             Some(pct) => {
                 let p = pct.clamp(0.0, 1.0);
                 let color = if p > 0.90 {
-                    Color::Red
+                    theme_colors::error()
                 } else if p > 0.70 {
-                    Color::Yellow
+                    theme_colors::warning()
                 } else {
-                    Color::Green
+                    theme_colors::success()
                 };
                 let f = ((p * bar_width as f32) as usize).min(bar_width);
                 let e = bar_width - f;
                 lines.push(Line::from(vec![
-                    Span::styled(label.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(label.to_string(), Style::default().fg(theme_colors::text())),
                     Span::styled("  [", Style::default().fg(theme_colors::muted())),
                     Span::styled("\u{2588}".repeat(f), Style::default().fg(color)),
                     Span::styled(
@@ -147,7 +147,7 @@ pub fn render_context_viz(
             }
             None => {
                 lines.push(Line::from(vec![
-                    Span::styled(label.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(label.to_string(), Style::default().fg(theme_colors::text())),
                     Span::styled("  no data", Style::default().fg(theme_colors::muted())),
                 ]));
             }
@@ -158,7 +158,10 @@ pub fn render_context_viz(
 
     // -- Cost --------------------------------------------------------------------
     lines.push(Line::from(vec![
-        Span::styled(" Session cost:  ", Style::default().fg(Color::White)),
+        Span::styled(
+            " Session cost:  ",
+            Style::default().fg(theme_colors::text()),
+        ),
         Span::styled(
             format!("${:.4}", cost_usd),
             Style::default()

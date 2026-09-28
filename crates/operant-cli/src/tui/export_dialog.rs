@@ -124,11 +124,7 @@ fn export_option_row(
     } else {
         theme_colors::panel_bg()
     };
-    let fg = if selected {
-        Color::White
-    } else {
-        theme_colors::text()
-    };
+    let fg = theme_colors::text();
     let desc_fg = if selected {
         Color::Rgb(245, 220, 232)
     } else {

@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::tui::render::{balanced_wrap, display_width};
+use crate::tui::theme_colors;
 
 /// Distinguishes what kind of action the permission dialog is for.
 /// This drives how many options are shown and what the command block looks like.
@@ -486,13 +487,13 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
                             Span::styled(
                                 prefix,
                                 Style::default()
-                                    .fg(Color::Green)
+                                    .fg(theme_colors::success())
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 line,
                                 Style::default()
-                                    .fg(Color::White)
+                                    .fg(theme_colors::text())
                                     .add_modifier(Modifier::BOLD),
                             ),
                         ])
@@ -559,7 +560,7 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
         Span::styled(
             pr.tool_name.clone(),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme_colors::warning())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -583,13 +584,13 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
             Span::styled(
                 "  \u{276F} ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 preview.clone(),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -609,7 +610,10 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
         for expl_line in &expl_lines {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(expl_line.clone(), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    expl_line.clone(),
+                    Style::default().fg(theme_colors::warning()),
+                ),
             ]));
         }
         lines.push(Line::from(""));
@@ -622,7 +626,7 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
         let prefix = if is_selected { "  \u{25BA} " } else { "    " };
         let key_style = if is_selected {
             Style::default()
-                .fg(Color::Green)
+                .fg(theme_colors::success())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
@@ -642,11 +646,13 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
 
     let (border_color, title_text) = match &pr.kind {
         PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. } => {
-            (Color::Yellow, " Permission Required ")
+            (theme_colors::warning(), " Permission Required ")
         }
-        PermissionDialogKind::FileRead { .. } => (Color::Cyan, " File Read Permission "),
-        PermissionDialogKind::FileWrite { .. } => (Color::Yellow, " File Write Permission "),
-        PermissionDialogKind::Generic => (Color::Yellow, " Permission Required "),
+        PermissionDialogKind::FileRead { .. } => (theme_colors::accent(), " File Read Permission "),
+        PermissionDialogKind::FileWrite { .. } => {
+            (theme_colors::warning(), " File Write Permission ")
+        }
+        PermissionDialogKind::Generic => (theme_colors::warning(), " Permission Required "),
     };
 
     let block = Block::default()

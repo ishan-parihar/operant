@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Widget, Wrap};
 
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -192,9 +193,9 @@ pub fn render_session_branching(state: &SessionBranchingState, area: Rect, buf: 
     let title = "Session Branches";
 
     let border_color = match state.mode {
-        BranchBrowserMode::Browse => Color::Cyan,
-        BranchBrowserMode::CreateNew => Color::Yellow,
-        BranchBrowserMode::ConfirmDelete => Color::Red,
+        BranchBrowserMode::Browse => theme_colors::accent(),
+        BranchBrowserMode::CreateNew => theme_colors::warning(),
+        BranchBrowserMode::ConfirmDelete => theme_colors::error(),
     };
 
     let block = Block::default()
@@ -239,7 +240,7 @@ fn render_branch_list(state: &SessionBranchingState, area: Rect, buf: &mut Buffe
         .map(|(idx, branch)| {
             let marker = if branch.is_current { " >" } else { "  " };
             let badge = if branch.is_current {
-                Span::styled(" [ACTIVE]", Style::default().fg(Color::Green))
+                Span::styled(" [ACTIVE]", Style::default().fg(theme_colors::success()))
             } else {
                 Span::raw("")
             };
@@ -259,7 +260,7 @@ fn render_branch_list(state: &SessionBranchingState, area: Rect, buf: &mut Buffe
 
     let selected_style = Style::default()
         .bg(Color::DarkGray)
-        .fg(Color::White)
+        .fg(theme_colors::text())
         .add_modifier(Modifier::BOLD);
 
     let list = List::new(items)
@@ -296,7 +297,7 @@ fn render_create_branch(state: &SessionBranchingState, area: Rect, buf: &mut Buf
             Span::styled(
                 &state.create_input,
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("_"),
@@ -327,10 +328,12 @@ fn render_confirm_delete(state: &SessionBranchingState, area: Rect, buf: &mut Bu
         Line::from(vec![
             Span::styled(
                 "Y",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme_colors::error())
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" to confirm | "),
-            Span::styled("Esc", Style::default().fg(Color::Cyan)),
+            Span::styled("Esc", Style::default().fg(theme_colors::accent())),
             Span::raw(" to cancel"),
         ]),
     ];

@@ -22,6 +22,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::path::{Path, PathBuf};
 
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::theme_colors;
 
 /// One row in the plugins list.
 #[derive(Debug, Clone)]
@@ -160,7 +161,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green))
+        .border_style(Style::default().fg(theme_colors::success()))
         .title(Span::styled(
             " Plugins ",
             Style::default().add_modifier(Modifier::BOLD),
@@ -176,12 +177,14 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
         let lines = vec![
             Line::from(Span::styled(
                 "Plugin operation failed:",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme_colors::error())
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 state.last_error.clone(),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -198,7 +201,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
             Line::from(Span::styled(
                 "No plugins installed.",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme_colors::warning())
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
@@ -207,7 +210,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
             Line::from(""),
             Line::from(Span::styled(
                 "  operant plugins install <git-url>",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme_colors::accent()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -252,12 +255,12 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
                 .bg(Color::Green)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme_colors::text())
         };
         let status_str = if entry.enabled { "enabled" } else { "disabled" };
         let status_style = if entry.enabled {
             Style::default()
-                .fg(Color::Green)
+                .fg(theme_colors::success())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
@@ -284,7 +287,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
         lines.push(Line::from(Span::styled(
             msg.clone(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         )));
     } else {

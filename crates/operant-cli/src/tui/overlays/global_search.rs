@@ -2,6 +2,8 @@
 //
 // Extracted from the overlays.rs monolith.
 
+use crate::tui::theme_colors;
+
 // ---------------------------------------------------------------------------
 // Global Search Dialog (T2-7)
 // ---------------------------------------------------------------------------
@@ -159,7 +161,7 @@ pub fn render_global_search(
     Block::default()
         .title(" Search [Esc: close, Enter: insert, \u{2191}\u{2193}: navigate] ")
         .borders(Borders::ALL)
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg(theme_colors::accent()))
         .render(dialog, buf);
 
     let inner = Rect {
@@ -171,9 +173,12 @@ pub fn render_global_search(
 
     // Query input bar (first row)
     let query_line = Line::from(vec![
-        Span::styled("/ ", Style::default().fg(Color::Cyan)),
-        Span::styled(state.query.clone(), Style::default().fg(Color::White)),
-        Span::styled("\u{2588}", Style::default().fg(Color::Cyan)),
+        Span::styled("/ ", Style::default().fg(theme_colors::accent())),
+        Span::styled(
+            state.query.clone(),
+            Style::default().fg(theme_colors::text()),
+        ),
+        Span::styled("\u{2588}", Style::default().fg(theme_colors::accent())),
     ]);
     Paragraph::new(query_line).render(
         Rect {
@@ -283,7 +288,7 @@ pub fn render_global_search(
                         "\u{2500}".repeat(dashes_right)
                     ),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme_colors::warning())
                         .add_modifier(Modifier::BOLD),
                 )]);
                 Paragraph::new(header_line).render(
@@ -303,7 +308,7 @@ pub fn render_global_search(
                 let style = if selected {
                     Style::default()
                         .add_modifier(Modifier::BOLD)
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                 } else {
                     Style::default().fg(Color::Gray)
                 };
@@ -327,7 +332,7 @@ pub fn render_global_search(
                             Span::styled(before, style),
                             Span::styled(
                                 matched,
-                                style.bg(Color::Rgb(60, 50, 0)).fg(Color::Yellow),
+                                style.bg(Color::Rgb(60, 50, 0)).fg(theme_colors::warning()),
                             ),
                             Span::styled(after, style),
                         ]

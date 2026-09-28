@@ -43,10 +43,10 @@ impl AgentStatus {
     pub fn color(&self) -> Color {
         match self {
             Self::Idle => Color::DarkGray,
-            Self::Running => Color::Green,
-            Self::WaitingForTool => Color::Yellow,
-            Self::Complete => Color::Cyan,
-            Self::Failed => Color::Red,
+            Self::Running => theme_colors::success(),
+            Self::WaitingForTool => theme_colors::warning(),
+            Self::Complete => theme_colors::accent(),
+            Self::Failed => theme_colors::error(),
         }
     }
 }
@@ -706,7 +706,7 @@ fn render_agent_detail(def: &AgentDefinition, area: Rect, buf: &mut Buffer) {
         lines.push(Line::default());
         lines.push(Line::from(vec![Span::styled(
             format!("⚠ Shadowed by: {}", shadow),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme_colors::warning()),
         )]));
     }
 
@@ -719,7 +719,7 @@ fn render_agent_detail(def: &AgentDefinition, area: Rect, buf: &mut Buffer) {
 fn render_agent_editor(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
     let editor = &state.editor;
     let selected_style = Style::default()
-        .fg(Color::White)
+        .fg(theme_colors::text())
         .bg(theme_colors::accent())
         .add_modifier(Modifier::BOLD);
     let normal_style = Style::default().fg(theme_colors::text());
@@ -774,13 +774,15 @@ fn render_agent_editor(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
     if let Some(msg) = editor.saved_message.as_ref() {
         lines.push(Line::from(vec![Span::styled(
             msg.clone(),
-            Style::default().fg(Color::Green),
+            Style::default().fg(theme_colors::success()),
         )]));
     }
     if let Some(err) = editor.error.as_ref() {
         lines.push(Line::from(vec![Span::styled(
             err.clone(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme_colors::error())
+                .add_modifier(Modifier::BOLD),
         )]));
     }
 
@@ -812,7 +814,7 @@ fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Li
     };
     let title_style = if selected {
         Style::default()
-            .fg(Color::White)
+            .fg(theme_colors::text())
             .bg(bg)
             .add_modifier(Modifier::BOLD)
     } else {

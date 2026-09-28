@@ -1,6 +1,7 @@
 //! Markdown -> ratatui lines renderer used by transcript message families.
 
 use crate::tui::figures;
+use crate::tui::theme_colors;
 use pulldown_cmark::{
     Alignment as MdAlignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
@@ -355,7 +356,7 @@ impl MdRenderer {
             }
             Event::FootnoteReference(name) => {
                 let number = self.footnote_number(&name);
-                let style = self.style().fg(Color::Cyan);
+                let style = self.style().fg(theme_colors::accent());
                 self.push_inline_spanned(&format!("[{number}]"), style);
             }
             Event::Html(html) | Event::InlineHtml(html) => {
@@ -378,11 +379,11 @@ impl MdRenderer {
                 self.gap();
                 let style = if level == HeadingLevel::H1 {
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                         .add_modifier(Modifier::BOLD | Modifier::ITALIC | Modifier::UNDERLINED)
                 } else {
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                         .add_modifier(Modifier::BOLD)
                 };
                 self.styles.push(style);
@@ -447,7 +448,7 @@ impl MdRenderer {
                 self.link_dest = Some(dest_url.to_string());
                 self.styles.push(
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::UNDERLINED),
                 );
             }
@@ -678,7 +679,7 @@ impl MdRenderer {
             format!("{indent}\u{250C}{rule}{label}"),
             border,
         )]));
-        let base = Style::default().fg(Color::White);
+        let base = Style::default().fg(theme_colors::text());
         for line in body.trim_end_matches('\n').lines() {
             let mut spans = vec![Span::styled(format!("{indent}\u{2502} "), border)];
             spans.extend(highlight_code_line_spans(line, syntax, base));
@@ -794,7 +795,7 @@ impl MdRenderer {
                 let mut spans = vec![Span::styled(
                     format!("  [{}] ", index + 1),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 )];
                 spans.extend(first.spans.iter().cloned());
@@ -918,12 +919,12 @@ fn split_and_style_links(text: &str) -> Vec<Span<'static>> {
             spans.push(Span::raw(text[last_end..match_start].to_string()));
         }
 
-        // Add the URL with special styling (cyan with underline)
+        // Add the URL with special styling (accent with underline)
         let url_text = url_match.as_str();
         spans.push(Span::styled(
             url_text.to_string(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::UNDERLINED),
         ));
         last_end = match_end;
@@ -940,12 +941,12 @@ fn split_and_style_links(text: &str) -> Vec<Span<'static>> {
                 spans.push(Span::raw(text[last_end..match_start].to_string()));
             }
 
-            // Add the email with special styling (cyan with underline)
+            // Add the email with special styling (accent with underline)
             let email_text = email_match.as_str();
             spans.push(Span::styled(
                 email_text.to_string(),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::UNDERLINED),
             ));
             last_end = match_end;

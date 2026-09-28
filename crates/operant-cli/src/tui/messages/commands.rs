@@ -5,6 +5,7 @@
 // task assignments, and goal blocks.
 
 use super::*;
+use crate::tui::theme_colors;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -12,14 +13,16 @@ pub fn render_system_api_error(msg: &str, retry_secs: Option<u64>) -> Vec<Line<'
     let mut lines = Vec::new();
     lines.push(Line::from(vec![Span::styled(
         "\u{250c}\u{2500} API Error ",
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme_colors::error())
+            .add_modifier(Modifier::BOLD),
     )]));
     let all_lines: Vec<&str> = msg.lines().collect();
     let total = all_lines.len();
     for line in all_lines.iter().take(5) {
         lines.push(Line::from(vec![
-            Span::styled("\u{2502} ", Style::default().fg(Color::Red)),
-            Span::styled(line.to_string(), Style::default().fg(Color::White)),
+            Span::styled("\u{2502} ", Style::default().fg(theme_colors::error())),
+            Span::styled(line.to_string(), Style::default().fg(theme_colors::text())),
         ]));
     }
     if total > 5 {
@@ -30,12 +33,12 @@ pub fn render_system_api_error(msg: &str, retry_secs: Option<u64>) -> Vec<Line<'
     }
     lines.push(Line::from(vec![Span::styled(
         "\u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-        Style::default().fg(Color::Red),
+        Style::default().fg(theme_colors::error()),
     )]));
     if let Some(n) = retry_secs {
         lines.push(Line::from(vec![Span::styled(
             format!("  \u{21bb} Retrying in {}s...", n),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme_colors::warning()),
         )]));
     }
     lines
@@ -59,17 +62,17 @@ pub fn render_user_command(name: &str, args: &str) -> Vec<Line<'static>> {
         Span::styled(
             "\u{25b8} ",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             name.to_string(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ".to_string(), Style::default()),
-        Span::styled(args.to_string(), Style::default().fg(Color::White)),
+        Span::styled(args.to_string(), Style::default().fg(theme_colors::text())),
     ])]
 }
 
@@ -165,7 +168,7 @@ pub fn render_user_memory_input(key: &str, value: &str) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![Span::styled(
             format!("# {}: {}", key, value),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme_colors::accent()),
         )]),
         Line::from(vec![Span::styled(
             "  Got it.",
@@ -224,7 +227,7 @@ pub fn render_collapsed_read_search(
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(paths_str, Style::default().fg(Color::White)),
+        Span::styled(paths_str, Style::default().fg(theme_colors::text())),
     ];
     if n_hidden > 0 {
         spans.push(Span::styled(
@@ -248,7 +251,7 @@ pub fn render_task_assignment(id: &str, subject: &str, desc: &str) -> Vec<Line<'
         Span::styled(
             title.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(

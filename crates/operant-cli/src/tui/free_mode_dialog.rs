@@ -305,7 +305,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
         let marker = if active { "\u{25b8}" } else { " " };
         let label_style = if active {
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(muted)
@@ -325,10 +325,10 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
             Style::default().fg(dim)
         } else if active {
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme_colors::text())
         };
         let cursor = if active { "_" } else { "" };
         lines.push(Line::from(vec![

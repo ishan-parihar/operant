@@ -155,7 +155,7 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
         let (stats, stats_color) = if file.binary {
             ("binary".to_string(), theme_colors::muted())
         } else if file.is_new_file {
-            (format!("new  +{}", file.added), Color::Yellow)
+            (format!("new  +{}", file.added), theme_colors::warning())
         } else {
             (
                 format!("+{} -{}", file.added, file.removed),
@@ -171,7 +171,7 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
         let base_style = if selected {
             Style::default()
                 .add_modifier(Modifier::BOLD)
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .bg(bg)
         } else {
             Style::default().fg(theme_colors::text()).bg(bg)
@@ -408,7 +408,7 @@ pub(crate) fn build_inline_diff_spans(
                 old_spans.push(Span::styled(
                     s,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                         .bg(Color::Rgb(150, 30, 30)),
                 ));
             }
@@ -416,7 +416,7 @@ pub(crate) fn build_inline_diff_spans(
                 new_spans.push(Span::styled(
                     s,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                         .bg(Color::Rgb(30, 130, 30)),
                 ));
             }
@@ -467,7 +467,7 @@ fn highlight_code_line(line: &str, path: &str, base_style: Style) -> Vec<Span<'s
                 let is_default = fg.r > 200 && fg.g > 200 && fg.b > 200;
                 let color = if is_default {
                     // Use the diff marker color (passed in base_style)
-                    base_style.fg.unwrap_or(Color::White)
+                    base_style.fg.unwrap_or(theme_colors::text())
                 } else {
                     Color::Rgb(fg.r, fg.g, fg.b)
                 };
@@ -509,7 +509,7 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
                         format_gutter(diff_line.old_line_no, None),
                         Style::default().fg(Color::DarkGray),
                     ),
-                    Span::styled("-  ", Style::default().fg(Color::Red)),
+                    Span::styled("-  ", Style::default().fg(theme_colors::error())),
                 ];
                 removed_row.extend(truncate_spans_to_width(old_spans, avail));
                 lines.push(Line::from(removed_row));
@@ -519,7 +519,7 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
                         format_gutter(None, next_line.new_line_no),
                         Style::default().fg(Color::DarkGray),
                     ),
-                    Span::styled("+  ", Style::default().fg(Color::Green)),
+                    Span::styled("+  ", Style::default().fg(theme_colors::success())),
                 ];
                 added_row.extend(truncate_spans_to_width(new_spans, avail));
                 lines.push(Line::from(added_row));
@@ -531,20 +531,20 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
             // Standard single-line rendering
             let (marker, content_style) = match diff_line.kind {
                 DiffLineKind::Header => (
-                    Span::styled("@@ ", Style::default().fg(Color::Cyan)),
-                    Style::default().fg(Color::Cyan),
+                    Span::styled("@@ ", Style::default().fg(theme_colors::accent())),
+                    Style::default().fg(theme_colors::accent()),
                 ),
                 DiffLineKind::Added => (
-                    Span::styled("+  ", Style::default().fg(Color::Green)),
-                    Style::default().fg(Color::Green),
+                    Span::styled("+  ", Style::default().fg(theme_colors::success())),
+                    Style::default().fg(theme_colors::success()),
                 ),
                 DiffLineKind::Removed => (
-                    Span::styled("-  ", Style::default().fg(Color::Red)),
-                    Style::default().fg(Color::Red),
+                    Span::styled("-  ", Style::default().fg(theme_colors::error())),
+                    Style::default().fg(theme_colors::error()),
                 ),
                 DiffLineKind::Context => (
                     Span::styled("   ", Style::default().fg(Color::DarkGray)),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme_colors::text()),
                 ),
             };
 

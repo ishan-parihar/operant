@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::tui::render::{display_width, take_width};
+use crate::tui::theme_colors;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -99,7 +100,7 @@ pub(crate) fn render_tool_use_inner(
                     Span::styled(
                         subagent_title(input),
                         Style::default()
-                            .fg(Color::White)
+                            .fg(theme_colors::text())
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
@@ -120,7 +121,7 @@ pub(crate) fn render_tool_use_inner(
         Span::styled(
             title.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -152,13 +153,13 @@ pub(crate) fn render_tool_use_inner(
                 Span::styled(
                     "    $ ".to_string(),
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme_colors::success())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     display,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme_colors::text())
                         .add_modifier(Modifier::BOLD),
                 ),
             ]));
@@ -253,13 +254,13 @@ pub fn render_bash_input_line(command: &str) -> Vec<Line<'static>> {
         Span::styled(
             "  $ ".to_string(),
             Style::default()
-                .fg(Color::Green)
+                .fg(theme_colors::success())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             command.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ])]

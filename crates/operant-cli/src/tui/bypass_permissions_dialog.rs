@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 
 use crate::tui::overlays::centered_rect;
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // State
@@ -83,9 +84,11 @@ pub fn render_bypass_permissions_dialog(
         .borders(Borders::ALL)
         .title(Line::from(vec![Span::styled(
             " WARNING: Bypass Permissions Mode ",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme_colors::error())
+                .add_modifier(Modifier::BOLD),
         )]))
-        .border_style(Style::default().fg(Color::Red));
+        .border_style(Style::default().fg(theme_colors::error()));
 
     let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
@@ -94,17 +97,17 @@ pub fn render_bypass_permissions_dialog(
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![Span::styled(
         "Operant running in Bypass Permissions mode",
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme_colors::warning())
             .add_modifier(Modifier::BOLD),
     )])];
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "In Bypass Permissions mode, Operant will NOT ask for your",
-        Style::default().fg(Color::White),
+        Style::default().fg(theme_colors::text()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         "approval before running potentially dangerous commands.",
-        Style::default().fg(Color::White),
+        Style::default().fg(theme_colors::text()),
     )]));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
@@ -134,17 +137,17 @@ pub fn render_bypass_permissions_dialog(
     // Options
     let opt_no_style = if state.selected == 0 {
         Style::default()
-            .fg(Color::White)
+            .fg(theme_colors::text())
             .add_modifier(Modifier::BOLD | Modifier::REVERSED)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme_colors::text())
     };
     let opt_yes_style = if state.selected == 1 {
         Style::default()
-            .fg(Color::Red)
+            .fg(theme_colors::error())
             .add_modifier(Modifier::BOLD | Modifier::REVERSED)
     } else {
-        Style::default().fg(Color::Red)
+        Style::default().fg(theme_colors::error())
     };
 
     lines.push(Line::from(vec![

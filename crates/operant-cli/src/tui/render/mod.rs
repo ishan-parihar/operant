@@ -99,7 +99,7 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // Fill the entire frame with a black background so the terminal's default
     // color (blue on Windows) doesn't bleed through cells not covered by widgets.
     frame.render_widget(
-        Block::default().style(Style::default().bg(Color::Black).fg(Color::White)),
+        Block::default().style(Style::default().bg(Color::Black).fg(theme_colors::text())),
         size,
     );
 

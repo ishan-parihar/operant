@@ -6,6 +6,7 @@
 //! owns only the box-drawing presentation: column sizing, per-column
 //! alignment and truncation to the wrap width.
 
+use crate::tui::theme_colors;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -147,7 +148,7 @@ pub fn render_table(table: &Table, width: u16) -> Vec<Line<'static>> {
         header_spans.push(Span::styled(
             truncate_to_width(&padded, col_width),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ));
         header_spans.push(Span::styled(

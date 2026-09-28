@@ -226,7 +226,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " Requesting device code...",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )));
         }
         DeviceAuthStatus::ShowingCode | DeviceAuthStatus::Polling => {
@@ -244,7 +244,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(Span::styled(
                 format!("    {}", state.user_code),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
@@ -258,14 +258,14 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 status_text,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )));
         }
         DeviceAuthStatus::BrowserAuth => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " Opening browser for authentication...",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )));
             if !state.auth_url.is_empty() {
                 lines.push(Line::from(""));
@@ -316,7 +316,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 format!(" Error: {}", msg),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme_colors::error()),
             )));
         }
     };

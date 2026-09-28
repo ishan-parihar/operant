@@ -14,6 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
 use super::debug_hub::TuiDebugHub;
+use crate::tui::theme_colors;
 
 /// Render the debug overlay. No-op if the overlay is not visible.
 /// Call this from `render::render_app` after the main render, passing the
@@ -38,10 +39,10 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
         .title(Span::styled(
             " Debug (F12 to close) ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme_colors::warning())
                 .add_modifier(Modifier::BOLD),
         ))
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(theme_colors::warning()))
         .style(Style::default().bg(Color::Black));
 
     let inner = block.inner(overlay_area);
@@ -58,23 +59,23 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
     let last_err_str = last_err.as_deref().unwrap_or("(none)");
     let stats = vec![
         Line::from(vec![
-            Span::styled("Uptime:    ", Style::default().fg(Color::Cyan)),
+            Span::styled("Uptime:    ", Style::default().fg(theme_colors::accent())),
             Span::raw(format!("{:.1}s", hub.uptime_secs())),
         ]),
         Line::from(vec![
-            Span::styled("Frames:    ", Style::default().fg(Color::Cyan)),
+            Span::styled("Frames:    ", Style::default().fg(theme_colors::accent())),
             Span::raw(format!("{}", hub.frame_count())),
         ]),
         Line::from(vec![
-            Span::styled("Render:    ", Style::default().fg(Color::Cyan)),
+            Span::styled("Render:    ", Style::default().fg(theme_colors::accent())),
             Span::raw(format!("{}ms last", hub.last_render_ms())),
         ]),
         Line::from(vec![
-            Span::styled("Last err:  ", Style::default().fg(Color::Cyan)),
+            Span::styled("Last err:  ", Style::default().fg(theme_colors::accent())),
             Span::styled(
                 last_err_str,
                 Style::default().fg(if last_err.is_some() {
-                    Color::Red
+                    theme_colors::error()
                 } else {
                     Color::DarkGray
                 }),
@@ -92,12 +93,14 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
         .take(chunks[1].height as usize)
         .map(|e| {
             let color = match e {
-                super::TuiEvent::Error { .. } => Color::Red,
+                super::TuiEvent::Error { .. } => theme_colors::error(),
                 super::TuiEvent::FrameRendered { .. } => Color::DarkGray,
-                super::TuiEvent::Key { .. } | super::TuiEvent::Mouse { .. } => Color::Green,
-                super::TuiEvent::SlashCommand { .. } => Color::Yellow,
+                super::TuiEvent::Key { .. } | super::TuiEvent::Mouse { .. } => {
+                    theme_colors::success()
+                }
+                super::TuiEvent::SlashCommand { .. } => theme_colors::warning(),
                 super::TuiEvent::AgentEvent { .. } => Color::Blue,
-                _ => Color::White,
+                _ => theme_colors::text(),
             };
             ListItem::new(Line::from(vec![Span::styled(
                 e.summary(),
@@ -116,6 +119,6 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
                 ))
                 .style(Style::default().bg(Color::Black)),
         )
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme_colors::text()));
     f.render_widget(event_list, chunks[1]);
 }

@@ -40,6 +40,7 @@ use ratatui::text::{Line, Span};
 
 use crate::tui::image_render::{self, GraphicsProtocol, ImageRenderConfig};
 use crate::tui::messages::cache::hash_content;
+use crate::tui::theme_colors;
 
 /// Raster ceiling asked of the external renderer, in CSS pixels.
 ///
@@ -542,7 +543,7 @@ fn emit_inline(png: &Path) {
 
 /// The lines a resolved diagram contributes. Pure.
 fn lines(diagram: &MermaidDiagram, source: &str, indent: &str) -> Vec<Line<'static>> {
-    let border = Style::default().fg(Color::Yellow);
+    let border = Style::default().fg(theme_colors::warning());
     let bar = || Span::styled(format!("{indent}\u{2502} "), border);
     match diagram {
         MermaidDiagram::Rendered { protocol, .. } => vec![Line::from(vec![
@@ -550,7 +551,7 @@ fn lines(diagram: &MermaidDiagram, source: &str, indent: &str) -> Vec<Line<'stat
             bar(),
             Span::styled(
                 format!("[mermaid] diagram rendered via {protocol}"),
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme_colors::success()),
             ),
         ])],
         MermaidDiagram::Rendering => vec![Line::from(vec![
@@ -573,7 +574,7 @@ fn lines(diagram: &MermaidDiagram, source: &str, indent: &str) -> Vec<Line<'stat
                 bar(),
                 Span::styled(
                     format!("mermaid error: {error}"),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme_colors::error()),
                 ),
             ]));
             out
@@ -602,7 +603,7 @@ fn source_block(
             Span::styled(note.to_string(), Style::default().fg(Color::DarkGray)),
         ]),
     ];
-    let body = Style::default().fg(Color::White);
+    let body = Style::default().fg(theme_colors::text());
     for line in source.trim_end_matches('\n').lines() {
         out.push(Line::from(vec![
             bar(),

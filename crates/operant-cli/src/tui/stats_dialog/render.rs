@@ -87,7 +87,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
         Span::styled(
             format_tokens(total_tokens),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -105,7 +105,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
         Span::styled(
             format!("${:.2}", data.total_cost_cents / 100.0),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -118,7 +118,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
         let streak_value = Span::styled(
             format!("● {} day{}", current, if current == 1 { "" } else { "s" }),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme_colors::warning())
                 .add_modifier(Modifier::BOLD),
         );
         let streak_longest = Span::styled(
@@ -142,7 +142,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
             Span::styled("Peak day: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} ({} tokens)", peak, format_tokens(data.peak_day_tokens)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             ),
         ]));
     }
@@ -161,14 +161,17 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
         });
         for (model, stats) in models.iter().take(5) {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:40} ", model), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("  {:40} ", model),
+                    Style::default().fg(theme_colors::accent()),
+                ),
                 Span::styled(
                     format!(
                         "{} turns  {}",
                         stats.turns,
                         format_tokens(stats.input_tokens + stats.output_tokens)
                     ),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme_colors::text()),
                 ),
                 Span::styled(
                     format!("  ${:.2}", stats.cost_cents / 100.0),
@@ -259,12 +262,12 @@ fn render_daily_tokens(data: &AggregatedStats, range_days: u32, area: Rect, buf:
             let cell = buf.cell_mut((x + 1, y));
             if let Some(c) = cell {
                 c.set_symbol("\u{2588}");
-                c.set_style(Style::default().fg(Color::Cyan));
+                c.set_style(Style::default().fg(theme_colors::accent()));
             }
             let cell2 = buf.cell_mut((x + 2, y));
             if let Some(c) = cell2 {
                 c.set_symbol("\u{2588}");
-                c.set_style(Style::default().fg(Color::Cyan));
+                c.set_style(Style::default().fg(theme_colors::accent()));
             }
         }
         // Label
@@ -450,19 +453,19 @@ fn render_models(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{:<42} ", model_display),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme_colors::accent()),
             ),
             Span::styled(
                 format!("{:>12} ", format_tokens(entry.input_tokens)),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme_colors::text()),
             ),
             Span::styled(
                 format!("{:>13} ", format_tokens(entry.output_tokens)),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme_colors::text()),
             ),
             Span::styled(
                 format!("{:>9}", format!("${:.4}", entry.cost_usd)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             ),
         ]));
     }
@@ -476,25 +479,25 @@ fn render_models(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
         Span::styled(
             format!("{:<42} ", "TOTAL"),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>12} ", format_tokens(total_input)),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>13} ", format_tokens(total_output)),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:>9}", format!("${:.4}", total_cost)),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme_colors::warning())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));

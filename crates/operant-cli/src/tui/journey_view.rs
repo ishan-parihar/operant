@@ -28,6 +28,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::path::PathBuf;
 
 use crate::tui::overlays::centered_rect;
+use crate::tui::theme_colors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JourneyPane {
@@ -206,12 +207,14 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
         let lines = vec![
             Line::from(Span::styled(
                 "Could not load journey data:",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme_colors::error())
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 state.last_error.clone(),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -278,13 +281,13 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
 fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     let is_active = state.active_pane == JourneyPane::Skills;
     let border_color = if is_active {
-        Color::Cyan
+        theme_colors::accent()
     } else {
         Color::DarkGray
     };
     let title_style = if is_active {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -307,7 +310,7 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
         let lines = vec![
             Line::from(Span::styled(
                 "No skills installed.",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -344,7 +347,7 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme_colors::text())
         };
         let name = truncate(&skill.name, 24);
         let cat = truncate(&skill.category, 14);
@@ -363,13 +366,13 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
 fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     let is_active = state.active_pane == JourneyPane::Memories;
     let border_color = if is_active {
-        Color::Yellow
+        theme_colors::warning()
     } else {
         Color::DarkGray
     };
     let title_style = if is_active {
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme_colors::warning())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -392,7 +395,7 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
         let lines = vec![
             Line::from(Span::styled(
                 "No memories stored yet.",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -435,14 +438,14 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme_colors::text())
         };
         let imp_style = if mem.importance >= 70 {
             Style::default()
-                .fg(Color::Green)
+                .fg(theme_colors::success())
                 .add_modifier(Modifier::BOLD)
         } else if mem.importance >= 40 {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(theme_colors::warning())
         } else {
             Style::default().fg(Color::DarkGray)
         };

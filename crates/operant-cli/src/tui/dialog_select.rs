@@ -261,7 +261,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         Span::styled(
             format!(" {}", state.title),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -276,7 +276,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         &state.filter,
         "Search",
         dim,
-        Color::White,
+        theme_colors::text(),
     ));
 
     frame.render_widget(Paragraph::new(header_lines).bg(dialog_bg), header_area);

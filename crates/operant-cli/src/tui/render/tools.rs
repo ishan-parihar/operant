@@ -126,7 +126,7 @@ pub(crate) fn render_tool_block_lines(
                 .fg(if block.status == ToolStatus::Error {
                     accent
                 } else {
-                    Color::White
+                    theme_colors::text()
                 })
                 .add_modifier(Modifier::BOLD),
         ));
@@ -158,8 +158,11 @@ pub(crate) fn render_tool_block_lines(
                 display
             };
             lines.push(Line::from(vec![
-                Span::styled("     $ ".to_string(), Style::default().fg(Color::Green)),
-                Span::styled(display, Style::default().fg(Color::White)),
+                Span::styled(
+                    "     $ ".to_string(),
+                    Style::default().fg(theme_colors::success()),
+                ),
+                Span::styled(display, Style::default().fg(theme_colors::text())),
             ]));
         }
     }
@@ -360,7 +363,11 @@ pub(crate) fn render_tool_group_lines(
     header.push(Span::styled(
         first.name.clone(),
         Style::default()
-            .fg(if errored > 0 { accent } else { Color::White })
+            .fg(if errored > 0 {
+                accent
+            } else {
+                theme_colors::text()
+            })
             .add_modifier(Modifier::BOLD),
     ));
     header.push(Span::styled(

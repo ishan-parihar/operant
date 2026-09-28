@@ -23,9 +23,9 @@ pub(crate) fn spinner_color(app: &App) -> Color {
     if let Some(start) = app.stall_start
         && start.elapsed() > std::time::Duration::from_secs(3)
     {
-        return Color::Red;
+        return theme_colors::error();
     }
-    Color::Yellow
+    theme_colors::warning()
 }
 
 pub(crate) fn is_modal_open(app: &App) -> bool {

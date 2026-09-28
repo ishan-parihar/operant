@@ -3,6 +3,7 @@
 use crate::tui::adapter_types::constants::APP_VERSION;
 use crate::tui::app::App;
 use crate::tui::rustle::rustle_lines;
+use crate::tui::theme_colors;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -191,7 +192,7 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     left_lines.push(Line::from(Span::styled(
         welcome_msg,
         Style::default()
-            .fg(Color::White)
+            .fg(theme_colors::text())
             .add_modifier(Modifier::BOLD),
     )));
     left_lines.push(Line::from(""));
@@ -283,22 +284,22 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("  ", Style::default()),
         Span::styled(
             format!("{} tools", tool_count.max(1)),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme_colors::text()),
         ),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{} MCP", mcp_count),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme_colors::text()),
         ),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{} skills", skills_count),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme_colors::text()),
         ),
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{} memories", mem_count),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme_colors::text()),
         ),
     ]));
     right_lines.push(Line::from(Span::styled(

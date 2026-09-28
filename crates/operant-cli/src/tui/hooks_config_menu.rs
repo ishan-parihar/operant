@@ -466,7 +466,7 @@ fn render_matcher_list(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<
         Span::styled(
             event.to_string(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -497,12 +497,15 @@ fn render_hook_list(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'st
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled(event.to_string(), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            event.to_string(),
+            Style::default().fg(theme_colors::accent()),
+        ),
         Span::styled(" / ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             matcher.to_string(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -528,7 +531,7 @@ fn render_hook_detail(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'
         None => {
             lines.push(Line::from(vec![Span::styled(
                 "  Hook not found.",
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme_colors::error()),
             )]));
             return (" Hook Detail ", lines);
         }
@@ -548,7 +551,7 @@ fn render_hook_detail(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'
         let text: String = chunk.iter().collect();
         lines.push(Line::from(vec![Span::styled(
             format!("    {text}"),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme_colors::text()),
         )]));
     }
     lines.push(Line::from(""));
@@ -571,7 +574,7 @@ fn push_list_row(lines: &mut Vec<Line<'static>>, label: &str, badge: &str, selec
     };
     let row_style = if selected {
         Style::default()
-            .fg(Color::White)
+            .fg(theme_colors::text())
             .bg(bg)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -595,7 +598,7 @@ fn push_detail_row(lines: &mut Vec<Line<'static>>, key: &str, value: &str) {
             format!("  {key:<10}  "),
             Style::default().fg(Color::DarkGray),
         ),
-        Span::styled(value.to_string(), Style::default().fg(Color::White)),
+        Span::styled(value.to_string(), Style::default().fg(theme_colors::text())),
     ]));
 }
 

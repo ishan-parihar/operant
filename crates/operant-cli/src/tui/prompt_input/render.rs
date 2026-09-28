@@ -4,6 +4,7 @@
 // Extracted from the prompt_input/mod.rs monolith.
 
 use super::*;
+use crate::tui::theme_colors;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -199,7 +200,7 @@ pub fn render_prompt_input(
     let text_style = if state.text.is_empty() && !focused {
         Style::default().fg(Color::DarkGray).bg(Color::Black)
     } else {
-        Style::default().fg(Color::White).bg(Color::Black)
+        Style::default().fg(theme_colors::text()).bg(Color::Black)
     };
 
     // Wrap each logical line into visual rows that fit `available_width`,
@@ -345,7 +346,7 @@ pub fn render_prompt_input(
                 if current_symbol.is_empty() || current_symbol == " " {
                     // Empty position — show a cursor bar
                     cell.set_symbol("▏");
-                    cell.set_style(Style::default().fg(Color::White).bg(Color::Black));
+                    cell.set_style(Style::default().fg(theme_colors::text()).bg(Color::Black));
                 } else {
                     // Non-empty position — reverse video
                     cell.set_style(
@@ -369,14 +370,14 @@ pub fn render_prompt_input(
             let buf_text = format!(":{}\u{2588}", state.vim_command_buf);
             Some(Line::from(vec![Span::styled(
                 buf_text,
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme_colors::accent()),
             )]))
         }
         VimMode::Search => {
             let buf_text = format!("/{}\u{2588}", state.vim_search_buf);
             Some(Line::from(vec![Span::styled(
                 buf_text,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme_colors::warning()),
             )]))
         }
         _ => None,

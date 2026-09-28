@@ -6,6 +6,7 @@
 use super::*;
 use crate::tui::app::TurnMetadata;
 use crate::tui::render::{display_width, take_width};
+use crate::tui::theme_colors;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
@@ -80,9 +81,14 @@ pub(crate) fn render_attachment_chip(kind: &str, label: String) -> Line<'static>
 }
 
 pub(crate) fn render_file_chip(label: String) -> Line<'static> {
-    // Use a steel-blue badge with white text for file injections — distinct from
-    // the orange img/doc chips and readable on dark terminal backgrounds.
-    render_attachment_chip_colored("file", label, Color::Rgb(51, 102, 170), Color::White)
+    // Use a steel-blue badge with theme body text for file injections — distinct
+    // from the orange img/doc chips and readable on dark terminal backgrounds.
+    render_attachment_chip_colored(
+        "file",
+        label,
+        Color::Rgb(51, 102, 170),
+        theme_colors::text(),
+    )
 }
 
 fn render_attachment_chip_colored(
