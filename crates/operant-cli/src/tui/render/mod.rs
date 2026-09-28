@@ -65,6 +65,7 @@ use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_colors;
 use crate::tui::theme_screen::render_theme_screen;
+use crate::tui::usage_overlay::{UsageMetrics, render_usage_overlay};
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -179,6 +180,22 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         .split(size);
 
     render_messages(frame, app, chunks[0]);
+
+    // Async-delegation rows, docked to the bottom-left of the messages area.
+    // Drawn immediately after the transcript so they sit above it and below the
+    // overlays; `refresh` re-reads the process-wide delegation registry with a
+    // real clock, so a task that finished or failed drops out on its own.
+    app.background_tasks.refresh();
+    let bg_rows = app.background_tasks.rows();
+    let bg_area = crate::tui::background_tasks::rows_area(chunks[0], bg_rows.len());
+    if !bg_rows.is_empty() {
+        crate::tui::background_tasks::render_rows(
+            frame,
+            bg_area,
+            &bg_rows,
+            crate::tui::background_tasks::now_unix_secs(),
+        );
+    }
     // chunks[1] is the blank separator — intentionally left empty
     if status_height > 0 {
         render_status_row(frame, app, chunks[2]);
@@ -189,6 +206,17 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         render_prompt_suggestions(frame, app, chunks[4]);
     }
     render_footer(frame, app, chunks[5]);
+
+    // Persistent usage panel (F8). Drawn above the base chrome but below the
+    // overlay block below, so any modal correctly occludes it.
+    if app.usage_overlay.visible {
+        render_usage_overlay(
+            frame,
+            &app.usage_overlay,
+            size,
+            &UsageMetrics::from_app(app),
+        );
+    }
 
     // Overlays (rendered on top in Z-order)
 

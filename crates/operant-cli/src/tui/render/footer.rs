@@ -304,7 +304,20 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         // (iter-147: PR badge render deleted — detect_pr() was never called,
         // pr_number/pr_state were always None)
 
-        // (iter-142: background_task_count/status render deleted — fields were always 0/None)
+        // Background delegations — real aggregate counts read from the
+        // delegation registry. iter-142 deleted the earlier pill because its
+        // backing fields were always 0/None; the registry behind them is now
+        // live, so the slot is filled again with values that can be non-zero.
+        let bg_counts = app.background_tasks.counts();
+        if !bg_counts.is_empty() {
+            if !spans.is_empty() {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                format!(" {} ", bg_counts.label()),
+                Style::default().fg(theme_colors::muted()),
+            ));
+        }
 
         // Vim mode indicator — shown for all modes using neovim "-- MODE --" convention.
         // INSERT is dim (common, low-noise); other modes use bright colour.

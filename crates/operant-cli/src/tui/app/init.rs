@@ -178,6 +178,8 @@ impl App {
             session_branching: crate::tui::session_branching::SessionBranchingState::new(),
             export_dialog: ExportDialogState::new(),
             context_viz: ContextVizState::new(),
+            usage_overlay: crate::tui::usage_overlay::UsageOverlayState::new(),
+            background_tasks: crate::tui::background_tasks::BackgroundTaskRegistry::new(),
             mcp_approval: McpApprovalDialogState::new(),
 
             bypass_permissions_dialog:

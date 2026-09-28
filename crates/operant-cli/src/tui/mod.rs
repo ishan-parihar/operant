@@ -8,6 +8,11 @@ pub mod debug;
 pub mod agents_view;
 pub mod app;
 pub mod ask_user_dialog;
+// The background-task row surface is wired: `App` carries the registry
+// (`app/mod.rs`), `App::new` constructs it (`app/init.rs`), and the render pass
+// refreshes and paints it (`render/mod.rs`). `tests::render_pass_still_wires_the_registry`
+// pins that last call site, so the rows cannot silently stop being shown again.
+pub mod background_tasks;
 pub mod banner;
 pub mod bypass_permissions_dialog;
 pub mod clipboard;
@@ -54,6 +59,7 @@ pub mod memory_file_selector;
 pub mod mermaid;
 pub mod theme_colors;
 pub mod theme_screen;
+pub mod usage_overlay;
 pub mod voice_mode_notice;
 
 pub use adapter_types::LaunchMode;

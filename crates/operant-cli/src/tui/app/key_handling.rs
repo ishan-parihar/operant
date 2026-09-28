@@ -1339,6 +1339,15 @@ impl App {
                 self.help_overlay.toggle();
             }
 
+            // ---- Usage overlay ------------------------------------------
+            // Persistent session usage panel (cost, cache-prefix hit rate,
+            // per-turn token deltas). Not modal, so it stays up until the
+            // next press. Mirrored in keybindings/defaults.rs as
+            // KeyAction::Custom(1) so /keys advertises it.
+            KeyCode::F(8) => {
+                self.usage_overlay.toggle();
+            }
+
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.prompt_input.kill_line_backward();
                 self.refresh_prompt_input();

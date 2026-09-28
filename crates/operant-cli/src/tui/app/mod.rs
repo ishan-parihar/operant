@@ -346,6 +346,14 @@ pub struct App {
     pub export_dialog: ExportDialogState,
     /// Context window / rate limit visualization overlay (/context).
     pub context_viz: ContextVizState,
+    /// Persistent session usage panel (F8) — cost, cache-prefix hit rate, and
+    /// per-turn token deltas. Hidden until toggled; see `tui::usage_overlay`
+    /// for which totals are real and which are deliberately not shown.
+    pub usage_overlay: crate::tui::usage_overlay::UsageOverlayState,
+    /// Rows for async delegations that are still in flight, plus recently
+    /// settled ones, read from the process-wide delegation registry each frame.
+    /// See `tui::background_tasks`.
+    pub background_tasks: crate::tui::background_tasks::BackgroundTaskRegistry,
     /// MCP server approval dialog.
     pub mcp_approval: McpApprovalDialogState,
     /// Go to Line dialog (Ctrl+G in message pane).
@@ -746,6 +754,18 @@ impl App {
             Some("MCP reconnect initiated — servers will reconnect in the background.".to_string());
     }
 
+    /// Teardown shared by every exit path: dump debug state, then release any
+    /// live background-delegation rows so none outlives the process that owns
+    /// the child it was tracking.
+    ///
+    /// Both exit paths funnel through here, so this cannot be added to one and
+    /// forgotten on the other.
+    fn run_exit_teardown(&mut self) {
+        self.debug_hub.dump_on_exit();
+        self.background_tasks
+            .release_all(crate::tui::background_tasks::now_unix_secs());
+    }
+
     pub fn run<B: ratatui::backend::Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -766,7 +786,7 @@ impl App {
                 self.should_exit = true;
             }
             if self.should_exit {
-                self.debug_hub.dump_on_exit();
+                self.run_exit_teardown();
                 return Ok(None);
             }
             self.frame_count = self.frame_count.wrapping_add(1);
@@ -1248,7 +1268,7 @@ impl App {
                             self.should_exit = true;
                         }
                         if self.should_exit {
-                            self.debug_hub.dump_on_exit();
+                            self.run_exit_teardown();
                             return Ok(None);
                         }
                         if should_submit {

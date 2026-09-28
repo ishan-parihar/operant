@@ -48,6 +48,19 @@ impl KeyBindingRegistry {
                 context: BindingContext::Global,
                 description: "Show help",
             },
+            // F8 toggles the persistent usage panel. Dispatched directly on
+            // the keycode in `app/key_handling.rs` (not through the
+            // KeyAction registry), so the action is `Custom(1)` — the
+            // enum's documented extension point. `usage_overlay::
+            // catalogue_entry_is_consistent` asserts this entry and that
+            // dispatch arm stay in sync.
+            DefaultBinding {
+                key: KeyCode::F(8),
+                modifiers: KeyModifiers::NONE,
+                action: KeyAction::Custom(1),
+                context: BindingContext::Global,
+                description: "Toggle usage overlay",
+            },
             DefaultBinding {
                 key: KeyCode::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
