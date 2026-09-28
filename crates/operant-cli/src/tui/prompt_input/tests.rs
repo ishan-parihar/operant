@@ -494,6 +494,41 @@ fn vim_key_e_motion() {
 }
 
 #[test]
+fn vim_key_j_and_k_move_between_lines() {
+    let mut mode = VimMode::Normal;
+    let mut text = "one\ntwo\nthree".to_string();
+    let mut cursor = 0usize;
+    let mut yank = String::new();
+    let mut pending = VimPendingState::None;
+    let mut last_find = None;
+
+    apply_vim_key(
+        &mut mode,
+        &mut text,
+        &mut cursor,
+        "j",
+        &mut yank,
+        &mut pending,
+        &mut last_find,
+    );
+    assert_eq!(
+        cursor, 4,
+        "j must move down one line, to the start of `two`"
+    );
+
+    apply_vim_key(
+        &mut mode,
+        &mut text,
+        &mut cursor,
+        "k",
+        &mut yank,
+        &mut pending,
+        &mut last_find,
+    );
+    assert_eq!(cursor, 0, "k must move back up one line");
+}
+
+#[test]
 fn vim_key_W_motion() {
     let mut mode = VimMode::Normal;
     let mut text = "foo.bar baz".to_string();

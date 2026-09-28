@@ -1046,6 +1046,53 @@ pub(super) fn vim_normal(
             *pending = VimPendingState::MacroReplay;
             false
         }
+        // ---- Vertical motion ----
+        //
+        // `j` and `k` were MISSING until iter-426: the registry advertised
+        // `VimMotionDown` / `VimMotionUp` in `/keys`, and pressing them did
+        // nothing because no arm here matched. `vim_command.rs` claims motion
+        // keys are "handled by apply_vim_key below", and every `motion_*`
+        // helper in this file is HORIZONTAL — the vertical pair had no owner.
+        //
+        // The column is carried across, clamped to the target line, which is
+        // what vim does when the line is long enough and what it degrades to
+        // when it is not. `cursor` is a BYTE index (see `char_idx_to_byte` and
+        // the `text[cursor..]` slicing throughout), so this is byte arithmetic
+        // and must stay consistent with the line boundaries `dd` computes.
+        "j" => {
+            let ls = text[..*cursor].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let le = text[*cursor..]
+                .find('\n')
+                .map(|p| *cursor + p)
+                .unwrap_or(text.len());
+            if le >= text.len() {
+                // Already on the last line. vim stays put rather than failing.
+                return false;
+            }
+            let next_start = le + 1;
+            let next_end = text[next_start..]
+                .find('\n')
+                .map(|p| next_start + p)
+                .unwrap_or(text.len());
+            *cursor = (next_start + (*cursor - ls)).min(next_end);
+            false
+        }
+        "k" => {
+            if *cursor == 0 {
+                return false;
+            }
+            let ls = text[..*cursor].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            if ls == 0 {
+                // On the first line: clamp to its start rather than wrapping.
+                *cursor = 0;
+                return false;
+            }
+            // `ls - 1` is the newline that terminates the line above.
+            let prev_end = ls - 1;
+            let prev_start = text[..prev_end].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            *cursor = (prev_start + (*cursor - ls)).min(prev_end);
+            false
+        }
         _ => false,
     }
 }

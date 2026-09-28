@@ -186,3 +186,178 @@ fn global_bindings_should_be_dispatched_in_key_handling() {
         missing.join("\n  ")
     );
 }
+
+/// Every `VimNormal` entry in the catalogue must correspond to a string the vim
+/// state machine actually matches on.
+///
+/// iter-426 exists because this check was missing and the drift was REAL: the
+/// catalogue advertised `VimMotionDown` / `VimMotionUp` for `j` and `k`, and
+/// pressing them did nothing — no arm in either dispatch file, and no test
+/// anywhere covering vertical motion. `/keys` was describing keys that no path
+/// could reach.
+///
+/// The scope is deliberately loose — a COMPLETE string literal in either
+/// dispatch file — and that is a correction, not laziness. A first attempt
+/// pinned `match` arms in `prompt_input/vim.rs` alone and reported nine
+/// discrepancies. Reading each one:
+///   - `Escape` and `"` were false positives: the first is an `if key == "…"`
+///     at `apply_vim_key`, the second tripped the extractor's escaping.
+///   - `:`, `/`, `V` and `.` are real, and all four are handled in
+///     `prompt_input/vim_command.rs` by the same `if key == "…"` shape.
+///   - exactly `j` and `k` were genuinely missing from BOTH files.
+///
+/// So the state machine spans two files and two dispatch shapes. Matching
+/// complete literals rather than arm grammar also means this survives
+/// reformatting, an arm being split or combined, or a key moving between the
+/// match and the equality tests — none of which are the defect being guarded.
+#[test]
+fn every_vim_normal_binding_is_reachable_in_the_dispatcher() {
+    let registry = KeyBindingRegistry::with_defaults();
+    let sources = [
+        include_str!("../prompt_input/vim.rs"),
+        include_str!("../prompt_input/vim_command.rs"),
+    ];
+
+    // Complete literals only, with comments skipped so a commented-out arm
+    // cannot satisfy this. A plain `contains` is satisfied by prose.
+    let live_literals: Vec<String> = sources
+        .iter()
+        .flat_map(|src| rust_string_literals(src))
+        .collect();
+
+    let mut missing = Vec::new();
+    for binding in registry.get_bindings(BindingContext::VimNormal) {
+        // The catalogue is `KeyCode`-shaped; the dispatcher is `&str`-shaped.
+        // Only these two kinds have a string form to look for, and both are
+        // mapped the way the caller's conversion maps them (`Esc` becomes
+        // "Escape", a plain char becomes itself).
+        let wanted = match binding.key {
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::Esc => "Escape".to_string(),
+            _ => continue,
+        };
+        if !live_literals.contains(&wanted) {
+            missing.push(format!(
+                "{:?} {} — \"{}\" appears in no match arm or `if key ==` in \
+                 prompt_input/vim.rs or prompt_input/vim_command.rs",
+                binding.key, binding.modifiers, wanted
+            ));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these VimNormal bindings are advertised by /keys but unreachable by the \
+         vim state machine. Pressing them does nothing while the help screen \
+         claims otherwise. Either add the dispatch or drop the catalogue \
+         entry:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// Collect every complete string literal in Rust source, skipping comments,
+/// char literals and lifetimes.
+///
+/// A tokenizer rather than `split('"')`, and the reason is specific: vim.rs
+/// contains `'"' => {`, a CHAR literal holding a double quote. Naive
+/// quote-pairing treats that quote as a string delimiter and desynchronises for
+/// the rest of the file — which made an earlier version of this pin report `j`,
+/// `k`, `m`, `'` and `"` as unreachable when all five are live arms. Skipping
+/// char literals also keeps lifetimes (`&'a`) from being read as quotes, and
+/// skipping comments keeps prose from being read as an arm.
+fn rust_string_literals(src: &str) -> Vec<String> {
+    let c: Vec<char> = src.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            '/' if c.get(i + 1) == Some(&'/') => {
+                while i < c.len() && c[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '/' if c.get(i + 1) == Some(&'*') => {
+                i += 2;
+                while i + 1 < c.len() && !(c[i] == '*' && c[i + 1] == '/') {
+                    i += 1;
+                }
+                i = (i + 2).min(c.len());
+            }
+            // A char literal closes within one or two characters; a lifetime
+            // does not, and that is the whole test for telling them apart.
+            '\'' => {
+                let closes = match c.get(i + 1) {
+                    Some('\\') => c.get(i + 3) == Some(&'\''),
+                    Some(_) => c.get(i + 2) == Some(&'\''),
+                    None => false,
+                };
+                if closes {
+                    i += 4;
+                } else {
+                    i += 1;
+                }
+            }
+            '"' => {
+                // Unescape as we go: the register arm is written `"\"" =>`, so
+                // the raw body is `\"` and a raw comparison would report the one
+                // binding whose key IS a quote as unreachable. That was a real
+                // false positive here, not a hypothetical.
+                let mut lit = String::new();
+                i += 1;
+                while i < c.len() && c[i] != '"' {
+                    if c[i] == '\\' && i + 1 < c.len() {
+                        i += 1;
+                        lit.push(match c[i] {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '0' => '\0',
+                            other => other,
+                        });
+                    } else {
+                        lit.push(c[i]);
+                    }
+                    i += 1;
+                }
+                out.push(lit);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// The extractor must actually be a tokenizer, or every pin built on it is
+/// decorative — and worse, actively wrong. Both failure modes below were real:
+/// a commented-out arm satisfying a `contains`, and `'"' =>` desynchronising
+/// quote-pairing so live arms looked absent.
+#[test]
+fn the_literal_extractor_ignores_comments_quotes_in_chars_and_lifetimes() {
+    // A commented-out arm must not count.
+    assert!(!rust_string_literals("let a = 1; // \"k\" => done").contains(&"k".to_string()));
+    assert!(!rust_string_literals("/* \"k\" => done */ let a = 1;").contains(&"k".to_string()));
+    // The char literal that broke the naive version. Live code AFTER it must
+    // still be found, and `"` must not appear as a literal of its own.
+    let tricky = "match k { '\"' => 1, \"j\" => 2, _ => 0 }";
+    let found = rust_string_literals(tricky);
+    assert!(
+        found.contains(&"j".to_string()),
+        "live literal after a quote-in-char was lost: {found:?}"
+    );
+    // An escaped quote must UNESCAPE, or the register arm `"\"" =>` — whose key
+    // IS a literal quote — is reported unreachable. This was a real false
+    // positive, not a hypothetical one.
+    assert!(
+        rust_string_literals("match k { \"\\\"\" => 1 }").contains(&"\"".to_string()),
+        "an escaped quote was not unescaped: {:?}",
+        rust_string_literals("match k { \"\\\"\" => 1 }")
+    );
+    // A lifetime is not a quote.
+    let lifetime = "fn f(x: &'a str) -> &'a str { x }";
+    assert!(
+        rust_string_literals(lifetime).is_empty(),
+        "a lifetime was misread as a quote: {:?}",
+        rust_string_literals(lifetime)
+    );
+}
