@@ -144,7 +144,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
         if !state.filter.trim().is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 " Press Enter to use custom model",
-                Style::default().fg(Color::Rgb(200, 200, 200)),
+                Style::default().fg(theme_colors::DIALOG_TEXT_BRIGHT),
             )]));
         }
     } else {
@@ -194,7 +194,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
             // Description
             if !model.description.is_empty() {
                 let desc_fg = if is_selected {
-                    Color::Rgb(200, 200, 200)
+                    theme_colors::DIALOG_TEXT_BRIGHT
                 } else {
                     dim
                 };

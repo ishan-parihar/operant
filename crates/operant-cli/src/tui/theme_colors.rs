@@ -409,6 +409,22 @@ pub const DIALOG_MUTED: Color = Color::Rgb(180, 180, 180);
 /// like the dialogs' `Rgb(90, 90, 90)` despite being a different colour.
 pub const FOOTER_DIM: Color = Color::Rgb(110, 110, 124);
 
+/// The brightest of the dialog text tiers: a SELECTED item's description line,
+/// and the "press Enter to use custom model" hint.
+///
+/// DO NOT confuse this with [`text_selection_bg`], which has the IDENTICAL value
+/// in all eight themes. That equality makes it look like a provably safe palette
+/// substitution, and it is not: every use of this constant is a FOREGROUND,
+/// while `text_selection_bg` is a BACKGROUND role. Swapping them would be
+/// value-preserving today and wrong the moment someone changes
+/// `text_selection_bg` for an unrelated reason — selected text would silently
+/// move with it. Equal value, different role.
+///
+/// It is brighter than [`DIALOG_MUTED`] (`Rgb(180, 180, 180)`), which is the
+/// point: a selected description should stand out from the unselected `dim`
+/// fallback beside it.
+pub const DIALOG_TEXT_BRIGHT: Color = Color::Rgb(200, 200, 200);
+
 /// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`].
 pub fn on_selection() -> Color {
     with_active(|p| p.text_dark)

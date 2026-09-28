@@ -327,7 +327,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
                 format!(" {}", item.description),
                 Style::default()
                     .fg(if is_selected {
-                        Color::Rgb(200, 200, 200)
+                        theme_colors::DIALOG_TEXT_BRIGHT
                     } else {
                         dim
                     })
