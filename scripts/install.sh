@@ -4,8 +4,42 @@
 
 set -e
 
-echo "=== Building Operant Release Binary ==="
 cd "$(dirname "$0")"
+
+# ── Native build dependency preflight ──
+# crates/operant-core/build.rs emits `cargo:rustc-link-lib=sonic` unconditionally,
+# so libsonic is a hard link requirement, not a nice-to-have. Everything else
+# here is a warning: on this machine the build succeeds with no ONNX Runtime and
+# no extracted libclang present, so their necessity is not something to assert
+# on the owner's behalf.
+echo "=== Checking Native Build Dependencies ==="
+SONIC_OK=0
+if [ -e /usr/lib/x86_64-linux-gnu/libsonic.so.0 ]; then
+    SONIC_OK=1
+    echo "  ok   libsonic (system)"
+elif [ -f "local/lib/libsonic.a" ]; then
+    SONIC_OK=1
+    echo "  ok   libsonic (local/lib/libsonic.a)"
+fi
+if [ "$SONIC_OK" -eq 0 ]; then
+    echo "  FAIL libsonic not found — espeak-ng (TTS) cannot link."
+    echo ""
+    echo "  Run:  ./scripts/provision-build-deps.sh"
+    echo "  That provisions libclang, ONNX Runtime and the alsa/sonic shims into"
+    echo "  the repo's local/ directory, which is where operant-core/build.rs looks."
+    echo ""
+    exit 1
+fi
+for tool in cmake pkg-config; do
+    if command -v "$tool" >/dev/null 2>&1; then
+        echo "  ok   $tool"
+    else
+        echo "  warn $tool missing — espeak-rs-sys may fail to build (TTS only)"
+    fi
+done
+
+echo ""
+echo "=== Building Operant Release Binary ==="
 cargo build --release -p operant-cli
 
 echo ""

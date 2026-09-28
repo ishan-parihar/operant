@@ -5,7 +5,13 @@
 # After running this, source scripts/dev-env.sh before cargo commands.
 set -e
 
-LOCAL_DIR="${LOCAL_DIR:-/home/z/my-project/local}"
+# Default to the repo's own `local/`, which is exactly where
+# crates/operant-core/build.rs looks when OPERANT_NATIVE_LIB_DIR is unset. The
+# previous default was an absolute path from one developer's machine
+# (/home/z/my-project/local), so on any other machine this script provisioned a
+# directory that nothing then built from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_DIR="${LOCAL_DIR:-$(dirname "$SCRIPT_DIR")/local}"
 mkdir -p "$LOCAL_DIR"
 
 # ── 1. libclang (for bindgen) ──
@@ -38,14 +44,29 @@ fi
 # ── 4. alsa runtime (for cpal via kokoro-tiny's playback feature) ──
 # Create a libasound.so symlink so the linker can find the runtime libasound.so.2
 mkdir -p "$LOCAL_DIR/lib"
-if [ ! -L "$LOCAL_DIR/lib/libasound.so" ]; then
-  ln -sf /usr/lib/x86_64-linux-gnu/libasound.so.2 "$LOCAL_DIR/lib/libasound.so"
+ALSA_SYSTEM="/usr/lib/x86_64-linux-gnu/libasound.so.2"
+if [ -e "$ALSA_SYSTEM" ]; then
+  ln -sf "$ALSA_SYSTEM" "$LOCAL_DIR/lib/libasound.so"
+else
+  echo "[provision] WARNING: $ALSA_SYSTEM not found — cpal audio playback will not link."
+  echo "[provision]   Install it (Debian/Ubuntu: libasound2) or disable TTS playback."
 fi
 
 # ── 5. sonic runtime (for espeak-ng, linked by operant-core/build.rs) ──
-# Create a libsonic.so symlink so the linker can find the runtime libsonic.so.0
-if [ ! -L "$LOCAL_DIR/lib/libsonic.so" ]; then
-  ln -sf /usr/lib/x86_64-linux-gnu/libsonic.so.0 "$LOCAL_DIR/lib/libsonic.so"
+# Deliberately NOT an unconditional `ln -sf`. That command succeeds even when the
+# target does not exist, which is how a dangling `local/lib/libsonic.so` came to
+# be committed to this repository: it was machine-local provisioning output that
+# was never supposed to be tracked, and it points at a path that does not exist
+# on a machine without libsonic0 installed.
+SONIC_SYSTEM="/usr/lib/x86_64-linux-gnu/libsonic.so.0"
+if [ -e "$SONIC_SYSTEM" ]; then
+  ln -sf "$SONIC_SYSTEM" "$LOCAL_DIR/lib/libsonic.so"
+  echo "[provision] libsonic.so -> $SONIC_SYSTEM"
+elif [ -f "$LOCAL_DIR/lib/libsonic.a" ]; then
+  echo "[provision] libsonic: using the committed $LOCAL_DIR/lib/libsonic.a (no system libsonic.so.0)"
+else
+  echo "[provision] WARNING: neither $SONIC_SYSTEM nor local/lib/libsonic.a found."
+  echo "[provision]   espeak-ng (TTS) will fail to link. Install libsonic0, or place a libsonic.a in $LOCAL_DIR/lib."
 fi
 
 # Synthetic alsa.pc so pkg-config can satisfy alsa-sys without libasound2-dev
