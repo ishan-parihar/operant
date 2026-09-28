@@ -275,7 +275,7 @@ local source. Push it to a remote first.
 ## Part 4 — decisions I need from you
 
 1. **operant-gateway: retire, or wire it as a standalone binary?** My call is
-   retire — `operant-core`'s gateway is the live one and the 1.4k-line config
+   retire — `operant-core`'s gateway is the live one and the 1,880-line config
    facade is recoverable from git. But it is your call, not an audit's.
 2. **operant-channels: wire `start_channels`, or retire 35 adapters that
    duplicate 3 platforms already live in operant-core?** Lean wire-at-one-point,
