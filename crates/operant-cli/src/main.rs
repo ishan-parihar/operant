@@ -2556,8 +2556,37 @@ fn warn_tui_fallback(rich_output: bool) {
     }
 }
 
+/// Restore the default `SIGPIPE` disposition.
+///
+/// Rust's runtime sets `SIGPIPE` to `SIG_IGN` before `main` so that a write to
+/// a closed pipe returns `EPIPE` instead of killing the process outright. That
+/// is the right default for a library, and the wrong one for a CLI: `println!`
+/// treats the resulting `Err` as a broken invariant and panics with "failed
+/// printing to stdout: Broken pipe". Combined with `panic = "abort"` in the
+/// release profile that is not a tidy failure — the process aborts and dumps
+/// core, so `operant doctor | head -5` printed a Rust panic message and left a
+/// `core` file behind.
+///
+/// Restoring `SIG_DFL` makes a closed pipe do what every other Unix tool does:
+/// die quietly from the signal, which the shell reports as 141. `yes | head -1`
+/// behaves identically, and nothing is written to stderr.
+///
+/// This must run before any output. It is Unix-only; on Windows `SIGPIPE` has
+/// no process-wide disposition to set and Rust's behaviour already matches
+/// expectations, so there is nothing to do.
+fn restore_default_sigpipe_disposition() {
+    #[cfg(unix)]
+    // Safety: `signal` is async-signal-safe and this runs single-threaded,
+    // before any worker exists. `SIG_DFL` is a valid disposition constant.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    restore_default_sigpipe_disposition();
+
     let cli = Cli::parse();
 
     // Load CLI-level config (.env file + HERMES_* env overrides; config.yaml

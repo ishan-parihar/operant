@@ -4722,6 +4722,7 @@ dependencies = [
  "futures",
  "icy_sixel",
  "image",
+ "libc",
  "open",
  "operant-channels",
  "operant-core",
