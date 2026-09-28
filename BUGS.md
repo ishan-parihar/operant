@@ -1684,6 +1684,29 @@ count is truncated by the first failing crate:
   `operant-harness/tests/host_boot.rs:14`.
 
 ### R40-20 — I reverted a peer-dirty file twice; the hunks were `cargo fmt` output, not peer work (iter-394, corrected iter-397)
+
+**Addendum, iter-418 — a disclosure I owe.** Removing the 17 GB
+`/tmp/operant-verify` worktree during iter-417 used
+`git worktree remove --force`, and I did not first check whether it was clean.
+Force is the wrong verb on a machine with a concurrent agent: it discards
+uncommitted work without warning, and I had not established whose worktree it
+was before running it.
+
+What I established afterwards, and why nothing was lost: it was checked out at
+`a6cd2bd5` = **my own** `fix(iter-409)` commit, reachable from `main` and
+`github/main`, so its work was already committed. The listing that made it look
+like the peer's was `ar`'s verbose output from an unrelated command in the same
+shell invocation, not that directory's contents.
+
+Outcome benign, process wrong. The rule this adds: **run
+`git -C <path> status --porcelain` before removing any worktree, and never pass
+`--force` on a shared machine.** Force is the same class as `git checkout --` on
+a peer-dirty file — the R40-10 clobber — aimed at a directory instead of a file.
+
+Also worth fixing, both cost time this round: `scripts/dev-env.sh` hardcodes
+`/home/z/my-project/local/...` (another machine's paths) and `~/.cargo/env` does
+not exist, so sourcing it aborts the shell. Cargo is at `/usr/bin/cargo`; the
+toolchain is `/home/ishanp/.rustup`.
 While staging the `operant-harness` doc fixes (iter-393) I ran
 `git checkout -- crates/operant-harness/src/composition.rs
 crates/operant-harness/src/discovery.rs` to strip the peer's in-flight hunks so
