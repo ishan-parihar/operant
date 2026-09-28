@@ -4,7 +4,8 @@
 //! to stdout using tokio's async I/O to avoid blocking the event loop.
 
 use super::{
-    AcpHandler, RpcResponse, dispatch, parse_request, serialize_response, validate_request,
+    AcpHandler, RpcNotification, RpcResponse, dispatch, parse_request, serialize_response,
+    validate_request,
 };
 use anyhow::Result;
 use std::sync::Arc;
@@ -29,6 +30,9 @@ pub async fn run_stdio_server(handler: Arc<dyn AcpHandler>) -> Result<()> {
     let stdin = tokio::io::stdin();
     let reader = BufReader::new(stdin);
     let mut lines = reader.lines();
+    // Session state lives for the process, not the request: a client holds a
+    // sessionId across `session/new` and a later `session/prompt`.
+    let sessions = crate::acp::SessionRegistry::new();
 
     loop {
         let line = match lines.next_line().await {
@@ -73,18 +77,46 @@ pub async fn run_stdio_server(handler: Arc<dyn AcpHandler>) -> Result<()> {
             continue;
         }
 
-        // Dispatch and check if we should shut down. JSON-RPC notifications
-        // (no `id`) must not receive a response.
-        let (response, should_shutdown) = dispatch(&request, &*handler).await;
-        if !request.is_notification() {
-            write_response(&response).await?;
+        // Dispatch and check if we should shut down. `session/update` carries no
+        // `id` and must never be answered, so notifications and the response are
+        // separate channels rather than one return value.
+        let outcome = dispatch(&request, &*handler, &sessions).await;
+
+        // Notifications are written BEFORE the response. For `session/prompt` the
+        // agent's whole turn is already complete by this point, so emitting the
+        // chunk first means a client sees the text arrive before the turn is
+        // reported finished — the ordering a streaming client expects.
+        for notification in &outcome.notifications {
+            write_notification(notification).await?;
         }
 
-        if should_shutdown {
+        if let Some(response) = &outcome.response
+            && !request.is_notification()
+        {
+            write_response(response).await?;
+        }
+
+        if outcome.should_shutdown {
             break;
         }
     }
 
+    Ok(())
+}
+
+/// Write a JSON-RPC notification to stdout as a single line.
+///
+/// Notifications omit `id` entirely — that absence is what makes them
+/// notifications rather than unanswered requests, so it must not be
+/// serialised as `"id": null`.
+async fn write_notification(notification: &RpcNotification) -> Result<()> {
+    let json = serde_json::to_string(notification)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize ACP notification: {}", e))?;
+
+    let mut stdout = tokio::io::stdout();
+    stdout.write_all(json.as_bytes()).await?;
+    stdout.write_all(b"\n").await?;
+    stdout.flush().await?;
     Ok(())
 }
 
