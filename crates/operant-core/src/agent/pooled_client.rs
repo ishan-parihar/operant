@@ -119,8 +119,23 @@ impl PooledModelClient {
                 retry_after: Duration::from_secs(secs.max(1) as u64),
             };
         }
+        // Actionable because this is the FIRST error a new user sees. On a fresh
+        // machine `operant run --query "hi"` printed this verbatim, with no hint
+        // that a provider was never configured — it reads as an internal pool
+        // failure rather than a missing setup step. `operant doctor` gets this
+        // right; the path a new user actually takes did not.
+        //
+        // Reaching here genuinely means "nothing was configured", not "configured
+        // but busy": the rate-limited case returns `Error::RateLimited` above, and
+        // any transport error returns earlier still. So naming the remedy is
+        // accurate rather than a guess.
+        //
+        // The original wording is kept as a prefix so existing log greps still
+        // match.
         Error::Agent(format!(
-            "Credential pool for provider '{}' has no available keys",
+            "Credential pool for provider '{}' has no available keys — no API key is \
+             configured for it. Run `operant setup` to configure a provider, or set \
+             that provider's key in the environment (for example OPENAI_API_KEY).",
             self.pool.provider()
         ))
     }
