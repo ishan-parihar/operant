@@ -69,8 +69,9 @@ under R40-13.
 
 ### Recommendation
 
-**Retire `operant-gateway`. Wire `operant-channels` at exactly one point.**
-Leave `operant-runtime` and `operant-tools` to follow whatever the other two do.
+**Retire `operant-gateway`.** On `operant-channels`, **decide the two-world
+config question first** (Part 2) — wiring its root is not a one-call fix once
+you know what it would revive.
 
 Rationale, and the cost of being wrong:
 
@@ -78,9 +79,13 @@ Rationale, and the cost of being wrong:
   already lives in `operant-core`. You lose a *second* frontend for the config
   HTTP API. If that facade is wanted, it is recoverable — it is code that
   compiles, and `git` keeps it.
-- **Wiring the channels root is ~one call** and unlocks 23 working adapters.
-  That is the cheapest possible form of "not YAGNI": the code exists, is
-  internally consistent, and needs an entry point.
+- **Wiring the channels root is NOT the cheap move the first draft of this
+  document claimed.** iter-411 found that `operant-channels` is the only
+  production consumer of `operant_config::` — the 1,043-field schema whose
+  loader has zero callers. Wiring `start_channels` would bring that world
+  back to life, alongside a hand-maintained allowlist bridging it to the live
+  `AppConfig` (`gateway_runner.rs:716`). Settle the two-world divergence
+  before wiring; see Part 2.
 - **Do not wire all four** to "be safe." That is the YAGNI failure in reverse —
   committing to maintain four subsystems you have not decided you want. The
   decision you asked for is *which capability*, not *how to make everything
@@ -138,16 +143,80 @@ delete it. A stale audit is worse than none, because it is confidently wrong.
   place — one is the `#[secret]` encryption attribute that R40-15 depends on, the
   other is a parser, not an abstraction.
 
-### The one category I could not close
+### The one category I could not close — CLOSED, iter-411
 
 A **write-only config knob** — a field that parses, persists, and displays but
 changes no behavior — is a correctness bug, not waste, and this project has been
 bitten by that class repeatedly (`forceLine`, `forceStage`, `targetSessionLength`;
-R40-14's inert approval blocklist). I did not find a confirmed instance in this
-round's measurements, and I am **not** claiming there is none. Closing this
-properly means field-by-field read-site tracing across 31k lines of
-`operant-config`, which is a separate pass. It is the highest-value thing left
-to do.
+R40-14's inert approval blocklist). That pass is now done.
+
+**The method, and why it is trustworthy here.** The concern with a static
+write-only-knob sweep is that absence of evidence is not evidence of absence: a
+field read through a generated accessor or a stringly-typed path lookup has zero
+text hits outside its definition. That risk is real in this repo and had to be
+ruled out, not assumed. It was:
+
+- `Configurable` (`crates/operant-macros/src/lib.rs:107`) generates `get_prop`,
+  `set_prop`, `prop_fields`, `secret_fields`, `init_defaults` — a
+  **stringly-typed CRUD surface** with no typed getters, which is exactly the
+  shape that defeats text search.
+- Every `get_prop(` call in the workspace outside tests is in
+  `operant-runtime/src/onboard/field_visibility.rs:151,156` — and that is the
+  **write** path, onboarding defaults being applied — plus
+  `operant-config/src/helpers.rs`, which is the macro's own path parser.
+- Every other `get_prop` call in the tree is inside `core_tests.rs`.
+
+So a production behavioral read *cannot* go through `get_prop`. It must be a
+direct Rust field access, which text search does find. The absence claims below
+are therefore sound, not merely unrefuted.
+
+### The finding: an entire config world is unreachable
+
+| | world (1) `operant-config` | world (2) `operant-core/src/config.rs` |
+|---|---|---|
+| size | 1,043 fields / 154 structs | 266 fields / 36 structs |
+| loader | `Config::load_or_init()` `config_impl.rs:299` | `load_app_config()` |
+| non-test callers of loader | **0** | many |
+| files in `operant-cli` using it | **0** | **61** |
+| read at boot by the binary | no | **yes** |
+
+**`Config::load_or_init()` has zero non-test callers** — verified by excluding
+the definition and doc references. `operant-cli`, the only binary, contains
+**zero** references to `operant_config::`. The only production consumers of that
+crate are in `operant-channels`, which is itself unreachable.
+
+The consequence: **the 1,043-field schema is dead, and so is every field in
+it.** Not write-only — wholly unreachable. Any knob set in the shape that
+schema describes has never been read by a release binary. That subsumes and
+reframes the "which AppConfig is canonical" question: world (2) is the live one
+and is already the de facto answer, by usage rather than by decision.
+
+This also explains the third schema from Part 2. The HTTP CRUD facade
+(`operant-gateway/src/api_config.rs`) reads and writes world (1) — the schema no
+binary loads. So the config-editing surface writes to a world the runtime never
+reads. That is the most serious item in this document: it is not dead code, it
+is a **write-only subsystem**, and it is the exact defect class this project has
+already paid for twice (R40-14, R40-15).
+
+**This inverts my own recommendation from the first draft**, which proposed
+wiring `operant-channels` at one point. If that were done, world (1) would come
+alive through the channels path — reviving 1,043 fields whose relationship to
+the live `AppConfig` is maintained by hand via a small allowlist
+(`gateway_runner.rs:716`). Wiring the channels root is therefore **not**
+obviously the cheap move it looked like; the two worlds' divergence has to be
+settled first.
+
+### No live write-only knob was found
+
+Across world (2) — the 266 fields the binary actually reads — no field was
+confirmed write-only. Every field examined had at least one behavioral read
+site, or was read via the live `runtime_config()` global installed by
+`install_runtime_config` (`cmd_config.rs:10,85`, `cmd_auth.rs:474`).
+
+That is weaker than it sounds and should be read as such: it means no instance
+was *confirmed*, not that none exists. The untested surface is the `#[nested]`
+`HashMap` and `Vec<T>` sections, whose leaves are reached through `get_prop`
+paths in places this pass did not exhaustively enumerate.
 
 ## Part 3 — agentic-utility, and how to integrate it
 
@@ -304,9 +373,13 @@ local source. Push it to a remote first.
 2. **operant-channels: wire `start_channels`, or retire 35 adapters that
    duplicate 3 platforms already live in operant-core?** Lean wire-at-one-point,
    then dedupe telegram/discord/slack.
-3. **The duplicate 2,501-line `AppConfig` — which is canonical?** I cannot
-   determine this from the code alone; it depends on which one you intend to
-   keep long-term.
+3. **The two config worlds are settled by usage, not by preference** — world (2)
+   (`operant-core`'s `AppConfig`, 266 fields, 61 files in `operant-cli`) is
+   live; world (1) (`operant-config`, 1,043 fields) has no loader caller and no
+   binary reference. The open question is no longer "which is canonical" but
+   "delete world (1), or merge it into world (2)". Merging is a large job;
+   deleting leaves the HTTP config facade in the unreachable gateway crate with
+   nothing to talk to.
 4. **`memory-wire` rewrite: is the agentmemory data portable?** Before committing
    to the swap, confirm your existing banks can migrate to the
    Hindsight-shaped schema. This is the one item that could make the plan fail.
@@ -326,5 +399,7 @@ local source. Push it to a remote first.
 - I did not re-run the compile or the doc build. `origin/main` is still broken
   by the missing `pub mod cache_monitor;` (R40-21), so any measurement taken now
   would be against a tree that does not build.
-- I could not confirm the absence of a write-only config knob anywhere in
-  31k lines of `operant-config`. That pass is still owed.
+- I could not exhaustively enumerate the `#[nested] HashMap` / `Vec<T>` config
+  leaves, whose paths are resolved via `get_prop`. No live write-only knob was
+  confirmed in the 266-field live schema, but that is "none confirmed", not
+  "none present".
