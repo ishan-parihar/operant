@@ -1137,13 +1137,16 @@ impl App {
                 true
             }
 
-            // /terminal-setup — surface that operant auto-detects terminal
-            // capabilities at startup (OSC8, truecolor, etc.).
+            // /terminal-setup — operant maps Enter+Shift to a newline in the
+            // prompt (key_handling.rs), but most terminals send a bare \r for
+            // Shift+Enter, so crossterm cannot see the difference and the key
+            // silently submits instead. Nothing in the app can recover that;
+            // it has to be fixed terminal-side, so name the fix for the
+            // environment we are actually in.
             "terminal-setup" => {
-                self.status_message = Some(
-                    "Terminal capabilities are auto-detected at startup. No manual setup needed."
-                        .to_string(),
-                );
+                self.status_message = Some(crate::tui::terminal_setup::render(
+                    &crate::tui::terminal_setup::EnvSnapshot::from_process(),
+                ));
                 true
             }
 

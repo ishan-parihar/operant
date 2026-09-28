@@ -49,6 +49,7 @@ pub mod settings_screen;
 pub mod skills_view;
 pub mod slash_usage;
 pub mod stats_dialog;
+pub mod terminal_setup;
 pub mod transcript_turn;
 pub mod virtual_list;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
