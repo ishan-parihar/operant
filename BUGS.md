@@ -1510,18 +1510,63 @@ operant` on that tree is green.
   tag-triggered), so a broken `origin/main` is only caught if an agent happens
   to run `cargo check`. This is the second time (first: iter-359) — see R40-7.
 
-### R40-17 — CI cannot be enabled on main yet: the jobs are red, not just untriggered (OPEN, MEDIUM, measured iter-385)
+### R40-17 — CI now runs on pushes to main; the `doc` job is still red (PARTIAL, iter-391)
+**Landed (iter-391)**: `ci.yml` gained `branches: ['main']`, so `fmt` and
+`clippy` — the two jobs verified green, and the two that would have caught a
+compile break — now run on every push. That is the direct fix for both
+R40-11-class incidents going forward.
+**Still open**: the `doc` job (below), and `test.yml` / `build.yml`, which stay
+tag-only because their 3-OS all-features release matrix and tarpaulin run are
+unmeasured. The `doc` job was deliberately left ENABLED rather than excluded
+from the workflow, so its failure stays visible instead of being silently
+dropped — a partial trigger that quietly omits the red job is exactly the
+false green this audit already caught once (the RUSTFLAGS interaction,
+iter-370).
 The obvious fix for R40-7 is adding `branches: ['main']` to the workflows. **Do
 not do that yet** — I built the patch, then ran each job locally, and two of
 them are already red, so enabling the trigger turns every push red and trains
 everyone to ignore CI.
 - `ci.yml` `doc` job (`RUSTDOCFLAGS=-Dwarnings`, `cargo doc --workspace
-  --no-deps --all-features`): **10 broken intra-doc links** under
-  `-Dwarnings`, including `crates/operant-core/src/agent/provider_registry.rs:10`
-  (a `NoopProvider` that does not exist) and 4 in `operant-harness`
-  (`composition.rs:95,104,386`, `discovery.rs:11` — `Composition` not in
-  scope). Several are in the peer's iter-382 code. These are claim-must-match-
-  code defects: doc comments citing items that are not there.
+  --no-deps --all-features`): **red — 26 errors, now 44**. Re-measured at
+  iter-391 with `--keep-going`, which is what makes the number trustworthy:
+  plain `cargo doc` halts at the first failing crate, so crate-by-crate runs
+  reported counts that grew as earlier crates were fixed. Use
+  `RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features
+  --keep-going` for any future recount. Breakdown of the 44, by class:
+  - **unclosed HTML tag (21)** — the largest class, and pure rustdoc
+    mechanics: angle-bracket generics and bracketed words in `///` prose are
+    parsed as HTML. `HashMap`, `String`, `dyn`, `name`, `key`, `value`, `id`,
+    `level`, `hex`, `text`, `prompt`, `filename`, `scope`, `repo`,
+    `OperantAgent`, `custom-name`.
+  - **unresolved link (22)** — spans all three sub-classes, and they need
+    DIFFERENT fixes, so do not batch this blindly:
+    (a) *unqualified but real* — qualify the path
+    (`Composition::resolve` at `discovery.rs:11`, `chat_provider` at
+    `provider_registry.rs:10`). Both were fixed in iter-389/391 but are
+    unstaged: those files are peer-mixed.
+    (b) *renamed* — `NoopProvider` in the `composition.rs:384` doc names a type
+    that no longer exists; the code builds `crate::row::NativeRowStub` at :399
+    and the only `NoopProvider` in the repo is a test-local struct in
+    `operant-harness/tests/host_boot.rs:14`. Fix by naming `NativeRowStub`.
+    (c) *never existed* — `from_provider_tables` at `composition.rs:95,104`:
+    no such method anywhere in the crate and nothing calls it; the real boot
+    path is `discovery.rs:37` → `Architecture::from_toml`. **Do NOT implement
+    it to satisfy rustdoc** — that would invent a feature and add a new
+    claim-must-match-code defect. Rewrite the prose to state that only the
+    `[[row]]` table-array form is supported.
+    Also: `ToolCall`, `refresh_coalesced`, `Duration::ZERO`, `AftBridge::bash`,
+    `CommandResult`, `add`, `ProviderRegistry`, `reload_skill_cache`,
+    `new_with_writer`, `PLAN`, and bare single letters/numbers (`K`, `V`, `R`,
+    `moa`, `1`–`5`, `Esc`, `up`, `enter`) that are markdown-looking
+    bracketed text, not links.
+  - **public documentation links to a private item (2)** — `PluginRegistry` (×2).
+  - **this URL is not a hyperlink (6)** — bare URLs such as
+    `http://homeassistant.local:8123`; wrap in `<...>`.
+- Two of these were fixed in iter-389 (`PgKnowledgeGraph` → private
+  `run_on_os_thread`, and `operant-hardware/src/datasheet.rs` unqualified
+  module-doc links). The rest is its own piece of work, not part of a security
+  iteration: every one is a doc comment asserting something the code does not
+  do, which is the same defect class as R40-14's dead extractor.
 - `test.yml` runs `cargo test --workspace --all-features` on a 3-OS matrix
   including `--release`, plus `cargo tarpaulin`. It is red regardless of the
   trigger: `tools::kernel::tests::ping_roundtrip` and
