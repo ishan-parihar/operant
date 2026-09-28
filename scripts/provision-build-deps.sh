@@ -15,13 +15,44 @@ LOCAL_DIR="${LOCAL_DIR:-$(dirname "$SCRIPT_DIR")/local}"
 mkdir -p "$LOCAL_DIR"
 
 # ── 1. libclang (for bindgen) ──
-if [ ! -f "$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu/libclang-19.so.19" ]; then
-  echo "[provision] downloading libclang1-19 deb..."
-  curl -fsSL "http://ftp.debian.org/debian/pool/main/l/llvm-toolchain-19/libclang1-19_19.1.7-3+b1_amd64.deb" \
-    -o "$LOCAL_DIR/libclang.deb"
-  mkdir -p "$LOCAL_DIR/libclang_extract"
-  dpkg-deb -x "$LOCAL_DIR/libclang.deb" "$LOCAL_DIR/libclang_extract/"
-  rm "$LOCAL_DIR/libclang.deb"
+# bindgen dlopens libclang and globs for 'libclang.so' / 'libclang-*.so.*'. Many
+# distros ship ONLY libclang.so.N.N, which matches NEITHER pattern, so a path
+# pointing at such a directory fails even though libclang is installed. Prefer a
+# system libclang, linked under a name bindgen will find, before falling back to
+# the Debian .deb (which also needs dpkg-deb, absent on non-Debian systems).
+LINK_DIR="$LOCAL_DIR/libclang"
+mkdir -p "$LINK_DIR"
+# Prefer the plain name bindgen globs, then any versioned variant.
+SYS_LIBCLANG=""
+for cand in /usr/lib/libclang.so /usr/lib/libclang.so.*.* /usr/lib/*/libclang.so.*.*; do
+  if [ -e "$cand" ]; then SYS_LIBCLANG="$cand"; break; fi
+done
+if [ -n "$SYS_LIBCLANG" ]; then
+  ln -sf "$SYS_LIBCLANG" "$LINK_DIR/libclang.so"
+  echo "[provision] using system libclang: $SYS_LIBCLANG"
+elif [ ! -e "$LINK_DIR/libclang.so" ] && [ ! -f "$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu/libclang-19.so.19" ]; then
+  echo "[provision] no system libclang; falling back to the Debian .deb..."
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "[provision] installing libclang via apt-get (needs root)..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq libclang-dev
+    SYS_LIBCLANG=$(ls /usr/lib/libclang.so.*.* /usr/lib/*/libclang.so.*.* 2>/dev/null | head -1)
+    [ -n "$SYS_LIBCLANG" ] && ln -sf "$SYS_LIBCLANG" "$LINK_DIR/libclang.so"
+  else
+    curl -fsSL "http://ftp.debian.org/debian/pool/main/l/llvm-toolchain-19/libclang1-19_19.1.7-3+b1_amd64.deb" \
+      -o "$LOCAL_DIR/libclang.deb"
+    mkdir -p "$LOCAL_DIR/libclang_extract"
+    if command -v dpkg-deb >/dev/null 2>&1; then
+      dpkg-deb -x "$LOCAL_DIR/libclang.deb" "$LOCAL_DIR/libclang_extract/"
+    else
+      # `ar` ships with binutils and is present everywhere; dpkg-deb is not.
+      # Without this the provisioner cannot run on Arch, Fedora, nix or Alpine.
+      ( cd "$LOCAL_DIR/libclang_extract" && ar x ../libclang.deb && tar xf data.tar.xz )
+    fi
+    rm -f "$LOCAL_DIR/libclang.deb"
+  fi
+fi
+if [ -e "$LINK_DIR/libclang.so" ]; then
+  echo "[provision] LIBCLANG_PATH=$LINK_DIR"
 fi
 
 # ── 2. ONNX Runtime (for ort-sys via kokoro-tiny) ──

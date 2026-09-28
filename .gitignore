@@ -114,3 +114,9 @@ skills/.curator/
 
 # agent session scratch (plans, run-continuation state)
 .omo/
+
+# Build-time dependencies fetched by scripts/provision-build-deps.sh.
+# Never commit these: they are platform-specific binaries, multi-megabyte, and
+# the provisioner re-downloads them on demand.
+local/libclang.deb
+local/onnxruntime*.tgz
