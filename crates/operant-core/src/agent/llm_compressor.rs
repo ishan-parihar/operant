@@ -359,6 +359,14 @@ impl LlmCompressor {
         // Find the tail boundary: walk backward from the end, accumulating
         // tokens until we exceed tail_token_budget.
         let tail_start = self.find_tail_start(middle_and_tail);
+        // Never start the tail on a `tool_result` whose `tool_use` was
+        // summarized into the middle — that is an orphaned result, which
+        // strict providers reject outright. Pull the boundary back to the
+        // start of the tool group so both halves stay together.
+        let tail_start = crate::context_management::tool_group_starts(middle_and_tail)
+            .get(tail_start)
+            .copied()
+            .unwrap_or(tail_start);
         let (middle, tail) = middle_and_tail.split_at(tail_start);
 
         if middle.is_empty() {

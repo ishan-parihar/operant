@@ -23,29 +23,16 @@ pub struct ColorPalette {
     /// Warning/caution messages
     pub warning: Color,
     /// Information messages
-    #[expect(
-        dead_code,
-        reason = "palette role with no renderer consumer yet; kept so the palette stays complete"
-    )]
     pub info: Color,
     /// Action buttons and interactive elements
-    #[expect(
-        dead_code,
-        reason = "palette role with no renderer consumer yet; kept so the palette stays complete"
-    )]
     pub action: Color,
     /// Disabled or dimmed states
     pub disabled: Color,
     /// Primary accent color
     pub accent: Color,
     /// Secondary accent
-    #[expect(
-        dead_code,
-        reason = "palette role with no renderer consumer yet; kept so the palette stays complete"
-    )]
     pub secondary_accent: Color,
     /// Text on dark backgrounds
-    #[expect(dead_code, reason = "superseded by the shared `text` slot below")]
     pub text_light: Color,
     /// Text on light backgrounds
     pub text_dark: Color,
@@ -287,6 +274,14 @@ pub const DEFAULT_PALETTE: ColorPalette = ColorPalette::default_theme();
 /// Set once at startup from the persisted theme name and again on every
 /// `/theme` selection. Held behind an `RwLock` so the render hot path only
 /// ever copies a single `Color` out — never the whole palette.
+///
+/// What is stored here is the palette *already quantized* to the terminal's
+/// colour depth (see [`crate::tui::color_depth`]): the accessors are read once
+/// per styled span, so quantization has to happen on the write path in
+/// [`set_active_theme`], not per read. `DEFAULT_PALETTE` is the one exception
+/// — it is a `const` static initializer, so the colours read before the first
+/// `set_active_theme` (which `App::new` runs before the first frame) are the
+/// authored triples.
 static ACTIVE: RwLock<ColorPalette> = RwLock::new(DEFAULT_PALETTE);
 
 /// Read one colour out of the active palette without cloning the palette.
@@ -304,8 +299,18 @@ fn with_active(f: impl FnOnce(&ColorPalette) -> Color) -> Color {
 ///
 /// Unknown names fall back to [`DEFAULT_PALETTE`], matching
 /// [`ColorPalette::for_theme`].
+///
+/// This is also where the palette is quantized to the terminal's colour depth:
+/// it is the only write path for [`ACTIVE`], so quantizing here means all 14
+/// accessors — and every renderer reading through them — get colours the
+/// terminal can actually display, at the cost of one pass per theme change
+/// rather than one per styled span. [`crate::tui::color_depth::detect`] is
+/// itself cached, so the detection cost is paid once per process, here.
 pub fn set_active_theme(theme_name: &str) {
-    let next = ColorPalette::for_theme(theme_name);
+    let next = crate::tui::color_depth::quantize_palette(
+        &ColorPalette::for_theme(theme_name),
+        crate::tui::color_depth::detect(),
+    );
     match ACTIVE.write() {
         Ok(mut guard) => *guard = next,
         Err(poisoned) => *poisoned.into_inner() = next,
@@ -382,14 +387,18 @@ pub fn set_active_theme_enum(theme: &crate::tui::adapter_types::config::Theme) {
     set_active_theme(theme.as_str());
 }
 
+// `pub(crate)` so `tui::color_depth`'s precomputation test can reach the
+// shared-palette lock below and serialize against these mutations. The module
+// only exists under `#[cfg(test)]`, so this exposes nothing in a real build.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The process-global palette is shared, so tests that switch it must not
     /// interleave. Every mutating test takes this lock and restores the default
-    /// palette before releasing it.
-    static ACTIVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// palette before releasing it. `pub(crate)` so `tui::color_depth`'s
+    /// precomputation test can serialize against these mutations too.
+    pub(crate) static ACTIVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Run `f` with `theme` active, then restore the default palette.
     fn with_theme<T>(theme: &str, f: impl FnOnce() -> T) -> T {

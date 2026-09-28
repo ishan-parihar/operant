@@ -2,6 +2,7 @@ pub mod adapter_types;
 pub mod provider;
 
 pub mod bridge_state;
+pub mod color_depth;
 pub mod debug;
 
 pub mod agents_view;

@@ -105,6 +105,11 @@ pub struct AgentConfig {
     pub stream: bool,
     /// Context window size for truncation
     pub context_window: usize,
+    /// Maximum share of `context_window` that a single tool result may occupy
+    /// before its bulk is withheld behind an explicit marker. Threaded from
+    /// `BehaviorSettings::max_tool_result_share`; see
+    /// `context_management::DEFAULT_MAX_TOOL_RESULT_SHARE`.
+    pub max_tool_result_share: f64,
     /// Max self-healing attempts on tool errors
     pub max_healing_attempts: usize,
     /// Ordered list of fallback models for automatic failover on retryable errors.
@@ -162,6 +167,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             system_prompt: settings.system_prompt.clone(),
             stream: settings.stream,
             context_window: settings.context_window,
+            max_tool_result_share: settings.max_tool_result_share,
             max_healing_attempts: settings.max_healing_attempts,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
@@ -805,7 +811,7 @@ fn truncate_tool_result(tool_name: &str, content: &str) -> String {
 /// Truncate a string to at most `max_bytes` bytes, ending at a UTF-8 char
 /// boundary. Without this, `&s[..N]` panics if N falls in the middle of a
 /// multi-byte character (common with CJK text or emoji in tool output).
-fn safe_truncate_str(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn safe_truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
@@ -1725,6 +1731,7 @@ mod tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             context_window: 8000,
+            max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
@@ -1770,6 +1777,7 @@ mod tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             context_window: 8000,
+            max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
@@ -1881,6 +1889,7 @@ mod tests {
             system_prompt: Some("You are a test agent.".to_string()),
             stream: true,
             context_window: 8000,
+            max_tool_result_share: crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,

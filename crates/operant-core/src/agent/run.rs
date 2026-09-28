@@ -1209,15 +1209,21 @@ impl OperantAgent {
                         // output or file reads. Redact before the text is
                         // pushed to the LLM-bound message list, persisted to
                         // the session DB, or written to the trajectory.
-                        let content = if result.success {
-                            crate::redaction::redact_sensitive_text_if_enabled(
-                                &truncate_tool_result(&result.name, &result.content),
-                            )
+                        //
+                        // Spend guard runs BEFORE the 4096-byte absolute cap so
+                        // an enormous result is reported at its real size and
+                        // price; the cap then trims whatever the guard let
+                        // through. Both bounds are explicit — the model is
+                        // always told when output was withheld.
+                        let body = if result.success {
+                            truncate_tool_result(&result.name, &result.content)
                         } else {
-                            crate::redaction::redact_sensitive_text_if_enabled(
-                                result.error.as_deref().unwrap_or("Error"),
-                            )
+                            result.error.clone().unwrap_or_else(|| "Error".to_string())
                         };
+                        let body = crate::redaction::redact_sensitive_text_if_enabled(&body);
+                        let content = self
+                            .guard_tool_output_spend(&result.tool_call_id, &result.name, body)
+                            .await;
 
                         // ── Memory write mirroring (hermes parity) ────────
                         // When a built-in memory tool writes an entry

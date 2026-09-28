@@ -58,6 +58,103 @@ pub fn estimate_total_tokens(messages: &[Message]) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// tool_use / tool_result correlation
+// ---------------------------------------------------------------------------
+
+/// A message that *requests* tool calls: an assistant turn carrying at least
+/// one [`ToolCall`]. Each `ToolCall::id` is the id the provider expects to see
+/// answered by a [`Message::tool_call_id`].
+pub fn is_tool_use(msg: &Message) -> bool {
+    msg.role == crate::client::Role::Assistant
+        && msg
+            .tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
+}
+
+/// For every index, the first index of the tool-use group it belongs to.
+///
+/// A group is an assistant `tool_use` turn plus the `Role::Tool` turns that
+/// answer it — the shape every OpenAI-compatible provider emits and every
+/// strict provider validates. Messages inside one group must be kept or
+/// dropped **together**: a `tool_use` with no `tool_result` is malformed, and
+/// so is a `tool_result` with no `tool_use`.
+///
+/// A lone `Role::Tool` message (no preceding `tool_use` in the slice) is its own
+/// group — the input is already malformed there, and this pass must not make it
+/// worse by growing the blast radius.
+pub fn tool_group_starts(messages: &[Message]) -> Vec<usize> {
+    let mut starts = vec![0usize; messages.len()];
+    let (mut start, mut i) = (0usize, 0usize);
+    while i < messages.len() {
+        if is_tool_use(&messages[i]) {
+            while i + 1 < messages.len() && messages[i + 1].role == crate::client::Role::Tool {
+                i += 1;
+            }
+        }
+        for slot in starts.iter_mut().take(i + 1).skip(start) {
+            *slot = start;
+        }
+        start = i + 1;
+        i += 1;
+    }
+    starts
+}
+
+/// Pick a compaction cut that can never orphan a `tool_use` from its
+/// `tool_result`.
+///
+/// Returns the **exclusive end index of the surviving prefix**:
+/// `messages[..k]` is kept and `messages[k..]` is dropped. `budget_tokens` is
+/// the ceiling for the *kept* portion, so a larger budget can only move the cut
+/// **later**.
+///
+/// Guarantees, each covered by a test in this module:
+///
+/// - **No orphan, in either direction.** The cut only ever lands on a group
+///   boundary, so a `tool_use` and the `tool_result`s answering it are always
+///   kept or dropped together.
+/// - **Monotonic in budget.** The walk visits groups left to right and its only
+///   budget-dependent branch is `kept + cost > budget_tokens`, which is
+///   monotone in `budget_tokens`; so for `b2 >= b1`
+///   `safe_compaction_cutoff(m, b2) >= safe_compaction_cutoff(m, b1)`.
+/// - **All-tool-pairs history.** Every message belongs to exactly one group, so
+///   the cut still lands on a boundary. `k` strictly advances each iteration, so
+///   the loop always terminates — no panic, no spin.
+/// - **Documented fallback.** If the *first* group alone blows the budget there
+///   is no cut that both fits and stays whole, so this returns `0`: no prefix
+///   survives. `0` is the natural end of the same left-to-right scan (it is also
+///   the answer for `budget_tokens == 0`), which is what keeps the monotonicity
+///   guarantee true — a "keep everything" answer here would report a budget that
+///   was never met and would move the cut *earlier* as the budget grew. Callers
+///   that need a head+tail shape should use the group-aware eviction in
+///   [`evict_to_budget`], which keeps the newest turns instead of the oldest.
+pub fn safe_compaction_cutoff(messages: &[Message], budget_tokens: usize) -> usize {
+    let n = messages.len();
+    if n == 0 {
+        return 0;
+    }
+    let starts = tool_group_starts(messages);
+
+    let mut kept = 0usize;
+    let mut k = 0usize;
+    while k < n {
+        // Advance to the end of the group starting at `k` (groups are contiguous).
+        let mut end = k + 1;
+        while end < n && starts[end] == starts[k] {
+            end += 1;
+        }
+        let cost: usize = messages[k..end].iter().map(estimate_message_tokens).sum();
+        if kept.saturating_add(cost) > budget_tokens {
+            return k; // `k == 0` here: nothing fits, so no prefix survives
+        }
+        kept += cost;
+        k = end;
+    }
+    n
+}
+
+// ---------------------------------------------------------------------------
 // Tiered eviction
 // ---------------------------------------------------------------------------
 
@@ -104,9 +201,11 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
     let keep_recent = (budget_tokens / 4096).clamp(6, 50);
     let n = messages.len();
 
-    // Build a list of (index, tier) for evictable messages. System
-    // messages (index 0, role=System) and the last `keep_recent` messages
-    // are never evicted.
+    // Build a list of (group start, tier) for evictable tool groups. System
+    // messages (index 0, role=System) and the last `keep_recent` messages are
+    // never evicted, and a group that *reaches into* the recency reserve is
+    // skipped entirely — dropping its head would strand its tool results.
+    let starts = tool_group_starts(&messages);
     let mut evictable: Vec<(usize, u8)> = Vec::new();
     for (i, msg) in messages.iter().enumerate() {
         if i == 0 && msg.role == crate::client::Role::System {
@@ -115,23 +214,39 @@ pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Mess
         if i >= n.saturating_sub(keep_recent) {
             continue; // recency reserve
         }
-        let tier = message_tier(msg);
-        evictable.push((i, tier));
+        if starts[i] != i {
+            continue; // not the group's first message
+        }
+        let mut end = i + 1;
+        while end < n && starts[end] == i {
+            end += 1;
+        }
+        if end > n.saturating_sub(keep_recent) {
+            continue; // group overlaps the recency reserve
+        }
+        evictable.push((i, message_tier(msg)));
     }
 
     // Sort by tier descending (T3=3 first), then by index ascending
     // (oldest first within tier).
     evictable.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
-    // Evict until under budget.
+    // Evict until under budget. Eviction always takes a WHOLE tool group: a
+    // lone `tool_use` or a lone `tool_result` is a malformed request, so the
+    // unit of eviction is the group, never the individual message.
     let mut keep = vec![true; n];
     let mut current_total = total;
     for (i, _tier) in &evictable {
         if current_total <= budget_tokens {
             break;
         }
-        current_total = current_total.saturating_sub(estimate_message_tokens(&messages[*i]));
-        keep[*i] = false;
+        for j in *i..n {
+            if starts[j] != *i {
+                break;
+            }
+            current_total = current_total.saturating_sub(estimate_message_tokens(&messages[j]));
+            keep[j] = false;
+        }
     }
 
     messages
@@ -244,6 +359,111 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
 }
 
 // ---------------------------------------------------------------------------
+// Tool-result spend guard
+// ---------------------------------------------------------------------------
+
+/// Default ceiling on the share of the context window a **single** tool result
+/// may occupy before operant withholds the bulk of it.
+///
+/// 5% is deliberately conservative. `agent::truncate_tool_result` already caps
+/// a result at 4096 bytes, which is ~0.8% of a 128k window (so the guard stays
+/// out of the way on big-context models) but a *quarter* of a 16k window and
+/// more than an entire 4k window. A share-based bound tracks whichever model is
+/// configured instead of assuming one window size, and it still fires on the
+/// 4096-byte cap wherever that cap is too loose.
+///
+/// Set to 0 to disable the guard.
+pub const DEFAULT_MAX_TOOL_RESULT_SHARE: f64 = 0.05;
+
+/// Token budget reserved for the guard's own marker text, so the body we inline
+/// plus the marker stays under `tool_result_token_limit`.
+const SPEND_MARKER_TOKEN_RESERVE: usize = 48;
+
+/// Footer appended after a withheld tool result. Never silently shortened: the
+/// model is told exactly how much was removed.
+const SPEND_TRUNCATION_FOOTER_PREFIX: &str = "\n[operant: end of tool result — withheld ";
+
+/// Token ceiling for a single tool result at `max_share` of `budget_tokens`.
+///
+/// Returns `usize::MAX` when `max_share <= 0.0` (guard disabled), so callers
+/// and the guard itself agree on the threshold from one place.
+pub fn tool_result_token_limit(budget_tokens: usize, max_share: f64) -> usize {
+    if max_share <= 0.0 {
+        return usize::MAX;
+    }
+    ((budget_tokens as f64) * max_share).round().max(1.0) as usize
+}
+
+/// Guard one tool result against consuming the context window.
+///
+/// Returns `None` when the result fits within `max_share` of `budget_tokens` —
+/// the caller keeps the string it already owns, so no clone happens on the hot
+/// path. Otherwise returns a replacement whose **body is an exact, unmodified,
+/// char-boundary prefix of `content`**, wrapped in a marker that states the
+/// size, the token count, the share of the window, the ceiling, and the
+/// estimated input price (when a `models.dev` rate is supplied).
+///
+/// **Safety.** The only edits to tool output are (a) dropping a suffix and
+/// (b) adding operant-authored marker text. Nothing is reordered, substituted
+/// or synthesised, and a suffix is never dropped without saying so — a silently
+/// shortened tool result is worse than a failed one, because the model would
+/// reason from output the tool never produced.
+pub fn guard_tool_result(
+    tool_call_id: &str,
+    content: &str,
+    budget_tokens: usize,
+    max_share: f64,
+    cost_per_million_input: Option<f64>,
+) -> Option<String> {
+    let limit = tool_result_token_limit(budget_tokens, max_share);
+    let tokens = estimate_tokens(content);
+    if tokens <= limit {
+        return None;
+    }
+
+    let share_pct = if budget_tokens == 0 {
+        0.0
+    } else {
+        100.0 * tokens as f64 / budget_tokens as f64
+    };
+    let cost_note = match cost_per_million_input {
+        Some(rate) => format!(
+            " Estimated input price at {rate:.4}/1M tokens: ${:.4}.",
+            tokens as f64 / 1_000_000.0 * rate
+        ),
+        None => String::new(),
+    };
+    let header = format!(
+        "[operant: oversized tool result for call {tool_call_id} — {} chars, ~{tokens} tokens, \
+         {share_pct:.1}% of the {budget_tokens}-token context window. The ceiling for one result \
+         is {limit} tokens ({:.0}% of the window).{cost_note} Only the first {{KEPT}} tokens are \
+         inlined below; the remainder was withheld so the conversation stays inside its window. \
+         Re-run the tool with a narrower slice (head/tail, a line range, or a narrower query) \
+         if you need the rest.]\n",
+        content.chars().count(),
+        max_share * 100.0,
+    );
+
+    // Size the body against the ceiling minus the marker this guard spends.
+    // `estimate_tokens` is chars/4, so the inverse is tokens*4 bytes.
+    let keep_bytes = limit
+        .saturating_sub(estimate_tokens(&header))
+        .saturating_sub(SPEND_MARKER_TOKEN_RESERVE)
+        .saturating_mul(4);
+    let body = crate::agent::safe_truncate_str(content, keep_bytes);
+    let kept_tokens = estimate_tokens(body);
+
+    let footer_text = format!(
+        "{SPEND_TRUNCATION_FOOTER_PREFIX}{} of {tokens} tokens ({} tokens removed).]",
+        kept_tokens,
+        tokens.saturating_sub(kept_tokens)
+    );
+    let header = header.replace("{KEPT}", &kept_tokens.to_string());
+
+    Some(format!("{header}{body}{footer_text}"))
+}
+
+// ---------------------------------------------------------------------------
 // Combined budget management
 // ---------------------------------------------------------------------------
 
@@ -275,6 +495,46 @@ mod tests {
 
     fn make_msg(role: Role, content: impl Into<String>) -> Message {
         Message::new(role, content.into())
+    }
+
+    /// An assistant turn that requests one tool call — i.e. a `tool_use`.
+    fn make_tool_use(id: &str) -> Message {
+        Message::assistant("").with_tool_calls(vec![crate::client::ToolCall {
+            id: id.to_string(),
+            function: crate::client::ToolCallFunction {
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"a.rs"}"#.to_string(),
+            },
+        }])
+    }
+
+    /// Assert that no surviving `tool_result` lacks its `tool_use` and no
+    /// surviving `tool_use` lacks every one of its `tool_result`s.
+    #[track_caller]
+    fn assert_no_orphans(kept: &[Message]) {
+        let answered: std::collections::HashSet<&str> = kept
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        let requested: std::collections::HashSet<&str> = kept
+            .iter()
+            .filter(|m| is_tool_use(m))
+            .flat_map(|m| m.tool_calls.as_ref().into_iter().flatten())
+            .map(|tc| tc.id.as_str())
+            .collect();
+        for id in &requested {
+            assert!(
+                answered.contains(id),
+                "tool_use {id} survived with no tool_result"
+            );
+        }
+        for id in &answered {
+            assert!(
+                requested.contains(id),
+                "tool_result {id} survived with no tool_use"
+            );
+        }
     }
 
     #[test]
@@ -412,5 +672,221 @@ mod tests {
         // System + recent should survive.
         assert!(result.first().is_some_and(|m| m.role == Role::System));
         assert!(result.iter().any(|m| m.content == "recent answer"));
+    }
+
+    #[test]
+    fn evict_to_budget_never_orphans_a_tool_use_from_its_result() {
+        // A tool_use group followed by enough recent turns to push the group
+        // out of the recency reserve. Eviction drops tool results first (T3),
+        // which used to strand the surviving tool_use with no answer.
+        let mut msgs = vec![
+            make_msg(Role::System, "system prompt"),
+            make_msg(Role::User, "old user message"),
+            make_tool_use("call_1"),
+            Message::tool("call_1", "very long tool result ".repeat(50)),
+        ];
+        for i in 0..6 {
+            msgs.push(make_msg(Role::User, format!("msg {i}")));
+            msgs.push(make_msg(Role::Assistant, format!("reply {i}")));
+        }
+        let result = evict_to_budget(msgs, 60);
+        assert_no_orphans(&result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Safe compaction cut
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn safe_cut_should_not_orphan_a_tool_result_from_its_tool_use() {
+        // [0] user, [1] tool_use(call_1), [2] tool_result(call_1), [3] user
+        let msgs = vec![
+            make_msg(Role::User, "read the file"),
+            make_tool_use("call_1"),
+            Message::tool("call_1", "file contents ".repeat(40)),
+            make_msg(Role::User, "thanks"),
+        ];
+        // A prefix cut cannot strand a tool_result — an earlier index always
+        // survives with a later one — so direction A is reachable only from the
+        // SUFFIX-keeping cut, which is what `llm_compressor` uses: it replaces
+        // everything before the tail boundary with a summary and keeps
+        // `messages[tail_start..]`. A raw boundary of 2 summarizes away
+        // call_1's request while keeping its answer; snapping the boundary to
+        // the group start keeps both halves.
+        let raw_tail_boundary = 2;
+        let safe_boundary = tool_group_starts(&msgs)[raw_tail_boundary];
+        assert_eq!(safe_boundary, 1, "tail must move back to the tool_use");
+
+        // The naive boundary really is malformed — otherwise this proves nothing.
+        let naive_surviving_tail = &msgs[raw_tail_boundary..];
+        assert!(
+            naive_surviving_tail
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call_1")),
+            "sanity: the naive tail still carries the tool_result"
+        );
+        assert!(
+            !naive_surviving_tail.iter().any(is_tool_use),
+            "sanity: the naive tail lost the tool_use that answered it"
+        );
+
+        let safe_tail = &msgs[safe_boundary..];
+        assert!(
+            safe_tail.iter().any(is_tool_use),
+            "the snapped tail carries the tool_use with its result"
+        );
+        assert_no_orphans(safe_tail);
+
+        // And the same property holds for the group-aware eviction, which keeps
+        // a suffix and is the other suffix-shaped cut in the pipeline.
+        for budget in (0..=400).step_by(11) {
+            let kept = evict_to_budget(msgs.clone(), budget);
+            assert_no_orphans(&kept);
+        }
+    }
+
+    #[test]
+    fn safe_cut_should_not_orphan_a_tool_use_from_its_tool_result() {
+        // [0] user, [1] tool_use(call_1), [2] tool_result(call_1), [3] user
+        let msgs = vec![
+            make_msg(Role::User, "read the file"),
+            make_tool_use("call_1"),
+            Message::tool("call_1", "file contents ".repeat(40)),
+            make_msg(Role::User, "thanks"),
+        ];
+        // A budget that fits the leading user turn but not the whole tool group
+        // tempts a naive cut to land at 2, keeping call_1's request while
+        // dropping its answer. Group closure must pull the cut back to 1.
+        let group_cost: usize = msgs[1..3]
+            .iter()
+            .map(estimate_message_tokens)
+            .sum::<usize>();
+        let budget = estimate_message_tokens(&msgs[0]) + group_cost - 1;
+        let k = safe_compaction_cutoff(&msgs, budget);
+        assert!(
+            k <= 1,
+            "cut must not keep a tool_use whose result is dropped (k={k})"
+        );
+        assert_no_orphans(&msgs[..k]);
+    }
+
+    #[test]
+    fn safe_cut_should_be_monotonic_in_budget() {
+        let mut msgs = vec![make_msg(Role::System, "system prompt")];
+        for i in 0..12 {
+            msgs.push(make_msg(
+                Role::User,
+                format!("question {i} {}", "x".repeat(60)),
+            ));
+            msgs.push(make_tool_use(&format!("call_{i}")));
+            msgs.push(Message::tool(
+                format!("call_{i}"),
+                format!("answer {i} {}", "y".repeat(60)),
+            ));
+        }
+        let mut previous = 0usize;
+        for budget in (0..=4000).step_by(37) {
+            let k = safe_compaction_cutoff(&msgs, budget);
+            assert!(
+                k >= previous,
+                "budget {budget}: cut moved earlier ({previous} -> {k})"
+            );
+            assert!(k <= msgs.len());
+            assert_no_orphans(&msgs[..k]);
+            previous = k;
+        }
+    }
+
+    #[test]
+    fn safe_cut_should_handle_history_that_is_all_tool_pairs() {
+        // Nothing here is safe to cut: every message belongs to a tool group.
+        let msgs: Vec<Message> = (0..8)
+            .flat_map(|i| {
+                [
+                    make_tool_use(&format!("call_{i}")),
+                    Message::tool(format!("call_{i}"), format!("result {i}")),
+                ]
+            })
+            .collect();
+        for budget in [0usize, 1, 8, 64, 4096, 1_000_000] {
+            let k = safe_compaction_cutoff(&msgs, budget);
+            assert!(k <= msgs.len(), "k={k} out of range");
+            assert_no_orphans(&msgs[..k]);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool-result spend guard
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn oversized_tool_result_should_report_size_and_token_price() {
+        let huge = "x".repeat(200_000);
+        let budget = 8_000usize;
+        let guarded = guard_tool_result("call_42", &huge, budget, 0.05, Some(3.0))
+            .expect("200k chars is 50% of an 8k window — guard must fire");
+
+        assert!(guarded.contains("call_42"), "names the call it replaced");
+        assert!(
+            guarded.contains("200000 chars"),
+            "states the original size: {guarded}"
+        );
+        assert!(
+            guarded.contains("50000 tokens"),
+            "states the token count: {guarded}"
+        );
+        assert!(
+            guarded.contains("625.0% of the 8000-token context window"),
+            "states the share of the window: {guarded}"
+        );
+        assert!(
+            guarded.contains("400 tokens") && guarded.contains("5% of the window"),
+            "states the ceiling: {guarded}"
+        );
+        assert!(
+            guarded.contains("Estimated input price at 3.0000/1M tokens: $0.1500"),
+            "states the token price: {guarded}"
+        );
+        // The body really is bounded, and the withheld part is accounted for.
+        assert!(
+            estimate_tokens(&guarded) <= budget,
+            "guard overshot the budget"
+        );
+        assert!(
+            guarded.contains("tokens removed"),
+            "reports how much was withheld: {guarded}"
+        );
+    }
+
+    #[test]
+    fn oversized_tool_result_should_never_silently_truncate() {
+        let huge = "x".repeat(200_000);
+        let guarded =
+            guard_tool_result("call_7", &huge, 8_000, 0.05, None).expect("guard must fire");
+        // Truncation is always announced, in both the header and the footer.
+        assert!(
+            guarded.contains("oversized tool result"),
+            "truncation is announced up front: {guarded}"
+        );
+        assert!(
+            guarded.contains("was withheld"),
+            "says the remainder was withheld, not dropped silently"
+        );
+        assert!(
+            guarded.contains("withheld") && guarded.contains("tokens removed"),
+            "footer accounts for the withheld tokens"
+        );
+        // What survived is an exact prefix of the original — no substitution.
+        let body_start = guarded.find(']').expect("header closes") + 2;
+        let body = &guarded[body_start..guarded.find("\n[operant: end").unwrap_or(guarded.len())];
+        assert!(
+            huge.starts_with(body),
+            "body must be an unmodified prefix of the original output"
+        );
+        // A result within the ceiling is returned untouched (no clone, no marker).
+        let small = "y".repeat(80);
+        assert_eq!(guard_tool_result("call_8", &small, 8_000, 0.05, None), None);
+        // 0.0 disables the guard entirely.
+        assert_eq!(guard_tool_result("call_9", &huge, 8_000, 0.0, None), None);
     }
 }

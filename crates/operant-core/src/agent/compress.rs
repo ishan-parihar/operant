@@ -6,6 +6,10 @@ use tracing::{info, warn};
 
 use super::*;
 
+/// Tokens held back from the context window for the model's own response, so
+/// budgeted passes size the input against what is actually available.
+const RESPONSE_RESERVE_TOKENS: usize = 4096;
+
 impl OperantAgent {
     /// Compress context on overflow: try LLM summarization first, fall back
     /// to deterministic decay/eviction. Matches hermes-agent's compression
@@ -145,6 +149,65 @@ impl OperantAgent {
                 .load(std::sync::atomic::Ordering::Relaxed),
             crate::context_management::estimate_total_tokens(messages),
         )
+    }
+
+    /// Apply the tool-result spend guard to one tool output before it joins the
+    /// LLM-bound message list.
+    ///
+    /// A single tool result can be enormous (a whole file, a long command's
+    /// stdout) and would otherwise silently eat the context window. When it
+    /// exceeds `agent.max_tool_result_share` of the usable budget, the bulk is
+    /// withheld behind an explicit marker stating the size, the share and the
+    /// estimated input price — the price comes from the same `models.dev`
+    /// `cost_input_per_million` lookup `emit_usage_and_cost` already uses, and
+    /// is only fetched when the guard actually fires.
+    pub(crate) async fn guard_tool_output_spend(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        content: String,
+    ) -> String {
+        let budget = self
+            .config
+            .context_window
+            .saturating_sub(RESPONSE_RESERVE_TOKENS);
+        let max_share = self.config.max_tool_result_share;
+        let limit = crate::context_management::tool_result_token_limit(budget, max_share);
+
+        // Reuse the existing token counter for the threshold pre-check so the
+        // (possibly networked) price lookup only runs when the guard fires.
+        if crate::context_management::estimate_tokens(&content) <= limit {
+            return content;
+        }
+
+        let (provider, model_name) = match self.config.model.split_once('/') {
+            Some((p, m)) => (p.to_string(), m.to_string()),
+            None => (String::new(), self.config.model.clone()),
+        };
+        let price = crate::models_dev::get_model_capabilities(&provider, &model_name)
+            .await
+            .and_then(|caps| caps.cost_input_per_million);
+
+        let Some(guarded) = crate::context_management::guard_tool_result(
+            tool_call_id,
+            &content,
+            budget,
+            max_share,
+            price,
+        ) else {
+            return content;
+        };
+        info!(
+            tool = tool_name,
+            original_chars = content.chars().count(),
+            original_tokens = crate::context_management::estimate_tokens(&content),
+            kept_chars = guarded.chars().count(),
+            limit_tokens = limit,
+            budget_tokens = budget,
+            cost_usd_per_million = price,
+            "oversized tool result: bulk withheld behind an explicit marker"
+        );
+        guarded
     }
 
     /// Emit `AgentEvent::Usage`/`AgentEvent::Cost` for a completed request
