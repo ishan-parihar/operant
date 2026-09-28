@@ -24,7 +24,18 @@ LOCAL_DIR="${LOCAL_DIR:-$(dirname "$SCRIPT_DIR")/local}"
 ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.20.1"
 
 # libclang (extracted from libclang1-19 deb, no root needed)
+# Prefer the symlink the provisioner makes for a system libclang: bindgen globs
+# for 'libclang.so' and 'libclang-*.so.*', and a distro that ships only
+# libclang.so.N.N satisfies neither, so pointing LIBCLANG_PATH straight at
+# /usr/lib fails even when libclang is installed.
+if [ -z "$LIBCLANG_PATH" ] && [ -e "$LOCAL_DIR/libclang/libclang.so" ]; then
+  LIBCLANG_PATH="$LOCAL_DIR/libclang"
+fi
 export LIBCLANG_PATH="${LIBCLANG_PATH:-$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu}"
+if ! ls "$LIBCLANG_PATH"/libclang.so >/dev/null 2>&1 && ! ls "$LIBCLANG_PATH"/libclang-*.so.* >/dev/null 2>&1; then
+  echo "[dev-env] WARN: no libclang under LIBCLANG_PATH=$LIBCLANG_PATH" >&2
+  echo "[dev-env]       run scripts/provision-build-deps.sh first." >&2
+fi
 
 # ONNX Runtime (prebuilt tarball from microsoft/onnxruntime releases)
 export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"
