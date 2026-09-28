@@ -125,3 +125,64 @@ fn test_custom_action() {
     assert!(binding.is_some());
     assert_eq!(binding.unwrap().action, KeyAction::Custom(42));
 }
+
+/// `/keys` and `/hotkeys` read the registry, but the registry does not
+/// DISPATCH anything — `app/key_handling.rs` does, and it is still a
+/// context-dispatched if-chain rather than a registry lookup. So a binding can
+/// be advertised in the help output while pressing it does nothing, which is
+/// the worst shape a help screen can have: it asserts a capability that does
+/// not exist.
+///
+/// This pins the Global-context chords, which is the honest scope. Global
+/// chords are the ones a user can press from anywhere and expect to work, and
+/// they are the ones dispatched in `key_handling.rs`. The other eleven
+/// `BindingContext`s deliberately do NOT dispatch there — vim modes live in
+/// `prompt_input/vim.rs` and completion has its own module — so grepping
+/// `key_handling.rs` for them would fail on correct code.
+///
+/// WHAT THIS DOES NOT CATCH, stated plainly:
+///   - that the right MODIFIER is handled. It checks the key token only, so a
+///     binding of `Ctrl+X` is satisfied by an unrelated bare `x` press.
+///   - that the dispatch happens in the right BRANCH. `Ctrl+P` appears three
+///     times in `key_handling.rs` for three different contexts; this cannot tell
+///     them apart.
+///   - anything about the other eleven contexts.
+///
+/// It catches the regression that actually happens: someone deletes or renames
+/// a dispatch arm and leaves the catalogue entry behind.
+///
+/// A real behavioural test would build a `KeyEvent` and assert the resulting
+/// `App` state change. That is the right test, and it is not written here
+/// because each `App` construction in this crate is a large fixture — the
+/// source-level pin is the cheap half of the guarantee, not the whole of it.
+#[test]
+fn global_bindings_should_be_dispatched_in_key_handling() {
+    let dispatch = include_str!("../app/key_handling.rs");
+    let globals = DEFAULT_KEYBINDINGS.get_bindings(BindingContext::Global);
+    assert!(
+        !globals.is_empty(),
+        "the Global table is empty — `/keys` would show no global bindings"
+    );
+
+    let mut missing = Vec::new();
+    for binding in globals {
+        // `KeyCode` derives Debug, and for the variants the Global table uses
+        // the Debug form IS the source token: `Char('c')`, `F(1)`, `Esc`.
+        let token = format!("KeyCode::{:?}", binding.key);
+        if !dispatch.contains(&token) {
+            missing.push(format!(
+                "{token} ({:?}, described as {:?})",
+                binding.action, binding.description
+            ));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these Global bindings are advertised by /keys and /hotkeys but no \
+         dispatch arm in tui/app/key_handling.rs handles them. Pressing them \
+         does nothing while the help screen claims otherwise. Either add the \
+         dispatch arm or drop the catalogue entry:\n  {}",
+        missing.join("\n  ")
+    );
+}

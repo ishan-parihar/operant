@@ -164,6 +164,12 @@ Use the echo tool to repeat information and the calculate tool for math."
         ),
         stream: true,
         context_window: 128_000,
+        // A single tool result may occupy at most this share of the window
+        // before its bulk is withheld behind an explicit marker (iter-357).
+        // This field was missing from this struct literal until iter-409, which
+        // is why `cargo test --workspace` failed to compile the example while
+        // `cargo check --workspace` passed: `check` does not build examples.
+        max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
         request_timeout: Duration::from_secs(120),
         max_healing_attempts: 3,
         fallback_models: vec![],

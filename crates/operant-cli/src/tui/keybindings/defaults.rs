@@ -9,6 +9,16 @@ impl KeyBindingRegistry {
     pub(crate) fn add_defaults(&mut self) {
         let defaults: Vec<DefaultBinding> = vec![
             // Global bindings
+            //
+            // `Ctrl+h` / `Ctrl+l` (HistoryPrevious / HistoryNext) used to be
+            // listed here and were removed in iter-409: nothing dispatched
+            // them, so `/keys` advertised a capability that did not exist, and
+            // they cannot be bound anyway — `Ctrl+h` is ASCII 8 (backspace) and
+            // `Ctrl+l` is readline's clear-screen, so the terminal layer takes
+            // them first. Both are now in `OS_CONFLICTS` instead, which is how
+            // `/hotkeys` explains an unavailable chord. Note there is no other
+            // history-navigation binding: the capability does not exist yet,
+            // so nothing was lost by dropping the claim.
             DefaultBinding {
                 key: KeyCode::Char('c'),
                 modifiers: KeyModifiers::CONTROL,
@@ -22,20 +32,6 @@ impl KeyBindingRegistry {
                 action: KeyAction::Cancel,
                 context: BindingContext::Global,
                 description: "Quit application",
-            },
-            DefaultBinding {
-                key: KeyCode::Char('h'),
-                modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::HistoryPrevious,
-                context: BindingContext::Global,
-                description: "Previous history",
-            },
-            DefaultBinding {
-                key: KeyCode::Char('l'),
-                modifiers: KeyModifiers::CONTROL,
-                action: KeyAction::HistoryNext,
-                context: BindingContext::Global,
-                description: "Next history",
             },
             DefaultBinding {
                 key: KeyCode::F(1),

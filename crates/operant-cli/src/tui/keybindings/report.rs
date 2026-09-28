@@ -69,6 +69,14 @@ const OS_CONFLICTS: &[(&str, &str)] = &[
         "X11 keysym WordRubout — some terminals intercept it",
     ),
     ("Ctrl+y", "X11 keysym Undo — some terminals intercept it"),
+    (
+        "Ctrl+h",
+        "ASCII 8 / X11 BackSpace — the terminal or readline layer takes backspace before the app sees it",
+    ),
+    (
+        "Ctrl+l",
+        "readline clear-screen — most terminals repaint instead of delivering the key",
+    ),
     ("F1", "many terminals bind their own help viewer to F1"),
 ];
 
