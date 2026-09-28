@@ -1099,6 +1099,44 @@ production callers, so the loop's `emit` calls were no-ops).
   their code into this tree and conflict with their next push; that gate red
   belongs to their iteration.
 
+### R40-12 — AGENTS.md's "7 platforms only" is false: 22 channel features are in the DEFAULT build (OPEN, MEDIUM)
+`AGENTS.md` states "Supported: 7 platforms", "Do NOT re-add purged platforms",
+and records that iter-50 purged 20 phantom platforms (matrix, mattermost,
+signal, …). Measured against the committed tree, that is no longer true:
+- `crates/operant-cli/Cargo.toml` `default = ["agent-runtime", "gateway"]`,
+  and `agent-runtime` enables **22** `channel-*` features — including
+  `channel-signal`, `channel-mattermost`, `channel-irc`, `channel-imessage`,
+  `channel-dingtalk`, `channel-qq`, `channel-bluesky`, `channel-twitter`,
+  `channel-reddit`, `channel-notion`, `channel-linq`, `channel-wati`,
+  `channel-nextcloud`, `channel-mochat`, `channel-wecom`, `channel-clawdtalk`.
+  All 15 of those are declared in `operant-channels/Cargo.toml` and have real
+  source files (65 files under `crates/operant-channels/src`, e.g.
+  `bluesky.rs`, `irc.rs`, `matrix.rs`, `mattermost.rs`, `nextcloud_talk.rs`).
+- So the purge either was reverted or never persisted to `origin/main`. The
+  documented invariant and the shipped manifest disagree, and the manifest is
+  the one that builds. **Treat the doc as wrong, not the code** — deciding
+  which is intended is an operator call, not an audit inference.
+
+### R40-13 — ~160K lines of crates compile into the binary but are never referenced (OPEN, HIGH)
+Six optional deps are enabled by the DEFAULT features yet have **zero**
+references from `crates/operant-cli/src`: `operant-runtime`,
+`operant-channels`, `operant-gateway`, `operant-memory`, `operant-tools`,
+`operant-hardware` (each 0 matching files at HEAD). They are linked, compiled
+on every build, and can never execute.
+- This one root cause explains three older ledger items at once: **R5-3**
+  (operant-runtime `RuntimeAgent` dead), **R13-3** (`run_gateway` has no
+  caller because the CLI never reaches `operant-gateway`), and **R15-1**
+  (operant-channels unwired). The CLI's live path is
+  `operant-cli → operant-core → (operant-config, operant-harness,
+  operant-memory-as-dep-only)`.
+- Cost of leaving it: every build pays the compile time, and any audit that
+  greps for a symbol in those crates gets a false "wired" signal.
+- Two legitimate resolutions, and they are NOT equivalent: (a) wire the
+  subsystems into the CLI so the features mean something, or (b) drop them
+  from `default` and delete the crates if they are genuinely abandoned. Only
+  the operator knows which; do not guess. Note the interaction with R40-12:
+  if (b), the 22 channel features go with them.
+
 ### R40-11 — `origin/main` does not compile: iter-357 shipped a reader without its field (OPEN, HIGH)
 `0482fa1b` (peer, `fix(iter-357)`) added
 `max_tool_result_share: settings.max_tool_result_share` at
