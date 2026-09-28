@@ -654,6 +654,16 @@ impl MdRenderer {
             return;
         };
         let indent = " ".repeat(self.indent);
+        // A ```mermaid fence holds a diagram, not source to read. The ladder in
+        // `tui::mermaid` decides whether it is drawn inline or shown as source
+        // with the reason; either way this block is never a syntax-highlighted
+        // code listing.
+        if crate::tui::mermaid::is_mermaid_lang(&lang) {
+            for line in crate::tui::mermaid::diagram_lines(&body, &indent) {
+                self.push_line(line);
+            }
+            return;
+        }
         let label = if lang.is_empty() {
             String::new()
         } else {

@@ -27,6 +27,17 @@
 //!   direct call**, so timeouts, guardrails, and tool-result truncation
 //!   fire identically. `tool_call` executes the underlying tool via
 //!   `ToolRegistry::execute` and returns its result verbatim.
+//!
+//! Two additions live here:
+//!
+//! * [`deferred`] — turn-triggered materialisation. The bridge above is
+//!   model-driven; this is the turn-driven path that re-injects a deferred
+//!   tool into the model-visible array when the user's turn overlaps it.
+//! * [`name_recovery`] — bounded edit-distance recovery of hallucinated
+//!   or near-miss tool names, refusing on equidistant ties.
+
+pub mod deferred;
+pub mod name_recovery;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -469,7 +480,7 @@ impl OperantTool for ToolCallTool {
 
     async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let id = synthetic_call_id(TOOL_CALL_NAME);
-        let name = match args.get("name").and_then(Value::as_str) {
+        let requested = match args.get("name").and_then(Value::as_str) {
             Some(n) if !n.is_empty() => n.to_string(),
             _ => {
                 return ToolResult::error(
@@ -479,10 +490,33 @@ impl OperantTool for ToolCallTool {
             }
         };
         let arguments = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
+        let name = requested.clone();
 
         if BRIDGE_TOOL_NAMES.contains(&name.as_str()) {
             return ToolResult::error(id, format!("'{name}' is a bridge tool — call it directly."));
         }
+
+        // Bounded edit-distance recovery: a near-miss deferred name (the
+        // model writing `mcp_gh_create_pr` for `mcp_github_create_pr`)
+        // is repaired once here, so the rest of the bridge sees a real
+        // name. Only attempted when the name is not ALREADY registered: a
+        // name that IS registered but is unavailable is a deliberate ban,
+        // and recovery must never launder a ban into a near-miss success.
+        let name = if self.registry.contains(&name).await {
+            name
+        } else {
+            match &name_recovery::resolve(&self.registry, &name).await {
+                name_recovery::Recovery::Recovered { canonical, .. } => canonical.clone(),
+                name_recovery::Recovery::Exact => name,
+                refused => {
+                    return ToolResult::error(
+                        id,
+                        name_recovery::refusal_message(&requested, refused),
+                    );
+                }
+            }
+        };
+
         if !is_deferrable(&name) {
             return ToolResult::error(
                 id,

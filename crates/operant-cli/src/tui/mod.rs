@@ -53,6 +53,7 @@ pub mod hooks_config_menu;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
 pub mod memory_file_selector;
+pub mod mermaid;
 pub mod theme_colors;
 pub mod theme_screen;
 pub mod voice_capture;

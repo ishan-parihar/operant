@@ -47,6 +47,14 @@ pub struct RuntimeMetrics {
     guardrail_skips: AtomicU64,
     /// Truncated responses that triggered a continuation retry (T1).
     truncation_continuations: AtomicU64,
+    /// Requests whose cacheable prompt prefix matched a recently-sent
+    /// one, i.e. the provider was eligible to serve them from cache.
+    cache_prefix_reuse: AtomicU64,
+    /// Requests whose cacheable prompt prefix changed since the last
+    /// request, so a content-addressed cache could not serve them.
+    cache_prefix_misses: AtomicU64,
+    /// Unix-millis of the last detected prompt-cache miss (0 = never).
+    last_cache_miss_at: AtomicU64,
     /// Unix-millis of the last stream-drop retry (0 = never).
     last_stream_retry_at: AtomicU64,
     /// Unix-millis of the last empty-content retry (0 = never).
@@ -66,6 +74,9 @@ pub struct MetricsSnapshot {
     pub memory_jobs_dropped: u64,
     pub guardrail_skips: u64,
     pub truncation_continuations: u64,
+    pub cache_prefix_reuse: u64,
+    pub cache_prefix_misses: u64,
+    pub last_cache_miss_at: u64,
     pub last_stream_retry_at: u64,
     pub last_empty_content_retry_at: u64,
     pub last_memory_failure_at: u64,
@@ -82,6 +93,7 @@ impl MetricsSnapshot {
             || self.memory_jobs_dropped > 0
             || self.guardrail_skips > 0
             || self.truncation_continuations > 0
+            || self.cache_prefix_misses > 0
     }
 }
 
@@ -133,6 +145,21 @@ impl RuntimeMetrics {
         self.guardrail_skips.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A request re-used bytes the provider had already been handed, so
+    /// it was eligible for a prompt-cache read. NOT a confirmed read —
+    /// see `clients::cache_monitor` for the proven/inferred split.
+    pub fn record_cache_prefix_reuse(&self) {
+        self.cache_prefix_reuse.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A request's cacheable prompt prefix changed, so the cache could
+    /// not serve it and the operator is paying full price for it.
+    pub fn record_cache_prefix_miss(&self) {
+        self.cache_prefix_misses.fetch_add(1, Ordering::Relaxed);
+        self.last_cache_miss_at
+            .store(now_millis(), Ordering::Relaxed);
+    }
+
     /// Read every counter into a cheap `Copy` snapshot.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -143,6 +170,9 @@ impl RuntimeMetrics {
             memory_jobs_dropped: self.memory_jobs_dropped.load(Ordering::Relaxed),
             guardrail_skips: self.guardrail_skips.load(Ordering::Relaxed),
             truncation_continuations: self.truncation_continuations.load(Ordering::Relaxed),
+            cache_prefix_reuse: self.cache_prefix_reuse.load(Ordering::Relaxed),
+            cache_prefix_misses: self.cache_prefix_misses.load(Ordering::Relaxed),
+            last_cache_miss_at: self.last_cache_miss_at.load(Ordering::Relaxed),
             last_stream_retry_at: self.last_stream_retry_at.load(Ordering::Relaxed),
             last_empty_content_retry_at: self.last_empty_content_retry_at.load(Ordering::Relaxed),
             last_memory_failure_at: self.last_memory_failure_at.load(Ordering::Relaxed),
@@ -190,6 +220,22 @@ mod tests {
         assert_eq!(s.memory_jobs_dropped, 1);
         assert!(s.last_memory_failure_at > 0);
         assert_eq!(s.stream_retries, 0);
+    }
+
+    #[test]
+    fn test_cache_prefix_counters_increment_and_stamp() {
+        let m = RuntimeMetrics::new();
+        m.record_cache_prefix_reuse();
+        m.record_cache_prefix_reuse();
+        m.record_cache_prefix_miss();
+
+        let s = m.snapshot();
+        assert_eq!(s.cache_prefix_reuse, 2);
+        assert_eq!(s.cache_prefix_misses, 1);
+        assert!(s.last_cache_miss_at > 0, "miss stamp must be set");
+        // A detected miss must make the health pill visible, not hide
+        // behind a healthy-looking session.
+        assert!(s.has_any());
     }
 
     #[test]

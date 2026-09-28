@@ -432,6 +432,11 @@ pub struct OperantAgent {
     /// the agent bumps the counters at the existing warn! points so the
     /// aggregation hook adds no extra logging of its own.
     metrics: Arc<crate::runtime_metrics::RuntimeMetrics>,
+    /// Client-side prompt-cache prefix tracker. Holds the recently-seen
+    /// cacheable-prefix digests so the run loop can decide hit/miss
+    /// eligibility for a request WITHOUT the provider reporting anything.
+    /// See `clients::cache_monitor`. Cheap to clone; per-agent state.
+    cache_tracker: crate::agent::clients::cache_monitor::PrefixTracker,
     /// LLM-based context compressor. When set, context overflow errors
     /// trigger LLM summarization (summarize middle turns via auxiliary model)
     /// before falling back to deterministic decay/eviction. Matches

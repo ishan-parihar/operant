@@ -14,7 +14,59 @@ use tracing::{debug, error, info, instrument, warn};
 
 use super::*;
 
+/// The text of the most recent user message, used as the relevance trigger
+/// for turn-triggered materialisation of deferred (MCP) tools.
+///
+/// Scans backwards and stops at the first user message. Only user text is
+/// considered: assistant turns and tool results are model-generated, so
+/// matching against them would let the model materialise anything simply by
+/// hallucinating a tool name in its own reasoning.
+fn last_user_turn(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, Role::User))
+        .map(|m| m.content.clone())
+        .unwrap_or_default()
+}
+
 impl OperantAgent {
+    /// Assemble the model-visible tool list for one LLM request.
+    ///
+    /// Two layers, in order:
+    ///
+    /// 1. `get_schemas_for_request` applies the `tool_search` bridge — MCP
+    ///    (`mcp_*`) tools are withheld behind `tool_search` /
+    ///    `tool_describe` / `tool_call`, native tools stay eager.
+    /// 2. [`crate::tools::tool_search::deferred::materialise`] re-injects
+    ///    the deferred tools the *current user turn* makes relevant, so a
+    ///    model that never thinks to search for `mcp_github_*` still gets
+    ///    it described when the user says "open a pull request".
+    ///
+    /// The catalog handed to `materialise` is `get_schemas()` — already the
+    /// registered ∩ available ∩ not-disabled intersection — so materialising
+    /// can never surface a tool the registry would otherwise withhold. That
+    /// keeps *deferred* (a presentation choice) distinct from *unavailable*
+    /// (a capability the tool does not have).
+    ///
+    /// The cost is one extra `get_schemas()` read of the shared RwLock per
+    /// request; negligible next to the LLM round-trip it precedes.
+    pub(crate) async fn tools_for_turn(
+        &self,
+        messages: &[Message],
+    ) -> Vec<crate::schema::ToolSchema> {
+        let visible = self
+            .registry
+            .get_schemas_for_request(&self.config.tool_search, self.config.context_window)
+            .await;
+        let catalog = self.registry.get_schemas().await;
+        crate::tools::tool_search::deferred::materialise(
+            &last_user_turn(messages),
+            visible,
+            &catalog,
+        )
+    }
+
     /// Attempt a "grace call" — a toolless summary request to the model.
     ///
     /// Called when the iteration budget or max_iterations is exhausted.
@@ -384,10 +436,53 @@ impl OperantAgent {
             );
 
             // Get tool schemas
-            let tools = self
-                .registry
-                .get_schemas_for_request(&self.config.tool_search, self.config.context_window)
-                .await;
+            let tools = self.tools_for_turn(&messages).await;
+
+            // ── Prompt-cache health check ───────────────────────────────
+            // Hash the cacheable head of the request (first system message
+            // + the tool block) and compare it against the recently-seen
+            // set. An unchanged digest means the provider was handed the
+            // same cacheable bytes as last turn, so the request is
+            // ELIGIBLE for a cache read — a necessary condition, never a
+            // confirmed hit. A changed digest means a content-addressed
+            // cache cannot serve it. The conversation history is excluded
+            // by construction, so a growing conversation never reads as a
+            // miss.
+            //
+            // A proven verdict from the server seam (a proxy that saw the
+            // provider's cache counters for these same bytes) wins over
+            // the inferred one. Cost: one truncated SHA-256 over the
+            // stable prefix only — never over the volatile suffix or the
+            // history, which is where the real saving is.
+            if let Some(prefix) =
+                crate::agent::clients::cache_monitor::CacheablePrefix::from_messages(
+                    &messages, &tools,
+                )
+            {
+                let (digest, verdict) =
+                    crate::agent::clients::cache_monitor::reconcile(&prefix, &self.cache_tracker);
+                match verdict.outcome {
+                    crate::agent::clients::cache_monitor::CacheOutcome::Hit => {
+                        self.metrics.record_cache_prefix_reuse();
+                    }
+                    crate::agent::clients::cache_monitor::CacheOutcome::Miss => {
+                        self.metrics.record_cache_prefix_miss();
+                        warn!(
+                            prefix_hash = %digest,
+                            evidence = ?verdict.evidence,
+                            reason = ?verdict.reason,
+                            provider_report = self
+                                .config
+                                .model
+                                .split_once('/')
+                                .map(|(provider, _)| provider)
+                                .unwrap_or("unknown"),
+                            "prompt cache MISS: {verdict}"
+                        );
+                    }
+                    crate::agent::clients::cache_monitor::CacheOutcome::Unknown => {}
+                }
+            }
 
             let request = ChatRequest::new(self.effective_model(), messages.clone())
                 .with_tools(tools)
@@ -443,13 +538,7 @@ impl OperantAgent {
                             )
                             .await;
                             // Rebuild request with compressed messages
-                            let tools = self
-                                .registry
-                                .get_schemas_for_request(
-                                    &self.config.tool_search,
-                                    self.config.context_window,
-                                )
-                                .await;
+                            let tools = self.tools_for_turn(&messages).await;
                             let retry_request =
                                 ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
@@ -476,13 +565,7 @@ impl OperantAgent {
                                     "credential rotated",
                                 )
                                 .await;
-                                let tools = self
-                                    .registry
-                                    .get_schemas_for_request(
-                                        &self.config.tool_search,
-                                        self.config.context_window,
-                                    )
-                                    .await;
+                                let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
@@ -554,13 +637,7 @@ impl OperantAgent {
                                     max = retry_state.max_retries,
                                     "Stream dropped mid-read — re-issuing LLM request"
                                 );
-                                let tools = self
-                                    .registry
-                                    .get_schemas_for_request(
-                                        &self.config.tool_search,
-                                        self.config.context_window,
-                                    )
-                                    .await;
+                                let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
@@ -605,13 +682,7 @@ impl OperantAgent {
                                 "context overflow",
                             )
                             .await;
-                            let tools = self
-                                .registry
-                                .get_schemas_for_request(
-                                    &self.config.tool_search,
-                                    self.config.context_window,
-                                )
-                                .await;
+                            let tools = self.tools_for_turn(&messages).await;
                             let retry_request =
                                 ChatRequest::new(self.effective_model(), messages.clone())
                                     .with_tools(tools)
@@ -638,13 +709,7 @@ impl OperantAgent {
                                     "credential rotated",
                                 )
                                 .await;
-                                let tools = self
-                                    .registry
-                                    .get_schemas_for_request(
-                                        &self.config.tool_search,
-                                        self.config.context_window,
-                                    )
-                                    .await;
+                                let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
                                     ChatRequest::new(self.effective_model(), messages.clone())
                                         .with_tools(tools)
@@ -1091,6 +1156,19 @@ impl OperantAgent {
                         .map(|tc| (tc.id.clone(), tc.function.arguments.clone()))
                         .collect();
 
+                    // Build a lookup map from tool_call_id → the name the
+                    // MODEL asked for. `execute_tools` may rewrite that name
+                    // via bounded edit-distance recovery (a near-miss like
+                    // `read_files` for `read_file`), so comparing the model's
+                    // request against the name the executor stamped on the
+                    // result is how the loop knows a recovery happened and can
+                    // tell the model instead of letting it build on a false
+                    // premise.
+                    let call_names: std::collections::HashMap<String, String> = tool_calls
+                        .iter()
+                        .map(|tc| (tc.id.clone(), tc.function.name.clone()))
+                        .collect();
+
                     // ── Progressive LCM ingest (hermes context_engine parity) ──
                     // Commit the accumulated conversation (including the
                     // assistant message just pushed above) into the lossless
@@ -1219,6 +1297,29 @@ impl OperantAgent {
                             truncate_tool_result(&result.name, &result.content)
                         } else {
                             result.error.clone().unwrap_or_else(|| "Error".to_string())
+                        };
+                        // Tool-name recovery (see `call_names` above): a
+                        // non-empty result name that differs from the name the
+                        // model asked for means `execute_tools` recovered a
+                        // near-miss. Say so, or the model will keep using the
+                        // name that does not exist. Bridge tools are exempt —
+                        // `tool_call` legitimately returns the INNER tool's
+                        // name, which is not a recovery.
+                        let body = match call_names.get(&result.tool_call_id) {
+                            Some(requested)
+                                if !result.name.is_empty()
+                                    && *requested != result.name
+                                    && !crate::tools::tool_search::BRIDGE_TOOL_NAMES
+                                        .contains(&requested.as_str()) =>
+                            {
+                                format!(
+                                    "[tool name recovered] No registered tool is named the name you \
+                                     called. '{}' was executed instead. Use the exact name '{}' from \
+                                     now on — do not repeat the incorrect name.\n\n{body}",
+                                    requested, result.name
+                                )
+                            }
+                            _ => body,
                         };
                         let body = crate::redaction::redact_sensitive_text_if_enabled(&body);
                         let content = self

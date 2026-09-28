@@ -229,6 +229,15 @@ impl AnthropicModelClient {
                 as u32,
         };
 
+        // Prompt-cache observation. Anthropic is the one provider whose
+        // response PROVES whether the cache_control breakpoints hit, via
+        // `cache_read_input_tokens` / `cache_creation_input_tokens`. These
+        // were previously never read anywhere, so a silently missing
+        // cache re-paid full price for the whole prefix every turn and
+        // nothing said so. Hand them to the server-side seam, which is
+        // the same registry a proxy in front of the provider reports into.
+        report_prompt_cache_observation(usage_obj, body["model"].as_str(), "operant:anthropic");
+
         let tc = if tool_calls.is_empty() {
             None
         } else {
@@ -480,6 +489,14 @@ fn parse_sse_event(
             let input_tokens = json["message"]["usage"]["input_tokens"]
                 .as_u64()
                 .unwrap_or(0) as u32;
+            // Streaming is the DEFAULT transport (`stream = true`), so
+            // this is where a proven cache verdict is actually available
+            // for most requests. Same seam as the non-streaming path.
+            report_prompt_cache_observation(
+                &json["message"]["usage"],
+                json["message"]["model"].as_str(),
+                "operant:anthropic",
+            );
             (input_tokens > 0).then_some(StreamChunk {
                 content: None,
                 reasoning: None,
@@ -522,6 +539,56 @@ fn parse_sse_event(
             })
         }
         _ => None,
+    }
+}
+
+/// Feed Anthropic's cache counters into the server-side monitoring seam.
+///
+/// `usage_obj` is the provider's `usage` object (from the non-streaming
+/// body, or from `message_start`'s `message.usage` on the streaming
+/// path). Anthropic is one of the few providers whose response *proves*
+/// cache behaviour, so a `cache_read_input_tokens > 0` here is the only
+/// PROVEN hit in the system — the client-side prefix tracker can only
+/// ever infer eligibility.
+///
+/// A missing pair of counters means the provider said nothing about
+/// caching; that is a legitimate "no data", not an error to escalate, so
+/// it lands at `debug!`. Anything the seam DID accept is classified, and
+/// a proven miss is surfaced rather than swallowed.
+fn report_prompt_cache_observation(usage_obj: &Value, model: Option<&str>, source: &str) {
+    use super::cache_monitor::{ObservedCacheBehaviour, server_cache_monitor};
+
+    let cache_read = usage_obj["cache_read_input_tokens"].as_u64();
+    let cache_creation = usage_obj["cache_creation_input_tokens"].as_u64();
+    if cache_read.is_none() && cache_creation.is_none() {
+        tracing::debug!(
+            "Anthropic response carried no prompt-cache counters — \
+             client-side prefix tracking stays INFERRED for this request"
+        );
+        return;
+    }
+
+    let report = ObservedCacheBehaviour::from_provider(
+        source,
+        "anthropic",
+        model.map(str::to_string),
+        cache_read,
+        cache_creation,
+    );
+    match server_cache_monitor().report(report) {
+        Ok(observation) => {
+            if observation.verdict.outcome == super::cache_monitor::CacheOutcome::Miss {
+                tracing::warn!(
+                    cache_creation_tokens = observation.verdict.cache_creation_tokens.unwrap_or(0),
+                    cache_read_tokens = observation.verdict.cache_read_tokens.unwrap_or(0),
+                    "prompt cache MISS (proven by provider): the cache_control breakpoints \
+                     did not hit — the full prefix was re-encoded at full price"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::debug!(%error, "prompt-cache observation not accepted by the seam");
+        }
     }
 }
 

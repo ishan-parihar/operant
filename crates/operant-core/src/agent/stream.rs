@@ -471,7 +471,7 @@ impl OperantAgent {
         let mut seen_tool_calls: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
-        for (idx, tool_call) in tool_calls.into_iter().enumerate() {
+        for (idx, mut tool_call) in tool_calls.into_iter().enumerate() {
             // Check interrupt flag
             if self.interrupt_flag.is_triggered() {
                 early_results[idx] = Some(ToolResult::error(
@@ -502,7 +502,7 @@ impl OperantAgent {
                 continue;
             }
 
-            let name = tool_call.function.name.clone();
+            let mut name = tool_call.function.name.clone();
             let raw_args = tool_call.function.arguments.clone();
             let trimmed = raw_args.trim();
             let args_str = if trimmed.is_empty() {
@@ -632,14 +632,47 @@ impl OperantAgent {
                 }
             }
 
-            // Validate tool exists
+            // Validate tool exists — with bounded edit-distance recovery for
+            // hallucinated / near-miss names. A model that writes
+            // `read_files` for `read_file`, or a name from an MCP server
+            // that has since disconnected, otherwise gets a bare
+            // "not found" and retries the same wrong name forever. Recovery
+            // rewrites the name in the ToolCall that flows into `pending`, so
+            // BOTH execution branches (single-tool and the concurrent pool)
+            // dispatch the canonical name without a second hook. A tie at the
+            // minimum distance is refused, never guessed. The caller detects
+            // the recovery by comparing the result's stamped name with the
+            // name the model asked for, and tells the model about it.
             if !self.registry.contains(&name).await {
-                error!(tool = %name, "Tool not found");
-                early_results[idx] = Some(ToolResult::error(
-                    &tool_call.id,
-                    format!("Tool '{}' not found", name),
-                ));
-                continue;
+                let recovery =
+                    crate::tools::tool_search::name_recovery::resolve(&self.registry, &name).await;
+                match &recovery {
+                    crate::tools::tool_search::name_recovery::Recovery::Recovered {
+                        canonical,
+                        distance,
+                        ..
+                    } => {
+                        warn!(
+                            tool = %name,
+                            canonical = %canonical,
+                            distance,
+                            "Recovered near-miss tool name"
+                        );
+                        tool_call.function.name.clone_from(canonical);
+                        name.clone_from(canonical);
+                    }
+                    crate::tools::tool_search::name_recovery::Recovery::Exact => {}
+                    refused => {
+                        error!(tool = %name, "Tool not found and not recoverable");
+                        early_results[idx] = Some(ToolResult::error(
+                            &tool_call.id,
+                            crate::tools::tool_search::name_recovery::refusal_message(
+                                &name, refused,
+                            ),
+                        ));
+                        continue;
+                    }
+                }
             }
 
             // ── Centralized argument validation (iter-262) ───────────

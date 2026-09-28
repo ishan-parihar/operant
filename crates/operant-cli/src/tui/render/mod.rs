@@ -438,4 +438,15 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     for image in queued {
         let _ = crate::tui::image_paste::emit_inline_image(&image);
     }
+
+    // ---- Mermaid diagrams (post-paint pass) ------------------------------
+    // A ```mermaid block rasterises on a worker thread, so the picture lands
+    // here some frames after the transcript first showed the diagram. Same
+    // window as the inline-graphics pass above, for the same reason: graphics
+    // protocols paint outside ratatui's cell grid. When a raster lands the
+    // memoized transcript lines are stale — a "rendering…" placeholder just
+    // became the real thing — so drop them and let the next frame rebuild.
+    if crate::tui::mermaid::drain_ready_images() {
+        crate::tui::render::cache::MESSAGE_LINES_CACHE.with(|cache| cache.borrow_mut().take());
+    }
 }
