@@ -1688,7 +1688,22 @@ uncommitted work in both files: a rustfmt reflow of `ProviderFactory`'s
   a peer's uncommitted work is the R40-10 class, and repeating it is how
   R40-10 happened in the first place.
 
-### R40-21 — `origin/main` does not compile AGAIN: peer's iter-391 omitted a `mod` declaration (OPEN, HIGH, measured iter-396)
+### R40-21 — `origin/main` does not compile AGAIN: peer's iter-391 omitted a `mod` declaration (CLOSED, iter-414; was OPEN/HIGH, measured iter-396)
+
+**CLOSED iter-414.** The peer pushed their own fix; `pub mod cache_monitor;` is
+now at `crates/operant-core/src/agent/clients/mod.rs:3` on `main` (`8fd6d6a9`).
+This is the outcome iter-400 defined as "fixed": the declaration landed on
+`main`, rather than being added from a clean checkout, which would have been a
+duplicate. No action was taken here — the remedy belonged to whoever wrote the
+unreferenced module, and adding it myself would have created two competing
+declarations.
+
+**Consequence: the three items this blocked are unblocked.** The R40-19 rustdoc
+recount, a valid release rebuild, and any further measurement that requires a
+compiling tree were all downstream of this. See the addendum at the end of this
+entry.
+
+Original finding, retained:
 Third occurrence of the R40-9/iter-359 failure class. The peer's
 `d68ea308` (iter-391, "cache-miss detection") added
 `crates/operant-core/src/agent/clients/cache_monitor.rs` and referenced it
