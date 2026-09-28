@@ -665,6 +665,16 @@ impl MdRenderer {
             }
             return;
         }
+        // A ```latex / ```math / ```tex fence holds a formula, not source to
+        // read. Same shape as the mermaid branch above and the same deal: the
+        // ladder in `tui::latex` decides whether it is drawn inline or shown as
+        // source with the reason, and either way the source is never swallowed.
+        if crate::tui::latex::is_latex_lang(&lang) {
+            for line in crate::tui::latex::formula_lines(&body, &indent) {
+                self.push_line(line);
+            }
+            return;
+        }
         let label = if lang.is_empty() {
             String::new()
         } else {

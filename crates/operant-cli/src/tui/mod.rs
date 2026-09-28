@@ -57,6 +57,7 @@ pub mod free_mode_dialog;
 pub mod hooks_config_menu;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
+pub mod latex;
 pub mod memory_file_selector;
 pub mod mermaid;
 pub mod theme_colors;

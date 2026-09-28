@@ -473,10 +473,18 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // raster lands the memoized transcript lines are stale — a "rendering…"
     // placeholder just became the real thing — so drop them and let the next
     // frame rebuild.
-    let landed = crate::tui::mermaid::drain_ready_rasters();
-    if landed.resolved {
+    let mut landed = crate::tui::mermaid::drain_ready_rasters();
+
+    // A ```latex / ```math / ```tex block is the same shape of problem: the
+    // formula rasterises on a worker thread, so its placeholder goes stale on
+    // exactly the same schedule. Both ladders report "a PNG just landed, and the
+    // transcript lines are stale", so there is still exactly ONE registry call —
+    // `pin_rasters` consumes a list of PNG paths, not a producer.
+    let formulas = crate::tui::latex::drain_ready_rasters();
+    if landed.resolved || formulas.resolved {
         crate::tui::render::cache::MESSAGE_LINES_CACHE.with(|cache| cache.borrow_mut().take());
     }
+    landed.pngs.extend(formulas.pngs);
     crate::tui::pinned_images::pin_rasters(&app.pinned_images, &landed);
 
     // Re-emit every pinned graphic, and blank the cells it owns so the flush
