@@ -1555,3 +1555,32 @@ working tree** (36 dirty files total, 100% overlap). Applying a whole-file
 reformat over in-flight edits is the R40-10 clobber class, so it was dropped
 rather than forced. Once the concurrent agent's work lands, this is a single
 `cargo fmt --all && git commit`.
+
+### R40-19 — the `doc` CI job has 26 rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, measured iter-389)
+`ci.yml`'s doc job (`RUSTDOCFLAGS=-Dwarnings`, `cargo doc --workspace --no-deps
+--all-features`) is red, which is one of the two reasons the main-branch
+trigger is still deferred (R40-17). Two were fixed in iter-389
+(`PgKnowledgeGraph` linking a private item; `operant-hardware/src/datasheet.rs`
+unqualified module-doc links). **26 remain**, measured with the full
+`--all-features` graph — note the count grows as earlier crates are fixed,
+because a crate that fails stops reporting the ones behind it, so any single
+number here is a floor, not the total:
+- `unclosed HTML tag` (9): `String`, `scope`, `repo`, `OperantAgent`, `id`,
+  `hex`, `Connection` — angle-bracket generics in doc comments that rustdoc
+  parses as HTML.
+- `public documentation ... links to private item` (6): `PluginRegistry` (×2),
+  `Self::build_headers`, `every_interval`, `Self::download_binary`, `VerbKind`.
+- `unresolved link` (8): `ToolCall`, `refresh_coalesced`, `Duration::ZERO`,
+  `chat_provider`, `AftBridge::bash`, `add`, and others.
+- `this URL is not a hyperlink` (3).
+- Two fixes made in iter-389 for `operant-harness` (`Composition::resolve`,
+  `NoopProvider`) are correct and verified but were deliberately NOT staged:
+  those two files carry the concurrent agent's in-flight edits (a `dyn Fn`
+  reflow) alongside my doc changes, so staging would have swept their work in
+  (R40-10). They land when the peer's work does — one iteration, two hunks.
+- **This is claim-must-match-code work throughout**: every one of these is a
+  doc comment asserting something the code does not do, which is the same
+  defect class as R40-14's dead extractor. The `NoopProvider` case is the
+  sharpest — the code builds `crate::row::NativeRowStub` and the only
+  `NoopProvider` in the repo is a test-local struct in
+  `operant-harness/tests/host_boot.rs:14`.
