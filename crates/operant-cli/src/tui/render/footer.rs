@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    ACCENT_PRIMARY, STATUS_THINKING, STATUS_THINKING_ELLIPSIS, shimmer_spans, spinner_char,
+    STATUS_THINKING, STATUS_THINKING_ELLIPSIS, accent_primary, shimmer_spans, spinner_char,
     spinner_color, truncate_middle, truncate_text,
 };
 
@@ -744,20 +744,20 @@ pub(crate) fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect
         let is_selected = start + row == selected;
         let accent_style = if is_selected {
             Style::default()
-                .fg(ACCENT_PRIMARY)
+                .fg(accent_primary())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
         let label_style = if is_selected {
             Style::default()
-                .fg(ACCENT_PRIMARY)
+                .fg(accent_primary())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
         let detail_style = if is_selected {
-            Style::default().fg(ACCENT_PRIMARY)
+            Style::default().fg(accent_primary())
         } else {
             Style::default().fg(Color::DarkGray)
         };

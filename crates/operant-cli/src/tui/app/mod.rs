@@ -138,6 +138,14 @@ pub struct App {
     /// alt screen + raw mode and clears this field.
     pub pending_shell_command: Option<Vec<String>>,
 
+    /// Pasted/dropped images waiting for the post-paint inline-graphics emit.
+    ///
+    /// Terminal image protocols (Kitty/Sixel/iTerm2) paint outside ratatui's
+    /// cell grid, so the escape sequence can only be written after the frame is
+    /// flushed — the same post-paint path the OSC 8 hyperlink overlay uses.
+    /// Drained once per entry by `render_app` (which only has `&App`).
+    pub pending_inline_images: RefCell<Vec<crate::tui::image_paste::PastedImage>>,
+
     // Extended state
     pub tool_use_blocks: Vec<ToolUseBlock>,
     pub permission_request: Option<PermissionRequest>,

@@ -406,12 +406,14 @@ impl App {
                     label: label.clone(),
                     dimensions: None,
                 };
-                self.prompt_input.add_image(img);
-                self.push_notification(
-                    crate::notifications::NotificationKind::Info,
-                    format!("Image attached: {}", label),
-                    Some(3),
+                // Same render/degrade path as a clipboard paste.
+                let msg = crate::tui::image_paste::describe_rendered(
+                    &img,
+                    &crate::tui::image_paste::render_attachment(&img),
                 );
+                self.prompt_input.add_image(img.clone());
+                self.pending_inline_images.borrow_mut().push(img);
+                self.push_notification(crate::notifications::NotificationKind::Info, msg, Some(3));
             } else {
                 // Non-image file: insert as an @mention so the path is visible
                 // but clearly marked as a file reference.

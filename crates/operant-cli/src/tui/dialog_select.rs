@@ -12,8 +12,9 @@ use ratatui::widgets::Paragraph;
 use std::cell::{Cell, RefCell};
 
 use crate::tui::overlays::{
-    OPERANT_PANEL_BG, centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg,
+    centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg,
 };
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -194,7 +195,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
     }
 
     let dim = Color::Rgb(90, 90, 90);
-    let dialog_bg = OPERANT_PANEL_BG;
+    let dialog_bg = theme_colors::panel_bg();
     let highlight_bg = Color::Rgb(255, 191, 0); // pink highlight bar
     let highlight_fg = Color::White;
     let category_fg = Color::Rgb(255, 191, 0); // pink category names

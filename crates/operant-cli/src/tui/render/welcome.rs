@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
-use super::{ACCENT_PRIMARY, WELCOME_BOX_HEIGHT, truncate_end};
+use super::{WELCOME_BOX_HEIGHT, accent_primary, display_width, truncate_end};
 
 #[allow(dead_code)] // Prepared for welcome screen rendering — not yet wired into render_app()
 pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
@@ -23,7 +23,7 @@ pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> 
 
     if let Some(url) = app.remote_session_url.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled(" link ", Style::default().fg(ACCENT_PRIMARY)),
+            Span::styled(" link ", Style::default().fg(accent_primary())),
             Span::styled(
                 truncate_end(url, max_width),
                 Style::default().fg(Color::DarkGray),
@@ -66,7 +66,7 @@ pub(crate) fn render_banner_block(frame: &mut Frame, _app: &App, area: Rect) {
         .map(|l| {
             l.spans
                 .iter()
-                .map(|s| s.content.chars().count())
+                .map(|s| display_width(&s.content))
                 .sum::<usize>()
         })
         .max()
@@ -108,7 +108,7 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 "Operant ",
                 Style::default()
-                    .fg(ACCENT_PRIMARY)
+                    .fg(accent_primary())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(

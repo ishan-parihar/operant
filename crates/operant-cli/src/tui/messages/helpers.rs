@@ -5,8 +5,10 @@
 
 use super::*;
 use crate::tui::app::TurnMetadata;
+use crate::tui::render::{display_width, take_width};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) fn render_user_text_with_ctx(text: &str, ctx: &RenderContext) -> Vec<Line<'static>> {
@@ -111,19 +113,36 @@ pub(crate) fn user_metadata_line(_meta: Option<&TurnMetadata>) -> Option<Line<'s
 }
 
 fn truncate_user_prompt_text(text: &str) -> String {
-    if text.len() <= MAX_USER_PROMPT_DISPLAY_CHARS {
+    if display_width(text) <= MAX_USER_PROMPT_DISPLAY_CHARS {
         return text.to_string();
     }
 
-    let head = &text[..TRUNCATE_USER_PROMPT_HEAD_CHARS.min(text.len())];
-    let tail_start = text.len().saturating_sub(TRUNCATE_USER_PROMPT_TAIL_CHARS);
-    let tail = &text[tail_start..];
-    let hidden_lines = text
-        .chars()
-        .take(TRUNCATE_USER_PROMPT_HEAD_CHARS)
-        .filter(|c| *c == '\n')
+    // Cut on grapheme-cluster boundaries. Slicing by byte offset would either
+    // split a multi-byte character (corrupting the prompt) or panic outright
+    // when the offset lands mid-character.
+    let head = take_width(text, TRUNCATE_USER_PROMPT_HEAD_CHARS);
+    let tail_budget = TRUNCATE_USER_PROMPT_TAIL_CHARS.min(display_width(text));
+    let tail = take_width_from_end(text, tail_budget);
+    let hidden_lines = head
+        .matches('\n')
         .count()
-        .saturating_sub(tail.chars().filter(|c| *c == '\n').count());
+        .saturating_sub(tail.matches('\n').count());
 
     format!("{head}\n… +{hidden_lines} lines …\n{tail}")
+}
+
+/// Longest suffix of `s` that fits within `max_width` terminal cells, cut only
+/// on a grapheme-cluster boundary. Mirror of `take_width`.
+fn take_width_from_end(s: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0usize;
+    for g in s.graphemes(true).rev() {
+        let gw = display_width(g);
+        if width + gw > max_width {
+            break;
+        }
+        out.insert_str(0, g);
+        width += gw;
+    }
+    out
 }

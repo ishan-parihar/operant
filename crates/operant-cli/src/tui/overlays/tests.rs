@@ -40,7 +40,7 @@ fn help_overlay_filter() {
 
 #[test]
 fn modal_search_line_separates_leading_space_from_cursor() {
-    let line = modal_search_line("", "Search", OPERANT_MUTED, OPERANT_TEXT);
+    let line = modal_search_line("", "Search", theme_colors::muted(), theme_colors::text());
     assert_eq!(line.spans.len(), 3);
     assert_eq!(line.spans[0].content.as_ref(), " ");
     assert_eq!(line.spans[1].content.as_ref(), "S");

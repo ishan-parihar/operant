@@ -10,8 +10,11 @@
 //   Linux  : xclip / wl-paste
 //   Windows: PowerShell Get-Clipboard
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+
+use crate::tui::image_render::{self, ImageRenderConfig, RenderedImage};
 
 // ---------------------------------------------------------------------------
 // Image attachment state
@@ -21,7 +24,6 @@ use std::process::Command;
 #[derive(Debug, Clone)]
 pub struct PastedImage {
     /// Path to the temporary PNG file on disk.
-    #[allow(dead_code)] // Path to temporary pasted image
     pub path: PathBuf,
     /// Display label shown in the prompt (e.g. "clipboard.png" or "image.png").
     pub label: String,
@@ -363,6 +365,108 @@ pub fn encode_image_base64(path: &PathBuf) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Inline rendering
+// ---------------------------------------------------------------------------
+
+/// A clear, single-line stand-in for an image the terminal cannot draw.
+///
+/// Names the format and the pixel size so the user still learns what was
+/// pasted, instead of the attachment silently disappearing.
+pub fn placeholder_for(img: &PastedImage) -> String {
+    let format = image_format_of(&img.path, &img.label);
+    match img.dimensions {
+        Some((w, h)) => {
+            format!("[image: {format} {w}x{h} — no inline graphics protocol available]")
+        }
+        None => format!("[image: {format} — no inline graphics protocol available]"),
+    }
+}
+
+/// Sniff the image format from the file's magic bytes, falling back to the
+/// label's extension. Sniffing keeps the placeholder honest for drag-and-drop
+/// attachments, whose label is the user's filename.
+fn image_format_of(path: &PathBuf, label: &str) -> String {
+    if let Ok(head) = std::fs::read(path) {
+        let head = &head[..head.len().min(12)];
+        if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return "PNG".to_string();
+        }
+        if head.starts_with(b"\xff\xd8\xff") {
+            return "JPEG".to_string();
+        }
+        if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+            return "GIF".to_string();
+        }
+        if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+            return "WebP".to_string();
+        }
+        if head.starts_with(b"BM") {
+            return "BMP".to_string();
+        }
+    }
+    match label
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_uppercase())
+    {
+        Some(ext) if !ext.is_empty() => ext,
+        _ => "image".to_string(),
+    }
+}
+
+/// Render a pasted attachment for the current terminal.
+///
+/// Delegates to [`image_render::render_image`], which auto-detects the protocol
+/// in the order Kitty -> iTerm2 -> Sixel. On failure the result carries a
+/// textual placeholder rather than raw bytes or silence.
+pub fn render_attachment(img: &PastedImage) -> RenderedImage {
+    let rendered = image_render::render_image(&img.path, &ImageRenderConfig::default());
+    if rendered.success {
+        return rendered;
+    }
+    RenderedImage {
+        escape_sequence: placeholder_for(img),
+        width_cells: 0,
+        height_cells: 0,
+        success: false,
+    }
+}
+
+/// Render the attachment and, when the terminal speaks a graphics protocol,
+/// write the escape sequence to stdout.
+///
+/// Terminal graphics protocols paint outside ratatui's cell grid, so this is
+/// the same post-paint write path the OSC 8 hyperlink overlay uses. Returns
+/// the rendered image (or the placeholder) so the caller can report it.
+pub fn emit_inline_image(img: &PastedImage) -> RenderedImage {
+    let rendered = render_attachment(img);
+    if rendered.success {
+        let mut out = std::io::stdout();
+        let _ = out.write_all(rendered.escape_sequence.as_bytes());
+        let _ = out.flush();
+    }
+    rendered
+}
+
+/// Human-readable one-liner describing what happened to a pasted image.
+pub fn describe_rendered(img: &PastedImage, rendered: &RenderedImage) -> String {
+    let size = match img.dimensions {
+        Some((w, h)) => format!("{w}x{h}"),
+        None => "unknown size".to_string(),
+    };
+    if rendered.success {
+        format!(
+            "{} ({size}) — inline via {}, {}x{} cells",
+            img.label,
+            image_render::detect_graphics_protocol(),
+            rendered.width_cells,
+            rendered.height_cells
+        )
+    } else {
+        format!("{} ({size}) — {}", img.label, rendered.escape_sequence)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -431,5 +535,84 @@ mod tests {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &b64).unwrap();
         assert_eq!(decoded, b"hello world");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Write a file with a real PNG IHDR so the format sniffer and the
+    /// dimension reader both have something real to work with.
+    fn write_test_png(name_hint: &str, w: u32, h: u32) -> PathBuf {
+        let mut data = vec![0u8; 24];
+        data[0..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        data[8..12].copy_from_slice(&13u32.to_be_bytes());
+        data[12..16].copy_from_slice(b"IHDR");
+        data[16..20].copy_from_slice(&w.to_be_bytes());
+        data[20..24].copy_from_slice(&h.to_be_bytes());
+        let path = std::env::temp_dir().join(format!("operant-test-{name_hint}.png"));
+        std::fs::write(&path, &data).unwrap();
+        path
+    }
+
+    /// `image_render` had zero callers, so a pasted image never rendered. When
+    /// the terminal has no graphics protocol the user must still be told what
+    /// was pasted — a named, sized placeholder, not silence and not bytes.
+    #[test]
+    fn image_paste_should_render_placeholder_when_no_protocol_available() {
+        let path = write_test_png("placeholder", 640, 480);
+        let img = PastedImage {
+            path: path.clone(),
+            label: "clipboard.png".to_string(),
+            dimensions: Some((640, 480)),
+        };
+
+        // Force a terminal with no graphics protocol: the runner's own
+        // terminal may well speak Kitty or Sixel.
+        let rendered =
+            image_render::with_env(&image_render::PROTOCOL_FREE_ENV, || render_attachment(&img));
+        assert!(!rendered.success);
+        assert_eq!(rendered.width_cells, 0);
+        assert_eq!(rendered.height_cells, 0);
+
+        // One clear line naming the format and the pixel size.
+        let text = &rendered.escape_sequence;
+        assert!(!text.contains('\n'), "placeholder must be a single line");
+        assert!(text.contains("PNG"), "placeholder names the format: {text}");
+        assert!(
+            text.contains("640x480"),
+            "placeholder names the size: {text}"
+        );
+        assert!(
+            text.contains("no inline graphics protocol"),
+            "placeholder explains why: {text}"
+        );
+        // Never raw bytes.
+        assert!(
+            !text.contains('\u{1b}'),
+            "placeholder must not carry escapes"
+        );
+
+        // The description line carries the same information for the toast.
+        let described = describe_rendered(&img, &rendered);
+        assert!(described.contains("clipboard.png"));
+        assert!(described.contains("640x480"));
+        assert!(described.contains("no inline graphics protocol"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A non-PNG attachment (drag-and-drop carries the user's filename) falls
+    /// back to sniffing, then to the extension, and still never leaks bytes.
+    #[test]
+    fn image_paste_placeholder_sniffs_format_for_non_png() {
+        let path = std::env::temp_dir().join("operant-test-sniff.jpg");
+        std::fs::write(&path, b"\xff\xd8\xff\xe0hello").unwrap();
+        let img = PastedImage {
+            path: path.clone(),
+            label: "photo.jpeg".to_string(),
+            dimensions: None,
+        };
+        let rendered =
+            image_render::with_env(&image_render::PROTOCOL_FREE_ENV, || render_attachment(&img));
+        assert!(!rendered.success);
+        assert!(rendered.escape_sequence.contains("JPEG"));
+        let _ = std::fs::remove_file(&path);
     }
 }

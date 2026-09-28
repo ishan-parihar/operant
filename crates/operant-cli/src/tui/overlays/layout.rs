@@ -1,9 +1,13 @@
 // overlays/layout.rs — Shared geometry, constants, and modal helpers.
 //
-// Extracted from the overlays.rs monolith. Holds the OPERANT_* color
-// constants, centered-rect / cycle helpers, dark-overlay + dialog-bg
+// Extracted from the overlays.rs monolith. Holds the shared semantic colour
+// accessors, centered-rect / cycle helpers, dark-overlay + dialog-bg
 // renderers, and the modal frame/title/search helpers used by every
 // overlay in this module.
+//
+// The colours are no longer constants: they resolve through
+// `crate::tui::theme_colors`, so `/theme` (and the persisted `theme` setting)
+// repaints every overlay instead of only writing the name to disk.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -13,12 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
-pub const OPERANT_ACCENT: Color = Color::Rgb(255, 191, 0);
-pub const OPERANT_PANEL_BG: Color = Color::Rgb(26, 26, 46);
-pub const OPERANT_PANEL_BORDER: Color = Color::Rgb(72, 72, 80);
-pub const OPERANT_TEXT: Color = Color::Rgb(255, 248, 220);
-pub const OPERANT_MUTED: Color = Color::Rgb(204, 155, 31);
-pub const OPERANT_OVERLAY_BG: Color = Color::Rgb(10, 10, 14);
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Geometry helper (shared)
@@ -70,8 +69,8 @@ pub fn render_dark_overlay_buf(buf: &mut Buffer, area: Rect) {
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
             if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_bg(OPERANT_OVERLAY_BG);
-                cell.set_fg(OPERANT_MUTED);
+                cell.set_bg(theme_colors::overlay_bg());
+                cell.set_fg(theme_colors::muted());
             }
         }
     }
@@ -87,8 +86,8 @@ pub fn render_dialog_bg_buf(buf: &mut Buffer, area: Rect) {
         for x in area.x..area.x + area.width {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_char(' ');
-                cell.set_bg(OPERANT_PANEL_BG);
-                cell.set_fg(OPERANT_TEXT);
+                cell.set_bg(theme_colors::panel_bg());
+                cell.set_fg(theme_colors::text());
             }
         }
     }
@@ -187,11 +186,17 @@ pub fn render_modal_title_frame(frame: &mut Frame, area: Rect, title: &str, righ
         Span::styled(
             format!(" {}", title),
             Style::default()
-                .fg(OPERANT_TEXT)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" ".repeat(padding), Style::default().fg(OPERANT_TEXT)),
-        Span::styled(right_hint.to_string(), Style::default().fg(OPERANT_MUTED)),
+        Span::styled(
+            " ".repeat(padding),
+            Style::default().fg(theme_colors::text()),
+        ),
+        Span::styled(
+            right_hint.to_string(),
+            Style::default().fg(theme_colors::muted()),
+        ),
     ]);
     frame.render_widget(
         Paragraph::new(line),
@@ -217,11 +222,17 @@ pub fn render_modal_title_buf(buf: &mut Buffer, area: Rect, title: &str, right_h
         Span::styled(
             format!(" {}", title),
             Style::default()
-                .fg(OPERANT_TEXT)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" ".repeat(padding), Style::default().fg(OPERANT_TEXT)),
-        Span::styled(right_hint.to_string(), Style::default().fg(OPERANT_MUTED)),
+        Span::styled(
+            " ".repeat(padding),
+            Style::default().fg(theme_colors::text()),
+        ),
+        Span::styled(
+            right_hint.to_string(),
+            Style::default().fg(theme_colors::muted()),
+        ),
     ]);
     Paragraph::new(line).render(
         Rect {

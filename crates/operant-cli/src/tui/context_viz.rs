@@ -7,10 +7,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, begin_modal_frame, modal_header_line_area,
-    render_modal_title_frame,
-};
+use crate::tui::overlays::{begin_modal_frame, modal_header_line_area, render_modal_title_frame};
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // State
@@ -60,7 +58,7 @@ pub fn render_context_viz(
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " Token window, rate limits, and session cost.",
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )])),
             subtitle_area,
         );
@@ -89,16 +87,19 @@ pub fn render_context_viz(
     lines.push(Line::from(vec![Span::styled(
         " Context window",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )]));
 
     let filled = ((ctx_pct * bar_width as f32) as usize).min(bar_width);
     let empty = bar_width - filled;
     lines.push(Line::from(vec![
-        Span::styled(" [", Style::default().fg(OPERANT_MUTED)),
+        Span::styled(" [", Style::default().fg(theme_colors::muted())),
         Span::styled("\u{2588}".repeat(filled), Style::default().fg(ctx_color)),
-        Span::styled("\u{2591}".repeat(empty), Style::default().fg(OPERANT_MUTED)),
+        Span::styled(
+            "\u{2591}".repeat(empty),
+            Style::default().fg(theme_colors::muted()),
+        ),
         Span::styled(
             format!(
                 "]  {:.0}%  ({} / {})",
@@ -116,7 +117,7 @@ pub fn render_context_viz(
     lines.push(Line::from(vec![Span::styled(
         " Rate limits",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )]));
 
@@ -135,16 +136,19 @@ pub fn render_context_viz(
                 let e = bar_width - f;
                 lines.push(Line::from(vec![
                     Span::styled(label.to_string(), Style::default().fg(Color::White)),
-                    Span::styled("  [", Style::default().fg(OPERANT_MUTED)),
+                    Span::styled("  [", Style::default().fg(theme_colors::muted())),
                     Span::styled("\u{2588}".repeat(f), Style::default().fg(color)),
-                    Span::styled("\u{2591}".repeat(e), Style::default().fg(OPERANT_MUTED)),
+                    Span::styled(
+                        "\u{2591}".repeat(e),
+                        Style::default().fg(theme_colors::muted()),
+                    ),
                     Span::styled(format!("]  {:.0}%", p * 100.0), Style::default().fg(color)),
                 ]));
             }
             None => {
                 lines.push(Line::from(vec![
                     Span::styled(label.to_string(), Style::default().fg(Color::White)),
-                    Span::styled("  no data", Style::default().fg(OPERANT_MUTED)),
+                    Span::styled("  no data", Style::default().fg(theme_colors::muted())),
                 ]));
             }
         }
@@ -158,20 +162,20 @@ pub fn render_context_viz(
         Span::styled(
             format!("${:.4}", cost_usd),
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
 
     Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(inner, frame.buffer_mut());
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " enter/esc close",
             Style::default()
-                .fg(OPERANT_MUTED)
+                .fg(theme_colors::muted())
                 .add_modifier(Modifier::ITALIC),
         )])),
         layout.footer_area,

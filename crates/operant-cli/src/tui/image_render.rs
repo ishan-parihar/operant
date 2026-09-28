@@ -1,10 +1,14 @@
-#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
 // image_render.rs — Kitty/Sixel/iTerm2 inline image rendering for TUI.
 //
 // Provides terminal capability detection and image rendering via:
 //   - Kitty Graphics Protocol (most capable, supports RGB, animation)
 //   - Sixel (DEC VT340 legacy, wide support)
 //   - iTerm2 proprietary protocol (macOS only)
+//
+// `image_paste::emit_inline_image` is the caller: it renders a pasted
+// attachment and writes the escape sequence to stdout on the post-paint pass.
+// The items marked `expect(dead_code)` below are the encoder knobs and
+// capability queries that path does not read yet.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -20,6 +24,17 @@ pub enum GraphicsProtocol {
     ITerm2,
     /// No graphics protocol detected; fall back to text description.
     None,
+}
+
+impl std::fmt::Display for GraphicsProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Kitty => "kitty",
+            Self::Sixel => "sixel",
+            Self::ITerm2 => "iterm2",
+            Self::None => "no graphics protocol",
+        })
+    }
 }
 
 /// Detect the best available graphics protocol for the current terminal.
@@ -78,6 +93,10 @@ pub struct ImageRenderConfig {
     /// Preserve aspect ratio when scaling.
     pub preserve_aspect: bool,
     /// Use Unicode half-block characters for higher density (Kitty only).
+    #[expect(
+        dead_code,
+        reason = "half-block rendering is unimplemented; kept for the config shape"
+    )]
     pub use_half_blocks: bool,
     /// Placeholder text when rendering is not supported.
     pub placeholder: String,
@@ -341,23 +360,95 @@ fn encode_sixel_png(_path: &PathBuf, _config: &ImageRenderConfig) -> Option<Stri
 }
 
 /// Clear the current Kitty graphics cursor position (move past rendered image).
+#[expect(
+    dead_code,
+    reason = "the emit path never needs to re-home the cursor yet"
+)]
 pub fn kitty_clear_image() -> String {
     "\x1b_Ga=d,d=1\x1b\\".to_string()
 }
 
 /// Check if the terminal supports any graphics protocol.
+#[allow(dead_code, reason = "only the detection-order test calls this today")]
 pub fn has_graphics_support() -> bool {
     detect_graphics_protocol() != GraphicsProtocol::None
 }
 
+/// Serialises env-var-mutating tests: they run on parallel threads and share
+/// process-global environment, so they must not interleave. Shared with
+/// `image_paste`'s tests, which present a protocol-free terminal.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard over several env vars at once, so a test can present the
+/// terminal with a complete environment and have it restored on drop.
+#[cfg(test)]
+struct MultiEnvGuard(Vec<(&'static str, Option<String>)>);
+
+#[cfg(test)]
+impl MultiEnvGuard {
+    /// `None` removes the variable, so a case can be stated as a complete
+    /// environment rather than as a delta on whatever the runner inherited.
+    fn set(vars: &[(&'static str, Option<&str>)]) -> Self {
+        let saved = vars
+            .iter()
+            .map(|(k, v)| {
+                let prev = std::env::var(k).ok();
+                // Safety: serialised by ENV_LOCK.
+                unsafe {
+                    match v {
+                        Some(value) => std::env::set_var(k, value),
+                        None => std::env::remove_var(k),
+                    }
+                }
+                (*k, prev)
+            })
+            .collect();
+        MultiEnvGuard(saved)
+    }
+}
+
+#[cfg(test)]
+impl Drop for MultiEnvGuard {
+    fn drop(&mut self) {
+        for (key, prev) in &self.0 {
+            // Safety: env mutations are serialised by ENV_LOCK.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+}
+
+/// Run `f` with exactly the given terminal environment, then restore it.
+///
+/// `None` removes a variable. Serialised against every other env-mutating test
+/// in the process, so a test that needs a protocol-free terminal gets one no
+/// matter what terminal the test runner was launched from.
+#[cfg(test)]
+pub(crate) fn with_env<T>(vars: &[(&'static str, Option<&str>)], f: impl FnOnce() -> T) -> T {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = MultiEnvGuard::set(vars);
+    f()
+}
+
+/// A terminal environment with every graphics signal cleared, so a test gets
+/// `GraphicsProtocol::None` no matter what terminal the runner was launched
+/// from. `dumb` is not in the Sixel term list.
+#[cfg(test)]
+pub(crate) const PROTOCOL_FREE_ENV: [(&str, Option<&str>); 4] = [
+    ("TERM", Some("dumb")),
+    ("KITTY_WINDOW_ID", None),
+    ("TERM_PROGRAM", None),
+    ("ITERM_SESSION_ID", None),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Serializes env-var-mutating tests: they run on parallel threads and
-    /// share process-global environment, so they must not interleave.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// RAII guard: sets an env var for the duration of the test and restores
     /// the previous value on drop — even if the test panics.
@@ -438,5 +529,50 @@ mod tests {
         data[6..8].copy_from_slice(&100u16.to_le_bytes()); // width
         data[8..10].copy_from_slice(&200u16.to_le_bytes()); // height
         assert_eq!(get_image_dimensions(&data), Some((100, 200)));
+    }
+
+    /// The auto-detect preference order is part of the contract: Kitty beats
+    /// iTerm2 beats Sixel. Assert the order itself, not just one winner.
+    #[test]
+    fn image_paste_should_select_protocol_by_detection_order() {
+        // Everything set at once: the most capable protocol must win.
+        let kitty = with_env(
+            &[
+                ("TERM", Some("xterm-256color")),
+                ("KITTY_WINDOW_ID", Some("1")),
+                ("TERM_PROGRAM", Some("iTerm.app")),
+                ("ITERM_SESSION_ID", Some("w0t0p0")),
+            ],
+            detect_graphics_protocol,
+        );
+        assert_eq!(kitty, GraphicsProtocol::Kitty);
+
+        // Kitty gone: iTerm2 must win over the Sixel-capable $TERM.
+        let iterm = with_env(
+            &[
+                ("TERM", Some("xterm-256color")),
+                ("KITTY_WINDOW_ID", None),
+                ("TERM_PROGRAM", Some("iTerm.app")),
+                ("ITERM_SESSION_ID", Some("w0t0p0")),
+            ],
+            detect_graphics_protocol,
+        );
+        assert_eq!(iterm, GraphicsProtocol::ITerm2);
+
+        // Only a Sixel-capable $TERM left.
+        let sixel = with_env(
+            &[
+                ("TERM", Some("xterm-256color")),
+                ("KITTY_WINDOW_ID", None),
+                ("TERM_PROGRAM", None),
+                ("ITERM_SESSION_ID", None),
+            ],
+            detect_graphics_protocol,
+        );
+        assert_eq!(sixel, GraphicsProtocol::Sixel);
+
+        // Nothing recognisable: the caller renders a textual placeholder.
+        let none = with_env(&PROTOCOL_FREE_ENV, detect_graphics_protocol);
+        assert_eq!(none, GraphicsProtocol::None);
     }
 }

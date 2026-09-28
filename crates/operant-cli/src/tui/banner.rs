@@ -128,7 +128,8 @@ pub fn banner_with_subtitle(width: u16, version: &str) -> Vec<Line<'static>> {
         // Underline the wordmark with a dim rule + version tag.
         let rule_width = (width as usize).clamp(20, 56);
         let version_label = format!(" v{} ", version);
-        let rule_total = rule_width.saturating_sub(version_label.len());
+        let rule_total =
+            rule_width.saturating_sub(crate::tui::render::display_width(&version_label));
         let left_rule = "─".repeat(rule_total / 2);
         let right_rule = "─".repeat(rule_total - rule_total / 2);
         lines.push(Line::from(vec![

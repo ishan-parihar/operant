@@ -19,11 +19,11 @@ pub fn render_stats_dialog(state: &StatsDialogState, area: Rect, buf: &mut Buffe
 
     let tab_line = Line::from(vec![
         tab_span("Overview", state.tab == StatsTab::Overview),
-        Span::styled("  ·  ", Style::default().fg(OPERANT_MUTED)),
+        Span::styled("  ·  ", Style::default().fg(theme_colors::muted())),
         tab_span("Daily Tokens", state.tab == StatsTab::DailyTokens),
-        Span::styled("  ·  ", Style::default().fg(OPERANT_MUTED)),
+        Span::styled("  ·  ", Style::default().fg(theme_colors::muted())),
         tab_span("Cost Heatmap", state.tab == StatsTab::CostHeatmap),
-        Span::styled("  ·  ", Style::default().fg(OPERANT_MUTED)),
+        Span::styled("  ·  ", Style::default().fg(theme_colors::muted())),
         tab_span("Models", state.tab == StatsTab::Models),
     ]);
     if let Some(tab_area) = modal_header_line_area(layout.header_area, 1) {
@@ -34,7 +34,11 @@ pub fn render_stats_dialog(state: &StatsDialogState, area: Rect, buf: &mut Buffe
 
     let Some(data) = &state.data else {
         Paragraph::new("Loading\u{2026}")
-            .style(Style::default().fg(OPERANT_MUTED).bg(OPERANT_PANEL_BG))
+            .style(
+                Style::default()
+                    .fg(theme_colors::muted())
+                    .bg(theme_colors::panel_bg()),
+            )
             .render(content_area, buf);
         return;
     };
@@ -48,7 +52,7 @@ pub fn render_stats_dialog(state: &StatsDialogState, area: Rect, buf: &mut Buffe
     Paragraph::new(Line::from(vec![Span::styled(
         " tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll",
         Style::default()
-            .fg(OPERANT_MUTED)
+            .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),
     )]))
     .render(layout.footer_area, buf);
@@ -59,11 +63,14 @@ fn tab_span(label: &str, active: bool) -> Span<'static> {
         Span::styled(
             label.to_string(),
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )
     } else {
-        Span::styled(label.to_string(), Style::default().fg(OPERANT_MUTED))
+        Span::styled(
+            label.to_string(),
+            Style::default().fg(theme_colors::muted()),
+        )
     }
 }
 

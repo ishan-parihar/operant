@@ -9,6 +9,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use unicode_segmentation::UnicodeSegmentation;
+
+use crate::tui::render::{balanced_wrap, display_width};
 
 /// Distinguishes what kind of action the permission dialog is for.
 /// This drives how many options are shown and what the command block looks like.
@@ -348,11 +351,10 @@ pub(crate) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 /// longer than `width`. Without the hard-break fallback, long unbreakable
 /// tokens (Windows paths, base64 blobs, URLs, …) overflow the dialog border.
 pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
-    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     if width == 0 {
         return vec![text.to_string()];
     }
-    if UnicodeWidthStr::width(text) <= width {
+    if display_width(text) <= width {
         return vec![text.to_string()];
     }
 
@@ -363,13 +365,13 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
         let mut chunks: Vec<String> = Vec::new();
         let mut current = String::new();
         let mut current_w = 0usize;
-        for ch in token.chars() {
-            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        for g in token.graphemes(true) {
+            let cw = display_width(g);
             if current_w + cw > width && !current.is_empty() {
                 chunks.push(std::mem::take(&mut current));
                 current_w = 0;
             }
-            current.push(ch);
+            current.push_str(g);
             current_w += cw;
         }
         if !current.is_empty() {
@@ -382,7 +384,7 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
     let mut current_line = String::new();
     let mut current_width = 0usize;
     for word in text.split_whitespace() {
-        let word_w = UnicodeWidthStr::width(word);
+        let word_w = display_width(word);
 
         // Long unbreakable token — flush the current line then hard-break the
         // token across multiple lines.
@@ -396,7 +398,7 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
                 for chunk in chunks {
                     result.push(chunk);
                 }
-                current_width = UnicodeWidthStr::width(last.as_str());
+                current_width = display_width(last.as_str());
                 current_line = last;
             }
             continue;
@@ -505,12 +507,15 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
     let desc_lines = if pr.description.trim().is_empty() {
         vec![]
     } else {
-        word_wrap(&pr.description, text_width)
+        // Prose: balance the wrap so the right edge is even and the last line
+        // is not a lone word. (The command block above stays greedy — it can
+        // be code or ASCII art, where column alignment must survive.)
+        balanced_wrap(&pr.description, text_width)
     };
     let expl_lines = if pr.danger_explanation.is_empty() {
         vec![]
     } else {
-        word_wrap(&pr.danger_explanation, text_width)
+        balanced_wrap(&pr.danger_explanation, text_width)
     };
 
     // preview line count (used for non-Bash kinds; Bash uses its own block above)

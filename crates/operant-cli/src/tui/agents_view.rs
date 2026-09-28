@@ -11,9 +11,9 @@ use ratatui::{
 use std::path::{Path, PathBuf};
 
 use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_buf, cycle_next,
-    cycle_prev, modal_header_line_area, render_modal_title_buf,
+    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
 };
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -551,7 +551,7 @@ pub fn render_agents_menu(state: &AgentsMenuState, area: Rect, buf: &mut Buffer)
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         Paragraph::new(Line::from(vec![Span::styled(
             subtitle,
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         )]))
         .render(subtitle_area, buf);
     }
@@ -573,7 +573,7 @@ pub fn render_agents_menu(state: &AgentsMenuState, area: Rect, buf: &mut Buffer)
     Paragraph::new(Line::from(vec![Span::styled(
         footer,
         Style::default()
-            .fg(OPERANT_MUTED)
+            .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),
     )]))
     .render(layout.footer_area, buf);
@@ -585,13 +585,16 @@ fn render_agents_list(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
         lines.push(Line::from(vec![Span::styled(
             " Active now",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         )]));
         for agent in state.active_agents.iter().take(3) {
             lines.push(Line::from(vec![
-                Span::styled(" ", Style::default().fg(OPERANT_MUTED)),
-                Span::styled(agent.name.clone(), Style::default().fg(OPERANT_TEXT)),
+                Span::styled(" ", Style::default().fg(theme_colors::muted())),
+                Span::styled(
+                    agent.name.clone(),
+                    Style::default().fg(theme_colors::text()),
+                ),
                 Span::styled(
                     format!("  {}", agent.status.label()),
                     Style::default().fg(agent.status.color()),
@@ -635,51 +638,51 @@ fn render_agents_list(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
         ));
     }
     Paragraph::new(lines)
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(area, buf);
 }
 
 fn render_agent_detail(def: &AgentDefinition, area: Rect, buf: &mut Buffer) {
     let mut lines = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled(" Name       ", Style::default().fg(OPERANT_MUTED)),
+        Span::styled(" Name       ", Style::default().fg(theme_colors::muted())),
         Span::styled(
             def.name.clone(),
             Style::default()
-                .fg(OPERANT_TEXT)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  ({})", def.source),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled(" Model      ", Style::default().fg(OPERANT_MUTED)),
+        Span::styled(" Model      ", Style::default().fg(theme_colors::muted())),
         Span::raw(def.model.as_deref().unwrap_or("default").to_string()),
     ]));
     if let Some(mem) = &def.memory_scope {
         lines.push(Line::from(vec![
-            Span::styled(" Memory     ", Style::default().fg(OPERANT_MUTED)),
+            Span::styled(" Memory     ", Style::default().fg(theme_colors::muted())),
             Span::raw(mem.clone()),
         ]));
     }
     if !def.tools.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled(" Tools      ", Style::default().fg(OPERANT_MUTED)),
+            Span::styled(" Tools      ", Style::default().fg(theme_colors::muted())),
             Span::raw(def.tools.join(", ")),
         ]));
     } else {
         lines.push(Line::from(vec![
-            Span::styled(" Tools      ", Style::default().fg(OPERANT_MUTED)),
-            Span::styled("All tools", Style::default().fg(OPERANT_MUTED)),
+            Span::styled(" Tools      ", Style::default().fg(theme_colors::muted())),
+            Span::styled("All tools", Style::default().fg(theme_colors::muted())),
         ]));
     }
     lines.push(Line::default());
     lines.push(Line::from(vec![Span::styled(
         " Description",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )]));
     for line in def.description.lines() {
@@ -689,13 +692,13 @@ fn render_agent_detail(def: &AgentDefinition, area: Rect, buf: &mut Buffer) {
     lines.push(Line::from(vec![Span::styled(
         " Prompt",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )]));
     for line in def.instructions.lines().take(8) {
         lines.push(Line::from(vec![Span::styled(
             format!(" {}", line),
-            Style::default().fg(OPERANT_TEXT),
+            Style::default().fg(theme_colors::text()),
         )]));
     }
 
@@ -709,7 +712,7 @@ fn render_agent_detail(def: &AgentDefinition, area: Rect, buf: &mut Buffer) {
 
     Paragraph::new(lines)
         .wrap(ratatui::widgets::Wrap { trim: false })
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(area, buf);
 }
 
@@ -717,9 +720,9 @@ fn render_agent_editor(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
     let editor = &state.editor;
     let selected_style = Style::default()
         .fg(Color::White)
-        .bg(OPERANT_ACCENT)
+        .bg(theme_colors::accent())
         .add_modifier(Modifier::BOLD);
-    let normal_style = Style::default().fg(OPERANT_TEXT);
+    let normal_style = Style::default().fg(theme_colors::text());
 
     let field_style = |field: AgentEditorField| {
         if editor.selected_field == field {
@@ -747,7 +750,7 @@ fn render_agent_editor(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
         Line::from(vec![Span::styled(
             " Prompt",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         )]),
     ];
@@ -782,7 +785,7 @@ fn render_agent_editor(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
     }
 
     Paragraph::new(lines)
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(area, buf);
 }
 
@@ -793,16 +796,19 @@ fn render_editor_field(label: &str, value: &str, value_style: Style) -> Line<'st
         value.to_string()
     };
     Line::from(vec![
-        Span::styled(format!(" {label:<10} "), Style::default().fg(OPERANT_MUTED)),
+        Span::styled(
+            format!(" {label:<10} "),
+            Style::default().fg(theme_colors::muted()),
+        ),
         Span::styled(display, value_style),
     ])
 }
 
 fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Line<'static> {
     let bg = if selected {
-        OPERANT_ACCENT
+        theme_colors::accent()
     } else {
-        OPERANT_PANEL_BG
+        theme_colors::panel_bg()
     };
     let title_style = if selected {
         Style::default()
@@ -810,12 +816,12 @@ fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Li
             .bg(bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(OPERANT_TEXT).bg(bg)
+        Style::default().fg(theme_colors::text()).bg(bg)
     };
     let meta_style = if selected {
         Style::default().fg(Color::Rgb(248, 220, 236)).bg(bg)
     } else {
-        Style::default().fg(OPERANT_MUTED).bg(bg)
+        Style::default().fg(theme_colors::muted()).bg(bg)
     };
     let mut spans = vec![
         Span::styled(" ", Style::default().bg(bg)),

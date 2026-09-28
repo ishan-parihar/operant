@@ -339,16 +339,17 @@ pub fn handle_mcp_approval_key(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Truncate a string to at most `max_chars` characters, appending `…` if cut.
-pub(crate) fn truncate_str(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
+/// Truncate a string to at most `max_width` display cells, appending `…` if cut.
+pub(crate) fn truncate_str(s: &str, max_width: usize) -> String {
+    use crate::tui::render::{display_width, take_width};
+    if max_width == 0 {
         return String::new();
     }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_string()
-    } else {
-        let cut: String = chars[..max_chars.saturating_sub(1)].iter().collect();
-        format!("{}\u{2026}", cut)
+    if display_width(s) <= max_width {
+        return s.to_string();
     }
+    // Reserve the final cell for the ellipsis.
+    let mut out = take_width(s, max_width - 1);
+    out.push('\u{2026}');
+    out
 }

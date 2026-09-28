@@ -6,10 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, begin_modal_buf, modal_header_line_area,
-    render_modal_title_buf,
-};
+use crate::tui::overlays::{begin_modal_buf, modal_header_line_area, render_modal_title_buf};
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Data types

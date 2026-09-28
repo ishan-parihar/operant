@@ -62,21 +62,21 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
         Span::styled(
             " Settings",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" — Operant", Style::default().fg(OPERANT_MUTED)),
+        Span::styled(" — Operant", Style::default().fg(theme_colors::muted())),
         Span::styled(
             format!(
                 "{:>width$}",
                 "Esc close",
                 width = inner.width.saturating_sub(19) as usize
             ),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
     ]);
     frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(OPERANT_PANEL_BG)),
+        Paragraph::new(title).style(Style::default().bg(theme_colors::panel_bg())),
         header_area,
     );
 
@@ -85,10 +85,10 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
         &screen.search_query,
         "Type to search settings...",
         Color::DarkGray,
-        OPERANT_ACCENT,
+        theme_colors::accent(),
     );
     frame.render_widget(
-        Paragraph::new(search_line).style(Style::default().bg(OPERANT_PANEL_BG)),
+        Paragraph::new(search_line).style(Style::default().bg(theme_colors::panel_bg())),
         search_area,
     );
 
@@ -148,7 +148,7 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             Span::styled(
                 " Enter ",
                 Style::default()
-                    .fg(OPERANT_ACCENT)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("save  "),
@@ -165,14 +165,14 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
             Span::styled(
                 " ↑↓ ",
                 Style::default()
-                    .fg(OPERANT_ACCENT)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("navigate  "),
             Span::styled(
                 " Enter ",
                 Style::default()
-                    .fg(OPERANT_ACCENT)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("toggle/edit  "),
@@ -186,7 +186,11 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
         ])
     };
     let footer_para = Paragraph::new(vec![footer])
-        .style(Style::default().fg(OPERANT_MUTED).bg(OPERANT_PANEL_BG))
+        .style(
+            Style::default()
+                .fg(theme_colors::muted())
+                .bg(theme_colors::panel_bg()),
+        )
         .alignment(Alignment::Center);
     frame.render_widget(footer_para, footer_area);
 }
@@ -231,7 +235,7 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
         let row_style = if is_selected {
             Style::default()
                 .fg(Color::Black)
-                .bg(OPERANT_ACCENT)
+                .bg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()

@@ -16,9 +16,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_buf, cycle_next,
-    cycle_prev, modal_header_line_area, render_modal_title_buf,
+    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
 };
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -394,7 +394,7 @@ pub fn render_hooks_config_menu(state: &HooksConfigMenuState, area: Rect, buf: &
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         Paragraph::new(Line::from(vec![Span::styled(
             breadcrumb,
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         )]))
         .render(subtitle_area, buf);
     }
@@ -406,7 +406,7 @@ pub fn render_hooks_config_menu(state: &HooksConfigMenuState, area: Rect, buf: &
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0))
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(layout.body_area, buf);
     let footer = match state.mode {
         HooksMenuMode::SelectEvent => " enter drill  ·  esc close",
@@ -417,7 +417,7 @@ pub fn render_hooks_config_menu(state: &HooksConfigMenuState, area: Rect, buf: &
     Paragraph::new(Line::from(vec![Span::styled(
         footer,
         Style::default()
-            .fg(OPERANT_MUTED)
+            .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),
     )]))
     .render(layout.footer_area, buf);
@@ -565,9 +565,9 @@ fn render_hook_detail(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'
 
 fn push_list_row(lines: &mut Vec<Line<'static>>, label: &str, badge: &str, selected: bool) {
     let bg = if selected {
-        OPERANT_ACCENT
+        theme_colors::accent()
     } else {
-        OPERANT_PANEL_BG
+        theme_colors::panel_bg()
     };
     let row_style = if selected {
         Style::default()
@@ -575,12 +575,12 @@ fn push_list_row(lines: &mut Vec<Line<'static>>, label: &str, badge: &str, selec
             .bg(bg)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(OPERANT_TEXT).bg(bg)
+        Style::default().fg(theme_colors::text()).bg(bg)
     };
     let badge_style = if selected {
         Style::default().fg(Color::Rgb(248, 220, 236)).bg(bg)
     } else {
-        Style::default().fg(OPERANT_MUTED).bg(bg)
+        Style::default().fg(theme_colors::muted()).bg(bg)
     };
     lines.push(Line::from(vec![
         Span::styled(" ", Style::default().bg(bg)),

@@ -12,6 +12,11 @@ mod layout;
 mod message_selector;
 mod rewind_flow;
 
+// The shared semantic colours used to be `OPERANT_*` constants in `layout`.
+// They now resolve through the active theme palette; re-export the module so
+// the `use super::*` sub-modules pick it up alongside the layout helpers.
+use crate::tui::theme_colors;
+
 pub use global_search::*;
 pub use help::*;
 pub use history_search::*;

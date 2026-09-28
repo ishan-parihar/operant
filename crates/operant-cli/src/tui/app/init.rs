@@ -24,6 +24,17 @@ impl App {
         };
         let initial_vim = settings.vim_enabled;
 
+        // Make the persisted theme the palette every renderer reads, before
+        // the first frame. Previously the theme name was only written to
+        // settings.json and nothing read it back.
+        crate::tui::theme_colors::set_active_theme_enum(&settings.theme);
+
+        // `reduce_motion` is an accessibility preference: it must disable the
+        // shimmer sweep and drop the redraw cadence to the static tier.
+        // Captured before `settings` is moved into the struct below.
+        let reduce_motion = settings.reduce_motion;
+        crate::tui::redraw::set_reduce_motion(reduce_motion);
+
         let model_name = {
             let raw = config.agent.model.clone();
             if raw.ends_with("/default") {
@@ -93,7 +104,8 @@ impl App {
             tool_use_blocks: Vec::new(),
             permission_request: None,
             frame_count: 0,
-            perf_tier: crate::tui::redraw::PerformanceTier::detect(),
+            perf_tier: crate::tui::redraw::PerformanceTier::detect()
+                .with_reduce_motion(reduce_motion),
             last_activity: std::time::Instant::now(),
             client_focused: true,
             token_count: 0,
@@ -147,6 +159,7 @@ impl App {
             plan_mode: false,
             stall_start: None,
             settings_screen: SettingsScreen::new(),
+            pending_inline_images: std::cell::RefCell::new(Vec::new()),
             theme_screen: ThemeScreen::new(),
             stats_dialog: StatsDialogState::new(),
             mcp_view: McpViewState::new(),

@@ -928,6 +928,14 @@ impl App {
                 &mut self.settings,
                 key,
             );
+            // `reduce_motion` is the one setting with a live effect on the
+            // render loop, so apply it the moment the screen writes it rather
+            // than waiting for the next launch. The screen owns the live value
+            // (it writes the snapshot file, not `self.settings`).
+            let reduce_motion = self.settings_screen.reduce_motion;
+            crate::tui::redraw::set_reduce_motion(reduce_motion);
+            self.perf_tier =
+                crate::tui::redraw::PerformanceTier::detect().with_reduce_motion(reduce_motion);
             return false;
         }
 
@@ -1130,17 +1138,16 @@ impl App {
             )
         {
             use crate::tui::image_paste::{
-                read_clipboard_image, read_clipboard_text, read_primary_text,
+                describe_rendered, read_clipboard_image, read_clipboard_text, read_primary_text,
+                render_attachment,
             };
             if let Some(img) = read_clipboard_image() {
-                let label = img.label.clone();
-                let dims = img.dimensions;
-                self.prompt_input.add_image(img);
-                let msg = if let Some((w, h)) = dims {
-                    format!("Image attached: {} ({}x{})", label, w, h)
-                } else {
-                    format!("Image attached: {}", label)
-                };
+                // Render (or degrade to a named placeholder) before the image
+                // is moved into the prompt's attachment list.
+                let msg = describe_rendered(&img, &render_attachment(&img));
+                self.prompt_input.add_image(img.clone());
+                // Queued for the post-paint emit pass in `render_app`.
+                self.pending_inline_images.borrow_mut().push(img);
                 self.push_notification(NotificationKind::Info, msg, Some(3));
             } else if let Some(text) = read_clipboard_text().or_else(read_primary_text) {
                 self.handle_paste_data(text);

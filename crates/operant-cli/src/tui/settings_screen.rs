@@ -7,9 +7,9 @@
 use crate::tui::adapter_types::config::Settings;
 use crate::tui::adapter_types::output_styles::{builtin_styles, find_style};
 use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, centered_rect, modal_search_line,
-    render_dark_overlay, render_dialog_bg,
+    centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg,
 };
+use crate::tui::theme_colors;
 use operant_core::config::AppConfig;
 use std::collections::HashMap;
 

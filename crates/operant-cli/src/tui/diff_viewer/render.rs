@@ -4,6 +4,7 @@
 // renderers, and the inline word-level diff / syntax-highlight helpers.
 
 use super::*;
+use crate::tui::render::{display_width, take_width};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -35,7 +36,7 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
                     DiffType::TurnDiff => "turn diff",
                 }
             ),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         )]))
         .render(subtitle_area, buf);
     }
@@ -50,13 +51,13 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
             Line::from(vec![Span::styled(
                 empty,
                 Style::default()
-                    .fg(OPERANT_TEXT)
+                    .fg(theme_colors::text())
                     .add_modifier(Modifier::ITALIC),
             )]),
             Line::from(""),
             Line::from(vec![Span::styled(
                 " Use /review for the current git diff, or make an edit and reopen /changes.",
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )]),
         ])
         .render(layout.body_area, buf);
@@ -73,7 +74,12 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
         .split(layout.body_area);
 
     let divider: Vec<Line<'static>> = (0..layout.body_area.height)
-        .map(|_| Line::from(Span::styled("│", Style::default().fg(OPERANT_MUTED))))
+        .map(|_| {
+            Line::from(Span::styled(
+                "│",
+                Style::default().fg(theme_colors::muted()),
+            ))
+        })
         .collect();
     Paragraph::new(divider).render(panes[1], buf);
 
@@ -82,7 +88,7 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
     Paragraph::new(Line::from(vec![Span::styled(
         " tab switch pane  ·  ↑↓ navigate  ·  space collapse  ·  d toggle scope",
         Style::default()
-            .fg(OPERANT_MUTED)
+            .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),
     )]))
     .render(layout.footer_area, buf);
@@ -98,19 +104,19 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
             " Files",
             Style::default()
                 .fg(if focused {
-                    OPERANT_ACCENT
+                    theme_colors::accent()
                 } else {
-                    OPERANT_TEXT
+                    theme_colors::text()
                 })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  {}", state.files.len()),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
     ]);
     Paragraph::new(header)
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(
             Rect {
                 x: area.x,
@@ -147,17 +153,20 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
         let is_collapsed = *state.collapsed.get(abs_idx).unwrap_or(&false);
         let collapse_char = if is_collapsed { "\u{25b8}" } else { "\u{25be}" }; // ▸ / ▾
         let (stats, stats_color) = if file.binary {
-            ("binary".to_string(), OPERANT_MUTED)
+            ("binary".to_string(), theme_colors::muted())
         } else if file.is_new_file {
             (format!("new  +{}", file.added), Color::Yellow)
         } else {
-            (format!("+{} -{}", file.added, file.removed), OPERANT_MUTED)
+            (
+                format!("+{} -{}", file.added, file.removed),
+                theme_colors::muted(),
+            )
         };
 
         let bg = if selected {
-            OPERANT_ACCENT
+            theme_colors::accent()
         } else {
-            OPERANT_PANEL_BG
+            theme_colors::panel_bg()
         };
         let base_style = if selected {
             Style::default()
@@ -165,7 +174,7 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
                 .fg(Color::White)
                 .bg(bg)
         } else {
-            Style::default().fg(OPERANT_TEXT).bg(bg)
+            Style::default().fg(theme_colors::text()).bg(bg)
         };
 
         let y = inner.y + i as u16;
@@ -214,19 +223,19 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
             format!(" {}", file.path),
             Style::default()
                 .fg(if focused {
-                    OPERANT_ACCENT
+                    theme_colors::accent()
                 } else {
-                    OPERANT_TEXT
+                    theme_colors::text()
                 })
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("  +{} -{}", file.added, file.removed),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
     ]);
     Paragraph::new(header)
-        .style(Style::default().bg(OPERANT_PANEL_BG))
+        .style(Style::default().bg(theme_colors::panel_bg()))
         .render(
             Rect {
                 x: area.x,
@@ -250,7 +259,7 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
             Line::from(vec![Span::styled(
                 " [collapsed]  press Space to expand",
                 Style::default()
-                    .fg(OPERANT_MUTED)
+                    .fg(theme_colors::muted())
                     .add_modifier(Modifier::ITALIC),
             )]),
         ])
@@ -260,7 +269,7 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
 
     if file.binary {
         Paragraph::new("Binary file — no diff available")
-            .style(Style::default().fg(OPERANT_MUTED))
+            .style(Style::default().fg(theme_colors::muted()))
             .render(inner, buf);
         return;
     }
@@ -328,7 +337,7 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
             };
             Paragraph::new(Line::from(Span::styled(
                 ch.to_string(),
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )))
             .render(cell_area, buf);
         }
@@ -349,23 +358,23 @@ pub(crate) fn format_gutter(old_no: Option<u32>, new_no: Option<u32>) -> String 
     }
 }
 
-/// Truncate a list of owned spans so the total character count ≤ `max_chars`.
+/// Truncate a list of owned spans so the total display width ≤ `max_width`.
 pub(crate) fn truncate_spans_to_width(
     spans: Vec<Span<'static>>,
-    max_chars: usize,
+    max_width: usize,
 ) -> Vec<Span<'static>> {
-    let mut remaining = max_chars;
+    let mut remaining = max_width;
     let mut result = Vec::new();
     for span in spans {
         if remaining == 0 {
             break;
         }
-        let char_count: usize = span.content.chars().count();
-        if char_count <= remaining {
-            remaining -= char_count;
+        let width = display_width(&span.content);
+        if width <= remaining {
+            remaining -= width;
             result.push(span);
         } else {
-            let truncated: String = span.content.chars().take(remaining).collect();
+            let truncated = take_width(&span.content, remaining);
             remaining = 0;
             result.push(Span::styled(truncated, span.style));
         }
@@ -389,8 +398,11 @@ pub(crate) fn build_inline_diff_spans(
         let s: String = change.to_string();
         match change.tag() {
             ChangeTag::Equal => {
-                old_spans.push(Span::styled(s.clone(), Style::default().fg(OPERANT_TEXT)));
-                new_spans.push(Span::styled(s, Style::default().fg(OPERANT_TEXT)));
+                old_spans.push(Span::styled(
+                    s.clone(),
+                    Style::default().fg(theme_colors::text()),
+                ));
+                new_spans.push(Span::styled(s, Style::default().fg(theme_colors::text())));
             }
             ChangeTag::Delete => {
                 old_spans.push(Span::styled(

@@ -396,14 +396,15 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-/// Truncate `s` to `max` characters, appending `…` if truncated.
+/// Truncate `s` to `max` display cells, appending `…` if truncated.
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
+    use crate::tui::render::{display_width, take_width};
+    if display_width(s) <= max {
         s.to_string()
     } else if max == 0 {
         String::new()
     } else {
-        let mut out: String = s.chars().take(max - 1).collect();
+        let mut out = take_width(s, max - 1);
         out.push('…');
         out
     }
@@ -412,21 +413,12 @@ fn truncate(s: &str, max: usize) -> String {
 /// Word-wrap-aware truncation for the description footer line. Hard-truncates
 /// at `max` display columns (no wrapping), appending `…` if cut.
 fn truncate_to_width(s: &str, max: usize) -> String {
-    use unicode_width::UnicodeWidthStr;
+    use crate::tui::render::{display_width, take_width};
     if max == 0 {
         return String::new();
     }
-    let mut out = String::new();
-    let mut width = 0usize;
-    for ch in s.chars() {
-        let cw = UnicodeWidthStr::width(ch.to_string().as_str());
-        if width + cw > max {
-            break;
-        }
-        out.push(ch);
-        width += cw;
-    }
-    if out.chars().count() < s.chars().count() {
+    let mut out = take_width(s, max);
+    if display_width(&out) < display_width(s) {
         out.push('…');
     }
     out

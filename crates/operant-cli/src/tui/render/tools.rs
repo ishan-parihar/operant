@@ -5,7 +5,8 @@ use crate::tui::figures;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{ACCENT_PRIMARY, shimmer_spans};
+use super::{accent_primary, display_width, shimmer_spans, take_width};
+use crate::tui::theme_colors;
 
 pub(crate) fn build_tool_names(
     messages: &[crate::tui::adapter_types::types::Message],
@@ -93,9 +94,9 @@ pub(crate) fn render_tool_block_lines(
     let in_flight = block.status.is_pending();
 
     let accent = if block.status == ToolStatus::Error {
-        Color::Rgb(255, 140, 0)
+        theme_colors::error()
     } else {
-        ACCENT_PRIMARY
+        accent_primary()
     };
     let mut header_spans = vec![Span::styled(
         "   ~ ".to_string(),
@@ -148,9 +149,11 @@ pub(crate) fn render_tool_block_lines(
             if i >= 2 {
                 break;
             }
-            let display: String = cmd_line.chars().take(160).collect();
-            let display = if cmd_line.chars().count() > 160 {
-                format!("{}\u{2026}", display)
+            // Budget in display cells, not chars: a CJK glyph is one char but
+            // two columns, so a char budget would overflow the block.
+            let display = take_width(cmd_line, 160);
+            let display = if display_width(&display) < display_width(cmd_line) {
+                format!("{display}\u{2026}")
             } else {
                 display
             };
@@ -348,7 +351,7 @@ pub(crate) fn render_tool_group_lines(
     let accent = if errored > 0 {
         Color::Rgb(255, 140, 0)
     } else {
-        ACCENT_PRIMARY
+        accent_primary()
     };
     let mut header = vec![Span::styled(
         "   ~ ".to_string(),

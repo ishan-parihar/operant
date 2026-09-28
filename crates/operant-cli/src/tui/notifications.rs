@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use crate::tui::overlays::{OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BORDER, OPERANT_TEXT};
+use crate::tui::theme_colors;
 use unicode_width::UnicodeWidthStr;
 
 /// Severity / visual style of a notification.
@@ -115,10 +115,10 @@ use ratatui::widgets::{Clear, Paragraph};
 impl NotificationKind {
     pub fn color(&self) -> Color {
         match self {
-            NotificationKind::Info => OPERANT_ACCENT,
-            NotificationKind::Warning => Color::Yellow,
-            NotificationKind::Error => Color::Red,
-            NotificationKind::Success => Color::Rgb(80, 200, 120),
+            NotificationKind::Info => theme_colors::accent(),
+            NotificationKind::Warning => theme_colors::warning(),
+            NotificationKind::Error => theme_colors::error(),
+            NotificationKind::Success => theme_colors::success(),
         }
     }
 
@@ -204,12 +204,12 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
             icon_with_spaces.clone(),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(message, Style::default().fg(OPERANT_TEXT)),
+        Span::styled(message, Style::default().fg(theme_colors::text())),
     ];
     if true {
         row0_spans.push(Span::styled(
             esc_hint.to_string(),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ));
     }
 
@@ -229,13 +229,13 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
         let empty: String = " ".repeat(inner_w.saturating_sub(bar_w));
         Line::from(vec![
             Span::styled(format!(" {}", filled), Style::default().fg(color)),
-            Span::styled(empty, Style::default().fg(OPERANT_MUTED)),
+            Span::styled(empty, Style::default().fg(theme_colors::muted())),
             Span::raw(" "),
         ])
     } else {
         Line::from(Span::styled(
             format!(" {}", "─".repeat(inner_w)),
-            Style::default().fg(OPERANT_PANEL_BORDER),
+            Style::default().fg(theme_colors::border()),
         ))
     };
 
@@ -282,7 +282,7 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
                     && let Some(cell) = buf.cell_mut((right_x, toast_area.y + row))
                 {
                     cell.set_bg(bg);
-                    cell.set_fg(OPERANT_PANEL_BORDER);
+                    cell.set_fg(theme_colors::border());
                     cell.set_char('▐');
                 }
             }

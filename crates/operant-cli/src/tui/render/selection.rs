@@ -1,10 +1,10 @@
 // render/selection.rs — Text selection highlight, row cache, context menu.
 
 use crate::tui::app::{App, ContextMenuKind};
-use crate::tui::overlays::OPERANT_ACCENT;
+use crate::tui::theme_colors;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
 pub(crate) fn cache_selectable_row_text(frame: &mut Frame, app: &App) {
@@ -109,10 +109,10 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
                 } else {
                     &sym
                 });
-                // Highlight: white background, black foreground
+                // Highlight: selection background from the active palette.
                 let new_style = Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(200, 200, 200));
+                    .fg(theme_colors::on_selection())
+                    .bg(theme_colors::text_selection_bg());
                 cell.set_style(new_style);
             }
         }
@@ -166,8 +166,12 @@ pub(crate) fn render_context_menu(frame: &mut Frame, app: &App) {
         let menu_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .style(Style::default().fg(Color::White).bg(Color::Rgb(24, 24, 30)))
-            .border_style(Style::default().fg(OPERANT_ACCENT));
+            .style(
+                Style::default()
+                    .fg(theme_colors::text())
+                    .bg(theme_colors::panel_bg()),
+            )
+            .border_style(Style::default().fg(theme_colors::accent()));
         menu_block.render(menu_area, frame.buffer_mut());
 
         // Render menu items
@@ -188,22 +192,22 @@ pub(crate) fn render_context_menu(frame: &mut Frame, app: &App) {
 
             let fg_color = if *enabled {
                 if is_selected {
-                    Color::Black
+                    theme_colors::on_selection()
                 } else {
-                    Color::White
+                    theme_colors::text()
                 }
             } else {
-                Color::DarkGray
+                theme_colors::disabled()
             };
 
             let bg_color = if is_selected {
                 if *enabled {
-                    OPERANT_ACCENT
+                    theme_colors::selection_bg()
                 } else {
-                    Color::Rgb(24, 24, 30)
+                    theme_colors::panel_bg()
                 }
             } else {
-                Color::Rgb(24, 24, 30)
+                theme_colors::panel_bg()
             };
 
             let style = Style::default().fg(fg_color).bg(bg_color);

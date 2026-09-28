@@ -4,6 +4,7 @@
 // read/write results, generic success/error results, and bash I/O.
 
 use super::*;
+use crate::tui::render::{display_width, take_width};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -139,9 +140,11 @@ pub(crate) fn render_tool_use_inner(
             if i >= 2 {
                 break;
             }
-            let display: String = cmd_line.chars().take(160).collect();
-            let display = if cmd_line.chars().count() > 160 {
-                format!("{}\u{2026}", display)
+            // Budget in display cells, not chars: a CJK glyph is one char but
+            // two columns, so a char budget would overflow the block.
+            let display = take_width(cmd_line, 160);
+            let display = if display_width(&display) < display_width(cmd_line) {
+                format!("{display}\u{2026}")
             } else {
                 display
             };

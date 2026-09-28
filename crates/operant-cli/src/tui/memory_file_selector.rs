@@ -7,9 +7,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, centered_rect, cycle_next,
-    cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
+    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
 };
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,17 +143,20 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
         Span::styled(
             " Memory",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" — choose a file", Style::default().fg(OPERANT_MUTED)),
+        Span::styled(
+            " — choose a file",
+            Style::default().fg(theme_colors::muted()),
+        ),
         Span::styled(
             format!(
                 "{:>width$}",
                 "Esc close",
                 width = inner.width.saturating_sub(24) as usize
             ),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
     ]));
     lines.push(Line::from(""));
@@ -166,7 +169,7 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
         };
 
         let new_tag = if !file.exists {
-            Span::styled(" (new)", Style::default().fg(OPERANT_MUTED))
+            Span::styled(" (new)", Style::default().fg(theme_colors::muted()))
         } else {
             Span::raw("")
         };
@@ -179,14 +182,14 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
                 ),
                 Style::default()
                     .fg(Color::Black)
-                    .bg(OPERANT_ACCENT)
+                    .bg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             )]));
         } else {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("    {type_label} {}", file.display_path),
-                    Style::default().fg(OPERANT_TEXT),
+                    Style::default().fg(theme_colors::text()),
                 ),
                 new_tag,
             ]));
@@ -196,11 +199,15 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "  \u{2191}\u{2193} navigate  Enter select  Esc close",
-        Style::default().fg(OPERANT_MUTED),
+        Style::default().fg(theme_colors::muted()),
     )]));
 
     let para = Paragraph::new(lines)
-        .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+        .style(
+            Style::default()
+                .bg(theme_colors::panel_bg())
+                .fg(theme_colors::text()),
+        )
         .alignment(Alignment::Left);
 
     use ratatui::widgets::Widget;
@@ -208,9 +215,11 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
 }
 
 fn pad_line(text: &str, width: u16) -> String {
+    use crate::tui::render::{display_width, take_width};
     let max_width = width as usize;
-    let mut clipped: String = text.chars().take(max_width).collect();
-    let visible = clipped.chars().count();
+    let mut clipped = take_width(text, max_width);
+    // Pad by the *display* shortfall, so a two-cell glyph counts as two.
+    let visible = display_width(&clipped);
     if visible < max_width {
         clipped.push_str(&" ".repeat(max_width - visible));
     }

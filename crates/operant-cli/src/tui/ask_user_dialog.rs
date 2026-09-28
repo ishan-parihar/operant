@@ -25,7 +25,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::tui::overlays::{OPERANT_PANEL_BG, centered_rect};
+use crate::tui::overlays::centered_rect;
+use crate::tui::render::balanced_wrap;
+use crate::tui::theme_colors;
 
 const BORDER_FG: Color = Color::Rgb(120, 120, 170);
 const TITLE_FG: Color = Color::Rgb(200, 160, 255);
@@ -196,7 +198,9 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     }
 
     // ---- size estimate ----
-    let question_lines = word_wrap(&state.question, 52).len() as u16;
+    // Prose: balanced wrap, so the estimate below matches the rendered line
+    // count (both use `balanced_wrap`).
+    let question_lines = balanced_wrap(&state.question, 52).len() as u16;
     let options_lines = state
         .options
         .as_ref()
@@ -211,13 +215,13 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
         for x in modal_area.left()..modal_area.right() {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_char(' ');
-                cell.set_bg(OPERANT_PANEL_BG);
+                cell.set_bg(theme_colors::panel_bg());
             }
         }
     }
 
     // ---- border ----
-    let border_style = Style::default().fg(BORDER_FG).bg(OPERANT_PANEL_BG);
+    let border_style = Style::default().fg(BORDER_FG).bg(theme_colors::panel_bg());
     let inner_w = modal_area.width.saturating_sub(2) as usize;
     for y in modal_area.top()..modal_area.bottom() {
         let is_top = y == modal_area.top();
@@ -246,7 +250,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     let title_x = modal_area.left() + 2;
     let title_style = Style::default()
         .fg(TITLE_FG)
-        .bg(OPERANT_PANEL_BG)
+        .bg(theme_colors::panel_bg())
         .add_modifier(Modifier::BOLD);
     for (i, ch) in title.chars().enumerate() {
         let x = title_x + i as u16;
@@ -284,12 +288,14 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
 
     // Question text
     row += 1; // top padding
-    for wrap_line in word_wrap(&state.question, inner_w) {
+    for wrap_line in balanced_wrap(&state.question, inner_w) {
         write_line!(
             row,
             Line::from(Span::styled(
                 wrap_line,
-                Style::default().fg(QUESTION_FG).bg(OPERANT_PANEL_BG)
+                Style::default()
+                    .fg(QUESTION_FG)
+                    .bg(theme_colors::panel_bg())
             ))
         );
         row += 1;
@@ -314,7 +320,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             let style_bg = if is_sel {
                 SELECTED_BG
             } else {
-                OPERANT_PANEL_BG
+                theme_colors::panel_bg()
             };
             write_line!(
                 row,
@@ -352,7 +358,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
         let style_bg = if is_sel {
             SELECTED_BG
         } else {
-            OPERANT_PANEL_BG
+            theme_colors::panel_bg()
         };
         let mut spans = vec![Span::styled(
             prefix,
@@ -389,7 +395,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             row,
             Line::from(Span::styled(
                 hint,
-                Style::default().fg(HINT_FG).bg(OPERANT_PANEL_BG)
+                Style::default().fg(HINT_FG).bg(theme_colors::panel_bg())
             ))
         );
     }
@@ -401,44 +407,9 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
 // Word-wrap helper
 // ---------------------------------------------------------------------------
 
-fn word_wrap(text: &str, max_width: usize) -> Vec<String> {
-    if max_width == 0 {
-        return vec![text.to_string()];
-    }
-    let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
-        if paragraph.is_empty() {
-            lines.push(String::new());
-            continue;
-        }
-        let mut current = String::new();
-        for word in paragraph.split_whitespace() {
-            // Measure by display width, not byte length, so CJK/emoji wrap
-            // correctly (a byte-length comparison wraps multibyte text short).
-            let fits = unicode_width::UnicodeWidthStr::width(current.as_str())
-                + 1
-                + unicode_width::UnicodeWidthStr::width(word)
-                <= max_width;
-            if current.is_empty() {
-                current.push_str(word);
-            } else if fits {
-                current.push(' ');
-                current.push_str(word);
-            } else {
-                lines.push(current.clone());
-                current = word.to_string();
-            }
-        }
-        if !current.is_empty() {
-            lines.push(current);
-        }
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
-    use super::word_wrap;
+    use super::balanced_wrap;
 
     #[test]
     fn word_wrap_uses_display_width_not_bytes() {
@@ -446,18 +417,18 @@ mod tests {
         // "中文 中文" is 4 glyphs = 8 columns + 1 space = 9 columns; it fits
         // in width 9 on one line. A byte-length wrapper would see 13 bytes
         // and wrap it incorrectly.
-        let lines = word_wrap("中文 中文", 9);
+        let lines = balanced_wrap("中文 中文", 9);
         assert_eq!(lines, vec!["中文 中文".to_string()]);
 
         // At width 4 (one CJK word = 4 columns) each word takes its own line.
-        let lines = word_wrap("中文 中文", 4);
+        let lines = balanced_wrap("中文 中文", 4);
         assert_eq!(lines, vec!["中文".to_string(), "中文".to_string()]);
     }
 
     #[test]
     fn word_wrap_ascii_unchanged() {
         assert_eq!(
-            word_wrap("the quick brown fox", 9),
+            balanced_wrap("the quick brown fox", 9),
             vec!["the quick".to_string(), "brown fox".to_string()]
         );
     }

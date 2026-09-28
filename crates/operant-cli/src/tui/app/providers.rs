@@ -232,6 +232,10 @@ impl App {
     }
 
     /// Apply a theme by name, persisting it to config.
+    ///
+    /// Also switches the process-global palette the renderers read, so the
+    /// change is visible on the very next frame instead of only on the next
+    /// launch.
     pub fn apply_theme(&mut self, theme_name: &str) {
         let theme = match theme_name {
             "dark" => Theme::Dark,
@@ -246,6 +250,7 @@ impl App {
         let mut settings = Settings::load_sync().unwrap_or_default();
         settings.theme = theme;
         let _ = settings.save_sync();
+        crate::tui::theme_colors::set_active_theme(theme_name);
         self.status_message = Some(format!("Theme set to: {}", theme_name));
     }
 }

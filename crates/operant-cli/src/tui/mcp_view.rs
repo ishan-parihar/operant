@@ -10,9 +10,9 @@ use ratatui::{
 };
 
 use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_PANEL_BORDER, OPERANT_TEXT,
     centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
 };
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Data types (view-level; mirrors cc_mcp types)
@@ -231,7 +231,7 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         Span::styled(
             " MCP",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -240,7 +240,7 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 state.servers.len(),
                 state.filtered_tools().len()
             ),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
         Span::styled(
             format!(
@@ -248,11 +248,15 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 "Esc close",
                 width = inner.width.saturating_sub(26) as usize
             ),
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         ),
     ]);
     Paragraph::new(title)
-        .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+        .style(
+            Style::default()
+                .bg(theme_colors::panel_bg())
+                .fg(theme_colors::text()),
+        )
         .render(layout[0], buf);
 
     // Split: servers (left 35%) | tools (right 65%)
@@ -276,65 +280,73 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         Span::styled(
             " Tab ",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("switch pane  "),
         Span::styled(
             " / ",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("filter tools  "),
         Span::styled(
             " e ",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("error detail  "),
         Span::styled(
             " a ",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("auth  "),
         Span::styled(
             " r ",
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("reconnect"),
     ]);
     Paragraph::new(footer)
-        .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_MUTED))
+        .style(
+            Style::default()
+                .bg(theme_colors::panel_bg())
+                .fg(theme_colors::muted()),
+        )
         .render(layout[2], buf);
 }
 
 fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     let focused = state.active_pane == McpViewPane::ServerList;
     let border_style = if focused {
-        Style::default().fg(OPERANT_ACCENT)
+        Style::default().fg(theme_colors::accent())
     } else {
-        Style::default().fg(OPERANT_PANEL_BORDER)
+        Style::default().fg(theme_colors::border())
     };
     Block::default()
         .title(Span::styled(
             " Servers ",
             Style::default()
                 .fg(if focused {
-                    OPERANT_ACCENT
+                    theme_colors::accent()
                 } else {
-                    OPERANT_MUTED
+                    theme_colors::muted()
                 })
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(border_style)
-        .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+        .style(
+            Style::default()
+                .bg(theme_colors::panel_bg())
+                .fg(theme_colors::text()),
+        )
         .render(area, buf);
 
     let inner = Rect {
@@ -418,10 +430,10 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 if sel {
                     Style::default()
                         .fg(Color::Black)
-                        .bg(OPERANT_ACCENT)
+                        .bg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(OPERANT_TEXT)
+                    Style::default().fg(theme_colors::text())
                 },
             )]);
             Paragraph::new(line).render(
@@ -489,24 +501,28 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     let focused =
         state.active_pane == McpViewPane::ToolList || state.active_pane == McpViewPane::ToolDetail;
     let border_style = if focused {
-        Style::default().fg(OPERANT_ACCENT)
+        Style::default().fg(theme_colors::accent())
     } else {
-        Style::default().fg(OPERANT_PANEL_BORDER)
+        Style::default().fg(theme_colors::border())
     };
     Block::default()
         .title(Span::styled(
             " Tools ",
             Style::default()
                 .fg(if focused {
-                    OPERANT_ACCENT
+                    theme_colors::accent()
                 } else {
-                    OPERANT_MUTED
+                    theme_colors::muted()
                 })
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(border_style)
-        .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+        .style(
+            Style::default()
+                .bg(theme_colors::panel_bg())
+                .fg(theme_colors::text()),
+        )
         .render(area, buf);
 
     let inner = Rect {
@@ -518,7 +534,7 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
 
     // Search bar
     let search_line = Line::from(vec![
-        Span::styled("/ ", Style::default().fg(OPERANT_ACCENT)),
+        Span::styled("/ ", Style::default().fg(theme_colors::accent())),
         Span::styled(
             if state.tool_search.is_empty() {
                 "filter tools".to_string()
@@ -526,9 +542,9 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 state.tool_search.clone()
             },
             Style::default().fg(if state.tool_search.is_empty() {
-                OPERANT_MUTED
+                theme_colors::muted()
             } else {
-                OPERANT_TEXT
+                theme_colors::text()
             }),
         ),
     ]);
@@ -567,10 +583,10 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             if sel {
                 Style::default()
                     .fg(Color::Black)
-                    .bg(OPERANT_ACCENT)
+                    .bg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(OPERANT_TEXT)
+                Style::default().fg(theme_colors::text())
             },
         )]);
         Paragraph::new(line).render(
@@ -588,9 +604,9 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
 fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     let focused = state.active_pane == McpViewPane::ToolDetail;
     let border_style = if focused {
-        Style::default().fg(OPERANT_ACCENT)
+        Style::default().fg(theme_colors::accent())
     } else {
-        Style::default().fg(OPERANT_PANEL_BORDER)
+        Style::default().fg(theme_colors::border())
     };
 
     // If error is expanded, show full error text in this pane
@@ -602,7 +618,11 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             .title(" Error Detail [e: close] ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Red))
-            .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+            .style(
+                Style::default()
+                    .bg(theme_colors::panel_bg())
+                    .fg(theme_colors::text()),
+            )
             .render(area, buf);
         let inner = Rect {
             x: area.x + 1,
@@ -630,15 +650,19 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             " Tool Detail ",
             Style::default()
                 .fg(if focused {
-                    OPERANT_ACCENT
+                    theme_colors::accent()
                 } else {
-                    OPERANT_MUTED
+                    theme_colors::muted()
                 })
                 .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(border_style)
-        .style(Style::default().bg(OPERANT_PANEL_BG).fg(OPERANT_TEXT))
+        .style(
+            Style::default()
+                .bg(theme_colors::panel_bg())
+                .fg(theme_colors::text()),
+        )
         .render(area, buf);
 
     let inner = Rect {
@@ -660,7 +684,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     lines.push(Line::from(vec![Span::styled(
         format!("{}:{}", tool.server, tool.name),
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::default());
@@ -701,7 +725,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         if !server.resources.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Resources:",
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )]));
             for resource in server.resources.iter().take(3) {
                 lines.push(Line::from(vec![Span::styled(
@@ -714,7 +738,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         if !server.prompts.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Prompts:",
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )]));
             for prompt in server.prompts.iter().take(3) {
                 lines.push(Line::from(vec![Span::styled(
@@ -731,9 +755,11 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
 }
 
 fn pad_line(text: &str, width: u16) -> String {
+    use crate::tui::render::{display_width, take_width};
     let max_width = width as usize;
-    let mut clipped: String = text.chars().take(max_width).collect();
-    let visible = clipped.chars().count();
+    let mut clipped = take_width(text, max_width);
+    // Pad by the *display* shortfall, so a two-cell glyph counts as two.
+    let visible = display_width(&clipped);
     if visible < max_width {
         clipped.push_str(&" ".repeat(max_width - visible));
     }

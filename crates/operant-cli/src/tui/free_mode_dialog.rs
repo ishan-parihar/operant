@@ -37,9 +37,8 @@ use ratatui::widgets::Paragraph;
 
 use crate::tui::adapter_types::{FREE_CATALOG, FreeUpstream};
 
-use crate::tui::overlays::{
-    OPERANT_PANEL_BG, centered_rect, render_dark_overlay, render_dialog_bg,
-};
+use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg};
+use crate::tui::theme_colors;
 
 /// One row in the dialog — one provider's name, URL, and the user's
 /// (possibly empty) typed key.
@@ -213,7 +212,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
     let dim = Color::Rgb(90, 90, 90);
     let muted = Color::Rgb(180, 180, 180);
     let tip = Color::Rgb(120, 210, 150);
-    let dialog_bg = OPERANT_PANEL_BG;
+    let dialog_bg = theme_colors::panel_bg();
 
     render_dark_overlay(frame, area);
 
@@ -237,7 +236,8 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
     );
     let title_pad = inner
         .width
-        .saturating_sub(title_text.chars().count() as u16 + 5) as usize;
+        .saturating_sub(crate::tui::render::display_width(&title_text) as u16 + 5)
+        as usize;
 
     let confirm_hint = if state.can_submit() {
         format!(
@@ -294,7 +294,7 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
     let row_label_width: usize = state
         .fields
         .iter()
-        .map(|f| f.upstream.title.chars().count())
+        .map(|f| crate::tui::render::display_width(f.upstream.title))
         .max()
         .unwrap_or(0)
         .max(8);

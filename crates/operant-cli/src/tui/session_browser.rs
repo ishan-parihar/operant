@@ -6,7 +6,6 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use unicode_width::UnicodeWidthStr;
 
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
 
@@ -171,20 +170,17 @@ fn fmt_cost(usd: f64) -> String {
 
 /// Truncate `s` to fit within `max_width` display columns, appending `…` if cut.
 fn truncate_display(s: &str, max_width: usize) -> String {
-    if s.width() <= max_width {
+    use crate::tui::render::{display_width, take_width};
+    if display_width(s) <= max_width {
         return s.to_string();
     }
     if max_width <= 1 {
         return "…".to_string();
     }
-    let mut out = String::new();
-    for ch in s.chars() {
-        if out.width() + ch.len_utf8() + 1 > max_width {
-            break;
-        }
-        out.push(ch);
-    }
-    format!("{}…", out)
+    // Reserve the final cell for the ellipsis.
+    let mut out = take_width(s, max_width - 1);
+    out.push('…');
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +602,7 @@ mod tests {
         let long = "abcdefghij"; // 10 chars
         let result = truncate_display(long, 5);
         assert!(
-            result.width() <= 6,
+            crate::tui::render::display_width(&result) <= 6,
             "truncated string should fit within budget"
         );
         assert!(result.ends_with('…'));

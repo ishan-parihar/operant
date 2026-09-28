@@ -5,10 +5,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_frame,
-    modal_header_line_area, render_modal_title_frame,
-};
+use crate::tui::overlays::{begin_modal_frame, modal_header_line_area, render_modal_title_frame};
+use crate::tui::theme_colors;
 
 #[derive(Debug, Clone, Default)]
 pub struct ImportConfigDialogState {
@@ -50,7 +48,7 @@ pub fn render_import_config_dialog(frame: &mut Frame, state: &ImportConfigDialog
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " Preview the content to import from ~/.claude; Enter to confirm, Esc to cancel.",
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )])),
             subtitle_area,
         );
@@ -61,7 +59,7 @@ pub fn render_import_config_dialog(frame: &mut Frame, state: &ImportConfigDialog
         lines.push(section_title("CLAUDE.md"));
         lines.push(Line::from(vec![Span::styled(
             "  Will import CLAUDE.md from ~/.claude",
-            Style::default().fg(OPERANT_TEXT),
+            Style::default().fg(theme_colors::text()),
         )]));
         lines.push(Line::from(""));
     }
@@ -70,7 +68,7 @@ pub fn render_import_config_dialog(frame: &mut Frame, state: &ImportConfigDialog
         lines.push(section_title("settings.json"));
         lines.push(Line::from(vec![Span::styled(
             "  Will import settings from ~/.claude/settings.json",
-            Style::default().fg(OPERANT_TEXT),
+            Style::default().fg(theme_colors::text()),
         )]));
         lines.push(Line::from(""));
     }
@@ -79,7 +77,7 @@ pub fn render_import_config_dialog(frame: &mut Frame, state: &ImportConfigDialog
         lines.push(section_title("Auth credentials"));
         lines.push(Line::from(vec![Span::styled(
             "  Will import API keys from ~/.claude/.credentials",
-            Style::default().fg(OPERANT_TEXT),
+            Style::default().fg(theme_colors::text()),
         )]));
         lines.push(Line::from(""));
     }
@@ -87,21 +85,21 @@ pub fn render_import_config_dialog(frame: &mut Frame, state: &ImportConfigDialog
     if lines.is_empty() {
         lines.push(Line::from(vec![Span::styled(
             "  Nothing to import.",
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         )]));
     }
 
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(OPERANT_PANEL_BG)),
+            .style(Style::default().bg(theme_colors::panel_bg())),
         layout.body_area,
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " Enter to import  ·  Esc to cancel",
             Style::default()
-                .fg(OPERANT_MUTED)
+                .fg(theme_colors::muted())
                 .add_modifier(Modifier::ITALIC),
         )])),
         layout.footer_area,
@@ -114,7 +112,7 @@ fn section_title(title: &str) -> Line<'static> {
         Span::styled(
             title.to_string(),
             Style::default()
-                .fg(OPERANT_ACCENT)
+                .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD),
         ),
     ])

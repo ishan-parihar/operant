@@ -8,8 +8,31 @@
 //!
 //! This reduces CPU usage by 5-10x on idle terminals and dramatically
 //! improves battery life on laptops.
+//!
+//! The accessibility preference `reduce_motion` (persisted in
+//! `~/.operant/settings.json`, toggled from the settings screen) overrides the
+//! detected tier down to [`PerformanceTier::Minimal`] and makes
+//! [`crate::tui::render::shimmer_spans`] emit static text.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+/// Process-wide `reduce_motion` flag, set once from the persisted setting at
+/// startup and again whenever the settings screen toggles it.
+///
+/// Read by the shimmer helper, which has no `App` handle, so the value has to
+/// live somewhere process-wide.
+static REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
+
+/// Record the user's `reduce_motion` preference for the running process.
+pub fn set_reduce_motion(enabled: bool) {
+    REDUCE_MOTION.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether the user asked for reduced motion.
+pub fn reduce_motion_enabled() -> bool {
+    REDUCE_MOTION.load(Ordering::Relaxed)
+}
 
 /// Performance tier — controls animation FPS and redraw cadence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -88,6 +111,15 @@ impl PerformanceTier {
     pub fn animations_enabled(&self) -> bool {
         *self != Self::Minimal
     }
+
+    /// Clamp the detected tier to the static level when the user asked for
+    /// reduced motion.
+    ///
+    /// `Minimal` is the non-animated tier: [`PerformanceTier::animations_enabled`]
+    /// is false for it, so the redraw interval falls back to `fast_fps`.
+    pub fn with_reduce_motion(self, reduce_motion: bool) -> Self {
+        if reduce_motion { Self::Minimal } else { self }
+    }
 }
 
 /// Calculate the optimal redraw interval based on current state.
@@ -162,6 +194,7 @@ pub fn redraw_interval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::render::shimmer_spans;
 
     #[test]
     fn tier_ordinals_are_consistent() {
@@ -220,5 +253,74 @@ mod tests {
             tier,
             PerformanceTier::Minimal | PerformanceTier::Normal | PerformanceTier::High
         ));
+    }
+
+    /// `reduce_motion` used to be persisted through four layers of config and
+    /// read by nothing. It must now (a) kill the frame-count-driven shimmer
+    /// and (b) drop the tier to its non-animated level.
+    #[test]
+    fn reduce_motion_should_disable_shimmer_and_force_static_tier() {
+        // (a) The tier is clamped to the static level.
+        for detected in [
+            PerformanceTier::Minimal,
+            PerformanceTier::Normal,
+            PerformanceTier::High,
+        ] {
+            let clamped = detected.with_reduce_motion(true);
+            assert_eq!(clamped, PerformanceTier::Minimal);
+            assert!(!clamped.animations_enabled());
+        }
+        // …and left alone when the preference is off.
+        assert_eq!(
+            PerformanceTier::High.with_reduce_motion(false),
+            PerformanceTier::High
+        );
+
+        // (b) The process-wide flag actually reaches the shimmer helper.
+        assert!(!reduce_motion_enabled());
+        let shimmering = [shimmer_spans("Thinking", 0), shimmer_spans("Thinking", 400)];
+        // With motion enabled the sweep moves between frames.
+        assert_ne!(
+            shimmer_styles(&shimmering[0]),
+            shimmer_styles(&shimmering[1])
+        );
+
+        set_reduce_motion(true);
+        assert!(reduce_motion_enabled());
+        let still = [shimmer_spans("Thinking", 0), shimmer_spans("Thinking", 400)];
+        set_reduce_motion(false);
+        // With motion disabled every frame is identical.
+        assert_eq!(shimmer_styles(&still[0]), shimmer_styles(&still[1]));
+        // The text is still there — reduced motion removes the sweep, not the label.
+        let flat: String = still[0].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(flat, "Thinking");
+
+        // (c) The redraw cadence follows the clamped tier: with motion
+        // reduced, the tick uses the static `fast_fps`, not `animation_fps`.
+        let clamped = PerformanceTier::High.with_reduce_motion(true);
+        assert!(!clamped.animations_enabled());
+        let static_tick = Duration::from_millis(1000 / PerformanceTier::Minimal.fast_fps() as u64);
+        assert_eq!(
+            redraw_interval(clamped, false, None, None, true),
+            static_tick
+        );
+        // The animated tier would have ticked faster.
+        assert!(
+            redraw_interval(PerformanceTier::High, false, None, None, true) < static_tick,
+            "reduced motion must be at least as slow as the static cadence"
+        );
+    }
+
+    /// The style of every span, for asserting shimmer output without a buffer.
+    fn shimmer_styles(spans: &[ratatui::text::Span<'_>]) -> Vec<(String, ratatui::style::Color)> {
+        spans
+            .iter()
+            .map(|s| {
+                (
+                    s.content.to_string(),
+                    s.style.fg.unwrap_or(ratatui::style::Color::Reset),
+                )
+            })
+            .collect()
     }
 }

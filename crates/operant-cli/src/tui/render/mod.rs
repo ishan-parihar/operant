@@ -31,6 +31,8 @@ pub(crate) use utils::{
     is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color, truncate_end,
     truncate_middle, truncate_text,
 };
+// The width seam, re-exported at `pub` so sibling modules can `pub use` it.
+pub use utils::{balanced_wrap, display_width, take_width};
 
 // render.rs â€” All ratatui rendering logic.
 
@@ -61,6 +63,7 @@ use crate::tui::overlays::{
 use crate::tui::prompt_input::input_height;
 use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
+use crate::tui::theme_colors;
 use crate::tui::theme_screen::render_theme_screen;
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
 use ratatui::Frame;
@@ -81,7 +84,11 @@ const SPINNER: &[char] = &[
     '\u{00b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273d}', '\u{273b}',
     '\u{2736}', '\u{2733}', '\u{2722}', '\u{00b7}',
 ];
-const ACCENT_PRIMARY: Color = Color::Rgb(255, 191, 0);
+/// Accent bar / selection colour. Palette-driven: `/theme` repaints it.
+pub(crate) fn accent_primary() -> Color {
+    theme_colors::accent()
+}
+
 const WELCOME_BOX_HEIGHT: u16 = 9;
 const STATUS_THINKING: &str = "thinking";
 const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
@@ -118,7 +125,7 @@ pub fn render_app(frame: &mut Frame, app: &App) {
             let usable_width = size.width.max(1) as usize;
             // Measure display width (not char count) so wide chars (CJK/emoji)
             // don't undercount rows and overflow the status area.
-            let text_cols = unicode_width::UnicodeWidthStr::width(text);
+            let text_cols = crate::tui::render::display_width(text);
             text_cols.div_ceil(usable_width).clamp(1, 3) as u16
         } else {
             1
@@ -419,5 +426,16 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     let hits = crate::tui::osc8::scan_buffer_for_urls(frame.buffer_mut());
     if let Err(e) = crate::tui::osc8::emit_hits(&hits) {
         tracing::debug!("OSC8 hyperlink emission failed: {e}");
+    }
+
+    // ---- Inline graphics (post-paint pass) ------------------------------
+    // Kitty/Sixel/iTerm2 images paint outside ratatui's cell grid, so the
+    // escape sequence has to be written after the frame is flushed — same
+    // window as the OSC 8 pass above. Drained so each attachment is emitted
+    // once; terminals with no graphics protocol simply render nothing here and
+    // the user already got the named placeholder in the paste notification.
+    let queued: Vec<_> = app.pending_inline_images.borrow_mut().drain(..).collect();
+    for image in queued {
+        let _ = crate::tui::image_paste::emit_inline_image(&image);
     }
 }

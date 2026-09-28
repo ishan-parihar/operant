@@ -10,9 +10,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_frame, cycle_next,
-    cycle_prev, modal_header_line_area, render_modal_title_frame,
+    begin_modal_frame, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_frame,
 };
+use crate::tui::theme_colors;
+use crate::tui::theme_colors::ColorPalette;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,87 +82,66 @@ impl Default for ThemeScreen {
 // Built-in themes
 // ---------------------------------------------------------------------------
 
+/// The themes offered by the picker, in display order.
+const THEME_NAMES: &[&str] = &[
+    "default",
+    "dark",
+    "light",
+    "solarized",
+    "nord",
+    "dracula",
+    "monokai",
+    "deuteranopia",
+];
+
+fn theme_label(name: &str) -> &'static str {
+    match name {
+        "default" => "Default",
+        "dark" => "Dark",
+        "light" => "Light",
+        "solarized" => "Solarized",
+        "nord" => "Nord",
+        "dracula" => "Dracula",
+        "monokai" => "Monokai",
+        "deuteranopia" => "Deuteranopia",
+        _ => "Custom",
+    }
+}
+
+fn theme_description(name: &str) -> &'static str {
+    match name {
+        "default" => "Operant default — dark background, cyan accents",
+        "dark" => "High-contrast dark theme",
+        "light" => "Light background with dark text",
+        "solarized" => "Solarized Dark — warm tones with blue accents",
+        "nord" => "Nord — cool blue-grey palette",
+        "dracula" => "Dracula — purple/pink dark theme",
+        "monokai" => "Monokai — vibrant colours on dark background",
+        "deuteranopia" => "Red-green color blind friendly — blue/yellow/gray palette",
+        _ => "Unknown palette — falls back to the Operant default",
+    }
+}
+
 fn builtin_themes() -> Vec<ThemeOption> {
-    vec![
-        ThemeOption {
-            name: "default".to_string(),
-            label: "Default".to_string(),
-            description: "Operant default — dark background, cyan accents".to_string(),
-            swatch: [Color::Black, Color::Cyan, Color::Green, Color::White],
-        },
-        ThemeOption {
-            name: "dark".to_string(),
-            label: "Dark".to_string(),
-            description: "High-contrast dark theme".to_string(),
-            swatch: [
-                Color::Rgb(18, 18, 18),
-                Color::Rgb(97, 175, 239),
-                Color::Rgb(152, 195, 121),
-                Color::Rgb(229, 229, 229),
-            ],
-        },
-        ThemeOption {
-            name: "light".to_string(),
-            label: "Light".to_string(),
-            description: "Light background with dark text".to_string(),
-            swatch: [Color::White, Color::Blue, Color::DarkGray, Color::Black],
-        },
-        ThemeOption {
-            name: "solarized".to_string(),
-            label: "Solarized".to_string(),
-            description: "Solarized Dark — warm tones with blue accents".to_string(),
-            swatch: [
-                Color::Rgb(0, 43, 54),
-                Color::Rgb(38, 139, 210),
-                Color::Rgb(133, 153, 0),
-                Color::Rgb(131, 148, 150),
-            ],
-        },
-        ThemeOption {
-            name: "nord".to_string(),
-            label: "Nord".to_string(),
-            description: "Nord — cool blue-grey palette".to_string(),
-            swatch: [
-                Color::Rgb(46, 52, 64),
-                Color::Rgb(136, 192, 208),
-                Color::Rgb(163, 190, 140),
-                Color::Rgb(216, 222, 233),
-            ],
-        },
-        ThemeOption {
-            name: "dracula".to_string(),
-            label: "Dracula".to_string(),
-            description: "Dracula — purple/pink dark theme".to_string(),
-            swatch: [
-                Color::Rgb(40, 42, 54),
-                Color::Rgb(139, 233, 253),
-                Color::Rgb(80, 250, 123),
-                Color::Rgb(248, 248, 242),
-            ],
-        },
-        ThemeOption {
-            name: "monokai".to_string(),
-            label: "Monokai".to_string(),
-            description: "Monokai — vibrant colours on dark background".to_string(),
-            swatch: [
-                Color::Rgb(39, 40, 34),
-                Color::Rgb(102, 217, 239),
-                Color::Rgb(166, 226, 46),
-                Color::Rgb(248, 248, 242),
-            ],
-        },
-        ThemeOption {
-            name: "deuteranopia".to_string(),
-            label: "Deuteranopia".to_string(),
-            description: "Red-green color blind friendly — blue/yellow/gray palette".to_string(),
-            swatch: [
-                Color::Rgb(18, 18, 18),
-                Color::Rgb(0, 122, 204),   // Blue
-                Color::Rgb(255, 180, 0),   // Gold/Yellow
-                Color::Rgb(200, 200, 200), // Light gray
-            ],
-        },
-    ]
+    THEME_NAMES
+        .iter()
+        .map(|name| {
+            // The swatch is read from the palette itself, so the preview can
+            // never drift from what `/theme` actually applies.
+            let palette = ColorPalette::for_theme(name);
+            ThemeOption {
+                name: (*name).to_string(),
+                label: theme_label(name).to_string(),
+                description: theme_description(name).to_string(),
+                swatch: [
+                    palette.panel_bg,
+                    palette.accent,
+                    palette.success,
+                    palette.text,
+                ],
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +160,8 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                " Preview palettes before wiring up richer theme behavior.",
-                Style::default().fg(OPERANT_MUTED),
+                " Applies immediately — the whole TUI repaints in this palette.",
+                Style::default().fg(theme_colors::muted()),
             )])),
             subtitle_area,
         );
@@ -192,19 +172,19 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
     for (i, theme) in screen.themes.iter().enumerate() {
         let is_selected = i == screen.selected_idx;
         let bg = if is_selected {
-            OPERANT_ACCENT
+            theme_colors::accent()
         } else {
-            OPERANT_PANEL_BG
+            theme_colors::panel_bg()
         };
         let fg = if is_selected {
             Color::White
         } else {
-            OPERANT_TEXT
+            theme_colors::text()
         };
         let desc_fg = if is_selected {
             Color::Rgb(248, 220, 236)
         } else {
-            OPERANT_MUTED
+            theme_colors::muted()
         };
 
         // Build the swatch using block characters with background colour
@@ -236,14 +216,14 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
         lines.push(Line::from(""));
     }
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(OPERANT_PANEL_BG)),
+        Paragraph::new(lines).style(Style::default().bg(theme_colors::panel_bg())),
         layout.body_area,
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " ↑↓ navigate  ·  enter apply  ·  esc cancel",
             Style::default()
-                .fg(OPERANT_MUTED)
+                .fg(theme_colors::muted())
                 .add_modifier(Modifier::ITALIC),
         )])),
         layout.footer_area,

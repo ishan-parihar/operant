@@ -12,9 +12,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::overlays::{
-    OPERANT_PANEL_BG, centered_rect, render_dark_overlay, render_dialog_bg,
-};
+use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg};
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // Status enum
@@ -175,7 +174,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
 
     let pink = Color::Rgb(255, 191, 0);
     let dim = Color::Rgb(90, 90, 90);
-    let dialog_bg = OPERANT_PANEL_BG;
+    let dialog_bg = theme_colors::panel_bg();
     let green = Color::Rgb(80, 200, 120);
 
     // ── Darken the entire background ──

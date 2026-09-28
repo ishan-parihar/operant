@@ -8,10 +8,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::tui::overlays::{
-    OPERANT_ACCENT, OPERANT_MUTED, OPERANT_PANEL_BG, OPERANT_TEXT, begin_modal_frame,
-    modal_header_line_area, render_modal_title_frame,
-};
+use crate::tui::overlays::{begin_modal_frame, modal_header_line_area, render_modal_title_frame};
+use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
 // State
@@ -67,7 +65,7 @@ pub fn render_export_dialog(frame: &mut Frame, state: &ExportDialogState, area: 
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " Choose a format to export this session.",
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             )])),
             subtitle_area,
         );
@@ -93,21 +91,21 @@ pub fn render_export_dialog(frame: &mut Frame, state: &ExportDialogState, area: 
         Line::from(""),
         Line::from(vec![Span::styled(
             " Saved to ./claude-export-<timestamp>.<ext>",
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         )]),
     ];
 
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(OPERANT_PANEL_BG)),
+            .style(Style::default().bg(theme_colors::panel_bg())),
         layout.body_area,
     );
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             " tab/←/→ switch  ·  enter export  ·  1/2 choose",
             Style::default()
-                .fg(OPERANT_MUTED)
+                .fg(theme_colors::muted())
                 .add_modifier(Modifier::ITALIC),
         )])),
         layout.footer_area,
@@ -122,15 +120,19 @@ fn export_option_row(
     width: u16,
 ) -> Line<'static> {
     let bg = if selected {
-        OPERANT_ACCENT
+        theme_colors::accent()
     } else {
-        OPERANT_PANEL_BG
+        theme_colors::panel_bg()
     };
-    let fg = if selected { Color::White } else { OPERANT_TEXT };
+    let fg = if selected {
+        Color::White
+    } else {
+        theme_colors::text()
+    };
     let desc_fg = if selected {
         Color::Rgb(245, 220, 232)
     } else {
-        OPERANT_MUTED
+        theme_colors::muted()
     };
     let mut spans = vec![
         Span::styled(format!(" [{}] ", key), Style::default().fg(desc_fg).bg(bg)),

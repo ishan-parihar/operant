@@ -99,8 +99,8 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     let search_line = modal_search_line(
         &overlay.filter,
         "Search shortcuts or commands",
-        OPERANT_MUTED,
-        OPERANT_TEXT,
+        theme_colors::muted(),
+        theme_colors::text(),
     );
     if let Some(search_area) = modal_header_line_area(layout.header_area, 2) {
         frame.render_widget(Paragraph::new(search_line), search_area);
@@ -123,7 +123,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     left_lines.push(Line::from(Span::styled(
         " Keyboard Shortcuts",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )));
     left_lines.push(Line::from(""));
@@ -132,7 +132,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     left_lines.push(Line::from(Span::styled(
         " Navigation",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )));
     for (key, desc) in &[
@@ -148,7 +148,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     left_lines.push(Line::from(Span::styled(
         " Input",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )));
     for (key, desc) in &[
@@ -165,7 +165,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     left_lines.push(Line::from(Span::styled(
         " App",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )));
     for (key, desc) in &[
@@ -183,13 +183,18 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     frame.render_widget(
         Paragraph::new(left_lines)
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(OPERANT_PANEL_BG)),
+            .style(Style::default().bg(theme_colors::panel_bg())),
         col_chunks[0],
     );
 
     // ─── Center divider ────────────────────────────────────────────────────
     let divider_lines: Vec<Line<'static>> = (0..content_area.height)
-        .map(|_| Line::from(Span::styled("\u{2502}", Style::default().fg(OPERANT_MUTED))))
+        .map(|_| {
+            Line::from(Span::styled(
+                "\u{2502}",
+                Style::default().fg(theme_colors::muted()),
+            ))
+        })
         .collect();
     frame.render_widget(Paragraph::new(divider_lines), col_chunks[1]);
 
@@ -211,7 +216,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     right_lines.push(Line::from(Span::styled(
         " Slash Commands",
         Style::default()
-            .fg(OPERANT_ACCENT)
+            .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD),
     )));
     right_lines.push(Line::from(""));
@@ -226,7 +231,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
             right_lines.push(Line::from(Span::styled(
                 format!(" {}", entry.category),
                 Style::default()
-                    .fg(OPERANT_ACCENT)
+                    .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             )));
         }
@@ -240,14 +245,14 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
             Span::styled(
                 format!("/{:<14}", entry.name),
                 Style::default()
-                    .fg(OPERANT_TEXT)
+                    .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(aliases_text, Style::default().fg(OPERANT_MUTED)),
+            Span::styled(aliases_text, Style::default().fg(theme_colors::muted())),
             Span::raw("  "),
             Span::styled(
                 entry.description.clone(),
-                Style::default().fg(OPERANT_MUTED),
+                Style::default().fg(theme_colors::muted()),
             ),
         ]));
     }
@@ -255,7 +260,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     if filtered.is_empty() {
         right_lines.push(Line::from(Span::styled(
             " No matching commands",
-            Style::default().fg(OPERANT_MUTED),
+            Style::default().fg(theme_colors::muted()),
         )));
     }
 
@@ -268,7 +273,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
         Paragraph::new(right_lines)
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0))
-            .style(Style::default().bg(OPERANT_PANEL_BG)),
+            .style(Style::default().bg(theme_colors::panel_bg())),
         col_chunks[2],
     );
 
@@ -278,7 +283,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
             APP_VERSION
         ),
         Style::default()
-            .fg(OPERANT_MUTED)
+            .fg(theme_colors::muted())
             .add_modifier(Modifier::ITALIC),
     )]);
     frame.render_widget(Paragraph::new(version_line), layout.footer_area);
@@ -294,9 +299,9 @@ fn kb_line<'a>(key: &str, desc: &str) -> Line<'a> {
         Span::styled(
             format!("{:<20}", key),
             Style::default()
-                .fg(OPERANT_TEXT)
+                .fg(theme_colors::text())
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(desc.to_string(), Style::default().fg(OPERANT_MUTED)),
+        Span::styled(desc.to_string(), Style::default().fg(theme_colors::muted())),
     ])
 }

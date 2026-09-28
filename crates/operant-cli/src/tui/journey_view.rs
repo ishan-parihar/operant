@@ -461,20 +461,21 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Truncate `s` to `max` chars, appending `…` if cut.
+/// Truncate `s` to `max` display cells, appending `…` if cut.
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
+    use crate::tui::render::{display_width, take_width};
+    if display_width(s) <= max {
         s.to_string()
     } else if max == 0 {
         String::new()
     } else {
-        let mut out: String = s.chars().take(max - 1).collect();
+        let mut out = take_width(s, max - 1);
         out.push('…');
         out
     }
 }
 
-/// Truncate the first line of `s` to `max` chars, appending `…` if cut.
+/// Truncate the first line of `s` to `max` display cells, appending `…` if cut.
 /// Multi-line content collapses to its first line so the row stays one line tall.
 fn truncate_first_line(s: &str, max: usize) -> String {
     let first = s.lines().next().unwrap_or("").trim();

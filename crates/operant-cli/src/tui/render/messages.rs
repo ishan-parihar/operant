@@ -16,7 +16,7 @@ use ratatui::widgets::Paragraph;
 
 use super::cache::*;
 use super::tools::{render_tool_items_lines, tool_group_ranges};
-use super::{ACCENT_PRIMARY, RenderedLineItem};
+use super::{RenderedLineItem, accent_primary};
 use super::{build_tool_names, render_system_annotation_lines, shimmer_spans};
 
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
@@ -168,7 +168,7 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             indicator,
             Style::default()
                 .fg(Color::Black)
-                .bg(ACCENT_PRIMARY)
+                .bg(accent_primary())
                 .add_modifier(Modifier::BOLD),
         )]);
         frame.render_widget(Paragraph::new(vec![ind_line]), ind_area);
