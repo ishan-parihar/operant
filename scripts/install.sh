@@ -8,10 +8,16 @@ cd "$(dirname "$0")"
 
 # ── Native build dependency preflight ──
 # crates/operant-core/build.rs emits `cargo:rustc-link-lib=sonic` unconditionally,
-# so libsonic is a hard link requirement, not a nice-to-have. Everything else
-# here is a warning: on this machine the build succeeds with no ONNX Runtime and
-# no extracted libclang present, so their necessity is not something to assert
-# on the owner's behalf.
+# so libsonic is a hard link requirement, not a nice-to-have.
+#
+# ONNX Runtime is also NOT optional, contrary to what this comment used to claim.
+# Measured on the shipped binary:
+#     readelf -d ~/.local/bin/operant | grep NEEDED
+#       libonnxruntime.so.1  <- a hard NEEDED entry, not a soft reference
+# so a machine without it cannot start operant at all. Only the *build* can
+# sometimes succeed without it (kokoro-tty is optional); the *installed binary*
+# always needs it. The rpath added in iter-425 points at ~/.local/lib/operant for
+# this reason, and the install step below populates that directory.
 echo "=== Checking Native Build Dependencies ==="
 SONIC_OK=0
 if [ -e /usr/lib/x86_64-linux-gnu/libsonic.so.0 ]; then
