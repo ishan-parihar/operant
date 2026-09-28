@@ -402,6 +402,64 @@ fn test_ctrl_k_shortcut_opens_command_palette_even_with_input() {
     assert_eq!(app.prompt_input.text, "hello");
 }
 
+#[test]
+fn test_ctrl_e_moves_to_end_of_line_not_end_of_text() {
+    let mut app = make_app();
+    // Multi-line, so "end of text" and "end of line" are different answers and
+    // the test would pass for the wrong reason on single-line input.
+    app.prompt_input.text = "one\ntwo".to_string();
+    app.prompt_input.cursor = 0;
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Char('e'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        app.prompt_input.cursor, 3,
+        "Ctrl+E must stop at the end of the FIRST line, not the end of the buffer"
+    );
+    assert_eq!(app.prompt_input.text, "one\ntwo", "Ctrl+E must not edit");
+}
+
+#[test]
+fn test_ctrl_f_moves_word_forward() {
+    let mut app = make_app();
+    app.prompt_input.text = "hello world".to_string();
+    app.prompt_input.cursor = 0;
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        app.prompt_input.cursor, 6,
+        "Ctrl+F must advance to the start of the next word"
+    );
+    assert_eq!(app.prompt_input.text, "hello world", "Ctrl+F must not edit");
+}
+
+#[test]
+fn test_ctrl_n_navigates_history_down() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["first".to_string(), "second".to_string()];
+    // history_pos is an INDEX into history, so the newest entry is Some(len-1).
+    // Two history_ups therefore land on the oldest, and Ctrl+N must walk one
+    // entry newer from there. (Asserting the walk from the newest entry would
+    // be wrong: history_down from the newest correctly restores your draft and
+    // clears the position, which is readline's behaviour, not a bug.)
+    app.prompt_input.history_up();
+    app.prompt_input.history_up();
+    assert_eq!(app.prompt_input.history_pos, Some(0));
+    assert_eq!(app.prompt_input.text, "first");
+
+    app.handle_key_event(press_key(KeyCode::Char('n'), KeyModifiers::CONTROL));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(1),
+        "Ctrl+N must walk one entry newer"
+    );
+    assert_eq!(app.prompt_input.text, "second");
+}
+
 // ---- Bash prefix allowlist ----------------------------------------------
 
 #[test]

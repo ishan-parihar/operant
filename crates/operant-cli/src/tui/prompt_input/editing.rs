@@ -90,6 +90,23 @@ impl PromptInputState {
         }
     }
 
+    /// Ctrl+E: Move to the end of the current line.
+    ///
+    /// End of LINE, not end of text — the prompt is multi-line capable
+    /// (Shift+Enter, and vim's `o`/`O` insert newlines), and readline's Ctrl+E
+    /// is line-scoped, so collapsing the whole buffer onto one line would make
+    /// a multi-line draft unnavigable. The counterpart `move_to_start` is NOT
+    /// added here: the catalogue advertises Ctrl+A as "Move to start", but
+    /// Ctrl+A already opens the model picker in the dispatch block above, and
+    /// which of the two should win is a UX decision, not an oversight.
+    pub fn move_to_end(&mut self) {
+        let line_end = self.text[self.cursor..]
+            .find('\n')
+            .map(|p| self.cursor + p)
+            .unwrap_or(self.text.len());
+        self.cursor = line_end;
+    }
+
     /// Ctrl+W: Cut previous word and save to kill ring.
     pub fn kill_word_backward(&mut self) {
         if self.mode == InputMode::Readonly || self.cursor == 0 {

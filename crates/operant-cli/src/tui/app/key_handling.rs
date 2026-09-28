@@ -1361,6 +1361,35 @@ impl App {
                 self.refresh_prompt_input();
             }
 
+            // ---- Prompt bindings the catalogue advertised but nothing
+            // implemented (iter-429). Each of these is listed in
+            // keybindings/defaults.rs under BindingContext::Prompt, so /keys
+            // told users they worked, and pressing them did nothing. All three
+            // are standard readline, and none conflicts with an existing
+            // binding, which is why they are implemented rather than removed —
+            // the iter-409 resolution for Ctrl+H/Ctrl+L was to drop the claim,
+            // but those two could never fire reliably because the terminal or
+            // the OS took them. These can.
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.prompt_input.move_to_end();
+                self.refresh_prompt_input();
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.prompt_input.move_word_forward();
+                self.refresh_prompt_input();
+            }
+            // Ctrl+N as history-next, matching the guard the Down arm uses for
+            // history_down. The four OTHER Ctrl+N arms in this file are all
+            // scoped to a dialog or picker (connect_dialog,
+            // import_config_picker, command_palette, model_picker), so nothing
+            // else claims this chord with a focused prompt.
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.prompt_input.history_pos.is_some() {
+                    self.prompt_input.history_down();
+                }
+                self.refresh_prompt_input();
+            }
+
             // ---- Input stash (Ctrl+S) -----------------------------------
             // jcode parity. Parks the composer so a half-written prompt is
             // not lost when the composer has to be free; the same chord
