@@ -49,7 +49,9 @@ pub fn annotate_failure(command: &str, exit_code: Option<i32>, output: &str) -> 
     if (out_lc.contains("modulenotfounderror") || out_lc.contains("no module named"))
         && let Some(modname) = extract_missing_module(output)
     {
-        return Some(format!("💡 Try: `pip install {modname}` (or add to your requirements/pyproject)."));
+        return Some(format!(
+            "💡 Try: `pip install {modname}` (or add to your requirements/pyproject)."
+        ));
     }
 
     // 5. cd: no such file or directory
@@ -57,7 +59,8 @@ pub fn annotate_failure(command: &str, exit_code: Option<i32>, output: &str) -> 
         && out_lc.contains("no such file or directory")
     {
         return Some(
-            "💡 Try: check the path with `ls` and `pwd`. Quoted paths with spaces must be exact.".to_string(),
+            "💡 Try: check the path with `ls` and `pwd`. Quoted paths with spaces must be exact."
+                .to_string(),
         );
     }
 
@@ -146,7 +149,11 @@ mod tests {
 
     #[test]
     fn not_a_git_repo() {
-        let hint = annotate_failure("git status", Some(128), "fatal: not a git repository (or any parent up to mount point /)");
+        let hint = annotate_failure(
+            "git status",
+            Some(128),
+            "fatal: not a git repository (or any parent up to mount point /)",
+        );
         assert!(hint.is_some());
         assert!(hint.unwrap().contains("git init"));
     }

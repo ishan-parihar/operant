@@ -71,10 +71,7 @@ impl OperantTool for WorkingDiffTool {
             None => match std::env::current_dir() {
                 Ok(c) => c,
                 Err(e) => {
-                    return ToolResult::error(
-                        String::new(),
-                        format!("Cannot resolve cwd: {e}"),
-                    )
+                    return ToolResult::error(String::new(), format!("Cannot resolve cwd: {e}"));
                 }
             },
         };
@@ -103,9 +100,7 @@ impl OperantTool for WorkingDiffTool {
             Ok(text) => {
                 body.push_str(&truncate(&text, MAX_DIFF_BYTES, "[diff truncated]\n"));
             }
-            Err(e) => {
-                return ToolResult::error(String::new(), format!("git diff failed: {e}"))
-            }
+            Err(e) => return ToolResult::error(String::new(), format!("git diff failed: {e}")),
         }
 
         // 2. Untracked files (only for working mode — staged mode doesn't include them).
@@ -292,6 +287,10 @@ mod tests {
         let r = run_tool(json!({ "path": root.to_str().unwrap() }));
         assert!(r.success);
         let body = body_of(&r);
-        assert!(body.contains("[diff truncated]"), "body must be capped: len={}", body.len());
+        assert!(
+            body.contains("[diff truncated]"),
+            "body must be capped: len={}",
+            body.len()
+        );
     }
 }

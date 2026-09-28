@@ -57,12 +57,12 @@ pub use super::terminal_tool::TerminalTool;
 pub use super::todo_tool::TodoTool;
 pub use super::tool_backend_helpers::ToolBackendTool;
 pub use super::transcription_tool::TranscriptionTool;
-pub use super::working_diff_tool::WorkingDiffTool;
 pub use super::tts_tool::TtsTool;
 pub use super::verification_tool::VerifyTaskTool;
 pub use super::video_analysis_tool::VideoAnalysisTool;
 pub use super::vision_tool::VisionTool;
 pub use super::web_tools::{WebFetchTool, WebSearchTool};
+pub use super::working_diff_tool::WorkingDiffTool;
 pub use super::xai_http::XaiHttpTool;
 
 /// Register all built-in tools with a registry
@@ -97,11 +97,8 @@ pub async fn register_builtin_tools(
     // harness. Registered only when [tools.kernel] enabled; kernel::register
     // also installs the phase-2.5 bridged executor against this registry clone
     // (shared internals) and spawns the bridge drainer.
-    if let Err(e) = super::kernel::register(
-        registry,
-        &crate::config::runtime_config().tools.kernel,
-    )
-    .await
+    if let Err(e) =
+        super::kernel::register(registry, &crate::config::runtime_config().tools.kernel).await
     {
         tracing::warn!(target: "kernel", error = %e, "kernel tool registration failed");
     }

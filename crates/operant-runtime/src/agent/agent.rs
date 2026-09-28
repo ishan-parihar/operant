@@ -1522,7 +1522,8 @@ impl Agent {
 
         // Plan 006: shared retry counter — same struct the live OperantAgent
         // uses. Counter starts at 0; `should_retry` decides + increments.
-        let mut empty_response_retries = operant_core::agent::turn_rules::EmptyResponseCounter::new(EMPTY_RESPONSE_MAX_RETRIES);
+        let mut empty_response_retries =
+            operant_core::agent::turn_rules::EmptyResponseCounter::new(EMPTY_RESPONSE_MAX_RETRIES);
         let mut real_iterations = 0usize;
         for _ in 0..self
             .config
@@ -1762,7 +1763,8 @@ impl Agent {
         // ── Turn loop ──────────────────────────────────────────────────
         // Plan 006: shared retry counter — same struct the live OperantAgent
         // uses. Counter starts at 0; `should_retry` decides + increments.
-        let mut empty_response_retries = operant_core::agent::turn_rules::EmptyResponseCounter::new(EMPTY_RESPONSE_MAX_RETRIES);
+        let mut empty_response_retries =
+            operant_core::agent::turn_rules::EmptyResponseCounter::new(EMPTY_RESPONSE_MAX_RETRIES);
         let mut real_iterations = 0usize;
         for _ in 0..self
             .config

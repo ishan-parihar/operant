@@ -10,11 +10,11 @@
 
 use std::sync::Arc;
 
-use operant_harness::{
-    compile_pool, Architecture, ArchitectureRow, BuilderWithFactories, HarnessHost,
-    KernelOptions, PoolBundleProvider, PoolFamilyProvider, PoolManifest,
-};
 use operant_harness::pool::{PoolService, PoolSubSystem};
+use operant_harness::{
+    Architecture, ArchitectureRow, BuilderWithFactories, HarnessHost, KernelOptions,
+    PoolBundleProvider, PoolFamilyProvider, PoolManifest, compile_pool,
+};
 
 fn synthetic_manifest_for_dir(dir_name: &str) -> PoolManifest {
     PoolManifest {
@@ -74,23 +74,22 @@ async fn hermes_pilot_compile_and_boot_all_pools() {
     let mut builder = BuilderWithFactories::new();
     builder.register_factory(
         "pool",
-        Arc::new(|row: ArchitectureRow| {
-            match row.kind.as_deref() {
-                Some("pool.bundle") => Ok(Arc::new(PoolBundleProvider::new(row))
-                    as Arc<dyn operant_harness::Provider>),
-                Some("pool.family") | None => Ok(Arc::new(PoolFamilyProvider::new(row))
-                    as Arc<dyn operant_harness::Provider>),
-                Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
-                    row.id.clone(),
-                    other.to_string(),
-                )),
+        Arc::new(|row: ArchitectureRow| match row.kind.as_deref() {
+            Some("pool.bundle") => {
+                Ok(Arc::new(PoolBundleProvider::new(row)) as Arc<dyn operant_harness::Provider>)
             }
+            Some("pool.family") | None => {
+                Ok(Arc::new(PoolFamilyProvider::new(row)) as Arc<dyn operant_harness::Provider>)
+            }
+            Some(other) => Err(operant_harness::BuildError::NoConfigRowHandler(
+                row.id.clone(),
+                other.to_string(),
+            )),
         }),
     );
 
     // Boot via HarnessHost — this is the same path the operator uses.
-    let mut host = HarnessHost::new(KernelOptions { audit: false })
-        .with_max_active_providers(300); // enough for 22 pools *2
+    let mut host = HarnessHost::new(KernelOptions { audit: false }).with_max_active_providers(300); // enough for 22 pools *2
     {
         struct CaptureSeam;
         #[async_trait::async_trait]

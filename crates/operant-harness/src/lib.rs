@@ -33,7 +33,9 @@ pub use composition::{
     Architecture, ArchitectureRow, BuildError, Builder, BuilderWithFactories, Composition, Patch,
     PatchTarget, ProviderFactory,
 };
-pub use discovery::{DEFAULT_PATCH_DIR, collect_patches, default_patch_dir, resolve_boot_architecture};
+pub use discovery::{
+    DEFAULT_PATCH_DIR, collect_patches, default_patch_dir, resolve_boot_architecture,
+};
 pub use effect::Effect;
 pub use error::HarnessError;
 pub use harness::{Harness, KernelOptions};
@@ -44,12 +46,12 @@ pub use pool::{
     load_and_compile as load_and_compile_pool,
 };
 pub use pool_provider::{PoolBundleProvider, PoolFamilyProvider};
-pub use wasm_provider::WasmProvider;
 pub use provider::{
     ActivateCx, Provider, ProviderSource, ProviderSpec, ProviderState, Registration, Seam, Source,
 };
 pub use report::{ClaimInfo, DumpTree, MountReport, ProviderEntryInfo};
 pub use swap::{SwapGeneration, SwapOutcome};
+pub use wasm_provider::WasmProvider;
 
 /// Kernel version of the adopted-semantics contract. Bumped when a semantic changes.
 pub const HARNESS_SEMANTICS_VERSION: u32 = 1;

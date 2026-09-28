@@ -177,7 +177,9 @@ fn resolve_python(explicit: Option<&std::path::PathBuf>) -> std::path::PathBuf {
 /// installed binaries can point at a checkout; build-time fallback keeps dev
 /// runs working from any cwd.
 fn sidecar_cwd() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("KERNEL_SIDECAR_DIR").or_else(|_| std::env::var("PK_SIDECAR_DIR")) {
+    if let Ok(dir) =
+        std::env::var("KERNEL_SIDECAR_DIR").or_else(|_| std::env::var("PK_SIDECAR_DIR"))
+    {
         return std::path::PathBuf::from(dir);
     }
     match option_env!("CARGO_MANIFEST_DIR") {
@@ -256,7 +258,11 @@ fn spawn_handle(rt: &KernelRuntime) -> Result<Arc<SidecarHandle>, String> {
 }
 
 /// One request/response round-trip with crash-transparent single retry.
-pub(super) async fn request(rt: &KernelRuntime, method: &str, params: Value) -> Result<Value, String> {
+pub(super) async fn request(
+    rt: &KernelRuntime,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
     let budget = Duration::from_secs(rt.settings().request_timeout_secs.max(1));
     let mut consecutive_failures = 0u32;
     loop {

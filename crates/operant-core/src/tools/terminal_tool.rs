@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::runtime_config;
-use crate::terminal_hints::annotate_failure;
 use crate::schema::ToolSchema;
+use crate::terminal_hints::annotate_failure;
 use crate::tools::terminal_backend::{self, CommandOutput};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 

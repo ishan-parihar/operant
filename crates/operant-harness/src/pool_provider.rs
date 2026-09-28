@@ -64,7 +64,11 @@ impl ProviderSpec for PoolFamilyProvider {
         &self.id
     }
     fn source(&self) -> ProviderSource {
-        let name = self.config.get("name").and_then(|v| v.as_str()).map(str::to_string);
+        let name = self
+            .config
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         ProviderSource::Pool { name }
     }
     fn provides(&self) -> &[Claim] {

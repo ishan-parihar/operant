@@ -21,7 +21,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use operant_harness::{Architecture, ArchitectureRow, Builder, BuilderWithFactories, Harness, MountReport};
+use operant_harness::{
+    Architecture, ArchitectureRow, Builder, BuilderWithFactories, Harness, MountReport,
+};
 
 use crate::error::Result;
 use crate::schema::ToolSchema;
@@ -207,7 +209,9 @@ impl OperantTool for HarnessMountTool {
             Ok(r) => r,
             Err(e) => return ToolResult::error("harness_mount", format!("invalid row: {e}")),
         };
-        let arch = Architecture { rows: vec![row.clone()] };
+        let arch = Architecture {
+            rows: vec![row.clone()],
+        };
         let providers = if let Some(b) = &self.builders {
             match b.build_with(&arch) {
                 Ok(p) => p,
@@ -343,9 +347,12 @@ pub async fn register_harness_tools(
     use crate::tools::OperantTool;
     // HarnessDumpTool is always available; mount/unmount are approval-gated
     // inside their `execute` (see has_approval).
-    let dump: std::sync::Arc<dyn OperantTool> = std::sync::Arc::new(HarnessDumpTool::new(harness.clone()));
-    let mount: std::sync::Arc<dyn OperantTool> = std::sync::Arc::new(HarnessMountTool::new(harness.clone()));
-    let unmount: std::sync::Arc<dyn OperantTool> = std::sync::Arc::new(HarnessUnmountTool::new(harness));
+    let dump: std::sync::Arc<dyn OperantTool> =
+        std::sync::Arc::new(HarnessDumpTool::new(harness.clone()));
+    let mount: std::sync::Arc<dyn OperantTool> =
+        std::sync::Arc::new(HarnessMountTool::new(harness.clone()));
+    let unmount: std::sync::Arc<dyn OperantTool> =
+        std::sync::Arc::new(HarnessUnmountTool::new(harness));
     registry.register_dyn(dump).await?;
     registry.register_dyn(mount).await?;
     registry.register_dyn(unmount).await?;
@@ -435,14 +442,19 @@ mod tests {
         let harness = Arc::new(Harness::new(KernelOptions { audit: false }));
         let tool = HarnessMountTool::new(Arc::clone(&harness));
         let mut ctx = ToolContext::default();
-        ctx.metadata.insert("approval".to_string(), "true".to_string());
+        ctx.metadata
+            .insert("approval".to_string(), "true".to_string());
         let result = tool
             .execute(
                 json!({ "row": { "id": "x", "source": "native", "config": null, "kind": "native" } }),
                 ctx,
             )
             .await;
-        assert!(result.success, "expected success with approval: {}", result.error.unwrap_or_default());
+        assert!(
+            result.success,
+            "expected success with approval: {}",
+            result.error.unwrap_or_default()
+        );
         // Verify the provider is actually mounted.
         let tree = harness.dump().await;
         assert!(tree.providers.iter().any(|p| p.id == "x"));
@@ -465,9 +477,14 @@ mod tests {
         harness.mount(Arc::new(Noop)).await.unwrap();
         let tool = HarnessUnmountTool::new(Arc::clone(&harness));
         let mut ctx = ToolContext::default();
-        ctx.metadata.insert("approval".to_string(), "true".to_string());
+        ctx.metadata
+            .insert("approval".to_string(), "true".to_string());
         let result = tool.execute(json!({ "id": "noop" }), ctx).await;
-        assert!(result.success, "{}", result.error.clone().unwrap_or_default());
+        assert!(
+            result.success,
+            "{}",
+            result.error.clone().unwrap_or_default()
+        );
         let tree = harness.dump().await;
         assert!(tree.providers.is_empty());
     }

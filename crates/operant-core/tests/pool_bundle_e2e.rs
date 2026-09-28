@@ -13,7 +13,7 @@ use operant_core::harness_adapters::ToolSeam;
 use operant_core::pool_adapter;
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
 use operant_harness::{
-    BuilderWithFactories, Architecture, ArchitectureRow, Harness, PoolBundleProvider, PoolManifest,
+    Architecture, ArchitectureRow, BuilderWithFactories, Harness, PoolBundleProvider, PoolManifest,
 };
 use serde_json::json;
 
@@ -58,7 +58,10 @@ async fn pool_bundle_registers_as_readonly_tool() {
     };
     let providers = b.build_with(&arch).expect("build_with");
     assert_eq!(providers.len(), 1);
-    assert_eq!(providers[0].spec().source(), operant_harness::ProviderSource::Pool { name: None });
+    assert_eq!(
+        providers[0].spec().source(),
+        operant_harness::ProviderSource::Pool { name: None }
+    );
 
     // Mount through a Harness wired with the ToolSeam, threading the
     // row's config so the seam can read the path field.
@@ -80,7 +83,11 @@ async fn pool_bundle_registers_as_readonly_tool() {
     // And it should be invokable.
     let tool = registry.get(&bundle_row.id).await.expect("tool present");
     let result = tool.execute(json!({}), ToolContext::default()).await;
-    assert!(result.success, "tool should be callable: {}", result.error.unwrap_or_default());
+    assert!(
+        result.success,
+        "tool should be callable: {}",
+        result.error.unwrap_or_default()
+    );
     let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
     assert_eq!(v["kind"], "pool.bundle");
     assert_eq!(v["read_only"], true);

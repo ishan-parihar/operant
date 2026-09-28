@@ -19,10 +19,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::PluginManifest;
 use crate::error::PluginError;
 use crate::host::PluginHost;
-use crate::signature::{enforce_signature_policy, SignatureMode, VerificationResult};
-use crate::PluginManifest;
+use crate::signature::{SignatureMode, VerificationResult, enforce_signature_policy};
 
 /// Configuration for the watcher.
 #[derive(Debug, Clone)]
@@ -94,7 +94,8 @@ impl Watcher {
     /// Run a single scan. Returns the list of new/changed manifests
     /// detected by this scan.
     pub fn scan_once(&mut self) -> Result<Vec<ManifestChange>, PluginError> {
-        let mut current: HashMap<PathBuf, (SystemTime, SystemTime, Option<String>)> = HashMap::new();
+        let mut current: HashMap<PathBuf, (SystemTime, SystemTime, Option<String>)> =
+            HashMap::new();
         let mut changes: Vec<ManifestChange> = Vec::new();
 
         let entries = match std::fs::read_dir(self.host.plugins_dir()) {
@@ -136,7 +137,9 @@ impl Watcher {
                 .as_deref()
                 .and_then(|p| {
                     let wasm_file = path.join(p);
-                    std::fs::metadata(&wasm_file).and_then(|m| m.modified()).ok()
+                    std::fs::metadata(&wasm_file)
+                        .and_then(|m| m.modified())
+                        .ok()
                 })
                 .unwrap_or(SystemTime::UNIX_EPOCH);
 
@@ -171,7 +174,9 @@ impl Watcher {
             let is_new = prior.is_none();
             let mtime_changed = prior.map(|(t, _, _)| *t != mtime).unwrap_or(false);
             let wasm_changed = prior.map(|(_, w, _)| *w != wasm_mtime).unwrap_or(false);
-            let sig_changed = prior.map(|(_, _, s)| s != &manifest.signature).unwrap_or(false);
+            let sig_changed = prior
+                .map(|(_, _, s)| s != &manifest.signature)
+                .unwrap_or(false);
 
             if is_new || mtime_changed || wasm_changed || sig_changed {
                 changes.push(ManifestChange {
@@ -190,8 +195,11 @@ impl Watcher {
     /// `on_change` with the detected manifest changes. Errors are logged
     /// and the loop continues (so a single bad manifest can't kill the
     /// watcher).
-    pub async fn run_until<F>(&mut self, mut stop: tokio::sync::watch::Receiver<bool>, mut on_change: F)
-    where
+    pub async fn run_until<F>(
+        &mut self,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+        mut on_change: F,
+    ) where
         F: FnMut(&[ManifestChange]),
     {
         let interval = self.config.interval;
@@ -296,6 +304,9 @@ capabilities = ["skill"]
         let host = PluginHost::new(tmp.path()).unwrap();
         let mut w = Watcher::new(host, WatcherConfig::default());
         let changes = w.scan_once().unwrap();
-        assert!(changes.is_empty(), "unparseable manifest is skipped, not crashed");
+        assert!(
+            changes.is_empty(),
+            "unparseable manifest is skipped, not crashed"
+        );
     }
 }

@@ -28,12 +28,18 @@ pub fn resolve_boot_architecture(
     base_path: &Path,
     patch_dir: Option<&Path>,
 ) -> Result<Architecture, HarnessError> {
-    let raw = std::fs::read_to_string(base_path).map_err(|e| HarnessError::CompositionError(
-        format!("read architecture.toml {}: {e}", base_path.display()),
-    ))?;
-    let mut arch = Architecture::from_toml(&raw).map_err(|e| HarnessError::CompositionError(
-        format!("parse architecture.toml {}: {e}", base_path.display()),
-    ))?;
+    let raw = std::fs::read_to_string(base_path).map_err(|e| {
+        HarnessError::CompositionError(format!(
+            "read architecture.toml {}: {e}",
+            base_path.display()
+        ))
+    })?;
+    let mut arch = Architecture::from_toml(&raw).map_err(|e| {
+        HarnessError::CompositionError(format!(
+            "parse architecture.toml {}: {e}",
+            base_path.display()
+        ))
+    })?;
 
     let patches = collect_patches(patch_dir)?;
     if !patches.is_empty() {
@@ -57,26 +63,23 @@ pub fn collect_patches(dir: Option<&Path>) -> Result<Vec<Patch>, HarnessError> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
-    let entries = std::fs::read_dir(dir).map_err(|e| HarnessError::CompositionError(
-        format!("read patch dir {}: {e}", dir.display()),
-    ))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        HarnessError::CompositionError(format!("read patch dir {}: {e}", dir.display()))
+    })?;
     let mut paths: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| {
-            p.extension().and_then(|e| e.to_str()) == Some("toml")
-                && p.is_file()
-        })
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("toml") && p.is_file())
         .collect();
     paths.sort();
     let mut out = Vec::new();
     for path in paths {
-        let raw = std::fs::read_to_string(&path).map_err(|e| HarnessError::CompositionError(
-            format!("read patch {}: {e}", path.display()),
-        ))?;
-        let patch: Patch = toml::from_str(&raw).map_err(|e| HarnessError::CompositionError(
-            format!("parse patch {}: {e}", path.display()),
-        ))?;
+        let raw = std::fs::read_to_string(&path).map_err(|e| {
+            HarnessError::CompositionError(format!("read patch {}: {e}", path.display()))
+        })?;
+        let patch: Patch = toml::from_str(&raw).map_err(|e| {
+            HarnessError::CompositionError(format!("parse patch {}: {e}", path.display()))
+        })?;
         out.push(patch);
     }
     Ok(out)
@@ -86,8 +89,7 @@ pub fn collect_patches(dir: Option<&Path>) -> Result<Vec<Patch>, HarnessError> {
 /// unix, `$USERPROFILE\.operant\patches` on Windows. Returns `None` if
 /// the home dir cannot be determined.
 pub fn default_patch_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))?;
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     let mut p = PathBuf::from(home);
     p.push(DEFAULT_PATCH_DIR);
     Some(p)

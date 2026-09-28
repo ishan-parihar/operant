@@ -132,7 +132,8 @@ impl Provider for ConfigRowProvider {
                 // knows how to wrap String into a PromptSection.
                 let payload: std::sync::Arc<dyn std::any::Any + Send + Sync> =
                     std::sync::Arc::new(content);
-                cx.install_with("prompt", &self.id, payload.as_ref()).await?;
+                cx.install_with("prompt", &self.id, payload.as_ref())
+                    .await?;
                 tracing::info!(id = %self.id, kind = %self.kind, "prompt.section installed");
                 Ok(())
             }

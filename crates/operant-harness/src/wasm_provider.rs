@@ -99,9 +99,9 @@ impl Provider for WasmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::composition::ArchitectureRow;
     use crate::Harness;
     use crate::KernelOptions;
+    use crate::composition::ArchitectureRow;
 
     #[tokio::test]
     async fn wasm_provider_mount_and_replace_bumps_generation() {

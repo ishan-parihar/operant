@@ -1981,8 +1981,7 @@ mod tests {
         assert_eq!(v2.enabled, Some(true));
         assert_eq!(v2.sidecar_idle_secs, Some(900));
 
-        let core: operant_core::config::KernelSettings =
-            toml::from_str(toml).expect("core parse");
+        let core: operant_core::config::KernelSettings = toml::from_str(toml).expect("core parse");
         assert_eq!(core.enabled, true);
         assert_eq!(core.sidecar_idle_secs, 900);
         assert_eq!(core.request_timeout_secs, 60);

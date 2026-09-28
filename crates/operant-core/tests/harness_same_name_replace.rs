@@ -87,10 +87,7 @@ impl Provider for EchoProvider {
     fn spec(&self) -> &dyn ProviderSpec {
         self
     }
-    async fn activate(
-        &self,
-        cx: &mut ActivateCx<'_>,
-    ) -> Result<(), operant_harness::HarnessError> {
+    async fn activate(&self, cx: &mut ActivateCx<'_>) -> Result<(), operant_harness::HarnessError> {
         cx.install_with("tool", "seam_echo", &self.tool).await?;
         Ok(())
     }

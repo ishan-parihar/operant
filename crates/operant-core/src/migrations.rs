@@ -55,11 +55,7 @@ use rusqlite::Connection;
 ///
 /// `db_name` is used only for log lines; the runner doesn't key
 /// state by name (each DB is its own `user_version`).
-pub fn migrate(
-    conn: &Connection,
-    db_name: &str,
-    migrations: &[&str],
-) -> anyhow::Result<()> {
+pub fn migrate(conn: &Connection, db_name: &str, migrations: &[&str]) -> anyhow::Result<()> {
     let current = current_version(conn)?;
     let target = migrations.len() as i64;
 
@@ -79,13 +75,14 @@ pub fn migrate(
         let version = (idx as i64) + 1;
         tracing::info!(db = %db_name, from = idx, to = version, "migrate: applying entry");
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(sql).map_err(|e| {
-            anyhow::anyhow!("{db_name} migration v{version} failed: {e}")
-        })?;
+        tx.execute_batch(sql)
+            .map_err(|e| anyhow::anyhow!("{db_name} migration v{version} failed: {e}"))?;
         // Bump the pragma inside the same transaction so a failed
         // migration leaves the world at the previous version.
         tx.pragma_update(None, "user_version", version)
-            .map_err(|e| anyhow::anyhow!("{db_name} migration v{version} user_version bump failed: {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("{db_name} migration v{version} user_version bump failed: {e}")
+            })?;
         tx.commit()?;
         tracing::info!(db = %db_name, version, "migrate: entry applied");
     }
@@ -184,7 +181,10 @@ mod tests {
     #[test]
     fn migrate_failure_aborts_and_keeps_version() {
         let conn = fresh();
-        let migs = &["CREATE TABLE qux (id INTEGER PRIMARY KEY);", "NOT VALID SQL;"];
+        let migs = &[
+            "CREATE TABLE qux (id INTEGER PRIMARY KEY);",
+            "NOT VALID SQL;",
+        ];
         let err = migrate(&conn, "test", migs).unwrap_err();
         let msg = format!("{err}");
         assert!(

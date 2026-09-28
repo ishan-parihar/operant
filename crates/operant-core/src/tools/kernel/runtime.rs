@@ -178,7 +178,10 @@ impl KernelRuntime {
     /// One request/response round-trip to the live sidecar.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
         // Invalidate injection cache on any harness write so next turn sees fresh state.
-        let is_write = matches!(method, "refine_apply" | "refine_record" | "refine_rollback" | "harness_set" | "harness_delete");
+        let is_write = matches!(
+            method,
+            "refine_apply" | "refine_record" | "refine_rollback" | "harness_set" | "harness_delete"
+        );
         let res = sc_request(self, method, params).await;
         if is_write && res.is_ok() {
             self.invalidate_injection_cache().await;
@@ -187,7 +190,11 @@ impl KernelRuntime {
     }
 
     /// Per-turn injection cache helpers (TTL 5s, keyed by session_id + max_chars).
-    pub(crate) async fn cached_injection(&self, session_id: &str, max_chars: usize) -> Option<String> {
+    pub(crate) async fn cached_injection(
+        &self,
+        session_id: &str,
+        max_chars: usize,
+    ) -> Option<String> {
         let guard = self.injection_cache.lock().await;
         if let Some((cached_sid, cached_max, block, ts)) = guard.as_ref()
             && cached_sid == session_id

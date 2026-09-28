@@ -53,19 +53,31 @@ impl Seam for PromptSectionSeam {
     async fn install(&self, reg: &Registration<'_>) -> Result<Effect, HarnessError> {
         // S7 — accept both typed PromptSection and plain String content
         // (installed by ConfigRowProvider for prompt.section rows).
-        let section: Arc<dyn PromptSection> = if let Some(s) =
-            reg.payload.and_then(|p| p.downcast_ref::<Arc<dyn PromptSection>>()).cloned()
+        let section: Arc<dyn PromptSection> = if let Some(s) = reg
+            .payload
+            .and_then(|p| p.downcast_ref::<Arc<dyn PromptSection>>())
+            .cloned()
         {
             s
-        } else if let Some(s) = reg.payload.and_then(|p| p.downcast_ref::<String>()).cloned() {
-            Arc::new(StringPromptSection { id: reg.key.to_string(), content: s })
+        } else if let Some(s) = reg
+            .payload
+            .and_then(|p| p.downcast_ref::<String>())
+            .cloned()
+        {
+            Arc::new(StringPromptSection {
+                id: reg.key.to_string(),
+                content: s,
+            })
         } else if let Some(s) = reg
             .payload
             .and_then(|p| p.downcast_ref::<Arc<String>>())
             .cloned()
         {
             let content = (*s).clone();
-            Arc::new(StringPromptSection { id: reg.key.to_string(), content }) as Arc<dyn PromptSection>
+            Arc::new(StringPromptSection {
+                id: reg.key.to_string(),
+                content,
+            }) as Arc<dyn PromptSection>
         } else {
             return Err(HarnessError::ActivationFailed {
                 id: reg.provider_id.to_string(),

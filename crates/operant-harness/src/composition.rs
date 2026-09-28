@@ -284,7 +284,9 @@ impl From<BuildError> for HarnessError {
 /// build a WASM or pool provider — it only knows the factory exists when
 /// one is plugged in via `register_factory(source, factory)`.
 pub type ProviderFactory = std::sync::Arc<
-    dyn Fn(crate::composition::ArchitectureRow) -> Result<std::sync::Arc<dyn crate::Provider>, BuildError>
+    dyn Fn(
+            crate::composition::ArchitectureRow,
+        ) -> Result<std::sync::Arc<dyn crate::Provider>, BuildError>
         + Send
         + Sync,
 >;
@@ -337,9 +339,9 @@ impl BuilderWithFactories {
                         "prompt.section" => {
                             // S7 — prompt.section rows are now buildable; the
                             // provider reads content/path at activate time.
-                            providers.push(std::sync::Arc::new(crate::row::ConfigRowProvider::new(
-                                row.clone(),
-                            )));
+                            providers.push(std::sync::Arc::new(
+                                crate::row::ConfigRowProvider::new(row.clone()),
+                            ));
                         }
                         _ => {
                             return Err(BuildError::NoConfigRowHandler(
@@ -383,10 +385,11 @@ pub struct Builder;
 impl Builder {
     /// Build a list of native provider stubs for the active rows of `arch`.
     ///
-    /// Phase 3 stub: native and wasm rows produce a [`crate::provider::NoopProvider`]
-    /// carrying their config so a downstream phase can dispatch on
-    /// `source`. config_row rows are routed to a [`crate::row::ConfigRowProvider`]
-    /// when the kind is recognized, otherwise [`BuildError::NoConfigRowHandler`].
+    /// Phase 3 stub: native and wasm rows produce a
+    /// [`crate::row::NativeRowStub`] carrying their config so a downstream
+    /// phase can dispatch on `source`. config_row rows are routed to a
+    /// [`crate::row::ConfigRowProvider`] when the kind is recognized,
+    /// otherwise [`BuildError::NoConfigRowHandler`].
     pub fn build(
         arch: &Architecture,
     ) -> Result<Vec<std::sync::Arc<dyn crate::Provider>>, BuildError> {
@@ -408,9 +411,9 @@ impl Builder {
                             tracing::info!(id = %row.id, "config_row kind=disable (no provider)");
                         }
                         "prompt.section" => {
-                            providers.push(std::sync::Arc::new(crate::row::ConfigRowProvider::new(
-                                row.clone(),
-                            )));
+                            providers.push(std::sync::Arc::new(
+                                crate::row::ConfigRowProvider::new(row.clone()),
+                            ));
                         }
                         _ => {
                             return Err(BuildError::NoConfigRowHandler(
