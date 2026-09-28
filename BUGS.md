@@ -1099,6 +1099,42 @@ production callers, so the loop's `emit` calls were no-ops).
   their code into this tree and conflict with their next push; that gate red
   belongs to their iteration.
 
+### R40-14 — the command-approval blocklist is fed the wrong key for `code_execution` (OPEN, HIGH)
+`crates/operant-core/src/approval.rs:656` extracts the command for the
+approval gate with:
+```rust
+"terminal" | "code_execution" | "process" => args.get("command")...
+```
+But `CodeExecutionArgs` (`crates/operant-core/src/tools/code_execution.rs:42-46`)
+is `#[serde(rename_all = "camelCase")]` with fields `code` / `language` /
+`timeout` — there is no `command` key. The extractor falls through to
+`.unwrap_or(tool_name)`, so the hardline blocklist and dangerous-pattern layer
+receive the literal string `"code_execution"`, which matches nothing.
+**Net effect: `code_execution` is not gated by the command blocklist at all.**
+No test covers this extractor, which is why the mismatch survived. `terminal`
+and `process` are unaffected — verify their arg structs before changing the
+match.
+
+### R40-15 — secondary provider keys (`api_keys`) are written to config.toml in plaintext (OPEN, HIGH)
+`crates/operant-config/src/schema/core.rs`: `api_key` (line 43) carries
+`#[secret]`; `api_keys` (line 50) — the credential-pool list that rotates in on
+401/429 — carries only `#[serde(default, skip_serializing_if = ...)]`. So the
+primary key is encrypted on save and every pooled secondary key is serialized
+in plaintext to `config.toml` on each `save()`. The doc comment on `api_key`
+("never commit it to config.toml directly") makes the asymmetry a
+claim-must-match-code defect, not just a gap. Compare the hardened reference
+implementation, `operant-config/src/secrets.rs:294-301`, which writes with
+`OpenOptionsExt::mode(0o600)` at creation.
+
+### R40-16 — subprocesses inherit the full parent environment, including API keys (OPEN, MEDIUM)
+`crates/operant-core/src/tools/terminal_backend.rs:95-100` builds the child env
+from `std::env::vars().collect()` and passes it wholesale, so every command the
+agent runs inherits `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, the omp key, etc.
+`code_execution.rs` sets no env at all (same effective result). Additionally
+`LocalBackend` uses `child.kill()` with no `kill_on_drop` / process-group
+teardown, so a timeout can leave grandchildren running, and the Docker and SSH
+backends accept a timeout they never enforce.
+
 ### R40-12 — AGENTS.md's "7 platforms only" is false: 22 channel features are in the DEFAULT build (OPEN, MEDIUM)
 `AGENTS.md` states "Supported: 7 platforms", "Do NOT re-add purged platforms",
 and records that iter-50 purged 20 phantom platforms (matrix, mattermost,
