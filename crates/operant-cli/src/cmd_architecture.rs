@@ -200,7 +200,11 @@ pub async fn handle_dump_command(
             dump_once(&file, &patches, json)
         };
     }
-    let mut stop = tokio::sync::watch::channel(false).0;
+    // NOTE: `stop` is never sent to — the watch loop exits via ctrl_c() in the
+    // select! below, so this guard is always false. Left as-is (it costs
+    // nothing and the sender may be wired later); `mut` is not needed because
+    // nothing writes to it.
+    let stop = tokio::sync::watch::channel(false).0;
     let interval = std::time::Duration::from_secs(watch_secs);
     loop {
         if *stop.borrow() {
