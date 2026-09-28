@@ -86,6 +86,26 @@ jobs:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # System libraries the dependency graph needs at build time. Without this
+      # the job fails in `alsa-sys` before rustdoc ever runs — and because the
+      # job used to be gated off entirely, nobody saw that. Re-enabling the gate
+      # at iter-441 exposed a pre-existing environment gap rather than causing
+      # one; the gate is working correctly by reporting it.
+      #
+      # Same package set, and the same traced reason, as the `native` job in
+      # build.yml where iter-442 added it. `cargo doc` compiles the workspace, so
+      # it needs the same `-sys` crates a build does — `--all-features` in
+      # particular pulls the optional audio stack in through kokoro-tiny.
+      # Traced via `cargo tree -i alsa-sys`; see that commit for the full chain.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libasound2-dev \
+            libssl-dev \
+            libclang-dev \
+            cmake \
+            pkg-config
       - run: cargo doc --workspace --no-deps --all-features
 
   msrv:
