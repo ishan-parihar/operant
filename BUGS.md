@@ -1595,8 +1595,17 @@ everyone to ignore CI.
   (R40-19) and re-enabling the two gated jobs, in that order.
 
 ### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (OPEN, LOW, measured iter-385)
-`cargo fmt --all --check` reports 22 dirty files at HEAD (down from 66 — recent
-commits cleared most of the debt). The sweep was produced and verified in an
+`cargo fmt --all --check` reports 60 dirty hunks at HEAD (was 66, then 22, now
+60 again — the concurrent agent's commits add more fmt debt than their landed
+commits clear). The sweep is 22 files.
+**Re-confirmed blocked at iter-401**: 22 of 22 files are dirty in the shared
+tree (37 dirty files total, 100% overlap — identical to the iter-385
+measurement). Produced and verified again in an isolated worktree:
+`cargo fmt --all --check` clean afterwards and `cargo check -p operant-harness
+--lib` still compiles, so it is a pure line-wrap. It remains unstaged because
+every one of those files carries the peer's in-flight edits, and a whole-file
+`git add` would sweep them in (R40-10). Unlike R40-21 this is not waiting on a
+single push — it stays blocked for as long as the peer has these files open. The sweep was produced and verified in an
 isolated worktree: `cargo fmt --all --check` clean afterwards and
 `cargo check -p operant-core --lib` still compiles, so it is a pure line-wrap.
 It could not be applied because **all 22 files are dirty in the shared
