@@ -1529,6 +1529,14 @@ everyone to ignore CI.
   submodule, and **no workflow passes `submodules: recursive` to
   `actions/checkout`**. That is ~6 red jobs per push the moment the trigger
   lands. Fix the checkout step first.
+  - **Now measured, not inferred (iter-387)**: in a worktree with
+    `git submodule update --init --recursive` run, `tools::kernel` is
+    **6/6 green** (`ping_roundtrip` and `harness_apply_and_rollback_roundtrip`
+    both pass). So these two tests are not independently broken — they are
+    correct code that CI cannot run, and `with: submodules: recursive` on the
+    checkout step is the whole fix. An earlier version of this entry asserted
+    the mechanism without running it; it is now verified both ways (fail
+    without the submodule, pass with it).
 - `ci.yml` `fmt` and `clippy` jobs were verified green and would be safe to
   trigger. `release.yml` needs no change — it fires on `workflow_run` of
   `Build`, so it inherits the main-branch trigger transitively.
