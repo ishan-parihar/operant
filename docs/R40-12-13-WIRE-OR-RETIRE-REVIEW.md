@@ -160,15 +160,32 @@ ruled out, not assumed. It was:
   `set_prop`, `prop_fields`, `secret_fields`, `init_defaults` — a
   **stringly-typed CRUD surface** with no typed getters, which is exactly the
   shape that defeats text search.
-- Every `get_prop(` call in the workspace outside tests is in
-  `operant-runtime/src/onboard/field_visibility.rs:151,156` — and that is the
-  **write** path, onboarding defaults being applied — plus
-  `operant-config/src/helpers.rs`, which is the macro's own path parser.
-- Every other `get_prop` call in the tree is inside `core_tests.rs`.
+- Every `get_prop(` call in the tree outside `core_tests.rs` is:
+  `operant-runtime/src/onboard/field_visibility.rs:151,156` (the **write**
+  path — onboarding defaults being applied), `operant-config/src/helpers.rs`
+  (below), and `operant-macros/src/lib.rs:901` (the generated method body).
 
-So a production behavioral read *cannot* go through `get_prop`. It must be a
-direct Rust field access, which text search does find. The absence claims below
-are therefore sound, not merely unrefuted.
+**Narrowed claim, stated precisely.** The strong form — "`get_prop` is
+test-only" — was wrong, and the correction matters, because a false premise
+here would silently weaken every absence claim built on it. The accurate
+statement:
+
+> Direct Rust field access is the **only** route by which a production
+> behavioral read was found. `get_prop` is used in **onboarding display logic**
+> and in **config helpers**, not for behavior.
+
+`operant-config::helpers::serde_get_prop` is genuinely public API
+(`helpers.rs:114`, re-exported at `lib.rs:25` via `pub use crate::helpers::*`),
+so a field *can* in principle be read behaviorally by dotted-string path with no
+textual field reference — the false-negative risk is real, not hypothetical. What
+was measured: its only non-test caller anywhere is the derive's own generated
+`get_prop` body at `operant-macros/src/lib.rs:901`. No external caller was found.
+
+So the absence claims below are **well-supported, not airtight**: a
+string-path behavioral read with no caller of `serde_get_prop` would be
+unreachable by construction, but one routed through the generated `get_prop`
+would have been invisible to a field-name search. Any future reader attempting
+to *add* such a read should know the safety net here is a grep, not a guarantee.
 
 ### The finding: an entire config world is unreachable
 
@@ -235,17 +252,40 @@ the live `AppConfig` is maintained by hand via a small allowlist
 obviously the cheap move it looked like; the two worlds' divergence has to be
 settled first.
 
-### No live write-only knob was found
+### Three confirmed write-only knobs — in the LIVE config
 
-Across world (2) — the 266 fields the binary actually reads — no field was
-confirmed write-only. Every field examined had at least one behavioral read
-site, or was read via the live `runtime_config()` global installed by
-`install_runtime_config` (`cmd_config.rs:10,85`, `cmd_auth.rs:474`).
+The pass did find instances of the defect class, in the 266-field schema the
+binary actually reads. Each shows a declaration and a `Default`, and **no read
+site anywhere** outside `config.rs` itself:
 
-That is weaker than it sounds and should be read as such: it means no instance
-was *confirmed*, not that none exists. The untested surface is the `#[nested]`
-`HashMap` and `Vec<T>` sections, whose leaves are reached through `get_prop`
-paths in places this pass did not exhaustively enumerate.
+| field | declaration | default | read sites |
+|---|---|---|---|
+| `max_consecutive_tool_only` | `operant-core/src/config.rs` | 90 | **none** |
+| `event_channel_size` | `operant-core/src/config.rs` | 100 | **none** |
+| `lifeos_enabled` | `operant-core/src/config.rs` | false | **none** |
+
+These are the real thing: a user who sets `lifeos_enabled = true` in
+`config.toml` gets a file that parses, and a program that does not change.
+`lifeos_enabled` is the worst of the three by intent — it names a feature flag
+for the 22 Notion-backed LifeOS tools, and the flag does not gate them.
+
+**The same class exists in the dead DTO** and must be kept separate.
+`challenge_max_attempts` (10 non-test hits) and `allow_public_bind` (3) live in
+`operant-config/src/schema/` — `helpers.rs` and `gateway.rs` respectively. They
+are read, but only by `validate()` (`config_impl.rs:771,797`) and
+`apply_env_overrides` (`:1643`), which validate and mutate rather than govern
+runtime behavior. Two consequences, and the distinction is load-bearing:
+
+1. **The buckets erase differently.** Retiring `operant-gateway` and the
+   `operant-config` schema would erase `challenge_max_attempts` and
+   `allow_public_bind` entirely. It would **not** erase the three live fields
+   above, because they belong to `AppConfig` — the schema that survives. A
+   cleanup scoped to the dead world leaves the real knobs in place.
+2. **The classification rule is worth stating once, not per field.** "Read" is
+   not a binary: a read by `validate()` or `apply_env_overrides()` is a read, but
+   not a *behavioral* one. Applying that rule consistently is what separates
+   "dead DTO knob" from "live config field that nothing consumes", and the
+   three live fields are the latter.
 
 ## Part 3 — agentic-utility, and how to integrate it
 
@@ -399,9 +439,13 @@ local source. Push it to a remote first.
 1. **operant-gateway: retire, or wire it as a standalone binary?** My call is
    retire — `operant-core`'s gateway is the live one and the 1,880-line config
    facade is recoverable from git. But it is your call, not an audit's.
-2. **operant-channels: wire `start_channels`, or retire 35 adapters that
-   duplicate 3 platforms already live in operant-core?** Lean wire-at-one-point,
-   then dedupe telegram/discord/slack.
+2. **operant-channels: settle the config worlds first, THEN decide.**
+   *(Superseded recommendation — this previously read "lean wire-at-one-point",
+   which iter-411 showed to be wrong: `operant-channels` is the only production
+   consumer of the dead 1,043-field schema, so wiring it revives that world
+   alongside a hand-maintained allowlist at `gateway_runner.rs:716`.)*
+   After that is settled: wire the root to unlock 35 adapters, or retire the 3
+   that duplicate telegram/discord/slack in `operant-core`.
 3. **The two config worlds are settled by usage, not by preference** — world (2)
    (`operant-core`'s `AppConfig`, 266 fields, 61 files in `operant-cli`) is
    live; world (1) (`operant-config`, 1,043 fields) has no loader caller and no
@@ -409,9 +453,11 @@ local source. Push it to a remote first.
    "delete world (1), or merge it into world (2)". Merging is a large job;
    deleting leaves the HTTP config facade in the unreachable gateway crate with
    nothing to talk to.
-4. **`memory-wire` rewrite: is the agentmemory data portable?** Before committing
-   to the swap, confirm your existing banks can migrate to the
-   Hindsight-shaped schema. This is the one item that could make the plan fail.
+4. **Three live write-only knobs need wiring or deletion** — `max_consecutive_tool_only`,
+   `event_channel_size`, and `lifeos_enabled` in `operant-core/src/config.rs`
+   parse and persist but are read nowhere. They survive any cleanup of the dead
+   config world, so they are a separate piece of work. `lifeos_enabled` is the
+   one to look at first: it is a feature flag that does not gate its feature.
 5. **Vendoring policy: branch (fresh, non-reproducible) or tag (reproducible,
    needs manual bumps)?** And confirm you accept builds requiring network.
 6. **Which `sourcehound` surface do you want** — the `sourcehound_mcp` lib
@@ -428,7 +474,6 @@ local source. Push it to a remote first.
 - I did not re-run the compile or the doc build. `origin/main` is still broken
   by the missing `pub mod cache_monitor;` (R40-21), so any measurement taken now
   would be against a tree that does not build.
-- I could not exhaustively enumerate the `#[nested] HashMap` / `Vec<T>` config
-  leaves, whose paths are resolved via `get_prop`. No live write-only knob was
-  confirmed in the 266-field live schema, but that is "none confirmed", not
-  "none present".
+- I did not exhaustively enumerate the `#[nested] HashMap` / `Vec<T>` config
+  leaves, whose paths are resolved via `get_prop`. Three live write-only knobs
+  were confirmed; that is a lower bound on the class, not the count.
