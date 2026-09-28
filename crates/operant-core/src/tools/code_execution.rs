@@ -350,7 +350,8 @@ async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> 
     // never fails the turn. `route_python_to_kernel` is deleted; `enabled`
     // is the sole gate.
     let kernel_cfg = &crate::config::runtime_config().tools.kernel;
-    if kernel_cfg.enabled && let Some(rt) = super::kernel::global_runtime()
+    if kernel_cfg.enabled
+        && let Some(rt) = super::kernel::global_runtime()
     {
         match rt
             .request(
@@ -390,6 +391,13 @@ async fn execute_python(code: &str, timeout: Duration) -> Result<Value, String> 
     cmd.kill_on_drop(true); // belt-and-braces on top of the group kill
     #[cfg(unix)]
     cmd.process_group(0); // whole-tree teardown on timeout (hermes parity)
+    // Withhold credential-bearing env vars: `Command` inherits the parent
+    // environment by default, so model-authored code would otherwise see
+    // OPENAI_API_KEY and friends (BUGS.md R40-16).
+    cmd.env_clear();
+    cmd.envs(crate::tools::terminal_backend::sanitized_env(
+        &std::collections::HashMap::new(),
+    ));
     cmd.arg(script_path.as_os_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -416,6 +424,10 @@ async fn execute_javascript(code: &str, timeout: Duration) -> Result<Value, Stri
     cmd.kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
+    cmd.env_clear();
+    cmd.envs(crate::tools::terminal_backend::sanitized_env(
+        &std::collections::HashMap::new(),
+    ));
     cmd.arg(script_path.as_os_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -433,6 +445,10 @@ async fn execute_shell(code: &str, timeout: Duration) -> Result<Value, String> {
     cmd.kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
+    cmd.env_clear();
+    cmd.envs(crate::tools::terminal_backend::sanitized_env(
+        &std::collections::HashMap::new(),
+    ));
     for arg in &shell.args_pattern {
         cmd.arg(arg);
     }
@@ -466,6 +482,10 @@ async fn execute_rust(code: &str, timeout: Duration) -> Result<Value, String> {
     compile.kill_on_drop(true);
     #[cfg(unix)]
     compile.process_group(0);
+    compile.env_clear();
+    compile.envs(crate::tools::terminal_backend::sanitized_env(
+        &std::collections::HashMap::new(),
+    ));
     compile
         .arg(&src)
         .arg("--edition")
@@ -484,6 +504,10 @@ async fn execute_rust(code: &str, timeout: Duration) -> Result<Value, String> {
     run_cmd.kill_on_drop(true);
     #[cfg(unix)]
     run_cmd.process_group(0);
+    run_cmd.env_clear();
+    run_cmd.envs(crate::tools::terminal_backend::sanitized_env(
+        &std::collections::HashMap::new(),
+    ));
     run_cmd.stdout(Stdio::piped());
     run_cmd.stderr(Stdio::piped());
 

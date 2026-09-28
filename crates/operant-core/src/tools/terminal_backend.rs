@@ -27,6 +27,56 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
+/// Name fragments that mark an environment variable as credential-bearing.
+///
+/// Matched case-insensitively as substrings, so `OPENAI_API_KEY`,
+/// `my-service-token` and `AWS_SECRET_ACCESS_KEY` all match. Deliberately a
+/// denylist rather than an allowlist: an allowlist would break every
+/// legitimate command that needs `PATH`, `HOME`, `LANG`, or a user-set
+/// `FOO`, and this tool exists to run arbitrary user commands. A denylist
+/// fails open for unusual names, which is the safer trade for a tool whose
+/// job is not to sandbox (see BUGS.md R40-16, and R12-1: `code_execution`
+/// is documented as running unsandboxed on the host).
+///
+/// The fragments are deliberately SUFFIX- or TOKEN-SHAPED, never bare
+/// substrings that collide with ordinary variables: a bare `AUTH` would strip
+/// `SSH_AUTH_SOCK`, silently breaking every `ssh` / `scp` / `git push` that
+/// relies on the agent, and a bare `KEY` would strip `SSH_KEYSCAN`. The
+/// `secret_env_var_cases` test pins both directions.
+const SECRET_ENV_FRAGMENTS: &[&str] = &[
+    "API_KEY",
+    "APIKEY",
+    "_TOKEN",
+    "TOKEN_",
+    "SECRET_",
+    "_SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "PRIVATE_KEY",
+    "SESSION_KEY",
+];
+
+/// True when an environment variable must not be forwarded to a child process.
+pub(crate) fn is_secret_env_var(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    SECRET_ENV_FRAGMENTS.iter().any(|frag| upper.contains(frag))
+}
+
+/// Build the environment a spawned command runs with: the parent environment
+/// minus credential-bearing variables, plus the caller-supplied overrides.
+///
+/// The parent env is inherited implicitly by `Command`, so the empty-`env_vars`
+/// path leaked too; clearing it explicitly and re-adding the safe subset is the
+/// only way to actually withhold a variable. Overrides win over the inherited
+/// set, so a caller can still pass a token explicitly when it means to.
+pub(crate) fn sanitized_env(env_vars: &HashMap<String, String>) -> HashMap<String, String> {
+    std::env::vars()
+        .filter(|(k, _)| !is_secret_env_var(k))
+        .chain(env_vars.iter().map(|(k, v)| (k.clone(), v.clone())))
+        .collect()
+}
+
 /// Trait for terminal execution backends.
 #[async_trait]
 pub trait TerminalBackend: Send + Sync {
@@ -91,13 +141,12 @@ impl TerminalBackend for LocalBackend {
             cmd.current_dir(c);
         }
 
-        if !env_vars.is_empty() {
-            let mut env: HashMap<String, String> = std::env::vars().collect();
-            for (k, v) in env_vars {
-                env.insert(k.clone(), v.clone());
-            }
-            cmd.envs(&env);
-        }
+        // Withhold credential-bearing variables from the child. `Command`
+        // inherits the parent environment by default, so this must be an
+        // explicit clear-and-rebuild rather than relying on `envs()` to
+        // replace anything (R40-16).
+        cmd.env_clear();
+        cmd.envs(sanitized_env(env_vars));
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -614,6 +663,114 @@ mod tests {
         let mut m = HashMap::new();
         m.insert(k.to_string(), v.to_string());
         m
+    }
+
+    #[test]
+    fn secret_env_vars_are_recognised_case_insensitively() {
+        for name in [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "openai_api_key",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "refresh_token",
+            "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "DB_PASSWORD",
+            "SOME_CREDENTIAL",
+            "SSH_PRIVATE_KEY",
+        ] {
+            assert!(is_secret_env_var(name), "{name} must be treated as secret");
+        }
+    }
+
+    #[test]
+    fn ordinary_env_vars_are_not_treated_as_secret() {
+        // The denylist must not start eating variables that legitimate
+        // commands depend on — this is the regression that would make the
+        // scrub worse than the leak it fixes. SSH_AUTH_SOCK is the sharp
+        // case: a bare `AUTH` fragment silently breaks ssh/scp/git-push.
+        for name in [
+            "PATH",
+            "HOME",
+            "LANG",
+            "TERM",
+            "EDITOR",
+            "CI",
+            "PWD",
+            "SSH_AUTH_SOCK",
+            "AUTHORS",
+            "GPG_KEY_ID",
+            "TERM_SESSION_ID",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+        ] {
+            assert!(!is_secret_env_var(name), "{name} must pass through");
+        }
+    }
+
+    #[test]
+    fn explicit_overrides_survive_the_scrub() {
+        // A caller that deliberately passes a token must still get it, even
+        // though the parent env copy of it is dropped.
+        let merged = sanitized_env(&env("API_KEY", "explicitly-passed"));
+        assert_eq!(
+            merged.get("API_KEY").map(String::as_str),
+            Some("explicitly-passed")
+        );
+    }
+
+    #[tokio::test]
+    async fn spawned_command_does_not_inherit_api_keys() {
+        // End-to-end through the real spawn path (env_clear + sanitized_env +
+        // Command), not the predicate in isolation. The secret name is one the
+        // denylist genuinely matches, so this cannot pass for the wrong reason;
+        // the safe var proves the scrub is a filter and not a blanket wipe.
+        // SAFETY: single-threaded setup before the spawn; no other thread
+        // reads the environment during this window.
+        #[expect(unsafe_code, reason = "test fixture needs a parent-side secret")]
+        let _ = unsafe { std::env::set_var("OPERANT_TEST_API_KEY", "super-secret-value") };
+        #[expect(unsafe_code, reason = "test fixture needs a parent-side safe var")]
+        let _ = unsafe { std::env::set_var("OPERANT_TEST_SAFE_VAR", "visible-value") };
+        #[expect(unsafe_code, reason = "test fixture pins that SSH_AUTH_SOCK survives")]
+        let _ = unsafe { std::env::set_var("SSH_AUTH_SOCK", "/tmp/fake-agent.sock") };
+
+        let backend = LocalBackend;
+        let out = backend
+            .execute_command(
+                "printenv OPERANT_TEST_API_KEY OPERANT_TEST_SAFE_VAR SSH_AUTH_SOCK",
+                None,
+                &HashMap::new(),
+                false,
+                Duration::from_secs(10),
+                4096,
+            )
+            .await
+            .expect("spawn must succeed");
+
+        assert!(
+            !out.stdout.contains("super-secret-value"),
+            "child inherited a credential-bearing env var: {:?}",
+            out.stdout
+        );
+        assert!(
+            out.stdout.contains("visible-value"),
+            "scrub dropped a non-secret var the command needs: {:?}",
+            out.stdout
+        );
+        // The regression the bare-`AUTH` fragment would have caused.
+        assert!(
+            out.stdout.contains("/tmp/fake-agent.sock"),
+            "scrub stripped SSH_AUTH_SOCK, breaking ssh/scp/git-push: {:?}",
+            out.stdout
+        );
+
+        #[expect(unsafe_code, reason = "restores the parent environment")]
+        let _ = unsafe { std::env::remove_var("OPERANT_TEST_API_KEY") };
+        #[expect(unsafe_code, reason = "restores the parent environment")]
+        let _ = unsafe { std::env::remove_var("OPERANT_TEST_SAFE_VAR") };
+        #[expect(unsafe_code, reason = "restores the parent environment")]
+        let _ = unsafe { std::env::remove_var("SSH_AUTH_SOCK") };
     }
 
     #[test]
