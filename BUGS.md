@@ -1713,6 +1713,24 @@ the current tree fails at `operant-core`, costing ~9 minutes to learn nothing.
   ledger should NOT add the declaration — that line is already in the working
   copy, and adding it again from a clean checkout is a duplicate. The action is
   to get that commit pushed (or cherry-picked onto main), not to re-apply it.
+- **"Fixed" means `origin/main` carries the line, not that a local tree
+  compiles.** A fresh clone is broken until that commit lands, so anyone
+  running a clean-worktree compile or a CI run right now sees the failure.
+  Two consequences:
+  (1) the clippy gate (active on pushes to `main` since iter-392) will be RED
+      on the peer's next push **if they push other work first without this
+      line**. That is expected, not a regression — and it is the first
+      occurrence the gate would have caught automatically, so treat the red as
+      the mechanism working, not as a new incident.
+  (2) Do NOT add the line yourself even though the tree is broken. A duplicate
+      `pub mod cache_monitor;` in a file they are actively editing is a worse
+      failure than a broken main, and the fix is one commit from landing.
+- **Blocks four downstream items**, all of which are unblocked the moment that
+  commit lands and nothing more: the R40-19 doc recount (unmeasurable while
+  `operant-core` does not compile), the release rebuild (recorded in
+  R40-19's addendum), and anything that needs to compile `operant-core`. State
+  it as ONE blocked item rather than four, so the next session does not
+  re-derive that the tree is broken.
 - **Pattern worth naming**: this is the third time `origin/main` has been
   pushed uncompilable (iter-359 → R40-9, iter-357 → R40-11, now iter-391), and
   a clean-worktree compile at HEAD was the only thing that caught it each time.
