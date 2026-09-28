@@ -1099,6 +1099,36 @@ production callers, so the loop's `emit` calls were no-ops).
   their code into this tree and conflict with their next push; that gate red
   belongs to their iteration.
 
+### R40-11 — `origin/main` does not compile: iter-357 shipped a reader without its field (OPEN, HIGH)
+`0482fa1b` (peer, `fix(iter-357)`) added
+`max_tool_result_share: settings.max_tool_result_share` at
+`crates/operant-core/src/agent/mod.rs:170`, sourced from `BehaviorSettings`,
+but **the field was never declared on that struct** —
+`crates/operant-core/src/config.rs:193` (`BehaviorSettings`) has no
+`max_tool_result_share` at HEAD, so every build of a clean checkout fails:
+```
+error[E0609]: no field `max_tool_result_share` on type `&BehaviorSettings`
+  --> crates/operant-core/src/agent/mod.rs:170:45
+```
+- **Repro, measured**: a clean worktree of HEAD (`/tmp/owcheck`) fails
+  `cargo check -p operant-cli --bin operant` with the above. The shared
+  working tree does NOT fail, because the concurrent agent's UNCOMMITTED
+  `crates/operant-core/src/config.rs` contains the missing field declaration,
+  its `#[serde(default = "default_max_tool_result_share")]` attribute, the
+  `default_max_tool_result_share()` helper, and the `Default` impl entry. The
+  build is being kept alive by work that exists nowhere but one machine's disk.
+  This is the SECOND time `origin/main` has been left uncompilable by an
+  explicit-path commit (first: iter-359, R40-9) — same failure class.
+- **Blast radius beyond compilation**: even once the field lands, the
+  config surface must also reach `operant-config`'s schema, or the knob will
+  be unreadable/settable-from-nothing — the same two-file thread that
+  `agentmemory_version` needed (iter-347). Verify, do not assume.
+- **Not fixed here on purpose**: the one-line fix lives in a file the
+  concurrent agent is actively editing, and the field they wrote is theirs to
+  land with their surrounding work (default value + schema + example config
+  are all part of the same change). Committing a partial version would be the
+  R40-10 mistake in reverse.
+
 ### R40-7 — CI predicate aligned to the local gate; the main-branch trigger is still fmt-blocked (PARTIAL, iter-369)
 All four workflows fire only on `push: tags: ['v*']` (+ dispatch) — no
 `branches: [main]`, no `pull_request`.
