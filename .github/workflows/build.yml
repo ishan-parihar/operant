@@ -84,6 +84,19 @@ jobs:
   cross:
     name: Cross (${{ matrix.name }})
     runs-on: ubuntu-latest
+    # Best-effort by design, and the reasoning is load-bearing: release.yml
+    # gates on the WHOLE Build workflow's conclusion
+    # (`github.event.workflow_run.conclusion == 'success'`), and a workflow is
+    # `failure` if any job is. So without this, a single unbuildable target
+    # silently blocks every release forever while the native binaries sit
+    # complete and unpublishable. Android needs an NDK and FreeBSD needs a
+    # sysroot that `cross` does not always provide, so "will every one of these
+    # six link on any given run" is not a safe thing to bet a release on.
+    #
+    # `gh run download` in release.yml fetches whatever artifacts exist, so
+    # marking these non-fatal does not break publishing — it just stops them
+    # from vetoing it. Failures are still visible on the Build run.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -115,11 +128,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Clone path dependencies
-        shell: bash
-        run: |
-          git clone --depth 1 https://github.com/ishan-parihar/tdg-rust.git "$GITHUB_WORKSPACE/../tdg-rust"
 
       - uses: Swatinem/rust-cache@v2
         with:

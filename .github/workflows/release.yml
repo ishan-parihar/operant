@@ -46,7 +46,7 @@ jobs:
         id: notes
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import pathlib
           import re
           import sys
