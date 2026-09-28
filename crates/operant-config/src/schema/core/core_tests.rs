@@ -7433,3 +7433,68 @@ async fn coerce_for_set_prop_object_rejects_non_object() {
         err.message
     );
 }
+
+/// R40-15: the credential-pool keys (`api_keys`) must be encrypted on save
+/// exactly like the primary `api_key`. Before the field carried `#[secret]`,
+/// every pooled key was written to config.toml in plaintext — which also
+/// contradicted `api_key`'s own doc comment ("never commit it to config.toml
+/// directly").
+///
+/// This asserts on the RAW file contents, not on a config round-trip: the
+/// field has `skip_serializing_if`, so a load-and-compare test can pass while
+/// the on-disk value is still plaintext. Each element must be ciphertext AND
+/// decrypt back to the original.
+#[tokio::test]
+async fn config_save_encrypts_credential_pool_keys() {
+    let dir = std::env::temp_dir().join(format!("operant_test_pool_keys_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&dir).await.unwrap();
+
+    let mut config = Config {
+        workspace_dir: dir.join("workspace"),
+        config_path: dir.join("config.toml"),
+        ..Default::default()
+    };
+    config.providers.fallback = Some("default".into());
+    config.providers.models.insert(
+        "default".into(),
+        ModelProviderConfig {
+            api_key: Some("root-credential".into()),
+            api_keys: vec!["pooled-key-one".into(), "pooled-key-two".into()],
+            ..Default::default()
+        },
+    );
+
+    config.save().await.unwrap();
+
+    let contents = tokio::fs::read_to_string(&config.config_path.clone())
+        .await
+        .unwrap();
+
+    // The raw bytes must not contain either pooled key in the clear. This is
+    // the assertion that actually pins the defect: a round-trip through the
+    // loader would not catch a plaintext write.
+    assert!(
+        !contents.contains("pooled-key-one"),
+        "pooled key leaked to config.toml in plaintext:\n{contents}"
+    );
+    assert!(
+        !contents.contains("pooled-key-two"),
+        "pooled key leaked to config.toml in plaintext:\n{contents}"
+    );
+
+    let stored: Config = toml::from_str::<crate::migration::V1Compat>(&contents)
+        .unwrap()
+        .into_config();
+    let entry = stored.providers.models.get("default").unwrap();
+    let store = crate::secrets::SecretStore::new(&dir, true);
+
+    assert_eq!(entry.api_keys.len(), 2);
+    for (idx, original) in ["pooled-key-one", "pooled-key-two"].iter().enumerate() {
+        let stored_key = &entry.api_keys[idx];
+        assert!(
+            crate::secrets::SecretStore::is_encrypted(stored_key),
+            "pooled key {idx} was not encrypted: {stored_key}"
+        );
+        assert_eq!(&store.decrypt(stored_key).unwrap(), original);
+    }
+}

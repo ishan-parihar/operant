@@ -46,6 +46,12 @@ pub struct ModelProviderConfig {
     /// these rotate in on 401/429/billing exhaustion, each with its own
     /// error-class bench (hermes `load_pool(provider)` seeds every key a
     /// provider owns). Empty by default.
+    ///
+    /// `#[secret]`: each element is encrypted on save exactly like `api_key`.
+    /// Without it these keys were written to config.toml in plaintext on every
+    /// `save()`, which also contradicted the `api_key` doc comment above
+    /// ("never commit it to config.toml directly") — see BUGS.md R40-15.
+    #[secret]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_keys: Vec<String>,
     /// Override the provider type label. Rarely needed — only useful when you run two profiles against the same provider type (e.g. two different OpenAI-compatible gateways) and want to tell them apart in logs.

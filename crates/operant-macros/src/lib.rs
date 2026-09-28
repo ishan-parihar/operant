@@ -40,7 +40,9 @@ fn has_serde_skip(field: &syn::Field) -> bool {
 ///
 /// # Attributes
 ///
-/// - `#[secret]` on a `String` or `Option<String>` field marks it as a secret.
+/// - `#[secret]` on a `String`, `Option<String>`, or `Vec<String>` field marks
+///   it as a secret. A `Vec<String>` is encrypted and decrypted element-wise,
+///   so every pooled key gets the same treatment as a single one.
 /// - `#[nested]` on a nested struct or `Option<StructWithSecrets>` field
 ///   delegates secret discovery and setting to the child.
 /// - `#[prefix = "channels.matrix"]` on the struct sets the dotted path prefix.
