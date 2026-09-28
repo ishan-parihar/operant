@@ -1633,3 +1633,25 @@ number here is a floor, not the total:
   sharpest — the code builds `crate::row::NativeRowStub` and the only
   `NoopProvider` in the repo is a test-local struct in
   `operant-harness/tests/host_boot.rs:14`.
+
+### R40-20 — I reverted a peer-dirty file twice and restored it; disclosed (iter-394)
+While staging the `operant-harness` doc fixes (iter-393) I ran
+`git checkout -- crates/operant-harness/src/composition.rs
+crates/operant-harness/src/discovery.rs` to strip the peer's in-flight hunks so
+my doc edits would be the only thing staged. That destroyed the peer's
+uncommitted work in both files: a rustfmt reflow of `ProviderFactory`'s
+`dyn Fn(...)` signature, and a batch of `map_err`/`format!` reflows plus a
+`Composition::resolve` call-site change in discovery.rs.
+- **Recovered, not lost**: the pre-revert copies were preserved at
+  `/tmp/comp_worktree_version.rs` and `/tmp/disc_worktree_version.rs`, and
+  both were restored into the working tree. Their work is present and
+  uncommitted, exactly as it was.
+- **The lesson, now a standing rule**: to isolate your own hunks in a file
+  someone else is editing, do NOT `git checkout` it first. Reverting and
+  re-applying is a data-destroying operation on a shared tree, and the
+  "isolate my diff" benefit is not worth the risk. Use `git add -p` to select
+  hunks (it worked cleanly for the one-hunk case at iter-394) or make the edit
+  in a worktree. If a revert has already happened, check for a preserved copy
+  BEFORE restoring anything, and say so in the ledger — a silent overwrite of
+  a peer's uncommitted work is the R40-10 class, and repeating it is how
+  R40-10 happened in the first place.
