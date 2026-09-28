@@ -9,6 +9,7 @@
 //! model.  There is no persistent state across requests.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -24,6 +25,182 @@ use super::model_client::{ChatRequest, ModelClient, StreamChunk};
 use super::provider_registry::ProviderRegistry;
 use crate::client::ChatResponse;
 use crate::error::Result;
+
+// ---------------------------------------------------------------------------
+// FailoverDecision
+// ---------------------------------------------------------------------------
+
+/// What a failed request means for the rest of the chain.
+///
+/// Produced once by [`Failover::classify`] in the shared fallback path and
+/// consumed by both [`FallbackModelClient::chat`] and
+/// [`FallbackModelClient::chat_streaming`], so the two paths cannot drift
+/// apart and neither re-derives the reason from a message string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailoverDecision {
+    /// The runtime is not broken — this request was throttled. Wait `after`
+    /// and ask again. Another model on this provider is also a valid
+    /// substitute (rate-limit buckets are per model), and when a cheaper
+    /// sibling has a known price it is the preferred one.
+    RetrySame {
+        /// The provider's `Retry-After`, when it sent one.
+        after: Option<Duration>,
+    },
+    /// This model cannot serve the request. A different runtime answers.
+    FallBack {
+        /// Typed reason. Never a message string.
+        reason: FailoverReason,
+    },
+    /// Nothing in the chain can serve this request. Surface the error.
+    GiveUp,
+}
+
+/// A [`FailoverDecision`] plus everything a caller needs to act on it.
+#[derive(Debug, Clone)]
+pub struct Failover {
+    /// The semantic verdict.
+    pub decision: FailoverDecision,
+    /// Typed reason, mirrored out of the decision for the stage gates so no
+    /// caller re-parses a message.
+    pub reason: FailoverReason,
+    /// The full classification (status code, message, recovery hints).
+    pub classified: ClassifiedError,
+    /// Provider-supplied `Retry-After`, when present.
+    pub retry_after: Option<Duration>,
+    /// Whether the model chain on the current provider should advance.
+    /// Computed once, from the concrete `Error` variant.
+    advance_model_chain: bool,
+    /// Whether a different provider should take the request. True for auth,
+    /// billing, and rate-limit exhaustion — those providers have their own
+    /// credentials and quota. Computed once, from the classification.
+    switch_provider: bool,
+}
+
+impl Failover {
+    /// Classify a failed request into a typed decision.
+    ///
+    /// The two stage gates are the exact predicates the chain has always used,
+    /// evaluated here once so every caller shares them:
+    ///
+    /// * `advance_model_chain` — transport errors, rate limits, and 5xx. A
+    ///   different model (or endpoint) may well work. Note this is
+    ///   deliberately *not* `classified.should_fallback`, which is set for
+    ///   cases (a content-policy rejection at 400) the model chain has never
+    ///   advanced on.
+    /// * `switch_provider` — auth, billing, and rate limits. Those providers'
+    ///   credentials/quota are spent, so a sibling provider with its own quota
+    ///   is the right target.
+    pub fn classify(err: &Error) -> Self {
+        let (classified, retry_after) = match err {
+            Error::Network(_) => (
+                ClassifiedError {
+                    reason: FailoverReason::Timeout,
+                    status_code: None,
+                    message: err.to_string(),
+                    retryable: true,
+                    should_fallback: true,
+                    should_compress: false,
+                    should_rotate_credential: false,
+                },
+                None,
+            ),
+            Error::RateLimited { retry_after } => (
+                ClassifiedError {
+                    reason: FailoverReason::RateLimit,
+                    status_code: Some(429),
+                    message: format!("rate limited, retry after {retry_after:?}"),
+                    retryable: true,
+                    should_fallback: true,
+                    should_compress: false,
+                    should_rotate_credential: true,
+                },
+                Some(*retry_after),
+            ),
+            Error::Authentication(msg) => (
+                ClassifiedError {
+                    reason: FailoverReason::Auth,
+                    status_code: None,
+                    message: msg.clone(),
+                    retryable: false,
+                    should_fallback: true,
+                    should_compress: false,
+                    should_rotate_credential: true,
+                },
+                None,
+            ),
+            Error::Provider { status, body, .. } => {
+                (classify_api_error(Some(*status), body, None), None)
+            }
+            Error::Config(_) => (
+                ClassifiedError {
+                    reason: FailoverReason::FormatError,
+                    status_code: None,
+                    message: err.to_string(),
+                    retryable: false,
+                    should_fallback: false,
+                    should_compress: false,
+                    should_rotate_credential: false,
+                },
+                None,
+            ),
+            _ => (
+                ClassifiedError {
+                    reason: FailoverReason::Unknown,
+                    status_code: None,
+                    message: err.to_string(),
+                    retryable: true,
+                    should_fallback: true,
+                    should_compress: false,
+                    should_rotate_credential: false,
+                },
+                None,
+            ),
+        };
+
+        let advance_model_chain = matches!(err, Error::Network(_) | Error::RateLimited { .. })
+            || matches!(err, Error::Provider { status, .. } if *status >= 500);
+        let switch_provider = classified.is_auth()
+            || matches!(
+                classified.reason,
+                FailoverReason::Billing | FailoverReason::RateLimit
+            );
+
+        let decision = match classified.reason {
+            FailoverReason::RateLimit => FailoverDecision::RetrySame { after: retry_after },
+            _ if advance_model_chain || switch_provider => FailoverDecision::FallBack {
+                reason: classified.reason,
+            },
+            _ => FailoverDecision::GiveUp,
+        };
+
+        Self {
+            decision,
+            reason: classified.reason,
+            classified,
+            retry_after,
+            advance_model_chain,
+            switch_provider,
+        }
+    }
+
+    /// Advance the model chain on the current provider.
+    pub fn advance_model_chain(&self) -> bool {
+        self.advance_model_chain
+    }
+
+    /// Escalate to a different provider (separate credentials and quota).
+    pub fn switch_provider(&self) -> bool {
+        self.switch_provider
+    }
+
+    /// The typed reason's display form, for the existing
+    /// `AgentEvent::ModelFallback { reason }` wire — which is the natural
+    /// place a failover decision already surfaces, so no new event variant is
+    /// needed.
+    pub fn event_reason(&self) -> String {
+        self.reason.to_string()
+    }
+}
 
 /// A [`ModelClient`] wrapper that tries fallback models when the primary
 /// model fails with a retryable error.
@@ -107,20 +284,30 @@ impl FallbackModelClient {
     }
 
     /// Try the next provider from the registry for a non-streaming chat.
-    /// Called by chat() after try_models returns an auth/billing error.
-    async fn try_next_provider_chat(&self, request: &ChatRequest) -> Option<Result<ChatResponse>> {
+    /// Called by chat() after try_models returns a classified failure.
+    async fn try_next_provider_chat(
+        &self,
+        request: &ChatRequest,
+        failover: &Failover,
+    ) -> Option<Result<ChatResponse>> {
         let registry = self.provider_registry.as_ref()?;
-        // switch_to_next() skips providers in cooldown and returns None if all exhausted.
-        let next_provider = registry.switch_to_next()?;
+        // switch_to_next*() skips providers in cooldown and returns None if all exhausted.
+        let next_provider = match failover.decision {
+            // Merely rate-limited: the model is healthy, so a cheaper sibling
+            // beats the next configured route. Unknown prices keep chain order.
+            FailoverDecision::RetrySame { .. } => registry.switch_to_next_cheapest()?,
+            _ => registry.switch_to_next()?,
+        };
         let next_client = registry.get_client(&next_provider.name)?;
         let mut fallback_req = request.clone();
         fallback_req.model.clone_from(&next_provider.model);
         info!(
             to_provider = %next_provider.name,
             to_model = %next_provider.model,
-            "Auth/billing error — switching to fallback provider"
+            reason = %failover.event_reason(),
+            "Provider failover — switching to fallback provider"
         );
-        self.emit_fallback(&next_provider.model, "auth or billing failure");
+        self.emit_fallback(&next_provider.model, &failover.event_reason());
         let result = next_client.chat(fallback_req).await;
         if result.is_err() {
             registry.arm_cooldown(&next_provider.name);
@@ -128,40 +315,28 @@ impl FallbackModelClient {
         Some(result)
     }
 
-    /// Whether an error warrants switching to the next provider in the
-    /// fallback chain (hermes parity).
-    ///
-    /// The switch fires on auth/billing errors AND on credential-pool
-    /// exhaustion, which surfaces as `RateLimited` once every key is benched
-    /// (the pooled client reports the underlying class instead of an opaque
-    /// "no keys" error). A fully rate-limited provider is exactly when a
-    /// fallback provider's separate quota should be tried; the registry's
-    /// anti-thrash cooldown bounds repeat switching.
-    fn should_switch_provider(classified: &ClassifiedError) -> bool {
-        classified.is_auth()
-            || matches!(
-                classified.reason,
-                FailoverReason::Billing | FailoverReason::RateLimit
-            )
-    }
-
     /// Try the next provider from the registry for streaming.
-    /// Called by chat_streaming() after try_models returns an auth/billing error.
+    /// Called by chat_streaming() after try_models returns a classified failure.
     async fn try_next_provider_streaming(
         &self,
         request: &ChatRequest,
+        failover: &Failover,
     ) -> Option<Result<BoxStream<'static, Result<StreamChunk>>>> {
         let registry = self.provider_registry.as_ref()?;
-        let next_provider = registry.switch_to_next()?;
+        let next_provider = match failover.decision {
+            FailoverDecision::RetrySame { .. } => registry.switch_to_next_cheapest()?,
+            _ => registry.switch_to_next()?,
+        };
         let next_client = registry.get_client(&next_provider.name)?;
         let mut fallback_req = request.clone();
         fallback_req.model.clone_from(&next_provider.model);
         info!(
             to_provider = %next_provider.name,
             to_model = %next_provider.model,
-            "Auth/billing error — switching to fallback provider"
+            reason = %failover.event_reason(),
+            "Provider failover — switching to fallback provider"
         );
-        self.emit_fallback(&next_provider.model, "auth or billing failure");
+        self.emit_fallback(&next_provider.model, &failover.event_reason());
         let result = next_client.chat_streaming(fallback_req).await;
         if result.is_err() {
             registry.arm_cooldown(&next_provider.name);
@@ -178,80 +353,13 @@ impl FallbackModelClient {
         models
     }
 
-    /// Returns `true` when the error is likely to be resolved by switching
-    /// to a different model.
-    fn is_fallback_error(err: &Error) -> bool {
-        match err {
-            // Network / transport errors — transient, may affect specific endpoints
-            Error::Network(_) => true,
-            // Rate limited — different models may have separate rate-limit buckets
-            Error::RateLimited { .. } => true,
-            // Server-side provider errors (5xx) — transient, try a different model
-            Error::Provider { status, .. } if *status >= 500 => true,
-            // Everything else: bad request (4xx), auth (401/403), parse, validation — not retryable
-            _ => false,
-        }
-    }
-
     /// Classify an error into a recovery strategy using the full
     /// error_classifier taxonomy (22+ categories).
     ///
-    /// Extracts status code, body, and error code from the Error enum
-    /// and delegates to `classify_api_error` for pattern matching.
+    /// Thin wrapper over [`Failover::classify`] so the credential pool and the
+    /// run loop see exactly the classification the failover path uses.
     pub fn classify_error(err: &Error) -> ClassifiedError {
-        match err {
-            Error::Network(_) => ClassifiedError {
-                reason: FailoverReason::Timeout,
-                status_code: None,
-                message: err.to_string(),
-                retryable: true,
-                should_fallback: true,
-                should_compress: false,
-                should_rotate_credential: false,
-            },
-
-            Error::RateLimited { retry_after } => ClassifiedError {
-                reason: FailoverReason::RateLimit,
-                status_code: Some(429),
-                message: format!("rate limited, retry after {:?}", retry_after),
-                retryable: true,
-                should_fallback: true,
-                should_compress: false,
-                should_rotate_credential: true,
-            },
-
-            Error::Authentication(msg) => ClassifiedError {
-                reason: FailoverReason::Auth,
-                status_code: None,
-                message: msg.clone(),
-                retryable: false,
-                should_fallback: true,
-                should_compress: false,
-                should_rotate_credential: true,
-            },
-
-            Error::Provider { status, body, .. } => classify_api_error(Some(*status), body, None),
-
-            Error::Config(_) => ClassifiedError {
-                reason: FailoverReason::FormatError,
-                status_code: None,
-                message: err.to_string(),
-                retryable: false,
-                should_fallback: false,
-                should_compress: false,
-                should_rotate_credential: false,
-            },
-
-            _ => ClassifiedError {
-                reason: FailoverReason::Unknown,
-                status_code: None,
-                message: err.to_string(),
-                retryable: true,
-                should_fallback: true,
-                should_compress: false,
-                should_rotate_credential: false,
-            },
-        }
+        Failover::classify(err).classified
     }
 
     /// Core fallback loop shared by `chat` and `chat_streaming`.
@@ -285,13 +393,13 @@ impl FallbackModelClient {
                     return Ok(response);
                 }
                 Err(e) => {
-                    if Self::is_fallback_error(&e) {
+                    let failover = Failover::classify(&e);
+                    if failover.advance_model_chain() {
                         // The switch itself is the reportable event: the primary
                         // (or an earlier fallback) just failed, so this model is
                         // about to be attempted instead.
                         if *model != self.primary_model {
-                            let reason = Self::classify_error(&e).reason.to_string();
-                            self.emit_fallback(model, &reason);
+                            self.emit_fallback(model, &failover.event_reason());
                         }
                         warn!(
                             primary = %self.primary_model,
@@ -323,11 +431,12 @@ impl ModelClient for FallbackModelClient {
         if !self.fallback_enabled || self.fallback_models.is_empty() {
             // Fast path: no fallback configured, passthrough
             let result = self.inner.chat(request.clone()).await;
-            // Check for auth/billing errors → try provider fallback
+            // Check for auth/billing/rate-limit-exhaustion → try provider fallback
             if let Err(ref e) = result {
-                let classified = Self::classify_error(e);
-                if Self::should_switch_provider(&classified)
-                    && let Some(provider_result) = self.try_next_provider_chat(&request).await
+                let failover = Failover::classify(e);
+                if failover.switch_provider()
+                    && let Some(provider_result) =
+                        self.try_next_provider_chat(&request, &failover).await
                 {
                     return provider_result;
                 }
@@ -338,9 +447,10 @@ impl ModelClient for FallbackModelClient {
         let result = self.try_models(&request, |req| self.inner.chat(req)).await;
         // Check for auth/billing/rate-limit-exhaustion errors → try provider fallback
         if let Err(ref e) = result {
-            let classified = Self::classify_error(e);
-            if Self::should_switch_provider(&classified)
-                && let Some(provider_result) = self.try_next_provider_chat(&request).await
+            let failover = Failover::classify(e);
+            if failover.switch_provider()
+                && let Some(provider_result) =
+                    self.try_next_provider_chat(&request, &failover).await
             {
                 return provider_result;
             }
@@ -355,9 +465,10 @@ impl ModelClient for FallbackModelClient {
         if !self.fallback_enabled || self.fallback_models.is_empty() {
             let result = self.inner.chat_streaming(request.clone()).await;
             if let Err(ref e) = result {
-                let classified = Self::classify_error(e);
-                if Self::should_switch_provider(&classified)
-                    && let Some(provider_result) = self.try_next_provider_streaming(&request).await
+                let failover = Failover::classify(e);
+                if failover.switch_provider()
+                    && let Some(provider_result) =
+                        self.try_next_provider_streaming(&request, &failover).await
                 {
                     return provider_result;
                 }
@@ -369,9 +480,10 @@ impl ModelClient for FallbackModelClient {
             .try_models(&request, |req| self.inner.chat_streaming(req))
             .await;
         if let Err(ref e) = result {
-            let classified = Self::classify_error(e);
-            if Self::should_switch_provider(&classified)
-                && let Some(provider_result) = self.try_next_provider_streaming(&request).await
+            let failover = Failover::classify(e);
+            if failover.switch_provider()
+                && let Some(provider_result) =
+                    self.try_next_provider_streaming(&request, &failover).await
             {
                 return provider_result;
             }
@@ -490,6 +602,87 @@ mod tests {
     }
 
     // ── Tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn failover_decision_should_distinguish_rate_limit_from_broken_model() {
+        // Rate limited: the runtime is fine, just throttled. The provider's
+        // Retry-After rides along so a caller never re-derives it.
+        let throttled = Failover::classify(&Error::RateLimited {
+            retry_after: Duration::from_secs(7),
+        });
+        assert_eq!(
+            throttled.decision,
+            FailoverDecision::RetrySame {
+                after: Some(Duration::from_secs(7))
+            }
+        );
+        assert_eq!(throttled.retry_after, Some(Duration::from_secs(7)));
+        assert_eq!(throttled.reason, FailoverReason::RateLimit);
+        // Rate-limit buckets are per model, and pool exhaustion means this
+        // provider's quota is spent — so both stages stay open.
+        assert!(throttled.advance_model_chain());
+        assert!(throttled.switch_provider());
+
+        // Broken but transient (5xx): advance the chain, do NOT burn a
+        // provider — its credentials are fine.
+        let broken = Failover::classify(&Error::Provider {
+            status: 503,
+            body: "Service Unavailable".into(),
+            retry_after: None,
+        });
+        assert_eq!(
+            broken.decision,
+            FailoverDecision::FallBack {
+                reason: FailoverReason::Overloaded
+            }
+        );
+        assert!(broken.advance_model_chain());
+        assert!(!broken.switch_provider());
+
+        // Dead credentials: the chain does not advance on models, but another
+        // provider with its own keys should answer.
+        let auth = Failover::classify(&Error::Authentication("invalid key".into()));
+        assert_eq!(
+            auth.decision,
+            FailoverDecision::FallBack {
+                reason: FailoverReason::Auth
+            }
+        );
+        assert!(!auth.advance_model_chain());
+        assert!(auth.switch_provider());
+
+        // A malformed request is nobody's fault: no stage, no provider.
+        let bad_request = Failover::classify(&Error::Provider {
+            status: 400,
+            body: "Bad Request".into(),
+            retry_after: None,
+        });
+        assert_eq!(bad_request.decision, FailoverDecision::GiveUp);
+        assert!(!bad_request.advance_model_chain());
+        assert!(!bad_request.switch_provider());
+
+        // Transport: the endpoint is down, so try a different one.
+        let transport = Failover::classify(&Error::Agent("connection reset".into()));
+        assert_eq!(transport.decision, FailoverDecision::GiveUp);
+        assert!(!transport.advance_model_chain());
+        assert!(!transport.switch_provider());
+
+        // The event wire keeps the existing FailoverReason display form, so
+        // AgentEvent::ModelFallback is unchanged for consumers.
+        assert_eq!(throttled.event_reason(), "rate_limit");
+        assert_eq!(auth.event_reason(), "auth");
+    }
+
+    #[test]
+    fn classify_error_still_returns_the_full_classification() {
+        let classified = FallbackModelClient::classify_error(&Error::RateLimited {
+            retry_after: Duration::from_secs(3),
+        });
+        assert_eq!(classified.reason, FailoverReason::RateLimit);
+        assert_eq!(classified.status_code, Some(429));
+        assert!(classified.retryable);
+        assert!(classified.should_rotate_credential);
+    }
 
     #[tokio::test]
     async fn primary_succeeds_no_fallback_attempted() {

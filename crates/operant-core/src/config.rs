@@ -204,6 +204,15 @@ pub struct BehaviorSettings {
     pub session_reset: SessionResetMode,
     pub context_compression: bool,
     pub context_compression_threshold: f64,
+    /// Maximum share of `context_window` that a SINGLE tool result may occupy
+    /// before operant withholds the bulk of it. Expressed as a fraction
+    /// (0.0-1.0) rather than an absolute token count so the bound tracks the
+    /// configured model's window instead of assuming one. When the ceiling is
+    /// exceeded the model is told the result's size, its share of the window
+    /// and its estimated input price, and only a marked prefix is inlined.
+    /// Set to 0.0 to disable the guard.
+    #[serde(default = "default_max_tool_result_share")]
+    pub max_tool_result_share: f64,
     /// Max consecutive tool-only iterations before force-answer kicks in.
     /// When the LLM calls tools N times in a row without producing text,
     /// the agent omits tools from the request to force a textual response.
@@ -337,6 +346,12 @@ fn default_lcm_rollup_interval_minutes() -> u64 {
     0
 }
 
+/// Default for `max_tool_result_share` — 5% of the context window. See
+/// `context_management::DEFAULT_MAX_TOOL_RESULT_SHARE` for the rationale.
+fn default_max_tool_result_share() -> f64 {
+    crate::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE
+}
+
 impl Default for BehaviorSettings {
     fn default() -> Self {
         Self {
@@ -353,6 +368,7 @@ impl Default for BehaviorSettings {
             session_reset: SessionResetMode::Never,
             context_compression: false,
             context_compression_threshold: 0.5,
+            max_tool_result_share: default_max_tool_result_share(),
             max_consecutive_tool_only: 90,
             fallback_models: Vec::new(),
             fallback_on_errors: true,

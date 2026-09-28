@@ -14,6 +14,28 @@ use tracing::{debug, info, warn};
 
 use crate::credential_pool::PooledCredential;
 use crate::error::{Error, Result};
+use crate::oauth::singleflight::CoalescedFailure;
+
+/// The identity a refresh is coalesced under.
+///
+/// `provider` + the credential's stable id, so two different accounts on the
+/// same provider never share a flight (one account's token must never be
+/// handed to another). `PooledCredential::id` is a UUID minted when the entry
+/// is created, so every clone of a pool entry shares it while two genuinely
+/// different keys do not.
+///
+/// Returns `None` for an entry with no id and no name: there is no safe key,
+/// and a wrong key is worse than no coalescing.
+pub fn refresh_account_key(provider: &str, entry: &PooledCredential) -> Option<String> {
+    let identity = if !entry.id.trim().is_empty() {
+        entry.id.trim()
+    } else if !entry.name.trim().is_empty() {
+        entry.name.trim()
+    } else {
+        return None;
+    };
+    Some(format!("{}:{}", provider.trim().to_lowercase(), identity))
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -135,18 +157,69 @@ impl OAuthRefresher {
     }
 
     /// Refresh OAuth tokens for a credential entry.
+    ///
+    /// Concurrent refreshes of the **same account** are coalesced into a
+    /// single provider round trip — see [`refresh_coalesced`]. A rotating
+    /// (single-use) refresh token may only be spent once, so N concurrent
+    /// callers each spending it would kill the account; this is the guard.
     pub async fn refresh(
         &self,
         provider: &str,
         entry: &PooledCredential,
     ) -> Result<OAuthTokenResponse> {
-        let refresh_token = entry.refresh_token.as_ref().ok_or_else(|| {
-            Error::Authentication(format!(
+        self.refresh_coalesced(provider, entry)
+            .await
+            .map_err(CoalescedFailure::into)
+    }
+
+    /// Like [`refresh`](Self::refresh) but reports *who* spent the token.
+    ///
+    /// [`CoalescedFailure::Own`] means this caller performed the refresh;
+    /// [`CoalescedFailure::Shared`] means it observed a failure another caller
+    /// produced and made no network request of its own. Callers that count or
+    /// rate-limit provider errors need that distinction — otherwise one bad
+    /// refresh looks like N independent failures.
+    pub async fn refresh_coalesced(
+        &self,
+        provider: &str,
+        entry: &PooledCredential,
+    ) -> std::result::Result<OAuthTokenResponse, CoalescedFailure> {
+        let refresh_token = entry.refresh_token.as_deref().ok_or_else(|| {
+            CoalescedFailure::Own(Error::Authentication(format!(
                 "No refresh token for OAuth credential '{}'",
                 entry.name
-            ))
+            )))
         })?;
 
+        let Some(account) = refresh_account_key(provider, entry) else {
+            // No stable identity for this entry, so nothing can safely be
+            // coalesced. Refreshing alone is correct; coalescing on the
+            // provider name alone would risk handing one account's token to
+            // another.
+            return self
+                .refresh_inner(provider, refresh_token, entry)
+                .await
+                .map_err(CoalescedFailure::Own);
+        };
+
+        let provider_owned = provider.to_string();
+        crate::oauth::singleflight::global()
+            .coalesce(&account, refresh_token, || async {
+                self.refresh_inner(&provider_owned, refresh_token, entry)
+                    .await
+            })
+            .await
+            .map(|coalesced| coalesced.value)
+    }
+
+    /// The per-provider refresh call. Not coalesced — [`refresh`](Self::refresh)
+    /// is the entry point every caller should use.
+    async fn refresh_inner(
+        &self,
+        provider: &str,
+        refresh_token: &str,
+        entry: &PooledCredential,
+    ) -> Result<OAuthTokenResponse> {
         match provider.to_lowercase().as_str() {
             "anthropic" => self.refresh_anthropic(refresh_token, entry).await,
             "openai-codex" | "codex" => self.refresh_codex(refresh_token).await,

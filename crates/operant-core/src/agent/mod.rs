@@ -6,6 +6,7 @@
 //! improvement after each turn.
 
 pub(crate) mod background_review;
+pub mod chat_provider;
 pub mod error_classifier;
 pub mod insights;
 pub mod iteration_budget;
@@ -14,6 +15,7 @@ pub mod learning_graph;
 pub mod llm_compressor;
 pub mod message_safety;
 pub mod provider_registry;
+pub mod runtime_key;
 pub mod skill_bundle;
 pub mod skill_preprocessing;
 pub(crate) mod turn_context;
@@ -974,7 +976,7 @@ mod model_client;
 pub use model_client::{ChatRequest, ModelClient, StreamChunk};
 
 mod fallback;
-pub use fallback::{ClassifiedError, FallbackModelClient};
+pub use fallback::{ClassifiedError, Failover, FailoverDecision, FallbackModelClient};
 
 mod pooled_client;
 pub use pooled_client::PooledModelClient;

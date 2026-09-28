@@ -150,10 +150,31 @@ pub async fn lookup_models_dev_context(provider: &str, model: &str) -> Option<u6
 /// Look up full capability metadata for a provider+model combo.
 pub async fn get_model_capabilities(provider: &str, model: &str) -> Option<ModelCapabilities> {
     let (models, _) = fetch_models_dev(false).await.ok()?;
-
     let dev_provider = provider_to_models_dev(provider)?;
+    match_capabilities(&models, dev_provider, model)
+}
 
-    for m in &models {
+/// Synchronous capability lookup against the on-disk models.dev cache.
+///
+/// Reads the same cache [`get_model_capabilities`] populates — no network, no
+/// second pricing table. Exists for the synchronous fallback path, where
+/// awaiting a fetch is not an option. `None` when the cache is cold or the
+/// model is absent; callers treat that as "price unknown" and keep their
+/// configured ordering rather than guessing one.
+pub fn cached_capabilities(provider: &str, model: &str) -> Option<ModelCapabilities> {
+    let dev_provider = provider_to_models_dev(provider)?;
+    let content = fs::read_to_string(cache_path()).ok()?;
+    let cache: ModelsDevCache = serde_json::from_str(&content).ok()?;
+    match_capabilities(&cache.models, dev_provider, model)
+}
+
+/// Find one model's capabilities in an already-fetched catalog slice.
+fn match_capabilities(
+    models: &[serde_json::Value],
+    dev_provider: &str,
+    model: &str,
+) -> Option<ModelCapabilities> {
+    for m in models {
         let m_provider = m.get("provider_id").and_then(|v| v.as_str())?;
         let m_id = m.get("id").and_then(|v| v.as_str())?;
 

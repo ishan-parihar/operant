@@ -589,7 +589,7 @@ pub fn check_tool_approval(
     let command = extract_command_from_args(tool_name, args);
 
     // Run the check.
-    let guard = ApprovalGuard::new(approval_mode);
+    let guard = ApprovalGuard::new(approval_mode.clone());
     let context = ApprovalContext {
         tool_name: tool_name.to_string(),
         args: args.clone(),
@@ -597,8 +597,53 @@ pub fn check_tool_approval(
         channel: None,
         session_id: None,
     };
+    let existing = guard.check(&command, &context);
 
-    match guard.check(&command, &context) {
+    // Layer 3: blast-radius classification + justification gate.
+    //
+    // Layers 1-2 are pattern matches that do not distinguish `rm` from
+    // `rm -rf /`. This layer rates the command STRUCTURALLY (verb x flags x
+    // target boundedness) and refuses the high-blast-radius classes unless the
+    // model supplied a substantive written reason — a reason that padding or
+    // a restatement of the command cannot fake. Denied paths (filesystem
+    // root, home root, system directories, `.git`) are refused outright.
+    //
+    // It lives HERE, inside the one function every tool call already passes
+    // through, so both enforcement sites — `agent::stream` and the kernel's
+    // `BridgeExecutor` — inherit it. A second, parallel gate the model could
+    // route around would be worse than none, because it would create the
+    // impression of a check.
+    //
+    // It runs only for what layers 1-2 let through, so their verdict, reason
+    // and `blocked_by` are unchanged: this layer ADDS refusals, it never
+    // relabels theirs. It obeys the same `approval_mode`, so this is one
+    // policy with three layers, not a fourth policy.
+    //
+    // Defense in depth, NOT a sandbox: it reads command text. See
+    // `crate::blast_radius` for what it does not model, and
+    // `operant_runtime`'s landlock/bubblewrap/firejail/docker backends for
+    // real isolation.
+    if matches!(existing, ApprovalVerdict::Allowed) && approval_mode != ApprovalMode::Off {
+        let justification = justification_from_args(args);
+        let home = std::env::var("HOME").ok();
+        if let Some(refusal) = crate::blast_radius::screen(&command, justification, home.as_deref())
+        {
+            warn!(
+                tool = %tool_name,
+                layer = refusal.blocked_by(),
+                risk = refusal.risk_level(),
+                "Tool call refused by the blast-radius gate"
+            );
+            return CheckToolApprovalResult {
+                verdict: "blocked".into(),
+                risk_level: Some(refusal.risk_level().to_string()),
+                reason: Some(refusal.message()),
+                blocked_by: Some(refusal.blocked_by().to_string()),
+            };
+        }
+    }
+
+    match existing {
         ApprovalVerdict::Allowed => CheckToolApprovalResult {
             verdict: "allowed".into(),
             risk_level: None,
@@ -676,6 +721,29 @@ fn extract_command_from_args(tool_name: &str, args: &Value) -> String {
         }
         _ => tool_name.to_string(),
     }
+}
+
+/// Argument keys accepted as the model's written justification.
+///
+/// Deliberately generous in what it accepts (operant's usual posture toward
+/// model output) but strict about the *content* — see
+/// [`crate::justification`], which is what makes the gate resistant to a
+/// blind retry.
+const JUSTIFICATION_KEYS: &[&str] = &[
+    "justification",
+    "justificationText",
+    "justification_text",
+    "reason",
+    "why",
+    "rationale",
+];
+
+/// Pull the model's written justification out of tool arguments, if present.
+fn justification_from_args(args: &Value) -> Option<&str> {
+    let map = args.as_object()?;
+    JUSTIFICATION_KEYS
+        .iter()
+        .find_map(|key| map.get(*key).and_then(|v| v.as_str()))
 }
 
 // ============================================================================
@@ -1098,5 +1166,121 @@ mod tests {
             reason: "pattern".into(),
         };
         assert_ne!(blocked, requires);
+    }
+
+    // ---- Layer 3: blast-radius + justification gate (integration) ----
+    //
+    // `git reset --hard` is chosen deliberately: layers 1-2 do not match it,
+    // so a block here can only have come from the new gate.
+
+    #[test]
+    fn check_tool_approval_blocks_unbounded_command_without_justification() {
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({"command": "git reset --hard"}),
+            None,
+        );
+        assert_eq!(result.verdict, "blocked");
+        assert_eq!(result.blocked_by.as_deref(), Some("blast_radius"));
+        let reason = result.reason.unwrap_or_default();
+        // The message must tell the model how to proceed legitimately.
+        assert!(reason.contains("justification"), "{reason}");
+    }
+
+    #[test]
+    fn check_tool_approval_blocks_padded_justification() {
+        // The anti-slop property, at the wiring level: padding a
+        // justification must not unblock the command.
+        let padded = "a".repeat(400);
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({
+                "command": "git reset --hard",
+                "justification": padded,
+            }),
+            None,
+        );
+        assert_eq!(result.verdict, "blocked");
+        assert_eq!(result.blocked_by.as_deref(), Some("blast_radius"));
+    }
+
+    #[test]
+    fn check_tool_approval_allows_substantive_justification() {
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({
+                "command": "git reset --hard",
+                "justification":
+                    "Discarding three uncommitted experiments on the migration branch; \
+                     the work is stashed in the ticket and the branch is being abandoned \
+                     anyway, so the tree will be rebuilt from origin/main.",
+            }),
+            None,
+        );
+        assert_eq!(result.verdict, "allowed", "{:?}", result.reason);
+    }
+
+    #[test]
+    fn check_tool_approval_denies_system_paths_regardless_of_justification() {
+        // `find /usr ... -delete` matches no layer-1 or layer-2 pattern, so it
+        // reaches layer 3 and is refused on the path, not on the justification.
+        let good = "disposing of the stale shared libraries between image rebuilds, nothing \
+             authored by a human lives under this tree";
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({
+                "command": "find /usr -name '*.so' -delete",
+                "justification": good,
+            }),
+            None,
+        );
+        assert_eq!(result.verdict, "blocked", "{:?}", result.reason);
+        assert_eq!(result.blocked_by.as_deref(), Some("path_deny"));
+    }
+
+    #[test]
+    fn check_tool_approval_denies_vcs_internals() {
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({"command": "find ./.git -name '*.pack' -delete"}),
+            None,
+        );
+        assert_eq!(result.verdict, "blocked", "{:?}", result.reason);
+        assert_eq!(result.blocked_by.as_deref(), Some("path_deny"));
+    }
+
+    #[test]
+    fn blast_radius_gate_does_not_relabel_an_existing_layer2_verdict() {
+        // Layer 3 only ADDS refusals. A command layer 2 already flagged keeps
+        // its own verdict and `blocked_by` so the interactive prompt path is
+        // untouched.
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({"command": "rm -rf /var/log/app"}),
+            None,
+        );
+        assert_eq!(result.verdict, "requires_approval");
+        assert_eq!(result.blocked_by.as_deref(), Some("pattern"));
+    }
+
+    #[test]
+    fn check_tool_approval_leaves_scoped_commands_alone() {
+        for cmd in ["rm -rf ./target", "find ./build -name '*.o' -delete"] {
+            let result =
+                check_tool_approval("terminal", &serde_json::json!({ "command": cmd }), None);
+            assert_ne!(result.verdict, "blocked", "{cmd}: {:?}", result.reason);
+        }
+    }
+
+    #[test]
+    fn blast_radius_gate_follows_approval_mode_off() {
+        // The gate is layer 3 of the existing policy, not a fourth one: turning
+        // the approval mode off turns it off with everything else.
+        let result = check_tool_approval(
+            "terminal",
+            &serde_json::json!({"command": "git reset --hard"}),
+            Some("off"),
+        );
+        assert_eq!(result.verdict, "allowed");
     }
 }
