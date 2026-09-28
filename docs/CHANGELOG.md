@@ -241,6 +241,46 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ## [0.2.0] - 2026-09-27
 
+### Security
+
+- **`code_execution` and `patch` ignored the approval blocklist.** The command
+  extractor read `args["command"]` for tools whose arguments are `code`/`path`,
+  so the payload fell through to the literal tool name and matched nothing.
+  `code_execution` runs unsandboxed, which made the approval blocklist its last
+  real mitigation — and it was inert. Both tools now have their own extraction
+  arm.
+- **Credential-pool keys were written to `config.toml` in plaintext.** The
+  primary `api_key` was encrypted; the pool's `api_keys` vector was not.
+- **The full parent environment — including every API key — reached every
+  spawned process.** The terminal backend passed `std::env::vars()` through, and
+  an empty `env_vars` inherited everything implicitly. A secret-pattern scrub now
+  runs at all six spawn sites. Deliberately a denylist, not an allowlist: an
+  allowlist would strip `PATH`/`HOME` and break arbitrary user commands.
+
+### Fixed
+
+- **Piping any long-output command aborted with a core dump** (SIGPIPE
+  disposition). `operant doctor | head` now exits 0.
+- **`operant chat` looped forever on a non-TTY stdin**; EOF is now terminal.
+- **`operant doctor` always exited 0**, printing failures and reporting success,
+  so nothing could gate on it. It can now fail — and advisories ("install git",
+  "not logged in") are explicitly *not* counted as failures, so a healthy install
+  with unconfigured optional integrations still exits 0.
+- **The build could not succeed on a machine that had never built operant.**
+  `dev-env.sh` pointed at another developer's home directory and died sourcing a
+  `~/.cargo/env` that does not exist outside rustup installs; the dependency
+  provisioner was Debian-only and failed outright without `dpkg-deb`.
+  Both now detect what the host actually has.
+- **`/keys` advertised four chords that did something else**, and three prompt
+  bindings that were documented but never provided.
+
+### Changed
+
+- Best-effort cross-target builds no longer veto a release, and the release no
+  longer depends on a third-party submodule being reachable.
+- A 7.6 MB platform-specific `libclang.deb` is no longer committed to the
+  repository; the provisioner fetches it on demand.
+
 ### Added
 
 - **Lossless Context Management (LCM) engine** (`agent.context_engine = "lcm"`) — hermes-lcm parity: an append-only SQLite DAG keeps every message verbatim (FTS5-indexed) while the fresh-tail (D0) window stays in context. Opt-in; the built-in `compact` engine remains the default.
