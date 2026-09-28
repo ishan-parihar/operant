@@ -1776,7 +1776,7 @@ unmeasurable until R40-21 is fixed.** Re-run
 --keep-going` in a worktree at HEAD **with `git submodule update --init
 --recursive`** once the tree compiles, and treat that as the baseline.
 
-### R40-22 — three remotes point at the same URL, so tracking refs go stale silently (process note, iter-404)
+### R40-22 — three remotes point at the same URL, so tracking refs go stale silently (process note, iter-404/405)
 `git remote -v` shows `origin`, `github` and `gitlab` — and all three resolve
 to the same `https://github.com/ishan-parihar/operant.git`. The two GitHub ones
 track `main` under different local ref names, and neither ref is refreshed by a
