@@ -1020,4 +1020,49 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------------
+    // The UNPROVEN gate
+    // -----------------------------------------------------------------------
+
+    /// Hybrid retrieval scoring is UNPROVEN, and on the paraphrase arm it
+    /// measurably HURTS (see the module's conclusion and
+    /// `measure_hybrid_scoring_on_synthetic_fixture`). The module doc says it
+    /// must not be enabled in the prefetch path. A comment is not a gate,
+    /// though — a future contributor wiring it up would hit a wall of prose at
+    /// the definition site and keep scrolling.
+    ///
+    /// This is the runnable form of "grep for a caller": it fails the moment any
+    /// file outside `retrieval.rs` reaches for `score_candidates` or `rerank`.
+    /// Enabling it deliberately means deleting this test, which shows up in the
+    /// diff — and a diff that deletes the warning is a diff a reviewer can see.
+    #[test]
+    fn hybrid_retrieval_should_have_no_production_caller() {
+        let sources: [(&str, &str); 6] = [
+            ("memory_provider.rs", include_str!("memory_provider.rs")),
+            ("agent_memory.rs", include_str!("agent_memory.rs")),
+            ("agent/mod.rs", include_str!("agent/mod.rs")),
+            ("agent/run.rs", include_str!("agent/run.rs")),
+            ("agent/stream.rs", include_str!("agent/stream.rs")),
+            ("agent/builders.rs", include_str!("agent/builders.rs")),
+        ];
+        for (name, src) in sources {
+            assert!(
+                !src.contains("retrieval::score_candidates"),
+                "{name} now calls retrieval::score_candidates. Hybrid scoring is \
+                 UNPROVEN and hurts on the paraphrase arm. Re-run \
+                 measure_hybrid_scoring_on_synthetic_fixture against a REAL query \
+                 log with a real embedding model, re-tune DEFAULT_HYBRID_WEIGHTS \
+                 (they were chosen blind), and delete this test in the same commit \
+                 so the change is visible in review."
+            );
+            assert!(
+                !src.contains("retrieval::rerank"),
+                "{name} now calls retrieval::rerank. The LLM listwise reranker is \
+                 UNMEASURED — it cannot be measured without a live model budget. \
+                 Establish a recall@k improvement first, and delete this test in \
+                 the same commit so the change is visible in review."
+            );
+        }
+    }
 }
