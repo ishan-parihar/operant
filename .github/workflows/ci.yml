@@ -40,12 +40,15 @@ jobs:
       - name: Install jq (gate dependency)
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Clippy gate
-        # RUSTFLAGS is cleared for this step: the workflow sets -Dwarnings
-        # globally, and cargo applies it on top of the gate's own
-        # -D clippy::unwrap_used -D clippy::expect_used. That would promote
-        # every non-deny warning the allowlist absorbs to a hard error, so
-        # CI would fail where the local gate passes — the exact divergence
-        # this change removes.
+        # RUSTFLAGS is cleared here, and that is load-bearing. The workflow
+        # sets -Dwarnings globally; cargo layers it on top of the gate's own
+        # -D clippy::unwrap_used -D clippy::expect_used. Measured both ways:
+        # with RUSTFLAGS="" the gate reports the true seen=8 / new=0 /
+        # stale=0; with -Dwarnings inherited, cargo clippy ABORTS on the
+        # first denied warning, so the gate collects seen=1 against an
+        # 8-entry allowlist (stale=7) and STILL exits 0. It does not go red
+        # — it goes blind, reporting green after linting a fraction of the
+        # tree, with 7 valid allowlist entries spuriously flagged stale.
         env:
           RUSTFLAGS: ""
         run: bash scripts/clippy-warning-gate.sh
