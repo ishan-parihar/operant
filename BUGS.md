@@ -1634,7 +1634,7 @@ number here is a floor, not the total:
   `NoopProvider` in the repo is a test-local struct in
   `operant-harness/tests/host_boot.rs:14`.
 
-### R40-20 — I reverted a peer-dirty file twice and restored it; disclosed (iter-394)
+### R40-20 — I reverted a peer-dirty file twice; the hunks were `cargo fmt` output, not peer work (iter-394, corrected iter-397)
 While staging the `operant-harness` doc fixes (iter-393) I ran
 `git checkout -- crates/operant-harness/src/composition.rs
 crates/operant-harness/src/discovery.rs` to strip the peer's in-flight hunks so
@@ -1681,12 +1681,24 @@ from four places, but **never declared the module**:
   `E0432: unresolved import super::cache_monitor` and
   `E0433: cannot find cache_monitor in super` — 10 total, `operant-core (lib)`
   fails.
-**Not fixed here on purpose.** The file is the concurrent agent's in-flight
-work and the missing declaration belongs with it. Adding `mod cache_monitor`
-myself is a one-line guess about intent (public vs `pub(crate)`, and whether it
-re-exports from `clients`) that would land as a second unverified edit to
-someone else's module. The fix is theirs: declare it in the parent module
-alongside the rest of their change.
+**The fix is one line, and its location is now pinned** so it needs no
+re-deriving: add `pub mod cache_monitor;` to
+`crates/operant-core/src/agent/clients/mod.rs`, after line 4. `clients` is a
+DIRECTORY, not a `clients.rs`, so the declaration does NOT go in
+`agent/mod.rs` — that file only has `pub mod clients;` at line 989. The
+sibling declarations at `clients/mod.rs:2-4` are `pub mod anthropic;`,
+`pub mod openai;`, `pub mod prompt_caching;`, which also settles the visibility:
+`pub`, matching its siblings. (The E0433 "cannot find in `super`" variant means
+some call sites sit one level up in `agent/`, so the `clients` module must stay
+`pub` for them to reach it.)
+**Not fixed here on purpose.** It is the concurrent agent's in-flight work;
+adding a declaration to their new module is a second unverified edit to
+someone else's work, and the visibility question above is inferred from
+siblings rather than stated by them. It belongs in their commit.
+**Do not start a release build until this is fixed.** The installed binary
+(`baae1e9d`) predates the breakage, so `operant --version` and `operant doctor`
+still work and `target/release/operant` is a valid build — but any rebuild from
+the current tree fails at `operant-core`, costing ~9 minutes to learn nothing.
 - **Repro**: `git worktree add --detach /tmp/owc origin/main && cd /tmp/owc &&
   git submodule update --init --recursive && cargo check -p operant-core --lib`
   → 10 errors. The submodule init matters: without it the failure is masked by
