@@ -1114,6 +1114,15 @@ All four workflows fire only on `push: tags: ['v*']` (+ dispatch) — no
   it would promote every allowlist-absorbed warning to a hard error, so the
   step sets `RUSTFLAGS: ""` (step-level env overrides workflow-level in GitHub
   Actions); and the gate needs `jq`, which is not in the toolchain image.
+- **The RUSTFLAGS interaction is worse than a red CI — measured (iter-370)**:
+  with the workflow's `RUSTFLAGS: -Dwarnings` inherited, `cargo clippy` aborts
+  on the FIRST denied warning, so the gate collects almost nothing:
+  `seen=1` against an 8-entry allowlist, `stale=7`, exit 0. It does not fail —
+  it passes VACUOUSLY, having linted a fraction of the tree. With
+  `RUSTFLAGS=""` it reports the true `seen=8 / new=0 / stale=0`. So the
+  step-level clear is what makes the CI verdict mean anything at all; without
+  it, a green CI would mean "clippy stopped early", which is the same class
+  of false- green as iter-337's gate script dying before its comparison.
 - **Still open**: a `branches: [main]` trigger cannot land until the fmt debt
   is cleared, because `ci.yml` runs `cargo fmt --all --check` under
   `-Dwarnings` and the committed tree carries fmt debt (17 files at last
