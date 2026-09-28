@@ -91,8 +91,10 @@ impl ArchitectureRow {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Architecture {
     /// Top-level array of rows. The TOML shape is `[[row]]` (a table-array
-    /// at the top level). The struct is also accepted via the more compact
-    /// `[provider.<id>]` form by [`Architecture::from_provider_tables`].
+    /// at the top level). The compact `[provider.<id>]` form is NOT
+    /// accepted — there is no `from_provider_tables` constructor on this
+    /// struct, so these comments previously pointed at a method that does
+    /// not exist (BUGS.md R40-17).
     #[serde(default)]
     pub rows: Vec<ArchitectureRow>,
 }
@@ -100,8 +102,8 @@ pub struct Architecture {
 impl Architecture {
     /// Parse a `architecture.toml`-style document whose top level is a
     /// sequence of inline tables, each with `id/source/disabled/config/kind`.
-    /// The `[provider.<id>]` shape is NOT supported here — call
-    /// [`Self::from_provider_tables`] for that.
+    /// The `[provider.<id>]` shape is NOT supported here, and no
+    /// alternative constructor exists yet.
     pub fn from_toml(s: &str) -> Result<Self, HarnessError> {
         toml::from_str::<Architecture>(s)
             .map_err(|e| HarnessError::CompositionError(format!("toml parse: {e}")))

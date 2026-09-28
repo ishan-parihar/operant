@@ -8,8 +8,8 @@
 //! 1. Resolves the base path (`config.harness.architecture_toml`).
 //! 2. Discovers patches in `~/.operant/patches/*.toml` in sorted order
 //!    (so operators get a deterministic boot).
-//! 3. Calls [`Composition::resolve`] and returns the final
-//!    [`Architecture`].
+//! 3. Calls [`Composition::resolve`](crate::composition::Composition::resolve)
+ //!    and returns the final [`Architecture`].
 //!
 //! When the base file or any patch is missing, the result is
 //! `Architecture::default()` (empty rows) — boot is permitted with no
