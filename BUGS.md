@@ -1127,55 +1127,73 @@ implementation, `operant-config/src/secrets.rs:294-301`, which writes with
 `OpenOptionsExt::mode(0o600)` at creation.
 
 ### R40-16 — subprocesses inherit the full parent environment, including API keys (OPEN, MEDIUM)
-`crates/operant-core/src/tools/terminal_backend.rs:95-100` builds the child env
-from `std::env::vars().collect()` and passes it wholesale, so every command the
-agent runs inherits `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, the omp key, etc.
-`code_execution.rs` sets no env at all (same effective result). Additionally
-`LocalBackend` uses `child.kill()` with no `kill_on_drop` / process-group
-teardown, so a timeout can leave grandchildren running, and the Docker and SSH
-backends accept a timeout they never enforce.
+`crates/operant-core/src/tools/terminal_backend.rs:95-100` reads
+`std::env::vars().collect()` and passes the whole map to the child whenever
+`env_vars` is non-empty. When `env_vars` is EMPTY the child still inherits the
+parent environment — `std::process::Command` inherits by default and there is
+no `env_clear()` on either path. So both branches leak: the non-empty case
+explicitly, the empty case implicitly. No allowlist/denylist scrub of
+`*_API_KEY` exists anywhere in the file.
+- **Unverified sub-claims** (reported by the audit, not read here — do not
+  treat as fact): that `LocalBackend` uses bare `child.kill()` with no
+  `kill_on_drop`/process-group teardown, and that the Docker/SSH backends
+  accept a timeout they never enforce. Note that R12-1/its neighbours already
+  document `kill_on_drop` for `code_execution.rs` as a KNOWN accepted gap, so
+  these need direct reading before they are actioned.
 
-### R40-12 — AGENTS.md's "7 platforms only" is false: 22 channel features are in the DEFAULT build (OPEN, MEDIUM)
+### R40-12 — AGENTS.md's "7 platforms only" is false: 23 channel features are in the DEFAULT build (OPEN, MEDIUM, CORRECTED iter-376)
 `AGENTS.md` states "Supported: 7 platforms", "Do NOT re-add purged platforms",
 and records that iter-50 purged 20 phantom platforms (matrix, mattermost,
 signal, …). Measured against the committed tree, that is no longer true:
 - `crates/operant-cli/Cargo.toml` `default = ["agent-runtime", "gateway"]`,
-  and `agent-runtime` enables **22** `channel-*` features — including
+  and `agent-runtime` enables **23** `channel-*` features — including
   `channel-signal`, `channel-mattermost`, `channel-irc`, `channel-imessage`,
   `channel-dingtalk`, `channel-qq`, `channel-bluesky`, `channel-twitter`,
   `channel-reddit`, `channel-notion`, `channel-linq`, `channel-wati`,
   `channel-nextcloud`, `channel-mochat`, `channel-wecom`, `channel-clawdtalk`.
-  All 15 of those are declared in `operant-channels/Cargo.toml` and have real
-  source files (65 files under `crates/operant-channels/src`, e.g.
-  `bluesky.rs`, `irc.rs`, `matrix.rs`, `mattermost.rs`, `nextcloud_talk.rs`).
-- So the purge either was reverted or never persisted to `origin/main`. The
-  documented invariant and the shipped manifest disagree, and the manifest is
-  the one that builds. **Treat the doc as wrong, not the code** — deciding
-  which is intended is an operator call, not an audit inference.
+  (24 `channel-*` features are declared in `operant-cli/Cargo.toml`; the 24th,
+  `channel-webhook`, is not in the `agent-runtime` list.)
+- These are NOT phantoms resurrected from nowhere: every one is declared in
+  `operant-channels/Cargo.toml` and has a real source file (65 files under
+  `crates/operant-channels/src` — `bluesky.rs`, `irc.rs`, `matrix.rs`,
+  `mattermost.rs`, `nextcloud_talk.rs`, …). So the accurate finding is the
+  inverse of "a purge was undone": **23 real, implemented platform adapters
+  are unreachable from the shipped binary** because the CLI never references
+  `operant-channels` (R40-13). The gap is missing WIRING, not dead code.
+- **Operator decision, deliberately not executed here**: removing these
+  feature flags would touch a stated Design Preference ("Do NOT change"), and
+  the adapters are working code. Correct framing is "wire them or explicitly
+  retire them", never "purge the phantoms".
+- Corrected from the first statement of this item (iter-374): it reported "22"
+  and separately "15" for the same set. The count is 23.
 
-### R40-13 — ~160K lines of crates compile into the binary but are never referenced (OPEN, HIGH)
-Six optional deps are enabled by the DEFAULT features yet have **zero**
-references from `crates/operant-cli/src`: `operant-runtime`,
-`operant-channels`, `operant-gateway`, `operant-memory`, `operant-tools`,
-`operant-hardware` (each 0 matching files at HEAD). They are linked, compiled
-on every build, and can never execute.
-- This one root cause explains three older ledger items at once: **R5-3**
-  (operant-runtime `RuntimeAgent` dead), **R13-3** (`run_gateway` has no
-  caller because the CLI never reaches `operant-gateway`), and **R15-1**
-  (operant-channels unwired). The CLI's live path is
-  `operant-cli → operant-core → (operant-config, operant-harness,
-  operant-memory-as-dep-only)`.
-- Cost of leaving it: every build pays the compile time, and any audit that
-  greps for a symbol in those crates gets a false "wired" signal.
-- Two legitimate resolutions, and they are NOT equivalent: (a) wire the
-  subsystems into the CLI so the features mean something, or (b) drop them
-  from `default` and delete the crates if they are genuinely abandoned. Only
-  the operator knows which; do not guess. Note the interaction with R40-12:
-  if (b), the 22 channel features go with them.
-
-### R40-11 — `origin/main` does not compile: iter-357 shipped a reader without its field (OPEN, HIGH)
-`0482fa1b` (peer, `fix(iter-357)`) added
-`max_tool_result_share: settings.max_tool_result_share` at
+### R40-13 — 4 default-feature crates are in the normal dep graph with no reference from operant-cli/src (OPEN, HIGH, CORRECTED iter-376)
+`cargo tree -p operant-cli -e normal --depth 1` lists `operant-channels`,
+`operant-runtime`, `operant-gateway` and `operant-tools` as NORMAL (non-dev,
+non-build) dependencies of the CLI. Each has **zero** references from
+`crates/operant-cli/src` at HEAD. They are compiled into the default binary and
+never called.
+- **Corrections to the first statement of this item (iter-374)**, which said
+  six crates that are "linked" — both parts were wrong:
+  - `operant-memory` is NOT among them: the CLI reaches memory through a
+    re-export, `operant_core::memory::` — `cmd_memory.rs:12`
+    (`use operant_core::memory::{MemoryBlock, MemoryManager}`) and
+    `cmd_tui_debug.rs:365`. A bare crate-name grep misses this path.
+  - `operant-hardware` is optional and NOT in the default feature set, so it
+    is not compiled by default at all.
+  - "Linked" was unproven: the installed and `target/release` binary is
+    stripped and stale (md5 `39e6c798`, predating the peer's iter-356/357),
+    so `nm -C` returns zero symbols for EVERY crate and proves nothing. The
+    `cargo tree` normal-graph membership is the supported claim.
+- This single root cause explains three older ledger items at once: **R5-3**
+  (operant-runtime `RuntimeAgent` unreachable), **R13-3** (`run_gateway` has
+  no caller because the CLI never reaches `operant-gateway`), **R15-1**
+  (operant-channels unwired).
+- Two resolutions, not equivalent, and not an audit's call: (a) wire the
+  subsystems so the default features mean something, or (b) drop them from
+  `default` and delete the crates if genuinely retired. Per R40-12 the
+  adapters are real implementations, so (b) discards working code. Operator
+  decision, its own iteration.
 `crates/operant-core/src/agent/mod.rs:170`, sourced from `BehaviorSettings`,
 but **the field was never declared on that struct** —
 `crates/operant-core/src/config.rs:193` (`BehaviorSettings`) has no
