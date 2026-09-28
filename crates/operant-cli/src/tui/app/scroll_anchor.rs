@@ -12,13 +12,14 @@
 //     max_scroll - scroll_offset`, so a taller transcript slides the whole
 //     viewport down by the growth even though the offset never changed.
 //
-// The state lives in a thread-local rather than on `App` because `App::new`
-// (tui/app/init.rs) is owned by another lane; the sibling per-frame transcript
-// caches in tui/render/cache.rs are kept the same way. There is one `App` per
-// thread, so one scroll memory per thread is the same lifetime.
+// The state lives on `App` as `scroll_memory`. It used to be a `thread_local!`
+// because `App::new` (tui/app/init.rs) was locked by a parallel lane at the
+// time; that is the wrong shape for what is one-App-per-thread data, and it
+// meant two `App`s on one thread shared one reading position. The sibling
+// per-frame transcript caches in tui/render/cache.rs are genuinely frame-local
+// and stay thread-local.
 
 use super::*;
-use std::cell::RefCell;
 
 /// The row the view is pinned to, plus the offset the last reconcile wrote.
 ///
@@ -31,8 +32,8 @@ struct ScrollAnchor {
     applied_offset: usize,
 }
 
-#[derive(Clone, Copy)]
-struct ScrollMemory {
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ScrollMemory {
     /// Ctrl+G target — the `scroll_offset` to jump back to, when one is armed.
     bookmark: Option<usize>,
     /// Pinned row, when the reader is parked above the tail.
@@ -44,18 +45,12 @@ struct ScrollMemory {
     max_scroll: usize,
 }
 
-thread_local! {
-    static SCROLL: RefCell<ScrollMemory> = const {
-        RefCell::new(ScrollMemory { bookmark: None, anchor: None, max_scroll: 0 })
-    };
-}
-
 impl App {
     /// Ctrl+G — arm a bookmark at the current position, or jump back to the
     /// armed one and disarm it.
     pub(crate) fn toggle_scroll_bookmark(&mut self) {
-        let armed = SCROLL.with(|mem| mem.borrow_mut().bookmark.take());
-        let max_scroll = SCROLL.with(|mem| mem.borrow().max_scroll);
+        let armed = self.scroll_memory.bookmark.take();
+        let max_scroll = self.scroll_memory.max_scroll;
         match armed {
             Some(offset) => {
                 // The transcript can shrink under the bookmark (`/clear`,
@@ -76,7 +71,7 @@ impl App {
             }
             None => {
                 let at = self.scroll_offset;
-                SCROLL.with(|mem| mem.borrow_mut().bookmark = Some(at));
+                self.scroll_memory.bookmark = Some(at);
                 self.status_message = Some(format!(
                     "Bookmark on at {at} line(s) up — Ctrl+G returns here."
                 ));
@@ -102,11 +97,9 @@ impl App {
             .saturating_add(prev_offset)
             .saturating_sub(self.scroll_offset);
         let applied_offset = self.scroll_offset;
-        SCROLL.with(|mem| {
-            mem.borrow_mut().anchor = Some(ScrollAnchor {
-                top_row,
-                applied_offset,
-            });
+        self.scroll_memory.anchor = Some(ScrollAnchor {
+            top_row,
+            applied_offset,
         });
     }
 
@@ -132,42 +125,40 @@ impl App {
         } else {
             painted.saturating_add(scrolled)
         };
-        SCROLL.with(|cell| {
-            let mut mem = cell.borrow_mut();
-            mem.max_scroll = max_scroll;
+        let mem = &mut self.scroll_memory;
+        mem.max_scroll = max_scroll;
 
-            let Some(anchor) = mem.anchor else { return };
+        let Some(anchor) = mem.anchor else { return };
 
-            if self.auto_scroll {
-                // Auto-follow owns the view again — nothing to hold still.
-                mem.anchor = None;
-                return;
-            }
-            if scrolled != anchor.applied_offset {
-                // The view moved behind our back: a PageUp, a wheel tick,
-                // `/rewind`, `/clear`. A scroll the reader made is a new reading
-                // position, so the old pin is void. Comparing against the offset
-                // we last wrote catches every such path in one place instead of
-                // instrumenting each call site — the mouse wheel included.
-                mem.anchor = None;
-                return;
-            }
+        if self.auto_scroll {
+            // Auto-follow owns the view again — nothing to hold still.
+            mem.anchor = None;
+            return;
+        }
+        if scrolled != anchor.applied_offset {
+            // The view moved behind our back: a PageUp, a wheel tick,
+            // `/rewind`, `/clear`. A scroll the reader made is a new reading
+            // position, so the old pin is void. Comparing against the offset
+            // we last wrote catches every such path in one place instead of
+            // instrumenting each call site — the mouse wheel included.
+            mem.anchor = None;
+            return;
+        }
 
-            // Content above grew by however far the painted row drifted past
-            // the pin. `saturating_sub` covers the shrink case for free: a
-            // transcript that lost rows above the reader needs no correction,
-            // because the pinned line is already painted where the reader was
-            // looking.
-            let growth = painted.saturating_sub(anchor.top_row);
-            if growth == 0 {
-                return;
-            }
-            let corrected = scrolled.saturating_add(growth);
-            self.scroll_offset = corrected;
-            mem.anchor = Some(ScrollAnchor {
-                top_row: anchor.top_row,
-                applied_offset: corrected,
-            });
+        // Content above grew by however far the painted row drifted past
+        // the pin. `saturating_sub` covers the shrink case for free: a
+        // transcript that lost rows above the reader needs no correction,
+        // because the pinned line is already painted where the reader was
+        // looking.
+        let growth = painted.saturating_sub(anchor.top_row);
+        if growth == 0 {
+            return;
+        }
+        let corrected = scrolled.saturating_add(growth);
+        self.scroll_offset = corrected;
+        mem.anchor = Some(ScrollAnchor {
+            top_row: anchor.top_row,
+            applied_offset: corrected,
         });
     }
 }

@@ -42,9 +42,7 @@ pub mod session_browser;
 pub mod settings_screen;
 pub mod skills_view;
 pub mod slash_usage;
-pub mod state;
 pub mod stats_dialog;
-pub mod terminal;
 pub mod transcript_turn;
 pub mod virtual_list;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
@@ -56,7 +54,6 @@ pub mod memory_file_selector;
 pub mod mermaid;
 pub mod theme_colors;
 pub mod theme_screen;
-pub mod voice_capture;
 pub mod voice_mode_notice;
 
 pub use adapter_types::LaunchMode;

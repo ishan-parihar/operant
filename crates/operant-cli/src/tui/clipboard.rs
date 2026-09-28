@@ -1,11 +1,12 @@
 //! The single owner of every clipboard **write** in the TUI.
 //!
 //! Before this module the write path existed three times over
-//! (`app::helpers::try_copy_to_clipboard`, `message_copy::copy_to_clipboard`
-//! and `image_paste::write_clipboard_text`), each with its own hardcoded
+//! (`app::helpers::try_copy_to_clipboard`, the standalone `message_copy`
+//! module, and `image_paste::write_clipboard_text`), each with its own hardcoded
 //! wl-copy/xclip/xsel list and its own idea of which OS it was on. All three
 //! are now thin delegates here, so a copy either goes through the chain below
-//! or it does not happen at all.
+//! or it does not happen at all. The standalone `message_copy` module was
+//! deleted outright once its callers were moved here.
 //!
 //! The chain, in preference order:
 //!

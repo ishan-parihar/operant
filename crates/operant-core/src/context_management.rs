@@ -155,6 +155,294 @@ pub fn safe_compaction_cutoff(messages: &[Message], budget_tokens: usize) -> usi
 }
 
 // ---------------------------------------------------------------------------
+// Semantic compaction cut
+// ---------------------------------------------------------------------------
+
+/// Characters of each group's text handed to the embedder. A group can be a
+/// whole tool exchange, so this is capped; 512 chars is plenty for the
+/// goal-bearing sentence and it bounds the embedding request.
+const SEMANTIC_GROUP_CHARS: usize = 512;
+
+/// Groups embedded per pass. Bounds one pass to a single batch-sized embedding
+/// call. Groups past the cap fall back to the recency default — they are the
+/// most recent ones, which is what recency already protects.
+const SEMANTIC_MAX_GROUPS: usize = 64;
+
+/// The conversation goal a compaction cut is chosen against.
+///
+/// **What this is: the last `Role::User` turn** — the live task statement.
+/// Every earlier user turn is a superseded request. The two alternatives were
+/// rejected for concrete reasons, not taste:
+///
+/// - *A running summary* is a better target in principle, but producing one
+///   needs an LLM call on the very path that runs because the context window
+///   is nearly exhausted. A compaction pass that can fail to compact is a
+///   regression, so no model call is made here.
+/// - *The recent tool-result set* is the material being cut, so scoring
+///   against it is circular: it would rank tool output by its similarity to
+///   other tool output.
+///
+/// Returns `None` when there is no non-empty user turn, which routes the
+/// caller to the recency behaviour.
+pub fn compaction_goal(messages: &[Message]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.role == crate::client::Role::User && !m.content.trim().is_empty())
+        .map(|m| m.content.trim().to_string())
+}
+
+/// The outcome of one semantic compaction pass.
+///
+/// `kept` is a *selection of groups*, not a prefix of `messages`: that is the
+/// whole point of the semantic stage. The safety net is applied afterwards and
+/// recorded in [`head_cut`] — see [`semantic_compaction_cutoff`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticCut {
+    /// Indices into the ORIGINAL `messages` that survive, ascending. Every
+    /// tool group is either wholly present or wholly absent.
+    pub kept: Vec<usize>,
+    /// [`safe_compaction_cutoff`] run over the retained subsequence with the
+    /// same budget — the certified exclusive end index into `kept`. The
+    /// messages `kept[head_cut..]` are dropped even though the semantic stage
+    /// selected them, which is what makes the net load-bearing rather than
+    /// decorative.
+    pub head_cut: usize,
+    /// False when the pass degraded to recency: no embedder, no goal, or an
+    /// embedding call that failed. `kept` is then exactly
+    /// `0..safe_compaction_cutoff(messages, budget_tokens)`.
+    pub semantic: bool,
+    /// Mean goal cosine over the kept groups, or `0.0` when `semantic` is
+    /// false. A degraded pass reports `0.0` rather than a fabricated number.
+    pub goal_similarity: f32,
+}
+
+impl SemanticCut {
+    /// Materialise the surviving messages, moving out of `messages` so no
+    /// message body is ever cloned by the pass itself.
+    pub fn apply(self, messages: Vec<Message>) -> Vec<Message> {
+        self.kept
+            .into_iter()
+            .take(self.head_cut)
+            .filter_map(|i| messages.get(i).cloned())
+            .collect()
+    }
+}
+
+/// Choose a compaction cut by similarity to the conversation's goal, with
+/// [`safe_compaction_cutoff`] as the final safety net.
+///
+/// ## Why a group *selection*, not a single index
+///
+/// `safe_compaction_cutoff` is a **prefix** cut: it keeps `messages[..k]` and
+/// drops the tail. For a prefix cut, "retained goal relevance" is monotone
+/// non-decreasing in `k` — a longer prefix is a superset — so its argmax under
+/// any similarity score is always the largest feasible `k`, which is exactly
+/// what the budget already computes. A similarity-driven *prefix* cut is
+/// therefore provably identical to the recency cut. Scoring only the groups
+/// inside `messages[..cap]` is that degenerate case, and it is worse than
+/// useless: the head is the oldest content, which is the part a drifted
+/// conversation can least afford to keep.
+///
+/// So the semantic stage selects a **subset of whole groups** across the whole
+/// conversation, and returns indices. A group-subset message list is not a
+/// novel shape here — [`evict_to_budget`] already returns a non-prefix list
+/// (head plus a recency reserve) — and it is where the goal signal has
+/// something to do: a conversation that drifted into weather filler and then
+/// restated its goal should keep the earlier release-related exchange and drop
+/// the drift, not keep the oldest bytes.
+///
+/// ## Why the safety net is applied *after* the semantic choice
+///
+/// A semantically better cut that orphans a `tool_use` from its
+/// `tool_result` is strictly worse than a recency cut that does not — the
+/// provider rejects the malformed request, so the turn is lost entirely rather
+/// than degraded. So the net is not advisory, and the two compose in this
+/// exact order:
+///
+/// 1. `cap = safe_compaction_cutoff(messages, budget_tokens)` — computed, and
+///    returned verbatim on the degraded path. It is the only answer a pass
+///    with no semantic signal may give.
+/// 2. **Semantic stage.** Every group in `messages` is scored by cosine against
+///    the goal embedding and filled greedily, highest score first, under the
+///    same budget. Group 0 is reserved first and can never be dropped,
+///    matching the guarantee [`evict_to_budget`] makes about the system
+///    prompt. Skipped groups do not abort the fill, so a cheap high-scoring
+///    group can still be taken after an expensive one was passed over.
+/// 3. **Safety net, last.** `head_cut = safe_compaction_cutoff(&retained,
+///    budget_tokens)`. The retained subsequence is group-aligned by
+///    construction (whole groups only, in original order), so this lands on a
+///    group boundary and can never split a pair; it also re-asserts the budget
+///    over the retained subsequence itself, catching anything the greedy fill's
+///    integer arithmetic let through. The result is truncated to
+///    `kept[..head_cut]`, so the returned selection is *by construction* a
+///    prefix the net itself certifies.
+///
+/// ## Degradation
+///
+/// `embedder: None`, an empty goal, more than [`SEMANTIC_MAX_GROUPS`] groups,
+/// an embedding error, or a vector that is empty / non-finite / the wrong
+/// width all yield `semantic: false` and the pure recency cut `0..cap`.
+/// Embeddings are the optional part; a compaction path that failed without
+/// them would be a regression, so the degraded path is the *same function*
+/// with the semantic stage skipped, not a second implementation.
+pub async fn semantic_compaction_cutoff(
+    messages: &[Message],
+    budget_tokens: usize,
+    embedder: Option<&dyn crate::context::Embedder>,
+) -> SemanticCut {
+    // Computed once, and the sole answer the degraded path may give.
+    let cap = safe_compaction_cutoff(messages, budget_tokens);
+    let recency = move || SemanticCut {
+        kept: (0..cap).collect(),
+        head_cut: cap,
+        semantic: false,
+        goal_similarity: 0.0,
+    };
+
+    let Some(embedder) = embedder else {
+        return recency();
+    };
+    let Some(goal) = compaction_goal(messages) else {
+        return recency();
+    };
+
+    let starts = tool_group_starts(messages);
+    // Every group boundary in the conversation, as (start, end) pairs. The
+    // whole conversation is scored, not just `messages[..cap]` — see the
+    // function doc for why a prefix-restricted search is degenerate.
+    let mut groups: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < messages.len() {
+        let mut end = i + 1;
+        while end < messages.len() && starts[end] == starts[i] {
+            end += 1;
+        }
+        groups.push((i, end));
+        i = end;
+    }
+    if groups.is_empty() {
+        return recency();
+    }
+    // More groups than we are willing to embed: recency already protects the
+    // tail, so degrading is the honest answer rather than a partial embed.
+    if groups.len() > SEMANTIC_MAX_GROUPS {
+        return recency();
+    }
+
+    let group_text = |(s, e): (usize, usize)| -> String {
+        let mut out = String::new();
+        for m in &messages[s..e] {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(m.content.trim());
+            if out.chars().count() >= SEMANTIC_GROUP_CHARS {
+                break;
+            }
+        }
+        out.chars().take(SEMANTIC_GROUP_CHARS).collect()
+    };
+
+    // One embedding round-trip for the goal plus every group. Any failure here
+    // is a degrade, not an error: compaction must not fail because an optional
+    // embedding endpoint is down.
+    let mut texts = Vec::with_capacity(groups.len() + 1);
+    texts.push(goal.clone());
+    texts.extend(groups.iter().map(|g| group_text(*g)));
+    let vectors = match embedder.embed(&texts).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "semantic compaction cut: embed failed, using recency");
+            return recency();
+        }
+    };
+    let Some(goal_vec) = vectors
+        .first()
+        .filter(|v| !v.is_empty() && v.iter().all(|x| x.is_finite()))
+    else {
+        return recency();
+    };
+
+    // Score each group. A non-finite or wrong-width vector scores 0.0 rather
+    // than poisoning the sort (cosine of a NaN is NaN and compares Equal to
+    // everything, which would make the ordering arbitrary).
+    let mut scored: Vec<((usize, usize), f32)> = Vec::with_capacity(groups.len());
+    for (gi, g) in groups.iter().enumerate() {
+        let score = match vectors.get(gi + 1) {
+            Some(v) if v.len() == goal_vec.len() && v.iter().all(|x| x.is_finite()) => {
+                crate::context::embedder::cosine_similarity(goal_vec, v).max(0.0)
+            }
+            _ => 0.0,
+        };
+        scored.push((*g, score));
+    }
+
+    // Greedy fill, best score first. `sort_by` is stable and the group start is
+    // the secondary key, so equal scores keep conversation order — a tie never
+    // reshuffles the history.
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.0.cmp(&b.0.0))
+    });
+
+    let group_cost = |g: (usize, usize)| -> usize {
+        messages[g.0..g.1].iter().map(estimate_message_tokens).sum()
+    };
+    // Reserve group 0 up front: the system prompt / opening turn is never
+    // silently dropped, exactly as `evict_to_budget` guarantees. Located by its
+    // range, NOT by position — `scored` is already sorted by score, so
+    // `scored[0]` is the best match, not the first group.
+    let Some((first, first_score)) = scored.iter().find(|(g, _)| g.0 == 0) else {
+        return recency();
+    };
+    let mut kept_tokens = group_cost(*first);
+    // Selected GROUPS, as (start, end) ranges. Ranges, not starts: a tool group
+    // spans several messages and every one of them must come along.
+    let mut selected: Vec<(usize, usize)> = vec![*first];
+    let mut sim_sum = *first_score;
+    for (g, score) in scored.iter().filter(|(g, _)| g.0 != 0) {
+        let cost = group_cost(*g);
+        if kept_tokens.saturating_add(cost) > budget_tokens {
+            continue; // skip it, keep trying cheaper lower-scoring groups
+        }
+        kept_tokens += cost;
+        selected.push(*g);
+        sim_sum += *score;
+    }
+
+    // Restore conversation order — a group permutation is not a valid message
+    // sequence, and tool_use must stay immediately before its results.
+    selected.sort_unstable();
+    // Flatten the surviving groups into ascending message indices. `kept` is
+    // index-aligned with `retained` by construction (`retained[i]` is
+    // `messages[kept[i]]`), which is what makes the truncation below sound.
+    let mut kept: Vec<usize> = Vec::with_capacity(kept_tokens);
+    for (s, e) in &selected {
+        kept.extend(*s..*e);
+    }
+    let retained: Vec<Message> = kept
+        .iter()
+        .filter_map(|&i| messages.get(i).cloned())
+        .collect();
+
+    // The safety net, applied last. `retained` is group-aligned by
+    // construction, so this is a group boundary; it also re-asserts the budget
+    // over the retained subsequence itself.
+    let head_cut = safe_compaction_cutoff(&retained, budget_tokens);
+    kept.truncate(head_cut);
+
+    let count = selected.len().max(1) as f32;
+    SemanticCut {
+        kept,
+        head_cut,
+        semantic: true,
+        goal_similarity: sim_sum / count,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tiered eviction
 // ---------------------------------------------------------------------------
 
@@ -888,5 +1176,240 @@ mod tests {
         assert_eq!(guard_tool_result("call_8", &small, 8_000, 0.05, None), None);
         // 0.0 disables the guard entirely.
         assert_eq!(guard_tool_result("call_9", &huge, 8_000, 0.0, None), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Semantic compaction cut
+    // -----------------------------------------------------------------------
+
+    /// A conversation that drifted: two weather turns, then a tool exchange
+    /// carrying a release fact, then the user restating the release goal.
+    /// Index map (5 groups): G0=[0,1) system · G1=[1,3) weather ·
+    /// G2=[3,5) weather · G3=[5,8) tool exchange (the release fact at [6]) ·
+    /// G4=[8,10) the restated goal.
+    fn drifted_conversation() -> Vec<Message> {
+        vec![
+            make_msg(Role::System, "you are a helpful assistant"),
+            make_msg(Role::User, "what is the weather today"),
+            make_msg(Role::Assistant, "sunny and warm"),
+            make_msg(Role::User, "and tomorrow"),
+            make_msg(Role::Assistant, "rain likely"),
+            make_tool_use("call_a"),
+            Message::tool("call_a", "release pipeline: run release.sh --dry-run first"),
+            make_msg(Role::Assistant, "dry-run noted before deploy"),
+            make_msg(Role::User, "GOAL: fix the release pipeline"),
+            make_msg(Role::Assistant, "on it"),
+        ]
+    }
+
+    /// Budget at which the prefix cut ends at G3's start (index 5), so the
+    /// release fact at [6] is on the wrong side of the recency cut.
+    const DRIFT_BUDGET: usize = 60;
+
+    #[tokio::test]
+    async fn semantic_cut_should_still_respect_safe_compaction_cutoff() {
+        let msgs = drifted_conversation();
+        let cap = safe_compaction_cutoff(&msgs, DRIFT_BUDGET);
+        assert_eq!(cap, 5, "the recency cut must end before the tool group");
+
+        let mock = crate::context::MockEmbedder::default();
+        let cut = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&mock)).await;
+        assert!(cut.semantic, "an embedder was available, so the pass ran");
+
+        // (1) The result the net certifies, rebuilt from the selection.
+        let kept_msgs: Vec<Message> = cut
+            .kept
+            .iter()
+            .take(cut.head_cut)
+            .filter_map(|&i| msgs.get(i).cloned())
+            .collect();
+        assert!(
+            !kept_msgs.is_empty(),
+            "the net must not have truncated the whole selection"
+        );
+
+        // (2) No orphan in either direction — the property the net exists for.
+        assert_no_orphans(&kept_msgs);
+
+        // (3) Group alignment: a kept message is either its own group's head or
+        //     belongs to a group whose head was kept too, so no group is
+        //     entered in the middle.
+        let starts = tool_group_starts(&msgs);
+        let kept_set: std::collections::HashSet<usize> = cut.kept.iter().copied().collect();
+        for &i in &cut.kept {
+            assert!(
+                starts[i] == i || kept_set.contains(&starts[i]),
+                "index {i} kept without its group head {}",
+                starts[i]
+            );
+        }
+
+        // (4) The headline guarantee: the returned selection is EXACTLY the
+        //     prefix `safe_compaction_cutoff` certifies for the same budget.
+        assert_eq!(
+            cut.head_cut,
+            safe_compaction_cutoff(&kept_msgs, DRIFT_BUDGET),
+            "the semantic choice must be the safety net's own answer, applied last"
+        );
+        assert!(
+            estimate_total_tokens(&kept_msgs) <= DRIFT_BUDGET,
+            "the retained set must fit the budget it was selected for"
+        );
+
+        // (5) And the goal-relevant group actually survives, which is the
+        //     reason the pass exists — the recency cut at [6] drops it.
+        assert!(
+            kept_msgs
+                .iter()
+                .any(|m| m.content.contains("release.sh --dry-run")),
+            "the goal-relevant tool result must survive: {:?}",
+            kept_msgs
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>()
+        );
+        // (6) A low-relevance group is what got sacrificed.
+        assert!(
+            !kept_msgs.iter().any(|m| m.content == "sunny and warm"),
+            "a goal-irrelevant turn should be the one dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn semantic_cut_should_fall_back_to_recency_without_embeddings() {
+        let msgs = drifted_conversation();
+
+        // (a) No embedder at all.
+        let none = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, None).await;
+        assert!(!none.semantic, "must report the degraded path");
+        assert_eq!(none.goal_similarity, 0.0, "no fabricated score");
+        let cap = safe_compaction_cutoff(&msgs, DRIFT_BUDGET);
+        assert_eq!(none.kept, (0..cap).collect::<Vec<_>>());
+        assert_eq!(none.head_cut, cap);
+        // The degraded selection is exactly today's behaviour.
+        let applied = none.apply(msgs.clone());
+        assert_eq!(applied.len(), cap, "the degraded cut is the safe cut");
+        assert!(
+            applied
+                .iter()
+                .zip(msgs.iter())
+                .all(|(a, b)| a.role == b.role && a.content == b.content),
+            "the degraded cut must be the messages the recency cut keeps"
+        );
+
+        // (b) An embedder that fails degrades identically — compaction must not
+        //     fail because an optional embedding endpoint is down.
+        struct FailingEmbedder;
+        #[async_trait::async_trait]
+        impl crate::context::Embedder for FailingEmbedder {
+            fn model_id(&self) -> &str {
+                "failing"
+            }
+            async fn embed(&self, _: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+                Err(crate::error::Error::Agent("embedder is down".to_string()))
+            }
+        }
+        let failed = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&FailingEmbedder)).await;
+        assert!(!failed.semantic, "an embedder error must degrade, not fail");
+        assert_eq!(failed.kept, (0..cap).collect::<Vec<_>>());
+
+        // (c) No user turn ⇒ no goal ⇒ recency.
+        let no_user: Vec<Message> = msgs
+            .iter()
+            .filter(|m| m.role != Role::User)
+            .cloned()
+            .collect();
+        let goal_less = semantic_compaction_cutoff(&no_user, DRIFT_BUDGET, Some(&mock())).await;
+        assert!(!goal_less.semantic);
+        assert_eq!(compaction_goal(&no_user), None);
+    }
+
+    fn mock() -> crate::context::MockEmbedder {
+        crate::context::MockEmbedder::default()
+    }
+
+    #[test]
+    fn compaction_goal_is_the_last_user_turn() {
+        let msgs = drifted_conversation();
+        assert_eq!(
+            compaction_goal(&msgs).as_deref(),
+            Some("GOAL: fix the release pipeline"),
+            "the live task statement, not the superseded opening turn"
+        );
+        // An empty user turn does not become the goal.
+        let blank = vec![
+            make_msg(Role::User, "real goal"),
+            make_msg(Role::User, "   "),
+        ];
+        assert_eq!(compaction_goal(&blank).as_deref(), Some("real goal"));
+    }
+
+    /// Measures goal-fact retention on a clearly-labelled SYNTHETIC fixture.
+    ///
+    /// HONESTY NOTE: this fixture is synthetic and I wrote it. It is not a
+    /// session log. It encodes exactly one claim — that a recency prefix cut
+    /// loses a late goal-relevant fact that a group-selection cut keeps — and
+    /// it is built so the claim is testable at all: the goal-relevant group
+    /// sits *after* the recency cut, which is the only configuration where the
+    /// two strategies can disagree. It is a demonstration, not evidence of
+    /// benefit in production. The embedder is `MockEmbedder`, a hash trick
+    /// (`context/embedder.rs:126`) that scores token overlap, so a genuine
+    /// paraphrase would NOT be matched by it.
+    #[tokio::test]
+    async fn measure_goal_fact_retention_recency_vs_semantic() {
+        let msgs = drifted_conversation();
+        let cap = safe_compaction_cutoff(&msgs, DRIFT_BUDGET);
+        let baseline = msgs[..cap]
+            .iter()
+            .any(|m| m.content.contains("release.sh --dry-run"));
+        let cut = semantic_compaction_cutoff(&msgs, DRIFT_BUDGET, Some(&mock())).await;
+        let head_cut = cut.head_cut;
+        let similarity = cut.goal_similarity;
+        let semantic = cut
+            .apply(msgs)
+            .iter()
+            .any(|m| m.content.contains("release.sh --dry-run"));
+        println!(
+            "MEASURE goal_fact_retained: recency_prefix={baseline} semantic_group_cut={semantic} \
+             (budget={DRIFT_BUDGET}, cap={cap}, head_cut={head_cut}, similarity={similarity:.4})"
+        );
+        assert!(
+            !baseline,
+            "fixture invariant: the recency cut must lose the goal fact"
+        );
+        assert!(semantic, "the semantic cut must keep it");
+    }
+
+    /// The pass must never orphan a pair, across every budget and every
+    /// drift shape — not just the one the fixture above uses.
+    #[tokio::test]
+    async fn semantic_cut_never_orphans_a_pair_at_any_budget() {
+        let mock = mock();
+        for extra_filler in 0..6 {
+            let mut msgs = drifted_conversation();
+            for i in 0..extra_filler {
+                msgs.insert(1, make_msg(Role::User, format!("filler {i}")));
+            }
+            for budget in [0usize, 8, 32, DRIFT_BUDGET, 120, 400, 100_000] {
+                let cut = semantic_compaction_cutoff(&msgs, budget, Some(&mock)).await;
+                let kept: Vec<Message> = cut
+                    .kept
+                    .iter()
+                    .take(cut.head_cut)
+                    .filter_map(|&i| msgs.get(i).cloned())
+                    .collect();
+                assert_no_orphans(&kept);
+                assert!(
+                    estimate_total_tokens(&kept) <= budget || kept.is_empty(),
+                    "budget {budget}: kept {} tokens",
+                    estimate_total_tokens(&kept)
+                );
+                assert_eq!(
+                    cut.head_cut,
+                    safe_compaction_cutoff(&kept, budget),
+                    "budget {budget}: the net must be the last word"
+                );
+            }
+        }
     }
 }

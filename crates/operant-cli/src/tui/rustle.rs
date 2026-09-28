@@ -1,4 +1,5 @@
-#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
+// (iter-392: the `#![allow(dead_code)]` suppression is gone — this module is
+// reached from `render/welcome.rs::render_welcome_box`.)
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 

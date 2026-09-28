@@ -102,6 +102,7 @@ pub mod profile;
 pub mod rate_limiter;
 pub mod reasoning_timeouts;
 pub mod redaction;
+pub mod retrieval;
 pub mod runtime_adapter;
 pub mod runtime_metrics;
 pub mod schema;

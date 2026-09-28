@@ -86,6 +86,7 @@ impl App {
                 p
             },
             scroll_offset: 0,
+            scroll_memory: Default::default(),
             is_streaming: false,
             turn_state: TurnState::Idle,
             turn_started_at: None,

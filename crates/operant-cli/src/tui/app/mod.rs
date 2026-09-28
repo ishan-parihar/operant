@@ -15,6 +15,8 @@ mod providers;
 mod scroll_anchor;
 mod turn_state;
 
+pub(crate) use scroll_anchor::ScrollMemory;
+
 #[cfg(test)]
 mod tests;
 pub use enums::*;
@@ -85,6 +87,9 @@ pub struct App {
     pub input: String,
     pub prompt_input: PromptInputState,
     pub scroll_offset: usize,
+    /// Reading-position memory: the Ctrl+G bookmark and the reflow anchor.
+    /// Lives here (not in a thread-local) because it is one-App-per-thread data.
+    pub(crate) scroll_memory: ScrollMemory,
     /// Coarse "a turn is in flight" flag.
     ///
     /// **Compat shim.** It is still the authority on whether a turn is live

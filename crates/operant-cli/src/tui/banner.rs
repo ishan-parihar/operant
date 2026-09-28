@@ -1,4 +1,5 @@
-#![allow(dead_code)] // Foundation modules for future multi-crate extraction — wired in Phase 2I
+// (iter-392: the `#![allow(dead_code)]` suppression is gone — this module is
+// reached from `render/welcome.rs::render_banner_block`.)
 //! Operant ASCII wordmark banner.
 //!
 //! Renders the OPERANT wordmark in three sizes (full / compact / minimal) so
@@ -10,8 +11,7 @@
 //! and baseline. Each letter is 6 columns wide with a 1-column gap, except
 //! the 'R' which is 7 wide to accommodate the diagonal leg.
 //!
-//! Used by `render::render_welcome_box` (above the welcome panel) and by
-//! `app::App::status_message` for the splash overlay.
+//! Used by `render::render_banner_block` (above the welcome panel).
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

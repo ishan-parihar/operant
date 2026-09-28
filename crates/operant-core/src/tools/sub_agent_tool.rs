@@ -1,15 +1,33 @@
-//! Sub-agent delegation tool.
+//! Sub-agent delegation tool, including the bounded multi-agent **swarm**.
 //!
-//! This tool lets a parent agent delegate focused analysis to an isolated child
-//! agent without changing the parent ReAct loop. Supports single-task and batch
-//! (parallel) modes with role-based tool restrictions and spawn depth limits.
+//! A parent agent delegates focused analysis to isolated child agents without
+//! changing its own ReAct loop. Three modes share one code path:
+//!
+//! * single — one child, synchronous;
+//! * **swarm** (`tasks`) — N real worker sessions, each with its OWN agent
+//!   loop, message history, and tool scope, fanned out behind the same
+//!   semaphore + `buffer_unordered` pool the in-loop tool executor uses
+//!   (`agent/stream.rs::execute_tools`);
+//! * background — dispatched to a spawned task, polled by id.
+//!
+//! Recursive spawning is closed by [`SpawnPermit`], which reserves capacity in
+//! the **process-wide** live-worker count BEFORE a worker is built. Depth and
+//! breadth are both refused up front; a checked-after-spawning guard is not a
+//! guard. Because a worker is one model stream and one slice of the parent's
+//! tool-call spend, a fan-out is a COST decision — see `describe_spawn_costs`
+//! in the tool description and the reported defaults.
 
 use std::error::Error as StdError;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures::FutureExt;
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -40,6 +58,22 @@ const MIN_SPAWN_DEPTH: u32 = 1;
 const MAX_SPAWN_DEPTH_CAP: u32 = 3;
 /// Default max spawn depth (flat: parent -> child, no grandchildren)
 const DEFAULT_MAX_SPAWN_DEPTH: u32 = 1;
+/// Floor for a worker timeout, so a caller cannot pass `timeout_seconds: 0`
+/// and get a worker that is born already-expired.
+const MIN_WORKER_TIMEOUT_SECONDS: u64 = 30;
+
+/// Default cap on LIVE sub-agent workers across the whole process.
+///
+/// This is the global breadth cap, and it is the number that makes the swarm
+/// safe: it bounds concurrent model streams regardless of how many parents
+/// delegate at once. `MAX_CONCURRENT_CHILDREN` only bounds one batch, so N
+/// parents each fanning out M children would otherwise reach N*M live model
+/// streams — an unbounded spend against one API budget.
+pub const DEFAULT_MAX_GLOBAL_WORKERS: usize = 6;
+/// Floor for the global breadth cap.
+const MIN_GLOBAL_WORKERS: usize = 1;
+/// Ceiling for the global breadth cap.
+const MAX_GLOBAL_WORKERS_CAP: usize = 32;
 
 type BoxedToolError = Box<dyn StdError + Send + Sync>;
 
@@ -125,13 +159,244 @@ static MAX_SPAWN_DEPTH: AtomicU32 = AtomicU32::new(DEFAULT_MAX_SPAWN_DEPTH);
 static ORCHESTRATOR_ENABLED: AtomicU32 = AtomicU32::new(1); // default true
 static MAX_CONCURRENT_CHILDREN: AtomicU32 = AtomicU32::new(DEFAULT_MAX_CONCURRENT_CHILDREN as u32);
 
+/// LIVE sub-agent workers across the WHOLE process.
+///
+/// Global on purpose: a per-parent or per-batch count cannot see the other
+/// parents, so N parents each admitting M children yields N*M live model
+/// streams. A single process-wide counter is the only place that count is
+/// actually knowable.
+static LIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+/// Configurable ceiling for `LIVE_WORKERS`.
+static MAX_GLOBAL_WORKERS: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_GLOBAL_WORKERS);
+
 /// Monotonic counter behind the `sub-N` ids carried by
 /// `AgentEvent::SubagentStarted/Stopped`. Children run headless, so the id is
 /// the only thing that pairs a stop event back to its start.
 static SUBAGENT_SEQ: AtomicU32 = AtomicU32::new(1);
 
+/// Why a spawn was refused. Both variants are decided BEFORE any worker is
+/// built — a refusal never costs a model stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnRefusal {
+    /// The requested depth is past the configured delegation floor.
+    Depth { requested: u32, max: u32 },
+    /// The process-wide live-worker budget is exhausted.
+    Breadth { live: usize, max: usize },
+}
+
+impl std::fmt::Display for SpawnRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Depth { requested, max } => write!(
+                f,
+                "Spawn refused: depth {requested} exceeds max_spawn_depth {max}. \
+                 Workers cannot recurse past the configured delegation depth."
+            ),
+            Self::Breadth { live, max } => write!(
+                f,
+                "Spawn refused: {live}/{max} sub-agent worker slots are live \
+                 process-wide. Wait for a worker to finish, or lower the fan-out."
+            ),
+        }
+    }
+}
+
+/// A reserved slice of the process-wide live-worker budget.
+///
+/// Reservation happens in `reserve`, which reads the live count and claims the
+/// slots in ONE `fetch_update` — a plain `load`-then-`store` would let N
+/// concurrent parents all observe `live < max` and all admit M children, which
+/// is the N*M blow-up this guard exists to prevent.
+///
+/// Release lives in `Drop` and nowhere else, so the count is returned on
+/// EVERY exit path: success, `?`, an early return, a panic unwind, and tokio
+/// task cancellation/drop. A leaked count is the worst failure mode here — it
+/// permanently shrinks capacity for the remaining life of the process, with no
+/// error to point at — so there is exactly one release site and it cannot be
+/// skipped by adding a new `return`.
+#[derive(Debug)]
+struct SpawnPermit {
+    slots: usize,
+}
+
+impl SpawnPermit {
+    /// Claim up to `want` worker slots for a child at `depth`.
+    ///
+    /// Partial admission is normal and visible: when only 2 of 5 requested
+    /// slots are free, 2 are claimed and the caller reports the other 3 as
+    /// refused rather than building workers that would immediately fail.
+    /// `Err` only when NOTHING could be claimed.
+    fn reserve(want: usize, depth: u32) -> Result<Self, SpawnRefusal> {
+        let max_depth = MAX_SPAWN_DEPTH.load(Ordering::Relaxed);
+        if depth > max_depth {
+            return Err(SpawnRefusal::Depth {
+                requested: depth,
+                max: max_depth,
+            });
+        }
+
+        let want = want.max(1);
+        let max = max_global_workers();
+        // `fetch_update` hands back the PREVIOUS value, not the one the
+        // closure chose, so the claim is staged in a Cell the closure fills.
+        let claim = std::cell::Cell::new(0usize);
+        // AcqRel/Acquire pair: the counter is a capacity ledger, not a
+        // synchronisation primitive — no worker memory is published through
+        // it. Relaxed ordering would be sufficient; AcqRel costs nothing at
+        // this call rate and keeps the read-then-claim visibly paired.
+        let reserved = LIVE_WORKERS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            let headroom = max.saturating_sub(live);
+            let admitted = headroom.min(want);
+            if admitted == 0 {
+                return None;
+            }
+            claim.set(admitted);
+            Some(live + admitted)
+        });
+
+        match reserved {
+            Ok(_) => Ok(Self { slots: claim.get() }),
+            Err(live) => Err(SpawnRefusal::Breadth { live, max }),
+        }
+    }
+
+    /// How many workers this permit actually admits.
+    fn slots(&self) -> usize {
+        self.slots
+    }
+}
+
+impl Drop for SpawnPermit {
+    fn drop(&mut self) {
+        // `checked_sub` inside fetch_update: a double-release bug saturates at
+        // 0 instead of wrapping the counter to usize::MAX and wedging every
+        // future spawn permanently.
+        let _ = LIVE_WORKERS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |live| {
+            live.checked_sub(self.slots)
+        });
+    }
+}
+
+/// Live worker count across the process — exposed for the CLI status surfaces
+/// and for tests that assert the ledger balances.
+fn live_worker_count() -> usize {
+    LIVE_WORKERS.load(Ordering::Relaxed)
+}
+
+fn max_global_workers() -> usize {
+    MAX_GLOBAL_WORKERS.load(Ordering::Relaxed)
+}
+
 fn next_subagent_id() -> String {
     format!("sub-{}", SUBAGENT_SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// One worker's full instruction set. A worker gets its own message history
+/// and its own registry, but it is described by exactly this struct.
+#[derive(Debug, Clone)]
+struct WorkerSpec {
+    goal: String,
+    context: Option<String>,
+    role: SubAgentRole,
+    max_iterations: Option<u32>,
+    /// Bounded wall-clock budget for this worker. Unbounded is a hang, and one
+    /// wedged worker must not stall the swarm.
+    timeout_secs: u64,
+    output_schema: Option<Value>,
+}
+
+/// How a single worker ended. Every exit path — success, agent error,
+/// timeout, panic, or spawn refusal — is one of these, so a worker can never
+/// take the parent down: the failure is reported as data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkerStatus {
+    Completed(String),
+    Failed(String),
+    TimedOut {
+        after_secs: u64,
+    },
+    /// The worker future panicked. Contained via `catch_unwind` so the
+    /// parent's task survives and the rest of the swarm still completes.
+    Panicked,
+    /// The spawn guard refused this worker; it was never built, so it cost
+    /// no model stream.
+    Refused(String),
+}
+
+/// A worker's goal paired with its outcome, so the parent can attribute each
+/// result to the request that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerOutcome {
+    goal: String,
+    status: WorkerStatus,
+}
+
+/// A worker's execution, boxed so one `run` closure can build each worker's
+/// distinct future without a second trait or a generic-per-call.
+type WorkerRun = Pin<Box<dyn Future<Output = crate::error::Result<String>> + Send>>;
+
+/// Fan out `workers` and collect every outcome, reusing the in-loop tool
+/// pool's shape: a semaphore bounds how many workers hold a model stream at
+/// once, and `buffer_unordered` yields each outcome the moment its worker
+/// finishes rather than waiting on the slowest one. Outcomes are therefore in
+/// COMPLETION order, not submission order — which is why every outcome
+/// carries its own goal rather than a positional index.
+///
+/// Containment is per worker, not per swarm:
+/// * each worker is wrapped in its own `timeout`, so a wedged worker is
+///   dropped and the swarm still finishes;
+/// * the worker's whole execution — including building its future — is
+///   wrapped in `catch_unwind`, so a panicking worker becomes a
+///   `WorkerStatus::Panicked` entry instead of unwinding the parent;
+/// * an agent error becomes `WorkerStatus::Failed`.
+///
+/// None of these return `Err` — the swarm's only failure modes are the
+/// caller's to interpret.
+async fn run_swarm<F>(workers: Vec<WorkerSpec>, max_in_flight: usize, run: F) -> Vec<WorkerOutcome>
+where
+    F: Fn(WorkerSpec) -> WorkerRun,
+{
+    let in_flight = max_in_flight.max(1);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(in_flight));
+
+    let futures = workers.into_iter().map(|worker| {
+        let semaphore = semaphore.clone();
+        let run = &run;
+        async move {
+            let goal = worker.goal.clone();
+            let secs = worker.timeout_secs;
+
+            // Closed semaphore only on shutdown; report it per worker rather
+            // than failing the whole batch.
+            let Ok(_permit) = semaphore.acquire_owned().await else {
+                return WorkerOutcome {
+                    goal,
+                    status: WorkerStatus::Failed("worker pool closed during shutdown".to_string()),
+                };
+            };
+
+            // `run(worker)` is INSIDE the unwind boundary: building a worker's
+            // future is as capable of panicking as running it.
+            let status = match timeout(
+                Duration::from_secs(secs),
+                AssertUnwindSafe(async { run(worker).await }).catch_unwind(),
+            )
+            .await
+            {
+                Err(_) => WorkerStatus::TimedOut { after_secs: secs },
+                Ok(Err(_panic)) => WorkerStatus::Panicked,
+                Ok(Ok(Err(error))) => WorkerStatus::Failed(error.to_string()),
+                Ok(Ok(Ok(answer))) => WorkerStatus::Completed(answer),
+            };
+
+            WorkerOutcome { goal, status }
+        }
+    });
+
+    stream::iter(futures.collect::<Vec<_>>())
+        .buffer_unordered(in_flight)
+        .collect::<Vec<_>>()
+        .await
 }
 
 /// Tool that delegates a focused task to an isolated child OperantAgent.
@@ -207,12 +472,11 @@ impl SubAgentTool {
 
     /// Run a focused delegated task in an isolated child agent.
     ///
-    /// When `output_schema` is provided, the child's system prompt gets an
-    /// OUTPUT CONTRACT block and the final answer is validated against the
-    /// schema (hermes delegation_output_schema.py parity): on failure the
-    /// child receives exactly ONE bounded retry turn carrying the validation
-    /// errors verbatim, and a persistent failure still returns the answer
-    /// (flagged) so the parent keeps the data.
+    /// This is the GUARDED entry point: it reserves a process-wide worker slot
+    /// before the child is built, so a single delegation obeys the same
+    /// depth + breadth limits as a swarm. Swarms call `call_unguarded` per
+    /// worker instead, because `call_batch` already reserved the swarm's slots
+    /// in one atomic claim — counting twice would double-charge the budget.
     pub async fn call(
         &self,
         goal: impl Into<String>,
@@ -222,24 +486,56 @@ impl SubAgentTool {
         timeout_seconds: u64,
         output_schema: Option<Value>,
     ) -> std::result::Result<String, BoxedToolError> {
+        let child_depth = self.parent_depth + 1;
+        // Depth AND process-wide breadth, both decided here — before
+        // `ensure_supported_model`, before the client is built, before any
+        // token is spent. The permit lives for the whole call INCLUDING the
+        // output-schema retry loop, so one child is one live worker no matter
+        // how many turns it takes.
+        let _permit =
+            SpawnPermit::reserve(1, child_depth).map_err(|refusal| refusal.to_string())?;
+
+        self.call_unguarded(WorkerSpec {
+            goal: goal.into(),
+            context: context.map(Into::into),
+            role,
+            max_iterations,
+            timeout_secs: timeout_seconds.max(MIN_WORKER_TIMEOUT_SECONDS),
+            output_schema,
+        })
+        .await
+    }
+
+    /// Run one worker whose slot was ALREADY reserved by the caller.
+    ///
+    /// When `output_schema` is provided, the child's system prompt gets an
+    /// OUTPUT CONTRACT block and the final answer is validated against the
+    /// schema (hermes delegation_output_schema.py parity): on failure the
+    /// child receives exactly ONE bounded retry turn carrying the validation
+    /// errors verbatim, and a persistent failure still returns the answer
+    /// (flagged) so the parent keeps the data.
+    async fn call_unguarded(
+        &self,
+        worker: WorkerSpec,
+    ) -> std::result::Result<String, BoxedToolError> {
         self.ensure_supported_model()?;
 
-        let goal = goal.into();
-        let goal = goal.trim();
+        let goal = worker.goal.trim();
         if goal.is_empty() {
             return Err("Sub-agent goal must not be empty".into());
         }
 
-        // Check depth limits
+        let timeout_seconds = worker.timeout_secs;
+        let max_iterations = worker.max_iterations;
+        let role = worker.role;
+        let output_schema = worker.output_schema;
+
+        // The caller already cleared the guard, but the depth floor still
+        // decides the effective role: an orchestrator that is already at the
+        // depth floor cannot itself spawn, so it is demoted to a leaf rather
+        // than handed a tool that would only be refused.
         let child_depth = self.parent_depth + 1;
         let max_depth = MAX_SPAWN_DEPTH.load(Ordering::Relaxed);
-        if child_depth > max_depth {
-            return Err(format!(
-                "Cannot spawn sub-agent at depth {}: max spawn depth is {}",
-                child_depth, max_depth
-            )
-            .into());
-        }
 
         // Determine effective role based on depth and orchestrator enabled
         let effective_role = if role == SubAgentRole::Orchestrator {
@@ -258,7 +554,7 @@ impl SubAgentTool {
             Ok(schema) => schema,
             Err(error) => return Err(error.into()),
         };
-        let context: Option<String> = context.map(|c| c.into());
+        let context: Option<String> = worker.context;
 
         let mut retry_errors: Vec<String> = Vec::new();
         let mut attempts: usize = 0;
@@ -398,67 +694,98 @@ impl SubAgentTool {
         }
     }
 
-    /// Run multiple tasks in parallel (batch mode)
-    #[allow(clippy::type_complexity)]
-    pub async fn call_batch(
+    /// Fan out a **swarm**: run every task as a real worker session and
+    /// collect one outcome per worker.
+    ///
+    /// The spawn guard is consulted FIRST, before a single worker is built.
+    /// Capacity is claimed in one atomic reservation, so two parents fanning
+    /// out at the same moment cannot both pass a check and collectively
+    /// overshoot the process-wide budget — the N*M case. Workers beyond the
+    /// reservation are reported as `Refused` rather than silently dropped, and
+    /// they were never built, so a refused worker costs no model stream.
+    async fn call_batch(
         &self,
-        tasks: Vec<(
-            String,
-            Option<String>,
-            SubAgentRole,
-            Option<u32>,
-            u64,
-            Option<Value>,
-        )>,
+        tasks: Vec<WorkerSpec>,
     ) -> std::result::Result<String, BoxedToolError> {
-        let max_concurrent = MAX_CONCURRENT_CHILDREN.load(Ordering::Relaxed) as usize;
-        let max_concurrent = max_concurrent.clamp(1, 10);
-
-        // Use semaphore to limit concurrency
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
-        let mut handles = Vec::new();
-
-        for (goal, context, role, max_iterations, timeout_seconds, output_schema) in tasks {
-            let tool = self.clone_for_task();
-            let permit = semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|e| e.to_string())?;
-
-            let handle = tokio::spawn(async move {
-                let _permit = permit;
-                tool.call(
-                    goal,
-                    context,
-                    role,
-                    max_iterations,
-                    timeout_seconds,
-                    output_schema,
-                )
-                .await
-            });
-            handles.push(handle);
+        if tasks.is_empty() {
+            return Err("Swarm requires at least one task".into());
         }
 
-        // Wait for all tasks and collect results
-        let mut results = Vec::new();
-        let mut errors = Vec::new();
+        // ── Spawn guard, enforced BEFORE spawning ──
+        let child_depth = self.parent_depth + 1;
+        let reservation = SpawnPermit::reserve(tasks.len(), child_depth);
+        let admitted_slots = reservation.as_ref().map_or(0, SpawnPermit::slots);
+        let refusal_text = reservation.as_ref().err().map(SpawnRefusal::to_string);
 
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(result)) => results.push(result),
-                Ok(Err(e)) => errors.push(e.to_string()),
-                Err(e) => errors.push(e.to_string()),
+        let mut outcomes: Vec<WorkerOutcome> = Vec::with_capacity(tasks.len());
+        let mut admitted: Vec<WorkerSpec> = Vec::with_capacity(admitted_slots);
+        for worker in tasks {
+            if admitted.len() < admitted_slots {
+                admitted.push(worker);
+            } else {
+                // Report the shortfall instead of hiding it — a swarm that
+                // quietly ran 2 of 5 requested tasks is a lie the parent
+                // cannot detect.
+                let reason = refusal_text.clone().unwrap_or_else(|| {
+                    format!(
+                        "Swarm breadth cap reached: only {admitted_slots} of the requested \
+                         workers fit in the process-wide budget ({} live of {} allowed).",
+                        live_worker_count(),
+                        max_global_workers(),
+                    )
+                });
+                outcomes.push(WorkerOutcome {
+                    goal: worker.goal,
+                    status: WorkerStatus::Refused(reason),
+                });
+            }
+        }
+
+        // The reservation is held for the whole swarm, so slots are not
+        // returned as individual workers finish. That is deliberately
+        // conservative: over-reserving shrinks nothing that a concurrent
+        // parent needed, whereas releasing early would let a long swarm
+        // overshoot the budget it was admitted against.
+        let _permit = reservation.map_err(|refusal| refusal.to_string())?;
+
+        // Per-swarm in-flight cap, itself bounded by what the guard admitted —
+        // the pool can never be wider than the reservation.
+        let max_in_flight = (MAX_CONCURRENT_CHILDREN.load(Ordering::Relaxed) as usize)
+            .clamp(1, 10)
+            .min(admitted_slots.max(1));
+
+        let tool = self.clone_for_task();
+        outcomes.extend(
+            run_swarm(admitted, max_in_flight, move |worker| -> WorkerRun {
+                let tool = tool.clone_for_task();
+                Box::pin(async move {
+                    tool.call_unguarded(worker)
+                        .await
+                        .map_err(|error| crate::error::Error::Agent(error.to_string()))
+                })
+            })
+            .await,
+        );
+
+        let mut results: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        for outcome in &outcomes {
+            match &outcome.status {
+                WorkerStatus::Completed(answer) => results.push(answer.clone()),
+                WorkerStatus::Failed(error) => errors.push(error.clone()),
+                WorkerStatus::TimedOut { after_secs } => {
+                    errors.push(format!("worker timed out after {after_secs}s"))
+                }
+                WorkerStatus::Panicked => errors.push("worker panicked".to_string()),
+                WorkerStatus::Refused(reason) => errors.push(reason.clone()),
             }
         }
 
         if results.is_empty() && !errors.is_empty() {
-            return Err(format!("All sub-agents failed: {}", errors.join("; ")).into());
+            return Err(format!("All workers failed: {}", errors.join("; ")).into());
         }
 
-        // Format results as summary
-        Ok(format_batch_results(&results, &errors))
+        Ok(format_swarm_outcomes(&outcomes))
     }
 
     /// Dispatch a delegation in the background and return a handle immediately
@@ -799,32 +1126,43 @@ fn build_child_system_prompt(
     parts.join("\n")
 }
 
-/// Format batch results into a summary string
-fn format_batch_results(results: &[String], errors: &[String]) -> String {
-    let mut output = String::new();
+/// Render swarm outcomes for the parent, one section per worker.
+///
+/// Each section is headed by the worker's own goal so the parent can attribute
+/// a result to the request that produced it — a positional `Task 3` heading is
+/// useless once some workers were refused or failed and the survivors shift.
+/// Non-completed statuses are rendered inline, labelled, rather than dropped
+/// into a separate error list that loses the goal association.
+fn format_swarm_outcomes(outcomes: &[WorkerOutcome]) -> String {
+    if outcomes.is_empty() {
+        return "No results".to_string();
+    }
 
-    if !results.is_empty() {
-        output.push_str("## Delegation Results\n\n");
-        for (i, result) in results.iter().enumerate() {
-            output.push_str(&format!("### Task {}\n{}\n\n", i + 1, result));
+    let mut output = String::from("## Swarm Results\n\n");
+    for outcome in outcomes {
+        let heading = preview_of(&outcome.goal, 80);
+        match &outcome.status {
+            WorkerStatus::Completed(answer) => {
+                output.push_str(&format!("### {heading}\n{answer}\n\n"));
+            }
+            WorkerStatus::Failed(error) => {
+                output.push_str(&format!("### {heading}\n[failed] {error}\n\n"));
+            }
+            WorkerStatus::TimedOut { after_secs } => {
+                output.push_str(&format!(
+                    "### {heading}\n[timed out after {after_secs}s]\n\n"
+                ));
+            }
+            WorkerStatus::Panicked => {
+                output.push_str(&format!("### {heading}\n[panicked]\n\n"));
+            }
+            WorkerStatus::Refused(reason) => {
+                output.push_str(&format!("### {heading}\n[not spawned] {reason}\n\n"));
+            }
         }
     }
 
-    if !errors.is_empty() {
-        if !output.is_empty() {
-            output.push_str("---\n\n");
-        }
-        output.push_str("## Errors\n\n");
-        for (i, error) in errors.iter().enumerate() {
-            output.push_str(&format!("{}. {}\n", i + 1, error));
-        }
-    }
-
-    if output.is_empty() {
-        output = "No results".to_string();
-    }
-
-    output
+    output.trim_end().to_string()
 }
 
 #[async_trait]
@@ -834,14 +1172,23 @@ impl OperantTool for SubAgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate a focused task to an isolated sub-agent. Use this for deep analysis, \
+        "Delegate work to isolated sub-agents. Use this for deep analysis, \
         specialized coding investigation, architectural review, or other self-contained work. \
-        Supports single-task mode (goal + context), batch mode (tasks array for parallel execution), \
-        and background mode (background=true returns a handle immediately — poll with query=\"<id>\"). \
+        Modes: single (goal + context), SWARM (tasks array — each entry becomes a real worker \
+        session with its own conversation, tools and bounded timeout, all running in parallel), \
+        and background (background=true returns a handle immediately — poll with query=\"<id>\"). \
         Optional output_schema enforces a structured JSON contract on the child's final answer \
         (exactly one bounded retry on validation failure). \
         The sub-agent has a fresh conversation and does not inherit parent memory. \
-        Role 'leaf' (default) cannot delegate further; role 'orchestrator' can spawn its own sub-agents."
+        Role 'leaf' (default) cannot delegate further; role 'orchestrator' can spawn its own \
+        sub-agents. \
+        SWARM COST: every worker is its own model stream and its own tool-call spend, so N \
+        workers cost roughly N times one worker. Fan out only for genuinely independent \
+        subtasks; a task you could do in one tool call should not get a worker. \
+        SPAWN GUARD: depth and process-wide breadth are enforced BEFORE any worker starts. \
+        Requests past the cap are refused or truncated with an explicit '[not spawned]' marker \
+        rather than silently dropped, and each worker has a hard timeout so a wedged one cannot \
+        stall the rest."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -905,29 +1252,27 @@ impl OperantTool for SubAgentTool {
             };
         }
 
-        // Check if batch mode
+        // Swarm mode: one real worker session per task, fanned out behind the
+        // process-wide spawn guard.
         if let Some(tasks) = parsed.tasks {
             if !tasks.is_empty() {
-                // Batch mode: run tasks in parallel
-                let task_params: Vec<_> = tasks
+                let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
+                let timeout = parsed
+                    .timeout_seconds
+                    .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
+                let workers: Vec<WorkerSpec> = tasks
                     .into_iter()
-                    .map(|t| {
-                        let role = parsed.role.unwrap_or(SubAgentRole::Leaf);
-                        let timeout = parsed
-                            .timeout_seconds
-                            .unwrap_or(DEFAULT_CHILD_TIMEOUT_SECONDS);
-                        (
-                            t.goal,
-                            t.context,
-                            role,
-                            parsed.max_iterations,
-                            timeout,
-                            t.output_schema,
-                        )
+                    .map(|task| WorkerSpec {
+                        goal: task.goal,
+                        context: task.context,
+                        role,
+                        max_iterations: parsed.max_iterations,
+                        timeout_secs: timeout,
+                        output_schema: task.output_schema,
                     })
                     .collect();
 
-                match self.call_batch(task_params).await {
+                match self.call_batch(workers).await {
                     Ok(content) => ToolResult {
                         tool_call_id: TOOL_NAME.to_string(),
                         name: TOOL_NAME.to_string(),
@@ -982,7 +1327,7 @@ impl OperantTool for SubAgentTool {
 }
 
 fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
-    let parsed: SubAgentArgs = match args {
+    let mut parsed: SubAgentArgs = match args {
         Value::String(s) => serde_json::from_str(&s).map_err(|e| format!("Invalid JSON: {}", e))?,
         value => serde_json::from_value(value).map_err(|e| format!("Invalid arguments: {}", e))?,
     };
@@ -1000,6 +1345,13 @@ fn parse_args(args: Value) -> Result<SubAgentArgs, String> {
             }
         }
     }
+
+    // One floor, applied at the boundary: every downstream read (single,
+    // swarm, background) then agrees that a worker cannot be born already
+    // expired, instead of each call site remembering to clamp.
+    parsed.timeout_seconds = parsed
+        .timeout_seconds
+        .map(|seconds| seconds.max(MIN_WORKER_TIMEOUT_SECONDS));
 
     Ok(parsed)
 }
@@ -1033,6 +1385,18 @@ pub fn set_orchestrator_enabled(enabled: bool) {
 /// Set maximum concurrent children
 pub fn set_max_concurrent_children(count: usize) {
     MAX_CONCURRENT_CHILDREN.store(count.clamp(1, 10) as u32, Ordering::Relaxed);
+}
+
+/// Set the PROCESS-WIDE cap on live sub-agent workers.
+///
+/// This is the number that bounds total model streams. `max_concurrent_children`
+/// only bounds a single batch, so on its own N parents fanning out M workers
+/// each reach N*M live workers; this cap is what stops that.
+pub fn set_max_global_workers(count: usize) {
+    MAX_GLOBAL_WORKERS.store(
+        count.clamp(MIN_GLOBAL_WORKERS, MAX_GLOBAL_WORKERS_CAP),
+        Ordering::Relaxed,
+    );
 }
 
 #[cfg(test)]
@@ -1318,24 +1682,370 @@ mod tests {
     }
 
     #[test]
-    fn format_batch_results_handles_empty() {
-        let result = format_batch_results(&[], &[]);
+    fn format_swarm_outcomes_handles_empty() {
+        let result = format_swarm_outcomes(&[]);
         assert_eq!(result, "No results");
     }
 
     #[test]
-    fn format_batch_results_formats_results() {
-        let result = format_batch_results(&["result 1".to_string(), "result 2".to_string()], &[]);
-        assert!(result.contains("Task 1"));
-        assert!(result.contains("result 1"));
-        assert!(result.contains("Task 2"));
-        assert!(result.contains("result 2"));
+    fn format_swarm_outcomes_labels_each_worker_by_its_goal() {
+        let outcomes = vec![
+            WorkerOutcome {
+                goal: "audit the parser".to_string(),
+                status: WorkerStatus::Completed("found two issues".to_string()),
+            },
+            WorkerOutcome {
+                goal: "review the pool".to_string(),
+                status: WorkerStatus::Failed("provider 503".to_string()),
+            },
+        ];
+        let result = format_swarm_outcomes(&outcomes);
+        assert!(result.contains("audit the parser"), "{result}");
+        assert!(result.contains("found two issues"), "{result}");
+        assert!(result.contains("review the pool"), "{result}");
+        assert!(result.contains("[failed] provider 503"), "{result}");
     }
 
     #[test]
-    fn format_batch_results_includes_errors() {
-        let result = format_batch_results(&["ok".to_string()], &["error 1".to_string()]);
-        assert!(result.contains("Errors"));
-        assert!(result.contains("error 1"));
+    fn format_swarm_outcomes_marks_refusals_as_not_spawned() {
+        let outcomes = vec![WorkerOutcome {
+            goal: "over budget".to_string(),
+            status: WorkerStatus::Refused("Spawn refused: 6/6 slots live".to_string()),
+        }];
+        let result = format_swarm_outcomes(&outcomes);
+        assert!(result.contains("[not spawned]"), "{result}");
+    }
+
+    // ── Spawn guard + swarm ──────────────────────────────────────────────
+    //
+    // The guard ledger (`LIVE_WORKERS`, `MAX_GLOBAL_WORKERS`,
+    // `MAX_SPAWN_DEPTH`) is process-global, so every test that asserts on it
+    // serialises. Tests 1 and 5 exercise `run_swarm` only and never touch the
+    // ledger, so they stay parallel.
+
+    fn guard_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn spec(goal: &str, timeout_secs: u64) -> WorkerSpec {
+        WorkerSpec {
+            goal: goal.to_string(),
+            context: None,
+            role: SubAgentRole::Leaf,
+            max_iterations: Some(1),
+            timeout_secs,
+            output_schema: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn swarm_should_spawn_bounded_workers_and_collect_results() {
+        let goals = ["w1", "w2", "w3", "w4"];
+        let in_flight_now = std::sync::Arc::new(AtomicUsize::new(0));
+        let peak = std::sync::Arc::new(AtomicUsize::new(0));
+
+        let workers: Vec<WorkerSpec> = goals.iter().map(|g| spec(g, 30)).collect();
+        let outcomes = run_swarm(workers, 2, {
+            let in_flight_now = in_flight_now.clone();
+            let peak = peak.clone();
+            move |worker| -> WorkerRun {
+                let in_flight_now = in_flight_now.clone();
+                let peak = peak.clone();
+                Box::pin(async move {
+                    let now = in_flight_now.fetch_add(1, Ordering::AcqRel) + 1;
+                    peak.fetch_max(now, Ordering::AcqRel);
+                    // Yield so overlap is observable rather than incidental.
+                    tokio::task::yield_now().await;
+                    let answer = format!("{} done", worker.goal);
+                    in_flight_now.fetch_sub(1, Ordering::AcqRel);
+                    Ok(answer)
+                })
+            }
+        })
+        .await;
+
+        // One outcome per worker, no worker lost or duplicated.
+        assert_eq!(outcomes.len(), goals.len());
+        for goal in goals {
+            let outcome = outcomes
+                .iter()
+                .find(|outcome| outcome.goal == goal)
+                .unwrap_or_else(|| panic!("missing outcome for {goal}"));
+            assert_eq!(
+                outcome.status,
+                WorkerStatus::Completed(format!("{goal} done"))
+            );
+        }
+        // The pool really was bounded: never more than `max_in_flight` model
+        // streams at once, and the budget was actually exercised.
+        assert!(
+            peak.load(Ordering::Relaxed) <= 2,
+            "in-flight peak {} exceeded the pool bound of 2",
+            peak.load(Ordering::Relaxed)
+        );
+        assert!(peak.load(Ordering::Relaxed) >= 1);
+        assert_eq!(in_flight_now.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn spawn_guard_should_refuse_beyond_the_depth_cap() {
+        let _guard = guard_test_lock();
+        set_max_spawn_depth(1);
+
+        // A child at depth 1 is inside the cap and reserves fine.
+        let permit = SpawnPermit::reserve(1, 1);
+        assert!(permit.is_ok(), "depth 1 must be inside a cap of 1");
+
+        // Depth 2 is past the floor: refused, and refused BEFORE any slot is
+        // claimed, so the ledger is untouched.
+        let refused = SpawnPermit::reserve(1, 2);
+        assert_eq!(
+            refused.err(),
+            Some(SpawnRefusal::Depth {
+                requested: 2,
+                max: 1
+            })
+        );
+        assert_eq!(live_worker_count(), 1, "refusal must not claim a slot");
+        drop(permit);
+        assert_eq!(live_worker_count(), 0);
+    }
+
+    #[test]
+    fn spawn_guard_should_refuse_beyond_the_global_breadth_cap() {
+        let _guard = guard_test_lock();
+        set_max_spawn_depth(3);
+        set_max_global_workers(3);
+
+        let a = SpawnPermit::reserve(1, 1);
+        let b = SpawnPermit::reserve(1, 1);
+        let c = SpawnPermit::reserve(1, 1);
+        assert!(a.is_ok() && b.is_ok() && c.is_ok());
+        assert_eq!(live_worker_count(), 3);
+
+        // The 4th live worker is past the process-wide cap.
+        assert_eq!(
+            SpawnPermit::reserve(1, 1).err(),
+            Some(SpawnRefusal::Breadth { live: 3, max: 3 })
+        );
+        assert_eq!(live_worker_count(), 3, "refusal must not claim a slot");
+
+        // Partial admission: 5 requested with 3 live and cap 3 admits none.
+        assert!(SpawnPermit::reserve(5, 1).is_err());
+
+        drop(a);
+        drop(b);
+        drop(c);
+        assert_eq!(live_worker_count(), 0);
+    }
+
+    #[test]
+    fn spawn_guard_should_count_globally_not_per_parent() {
+        let _guard = guard_test_lock();
+        set_max_spawn_depth(3);
+        set_max_global_workers(4);
+
+        // The N*M case. Two "parents" each ask for 3 workers at the same time.
+        // A per-parent count would let both through for 6 live workers; the
+        // global ledger admits 4 and the second parent is refused.
+        let parent_one = SpawnPermit::reserve(3, 1);
+        let parent_two = SpawnPermit::reserve(3, 1);
+
+        let one = parent_one.expect("first parent must be admitted");
+        assert_eq!(one.slots(), 3);
+        let two = parent_two.expect("second parent gets partial admission");
+        assert_eq!(
+            two.slots(),
+            1,
+            "only 1 of 3 slots remain, so parent two may run 1 worker"
+        );
+        assert_eq!(live_worker_count(), 4, "live workers must never exceed 4");
+
+        // A third parent now has nothing left.
+        assert!(SpawnPermit::reserve(1, 1).is_err());
+
+        drop(one);
+        drop(two);
+        assert_eq!(live_worker_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn swarm_should_continue_after_a_worker_fails() {
+        let outcomes = run_swarm(
+            vec![
+                spec("a", 30),
+                spec("boom", 30),
+                spec("c", 30),
+                spec("d", 30),
+            ],
+            4,
+            |worker| -> WorkerRun {
+                Box::pin(async move {
+                    if worker.goal == "boom" {
+                        return Err(crate::error::Error::Agent("provider exploded".to_string()));
+                    }
+                    Ok(format!("{} done", worker.goal))
+                })
+            },
+        )
+        .await;
+
+        // The swarm still reports every worker, and the failure is data.
+        assert_eq!(outcomes.len(), 4);
+        let failed = outcomes
+            .iter()
+            .find(|outcome| outcome.goal == "boom")
+            .expect("the failing worker must still be reported");
+        assert_eq!(
+            failed.status,
+            WorkerStatus::Failed("Agent error: provider exploded".to_string())
+        );
+        assert!(matches!(failed.status, WorkerStatus::Failed(_)));
+        for goal in ["a", "c", "d"] {
+            let survivor = outcomes
+                .iter()
+                .find(|outcome| outcome.goal == goal)
+                .unwrap_or_else(|| panic!("{goal} must survive its sibling's failure"));
+            assert_eq!(
+                survivor.status,
+                WorkerStatus::Completed(format!("{goal} done"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn swarm_should_contain_a_panicking_worker() {
+        let outcomes = run_swarm(
+            vec![spec("boom", 30), spec("ok", 30)],
+            2,
+            |worker| -> WorkerRun {
+                Box::pin(async move {
+                    if worker.goal == "boom" {
+                        panic!("worker blew up");
+                    }
+                    Ok("ok done".to_string())
+                })
+            },
+        )
+        .await;
+
+        // A panicking worker is contained: it becomes a status, and the
+        // healthy sibling still reports. The parent task survives to collect.
+        let panicked = outcomes
+            .iter()
+            .find(|outcome| outcome.goal == "boom")
+            .expect("the panicking worker must still be reported");
+        assert_eq!(panicked.status, WorkerStatus::Panicked);
+        let survivor = outcomes
+            .iter()
+            .find(|outcome| outcome.goal == "ok")
+            .expect("sibling must still complete");
+        assert_eq!(
+            survivor.status,
+            WorkerStatus::Completed("ok done".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn swarm_should_time_out_a_wedged_worker() {
+        // A 1s budget (below the 30s floor a caller gets) proves the timeout
+        // actually fires and that the rest of the swarm completes without it.
+        let outcomes = run_swarm(
+            vec![spec("wedged", 1), spec("ok", 1)],
+            2,
+            |worker| -> WorkerRun {
+                Box::pin(async move {
+                    if worker.goal == "wedged" {
+                        // Never resolves on its own; only the deadline can end it.
+                        std::future::pending::<()>().await;
+                    }
+                    Ok("ok done".to_string())
+                })
+            },
+        )
+        .await;
+
+        let wedged = outcomes
+            .iter()
+            .find(|outcome| outcome.goal == "wedged")
+            .expect("wedged worker must be reported");
+        assert_eq!(wedged.status, WorkerStatus::TimedOut { after_secs: 1 });
+        let survivor = outcomes
+            .iter()
+            .find(|outcome| outcome.goal == "ok")
+            .expect("a wedged sibling must not stall the swarm");
+        assert_eq!(
+            survivor.status,
+            WorkerStatus::Completed("ok done".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "the std lock is held deliberately: it serialises the process-global worker ledger across this test's awaits, which is exactly what an async-aware lock would not give us here"
+    )]
+    async fn spawn_guard_count_should_be_released_on_every_exit_path() {
+        let _guard = guard_test_lock();
+        set_max_spawn_depth(3);
+        set_max_global_workers(4);
+        let baseline = live_worker_count();
+        assert_eq!(baseline, 0, "ledger must start balanced");
+
+        // (a) Normal return — the permit simply goes out of scope.
+        {
+            let _permit = SpawnPermit::reserve(1, 1);
+            assert_eq!(live_worker_count(), baseline + 1);
+        }
+        assert_eq!(live_worker_count(), baseline, "drop must release");
+
+        // (b) Early error return: a worker built after reserving then fails
+        // its pre-flight. The permit is released on the way out.
+        fn failing_worker() -> Result<(), SpawnRefusal> {
+            let _permit = SpawnPermit::reserve(1, 1)?;
+            Err(SpawnRefusal::Depth {
+                requested: 9,
+                max: 1,
+            })
+        }
+        assert!(failing_worker().is_err());
+        assert_eq!(live_worker_count(), baseline, "error return must release");
+
+        // (c) Panic unwind: the reservation was taken, then the worker panicked.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _permit = SpawnPermit::reserve(2, 1);
+            panic!("worker blew up after reserving");
+        }));
+        assert!(panicked.is_err(), "the panic must actually have unwound");
+        assert_eq!(live_worker_count(), baseline, "unwind must release");
+
+        // (d) Task cancellation: the owning task is aborted mid-flight, so no
+        // code after the reservation runs. Drop still fires.
+        let task = tokio::spawn(async {
+            let _permit = SpawnPermit::reserve(1, 1);
+            // Park forever so the abort lands with the permit held.
+            std::future::pending::<()>().await;
+        });
+        // Give the task a chance to acquire the permit, then cancel it.
+        tokio::task::yield_now().await;
+        assert_eq!(live_worker_count(), baseline + 1, "task must hold its slot");
+        task.abort();
+        let joined = task.await;
+        assert!(joined.is_err(), "the task must have been cancelled");
+        assert_eq!(
+            live_worker_count(),
+            baseline,
+            "cancellation must release, or capacity leaks for the process lifetime"
+        );
+    }
+
+    #[test]
+    fn parse_args_clamps_a_zero_timeout_to_the_worker_floor() {
+        let args = parse_args(serde_json::json!({ "goal": "x", "timeout_seconds": 0 }))
+            .expect("a zero timeout is clamped, not rejected");
+        assert_eq!(args.timeout_seconds, Some(MIN_WORKER_TIMEOUT_SECONDS));
     }
 }
