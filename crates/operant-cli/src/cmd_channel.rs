@@ -93,24 +93,44 @@ pub async fn handle_channel_command(
                 println!("Running in foreground — press Ctrl+C (SIGINT) or send SIGTERM to stop.");
             }
 
-            let mut sigint =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-            tokio::select! {
-                _ = sigint.recv() => {
-                    if json {
-                        println!(r#"{{"status":"stopping","reason":"SIGINT"}}"#);
-                    } else {
-                        println!("\nReceived SIGINT (Ctrl+C). Shutting down gateway...");
+            // `tokio::signal::unix` does not exist on Windows, so this is a
+            // compile error there rather than a runtime one. Same cfg split, and
+            // the same shape, as `cmd_gateway::cmd_run` and
+            // `operant_runtime::daemon::wait_for_exit_signal`.
+            #[cfg(unix)]
+            {
+                let mut sigint =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+                tokio::select! {
+                    _ = sigint.recv() => {
+                        if json {
+                            println!(r#"{{"status":"stopping","reason":"SIGINT"}}"#);
+                        } else {
+                            println!("\nReceived SIGINT (Ctrl+C). Shutting down gateway...");
+                        }
+                    }
+                    _ = sigterm.recv() => {
+                        if json {
+                            println!(r#"{{"status":"stopping","reason":"SIGTERM"}}"#);
+                        } else {
+                            println!("\nReceived SIGTERM. Shutting down gateway...");
+                        }
                     }
                 }
-                _ = sigterm.recv() => {
-                    if json {
-                        println!(r#"{{"status":"stopping","reason":"SIGTERM"}}"#);
-                    } else {
-                        println!("\nReceived SIGTERM. Shutting down gateway...");
-                    }
+            }
+
+            // Windows has no SIGTERM; Ctrl+C is the only graceful stop there.
+            // The `reason` field changes accordingly rather than claiming a
+            // signal this platform never delivered.
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await?;
+                if json {
+                    println!(r#"{{"status":"stopping","reason":"Ctrl+C"}}"#);
+                } else {
+                    println!("\nReceived Ctrl+C. Shutting down gateway...");
                 }
             }
             let stop = crate::gateway_runner::stop_gateway().await?;

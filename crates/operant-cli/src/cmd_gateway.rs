@@ -9,7 +9,6 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
-use tokio::signal::unix::{SignalKind, signal};
 
 // ── Sub-subcommand enums ────────────────────────────────────────────────
 
@@ -384,16 +383,33 @@ async fn cmd_run(config: &AppConfig) -> Result<()> {
     println!("{}", msg);
     println!("Press Ctrl+C (SIGINT) or send SIGTERM to stop the gateway.");
 
-    let mut sigint = signal(SignalKind::interrupt())?;
-    let mut sigterm = signal(SignalKind::terminate())?;
+    // `tokio::signal::unix` does not exist on Windows: the module is absent
+    // from the crate there, so naming it is a COMPILE error, not a runtime one.
+    // Split exactly as `operant_runtime::daemon::wait_for_exit_signal` already
+    // does, so there is one pattern in the tree rather than two.
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
 
-    tokio::select! {
-        _ = sigint.recv() => {
-            println!("\nReceived SIGINT (Ctrl+C). Shutting down gateway...");
+        let mut sigint = signal(SignalKind::interrupt())?;
+        let mut sigterm = signal(SignalKind::terminate())?;
+
+        tokio::select! {
+            _ = sigint.recv() => {
+                println!("\nReceived SIGINT (Ctrl+C). Shutting down gateway...");
+            }
+            _ = sigterm.recv() => {
+                println!("\nReceived SIGTERM. Shutting down gateway...");
+            }
         }
-        _ = sigterm.recv() => {
-            println!("\nReceived SIGTERM. Shutting down gateway...");
-        }
+    }
+
+    // Windows has no SIGTERM, and the console control event is the only
+    // graceful stop a user can send, so Ctrl+C is the whole contract there.
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await?;
+        println!("\nReceived Ctrl+C. Shutting down gateway...");
     }
 
     crate::gateway_runner::stop_gateway().await?;
