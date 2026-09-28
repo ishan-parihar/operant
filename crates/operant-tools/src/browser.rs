@@ -2210,6 +2210,34 @@ fn host_matches_allowlist(host: &str, allowed: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Serialises the tests in this module that mutate process-global
+    /// environment variables.
+    ///
+    /// Three of them directly contradict each other: `detects_invocation_id`
+    /// and `detects_journal_stream` each set one variable and assert
+    /// `is_service_environment()` is true, while `false_in_normal_context`
+    /// removes both and asserts it is false. cargo runs a test binary on
+    /// parallel threads, so without this lock those three race each other and
+    /// the failure is a scheduling accident rather than a real defect.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Restore an env var to the state it had before the test.
+    ///
+    /// The `None` arm is the part that matters. Three tests here previously
+    /// restored only `if let Some(original)`, which silently skips the case
+    /// where the variable was NOT set beforehand — leaving it removed for
+    /// every later test in the binary. That is a leak, not a cleanup.
+    fn restore_env(key: &str, original: Option<std::ffi::OsString>) {
+        // SAFETY: test-only. Every caller holds ENV_LOCK, and this module is
+        // the only place in this file that mutates the environment.
+        unsafe {
+            match original {
+                Some(val) => std::env::set_var(key, val),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -2580,76 +2608,74 @@ mod tests {
 
     #[test]
     fn ensure_browser_env_sets_home_when_missing() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original_home = std::env::var_os("HOME");
+        // SAFETY: test-only, serialised by ENV_LOCK.
         unsafe { std::env::remove_var("HOME") };
 
         let mut cmd = Command::new("true");
         ensure_browser_env(&mut cmd);
         // Function completes without panic — HOME and CHROMIUM_FLAGS set on cmd.
 
-        if let Some(home) = original_home {
-            unsafe { std::env::set_var("HOME", home) };
-        }
+        restore_env("HOME", original_home);
     }
 
     #[test]
     fn ensure_browser_env_sets_chromium_flags() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = std::env::var_os("CHROMIUM_FLAGS");
+        // SAFETY: test-only, serialised by ENV_LOCK.
         unsafe { std::env::remove_var("CHROMIUM_FLAGS") };
 
         let mut cmd = Command::new("true");
         ensure_browser_env(&mut cmd);
 
-        if let Some(val) = original {
-            unsafe { std::env::set_var("CHROMIUM_FLAGS", val) };
-        }
+        restore_env("CHROMIUM_FLAGS", original);
     }
 
     #[test]
     fn is_service_environment_detects_invocation_id() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = std::env::var_os("INVOCATION_ID");
+        // SAFETY: test-only, serialised by ENV_LOCK.
         unsafe { std::env::set_var("INVOCATION_ID", "test-unit-id") };
 
         assert!(is_service_environment());
 
-        if let Some(val) = original {
-            unsafe { std::env::set_var("INVOCATION_ID", val) };
-        } else {
-            unsafe { std::env::remove_var("INVOCATION_ID") };
-        }
+        restore_env("INVOCATION_ID", original);
     }
 
     #[test]
     fn is_service_environment_detects_journal_stream() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = std::env::var_os("JOURNAL_STREAM");
+        // SAFETY: test-only, serialised by ENV_LOCK.
         unsafe { std::env::set_var("JOURNAL_STREAM", "8:12345") };
 
         assert!(is_service_environment());
 
-        if let Some(val) = original {
-            unsafe { std::env::set_var("JOURNAL_STREAM", val) };
-        } else {
-            unsafe { std::env::remove_var("JOURNAL_STREAM") };
-        }
+        restore_env("JOURNAL_STREAM", original);
     }
 
     #[test]
     fn is_service_environment_false_in_normal_context() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let inv = std::env::var_os("INVOCATION_ID");
         let journal = std::env::var_os("JOURNAL_STREAM");
-        unsafe { std::env::remove_var("INVOCATION_ID") };
-        unsafe { std::env::remove_var("JOURNAL_STREAM") };
+        // SAFETY: test-only, serialised by ENV_LOCK.
+        unsafe {
+            std::env::remove_var("INVOCATION_ID");
+            std::env::remove_var("JOURNAL_STREAM");
+        }
 
         if std::env::var_os("HOME").is_some() {
             assert!(!is_service_environment());
         }
 
-        if let Some(val) = inv {
-            unsafe { std::env::set_var("INVOCATION_ID", val) };
-        }
-        if let Some(val) = journal {
-            unsafe { std::env::set_var("JOURNAL_STREAM", val) };
-        }
+        // Restored unconditionally, not `if let Some` — this test REMOVES both
+        // vars, so skipping the None arm would strip them for the whole binary.
+        restore_env("INVOCATION_ID", inv);
+        restore_env("JOURNAL_STREAM", journal);
     }
 
     #[test]
