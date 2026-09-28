@@ -8,7 +8,7 @@
 //! - GitHub Token / gh auth
 //! - Memory Provider Health
 //! - Profiles
-//! - Submodules (tinker-atropos)
+//! - Submodules (vendor/prime-agent)
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -675,15 +675,25 @@ pub fn run_platform_checks(
     // =====================================================================
     section_header("Submodules");
 
-    let tinker_dir = project_root().join("tinker-atropos");
-    if tinker_dir.exists() && tinker_dir.join("Cargo.toml").exists() {
-        check_ok("tinker-atropos", "(RL training backend)");
-    } else if tinker_dir.exists() {
-        check_info("tinker-atropos directory found (no Cargo.toml — not a Rust crate)");
+    // This used to probe `tinker-atropos`, which exists in neither the
+    // repository nor .gitmodules — its only other mention in the tree is an
+    // unwired 2026-05-12 TODO about a future RL environment. So the check could
+    // never take a success branch, and on every machine it printed
+    // "run: git submodule update --init --recursive" — a command that cannot
+    // fix it, because there is no such submodule to initialise. Unactionable
+    // advice is worse than none: it sends someone to run a command that cannot
+    // work and then conclude their checkout is broken.
+    //
+    // `vendor/prime-agent` is the one registered submodule. It is only needed by
+    // the `[pk]` sidecar, which ships `enabled = false`, so its absence is
+    // informational — a warning here would cry wolf on every ordinary install.
+    let prime_dir = project_root().join("vendor/prime-agent");
+    if prime_dir.join("Cargo.toml").exists() || prime_dir.join("package.json").exists() {
+        check_ok("vendor/prime-agent", "(pk sidecar runtime)");
     } else {
-        check_warn(
-            "tinker-atropos not found",
-            "(run: git submodule update --init --recursive)",
+        check_info(
+            "vendor/prime-agent not initialised (only needed for the opt-in [pk] feature — \
+             see: git submodule update --init)",
         );
     }
 }
