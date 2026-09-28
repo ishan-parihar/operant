@@ -182,6 +182,28 @@ pub fn advice(env: &EnvSnapshot) -> Vec<Advice> {
     out
 }
 
+/// A note about terminal graphics, which has nothing to do with Shift+Enter but
+/// is the same class of problem: a terminal-side capability operant cannot fix
+/// from inside the process.
+///
+/// Returned separately from [`advice`] because that type is scoped to key
+/// mapping, and because the answer is a sentence rather than a snippet — there
+/// is no config change that makes tmux forward Sixel for us.
+pub fn graphics_note(env: &EnvSnapshot) -> Option<String> {
+    if !env.tmux {
+        return None;
+    }
+    Some(
+        "Images: inside tmux, operant does not claim a graphics protocol, because \
+         $TERM describes tmux's own terminfo rather than the terminal that would \
+         receive the bytes — whether Sixel passes through depends on how tmux was \
+         BUILT and on your outer terminal, and neither is visible from here. So \
+         pasted images, diagrams and rendered formulas show as text inside tmux, \
+         and the same content renders outside it."
+            .to_string(),
+    )
+}
+
 /// Render the advice for display in the status line / command output.
 pub fn render(env: &EnvSnapshot) -> String {
     let items = advice(env);
@@ -207,6 +229,11 @@ pub fn render(env: &EnvSnapshot) -> String {
         let _ = writeln!(out);
     }
 
+    // A separate section, not another `Advice`: it is not about Shift+Enter.
+    if let Some(note) = graphics_note(env) {
+        let _ = writeln!(out, "{note}");
+    }
+
     out.trim_end().to_string()
 }
 
@@ -219,6 +246,31 @@ mod tests {
             .into_iter()
             .find(|a| a.target == target)
             .and_then(|a| a.snippet)
+    }
+
+    #[test]
+    fn a_multiplexer_is_told_why_images_do_not_render() {
+        let env = EnvSnapshot {
+            tmux: true,
+            ..Default::default()
+        };
+        let note = graphics_note(&env).expect("tmux must get the graphics note");
+        assert!(note.contains("tmux"), "the note must name the multiplexer");
+        assert!(
+            note.contains("does not claim a graphics protocol"),
+            "the note must say what operant DOES, not only what is wrong"
+        );
+        // It has to reach the user, not just exist — the whole point of adding
+        // it alongside the Sixel detection fix.
+        assert!(
+            render(&env).contains("does not claim a graphics protocol"),
+            "the graphics note must actually be rendered by /terminal-setup"
+        );
+    }
+
+    #[test]
+    fn a_plain_terminal_gets_no_graphics_note() {
+        assert!(graphics_note(&EnvSnapshot::default()).is_none());
     }
 
     #[test]

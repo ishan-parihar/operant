@@ -72,7 +72,21 @@ pub fn detect_graphics_protocol() -> GraphicsProtocol {
         "rxvt",
         "mlterm",
         "st",
-        "tmux",
+        // "tmux" is DELIBERATELY absent. Inside a multiplexer `$TERM` describes
+        // the multiplexer's OWN terminfo, not the outer terminal that would
+        // actually receive the bytes, so it is not evidence of anything:
+        //
+        //   - `screen-256color` (tmux's default) does not mention tmux, so
+        //     listing "tmux" would not even match the common case. A user whose
+        //     sixel passthrough works would be told it does not.
+        //   - `tmux-256color` does match, and passthrough then depends on
+        //     whether tmux was BUILT with sixel support and on the outer
+        //     terminal — neither of which `$TERM` can report. Claiming Sixel
+        //     here is how a user gets a mangled image re-drawn on every frame
+        //     (and since iter-418 pinned graphics, "every frame" is literal).
+        //
+        // Claiming nothing is the honest answer: `/terminal-setup` reports this
+        // limitation rather than the TUI silently emitting sequences tmux eats.
     ];
     if sixel_terms.iter().any(|t| term.contains(t)) {
         // Heuristic: assume Sixel support for known terminals
@@ -574,5 +588,53 @@ mod tests {
         // Nothing recognisable: the caller renders a textual placeholder.
         let none = with_env(&PROTOCOL_FREE_ENV, detect_graphics_protocol);
         assert_eq!(none, GraphicsProtocol::None);
+    }
+
+    /// Inside a multiplexer, `$TERM` describes the MULTIPLEXER's terminfo, not
+    /// the outer terminal that would actually receive the bytes — so it is not
+    /// evidence that Sixel works. Both common tmux `$TERM` values must claim
+    /// nothing rather than guess.
+    ///
+    /// This was a real defect: `tmux` was listed as a Sixel-capable terminal, so
+    /// `tmux-256color` claimed Sixel unconditionally. Whether passthrough
+    /// actually works depends on how tmux was BUILT and on the outer terminal,
+    /// neither of which `$TERM` reports — and since iter-418 pinned graphics, a
+    /// wrong claim is re-emitted on every frame instead of appearing once and
+    /// being forgotten.
+    #[test]
+    fn multiplexer_terminfo_does_not_claim_sixel() {
+        for term in ["screen-256color", "tmux-256color", "screen", "tmux"] {
+            let detected = with_env(
+                &[
+                    ("TERM", Some(term)),
+                    ("KITTY_WINDOW_ID", None),
+                    ("TERM_PROGRAM", None),
+                    ("ITERM_SESSION_ID", None),
+                ],
+                detect_graphics_protocol,
+            );
+            assert_eq!(
+                detected,
+                GraphicsProtocol::None,
+                "$TERM={term} is multiplexer terminfo and says nothing about Sixel \
+                 passthrough, so it must not claim the protocol"
+            );
+        }
+    }
+
+    /// A real Sixel terminal must still be detected — the tmux fix must not
+    /// have narrowed detection generally.
+    #[test]
+    fn a_real_sixel_terminal_is_still_detected() {
+        let detected = with_env(
+            &[
+                ("TERM", Some("xterm-256color")),
+                ("KITTY_WINDOW_ID", None),
+                ("TERM_PROGRAM", None),
+                ("ITERM_SESSION_ID", None),
+            ],
+            detect_graphics_protocol,
+        );
+        assert_eq!(detected, GraphicsProtocol::Sixel);
     }
 }
