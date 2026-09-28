@@ -1594,7 +1594,15 @@ everyone to ignore CI.
   rather than confusing. What is still outstanding is fixing the 44 doc errors
   (R40-19) and re-enabling the two gated jobs, in that order.
 
-### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (OPEN, LOW, measured iter-385)
+### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (OPEN, LOW, re-confirmed iter-416)
+**Re-confirmed at `31e727db`: 60 hunks across 22 unique files, 22 of 22 dirty in
+the shared tree — 100% overlap, unchanged.**
+**A measurement trap worth recording, because I fell into it this session.**
+Running `cargo fmt --all -- --check` in the *shared* tree reports **0 diffs** —
+the peer's uncommitted working copy is already fmt-clean and masks the committed
+state. I read that as "the sweep is done" and was wrong by 60 hunks. Measure fmt
+debt in a **clean worktree at HEAD**, never in the working tree: the number is a
+property of the commit, not of the checkout.
 `cargo fmt --all --check` reports 60 dirty hunks at HEAD (was 66, then 22, now
 60 again — the concurrent agent's commits add more fmt debt than their landed
 commits clear). The sweep is 22 files.
