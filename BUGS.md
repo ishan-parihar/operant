@@ -1796,6 +1796,18 @@ same stale ref, not a reverted file.
   the second time this session a nominally successful operation did not do what
   it reported (the first was the clippy gate's "exit 0" while linting 1 of 8
   warnings — R40-7, iter-370).
+- **Correction (iter-405)**: an earlier draft of this note claimed the failing
+  `merge-base --is-ancestor` check was explained by the two SHAs being equal.
+  That is wrong, and it was tested rather than argued: with identical SHAs
+  `git merge-base --is-ancestor HEAD HEAD` exits 0, so equality satisfies
+  ancestry. The check failed because the ref it was given was stale, and
+  against a freshly fetched ref the same check exits 0. Recorded here because
+  the wrong explanation is the more plausible-sounding one and would send the
+  next reader to compare SHAs when the actual defect is a stale ref.
+- **Also note the sequencing**: the fix that actually worked was
+  `git fetch --prune`, not the `git update-ref` shortcut the note originally
+  suggested — worth stating plainly, since the note described a remedy that was
+  never run.
 - **No force-push ever occurred**, and none should: AGENTS.md forbids it, and
   with two agents committing to `main` a force-push would discard peer work.
   Every push this session was a fast-forward, verified with
