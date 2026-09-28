@@ -1099,7 +1099,7 @@ production callers, so the loop's `emit` calls were no-ops).
   their code into this tree and conflict with their next push; that gate red
   belongs to their iteration.
 
-### R40-14 — the command-approval blocklist is fed the wrong key for `code_execution` (OPEN, HIGH)
+### R40-14 — the command-approval blocklist was never applied to `code_execution` (FIXED iter-383, HIGH)
 `crates/operant-core/src/approval.rs:656` extracts the command for the
 approval gate with:
 ```rust
@@ -1114,15 +1114,30 @@ receive the literal string `"code_execution"`, which matches nothing.
 No test covers this extractor, which is why the mismatch survived. `terminal`
 and `process` are unaffected — verify their arg structs before changing the
 match.
-- **Why this is HIGH and not cosmetic**: `code_execution` runs UNSANDBOXED on
+- **FIXED iter-383**: `code_execution` now has its own arm reading `code`,
+  split out of the `terminal | process` arm. `patch` was found broken the same
+  way in the same function — grouped with `file_write` and reading
+  `args["content"]`, but `PatchArgs` is `path`/`find`/`replace`, so it extracted
+  an empty payload and the text it writes was never gated. It now has its own
+  arm too. Four regression tests; mutation-proven both directions.
+  - **Note for the next reader on the test shape**: the natural end-to-end
+    assertion (`verdict != "allowed"` under `mode: Some("manual")`) is a
+    TAUTOLOGY — manual mode returns `requires_approval` for every tool before
+    the blocklist runs, so it passes with or without the bug. The shipped test
+    uses default (smart) mode and asserts `verdict == "blocked"` AND
+    `blocked_by == Some("hardline")`, with a benign-payload control so it
+    cannot pass by blanket denial. The payload must be the literal
+    `rm -rf /*`: the regex alternative requires the WHOLE string to be
+    `rm -rf /`, so wrapping it in `os.system(...)` falls through to the
+    weaker pattern layer.
   the host with the operant process's own permissions (already recorded as
   R12-1 / BUGS.md:135 — it writes a temp file and invokes python3/node/bash
   directly, with timeout + kill_on_drop + the approval gate as the only
-  mitigations). The approval extractor being dead means the last of those
-  mitigations is inert for this tool. Fix this alongside R12-1's unsandboxed
+  mitigations). The approval extractor being dead meant the last of those
+  mitigations was inert for this tool. Fix this alongside R12-1's unsandboxed
   note, not independently of it.
 
-### R40-15 — secondary provider keys (`api_keys`) are written to config.toml in plaintext (OPEN, HIGH)
+### R40-15 — secondary provider keys (`api_keys`) were written to config.toml in plaintext (FIXED iter-380, HIGH)
 `crates/operant-config/src/schema/core.rs`: `api_key` (line 43) carries
 `#[secret]`; `api_keys` (line 50) — the credential-pool list that rotates in on
 401/429 — carries only `#[serde(default, skip_serializing_if = ...)]`. So the
@@ -1132,7 +1147,8 @@ in plaintext to `config.toml` on each `save()`. The doc comment on `api_key`
 claim-must-match-code defect, not just a gap. Compare the hardened reference
 implementation, `operant-config/src/secrets.rs:294-301`, which writes with
 `OpenOptionsExt::mode(0o600)` at creation.
-- **The fix is NOT one attribute (corrected iter-379)**: the derive macro
+- **The fix is NOT one attribute (corrected iter-379)** — **this note was
+  WRONG and is retracted; see the correction below.**: the derive macro
   documents its supported types at `crates/operant-macros/src/lib.rs:43` —
   "`#[secret]` on a `String` or `Option<String>` field". `api_keys` is a
   `Vec<String>`, so annotating it would be silently ignored. The real work is
@@ -1142,8 +1158,23 @@ implementation, `operant-config/src/secrets.rs:294-301`, which writes with
   macro iteration, and the test must assert a pooled key round-trips
   encrypt→save→load as ciphertext — a config round-trip test is NOT enough,
   because `skip_serializing_if` means a leaked key can look correct.
+- **CORRECTION (iter-380, supersedes the note above)**: that advice was based
+  on a stale doc comment. The macro ALWAYS supported `Vec<String>` — see the
+  `is_vec_string` branch at `operant-macros/src/lib.rs:206-237`, which emits
+  per-element `secret_fields`, encrypt and decrypt operations. The claim that
+  annotating `api_keys` "would be silently ignored" was false. The shipped
+  fix was therefore exactly one attribute on `api_keys` plus a doc-comment
+  correction at `lib.rs:43` (which is what misled the iter-379 note in the
+  first place). No macro change was needed or made.
+  - Test: `config_save_encrypts_credential_pool_keys` in
+    `schema/core/core_tests.rs`, asserting on RAW file contents (no pooled key
+    appears in the clear) and that each element is `SecretStore::is_encrypted`
+    and decrypts to its original. A config round-trip is insufficient for the
+    reason given above.
+  - Mutation-proven both directions: without `#[secret]` the test fails; with
+    it, 645/645 in operant-config.
 
-### R40-16 — subprocesses inherit the full parent environment, including API keys (OPEN, MEDIUM)
+### R40-16 — subprocesses inherited the full parent environment, including API keys (FIXED iter-381, MEDIUM)
 `crates/operant-core/src/tools/terminal_backend.rs:95-100` reads
 `std::env::vars().collect()` and passes the whole map to the child whenever
 `env_vars` is non-empty. When `env_vars` is EMPTY the child still inherits the
@@ -1156,7 +1187,29 @@ explicitly, the empty case implicitly. No allowlist/denylist scrub of
   `kill_on_drop`/process-group teardown, and that the Docker/SSH backends
   accept a timeout they never enforce. Note that R12-1/its neighbours already
   document `kill_on_drop` for `code_execution.rs` as a KNOWN accepted gap, so
-  these need direct reading before they are actioned.
+  these need direct
+  reading before they are actioned. (iter-381 read the code: `code_execution.rs`
+  DOES use `kill_on_drop(true)` + `process_group(0)` at all five spawn sites.
+  The claim was about `terminal_backend.rs`'s LocalBackend, which is a
+  different path and is still unverified.)
+- **FIXED iter-381**: `sanitized_env()` now clears and rebuilds the child
+  environment from the parent minus credential-shaped names, applied at
+  LocalBackend plus all five `code_execution.rs` spawn sites (python, node,
+  shell, rustc, run). A denylist, not an allowlist, because the tool exists to
+  run arbitrary user commands; explicit `env_vars` overrides still win.
+  - **Do not reintroduce a bare `AUTH` fragment.** It strips `SSH_AUTH_SOCK`
+    and silently breaks every `ssh` / `scp` / `git push`. The fragments are
+    deliberately suffix-shaped (`API_KEY`, `_TOKEN`, `TOKEN_`, `SECRET_`,
+    `_SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `PRIVATE_KEY`,
+    `SESSION_KEY`). Caught in review before it shipped; pinned by
+    `ordinary_env_vars_are_not_treated_as_secret` and by the end-to-end
+    `spawned_command_does_not_inherit_api_keys`, which both fail if `AUTH`
+    returns.
+  - Docker and SSH backends were NOT leaking and are unchanged: they forward
+    only explicit `env_vars` and never inherit the parent environment.
+  - Mutation-proven: re-adding bare `AUTH` fails both tests with
+    "SSH_AUTH_SOCK must pass through" and "scrub stripped SSH_AUTH_SOCK,
+    breaking ssh/scp/git-push". operant-core 1812 pass at that commit.
 
 ### R40-12 — AGENTS.md's "7 platforms only" is false: 23 channel features are in the DEFAULT build (OPEN, MEDIUM, CORRECTED iter-376)
 `AGENTS.md` states "Supported: 7 platforms", "Do NOT re-add purged platforms",
@@ -1212,7 +1265,7 @@ never called.
   adapters are real implementations, so (b) discards working code. Operator
   decision, its own iteration.
 
-### R40-11 — `origin/main` does not compile: iter-357 shipped a reader without its field (OPEN, HIGH)
+### R40-11 — `origin/main` did not compile: iter-357 shipped a reader without its field (FIXED by peer iter-382, HIGH)
 `0482fa1b` (peer, `fix(iter-357)`) added
 `max_tool_result_share: settings.max_tool_result_share` at
 `crates/operant-core/src/agent/mod.rs:170`, sourced from `BehaviorSettings`,
@@ -1439,3 +1492,20 @@ decisions the audit left open.
   (last committed at their `f956f535`), neither a C2 file. Verification of
   C2's release compile is therefore done in a clean `git worktree` at HEAD
   (exit 0 at iters 359, 360 and 363).
+
+### R40-11 addendum — RESOLVED by the peer, not by this audit (iter-384)
+The repair sites were peer-dirty for the whole window this item was open, and
+an attempt to land the `DEFAULT_MAX_TOOL_RESULT_SHARE` fallback in an isolated
+worktree was **deliberately discarded** once the peer's own fix landed
+(`1f6fb2b1`, iter-382): their commit added the field to `BehaviorSettings`
+(`config.rs:215`) and kept the intended read at `agent/mod.rs:172`. Reverting
+to the constant at that point would have replaced their correct fix AND created
+a write-only config knob — a field that loads, persists, and changes nothing,
+which is the same defect class as R40-14. `cargo check -p operant-cli --bin
+operant` on that tree is green.
+- **Still open, minor**: `operant.example.toml` does not mention
+  `max_tool_result_share` (grep = 0) even though AGENTS.md requires a template
+  line for each new config field. Tracked here rather than as a new item.
+- **Process note**: nothing in CI runs on a push to main (all workflows are
+  tag-triggered), so a broken `origin/main` is only caught if an agent happens
+  to run `cargo check`. This is the second time (first: iter-359) — see R40-7.
