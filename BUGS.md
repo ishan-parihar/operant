@@ -1616,10 +1616,16 @@ single push — it stays blocked for as long as the peer has these files open.
   change and collides with their next several commits. Same shape as the
   expected clippy red in R40-21: a check reporting work that is not ours.
 
-### R40-19 — the `doc` CI job has 44 rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, measured iter-391)
+### R40-19 — the `doc` CI job is GATED OFF: 44 rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, measured iter-391)
 `ci.yml`'s doc job (`RUSTDOCFLAGS=-Dwarnings`, `cargo doc --workspace --no-deps
---all-features`) is red, which is one of the two reasons the main-branch
-trigger is still deferred (R40-17). Two were fixed in iter-389
+--all-features`) is **disabled, not deferred**. The main-branch trigger landed
+at iter-391/392 and `fmt` + `clippy` are live on pushes to `main`; `doc` carries
+`if: ${{ false }}` with a comment citing this entry, so it defers nothing and
+blocks nothing. It is re-enabled by deleting that one line once the count
+reaches zero. (An earlier version of this entry said the trigger was "still
+deferred" for this job — that was true when written and stopped being true at
+iter-392.)
+Two errors were fixed in iter-389
 (`PgKnowledgeGraph` linking a private item; `operant-hardware/src/datasheet.rs`
 unqualified module-doc links). **44 remain, as of iter-391** — see the
 addendum at the end of this entry, which explains why that number is a floor
