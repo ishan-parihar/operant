@@ -231,41 +231,48 @@ You said you don't want static vendored code and want vendors pulled on each
 build. Worth being precise, because the three mechanisms behave very
 differently and two of them will not do what you want:
 
-| mechanism | pulls at build? | stays current? | honest verdict |
+| mechanism | resolves at build? | stays current? | honest verdict |
 |---|---|---|---|
-| **cargo git dependency** | yes, at every build | **only after `cargo update`** | **this is what you want** |
+| **cargo git dependency** | once, then pinned in `Cargo.lock` | **only after `cargo update`** | closest to your requirement |
 | git submodule | no — pinned commit | no, drifts silently | fails your requirement |
 | git subtree / `vendor/` dir | no — copied static source | no | exactly what you rejected |
 | runtime auto-download (today's IGS) | no — at first use | yes, but *unreviewed* | supply-chain risk |
 
-**The "stays current" cell above is the caveat that matters.** Cargo resolves a
-git dependency and writes the result into `Cargo.lock`; every later build reuses
-that lock. A fresh upstream commit is *not* picked up until someone runs
-`cargo update`. Operant's own `Cargo.lock` currently has **0** git-sourced
-entries, so this would be the first git dependency in the workspace and the
-lockfile interaction is unproven here. A build-time pull gives you *pinned
-freshness on a schedule you control*, not continuous freshness.
+**The honest version of the freshness claim.** Cargo resolves a git dependency
+once and writes the result into **operant's own `Cargo.lock`**; every later
+build reuses that lock and does *not* re-resolve. A new upstream commit is
+invisible until someone runs `cargo update`. So a git dependency gives you
+**pinned freshness on a schedule you control**, not continuous freshness. Your
+requirement — no static copied-in code, refreshed from the real upstream — is
+met, and the git dependency is still the only mechanism of the four that meets
+it. It just does not deliver "always current" on its own; a scheduled
+`cargo update` is the missing half, and that is a CI step, not a cargo feature.
 
-**Which surface a dependency would take** — decide this before promising
-build-time pull, because the two targets differ:
-- `sourcehound` ships **two targets**: a lib named `sourcehound_mcp`
-  (`Cargo.toml:72-75`, `path = "src/lib.rs"`) and a bin named `sourcehound`
-  (`[[bin]]`, `path = "src/cli.rs"`). A cargo dependency takes the **lib**;
-  a subprocess contract like today's IGS needs the **bin**. Which one you
-  integrate decides whether this is a code dependency at all.
+Operant's `Cargo.lock` currently has **0** git-sourced entries, so this would be
+the workspace's first and the interaction is unproven here.
+
+**Which surface a dependency would take** — decide this before committing:
+- `sourcehound` ships **two targets**: a lib `sourcehound_mcp`
+  (`Cargo.toml:72-75`) and a bin `sourcehound` (`[[bin]]`, `src/cli.rs`). A
+  cargo dependency takes the **lib**; today's IGS subprocess contract needs the
+  **bin**. That choice decides whether this is a code dependency or a
+  process-swap.
+- The lib is small but **real, not a stub**: `src/lib.rs` is a 650-byte
+  re-export barrel exposing `server` (`SourcehoundMcpServer`), `config`
+  (`load_settings`), `tools`, `http`, and `Settings`; the browser, clustering,
+  fusion, cache and parsers are deliberately `pub(crate)`. It is embeddable —
+  the public surface is the MCP server, not the scraping primitives.
 - Its manifest declares `[package]` at line 1 and `[workspace]` at line 18 in
   the same file, with members being only `vendor/*` and `toon-helper`. The root
   package is its own workspace root while shipping ~196k lines of vendored
-  obscura as members. It resolves today, but a git dependency on it pulls that
-  vendor tree along — static source inside the thing meant to stay current.
+  obscura as members. A git dependency pulls that vendor tree along — static
+  source inside the thing meant to stay current.
 
-**Use a cargo git dependency.** It re-resolves on every build, so the harness
-genuinely always tracks upstream.
-
-`crates/operant-cli/Cargo.toml:21-24` already shows the pattern — those four
-crates use `{ workspace = true, optional = true }` with the real dependency in
-the root `Cargo.toml`. Put `memory-wire` and `sourcehound` in the root
-`Cargo.toml` the same way and you get build-time pull for free.
+**Recommendation: use a cargo git dependency.** `crates/operant-cli/Cargo.toml:21-24`
+already shows the pattern — `{ workspace = true, optional = true }` with the real
+dependency declared in the root `Cargo.toml`. Put `memory-wire` and `sourcehound`
+there the same way, add a scheduled `cargo update` in CI so freshness is real
+rather than assumed, and pin a tag for release builds so they stay reproducible.
 
 Four failure modes you are accepting, stated plainly:
 
