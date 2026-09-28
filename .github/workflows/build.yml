@@ -65,6 +65,33 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # System libraries the dependency graph needs at BUILD time. This step was
+      # entirely absent, which is why the release-gating Linux leg could not
+      # build: `alsa-sys` panicked with "Package alsa was not found in the
+      # pkg-config search path", and the cross legs died the same way on
+      # `openssl-sys`. A workflow that has never once built is a workflow that
+      # can never publish, and `release.yml` gates on this workflow's conclusion.
+      #
+      # Why these, traced rather than guessed (`cargo tree -i alsa-sys`):
+      #   libasound2-dev  alsa-sys    <- cpal <- kokoro-tiny <- operant-core (TTS audio out)
+      #   libssl-dev      openssl-sys
+      #   libclang-dev    bindgen, for the ONNX Runtime / espeak bindings
+      #   cmake           espeak-rs-sys builds espeak-ng from source
+      #   pkg-config      the probe mechanism all of the above are found through
+      #
+      # alsa is Linux-only; cpal uses CoreAudio on macOS and WASAPI on Windows,
+      # so the guard keeps those runners from running apt-get.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libasound2-dev \
+            libssl-dev \
+            libclang-dev \
+            cmake \
+            pkg-config
+
       - name: Build
         run: cargo build --workspace --release --target ${{ matrix.target }}
 
