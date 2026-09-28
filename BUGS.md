@@ -1605,24 +1605,30 @@ measurement). Produced and verified again in an isolated worktree:
 --lib` still compiles, so it is a pure line-wrap. It remains unstaged because
 every one of those files carries the peer's in-flight edits, and a whole-file
 `git add` would sweep them in (R40-10). Unlike R40-21 this is not waiting on a
-single push — it stays blocked for as long as the peer has these files open. The sweep was produced and verified in an
-isolated worktree: `cargo fmt --all --check` clean afterwards and
-`cargo check -p operant-core --lib` still compiles, so it is a pure line-wrap.
-It could not be applied because **all 22 files are dirty in the shared
-working tree** (36 dirty files total, 100% overlap). Applying a whole-file
-reformat over in-flight edits is the R40-10 clobber class, so it was dropped
-rather than forced. Once the concurrent agent's work lands, this is a single
-`cargo fmt --all && git commit`.
+single push — it stays blocked for as long as the peer has these files open.
+- **EXPECT A RED `fmt` JOB ON THE PEER'S NEXT PUSH — correct, not a
+  regression.** Since iter-392 `fmt` is an active ci.yml job on pushes to
+  `main`, and this debt is overwhelmingly the peer's iter-391 work, their next
+  push will go red on formatting they own. Do not "fix" it for them and do not
+  read it as something this audit broke: their fix is `cargo fmt --all` on their
+  own work. Pre-empting it with a 60-file reformat across an active tree is
+  exactly what this entry exists to prevent — a diff that size obscures their
+  change and collides with their next several commits. Same shape as the
+  expected clippy red in R40-21: a check reporting work that is not ours.
 
-### R40-19 — the `doc` CI job has 26 rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, measured iter-389)
+### R40-19 — the `doc` CI job has 44 rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, measured iter-391)
 `ci.yml`'s doc job (`RUSTDOCFLAGS=-Dwarnings`, `cargo doc --workspace --no-deps
 --all-features`) is red, which is one of the two reasons the main-branch
 trigger is still deferred (R40-17). Two were fixed in iter-389
 (`PgKnowledgeGraph` linking a private item; `operant-hardware/src/datasheet.rs`
-unqualified module-doc links). **26 remain**, measured with the full
-`--all-features` graph — note the count grows as earlier crates are fixed,
-because a crate that fails stops reporting the ones behind it, so any single
-number here is a floor, not the total:
+unqualified module-doc links). **44 remain, as of iter-391** — see the
+addendum at the end of this entry, which explains why that number is a floor
+rather than a total and cannot be re-measured until R40-21 is fixed. Full
+breakdown by class is in that addendum; the two largest are 21 unclosed-HTML-tag
+(generics and bracketed prose parsed as HTML) and ~14 single-letter or keybinding
+"links", only ~8 of which are genuine claim-must-match-code defects. Measured
+with the full `--all-features` graph using `--keep-going`, without which the
+count is truncated by the first failing crate:
 - `unclosed HTML tag` (9): `String`, `scope`, `repo`, `OperantAgent`, `id`,
   `hex`, `Connection` — angle-bracket generics in doc comments that rustdoc
   parses as HTML.
