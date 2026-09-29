@@ -1237,7 +1237,7 @@ signal, …). Measured against the committed tree, that is no longer true:
 - Corrected from the first statement of this item (iter-374): it reported "22"
   and separately "15" for the same set. The count is 23.
 
-### R40-13 — 4 default-feature crates are in the normal dep graph with no reference from operant-cli/src (OPEN, HIGH, CORRECTED iter-376)
+### R40-13 — 4 default-feature crates are in the normal dep graph with no reference from operant-cli/src (SUPERSEDED by R40-27 at iter-452 — all four claims verified FALSE)
 `cargo tree -p operant-cli -e normal --depth 1` lists `operant-channels`,
 `operant-runtime`, `operant-gateway` and `operant-tools` as NORMAL (non-dev,
 non-build) dependencies of the CLI. Each has **zero** references from
@@ -1510,7 +1510,7 @@ operant` on that tree is green.
   tag-triggered), so a broken `origin/main` is only caught if an agent happens
   to run `cargo check`. This is the second time (first: iter-359) — see R40-7.
 
-### R40-17 — CI now runs on pushes to main; the `doc` job is still red (PARTIAL, iter-391)
+### R40-17 — CI now runs on pushes to main; the `doc` job is still red (RESOLVED at iter-479 — Documentation job reports `success` on `ca811f70`, so all three CI jobs are green)
 **Landed (iter-391)**: `ci.yml` gained `branches: ['main']`, so `fmt` and
 `clippy` — the two jobs verified green, and the two that would have caught a
 compile break — now run on every push. That is the direct fix for both
@@ -1594,7 +1594,7 @@ everyone to ignore CI.
   rather than confusing. What is still outstanding is fixing the 44 doc errors
   (R40-19) and re-enabling the two gated jobs, in that order.
 
-### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (OPEN, LOW, re-confirmed iter-416)
+### R40-18 — fmt sweep is blocked on the concurrent agent, not on anything else (RESOLVED at iter-448 — the peer's 22 files were landed; `cargo fmt --all --check` re-verified exit 0 at iter-479)
 **Re-confirmed at `31e727db`: 60 hunks across 22 unique files, 22 of 22 dirty in
 the shared tree — 100% overlap, unchanged.**
 **A measurement trap worth recording, because I fell into it this session.**
@@ -1624,7 +1624,7 @@ single push — it stays blocked for as long as the peer has these files open.
   change and collides with their next several commits. Same shape as the
   expected clippy red in R40-21: a check reporting work that is not ours.
 
-### R40-19 — the `doc` CI job is GATED OFF: **74** rustdoc errors under `-Dwarnings` (OPEN, MEDIUM, recounted iter-415 at `c3dfa1ab`)
+### R40-19 — the `doc` CI job is GATED OFF: **74** rustdoc errors under `-Dwarnings` (RESOLVED at iter-441 — all 74 driven to 0 by hand and the gate re-enabled; re-verified not-gated and passing at iter-479)
 
 **Recounted iter-415, on a tree that finally compiles.** The previous figure was
 44 (iter-391), explicitly recorded as a floor. The real number is **74**, and the
@@ -1850,7 +1850,7 @@ carry a different number, which is the stale-duplicate-figure failure this
 ledger has hit before; update the comment and the entry together, or cite only
 the entry.
 
-### R40-22 — three remotes point at the same URL, so tracking refs go stale silently (process note, iter-404/405)
+### R40-22 — three remotes point at the same URL, so tracking refs go stale silently (CORRECTED at iter-479 — `gitlab` no longer aliases GitHub, it points at gitlab.com; the two GitHub remotes still duplicate, so the stale-ref risk stands)
 `git remote -v` shows `origin`, `github` and `gitlab` — and all three resolve
 to the same `https://github.com/ishan-parihar/operant.git`. The two GitHub ones
 track `main` under different local ref names, and neither ref is refreshed by a
@@ -2086,7 +2086,7 @@ adapters — and in both the plausible-sounding number is what made it convincin
 enough to file. **Before filing a "the docs are stale" finding, grep the doc for
 the thing the finding is about and confirm the doc actually claims it.**
 
-### R40-27 — Plan G's four "dead code in the shipped binary" claims are all false; verified, not assumed (iter-452)
+### R40-27 — Plan G's four "dead code in the shipped binary" claims are all false; verified, not assumed (CLOSED at iter-452 — this entry IS the resolution of R40-13)
 
 R40-13 has been carried as "the largest remaining engineering item" and as
 "the biggest lever on binary size and attack surface". I finally tested it
