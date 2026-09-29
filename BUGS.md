@@ -2221,3 +2221,50 @@ invisible). Both assertions mutation-proven independently — restoring the exac
 shipped bug, and adding a bogus provider, each fail the guard while the
 sibling test still passes.
 
+
+### R40-30 — tool-error rendering hardcodes the deuteranopia palette's error colour on all 8 themes (OPEN, owner decision, iter-461)
+Six sites in the TUI use `Color::Rgb(255, 140, 0)` for tool errors: five in
+`tui/render/tools.rs` (173, 355, 381, 467, 471) and one in `tui/messages/tools.rs:240`,
+where the local is literally named `error_color` next to `ToolStatus::Error`.
+
+That value is **not an arbitrary orange — it is the `deuteranopia` palette's
+`error` entry** (`theme_colors.rs:247`, commented `// Orange (not red)`), and
+that is correct by design: a red/green-safe palette has to use orange, because
+red is exactly the colour a deuteranope cannot reliably distinguish. Measured
+across all eight palettes, `error` is:
+
+| theme | `error` |
+|---|---|
+| default | `Rgb(255, 87, 51)` |
+| dark | `Rgb(239, 83, 80)` |
+| light | `Rgb(211, 47, 47)` |
+| solarized | `Rgb(220, 50, 47)` |
+| nord | `Rgb(191, 97, 106)` |
+| monokai | `Rgb(255, 85, 85)` |
+| dracula | `Rgb(249, 38, 114)` |
+| deuteranopia | `Rgb(255, 140, 0)` |
+
+**So these six sites are not a missed dedup and must not be treated as one.**
+Routing them through `palette.error()` would be the "obvious" theme fix, and it
+would change appearance on 7 of 8 themes — which is the per-theme appearance
+decision this file keeps declining to make unilaterally. It is also worth
+noting what today's behaviour actually means: a deuteranopia user gets a
+colourblind-safe error colour on *every* theme, while everyone else gets a
+colour chosen for them. That is defensible, and it is a real accessibility
+property rather than an accident to clean up.
+
+Owner call, genuinely a product question: (a) leave the six sites as they are
+(theme-independent, always colourblind-safe), (b) route them through
+`palette.error()` and accept the 7-theme appearance change, or (c) add an
+`error_accessible` accessor that returns the deuteranopia value for every theme
+and route them through that — which preserves today's appearance exactly while
+making the intent explicit and reversible.
+
+**Not filed as a colour-literal cleanup item.** It was found by scanning for
+exact-duplicate `Rgb` values, which is worth repeating: that scan returned 15
+apparent duplicate groups, and this was the only one that turned out to be a
+real decision rather than either mechanical work or something to leave alone.
+The rest were quantizer fixtures in `color_depth.rs` (pure primaries and the
+synthetic `Rgb(1,2,3)`), the `stats_dialog` heatmap data encoding, and the
+deliberately high-contrast unthemed text in `ask_user_dialog.rs`. A mechanical
+sweep would have destroyed all three.
