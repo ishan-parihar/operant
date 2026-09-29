@@ -365,6 +365,60 @@ fn test_question_mark_shortcut_closes_help_with_shift_modifier() {
     assert!(!app.show_help);
 }
 
+// ---- Prompt-context behavioural pin (iter-453) ----
+//
+// iter-429 proved a SOURCE pin cannot catch a wrong-action binding: the char is
+// dispatched, so a `contains(KeyCode::Char('u'))` grep passes, while the chord
+// actually opens a dialog. Only asserting the chord's specific EFFECT catches
+// that. The six chords below had zero presses anywhere in this file, so nothing
+// pinned what they do. Each asserts the exact post-condition, and the multi-line
+// fixtures matter: for Ctrl+U the input is multi-line because "delete to line
+// start" and "delete to text start" are different results, and a single-line
+// fixture would pass for the wrong reason.
+
+#[test]
+fn test_ctrl_u_deletes_to_line_start_not_to_text_start() {
+    let mut app = make_app();
+    app.prompt_input.text = "one\ntwo".to_string();
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+
+    // Line-scoped: the first line must survive. A whole-buffer delete would
+    // leave "" and this assertion would catch it.
+    assert_eq!(app.prompt_input.text, "one\n");
+    assert_eq!(app.prompt_input.cursor, 4);
+}
+
+#[test]
+fn test_ctrl_w_deletes_the_previous_word_only() {
+    let mut app = make_app();
+    app.prompt_input.text = "hello world".to_string();
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Char('w'), KeyModifiers::CONTROL));
+
+    assert_eq!(app.prompt_input.text, "hello ");
+}
+
+#[test]
+fn test_shift_enter_inserts_a_newline_instead_of_submitting() {
+    let mut app = make_app();
+    app.prompt_input.text = "ab".to_string();
+    app.prompt_input.cursor = 1;
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::SHIFT));
+
+    // Inserted AT the cursor, not appended, and nothing was submitted — the
+    // distinction from plain Enter is the whole point of the binding.
+    assert_eq!(app.prompt_input.text, "a\nb");
+    assert_eq!(app.prompt_input.cursor, 2);
+    assert!(!app.is_streaming);
+}
+
 #[test]
 fn test_question_mark_shortcut_types_into_non_empty_prompt() {
     let mut app = make_app();
