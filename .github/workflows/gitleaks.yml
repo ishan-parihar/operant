@@ -1,0 +1,55 @@
+name: Secret Scan
+
+# Gitleaks over the full history. Secrets do not arrive in a commit that
+# touches a workflow file — they arrive in whatever commit an agent or a
+# hurried `git add -A` happened to make, which is why this scans history rather
+# than only the diff.
+#
+# `--redact` is not optional: without it, a real hit prints the matched secret
+# into the run log, which is a public log on a public repo. Gitleaks reports
+# the file, line, and rule and substitutes a hash.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  # The scan only reads the repository. `contents: read` is all a secret scan
+  # legitimately needs; anything more would make this workflow a liability if it
+  # were ever compromised.
+  contents: read
+
+# Same reason every other workflow here has one: superseded runs were billing in
+# parallel with no concurrency group anywhere.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    # Only the newest commit needs scanning: a full-history scan of every commit
+    # in a push that contains 10 commits re-scans the same ancestors 10 times.
+    # The base ref is what makes a PR scan its merge-base rather than the whole
+    # default branch.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history to scan. fetch-depth: 0 is the difference
+          # between a real scan and one that silently sees a single commit and
+          # reports "no leaks found" — a scan that cannot fail is worse than no
+          # scan, because it is a false all-clear.
+          fetch-depth: 0
+
+      - name: Scan history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          # Report the location and rule, never the value.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          GITLEAKS_REDACT: "true"
+          # In PRs, scan the diff against the base so a leak already in main is
+          # not re-reported on every unrelated PR until someone rotates it.
+          GITLEAKS_PULL_TARGET: ${{ github.base_ref }}

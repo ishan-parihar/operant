@@ -1,0 +1,63 @@
+# Dependabot keeps the dependency surface current without a human opening a PR
+# for it. Cargo only — this repo has no npm, no pip manifest, and no Docker
+# build at the root that Dependabot could track, so anything else here would be
+# a config that silently never fires.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    # Weekly rather than daily. This is a 16-crate workspace where a full
+    # verification pass is slow, and daily PRs would be declined rather than
+    # merged — noise that trains the team to ignore the bot.
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    # Open PRs, never auto-merge. A dependency bump in a graph this wide can
+    # change link-time behaviour (alsa, openssl, ONNX Runtime) in ways no
+    # automated check here would catch, and the local verification loop in
+    # ci.yml's header is the actual gate.
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # One PR per minor/patch train instead of one per crate. Without this, a
+      # transitive bump fans out into a dozen PRs and Dependabot's 5-PR cap
+      # starves the direct dependencies that actually need review.
+      cargo-minor-patches:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+      cargo-direct-patches:
+        applies-to: version-updates
+        dependency-type: direct
+        update-types:
+          - patch
+
+  # GitHub Actions pinned by tag can be replaced with a moved tag; dependabot
+  # for `github-actions` tracks the action repos themselves. Kept separate from
+  # the cargo entry because it is a different ecosystem with a different PR
+  # shape, and the two need separate review.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(ci-deps)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

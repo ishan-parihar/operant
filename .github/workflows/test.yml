@@ -39,6 +39,34 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      # This step was missing, and it is the same gap build.yml:91-100 and
+      # ci.yml:131-139 already carry: without system libraries the job dies in
+      # `alsa-sys` ("Package alsa was not found in the pkg-config search path")
+      # before a single test is compiled. `cargo test` builds the workspace, and
+      # `--all-features` pulls the optional audio stack in through kokoro-tiny ->
+      # cpal -> alsa-sys.
+      #
+      # Same package set, same traced origin as the other two workflows
+      # (`cargo tree -i alsa-sys`):
+      #   libasound2-dev  alsa-sys    <- cpal <- kokoro-tiny <- operant-core
+      #   libssl-dev      openssl-sys
+      #   libclang-dev    bindgen, for the ONNX Runtime / espeak bindings
+      #   cmake           espeak-rs-sys builds espeak-ng from source
+      #   pkg-config      the probe mechanism all of the above are found through
+      #
+      # Linux-only guard for the same reason build.yml has one: alsa is a Linux
+      # library, and cpal uses CoreAudio on macOS and WASAPI on Windows.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libasound2-dev \
+            libssl-dev \
+            libclang-dev \
+            cmake \
+            pkg-config
+
       - name: Run tests
         run: cargo test --workspace --all-features
 
@@ -56,6 +84,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      # Same reason as the `test` job above: `cargo tarpaulin` compiles the
+      # workspace with --all-features, so it needs the same system libraries or
+      # it never reaches the instrumentation step. This job is ubuntu-only, so
+      # no `runner.os` guard is needed.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libasound2-dev \
+            libssl-dev \
+            libclang-dev \
+            cmake \
+            pkg-config
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin

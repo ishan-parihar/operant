@@ -31,6 +31,35 @@ run_test() {
     echo ""
 }
 
+# Clippy output filter.
+#
+# The filter below used to sit INSIDE the run_test command string:
+#
+#   ./scripts/check.sh clippy ... 2>&1 | grep -v '^warning' | grep -v ... 
+#
+# which reports the exit status of the LAST pipeline element — grep — not of
+# cargo. grep exits 0 whenever it matched and removed at least one line, so a
+# clippy run that failed hard still reported PASSED, and a run that failed
+# silently with no `warning:`-prefixed lines at all reported FAILED. The verdict
+# was essentially uncorrelated with the actual result.
+#
+# The fix is to keep the filter for display only and return cargo's own status.
+# `out=$(cmd) && status=0 || status=$?` is deliberate: it is a `||` compound, so
+# `set -e` does not abort on the failing command, and `$?` on the right-hand side
+# is the status of the assignment — i.e. the status of the command substitution.
+#
+# Note this is an ERROR detector, not a lint gate: no `-D warnings` is added
+# here on purpose. Raw clippy disagrees with .ci/clippy-allowlist.txt, so adding
+# it would make "self-test passed" and "the gate passed" different statements
+# (ci.yml says the same about its own clippy job). `scripts/clippy-warning-gate.sh`
+# is the warning gate; this step catches builds clippy cannot complete.
+run_clippy() {
+    local out status
+    out=$(./scripts/check.sh clippy --workspace --all-targets --all-features 2>&1) && status=0 || status=$?
+    printf '%s\n' "$out" | grep -v '^warning' | grep -v '^[[:space:]]' | grep -v '^$'
+    return "$status"
+}
+
 # 1. Build
 run_test "Build release binary" "./scripts/check.sh build --release 2>&1"
 
@@ -38,7 +67,7 @@ run_test "Build release binary" "./scripts/check.sh build --release 2>&1"
 run_test "Run workspace tests" "./scripts/check.sh test --workspace 2>&1"
 
 # 3. Clippy
-run_test "Run clippy" "./scripts/check.sh clippy --workspace --all-targets --all-features 2>&1 | grep -v '^warning' | grep -v '^\s' | grep -v '^$'"
+run_test "Run clippy" "run_clippy"
 
 # 4. Formatting
 run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"

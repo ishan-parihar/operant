@@ -20,6 +20,28 @@ jobs:
   publish:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # Job-level, not workflow-level, and that is load-bearing. A job's
+    # `permissions` block REPLACES the workflow-level one rather than merging
+    # with it, so `publish` re-declares contents/actions here — and the two
+    # attestation permissions are confined to this one job instead of every
+    # step of the workflow.
+    #
+    #   id-token: write     — mints the OIDC token the Sigstore certificate is
+    #                         issued against. Without it the action cannot
+    #                         sign, and a signature made with a long-lived PAT
+    #                         is not provenance: it proves who holds a
+    #                         credential, not which workflow built the bytes.
+    #   attestations: write — uploads the attestation to the GitHub API.
+    #
+    # `publish` is the only job in this file, so this is currently also
+    # workflow-wide in effect. It is scoped this way so that adding a second
+    # job later — a re-publish, a notes-only edit — does not silently hand the
+    # OIDC minting capability to it.
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -87,3 +109,52 @@ jobs:
               --notes-file release_notes.md \
               $(cat artifact_list.txt)
           fi
+
+      # Attest every uploaded artifact, not just the release tarball.
+      #
+      # The artifact_list.txt written by the step above is the single source of
+      # truth for "what was published" — enumerating the files again here would
+      # be a second list that silently drifts the first time an upload pattern
+      # changes. Reading the same file is what makes "all uploaded artifacts are
+      # attested" a property rather than a hope.
+      #
+      # This runs AFTER the publish step on purpose. An attestation for a file
+      # that failed to upload is a signature over nothing, and the failure mode
+      # is invisible: `gh release create` errors, but a partially-attested
+      # release looks fine until someone tries to verify a missing file.
+      #
+      # `continue-on-error` is NOT set. A release whose artifacts cannot be
+      # attested should fail loudly: a published binary with no provenance is
+      # exactly the artifact this step exists to make distinguishable from an
+      # attacker-uploaded one.
+      - name: Attest build provenance
+        if: steps.tag.outputs.skip != 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          # Attaches the attestation to the GitHub Release as well as emitting
+          # it to the API, so `gh attestation verify` works against the release
+          # URL a user actually downloads from.
+          subject-path: artifacts/*/*
+          push-to-registry: false
+
+      # Reconcile the two lists. `attest-build-provenance` is given a glob, and
+      # a glob is only as good as its shape: `gh run download --dir artifacts`
+      # lays each build-run artifact out in its own subdirectory, so
+      # `artifacts/*/*` covers the files the publish step above uploaded from.
+      # If that layout ever changes — a flat download, a nested archive — the
+      # glob silently stops covering some published file, and a partially
+      # attested release looks exactly like a fully attested one until someone
+      # tries to verify the missing file. Comparing against the same
+      # artifact_list.txt that was uploaded makes that gap loud.
+      - name: Verify every published artifact was attested
+        if: steps.tag.outputs.skip != 'true'
+        shell: bash
+        run: |
+          total=$(wc -l < artifact_list.txt)
+          attested=$(find artifacts -mindepth 2 -type f | wc -l)
+          if [ "$total" -ne "$attested" ]; then
+            echo "ERROR: published $total artifact(s) but the attestation glob covers $attested" >&2
+            echo "A published artifact with no provenance is indistinguishable from a tampered one." >&2
+            exit 1
+          fi
+          echo "Attested $attested of $total published artifact(s)."
