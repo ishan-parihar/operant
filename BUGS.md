@@ -2307,6 +2307,48 @@ synthetic `Rgb(1,2,3)`), the `stats_dialog` heatmap data encoding, and the
 deliberately high-contrast unthemed text in `ask_user_dialog.rs`. A mechanical
 sweep would have destroyed all three.
 
+**MEASURED at iter-472, and the trade is worse than "7 of 8 themes change".**
+Contrast of each candidate foreground against that theme's `panel_bg()`, with
+the caveat that a value resolving to a named ANSI slot is terminal-dependent and
+so is a lower bound rather than a measurement:
+
+| theme | `error()` on `panel_bg` | `TOOL_ERROR` on `panel_bg` | |
+|---|---|---|---|
+| default | 5.41 | 7.31 | worse, both pass |
+| dark | 5.09 | 7.61 | worse, both pass |
+| **light** | **4.69** | **2.20** | **swap FIXES it** |
+| solarized | 3.25 | 6.44 | worse, **swap fails AA** |
+| nord | 3.05 | 5.35 | worse, **swap fails AA** |
+| dracula | 4.53 | 6.11 | worse, both pass |
+| monokai | 3.93 | 6.37 | worse, **swap fails AA** |
+| deuteranopia | 8.03 | 8.03 | identical, by construction |
+
+So the swap is **worse on six of eight themes, three of them into an AA failure,
+better on one, identical on one.** "Better on one" is light, and that is the
+only thing recommending it.
+
+**The finding underneath, which is a live defect independent of the theme
+question:** on the `light` theme, `TOOL_ERROR` renders at **2.20:1** — bright
+orange on a near-white panel, well under the 4.5:1 AA threshold. That is true
+today, on the current code, at every one of the six tool-error sites. It is not
+an appearance preference and it is not a trade; it is an accessibility failure
+that this entry described as a colour decision for two iterations without ever
+checking the number.
+
+Why the two obvious fixes do not both work: `error()` fixes light and breaks
+solarized/nord/monokai, because the palette's own `error` values were chosen for
+hue fidelity against each theme rather than for contrast against its panel. So
+the fix is **not** the six-site swap. It is to darken the `light` theme's `error`
+value — it is `Rgb(211, 47, 47)`, and clearing 4.5:1 against `Rgb(248, 248, 248)`
+needs something considerably darker — which is a one-value change that reaches
+every `error()` consumer in that theme and is therefore a visible change for the
+user to approve.
+
+Recorded rather than applied: it is a colour the user sees, and this entry's whole
+point is that the choice is theirs. But the framing is corrected — R40-30 is not
+"should tool errors follow the theme", it is "the light theme's error colour
+fails contrast, and the theme-following swap is the wrong fix for it".
+
 ### R40-31 — selected-row secondary text sits under 4.5:1 contrast on 6 of 8 themes (OPEN, owner decision, iter-463)
 
 `SELECTED_ROW_FG` (`Rgb(248, 220, 236)`, a pale pink) is the foreground for a
