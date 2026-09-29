@@ -276,7 +276,23 @@ routing.
 5.1k stars, 894 forks, Apache-2.0, a **Linux Foundation** project, written in
 Rust, self-described as "in active development".
 
-### 4.2 So: is it a better inference provider than ours?
+### 4.2 Three different things are being called a "gateway"
+
+The word does the confusing here, and operant uses it for a *third* meaning.
+Worth separating before drawing any conclusion:
+
+| | what it is | in this repo |
+|---|---|---|
+| **inference client** | calls a model — Anthropic/OpenAI HTTP, streaming tool calls | `operant-core/src/agent/clients/` |
+| **`operant-gateway`** | **messaging platforms** — Telegram, Discord, Slack, WhatsApp, Email, SMS, Webhooks | `operant-core/src/gateway/`, 7 adapters |
+| **agentgateway** | an **LLM proxy** — routes *to* providers, adds failover/budget/guardrails/OTel | external, not a dependency |
+
+`operant-gateway` and `agentgateway` share a word and nothing else. The
+naming collision is why item 4 of the backlog is genuinely hard: renaming
+`operant-gateway` would be a large mechanical change across a crate that is
+already hard to reason about (see its hardcoded feature list, §2 item 4).
+
+### 4.3 So: is it a better inference provider than ours?
 
 **No, and the question does not have that answer available.** Our inference
 path is the Anthropic/OpenAI client inside `operant-core`. agentgateway sits
@@ -289,7 +305,7 @@ Kubernetes-only. Its README lists a **Standalone Quickstart** alongside the
 Kubernetes one, so a non-k8s deployment path exists. I would rather check than
 assert.
 
-### 4.3 The real integration hiding inside the wrong question
+### 4.4 The real integration hiding inside the wrong question
 
 Because agentgateway exposes an **OpenAI-compatible API** and operant's
 OpenAI path is driven by a configurable `client.base_url`
