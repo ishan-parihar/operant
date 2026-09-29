@@ -2728,3 +2728,54 @@ fix that addresses the cause, and which no existing role supports.
 Recorded rather than acted on, because all three are appearance or design calls.
 The do-not-substitute note is now on `status_badge` itself, so the substitution I
 was about to make cannot silently ship.
+
+### R40-33 — the remaining ~188 `DarkGray`/`Black` colour sites are blocked *structurally*, and one measurement settles it
+
+This closes a question that had been carried as four separate refutations across
+iters 461–464, and it closes it by replacing all four with a single test.
+
+**The test.** A migration of a `Color::DarkGray` or `Color::Black` site onto a
+palette role is value-preserving only if that role returns the same value in all 8
+themes. Measured across `default_theme`, `dark`, `light`, `solarized`, `nord`,
+`dracula`, `monokai` and `deuteranopia`:
+
+| role | distinct values across the 8 themes |
+|---|---|
+| `text_selection_bg` | **1 — `Rgb(200, 200, 200)`** |
+| `text`, `text_dark`, `muted` | 7 each |
+| `accent`, `border`, `panel_bg`, `overlay_bg`, `selection_bg`, `success`, `warning`, `error`, `disabled` | 8 each |
+
+So **12 of 13 roles are per-theme values, and the one exception is
+`text_selection_bg`** — a *background* role, already ruled out at iter-425 because
+its three live call sites use it as a `fg()`, which is a role mismatch even though
+the value is identical. There is no invariant foreground role.
+
+**Therefore no value-preserving migration of those ~188 sites exists.** Not "none
+was found" — none is available. Any move onto a role changes the rendered colour
+on 7 of 8 themes by construction. That is a structural property of the palette,
+not an artefact of which candidate I happened to consider, and it is the same
+reasoning that made `Color::DarkGray` look unthemed in the first place: it is
+theme-invariant *by construction*, being ANSI slot 8.
+
+This subsumes the four earlier refutations rather than adding to them. They were:
+`muted()` is dim-amber on the default theme where `DarkGray` is neutral grey;
+`disabled()` is `Rgb(189, 189, 189)` on `Rgb(248, 248, 248)` on the light theme,
+i.e. near-invisible; `text_dark` is a dark foreground for text sitting on a
+selection, so its role is wrong for chrome; and `accent()` is the selection and
+accent-bar role, not a neutral-secondary role. All four are true, and all four
+are consequences of the one table above — each candidate is a per-theme value that
+happens to be wrong for these sites, rather than a role that could not have been
+right for any site.
+
+**Method note, and the reason this is filed at all.** Four refutations assembled by
+reasoning is a weaker artefact than one measurement, because four independent
+arguments can share a single unexamined assumption — and here they did share one:
+that some candidate role might be theme-invariant. It never was. iter-471 taught
+the lesson on R40-32, where ranking options by plausibility produced a
+recommendation that measuring refuted outright; the same method was not applied
+here until iter-473, and applying it immediately subsumed the four.
+
+Recorded as a closure, not a deferral. The sites are not waiting on a measurement
+or on a decision I have not made; they are waiting on someone choosing to change
+appearance on 7 of 8 themes for ~188 sites, which is a legitimate thing to want
+and is not a bug.
