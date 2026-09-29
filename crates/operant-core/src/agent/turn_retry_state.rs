@@ -123,7 +123,33 @@ impl TurnRetryState {
         self.retry_count = 0;
         self.clear_restart_signals();
     }
+
+    /// Whether this turn has burned its whole turn-level retry budget.
+    ///
+    /// `reset_on_success` clears `retry_count` every time a response parses, and
+    /// that happens once per agent iteration, not once per turn. A turn that
+    /// makes progress between failures therefore gets a fresh budget each time,
+    /// so an upstream which flaps (drops the stream, answers, drops again) can
+    /// keep a turn alive indefinitely: the budget is never exhausted because it
+    /// is refilled between failures. Observed as "Still working... (9m elapsed)"
+    /// against a gateway proxy that was refusing connections mid-turn.
+    ///
+    /// This deliberately does NOT reuse `max_retries`. That is a per-LLM-call
+    /// budget (default 3) and a legitimate 90-iteration tool-using turn will pass
+    /// through it several times over without anything being wrong. The turn-level
+    /// cap is a separate, much larger allowance for *cumulative* upstream
+    /// failures inside one turn.
+    pub fn turn_retry_exhausted(&self, failed_this_turn: usize) -> bool {
+        failed_this_turn >= TURN_MAX_RETRY_FAILURES
+    }
 }
+
+/// Cumulative upstream failures tolerated across a whole turn.
+///
+/// Sized for flakiness, not for a dead upstream: a real outage burns this in a
+/// few iterations and the turn fails fast with a real error, while scattered
+/// blips across a long tool-using turn do not.
+pub const TURN_MAX_RETRY_FAILURES: usize = 12;
 
 impl fmt::Display for TurnRetryState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -150,6 +176,54 @@ mod tests {
         assert_eq!(state.max_retries, DEFAULT_MAX_RETRIES);
         assert!(!state.is_exhausted());
         assert!(!state.has_restart_signal());
+    }
+
+    /// The defect this guards: a turn that alternates failure → success → failure
+    /// never exhausts its budget, because `reset_on_success` clears `retry_count`
+    /// on every parsed response. That is once per iteration, so the per-call
+    /// budget is refilled between failures and a flaky upstream can hold a turn
+    /// open indefinitely.
+    #[test]
+    fn turn_budget_survives_alternating_success_and_failure() {
+        let mut state = TurnRetryState::new(Some(3));
+        let mut turn_failures = 0usize;
+
+        // Two full cycles of the pathological pattern: fail, succeed, fail, succeed.
+        for _ in 0..2 {
+            assert!(
+                !state.turn_retry_exhausted(turn_failures),
+                "not yet exhausted"
+            );
+            assert!(state.consume_retry());
+            turn_failures += 1;
+
+            state.reset_on_success(); // the response parsed — budget refills
+            assert_eq!(state.retry_count, 0, "per-call budget IS refilled");
+            assert!(
+                !state.turn_retry_exhausted(turn_failures),
+                "turn budget must NOT be refilled by a successful parse"
+            );
+        }
+
+        // Now drive the cumulative counter to the turn cap.
+        while !state.turn_retry_exhausted(turn_failures) {
+            state.reset_on_success();
+            turn_failures += 1;
+        }
+        assert!(
+            state.turn_retry_exhausted(turn_failures),
+            "alternating failures must eventually terminate the turn"
+        );
+    }
+
+    #[test]
+    fn turn_budget_tolerates_scattered_blips() {
+        let state = TurnRetryState::new(Some(3));
+        // A long turn with a handful of transient failures must survive: this is
+        // why the turn cap is deliberately larger than max_retries.
+        assert!(!state.turn_retry_exhausted(4));
+        assert!(!state.turn_retry_exhausted(TURN_MAX_RETRY_FAILURES - 1));
+        assert!(state.turn_retry_exhausted(TURN_MAX_RETRY_FAILURES));
     }
 
     #[test]

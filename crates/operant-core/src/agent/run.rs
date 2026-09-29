@@ -256,6 +256,13 @@ impl OperantAgent {
         // AgentEnd duration; the per-iteration `llm_start` only covers the
         // model call).
         let turn_start = std::time::Instant::now();
+        // Hard ceiling on a single turn, independent of iteration count.
+        // A turn that keeps making real progress should not be cut off, but one
+        // that is spinning against a degraded upstream must not hold a gateway
+        // channel open indefinitely. 20 minutes is far beyond any legitimate
+        // tool-using turn observed here (the longest was 33s) and well under
+        // the point where a user gives up.
+        const TURN_WALL_CLOCK_LIMIT_SECS: u64 = 20 * 60;
 
         // ── Memory provider: on_turn_start ──────────────────────────────
         // Notify the memory provider of the new turn so it can do per-turn
@@ -317,6 +324,16 @@ impl OperantAgent {
         }
 
         let mut retry_state = turn_retry_state::TurnRetryState::new(Some(self.config.max_retries));
+        // Cumulative failures for this whole turn. `retry_state.retry_count` is
+        // cleared by `reset_on_success` on every parsed response — i.e. once per
+        // iteration — so it cannot terminate a turn that keeps alternating
+        // "stream dropped" with "answered fine". Without this the retry budget is
+        // effectively unlimited across a multi-iteration turn and a flaky
+        // upstream pins the turn open until the user's own patience runs out.
+        // Symptom seen in the gateway log on 2026-09-29: "Still working...
+        // (9m elapsed...)" against a proxy returning connection errors between
+        // successful tool iterations.
+        let mut turn_retry_failures: usize = 0;
         // Plan 006: empty-content retry counter is the shared
         // EmptyResponseCounter from agent/turn_rules.rs — same logic the
         // runtime Agent uses (no more silent divergence on max_retries).
@@ -355,6 +372,25 @@ impl OperantAgent {
                     budget_used = self.iteration_budget.used(),
                     budget_max = self.iteration_budget.max_total(),
                     "Iteration budget exhausted — attempting grace call"
+                );
+                return self
+                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
+                    .await;
+            }
+
+            // Turn-level wall-clock ceiling. `iteration_budget` counts
+            // iterations and `call_with_loop_timeout` bounds a single LLM
+            // request, but neither bounds a turn that keeps making progress:
+            // 90 iterations x 120s is over three hours of theoretically
+            // legal work, and with an upstream that stalls rather than
+            // errors the user sees only "Still working..." heartbeats.
+            // Checked per iteration so the bound is enforced between calls.
+            let turn_elapsed = turn_start.elapsed().as_secs();
+            if turn_elapsed >= TURN_WALL_CLOCK_LIMIT_SECS {
+                warn!(
+                    turn_elapsed,
+                    limit_secs = TURN_WALL_CLOCK_LIMIT_SECS,
+                    "Turn wall-clock limit reached — attempting grace call"
                 );
                 return self
                     .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
@@ -617,7 +653,15 @@ impl OperantAgent {
                                 && !classified.should_compress
                                 && (classified.should_rotate_credential
                                     || !retry_state.rotate_attempted);
-                            if retryable && retry_state.consume_retry() {
+                            // Guard on the CUMULATIVE count for this turn, not
+                            // only `retry_state.consume_retry()` (which is
+                            // refilled by any successful parse). Without this a
+                            // turn that drops-and-recovers repeatedly never
+                            // exhausts its budget.
+                            let turn_budget_left =
+                                !retry_state.turn_retry_exhausted(turn_retry_failures);
+                            if retryable && turn_budget_left && retry_state.consume_retry() {
+                                turn_retry_failures += 1;
                                 self.iteration_budget.refund();
                                 // Aggregation hook: bump the shared retry
                                 // counters so the TUI status pill can show
@@ -809,6 +853,49 @@ impl OperantAgent {
                             // is the same logical turn.
                             self.iteration_budget.refund();
                             continue;
+                        }
+                    }
+
+                    // ── Tool-result anomaly retry (deterministic detectors) ─
+                    // The model just produced a final answer, but the tool
+                    // results it was built on may be unusable (empty,
+                    // unparseable, error-class). Rather than surface an
+                    // answer resting on a broken observation, inject a
+                    // feedback message and re-loop through the SAME
+                    // continuation shape as truncation above. Bounded by
+                    // turn_end_heuristics::MAX_ANOMALY_RETRIES; the count
+                    // is derived from the messages already in the list, so
+                    // there is no second counter to keep in sync.
+                    if tool_calls.is_empty() {
+                        let batch: Vec<&str> = messages
+                            .iter()
+                            .rev()
+                            .take_while(|m| m.role == Role::Tool)
+                            .map(|m| m.content.as_str())
+                            .collect();
+                        if !batch.is_empty() {
+                            let anomalies =
+                                turn_end_heuristics::detect_anomalies(&batch, &response_text);
+                            let injected = turn_end_heuristics::count_injected_retries(
+                                messages.iter().map(|m| m.content.as_str()),
+                            );
+                            if let Some(feedback) =
+                                turn_end_heuristics::anomaly_retry_prompt(&anomalies, injected)
+                            {
+                                warn!(
+                                    anomalies = ?anomalies,
+                                    injected,
+                                    "Tool-result anomaly — requesting corrected retry"
+                                );
+                                let retry_msg = Message::user(feedback);
+                                messages.push(retry_msg.clone());
+                                self.add_message(retry_msg).await;
+                                // Same reasoning as truncation: the LLM call
+                                // was spent on a broken observation, so the
+                                // retry is the same logical turn.
+                                self.iteration_budget.refund();
+                                continue;
+                            }
                         }
                     }
 
@@ -1091,6 +1178,22 @@ impl OperantAgent {
                         // turn-completion path.
                         if let Some(provider) = &self.memory_provider {
                             provider.queue_prefetch(&user_query);
+                        }
+
+                        // ── TurnEnd post-turn seam ──────────────────────────
+                        // One `TurnEnd` per completed turn, emitted after the
+                        // memory hooks above so subscribers observe the same
+                        // ordering the sync_turn path does. This is the seam
+                        // reflection / advisor / dreaming attach to.
+                        //
+                        // Zero-subscriber cost: `turn_end_bus` is `None`
+                        // unless a feature attached one, so the check below
+                        // constructs nothing, awaits nothing, and never
+                        // touches `messages` — the pre-seam lines above stay
+                        // byte-identical. `emit` is synchronous by contract:
+                        // a slow subscriber can never block the turn.
+                        if let Some(ref bus) = self.turn_end_bus {
+                            bus.emit(&session_id, iteration, total_tool_calls, &result.content);
                         }
 
                         // Emit AgentEnd hook
