@@ -2082,3 +2082,56 @@ establish it.
 
 Nothing to do here. The AGENTS.md platform-count drift is real and stays filed
 as R40-26, which is a design-intent question rather than dead code.
+
+### R40-28 — `v0.1.3` and `v0.1.4` are orphan tags: lightweight, on commits that are not main history (OPEN, owner decision, iter-455)
+Two of the five releases this project advertises contain no `main` history at
+all. Both tags are **lightweight** (a single entry pointing straight at a
+commit — contrast `v0.2.0`, which has both a tag object and a `^{}` commit
+dereference, i.e. is annotated), and both point at commits reachable only from
+`archive/stash-*` branches. They are never ancestors of `main`, which is why
+`git describe` correctly reports **v0.1.2** as the most recent real tag.
+`v0.1.3` still renders on the releases page as an 18 July 2026 release.
+
+**I was wrong that this is unrepairable.** I earlier escalated it as needing a
+force-push that AGENTS.md forbids. It does not:
+
+```console
+$ git push --dry-run origin :refs/tags/v0.1.3
+- [deleted] v0.1.3
+```
+
+Deleting a tag is a plain ref delete and rewrites **no branch history**.
+AGENTS.md's prohibition is on force-pushing to `main` — a branch. So the tags
+were always repairable, and had I not tested it the user would have been asked
+to accept a permanent defect as the price of a rule I had misread.
+
+**Not applied, deliberately.** This is destructive and outward-facing on
+release history I did not create, so it is the owner's call. Two coherent
+options:
+
+1. `git push origin :refs/tags/v0.1.3 :refs/tags/v0.1.4` — the releases page
+   then shows only releases that correspond to real `main` history. v0.1.2 and
+   v0.2.0 are annotated and correct, so nothing legitimate is lost. Recoverable:
+   both commit SHAs are recorded in this entry's git history if a user needs
+   the old refs back.
+2. Leave them. The cost is that a reader of the releases page sees a July
+   release that no commit on `main` produced.
+
+### R40-29 — `browser.provider` defaults to `obscura` in code but `igs` in every doc (OPEN, owner decision, iter-455)
+`crates/operant-core/src/config.rs:1181` defaults `browser.provider` to
+`"obscura"`. `AGENTS.md`, `operant.example.toml` and the deployability audit all
+state the default is `"igs"`. **Both values are valid** — Obscura is the engine
+the `igs` binary provides — so this is a naming/product decision, not a bug in
+either direction.
+
+**Why it is filed rather than fixed:** it is the same class as R40-26. A
+"which default is correct" question whose answer belongs to the user, where
+quietly editing the docs to match the code (or the code to match the docs)
+would erase the fact that a decision was never made. Note that my own earlier
+audit reported the default as `igs` because it read the docs — an instance of
+the same error this file keeps recording, where a documented value was reported
+as the observed one.
+
+Two coherent options: ratify `igs` as the user-facing name and leave the code
+alone, or ratify `obscura` and update the three doc sites. Either way the four
+sites should end up agreeing.
