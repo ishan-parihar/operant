@@ -2636,3 +2636,53 @@ are expected, in which case (a).
 
 Not fixed here, and deliberately: option (b) is an appearance change on 7 of 8
 themes, which is the user's call, not mine.
+
+**WITHDRAWN at iter-471 — the recommendation above is measurably wrong, and the
+defect is not the one this entry describes.** I measured the alternatives instead
+of ranking them by plausibility, and the ranking does not survive. Two errors,
+both mine, both from reasoning about names rather than values:
+
+  - **This is not an isolated offender.** `status_badge` renders four visible
+    badges and all four hardcode an ANSI background — `Green` (Connected),
+    `Yellow` (Connecting), `Yellow` (Reconnecting), `Red` (Failed), `DarkGray`
+    (OutboundOnly); `Disconnected` returns `None`. So this is a consistent local
+    convention, not drift, and "add a role and use it for one badge" would have
+    made that badge the only role-using one in a function where every sibling
+    uses a literal.
+  - **Routing through the palette makes three of the four measurably WORSE.**
+    Contrast against `on_selection()` as the foreground, all 8 themes:
+
+    | badge | as written | via role | themes failing 4.5:1 |
+    |---|---|---|---|
+    | Connected | 8.11 | `success()` | 2 of 8 — 2.67 on light, 4.35 on deuteranopia |
+    | Connecting | 15.54 | `warning()` | **0 of 8** — 4.68 to 12.74 |
+    | Failed | 5.48 | `error()` | 4 of 8 — 3.05 on nord, 3.25 solarized, 3.93 monokai, 4.22 light |
+    | OutboundOnly | 5.32 | `muted()` | **7 of 8** — 1.69 on nord |
+
+    `disabled()` for OutboundOnly measured 2.60 on dark, worse than the 5.32 it
+    has today, so that option is refuted too. As written, every badge passes AA.
+
+  The mechanism is a dimension I had not considered in four previous refutations
+  of colour substitutions: **direction of use**. Palette roles are tuned as
+  foregrounds on `panel_bg()`, and the light theme's `success` is
+  `Rgb(27, 94, 32)` — a *dark* green — precisely because it is meant to be read
+  on white. Use it as a background and the lightness relationship inverts. This
+  is the same "read the values, not the names" discipline that produced the
+  iter-463 and iter-466 errors, applied to direction rather than hue, and it took
+  measuring to see.
+
+**What actually remains here, stated precisely.** The accessibility concern in
+the entry above is real and is *not* addressed by anything in this table. A
+deuteranope cannot reliably distinguish this function's `Green` badge from its
+`Red` one, and no palette role fixes that, because the fixes measured above are
+worse. The honest options are therefore: (i) accept it, on the grounds that the
+badges are already distinguished by their text labels (" REMOTE ", " BRIDGE ✗ ")
+and a spinner glyph, not by colour alone; (ii) change the badge *hues* to a
+lightness-distinguishable pair — blue/orange say, which is a palette-design
+decision affecting every status indicator, not a local edit; or (iii) add a role
+tuned for use as a *background* rather than as a foreground, which is the one
+fix that addresses the cause, and which no existing role supports.
+
+Recorded rather than acted on, because all three are appearance or design calls.
+The do-not-substitute note is now on `status_badge` itself, so the substitution I
+was about to make cannot silently ship.

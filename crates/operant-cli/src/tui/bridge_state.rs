@@ -33,6 +33,15 @@ pub enum BridgeConnectionState {
 impl BridgeConnectionState {
     /// Return a styled status badge `Span` suitable for the status bar.
     /// Returns `None` when the state should not be shown (Disconnected).
+    ///
+    /// The badge backgrounds are hardcoded ANSI slots deliberately. Do NOT route
+    /// them through `theme_colors` roles: those roles are tuned as FOREGROUNDS on
+    /// `panel_bg()`, so using one as a background inverts the lightness
+    /// relationship. Measured with `on_selection()` as the foreground, a routed
+    /// badge drops below WCAG AA (4.5:1) on 7 of 8 themes via `muted()` (1.69:1
+    /// on nord) and on 2 of 8 via `success()` (2.67:1 on light, whose `success`
+    /// is a dark green precisely because it is meant to be read on white). As
+    /// written, every badge passes: 15.54, 8.11, 5.48, 5.32.
     pub fn status_badge(&self, spinner_frame: u64) -> Option<Span<'static>> {
         const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let sp = SPINNER[(spinner_frame as usize) % SPINNER.len()];
