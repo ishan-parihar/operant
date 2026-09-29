@@ -2282,6 +2282,22 @@ constant and calling `palette.error()`, changing the rendered colour on seven of
 eight themes. That is a per-theme appearance decision and it is not mine to
 make.
 
+**Verified at iter-464 that the deuteranopia palette is genuinely user-selectable**,
+because the constant's entire defence is that it is that palette's `error` value
+— if the theme were unreachable, that would be a historical coincidence rather
+than a live accessibility property, and the argument for keeping the constant
+would collapse. The chain is real end to end: `Theme::Deuteranopia` is a real
+variant of the enum in `tui/adapter_types/config.rs:12`, its `as_str()` returns
+`"deuteranopia"` (same file, line 23), and `ColorPalette::for_theme` matches
+that string (`theme_colors.rs:64`). So the `Rgb(255, 140, 0)` in `TOOL_ERROR`
+really is a value a user can currently be looking at, and the two things being
+traded off are both live.
+
+Worth recording as method: my first two attempts to read `as_str` returned
+nothing, because my pattern assumed `Self::Theme::X => "y"` while the code
+writes `Theme::X => "y"`. Two empty results in a row were a signal to read the
+file rather than try a third regex, and the theme was selectable all along.
+
 **Not filed as a colour-literal cleanup item.** It was found by scanning for
 exact-duplicate `Rgb` values, which is worth repeating: that scan returned 15
 apparent duplicate groups, and this was the only one that turned out to be a
@@ -2329,11 +2345,30 @@ numbers. The value that made the second error visible is that `default`'s
 `emphasis` is `Cyan` while its `accent` field is also a colour: same
 "selection" intuition, wrong variable.
 
-Owner call, and it is a per-theme appearance decision: (a) leave it, on the
-grounds that the row is still identifiable from its background and the title
-text is legible, (b) lighten `SELECTED_ROW_FG` per theme, (c) darken the
-selected-row background so light secondary text reads on it, or (d) use
-`theme_colors::text()`, which is what the title already does, at the cost of the
-secondary line losing its distinction from the title. What iter-463 did was only
+**Two corrections to this entry, from re-checking its own premises at iter-464.**
+
+First, the standard is a poor fit and I led with it anyway. WCAG 2.x contrast
+thresholds are written for web content; citing "below AA 4.5:1" invites reading
+this as a terminal UI failing a web standard. The measurement is sound, but the
+honest claim is narrower: on those six themes the selected row's secondary line
+is hard to read.
+
+Second, and more useful: I wrote that using `theme_colors::text()` would cost the
+secondary line "its distinction from the title", while in the same paragraph
+justifying leaving it alone with "the row is still identifiable from its
+background". Those contradict each other, and the second one is the true one.
+Verified at all four sites — `agents_view.rs:810`, `hooks_config_menu.rs:570`,
+`theme_screen.rs:174` and `diff_viewer/render.rs:166` all read
+`let bg = if selected { theme_colors::accent() } else { theme_colors::panel_bg() }`.
+**The background already signals selection everywhere.** So the pale pink is a
+redundant second cue, not a load-bearing one, and no option below needs to
+preserve it in order to keep selected rows identifiable.
+
+Owner call, and it is a per-theme appearance decision: (a) leave it, since the
+background identifies the row and the title is legible, (b) lighten
+`SELECTED_ROW_FG` per theme, (c) darken the selected-row background so light
+secondary text reads on it, or (d) use `theme_colors::text()` when selected —
+which the title already does, and which costs less than this entry originally
+claimed, because the background still marks the row. What iter-463 did was only
 name the constant — byte-identical on all eight themes, so it deliberately does
-not pre-empt this.
+not pre-empt any of this.
