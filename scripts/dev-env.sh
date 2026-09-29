@@ -39,6 +39,19 @@ fi
 
 # ONNX Runtime (prebuilt tarball from microsoft/onnxruntime releases)
 export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"
+# Dynamic linking of the ONNX runtime is a LOCAL-ONLY choice, and it is the
+# reason a locally built operant differs from a released one. Measured on the
+# same source, same commit:
+#
+#   CI release v0.2.0   NEEDED: libstdc++ libgcc_s libm libc ld-linux  (no onnx)
+#                       52 MB, statically linked ONNX, self-contained
+#   this dev-env        NEEDED: ... plus libonnxruntime.so.1
+#                       31 MB, needs a shared library at runtime
+#
+# Every problem chased in iters 425-430 -- the missing RUNPATH, the ONNX copy in
+# install.sh, the provisioning step in build.yml -- comes from this one line. CI
+# does not set it, so the published binary has never needed the shared object.
+# Set to 0 to build the same self-contained binary that ships.
 export ORT_PREFER_DYNAMIC_LINK="${ORT_PREFER_DYNAMIC_LINK:-1}"
 
 # Bindgen needs GCC's resource headers (stddef.h etc.) on systems without clang resource dir
