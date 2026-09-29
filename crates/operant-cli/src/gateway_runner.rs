@@ -2414,18 +2414,25 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let _ = std::fs::write(&pid_path, &pid_str);
     }
 
-    // An empty admins list means every Telegram user who finds the bot can
-    // drive the agent, with this process's model credentials. `operant gateway
-    // status` says so, but only that command -- `gateway run` started an open
-    // bot silently, and that is the one people actually type. Say it here.
+    // An empty admins list means every user who finds the bot can drive the
+    // agent, with this process's model credentials. `operant gateway status`
+    // says so, but only that command -- `gateway run` started an open bot
+    // silently, and that is the one people actually type. Say it here.
     let admin_note = if admins_configured {
         String::new()
     } else {
-        format!(
-            "\n  WARNING: no admins configured -- ANY user who can reach this bot \
-             can start agent turns.\n  Set [gateway] admins = [\"<telegram user id>\"] \
-             to restrict it."
-        )
+        // The gate compares msg.user_id with no platform scoping, so a Discord
+        // or Slack id in this list will never match a Telegram user and would
+        // lock Telegram out silently. Worth knowing before you fill it in.
+        [
+            "",
+            "  WARNING: no admins configured -- ANY user who can reach this bot",
+            "  can start agent turns.",
+            "  Fix: set admins in ~/.operant/operant.toml under [gateway] to your",
+            "  numeric id on the platform you are using. Ids are per-platform: a",
+            "  Discord id will not match a Telegram user.",
+        ]
+        .join("\n")
     };
 
     Ok(format!(
