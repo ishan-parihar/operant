@@ -187,14 +187,23 @@ These are the user's intentional design choices. Do not replace, remove, or
 - Do NOT switch the default away from sourcehound
 
 ### Platform Adapters (Gateway)
-- **Supported: 7 platforms** — telegram, discord, slack, whatsapp, email_smtp,
-  sms_twilio, webhooks
+- **Supported: 7 platforms** in the gateway registry (`platform_registry()` in
+  `crates/operant-cli/src/gateway_runner.rs`) — telegram, discord, slack,
+  whatsapp, email_smtp, sms_twilio, webhooks
 - **Working adapters**: Telegram, Discord, Slack (fully implemented in `gateway/mod.rs`)
 - **Stub adapter**: Webhook (needs HTTP server implementation)
 - **Config-only**: WhatsApp, Email, SMS (setup wizard + config flags exist,
   adapter code TBD)
 - 20 phantom platforms were purged in iter-50 (matrix, mattermost, signal, etc.)
 - Do NOT re-add purged platforms without a real adapter implementation
+- **The gateway registry is NOT the whole channel surface.** `operant-channels`
+  carries 31 `channel-*` features, 21 of them on by default (discord, slack,
+  signal, mattermost, irc, imessage, dingtalk, qq, bluesky, twitter, reddit,
+  notion, linq, wati, nextcloud, mochat, wecom, clawdtalk, webhook,
+  whatsapp-cloud, email); `channel-telegram` is opt-in behind the
+  `agentmemory`-independent `channel-telegram` feature. The preference above
+  scopes to the *gateway registry*; it is not a claim that the workspace has 7
+  messaging surfaces.
 
 ### Native Tool Integrations
 - **AFT (Agent File Tools)**: 15 IDE-grade coding tools via subprocess
@@ -253,14 +262,14 @@ operant/
 │       │   ├── config.rs      # CLI config
 │       │   ├── cmd_*.rs       # CLI subcommand handlers
 │       │   └── dashboard_server.rs # axum dashboard backend
-│       └── Cargo.toml         # Features: igs, lifeos
+│       └── Cargo.toml         # Features: agent-runtime, gateway, channel-* (21 by default), hardware, plugins-wasm, anthropic, ci-all
 ├── scripts/
 │   ├── dev-env.sh             # Source this before any cargo command
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace members (16 crates, self-contained)
-├── operant.example.toml       # Config template (7 platforms only)
+├── Cargo.toml                 # Workspace members (17 crates, self-contained)
+├── operant.example.toml       # Config template (7 gateway platforms; 21 channel-* features default-on)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── BUGS.md                    # Open issues tracker
 └── AGENTS.md                  # THIS FILE
@@ -931,6 +940,8 @@ model = "gpt-4"       # Default model (override in user config)
 7. **PUSH.** `git push origin main`. Then `git log origin/main -1` to confirm.
 8. **Do not commit** `target/`, `*.sqlite` test artifacts, or `~/.operant/.env`.
 9. **Respect the design preferences** — Kokoro TTS, memory-wire memory,
-    sourcehound browser/web tools, 7 platforms only. Do not "improve" them.
+    sourcehound browser/web tools, 7 platforms in the gateway registry (the
+    `operant-channels` crate separately default-enables 21 `channel-*`
+    features). Do not "improve" them.
 10. **When in doubt, ask.** Pushing back is welcome; silently doing the wrong
     thing is not.

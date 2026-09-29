@@ -137,6 +137,32 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 - **`operant doctor` advised a command that cannot work.** It probed a
   `tinker-atropos` submodule that exists in neither the repository nor
   `.gitmodules`, and recommended `git submodule update --init --recursive`.
+- **A turn could never time out.** `reset_on_success()` was called from the `Ok`
+  arm of the response match — once per agent *iteration*, not once per turn — so
+  a turn alternating "stream dropped" with "answered fine" had its retry budget
+  refilled between failures and never exhausted it. A flaky upstream held a
+  gateway turn open for 9 minutes against a 120s per-request ceiling that bounds
+  a single call, not a turn. A monotonic per-turn `turn_retry_failures` counter
+  (cap 12, deliberately not the per-call `max_retries` default of 3) and a
+  20-minute wall-clock limit now terminate such a turn; the per-call budget
+  still refills per iteration.
+- **Model output that can name credentials was logged.** The tool-call parser
+  logged 80-100 chars of model-emitted text verbatim on both the parse-failure
+  and repair paths, and that text is routinely shell fragments — so shell
+  fragments, which name credentials, reached the server log. Worse, the
+  parser's `ParserEvent::Error` was injected into the *conversation*, handing the
+  raw fragment back to the model and persisting it in session history. The
+  parser now logs `content_len` plus a preview cut before the first `$`, `=`, or
+  quote; the parser error is a fixed re-issue sentence with no model output; and
+  the safety layer logs lengths only.
+- **A turn lost to a restart was detected and then silently discarded.**
+  `check_interrupted_turns()` logged a WARN naming the channel and returned
+  unit, so the caller threw the `(channel_id, timestamp)` pairs away: a run that
+  started, died 5.2s later, and rebooted showed the user 18 minutes of silence
+  with no notice. The boot path now delivers the notice through
+  `send_channel_message`, and the state file records the platform so a
+  non-Telegram turn is not announced on Telegram (pre-existing files without the
+  field fall back to telegram, the only adapter that recorded turn state).
 
 ### Added
 

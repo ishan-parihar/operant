@@ -30,7 +30,7 @@ operant chat                  # start chatting (TUI)
 One-shot runs need no TUI at all:
 
 ```bash
-operant run --query "Audit the browser stack: check IGS web tools and the CDP browser"
+operant run --query "Audit the browser stack: check the sourcehound web tools and the CDP browser"
 ```
 
 ---
@@ -42,10 +42,10 @@ Operant is a production-grade **ReAct agent runtime** written in Rust. It replac
 Why it is different:
 
 - **A real agentic loop, not a chat wrapper** — think → act → observe with a JSON-schema tool registry, automatic memory-context injection, provider fallbacks, and self-healing retries.
-- **Memory that behaves like a plugin** — the default `agentmemory` provider (BM25 + vector + graph, hybrid search) auto-spawns on first use and mirrors the hermes-agent memory-plugin lifecycle: `session/start` on init, `observe` after every turn, context recall before each turn, session/end on exit.
+- **Memory that stays in-process** — the default `memory-wire` provider is an embedded engine (hybrid BM25 + token-overlap search) called directly over its sync `retain`/`recall` API: no server to spawn, no port to wait on, and a `catch_unwind` boundary that turns a panic into a memory miss instead of a dead turn. Context is prefetched before every turn and written back after it.
 - **Skills you can point at a directory** — import an entire skill tree (with recursive security scan), bundle multiple skills, autoload at boot, and let the agent curate new ones.
 - **Only enabled, functional tools reach the model** — the registry serves the intersection of *registered ∩ available ∩ not-disabled*, so the agent never sees tools that can't run.
-- **One stealth browser for everything** — the `obscura` CDP browser and the IGS web tools (search / scrape / extract) share the same Obscura binary, auto-provisioned on first use.
+- **One stealth browser for everything** — the `sourcehound` binary serves both the web tools (`web_search` / `web_scrape` / `web_extract` / `web_crawl`) and the browser (`cloakctl.navigate` / `read` / `act`) over its own MCP server on stdio. No API keys; if the binary is missing, every web tool degrades to a helpful error.
 - **Local-first** — no telemetry, no account required; bring any OpenAI-compatible endpoint or a local model.
 - **Persistent Kernel (opt-in)** — a stateful Python kernel whose variables survive across turns, a continual-harness store (session-local + global prompt/subagent lessons with snapshot rollback), and a tool bridge that lets one kernel cell call allowlisted tools in a loop (RLM-lite). See [docs/kernel.md](docs/kernel.md). Disabled by default; `git submodule update --init --recursive` + `[tools.kernel] enabled = true` to adopt.
 
@@ -74,7 +74,7 @@ operant
 │   ├── operant-cli          TUI (ratatui) · commands · app adapter
 │   ├── operant-tools        built-in tool implementations
 │   ├── operant-providers    LLM provider adapters
-│   ├── operant-memory       memory backends (agentmemory / builtin / …)
+│   ├── operant-memory       memory backends (memory-wire / builtin / …)
 │   ├── operant-plugins      WASM plugin bridge
 │   ├── operant-gateway      messaging gateway (telegram, discord, …)
 │   ├── operant-channels     channel orchestrator
@@ -89,9 +89,9 @@ operant
 
 | Capability | Implementation |
 |---|---|
-| **Memory** | `agentmemory` hybrid semantic memory (BM25 + vector + graph), auto-spawned; or `builtin` file memory (`MEMORY.md` / `USER.md`) |
-| **Tools** | 60+ JSON-schema tools: fs, git, web (IGS search/scrape/extract), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
-| **Browser** | Stealth **Obscura** CDP — persistent socket, page sessions, shared binary with IGS web tools |
+| **Memory** | `memory-wire` in-process hybrid semantic memory (BM25 + token-overlap), panic-guarded; or `builtin` file memory (`MEMORY.md` / `USER.md`) |
+| **Tools** | 60+ JSON-schema tools: fs, git, web (sourcehound search/scrape/extract/crawl), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
+| **Browser** | Stealth **sourcehound** — the engine's own profile cookie jar and DevTools endpoint, driven over MCP and shared with the web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
 | **Models** | Any OpenAI-compatible endpoint (`base_url`), local llama.cpp, Ollama; fallback chains + token-bucket rate limiting |
 | **MCP** | Native client (stdio + HTTP, deferred loading) **and** server; reconnect materializes tools mid-session |
@@ -207,11 +207,13 @@ fallbacks = [ { model = "gpt-4o-mini" } ]
 max_iterations = 20
 
 [memory]
-provider = "agentmemory"      # or "builtin"
+provider = "memory-wire"      # or "builtin"
 
-[tools]
-igs_enabled = true            # IGS web tools + browser
-# obscura_stealth = true
+[tools.web]
+preferred_provider = "sourcehound"   # or tavily | exa | searxng | duckduckgo
+
+[browser]
+provider = "sourcehound"      # or lightpanda | camofox | browserbase | browser-use | firecrawl
 
 [skills]
 autoload = true
@@ -249,7 +251,7 @@ See [`operant.example.toml`](operant.example.toml) for the full reference — ev
 - **Rust 1.89+** (edition 2024)
 - 4 GB RAM (8 GB recommended)
 - A model: any OpenAI-compatible endpoint, or a local llama.cpp / Ollama server
-- Optional: [igs](https://github.com/ishan-parihar/igs-rust) binary for IGS web tools and the shared Obscura browser
+- Optional: the `sourcehound` binary, for the web tools and the stealth browser (no API key; omit it and those tools report a clear error)
 
 ---
 
