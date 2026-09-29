@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# Superseded runs were billing in parallel: 190 runs had accumulated with no
+# concurrency group anywhere, so a newer push did not cancel the older one.
+# cancel-in-progress makes the newest run the only one that counts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
