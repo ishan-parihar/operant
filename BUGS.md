@@ -2563,3 +2563,54 @@ to match, and a blind window bleeds into the neighbouring row. Discarded it and
 relied on direct reads plus the gates. The lesson is the same one as the doc
 comment that had to be deleted: for this class of question, the instrument keeps
 disagreeing with the file, and the file wins.
+
+**Extended at iter-469, one site further out.** After the iter-468 fix I went
+looking for the same defect class elsewhere, and found `plugins_hub.rs:255` doing
+selection duty with hardcoded slots — `.fg(Color::Black).bg(Color::Green)` fired
+on `is_selected`. The decisive detail is two lines below it: the same function
+already renders the plugin's enabled/disabled state with
+`theme_colors::success()`. So that function knew both roles and picked the wrong
+one for selection, which is the identical mistake iter-468 fixed, in a different
+costume. Now `.fg(theme_colors::on_selection()).bg(theme_colors::accent())`.
+
+This does not change the "still open" list above. Those four sites put
+`Color::Black` on an `accent()` background, whereas `plugins_hub.rs` put black on
+green, so it was never in that list — it is a sibling finding, not a member of it.
+
+### R40-32 — `bridge_state.rs` hardcodes the one colour the accessibility palette exists to avoid, for a state that is not success
+
+`bridge_state.rs:57` renders a " REMOTE " badge as
+`.fg(Color::Black).bg(Color::Green)`, keyed on `peer_count > 0`. Unlike
+`plugins_hub.rs` above, I did **not** change this one, and the reason is a
+measured gap rather than caution about touching appearance.
+
+`Color::Green` is a hardcoded ANSI slot, so the badge ignores all 8 themes. The
+part that makes it more than a tidiness issue: the deuteranopia palette defines
+`success` as `Rgb(0, 150, 200)` with the source comment `// Blue (not green)`,
+and `theme_colors.rs` already has a test named
+`deuteranopia_uses_blue_for_success` pinning it. So a red/green-safe palette is a
+documented, test-enforced intent in this codebase, and this site hardcodes the
+colour that intent exists to avoid.
+
+The blocker is that no accessor expresses what this badge means. The palette has
+13 `Color` accessors — `accent`, `border`, `disabled`, `error`, `muted`,
+`on_selection`, `overlay_bg`, `panel_bg`, `selection_bg`, `success`, `text`,
+`text_selection_bg`, `warning` — and **none of them is informational**.
+"REMOTE, and here are the peers" is a state, not a success, so:
+
+  - `success()` is semantically wrong (the connection is not a success) even
+    though it is the closest existing role.
+  - `muted()` and `accent()` are both defensible on appearance grounds and both
+    change the rendered colour on 7 of 8 themes.
+
+Options, in the order I would rank them: (a) add an `info` / `notice` role to
+`ColorPalette` and use it — 8 palette constructors to touch, but it is the only
+option that names what the badge is, and every later informational badge gets it
+too; (b) `accent()`, zero new palette surface, and consistent with how
+`selected` rows and focus rings already read; (c) `success()`, zero new surface
+but semantically wrong and it would put a "connection exists" badge in the same
+colour as a "this succeeded" one. Recommend (b) unless more informational badges
+are expected, in which case (a).
+
+Not fixed here, and deliberately: option (b) is an appearance change on 7 of 8
+themes, which is the user's call, not mine.

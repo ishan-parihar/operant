@@ -251,8 +251,8 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
         let prefix = if is_selected { "›" } else { " " };
         let row_style = if is_selected {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Green)
+                .fg(theme_colors::on_selection())
+                .bg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme_colors::text())
