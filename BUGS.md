@@ -2168,13 +2168,22 @@ iter-455 unrepairable claim, then the iter-455/456 orphan claim).
    which is on `main`. Any `git fetch --tags` is rejected until they are
    corrected. Fixed at iter-458 with `git fetch origin --tags --force`, which is
    a local-ref operation only and pushes nothing.
-2. **`v0.1.4` has a tag but no GitHub release.** `gh release list` shows
-   `v0.2.0` (Latest), `v0.1.3`, `v0.1.2` — and no `v0.1.4`. So the tag exists on
-   a real `main` commit while the release entry was never published. That is a
-   genuine gap and the owner's call: publish it, or drop the tag.
+2. **NOT a defect, contrary to what this entry first claimed: `v0.1.4` has no
+   GitHub release.** I initially filed that as "a genuine gap and the owner's
+   call: publish it, or drop the tag." Measured at iter-460, nothing consults
+   it: `release.yml` gates on `git tag --points-at "$BUILD_COMMIT"`, comparing
+   the *build* commit, so a stray tag is never read. And `v0.1.4`'s commit is
+   `fix(ci): move tdg-rust clone before rust-cache step` (2026-07-19) — a CI fix,
+   not release preparation, so the tag looks incidental rather than a dropped
+   release. A tag without a release is a normal repository state, and the
+   releases page (v0.1.2 -> v0.1.3 -> v0.2.0) is a coherent progression. **No
+   action.** The question was mine, not the repo's — the same pattern as the
+   fragile-glyph atlas, which I retired after checking the glyph inventory.
 3. **`v0.1.3`/`v0.1.4` are lightweight while `v0.1.2`/`v0.2.0` are annotated.**
-   Cosmetic, but it is why `git describe` under-reports, and it costs the tag a
-   message and a tagger identity. Not worth rewriting published history for.
+   Cosmetic, and left alone: it is why `git describe` under-reports without
+   `--tags`, and it costs a tag a message and a tagger identity. Not worth
+   rewriting published history for.
+
 ### R40-29 — RESOLVED: the example config misstated the browser default and omitted the real one entirely (fixed iter-459)
 `crates/operant-core/src/config.rs:1181` defaults `browser.provider` to
 `"obscura"`, while `AGENTS.md`, `operant.example.toml` and the deployability
