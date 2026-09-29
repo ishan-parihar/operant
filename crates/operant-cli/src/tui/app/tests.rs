@@ -540,6 +540,28 @@ fn test_alt_v_does_not_toggle_vim_mode() {
 }
 
 #[test]
+fn test_down_moves_forward_through_history() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["oldest".to_string(), "newer".to_string()];
+    // `history_pos` is an INDEX, not an offset-from-end (established at
+    // iter-429, where I first asserted the wrong direction and the test caught
+    // it). Newest is Some(len-1), so start at the oldest to exercise the
+    // walk-forward path rather than the return-to-draft step.
+    app.prompt_input.history_pos = Some(0);
+    app.prompt_input.history_draft = "draft".to_string();
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.prompt_input.history_pos,
+        Some(1),
+        "Down is catalogued as \"Next history\"; it must advance the index"
+    );
+    assert_eq!(app.prompt_input.text, "newer");
+}
+
+#[test]
 fn test_registry_advertises_no_binding_for_an_unimplemented_action() {
     use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, KeyAction};
     let registry = &*DEFAULT_KEYBINDINGS;
