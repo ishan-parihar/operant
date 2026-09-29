@@ -1013,7 +1013,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             "terminal" | "bash" | "shell" | "aft_bash" | "process" | "docker" => "\u{1F4BB}",
             "code_execution" | "echo" | "local" | "slow" | "fast" => "\u{1F4BB}",
             // ── Web / Search ──
-            "web_search" | "web_search_" | "tavily" | "tavily_search" | "igs" => "\u{1F50D}",
+            "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => {
+                "\u{1F50D}"
+            }
             "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
             | "web_crawl" => "\u{1F310}",
             "search" | "find" | "file_search" => "\u{1F50E}",
@@ -1096,7 +1098,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 "terminal" | "bash" | "shell" | "aft_bash" | "code_execution" | "process"
                 | "echo" | "docker" => &["command"],
                 // Web / Search
-                "web_search" | "web_search_" | "tavily" | "tavily_search" | "igs" => &["query"],
+                "web_search" | "web_search_" | "tavily" | "tavily_search" | "sourcehound" => {
+                    &["query"]
+                }
                 "web_fetch" | "web_scrape" | "tavily_extract" | "tavily_crawl" | "web_extract"
                 | "web_crawl" | "http_request" | "xai_http_request" => &["url"],
                 // File read

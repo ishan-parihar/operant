@@ -13,7 +13,7 @@ use crate::config::{WebToolSettings, runtime_config};
 use crate::schema::ToolSchema;
 use crate::security::ssrf_verdict;
 use crate::tools::web_providers::{
-    DDGProvider, ExaProvider, IgsSearchProvider, SearXNGProvider, TavilyProvider,
+    DDGProvider, ExaProvider, SearXNGProvider, SourcehoundSearchProvider, TavilyProvider,
     WebSearchProvider, WebSearchResult,
 };
 use crate::tools::{OperantTool, ToolContext, ToolResult};
@@ -54,22 +54,22 @@ impl OperantTool for WebSearchTool {
             .unwrap_or(settings.default_results)
             .min(settings.max_results);
 
-        // The IGS engine is preferred when the binary is installed: it
-        // aggregates Tavily/Firecrawl + DuckDuckGo with JS rendering. When
-        // `igs` is missing (or returns nothing — its upstream needs a key),
-        // we fall back to the configured provider / DuckDuckGo.
-        let igs_available =
-            runtime_config().tools.igs_enabled && crate::tools::igs::find_igs_binary().is_some();
+        // The sourcehound engine is preferred when the binary is installed: it
+        // is a key-free multi-engine search (DDG, Wikipedia, GitHub, HN, SO).
+        // When it is missing (or returns nothing), we fall back to the
+        // configured provider / DuckDuckGo.
+        let sourcehound_available = crate::tools::sourcehound::is_available();
 
         // hermes `web_search_registry._resolve` semantics: the explicitly
         // configured provider runs first, then the chain falls through the
         // remaining available engines — so a rate-limited/anomaly-blocked
-        // DuckDuckGo (or a keyless igs) no longer silently returns 0 results.
-        let candidates = build_search_candidates(&settings, igs_available);
+        // DuckDuckGo (or a sourcehound subprocess) no longer silently returns
+        // 0 results.
+        let candidates = build_search_candidates(&settings, sourcehound_available);
         // Bound every provider to `search_timeout_secs`: a stalled engine
-        // (e.g. an igs subprocess whose own `igs_timeout_secs` can exceed the
-        // agent loop's tool timeout) must fail over to the next candidate
-        // instead of killing the whole search with a tool-level timeout.
+        // (e.g. a sourcehound subprocess that can exceed the agent loop's tool
+        // timeout) must fail over to the next candidate instead of killing
+        // the whole search with a tool-level timeout.
         let per_provider_timeout = Duration::from_secs(settings.search_timeout_secs.max(1));
         let (results, used_provider, last_error) =
             run_provider_chain(candidates, &args.query, num_results, per_provider_timeout).await;
@@ -82,8 +82,8 @@ impl OperantTool for WebSearchTool {
                 format!(
                     "Search failed: {}",
                     last_error.unwrap_or_else(|| {
-                        "all search providers returned no results — the IGS engine \
-                     (v1.0.2, key-free) and DuckDuckGo both came up empty; try again \
+                        "all search providers returned no results — the sourcehound \
+                     engine (key-free) and DuckDuckGo both came up empty; try again \
                      shortly, or configure a Tavily/Exa key in [tools.web] for \
                      additional providers"
                             .to_string()
@@ -158,9 +158,9 @@ async fn run_provider_chain(
 /// `web_search_registry._resolve` capability fallback).
 ///
 /// 1. The explicitly configured preferred provider runs first
-///    (tavily / exa / searxng / duckduckgo / igs / auto).
+///    (tavily / exa / searxng / duckduckgo / sourcehound / auto).
 /// 2. Then the remaining *available* engines in preference order:
-///    igs → tavily (key) → exa (key) → duckduckgo → searxng (url).
+///    sourcehound → tavily (key) → exa (key) → duckduckgo → searxng (url).
 ///
 /// Engines that cannot function (no key, no base URL, missing binary) are
 /// skipped, and duplicates are deduplicated so a provider is never tried
@@ -168,7 +168,7 @@ async fn run_provider_chain(
 /// (DDG anomaly pages / rate limits) or unconfigured.
 fn build_search_candidates(
     settings: &WebToolSettings,
-    igs_available: bool,
+    sourcehound_available: bool,
 ) -> Vec<Box<dyn WebSearchProvider>> {
     let mut out: Vec<Box<dyn WebSearchProvider>> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -179,7 +179,7 @@ fn build_search_candidates(
             settings.user_agent.clone(),
         )) as Box<dyn WebSearchProvider>
     };
-    let igs = || Box::new(IgsSearchProvider) as Box<dyn WebSearchProvider>;
+    let sourcehound = || Box::new(SourcehoundSearchProvider) as Box<dyn WebSearchProvider>;
     let tavily = || {
         Box::new(TavilyProvider::new(
             settings.tavily_api_key.clone().unwrap_or_default(),
@@ -215,10 +215,10 @@ fn build_search_candidates(
         "exa" => push(exa()),
         "searxng" => push(searxng()),
         "duckduckgo" => push(ddg()),
-        // igs / auto / unset: prefer igs when the binary is available.
+        // sourcehound / auto / unset: prefer sourcehound when installed.
         _ => {
-            if should_prefer_igs(&settings.preferred_provider, igs_available) {
-                push(igs());
+            if should_prefer_sourcehound(&settings.preferred_provider, sourcehound_available) {
+                push(sourcehound());
             } else {
                 push(ddg());
             }
@@ -226,8 +226,8 @@ fn build_search_candidates(
     }
 
     // 2. Capability fallbacks, in preference order, deduplicated.
-    if igs_available {
-        push(igs());
+    if sourcehound_available {
+        push(sourcehound());
     }
     if settings
         .tavily_api_key
@@ -569,24 +569,32 @@ fn html_decode(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
-/// Decide whether to prefer the IGS engine for web search.
+/// Decide whether to prefer the sourcehound engine for web search.
 ///
-/// Explicit user config wins: IGS is preferred only when the configured
-/// provider is `igs`/`auto`/unset (compared case-insensitively, trimmed).
-/// Any explicit non-igs provider (tavily, exa, searxng, …) returns `false`
-/// even when the igs binary is installed — mirroring hermes's
+/// Explicit user config wins: sourcehound is preferred only when the
+/// configured provider is `sourcehound`/`auto`/unset (compared
+/// case-insensitively, trimmed). Any explicit non-sourcehound provider
+/// (tavily, exa, searxng, …) returns `false` even when the binary is
+/// installed — mirroring hermes's
 /// `web_search_registry._resolve(explicit, capability)`, which honors the
 /// configured backend before auto-selecting among available ones.
 ///
-/// `igs_available` still gates the result: even a configured `igs`
-/// preference yields `false` when the binary is missing.
-fn should_prefer_igs(preferred: &str, igs_available: bool) -> bool {
-    if !igs_available {
+/// `igs` is the retired name of this same key-free engine, so it resolves to
+/// the successor (`auto`) rather than falling through to DuckDuckGo: a config
+/// written before the sourcehound re-home must still reach the engine it
+/// asked for. The default in `config.rs` is still the old string until the
+/// consolidation pass renames it, so this mapping is what keeps the retired
+/// name off the DuckDuckGo path.
+///
+/// `sourcehound_available` still gates the result: even a configured
+/// `sourcehound` preference yields `false` when the binary is missing.
+fn should_prefer_sourcehound(preferred: &str, sourcehound_available: bool) -> bool {
+    if !sourcehound_available {
         return false;
     }
     matches!(
         preferred.trim().to_ascii_lowercase().as_str(),
-        "igs" | "auto" | ""
+        "sourcehound" | "igs" | "auto" | ""
     )
 }
 
@@ -596,24 +604,30 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_should_prefer_igs_matrix() {
-        // Explicit non-igs providers must win even when igs is installed.
+    fn test_should_prefer_sourcehound_matrix() {
+        // Explicit non-sourcehound providers must win even when sourcehound
+        // is installed.
         for pref in ["tavily", "exa", "searxng", "unknown"] {
             assert!(
-                !should_prefer_igs(pref, true),
-                "explicit '{pref}' must not be overridden by igs availability"
+                !should_prefer_sourcehound(pref, true),
+                "explicit '{pref}' must not be overridden by sourcehound availability"
             );
         }
-        // igs / auto / unset prefer igs when available.
-        for pref in ["igs", "auto", ""] {
-            assert!(should_prefer_igs(pref, true), "'{pref}' should prefer igs");
+        // sourcehound / auto / unset prefer sourcehound when available. `igs` is
+        // the retired name of the same key-free engine and must not fall
+        // through to DuckDuckGo.
+        for pref in ["sourcehound", "auto", "", "igs", " IGS "] {
+            assert!(
+                should_prefer_sourcehound(pref, true),
+                "'{pref}' should prefer sourcehound"
+            );
         }
         // Case + whitespace tolerance.
-        assert!(should_prefer_igs("  IGS ", true));
-        assert!(should_prefer_igs("Auto", true));
+        assert!(should_prefer_sourcehound("  SOURCEHOUND ", true));
+        assert!(should_prefer_sourcehound("Auto", true));
         // Missing binary always wins regardless of preference.
-        assert!(!should_prefer_igs("igs", false));
-        assert!(!should_prefer_igs("tavily", false));
+        assert!(!should_prefer_sourcehound("sourcehound", false));
+        assert!(!should_prefer_sourcehound("tavily", false));
     }
 
     fn test_settings(preferred: &str) -> WebToolSettings {
@@ -629,21 +643,21 @@ mod tests {
 
     #[test]
     fn search_candidates_preferred_first_then_fallbacks() {
-        // duckduckgo preferred: ddg first, igs second, ddg deduped.
+        // duckduckgo preferred: ddg first, sourcehound second, ddg deduped.
         let settings = test_settings("duckduckgo");
         let names = provider_names(&build_search_candidates(&settings, true));
-        assert_eq!(names, vec!["duckduckgo", "igs"]);
+        assert_eq!(names, vec!["duckduckgo", "sourcehound"]);
 
-        // No igs binary: only ddg (deduped, single entry).
+        // No sourcehound binary: only ddg (deduped, single entry).
         let names = provider_names(&build_search_candidates(&settings, false));
         assert_eq!(names, vec!["duckduckgo"]);
     }
 
     #[test]
-    fn search_candidates_prefers_igs_when_auto() {
+    fn search_candidates_prefers_sourcehound_when_auto() {
         let settings = test_settings("auto");
         let names = provider_names(&build_search_candidates(&settings, true));
-        assert_eq!(names, vec!["igs", "duckduckgo"]);
+        assert_eq!(names, vec!["sourcehound", "duckduckgo"]);
 
         let names = provider_names(&build_search_candidates(&settings, false));
         assert_eq!(names, vec!["duckduckgo"]);
@@ -655,7 +669,7 @@ mod tests {
         settings.tavily_api_key = Some("tvly-key".to_string());
         settings.exa_api_key = Some("exa-key".to_string());
         let names = provider_names(&build_search_candidates(&settings, true));
-        assert_eq!(names, vec!["duckduckgo", "igs", "tavily", "exa"]);
+        assert_eq!(names, vec!["duckduckgo", "sourcehound", "tavily", "exa"]);
     }
 
     #[test]
@@ -663,7 +677,7 @@ mod tests {
         let mut settings = test_settings("tavily");
         settings.tavily_api_key = Some("tvly-key".to_string());
         let names = provider_names(&build_search_candidates(&settings, true));
-        assert_eq!(names, vec!["tavily", "igs", "duckduckgo"]);
+        assert_eq!(names, vec!["tavily", "sourcehound", "duckduckgo"]);
     }
 
     #[test]
@@ -672,7 +686,7 @@ mod tests {
         settings.exa_api_key = Some("exa-key".to_string());
         let names = provider_names(&build_search_candidates(&settings, true));
         // exa preferred + exa fallback are the same provider — one entry.
-        assert_eq!(names, vec!["exa", "igs", "duckduckgo"]);
+        assert_eq!(names, vec!["exa", "sourcehound", "duckduckgo"]);
     }
 
     #[test]

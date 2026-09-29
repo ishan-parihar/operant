@@ -27,7 +27,6 @@ pub mod file_state;
 pub mod file_tools;
 pub mod harness_tools;
 pub mod http_tool;
-pub mod igs;
 pub mod image_generation_tool;
 pub mod insights_tool;
 pub mod kanban_tool;
@@ -46,6 +45,7 @@ pub mod reaction_tool;
 pub mod send_message_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
+pub mod sourcehound;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod terminal_backend;
@@ -100,7 +100,6 @@ pub use delegation_output_schema::{
 pub use discord_tool::{DiscordAdminTool, DiscordTool};
 pub use feishu_tool::{FeishuDocTool, FeishuDriveTool};
 pub use home_assistant_tool::HomeAssistantTool;
-pub use igs::{WebExtractTool, WebScrapeTool};
 pub use kanban_tool::KanbanTool;
 pub use lcm_tools::register_lcm_tools;
 pub use mcp_tool::McpManagementTool;
@@ -113,6 +112,7 @@ pub use skills_tool::{
     SkillManageTool, SkillMeta, SkillTreeValidation, SkillViewTool, SkillsTool,
     collect_skill_children, validate_skill_tree,
 };
+pub use sourcehound::{WebExtractTool, WebScrapeTool};
 pub use spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,

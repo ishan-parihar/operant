@@ -1,7 +1,7 @@
 //! CLI subcommand for browser cookie management (`operant cookies`).
 //!
 //! Imports cookies from any browser (Chrome / Brave / Edge / Chromium /
-//! Firefox) into the shared Obscura session so accounts are usable without
+//! Firefox) into the sourcehound browser session so accounts are usable without
 //! manual login — the multi-browser cookie import mechanism.
 //!
 //! # Usage
@@ -9,7 +9,7 @@
 //! - `operant cookies import <file>`         — import a cookies.txt / JSON export
 //! - `operant cookies import --browser brave` — read directly from a browser's
 //!   cookie database (Firefox plaintext; Chromium-family v10 decrypted)
-//! - `operant cookies list`                  — list cookies in the Obscura session
+//! - `operant cookies list`                  — list cookies in the browser session
 //! - `operant cookies export <file>`         — dump session cookies as cookies.txt
 //! - `operant cookies clear`                 — clear all cookies in the session
 
@@ -36,14 +36,14 @@ pub enum CookiesSubcommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// List cookies currently in the Obscura session.
+    /// List cookies currently in the browser session.
     List,
     /// Export session cookies to a Netscape cookies.txt file.
     Export {
         /// Output file path (default: cookies.txt in CWD).
         output: Option<PathBuf>,
     },
-    /// Clear all cookies in the Obscura session.
+    /// Clear all cookies in the browser session.
     Clear,
     /// Discover browser cookie databases on this machine.
     Discover,
@@ -167,9 +167,9 @@ async fn handle_import(
         return Ok(());
     }
 
-    let applied = operant_core::obscura_cdp::import_cookies(&cookies).await?;
+    let applied = operant_core::sourcehound_cdp::import_cookies(&cookies).await?;
     println!(
-        "✓ Applied {}/{} cookies to the Obscura session.",
+        "✓ Applied {}/{} cookies to the browser session.",
         applied,
         cookies.len()
     );
@@ -184,12 +184,12 @@ async fn handle_import(
 }
 
 async fn handle_list() -> Result<()> {
-    let cookies = operant_core::obscura_cdp::export_cookies().await?;
+    let cookies = operant_core::sourcehound_cdp::export_cookies().await?;
     if cookies.is_empty() {
-        println!("No cookies in the Obscura session.");
+        println!("No cookies in the browser session.");
         return Ok(());
     }
-    println!("{} cookie(s) in the Obscura session:", cookies.len());
+    println!("{} cookie(s) in the browser session:", cookies.len());
     for c in cookies {
         let flags = if c.secure { "S" } else { "-" };
         let http = if c.http_only { "H" } else { "-" };
@@ -206,9 +206,9 @@ async fn handle_list() -> Result<()> {
 }
 
 async fn handle_export(output: Option<PathBuf>) -> Result<()> {
-    let cookies = operant_core::obscura_cdp::export_cookies().await?;
+    let cookies = operant_core::sourcehound_cdp::export_cookies().await?;
     if cookies.is_empty() {
-        println!("No cookies in the Obscura session — nothing exported.");
+        println!("No cookies in the browser session — nothing exported.");
         return Ok(());
     }
     let path = output.unwrap_or_else(|| PathBuf::from("cookies.txt"));
@@ -219,8 +219,8 @@ async fn handle_export(output: Option<PathBuf>) -> Result<()> {
 }
 
 async fn handle_clear() -> Result<()> {
-    operant_core::obscura_cdp::clear_cookies().await?;
-    println!("✓ Cleared all cookies in the Obscura session.");
+    operant_core::sourcehound_cdp::clear_cookies().await?;
+    println!("✓ Cleared all cookies in the browser session.");
     Ok(())
 }
 

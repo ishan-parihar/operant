@@ -4,9 +4,14 @@
 //!
 //! | Value         | Backend                                                           |
 //! |---------------|-------------------------------------------------------------------|
-//! | `"agentmemory"` | Hybrid semantic memory via the agentmemory server (REST + MCP)  |
+//! | `"agentmemory"` (also `"memory_wire"` / `"memory-wire"`) | In-process hybrid semantic memory via the `memory_wire` crate |
 //! | `"builtin"`   | File-backed MEMORY.md / USER.md (zero-dependency fallback)        |
 //! | other         | Silently falls back to `"builtin"`                                |
+//!
+//! The provider name `"agentmemory"` is retained for config compatibility: it
+//! is served by the in-process [`crate::memory_wire::MemoryWireProvider`]. The
+//! agentmemory REST server, its `npx` auto-spawn, and its deferred MCP server
+//! were removed — two live engines is how double-engine conflicts start.
 //!
 //! Old provider names (`"tdg"`, `"hindsight"`, `"retaindb"`, `"mem0"`,
 //! `"local-vector"`) were removed — configs that still reference them are
@@ -217,7 +222,7 @@ impl MemorySyncExecutor {
 /// Lifecycle-matching the Python MemoryProvider ABC.
 #[async_trait]
 pub trait MemoryProvider: Send + Sync {
-    /// Short identifier, e.g. `"builtin"`, `"agentmemory"`.
+    /// Short identifier, e.g. `"builtin"`, `"memory_wire"`.
     fn name(&self) -> &str;
 
     /// True when credentials / deps are present (no network calls).
@@ -227,8 +232,8 @@ pub trait MemoryProvider: Send + Sync {
     async fn initialize(&self, session_id: &str) -> Result<()>;
 
     /// Probe whether the provider's backing service is currently reachable.
-    /// Default: the cached availability flag (file-backed providers are
-    /// always available). Providers with a live service (agentmemory)
+    /// Default: the cached availability flag (file-backed and in-process
+    /// providers are always available). Providers with a live external service
     /// override with a real health probe that updates the cached flag.
     /// (iter-326 — lets the /mcp reconnect path report backend state.)
     async fn check_health(&self) -> bool {
@@ -236,19 +241,19 @@ pub trait MemoryProvider: Send + Sync {
     }
 
     /// Ensure the provider's backing service is reachable, spawning it when
-    /// the provider supports managed auto-spawn (e.g. agentmemory's REST
-    /// server). Returns true when the service is (or just became) ready.
-    /// Default: always ready — file-backed providers have no external
-    /// service. (iter-326 — lets the /mcp reconnect path warm the
-    /// agentmemory backend BEFORE connecting its MCP server, so the MCP
-    /// initialize handshake completes in <1s instead of minutes.)
+    /// the provider supports managed auto-spawn. Returns true when the service
+    /// is (or just became) ready. Default: always ready — file-backed and
+    /// in-process providers have no external service. (iter-326 — lets the
+    /// /mcp reconnect path warm an externally-hosted backend BEFORE connecting
+    /// its MCP server, so the MCP initialize handshake completes in <1s instead
+    /// of minutes.)
     async fn ensure_server(&self) -> bool {
         true
     }
 
     /// Static text for the system prompt (instructions / status line).
-    /// NOTE: must be async — providers (agentmemory) fetch live context
-    /// over HTTP, and build_messages runs inside the tokio runtime.
+    /// NOTE: must be async — some providers fetch live context here, and
+    /// build_messages runs inside the tokio runtime.
     async fn system_prompt_block(&self) -> String {
         String::new()
     }
@@ -395,9 +400,11 @@ impl MemoryProvider for BuiltinProvider {
 
 /// Construct the memory provider from the config `provider` string.
 ///
-/// The `"agentmemory"` provider (hybrid semantic memory via the agentmemory
-/// server) is the default and is constructed when the `agentmemory` feature
-/// is compiled in. All unrecognized provider names (including the removed
+/// The `"agentmemory"` provider name is the historical default. It is now
+/// served by the in-process [`crate::memory_wire::MemoryWireProvider`] — the
+/// agentmemory REST server, its `npx` auto-spawn, and its deferred MCP server
+/// were removed, and `"memory_wire"` / `"memory-wire"` are accepted as explicit
+/// aliases. All unrecognized provider names (including the removed
 /// `"tdg"`, `"hindsight"`, `"retaindb"`, `"mem0"`, `"local-vector"`) fall
 /// back to `BuiltinProvider` (file-backed MEMORY.md / USER.md) — the agent
 /// stays functional with a degraded memory backend rather than dying on
@@ -407,22 +414,24 @@ pub fn build_memory_provider(
     storage_dir: std::path::PathBuf,
 ) -> Arc<dyn MemoryProvider> {
     match provider_name {
-        // "agentmemory" → AgentMemoryProvider (REST client + auto-spawn).
-        // If the server can't be reached at startup it degrades gracefully
-        // at call time (see agent_memory.rs) rather than panicking.
-        #[cfg(feature = "agentmemory")]
-        "agentmemory" => match crate::agent_memory::AgentMemoryProvider::new(storage_dir.clone()) {
-            Ok(provider) => Arc::new(provider),
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    "agentmemory provider init failed; falling back to BuiltinProvider"
-                );
-                Arc::new(BuiltinProvider::new(
-                    crate::memory::MemoryManager::with_storage_dir(storage_dir),
-                ))
+        // "agentmemory"/"memory_wire" → MemoryWireProvider (in-process
+        // memory_wire). If the store can't be opened at construction it
+        // degrades gracefully at call time (see memory_wire.rs) rather than
+        // panicking.
+        "agentmemory" | "memory_wire" | "memory-wire" => {
+            match crate::memory_wire::MemoryWireProvider::new(storage_dir.clone()) {
+                Ok(provider) => Arc::new(provider),
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "memory_wire provider init failed; falling back to BuiltinProvider"
+                    );
+                    Arc::new(BuiltinProvider::new(
+                        crate::memory::MemoryManager::with_storage_dir(storage_dir),
+                    ))
+                }
             }
-        },
+        }
         // "builtin", "disabled", and any other value → BuiltinProvider.
         // Old provider names (tdg/hindsight/retaindb/mem0/local-vector) also
         // land here — they're treated as unknown and silently downgraded to
@@ -493,5 +502,21 @@ mod tests {
             p.ensure_server().await,
             "builtin default ensure_server must be always-ready"
         );
+    }
+
+    // The agentmemory name (and its memory_wire aliases) must route to the
+    // in-process MemoryWireProvider, not to BuiltinProvider. Uses a real temp
+    // dir because the provider opens a file-backed SQLite store on construct.
+    #[test]
+    fn test_agentmemory_and_aliases_build_the_memory_wire_provider() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for name in ["agentmemory", "memory_wire", "memory-wire"] {
+            let p = build_memory_provider(name, dir.path().to_path_buf());
+            assert_eq!(
+                p.name(),
+                "memory_wire",
+                "provider name '{name}' should route to the memory_wire provider"
+            );
+        }
     }
 }

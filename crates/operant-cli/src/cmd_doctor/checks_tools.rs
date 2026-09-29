@@ -358,45 +358,49 @@ pub fn run_platform_checks(
     // =====================================================================
     section_header("Tool Availability");
 
-    // The IGS binary provides web search/scrape + browser automation with
-    // zero API keys (DuckDuckGo/Obscura via igs-rust). When `igs_enabled`
-    // and the binary is present, web/search/browser are available without
-    // any of the legacy API-key providers. (audit 2026-08-02)
-    // Reuse the core resolver: honors tools.igs_binary_path override + PATH.
-    let igs_present =
-        config.tools.igs_enabled && operant_core::tools::igs::find_igs_binary().is_some();
+    // The sourcehound binary provides web search/scrape/extract/crawl plus
+    // browser automation with zero API keys. When the binary is present,
+    // web/search/browser are available without any of the legacy API-key
+    // providers. (audit 2026-08-02)
+    // Reuse the core resolver: honors the SOURCEHOUND_BINARY override + PATH.
+    let sourcehound_present = operant_core::tools::sourcehound::find_sourcehound_binary().is_some();
 
-    // Obscura browser binary: the `browser.provider = "obscura"` backend
-    // reuses the IGS-managed binary when present so browser + IGS web tools
-    // (search/scrape/crawl) share a single download. Surface which copy is
-    // resolved so `operant doctor` shows the sharing guarantee. (audit 2026-08-09)
-    if let Some(obscura) = operant_core::browser_provider::ObscuraProvider::resolve_obscura_binary()
-    {
+    // Surface which sourcehound copy is resolved so `operant doctor` shows the
+    // sharing guarantee between the web tools and the browser provider.
+    if let Some(bin) = operant_core::tools::sourcehound::find_sourcehound_binary() {
         check_info(&format!(
-            "Obscura browser binary (shared with IGS: {})",
-            obscura.display()
+            "sourcehound binary (web tools + browser provider): {}",
+            bin.display()
         ));
     } else {
         check_info(
-            "Obscura browser binary (not installed — auto-downloaded on first use by the obscura provider)",
+            "sourcehound binary (not installed — web search/scrape/extract/crawl and the sourcehound browser provider stay unavailable)",
         );
     }
 
     // Simplified port: list main tool categories and check their requirements.
-    // `is_configured` covers keyless backends (igs, builtin memory); `required_envs`
+    // `is_configured` covers keyless backends (sourcehound, builtin memory); `required_envs`
     // still counts as available for users of the legacy API-key providers, so
-    // neither source regresses (e.g. Tavily key without igs binary).
+    // neither source regresses (e.g. Tavily key without the sourcehound binary).
     let tool_categories: Vec<(&str, Vec<&str>, bool)> = vec![
         ("terminal", vec![], true),
         ("file", vec![], true),
-        // web/search: igs (keyless) OR Tavily/Exa keys
-        ("web", vec!["TAVILY_API_KEY", "EXA_API_KEY"], igs_present),
-        ("search", vec!["TAVILY_API_KEY", "EXA_API_KEY"], igs_present),
+        // web/search: sourcehound (keyless) OR Tavily/Exa keys
+        (
+            "web",
+            vec!["TAVILY_API_KEY", "EXA_API_KEY"],
+            sourcehound_present,
+        ),
+        (
+            "search",
+            vec!["TAVILY_API_KEY", "EXA_API_KEY"],
+            sourcehound_present,
+        ),
         // memory: builtin MEMORY.md + agentmemory (auto-spawned, keyless) are
         // always available; HONCHO/MEM0 keys remain an optional upgrade
         ("memory", vec!["HONCHO_API_KEY", "MEM0_API_KEY"], true),
         ("cron", vec![], true),
-        // browser: igs (keyless) OR any cloud-provider key
+        // browser: sourcehound (keyless) OR any cloud-provider key
         (
             "browser",
             vec![
@@ -405,7 +409,7 @@ pub fn run_platform_checks(
                 "FIRECRAWL_API_KEY",
                 "CAMOFOX_URL",
             ],
-            igs_present,
+            sourcehound_present,
         ),
         ("vision", vec![], config.vision.provider.is_some()),
         ("tts", vec![], config.tts.enabled),

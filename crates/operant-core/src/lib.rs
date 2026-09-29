@@ -45,7 +45,6 @@ pub mod acp;
 pub mod active_sessions;
 pub mod aft_bridge;
 pub mod agent;
-pub mod agent_memory;
 pub mod approval;
 pub mod blast_radius;
 pub mod browser_provider;
@@ -84,12 +83,12 @@ pub mod mcp;
 pub mod mcp_oauth;
 pub mod memory;
 pub mod memory_provider;
+pub mod memory_wire;
 pub mod migrations;
 pub mod moa;
 pub mod models_dev;
 pub mod oauth;
 pub mod oauth_refresh;
-pub mod obscura_cdp;
 pub mod observer;
 pub mod parser;
 pub mod persistence_seam;
@@ -112,6 +111,7 @@ pub mod skill_marketplace;
 pub mod skill_usage;
 pub mod skills;
 pub mod skills_guard;
+pub mod sourcehound_cdp;
 pub mod tool_guardrails;
 pub mod tools;
 pub mod trajectory;
@@ -128,7 +128,6 @@ pub use runtime_adapter::{NativeRuntime, RuntimeAdapter};
 
 pub use acp::{AcpHandler, AgentState, RpcRequest, RpcResponse, server};
 pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
-pub use agent_memory::AgentMemoryProvider;
 pub use approval::{
     ApprovalContext, ApprovalGuard, ApprovalMode, ApprovalVerdict, RiskLevel, check_tool_approval,
 };
@@ -164,6 +163,7 @@ pub use gateway_session::{
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
 pub use memory_provider::{BuiltinProvider, MemoryProvider, build_memory_provider};
+pub use memory_wire::MemoryWireProvider;
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;
 pub use plugins::{

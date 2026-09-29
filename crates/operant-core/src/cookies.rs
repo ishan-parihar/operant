@@ -1,8 +1,8 @@
 //! Browser cookie import/export — multi-browser cookie support for the
-//! Obscura browser.
+//! browser session.
 //!
 //! Lets accounts from any browser (Chrome / Brave / Edge / Chromium /
-//! Firefox) be used directly inside Obscura without manual login:
+//! Firefox) be used directly in the browser without manual login:
 //!
 //! - **Netscape `cookies.txt`** — the universal export format produced by
 //!   every cookie-export browser extension (EditThisCookie, Get cookies.txt,
@@ -12,7 +12,7 @@
 //!   values) and Chromium-family `Cookies` (SQLite with AES-128-CBC v10
 //!   encrypted values; decryption key from `Local State` `os_crypt`).
 //!
-//! Imported cookies are injected into the shared Obscura CDP session via
+//! Imported cookies are injected into the browser's CDP session via
 //! `Storage.setCookies` / `Network.setCookie`, then applied to every page
 //! the browser navigates to.
 
@@ -66,7 +66,7 @@ impl Cookie {
         let domain = self.domain.trim_start_matches('.');
         // Chrome-family files carry a leading dot for host-only cookies that
         // should apply to subdomains; Emit the raw domain for broadest
-        // compatibility (Obscura sets the cookie by domain directly).
+        // compatibility (the engine sets the cookie by domain directly).
         let http_only = if self.http_only { "TRUE" } else { "FALSE" };
         let secure = if self.secure { "TRUE" } else { "FALSE" };
         let expires = self.expires.unwrap_or(0);
@@ -712,7 +712,7 @@ pub fn read_firefox_cookies(db_path: &std::path::Path) -> Vec<Cookie> {
 
 /// Path of the persistent cookie store (`~/.operant/data/cookies.json`).
 /// Cookies survive across process runs so a single import keeps working for
-/// every future Obscura session without re-login.
+/// every future browser session without re-login.
 pub fn cookie_store_path() -> std::path::PathBuf {
     crate::platform::operant_data_dir().join("cookies.json")
 }

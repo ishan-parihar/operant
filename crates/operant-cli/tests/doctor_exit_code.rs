@@ -104,7 +104,7 @@ fn doctor_cmd(home: &Path) -> Command {
         "ANTHROPIC_API_KEY",
         "OPENAI_BASE_URL",
         "GITHUB_TOKEN",
-        "IGS_HOST",
+        "SOURCEHOUND_HOST",
     ] {
         cmd.env_remove(key);
     }

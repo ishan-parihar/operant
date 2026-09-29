@@ -1040,7 +1040,7 @@ mod tests {
     fn hybrid_retrieval_should_have_no_production_caller() {
         let sources: [(&str, &str); 6] = [
             ("memory_provider.rs", include_str!("memory_provider.rs")),
-            ("agent_memory.rs", include_str!("agent_memory.rs")),
+            ("memory_wire.rs", include_str!("memory_wire.rs")),
             ("agent/mod.rs", include_str!("agent/mod.rs")),
             ("agent/run.rs", include_str!("agent/run.rs")),
             ("agent/stream.rs", include_str!("agent/stream.rs")),

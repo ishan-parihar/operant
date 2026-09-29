@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Parity work against the `jcode` reference agent (iters 347-409). The TUI
 gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
+### Changed
+
+- **Memory backend is now memory-wire (in-process).** `MemoryWireProvider`
+  calls the `memory_wire` crate's sync `retain`/`recall` API directly with a
+  `catch_unwind` boundary (a panic degrades to a memory miss, not a dead
+  turn). `provider = "memory-wire"` is the default; `"agentmemory"` still
+  resolves to it. Upstream tracks branch `main`; advance with
+  `scripts/sync-vendors.sh`, pin `rev =` at release.
+- **Web + browser backends are now sourcehound (MCP subprocess).**
+  `web_search`/`web_scrape`/`web_extract`/`web_crawl` and the `sourcehound`
+  browser provider (`cloakctl.navigate`/`read`/`act`, raw CDP via
+  `cloakctl.cdp`) run over the `sourcehound` binary's stdio MCP server.
+  `browser.provider` and `preferred_provider` default to `"sourcehound"`.
+  In-process was measured unviable (their `[patch.crates-io]` evaporates for
+  consumers; unconditional render stack).
+
+### Removed
+
+- **agentmemory integration deleted.** `AgentMemoryProvider`, the `:3111`
+  `npx` auto-spawn, and the deferred agentmemory MCP registration are gone.
+  `memory.agentmemory_*` config keys no longer exist; old configs carrying
+  them fail parse under `deny_unknown_fields`.
+- **IGS + Obscura implementations deleted.** `tools/igs.rs`, the IGS binary
+  surface, `ObscuraProvider`, and `obscura_cdp.rs` (renamed to
+  `sourcehound_cdp.rs`, re-homed onto `cloakctl.cdp`) are gone. `tools.*`
+  and `browser.provider` values `igs`/`obscura` no longer exist; the retired
+  names fall back to lightpanda (browser) and sourcehound (search).
+
 ### Fixed
 
 - **`/steer` was a guaranteed no-op.** Submitting it required `Enter` while not

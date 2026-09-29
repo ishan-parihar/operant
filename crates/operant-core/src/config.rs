@@ -903,32 +903,6 @@ pub struct ToolSettings {
     /// aft always falls back to the built-in tools.
     #[serde(default = "default_true")]
     pub aft_enabled: bool,
-    /// Whether to register the IGS-backed web tools (web_scrape,
-    /// web_extract) and the `igs` browser provider. Requires the `igs`
-    /// binary (see igs.rs IGS_INSTALL_HINT). Defaults to true.
-    #[serde(default = "default_true")]
-    pub igs_enabled: bool,
-    /// Optional explicit path to the `igs` binary (default: PATH lookup).
-    #[serde(default)]
-    pub igs_binary_path: Option<PathBuf>,
-    /// Optional explicit path to the Obscura browser binary used by the
-    /// `obscura` browser provider. When unset, operant reuses the binary the
-    /// IGS integration manages (`$IGS_CONFIG_DIR/bin/obscura` or
-    /// `~/.config/igs-mcp/bin/obscura`), then falls back to its own copy at
-    /// `~/.operant/bin/obscura`. Point this at the same binary IGS uses to
-    /// guarantee a single shared Obscura across browser + web tools.
-    #[serde(default)]
-    pub obscura_binary_path: Option<PathBuf>,
-    /// Whether the `obscura` browser provider runs in stealth mode: prefers
-    /// the `-stealth` release build when downloading and passes `--stealth` to
-    /// `obscura serve` (anti-detection: browser TLS fingerprinting, tracker
-    /// blocking, `navigator.webdriver` masking). Defaults to true. Set to
-    /// false only if your Obscura binary predates `--stealth` support.
-    #[serde(default = "default_true")]
-    pub obscura_stealth: bool,
-    /// Timeout (seconds) for a single `igs` invocation (5..=600).
-    #[serde(default = "default_igs_timeout")]
-    pub igs_timeout_secs: u64,
     #[serde(default)]
     pub lifeos_enabled: bool,
     /// Progressive tool disclosure (hermes `tools.tool_search` parity).
@@ -944,10 +918,6 @@ pub struct ToolSettings {
 
 fn default_true() -> bool {
     true
-}
-
-fn default_igs_timeout() -> u64 {
-    60
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1036,11 +1006,6 @@ impl Default for ToolSettings {
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
             aft_enabled: true,
-            igs_enabled: true,
-            igs_binary_path: None,
-            obscura_binary_path: None,
-            obscura_stealth: true,
-            igs_timeout_secs: 60,
             lifeos_enabled: false,
             tool_search: ToolSearchSettings::default(),
         }
@@ -1160,9 +1125,8 @@ impl Default for MemorySettings {
 /// Browser provider configuration.
 ///
 /// `provider` selects the browser backend:
-/// - `"obscura"` (default) — local Obscura binary shared with IGS; CDP-driven,
-///   stealth by default (reliable multi-step automation)
-/// - `"igs"` — IGS CLI (`igs web scrape` / stateless browser CLI)
+/// - `"sourcehound"` (default) — the sourcehound browser engine driven over
+///   its MCP server (`cloakctl.navigate` / `cloakctl.read` / `cloakctl.act`)
 /// - `"lightpanda"` — local binary, auto-downloaded from GitHub Releases
 /// - `"camofox"` — local anti-detection browser REST API (`CAMOFOX_URL`)
 /// - `"browserbase"` — Browserbase cloud (`BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`)
@@ -1178,7 +1142,7 @@ pub struct BrowserSettings {
 impl Default for BrowserSettings {
     fn default() -> Self {
         Self {
-            provider: "obscura".to_string(),
+            provider: "sourcehound".to_string(),
         }
     }
 }
@@ -1299,8 +1263,8 @@ pub struct WebToolSettings {
     pub user_agent: String,
     pub default_results: usize,
     pub max_results: usize,
-    /// Preferred web search provider: igs (default — requires the `igs`
-    /// binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
+    /// Preferred web search provider: sourcehound (default — requires the
+    /// `sourcehound` binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
     pub preferred_provider: String,
     pub tavily_api_key: Option<String>,
     pub exa_api_key: Option<String>,
@@ -1316,7 +1280,7 @@ impl Default for WebToolSettings {
             user_agent: "Mozilla/5.0 (compatible; OperantAgent/0.1)".to_string(),
             default_results: 10,
             max_results: 20,
-            preferred_provider: "igs".to_string(),
+            preferred_provider: "sourcehound".to_string(),
             tavily_api_key: None,
             exa_api_key: None,
             searxng_base_url: None,
@@ -2083,47 +2047,6 @@ wonderful_unknown_key = 42
             err.is_err(),
             "deny_unknown_fields must reject unknown [pk] keys"
         );
-    }
-
-    #[test]
-    fn tools_toml_parses_obscura_binary_path() {
-        // The shared-Obscura knob: `tools.obscura_binary_path` must reach
-        // ToolSettings so ObscuraProvider can reuse the IGS-managed binary.
-        let raw = r#"
-[tools]
-igs_enabled = true
-obscura_binary_path = "/home/dev/.config/igs-mcp/bin/obscura"
-"#;
-        let parsed = parse_config_str(raw, std::path::Path::new("test.toml")).expect("valid TOML");
-        assert!(parsed.tools.igs_enabled);
-        assert_eq!(
-            parsed.tools.obscura_binary_path.as_deref(),
-            Some(std::path::Path::new(
-                "/home/dev/.config/igs-mcp/bin/obscura"
-            ))
-        );
-
-        // Old TOML without the key still parses (backward compat → None).
-        let old = r#"
-[tools]
-igs_enabled = true
-"#;
-        let parsed = parse_config_str(old, std::path::Path::new("old.toml")).expect("valid TOML");
-        assert_eq!(parsed.tools.obscura_binary_path, None);
-    }
-
-    #[test]
-    fn tools_toml_parses_obscura_stealth_default_true() {
-        // Stealth is on by default; explicitly disabling must round-trip.
-        let raw = r#"
-[tools]
-obscura_stealth = false
-"#;
-        let parsed = parse_config_str(raw, std::path::Path::new("test.toml")).expect("valid TOML");
-        assert!(!parsed.tools.obscura_stealth);
-
-        let default = AppConfig::default();
-        assert!(default.tools.obscura_stealth);
     }
 
     fn temp_dir(name: &str) -> PathBuf {

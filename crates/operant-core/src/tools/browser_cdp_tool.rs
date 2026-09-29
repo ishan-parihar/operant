@@ -37,8 +37,9 @@ impl OperantTool for BrowserCdpTool {
 
     fn description(&self) -> &str {
         "Send raw Chrome DevTools Protocol commands directly to the browser via WebSocket. \
-         When BROWSER_CDP_URL is unset, commands run against the managed Obscura session \
-         (auto-provisioning a page when no session_id is given) — \
+         When BROWSER_CDP_URL is unset, commands run against the endpoint sourcehound \
+         publishes for the browser profile (auto-provisioning a page when no session_id \
+         is given) — \
          e.g. Runtime.evaluate {expression: \"document.title\", returnByValue: true}. \
          params may be an object or a JSON-encoded string."
     }
@@ -83,18 +84,18 @@ impl OperantTool for BrowserCdpTool {
                 }
             }
             _ => {
-                // Managed Obscura session: pages/sessions are per-connection,
+                // Managed session: pages/sessions are per-connection,
                 // so commands must run over the shared persistent socket. If
                 // no session_id was given, auto-provision a page session so
                 // page-scoped methods (Runtime.evaluate, Page.navigate, ...)
                 // just work.
                 let session_id = match parsed.session_id.clone() {
                     Some(sid) => Some(sid),
-                    None => crate::obscura_cdp::ensure_shared_page_session_id()
+                    None => crate::sourcehound_cdp::ensure_shared_page_session_id()
                         .await
                         .ok(),
                 };
-                match crate::obscura_cdp::send_shared_session_cmd(
+                match crate::sourcehound_cdp::send_shared_session_cmd(
                     &parsed.method,
                     params,
                     session_id.as_deref(),
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn normalize_params_parses_json_strings_into_objects() {
-        // The live-test failure: params arrived as a JSON string and obscura
+        // The live-test failure: params arrived as a JSON string and the engine
         // rejected the command with "expression required".
         let normalized = normalize_params(Some(json!("{\"expression\": \"document.title\"}")));
         assert_eq!(normalized, json!({"expression": "document.title"}));

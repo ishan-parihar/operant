@@ -6,8 +6,7 @@
 //! | Value           | Backend                                         |
 //! |-----------------|-------------------------------------------------|
 //! | `"lightpanda"`  | Local Lightpanda binary (auto-downloaded)       |
-//! | `"obscura"`     | Local Obscura binary (shared with IGS; CDP-driven,  |
-//! |                 | stealth by default)                              |
+//! | `"sourcehound"` | sourcehound browser engine over MCP (CDP-capable) |
 //! | `"camofox"`     | Camofox REST API (`CAMOFOX_URL`)                |
 //! | `"browserbase"` | Browserbase cloud (`BROWSERBASE_API_KEY`)       |
 //! | `"browser-use"` | Browser Use cloud (`BROWSER_USE_API_KEY`)       |
@@ -17,11 +16,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::config::runtime_config;
 use crate::error::{Error, Result};
-use dirs;
+use crate::tools::sourcehound::Sourcehound;
 use reqwest;
-use tokio::io::AsyncWriteExt;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -145,312 +142,172 @@ impl BrowserProvider for LightpandaProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Obscura — local binary with CDP server, auto-downloaded from GitHub Releases
+// ---------------------------------------------------------------------------
+// Sourcehound — browser engine driven over MCP (`sourcehound mcp`, stdio)
 // ---------------------------------------------------------------------------
 
-pub struct ObscuraProvider;
+/// MCP tool names on the wire. The sourcehound server advertises **dotted**
+/// names in `tools/list` (`cloakctl.cdp`, `cloakctl.navigate`, …). The `lp_*`
+/// browser verbs (`lp_goto`, `lp_markdown`) exist only as the
+/// `sourcehound browser …` CLI subcommands — they are not MCP tools — so
+/// navigation goes through `cloakctl.navigate` + `cloakctl.read`.
+pub const SH_TOOL_PROFILE_CREATE: &str = "cloakctl.profile_create";
+pub const SH_TOOL_OPEN: &str = "cloakctl.open";
+pub const SH_TOOL_CDP: &str = "cloakctl.cdp";
+pub const SH_TOOL_NAVIGATE: &str = "cloakctl.navigate";
+pub const SH_TOOL_READ: &str = "cloakctl.read";
+pub const SH_TOOL_ACT: &str = "cloakctl.act";
 
-impl ObscuraProvider {
-    /// Returns the default installation path for the Obscura binary
-    /// (the operant-managed copy at `~/.operant/bin/obscura`).
-    pub fn default_bin_path() -> std::path::PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".operant")
-            .join("bin")
-            .join("obscura")
+/// The sourcehound profile the browser provider drives. Stable across runs so
+/// the profile's cookie jar — and any logged-in session in it — survives a
+/// restart. Overridable so a second operant install (or a test) can use its own
+/// profile instead of taking the single-writer lock on the default one.
+pub fn browser_profile() -> String {
+    std::env::var("OPERANT_BROWSER_PROFILE")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| "operant".to_string())
+}
+
+/// Readable page text out of a sourcehound page payload. Falls back to the
+/// whole payload so a shape change degrades to raw JSON rather than an empty
+/// string the agent cannot use.
+fn page_text(payload: &Value, key: &str) -> String {
+    match payload.get(key).and_then(Value::as_str) {
+        Some(text) if !text.is_empty() => text.to_string(),
+        _ => payload.to_string(),
     }
+}
 
-    /// The config directory the IGS integration uses for its own Obscura
-    /// binary. Mirrors igs-rust's `config::user_config_dir()` precedence
-    /// exactly: `$IGS_CONFIG_DIR` override, else `$XDG_CONFIG_HOME/igs-mcp`
-    /// or `~/.config/igs-mcp`.
-    fn igs_config_dir() -> std::path::PathBuf {
-        if let Ok(dir) = std::env::var("IGS_CONFIG_DIR")
-            && !dir.trim().is_empty()
-        {
-            return std::path::PathBuf::from(dir);
-        }
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let xdg = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{home}/.config"));
-        std::path::PathBuf::from(xdg).join("igs-mcp")
+/// Browser provider backed by the sourcehound MCP server.
+///
+/// sourcehound owns the engine process, its persistent profile (and therefore
+/// its cookie jar) and its DevTools endpoint; operant only speaks MCP to it
+/// over stdio, through the shared [`Sourcehound`] client. `cloakctl.cdp`
+/// publishes a real DevTools websocket
+/// (`ws://127.0.0.1:<port>/devtools/browser`) for the tools that attach to CDP
+/// directly — see [`crate::sourcehound_cdp`].
+pub struct SourcehoundProvider {
+    sh: Sourcehound,
+    profile: String,
+    /// Set once the profile has been created and opened. `None` until the
+    /// first call.
+    prepared: tokio::sync::OnceCell<()>,
+}
+
+impl Default for SourcehoundProvider {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    /// Resolve the Obscura binary to execute, in order:
-    ///
-    /// 1. `OBSCURA_BIN` environment variable — mirrors igs-rust's
-    ///    `ObscuraManager::explicit_binary_path()` precedence exactly, so the
-    ///    sharing is **bidirectional**: whichever side points the other at its
-    ///    binary via env wins, and both run the same file.
-    /// 2. `tools.obscura_binary_path` config override
-    /// 3. The binary the IGS integration manages — `$IGS_CONFIG_DIR/bin/obscura`
-    ///    or `~/.config/igs-mcp/bin/obscura`. igs-rust's `ObscuraManager`
-    ///    (`src/obscura.rs`) manages that location (honoring `OBSCURA_BIN`/
-    ///    `obscura.binary_path`) and auto-downloads from the same
-    ///    `h4ckf0r0day/obscura` releases operant uses, so reusing it keeps the
-    ///    `browser` tool and the IGS web tools (web_search, web_scrape,
-    ///    web_extract, web.crawl) on the *exact same* binary — one download,
-    ///    no version drift.
-    /// 4. The operant-managed copy at `~/.operant/bin/obscura` (fallback for
-    ///    machines that never installed IGS).
-    ///
-    /// Returns the first path that exists; `None` when no binary is installed
-    /// (callers then fall back to `Self::download_binary`, which installs to
-    /// the operant-managed copy).
-    pub fn resolve_obscura_binary() -> Option<std::path::PathBuf> {
-        Self::resolve_obscura_binary_with(runtime_config().tools.obscura_binary_path.as_deref())
-    }
-
-    /// Testable core of [`Self::resolve_obscura_binary`]: resolution order is
-    /// `OBSCURA_BIN` env → `config_override` → IGS-managed binary →
-    /// operant-managed copy.
-    fn resolve_obscura_binary_with(
-        config_override: Option<&std::path::Path>,
-    ) -> Option<std::path::PathBuf> {
-        // 1. OBSCURA_BIN env override (igs-rust precedence: env first). Must
-        //    be a real file — a missing env path falls through with a warning
-        //    so a stale env var can't silently break the browser.
-        if let Ok(env_bin) = std::env::var("OBSCURA_BIN")
-            && !env_bin.trim().is_empty()
-        {
-            let path = std::path::PathBuf::from(env_bin);
-            if path.is_file() {
-                tracing::debug!(
-                    path = %path.display(),
-                    "using OBSCURA_BIN override (shared with IGS)"
-                );
-                return Some(path);
-            }
-            tracing::warn!(
-                path = %path.display(),
-                "OBSCURA_BIN does not exist — falling back"
-            );
-        }
-        // 2. Explicit config override (must be a real file, not a directory).
-        if let Some(path) = config_override {
-            if path.is_file() {
-                return Some(path.to_path_buf());
-            }
-            tracing::warn!(
-                path = %path.display(),
-                "configured tools.obscura_binary_path does not exist — falling back"
-            );
-        }
-        // 3. IGS-managed binary (shared with the IGS integration).
-        let igs_bin = Self::igs_config_dir().join("bin").join("obscura");
-        if igs_bin.exists() {
-            return Some(igs_bin);
-        }
-        // 4. Operant-managed copy.
-        let own = Self::default_bin_path();
-        own.exists().then_some(own)
-    }
-
-    /// Where a fresh download is installed. When the IGS config directory
-    /// exists (IGS has run at least once), install into its `bin/` so a later
-    /// `igs` run finds the same binary and skips its own download — the
-    /// single-shared-binary guarantee even on first-run ordering. Otherwise
-    /// fall back to the operant-managed copy.
-    fn download_target() -> std::path::PathBuf {
-        let igs_dir = Self::igs_config_dir();
-        if igs_dir.exists() {
-            igs_dir.join("bin").join("obscura")
-        } else {
-            Self::default_bin_path()
+impl SourcehoundProvider {
+    pub fn new() -> Self {
+        Self {
+            sh: Sourcehound::global(),
+            profile: browser_profile(),
+            prepared: tokio::sync::OnceCell::const_new(),
         }
     }
 
-    /// Downloads the latest Obscura browser binary for the current platform.
-    /// Checks GitHub Releases for the latest binary.
-    async fn download_binary() -> Result<std::path::PathBuf> {
-        let install_into_igs = Self::igs_config_dir().exists();
-        let bin_path = Self::download_target();
-
-        tracing::info!("Fetching latest Obscura browser binary from GitHub Releases…");
-
-        let release_url = "https://api.github.com/repos/h4ckf0r0day/obscura/releases/latest";
-        let client = reqwest::Client::builder()
-            .user_agent("Operant-RS-Downloader")
-            .build()?;
-
-        let release: serde_json::Value = client.get(release_url).send().await?.json().await?;
-        let version = release["tag_name"].as_str().unwrap_or("").to_string();
-
-        let assets = release["assets"]
-            .as_array()
-            .ok_or_else(|| Error::Agent("No assets found in Obscura release".into()))?;
-
-        let asset = Self::find_matching_asset(assets)?;
-        tracing::info!(
-            "Downloading asset: {}",
-            asset["name"].as_str().unwrap_or("unknown")
-        );
-
-        let response = client
-            .get(asset["browser_download_url"].as_str().unwrap_or(""))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(Error::Agent(format!(
-                "Failed to download binary: {}",
-                response.status()
-            )));
+    /// Build a provider on an explicit MCP server command. Test seam: the
+    /// dispatch path below is identical, only the transport is swapped.
+    #[cfg(test)]
+    fn with_command(command: impl Into<String>, args: Vec<String>, profile: &str) -> Self {
+        Self {
+            sh: Sourcehound::new(command, args),
+            profile: profile.to_string(),
+            prepared: tokio::sync::OnceCell::const_new(),
         }
-
-        if let Some(parent) = bin_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let mut file = tokio::fs::File::create(&bin_path).await?;
-        let content = response.bytes().await?;
-        file.write_all(&content).await?;
-        file.flush().await?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = tokio::fs::metadata(&bin_path).await?.permissions();
-            perms.set_mode(0o755);
-            tokio::fs::set_permissions(&bin_path, perms).await?;
-        }
-
-        if Self::verify_binary(&bin_path).await.is_err() {
-            return Err(Error::Agent(
-                "Downloaded binary failed verification".to_string(),
-            ));
-        }
-
-        // Stamp the version file igs-rust's ObscuraManager reads
-        // (`bin/.obscura_version`). Its `ensure_ready()` compares that file to
-        // the latest GitHub release and skips downloading when they match — so
-        // a binary we installed into its `bin/` dir is reused, not replaced.
-        if install_into_igs && !version.is_empty() {
-            tokio::fs::write(
-                bin_path.with_file_name(".obscura_version"),
-                version.as_bytes(),
-            )
-            .await?;
-        }
-
-        tracing::info!(
-            "Obscura binary successfully installed to {}",
-            bin_path.display()
-        );
-        Ok(bin_path)
     }
 
-    fn find_matching_asset(assets: &[serde_json::Value]) -> Result<serde_json::Value> {
-        let os = std::env::consts::OS;
-        let arch = std::env::consts::ARCH;
-
-        tracing::debug!("Matching asset for OS: {}, Arch: {}", os, arch);
-
-        // Obscura release naming: obscura-x86_64-linux.tar.gz (standard),
-        // obscura-x86_64-linux-stealth.tar.gz (stealth), …
-        let (os_pattern, arch_pattern) = match (os, arch) {
-            ("linux", "x86_64") => ("linux", "x86_64"),
-            ("linux", "aarch64") => ("linux", "aarch64"),
-            ("macos", "x86_64") => ("macos", "x86_64"),
-            ("macos", "aarch64") => ("macos", "aarch64"),
-            ("windows", "x86_64") => ("windows", "x86_64"),
-            ("windows", "aarch64") => ("windows", "aarch64"),
-            _ => {
-                return Err(Error::Agent(format!(
-                    "Unsupported platform: {} on {}",
-                    os, arch
-                )));
-            }
-        };
-
-        let matches_platform = |a: &serde_json::Value| {
-            let name = a["name"].as_str().unwrap_or("");
-            name.contains(os_pattern) && name.contains(arch_pattern) && name.ends_with(".tar.gz")
-        };
-
-        // Prefer the stealth build (anti-detection + TLS fingerprinting + tracker
-        // blocking) — the default for the CDP browser. Fall back to the standard
-        // build when the release only ships non-stealth assets.
-        if let Some(stealth) = assets
-            .iter()
-            .find(|a| matches_platform(a) && a["name"].as_str().unwrap_or("").contains("-stealth"))
-        {
-            return Ok(stealth.clone());
-        }
-        if let Some(standard) = assets.iter().find(|a| matches_platform(a)) {
-            tracing::warn!(
-                "Stealth build unavailable for {}/{}, falling back to the standard build",
-                os,
-                arch
-            );
-            return Ok(standard.clone());
-        }
-        Err(Error::Agent(format!(
-            "Could not find matching binary for {} on {}",
-            arch, os
-        )))
-    }
-
-    /// Verifies that the binary exists and can be executed
-    pub async fn verify_binary(path: &std::path::Path) -> Result<()> {
-        if !path.exists() {
-            return Err(Error::Config(format!(
-                "Binary not found at {}",
-                path.display()
-            )));
-        }
-
-        let output = tokio::process::Command::new(path)
-            .arg("--version")
-            .output()
+    /// Claim the profile. Both sourcehound verbs are idempotent by contract —
+    /// creating an existing profile is a no-op ack, and opening a live profile
+    /// re-attaches rather than taking a second writer — so this runs once.
+    async fn prepare(&self) -> Result<()> {
+        self.prepared
+            .get_or_try_init(|| async {
+                for tool in [SH_TOOL_PROFILE_CREATE, SH_TOOL_OPEN] {
+                    self.sh
+                        .call(tool, serde_json::json!({ "profile": self.profile }))
+                        .await?;
+                }
+                Ok(())
+            })
             .await
-            .map_err(|e| Error::Agent(format!("Failed to execute binary: {}", e)))?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(Error::Agent("Binary execution failed".to_string()))
-        }
+            .copied()
     }
 
-    /// Resolve the shared Obscura binary (reusing the IGS-managed copy when
-    /// present), downloading to the operant-managed location only when neither
-    /// IGS nor operant has one installed.
-    pub async fn ensure_binary() -> Result<std::path::PathBuf> {
-        if let Some(bin) = Self::resolve_obscura_binary() {
-            return Ok(bin);
+    /// One `cloakctl.act` call with the profile injected.
+    async fn act(&self, args: Value) -> Result<String> {
+        self.prepare().await?;
+        let mut args = args;
+        if let Some(map) = args.as_object_mut() {
+            map.insert("profile".to_string(), Value::String(self.profile.clone()));
         }
-        Self::download_binary().await
+        let payload = self.sh.call(SH_TOOL_ACT, args).await?;
+        Ok(payload.to_string())
     }
 }
 
 #[async_trait]
-impl BrowserProvider for ObscuraProvider {
+impl BrowserProvider for SourcehoundProvider {
     fn name(&self) -> &str {
-        "obscura"
+        "sourcehound"
     }
+
     fn is_configured(&self) -> bool {
-        true // Auto-provisions the shared (stealth) binary on first use
+        self.sh.is_available()
     }
+
     async fn navigate(&self, url: &str) -> Result<String> {
-        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
-        session.navigate(url).await
+        self.prepare().await?;
+        self.sh
+            .call(
+                SH_TOOL_NAVIGATE,
+                serde_json::json!({ "profile": self.profile, "action": "url", "url": url }),
+            )
+            .await?;
+        // `cloakctl.navigate` answers with the navigation envelope only
+        // (profile / tab / action / url / title); the page body is a separate
+        // read, exactly as the tool's own snapshot → act → verify loop expects.
+        self.snapshot().await
     }
+
     async fn snapshot(&self) -> Result<String> {
-        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
-        session.snapshot().await
+        self.prepare().await?;
+        let payload = self
+            .sh
+            .call(
+                SH_TOOL_READ,
+                serde_json::json!({ "profile": self.profile, "format": "markdown" }),
+            )
+            .await?;
+        Ok(page_text(&payload, "content"))
     }
+
     async fn click(&self, selector: &str) -> Result<String> {
-        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
-        session.click(selector).await
+        self.act(serde_json::json!({ "kind": "click", "selector": selector }))
+            .await
     }
+
     async fn type_text(&self, selector: &str, text: &str) -> Result<String> {
-        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
-        session.fill(selector, text).await
+        self.act(serde_json::json!({ "kind": "fill", "selector": selector, "text": text }))
+            .await
     }
+
     async fn scroll(&self, direction: &str) -> Result<String> {
-        let session = crate::obscura_cdp::get_or_start_shared_session().await?;
-        session.scroll(direction).await
+        // One 500px step per direction — the same step the managed CDP session
+        // used, so scroll distance does not change with the transport.
+        const STEP: i64 = 500;
+        let (dx, dy) = match direction {
+            "up" => (0, -STEP),
+            "left" => (-STEP, 0),
+            "right" => (STEP, 0),
+            _ => (0, STEP),
+        };
+        self.act(serde_json::json!({ "kind": "scroll", "dx": dx, "dy": dy }))
+            .await
     }
 }
 
@@ -758,13 +615,23 @@ impl BrowserProvider for FirecrawlProvider {
 
 pub fn build_browser_provider(name: &str) -> std::sync::Arc<dyn BrowserProvider> {
     match name {
-        "igs" => std::sync::Arc::new(crate::tools::igs::IgsBrowserProvider::default()),
         "camofox" => std::sync::Arc::new(CamofoxProvider::new()),
         "browserbase" => std::sync::Arc::new(BrowserbaseProvider::new()),
         "browser-use" | "browser_use" => std::sync::Arc::new(BrowserUseProvider::new()),
         "firecrawl" => std::sync::Arc::new(FirecrawlProvider::new()),
-        "obscura" => std::sync::Arc::new(ObscuraProvider),
-        _ => std::sync::Arc::new(LightpandaProvider), // default: lightpanda
+        "sourcehound" => std::sync::Arc::new(SourcehoundProvider::new()),
+        other => {
+            // The catch-all exists so a misspelled provider name is not a hard
+            // failure. Say so: a stale `[browser] provider` value (the retired
+            // `igs` / `obscura` names) would otherwise degrade to a
+            // fetch-only browser without a word.
+            tracing::warn!(
+                provider = other,
+                fallback = "lightpanda",
+                "unknown browser provider — falling back"
+            );
+            std::sync::Arc::new(LightpandaProvider) // default: lightpanda
+        }
     }
 }
 
@@ -779,183 +646,209 @@ mod tests {
         ENV_LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "operant_obscura_test_{}_{}_{}",
-            name,
+    /// Mock sourcehound MCP server. Records every `tools/call` (name +
+    /// arguments) as one JSON line per call into the log file, then answers
+    /// with the same `structuredContent` shape the real server returns:
+    /// `cloakctl.read` carries a page body, everything else an envelope.
+    const MOCK_SOURCEHOUND: &str = r#"import sys, json
+log = sys.argv[1]
+def emit(rid, result):
+    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': rid, 'result': result}) + chr(10))
+    sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get('id')
+    if rid is None:
+        continue
+    mid = req.get('method')
+    if mid == 'initialize':
+        emit(rid, {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'mock-sourcehound', 'version': '1.0'}})
+    elif mid == 'tools/list':
+        emit(rid, {'tools': []})
+    elif mid == 'tools/call':
+        params = req.get('params') or {}
+        with open(log, 'a') as fh:
+            fh.write(json.dumps({'name': params.get('name'), 'arguments': params.get('arguments')}) + chr(10))
+        if params.get('name') == 'cloakctl.read':
+            payload = {'profile': 'p', 'tab': 'page-1', 'url': 'https://example.test/', 'format': 'markdown', 'content': 'MOCK PAGE BODY'}
+        elif params.get('name') == 'cloakctl.navigate':
+            payload = {'profile': 'p', 'tab': 'page-1', 'action': 'url', 'url': params.get('arguments', {}).get('url'), 'title': 'Mock'}
+        else:
+            payload = {'profile': 'p'}
+        emit(rid, {'content': [{'type': 'text', 'text': 'ok'}], 'structuredContent': payload})
+    else:
+        emit(rid, {})
+"#;
+
+    /// A provider wired to a mock sourcehound MCP server, plus the call-log
+    /// path the mock appends every `tools/call` to.
+    fn mock_sourcehound() -> (SourcehoundProvider, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_sh_mock_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         ));
-        std::fs::create_dir_all(&path).unwrap();
-        path
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("mock_sourcehound.py");
+        std::fs::write(&script, MOCK_SOURCEHOUND).unwrap();
+        let log = dir.join("calls.log");
+        std::fs::write(&log, b"").unwrap();
+        let provider = SourcehoundProvider::with_command(
+            "python3",
+            vec![
+                script.to_string_lossy().to_string(),
+                log.to_string_lossy().to_string(),
+            ],
+            "operant-test",
+        );
+        (provider, log)
     }
 
-    /// Restores an env var to its prior value on drop, so a panicking
-    /// assertion can't leak `IGS_CONFIG_DIR` into other tests in the process.
-    struct EnvGuard {
-        name: &'static str,
-        previous: Option<std::ffi::OsString>,
+    /// Every `tools/call` the mock recorded, in order.
+    fn recorded_calls(log: &std::path::Path) -> Vec<Value> {
+        std::fs::read_to_string(log)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .collect()
     }
 
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: test-only env mutation under exclusive lock; the guard
-            // is always created while `env_lock()` is held.
-            match &self.previous {
-                Some(value) => unsafe { std::env::set_var(self.name, value) },
-                None => unsafe { std::env::remove_var(self.name) },
-            }
+    #[tokio::test]
+    async fn provider_navigates_through_sourcehound_navigate_and_read() {
+        let (provider, log) = mock_sourcehound();
+
+        let body = provider.navigate("https://example.test/").await.unwrap();
+
+        // The provider returns the page body it read back after navigating —
+        // not the navigation envelope.
+        assert_eq!(body, "MOCK PAGE BODY");
+
+        let calls = recorded_calls(&log);
+        let names: Vec<&str> = calls.iter().filter_map(|c| c["name"].as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "cloakctl.profile_create",
+                "cloakctl.open",
+                "cloakctl.navigate",
+                "cloakctl.read",
+            ],
+            "navigation must dispatch the sourcehound tool names, in order"
+        );
+
+        // Every call carries the profile, and the navigate call carries the URL.
+        for call in &calls {
+            assert_eq!(call["arguments"]["profile"], "operant-test");
+        }
+        assert_eq!(
+            calls[2]["arguments"]["action"], "url",
+            "cloakctl.navigate needs action=url for a target address"
+        );
+        assert_eq!(calls[2]["arguments"]["url"], "https://example.test/");
+        assert_eq!(calls[3]["arguments"]["format"], "markdown");
+    }
+
+    #[tokio::test]
+    async fn provider_interactions_dispatch_cloakctl_act() {
+        let (provider, log) = mock_sourcehound();
+
+        provider.click("#submit").await.unwrap();
+        provider.type_text("#name", "ada").await.unwrap();
+        provider.scroll("up").await.unwrap();
+        provider.scroll("down").await.unwrap();
+        provider.scroll("left").await.unwrap();
+
+        let calls = recorded_calls(&log);
+        let acts: Vec<&Value> = calls
+            .iter()
+            .filter(|c| c["name"] == "cloakctl.act")
+            .collect();
+        assert_eq!(acts.len(), 5, "one cloakctl.act per interaction");
+
+        assert_eq!(acts[0]["arguments"]["kind"], "click");
+        assert_eq!(acts[0]["arguments"]["selector"], "#submit");
+
+        assert_eq!(acts[1]["arguments"]["kind"], "fill");
+        assert_eq!(acts[1]["arguments"]["selector"], "#name");
+        assert_eq!(acts[1]["arguments"]["text"], "ada");
+
+        // Directions map to pixel steps, not to a string the server never sees.
+        assert_eq!(
+            (
+                acts[2]["arguments"]["dy"].as_i64(),
+                acts[2]["arguments"]["dx"].as_i64()
+            ),
+            (Some(-500), Some(0))
+        );
+        assert_eq!(
+            (
+                acts[3]["arguments"]["dy"].as_i64(),
+                acts[3]["arguments"]["dx"].as_i64()
+            ),
+            (Some(500), Some(0))
+        );
+        assert_eq!(
+            (
+                acts[4]["arguments"]["dy"].as_i64(),
+                acts[4]["arguments"]["dx"].as_i64()
+            ),
+            (Some(0), Some(-500))
+        );
+
+        for act in &acts {
+            assert_eq!(act["arguments"]["profile"], "operant-test");
         }
     }
 
-    fn set_env_igs_config_dir(dir: &std::path::Path) -> EnvGuard {
-        let previous = std::env::var_os("IGS_CONFIG_DIR");
-        // SAFETY: test-only env mutation under exclusive lock
-        unsafe { std::env::set_var("IGS_CONFIG_DIR", dir) };
-        EnvGuard {
-            name: "IGS_CONFIG_DIR",
-            previous,
-        }
+    #[tokio::test]
+    async fn provider_snapshot_reads_the_page_body() {
+        let (provider, log) = mock_sourcehound();
+
+        assert_eq!(provider.snapshot().await.unwrap(), "MOCK PAGE BODY");
+        let calls = recorded_calls(&log);
+        assert_eq!(calls.last().unwrap()["name"], "cloakctl.read");
     }
 
     #[test]
-    fn find_matching_asset_prefers_stealth_build() {
-        let os = std::env::consts::OS;
-        let arch = std::env::consts::ARCH;
-        let name = |suffix: &str| format!("obscura-{arch}-{os}{suffix}.tar.gz");
-        let assets = vec![
-            serde_json::json!({ "name": name("") }),
-            serde_json::json!({ "name": name("-stealth") }),
-            serde_json::json!({ "name": name("-no-render") }),
-        ];
-        let chosen = ObscuraProvider::find_matching_asset(&assets).unwrap();
-        assert_eq!(chosen["name"], name("-stealth"));
+    fn page_text_falls_back_to_the_whole_payload() {
+        let payload = serde_json::json!({ "profile": "p", "tab": "page-1" });
+        // No `content` key: degrade to raw JSON rather than an empty string.
+        assert_eq!(page_text(&payload, "content"), payload.to_string());
+        assert_eq!(
+            page_text(&serde_json::json!({ "content": "" }), "content"),
+            serde_json::json!({ "content": "" }).to_string()
+        );
     }
 
     #[test]
-    fn find_matching_asset_falls_back_to_standard_build() {
-        let os = std::env::consts::OS;
-        let arch = std::env::consts::ARCH;
-        let name = |suffix: &str| format!("obscura-{arch}-{os}{suffix}.tar.gz");
-        let assets = vec![
-            serde_json::json!({ "name": name("") }),
-            serde_json::json!({ "name": name("-no-render") }),
-        ];
-        let chosen = ObscuraProvider::find_matching_asset(&assets).unwrap();
-        // No -stealth asset: standard rendering build wins over -no-render.
-        assert_eq!(chosen["name"], name(""));
-    }
-
-    #[test]
-    fn resolve_prefers_config_override() {
+    fn browser_profile_falls_back_to_operant() {
         let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("override");
-        let bin = dir.join("custom-obscura");
-        std::fs::write(&bin, b"").unwrap();
-        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&bin));
-        assert_eq!(result, Some(bin));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn resolve_uses_igs_managed_binary_when_present() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("igs");
-        let bin = dir.join("bin").join("obscura");
-        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        std::fs::write(&bin, b"").unwrap();
-        let _env = set_env_igs_config_dir(&dir);
-        let result = ObscuraProvider::resolve_obscura_binary_with(None);
-        assert_eq!(result, Some(bin));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn resolve_ignores_missing_override_then_uses_igs() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("igs2");
-        let bin = dir.join("bin").join("obscura");
-        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        std::fs::write(&bin, b"").unwrap();
-        let missing = dir.join("does-not-exist");
-        let _env = set_env_igs_config_dir(&dir);
-        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&missing));
-        assert_eq!(result, Some(bin));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn resolve_obscura_bin_env_wins_over_config_and_igs() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("env-bin");
-        let env_bin = dir.join("env-obscura");
-        std::fs::write(&env_bin, b"").unwrap();
-        let igs_bin = dir.join("igs-bin").join("obscura");
-        std::fs::create_dir_all(igs_bin.parent().unwrap()).unwrap();
-        std::fs::write(&igs_bin, b"").unwrap();
-        let _env = set_env_igs_config_dir(&dir.join("igs-bin"));
-        let previous = std::env::var_os("OBSCURA_BIN");
-        // SAFETY: test-only env mutation under exclusive lock; restored below.
-        unsafe { std::env::set_var("OBSCURA_BIN", &env_bin) };
-        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&igs_bin));
+        let previous = std::env::var_os("OPERANT_BROWSER_PROFILE");
+        // SAFETY: test-only env mutation under the module's exclusive lock.
+        unsafe { std::env::remove_var("OPERANT_BROWSER_PROFILE") };
+        assert_eq!(browser_profile(), "operant");
+        unsafe { std::env::set_var("OPERANT_BROWSER_PROFILE", "custom") };
+        assert_eq!(browser_profile(), "custom");
         match previous {
-            Some(value) => unsafe { std::env::set_var("OBSCURA_BIN", value) },
-            None => unsafe { std::env::remove_var("OBSCURA_BIN") },
+            Some(value) => unsafe { std::env::set_var("OPERANT_BROWSER_PROFILE", value) },
+            None => unsafe { std::env::remove_var("OPERANT_BROWSER_PROFILE") },
         }
-        assert_eq!(
-            result,
-            Some(env_bin),
-            "OBSCURA_BIN must win over both the config override and the IGS-managed binary"
-        );
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn resolve_missing_obscura_bin_env_falls_through_to_config() {
-        let _guard = env_lock().lock().unwrap();
-        let dir = temp_dir("env-bin-missing");
-        let config_bin = dir.join("config-obscura");
-        std::fs::write(&config_bin, b"").unwrap();
-        let previous = std::env::var_os("OBSCURA_BIN");
-        // SAFETY: test-only env mutation under exclusive lock; restored below.
-        unsafe { std::env::set_var("OBSCURA_BIN", dir.join("nope")) };
-        let result = ObscuraProvider::resolve_obscura_binary_with(Some(&config_bin));
-        match previous {
-            Some(value) => unsafe { std::env::set_var("OBSCURA_BIN", value) },
-            None => unsafe { std::env::remove_var("OBSCURA_BIN") },
-        }
-        assert_eq!(
-            result,
-            Some(config_bin),
-            "a stale OBSCURA_BIN must not shadow a valid config override"
-        );
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn download_target_prefers_igs_dir_when_present() {
-        let _guard = env_lock().lock().unwrap();
-        // IGS config dir exists → downloads land in its bin/ so igs reuses them.
-        let dir = temp_dir("dl-igs");
-        let _env = set_env_igs_config_dir(&dir);
-        assert_eq!(
-            ObscuraProvider::download_target(),
-            dir.join("bin").join("obscura")
-        );
-        let _ = std::fs::remove_dir_all(dir);
-
-        // IGS config dir does NOT exist → operant-managed copy (no IGS to share).
-        let absent = temp_dir("dl-absent");
-        std::fs::remove_dir_all(&absent).unwrap();
-        let _env2 = set_env_igs_config_dir(&absent);
-        assert_eq!(
-            ObscuraProvider::download_target(),
-            ObscuraProvider::default_bin_path()
-        );
-        let _ = std::fs::remove_dir_all(absent);
+    fn sourcehound_provider_maps_from_the_factory() {
+        let p = build_browser_provider("sourcehound");
+        assert_eq!(p.name(), "sourcehound");
     }
 
     #[test]
@@ -965,15 +858,19 @@ mod tests {
     }
 
     #[test]
-    fn test_igs_provider_maps_to_igs() {
-        let p = build_browser_provider("igs");
-        assert_eq!(p.name(), "igs");
-    }
-
-    #[test]
     fn test_unknown_falls_back_to_lightpanda() {
         let p = build_browser_provider("unknown");
         assert_eq!(p.name(), "lightpanda");
+    }
+
+    #[test]
+    fn retired_provider_names_fall_back_to_lightpanda() {
+        // The retired `igs` / `obscura` names used to resolve to their own
+        // providers. A config still naming one now hits the catch-all, so the
+        // fallback has to stay the fetch-only default rather than fail.
+        for retired in ["igs", "obscura"] {
+            assert_eq!(build_browser_provider(retired).name(), "lightpanda");
+        }
     }
 
     #[test]

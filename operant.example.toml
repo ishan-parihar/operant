@@ -266,22 +266,9 @@ event_channel_size = 100
 # The native file/terminal tools are only disabled when the bridge is proven
 # live, so a missing/broken aft always falls back to the built-in tools.
 aft_enabled = true
-# IGS-backed web tools (web_scrape, web_extract) + igs browser provider.
-# Install the binary: curl -sSL https://raw.githubusercontent.com/ishan-parihar/igs-rust/master/scripts/install.sh | bash
-igs_enabled = true
-# igs_binary_path = "/usr/local/bin/igs"
-# igs_timeout_secs = 60
-# Obscura browser binary used by the `obscura` browser provider.
-# When unset, operant reuses the binary the IGS integration manages
-# (~/.config/igs-mcp/bin/obscura, or $IGS_CONFIG_DIR/bin/obscura), then falls
-# back to its own copy at ~/.operant/bin/obscura. Set this to guarantee a
-# single shared Obscura across the browser tool + IGS web tools.
-# obscura_binary_path = "/home/you/.config/igs-mcp/bin/obscura"
-# Stealth mode for the `obscura` browser provider (default true): prefers the
-# -stealth release build when downloading and passes --stealth to the CDP
-# serve session (anti-detection + tracker blocking). Set false only for
-# binaries that predate --stealth support.
-# obscura_stealth = true
+# Web tools (web_search, web_scrape, web_extract) via the sourcehound MCP
+# server. Requires the `sourcehound` binary (SOURCEHOUND_BINARY override or PATH).
+# Search provider preference lives in [web_tools] preferred_provider.
 lifeos_enabled = false
 # Progressive tool disclosure (hermes `tools.tool_search` parity).
 # When active, MCP server tools (`mcp_*`) are replaced in the model-visible
@@ -306,8 +293,8 @@ fetch_timeout_secs = 30
 user_agent = "Mozilla/5.0 (compatible; HermesAgent/0.1)"
 default_results = 10
 max_results = 20
-# preferred_provider: igs (default — uses `igs` binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
-preferred_provider = "igs"
+# preferred_provider: sourcehound (default — uses `sourcehound` binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
+preferred_provider = "sourcehound"
 
 [tools.http]
 timeout_secs = 30
@@ -403,27 +390,24 @@ enabled = false
 #                Lifecycle parity with the hermes-agent memory plugin:
 #                session/start on init, observe on sync_turn, session/end on
 #                exit, context on pre-compress, remember-mirror on memory writes.
+# provider: memory-wire (default) | builtin
+# - memory-wire: in-process memory-wire engine (retain/recall); replaces agentmemory
 # - builtin:     file-backed MEMORY.md / USER.md in the operant home directory
-provider = "agentmemory"
+provider = "memory-wire"
 enabled = true
-# agentmemory_url = "http://localhost:3111"
-# agentmemory_secret = ""
-# agentmemory_auto_spawn = true
 
 [browser]
-# provider: obscura (default) | igs | lightpanda | camofox | browserbase | browser-use | firecrawl
-# - obscura:      local Obscura binary, shared with IGS; CDP-driven, stealth by default
-# - igs:         IGS headless browser via the `igs` binary (Obscura, zero API keys)
+# provider: sourcehound (default) | lightpanda | camofox | browserbase | browser-use | firecrawl
+# - sourcehound:  sourcehound browser engine over MCP; sourcehound owns the engine,
+#                 its profile cookie jar, and the DevTools endpoint operant attaches to
 # - lightpanda:  local binary from github.com/lightpanda-io/browser (downloaded automatically)
 # - camofox:     local anti-detection browser REST API (CAMOFOX_URL)
 # - browserbase: cloud (BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
 # - browser-use: cloud AI agent (BROWSER_USE_API_KEY)
 # - firecrawl:   scrape API (FIRECRAWL_API_KEY)
-# NOTE: the code default is "obscura" (see BrowserSettings::default). The line
-# below selects "igs" explicitly, which is the IGS CLI wrapper rather than the
-# direct CDP driver — same engine, different driver. Comment it out to inherit
-# the default.
-provider = "igs"
+# NOTE: the code default is "sourcehound" (see BrowserSettings::default).
+# Uncomment to override it explicitly.
+# provider = "sourcehound"
 
 # ── Advanced sections (uncomment to configure) ───────────────────────────────
 # These are power-user features. Most users don't need them.

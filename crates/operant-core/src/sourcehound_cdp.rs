@@ -1,54 +1,53 @@
-//! Managed CDP session on the shared (stealth) Obscura binary.
+//! Raw-Chrome-DevTools-Protocol access to the sourcehound browser engine.
 //!
-//! The IGS integration's `browser` commands are *not* CDP — igs-rust re-runs
-//! `obscura fetch <url> --stealth [--eval <js>]` per command with only a
-//! `CURRENT_URL` string as "session state". There is therefore no CDP endpoint
-//! to reuse through IGS. Instead, operant drives the **shared Obscura binary**
-//! directly over the Chrome DevTools Protocol:
+//! The [`crate::browser_provider::SourcehoundProvider`] drives the engine
+//! through sourcehound's `cloakctl.*` MCP verbs — that is the path the
+//! agent-facing browser tool takes. This module is the other path: tools and
+//! harnesses that speak CDP themselves (the `browser_cdp` tool, the cookie
+//! commands) attach directly to the same engine.
 //!
-//! 1. Resolve the shared binary ([`crate::browser_provider::ObscuraProvider`]
-//!    — the same one IGS manages, per the single-binary guarantee).
-//! 2. Spawn `obscura serve --port <free> --stealth`, which emits a
-//!    `ws://127.0.0.1:<port>` WebSocket URL on stdout (browser-level endpoint,
-//!    same shape Chrome's `--remote-debugging-port` exposes).
+//! sourcehound owns the engine process. It publishes a real DevTools
+//! websocket through its `cloakctl.cdp` MCP tool
+//! (`ws://127.0.0.1:<port>/devtools/browser` — the same browser-level shape
+//! Chrome's `--remote-debugging-port` exposes), and that call is idempotent:
+//! it returns the running endpoint rather than starting a rival server. So:
+//!
+//! 1. [`Sourcehound::global`] — the shared stdio client.
+//! 2. `cloakctl.cdp { profile }` — publish (or re-attach to) the endpoint and
+//!    take its `ws_url`.
 //! 3. Drive it over CDP: `Target.createTarget` / `Target.attachToTarget` for
 //!    a page session, then `Page.navigate`, `Runtime.evaluate`, and
-//!    `LP.getMarkdown` (Obscura's DOM-to-markdown conversion).
+//!    `LP.getMarkdown` (the engine's DOM-to-markdown conversion).
 //!
-//! This gives the `obscura` browser provider full interactive automation
-//! (navigate / snapshot / click / type / scroll) on the stealth build — the
-//! same pattern as the `SGavrl/hermes-plugin-obscura` Hermes plugin.
+//! There is no second engine: the websocket sourcehound publishes is the same
+//! one its MCP page verbs drive, over the same profile and cookie jar.
 
 use std::collections::HashMap;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
-use crate::browser_provider::ObscuraProvider;
+use crate::browser_provider::{SH_TOOL_CDP, browser_profile};
 use crate::error::{Error, Result};
+use crate::tools::sourcehound::Sourcehound;
 
-/// How long to wait for `obscura serve` to emit its WebSocket URL.
-const SERVE_START_TIMEOUT: Duration = Duration::from_secs(20);
 /// Post-navigation settling time before reading page content.
 const PAGE_SETTLE: Duration = Duration::from_secs(2);
 /// How long a single CDP command may take before we surface a timeout
-/// (obscura's own per-command V8 watchdog defaults to 60s).
+/// (the engine's own per-command V8 watchdog defaults to 60s).
 const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// A single persistent CDP WebSocket connection with id→response correlation.
 ///
-/// Obscura's `serve` keeps pages and sessions **per connection** — every WS
-/// connection gets its own `CdpContext`. A fresh connection per command would
+/// The engine keeps pages and sessions **per connection** — every WS
+/// connection gets its own context. A fresh connection per command would
 /// silently drop the created page/session, and the next step fails with
 /// `-32601 "No page for session"`. The whole session flow (createTarget →
 /// attachToTarget → Page.navigate → Runtime.evaluate → LP.getMarkdown) must
@@ -135,105 +134,55 @@ struct PageTarget {
     session_id: String,
 }
 
-/// A running `obscura serve` process exposing a CDP WebSocket endpoint.
+/// A CDP WebSocket attached to the sourcehound engine's published endpoint.
 pub struct CdpBrowserSession {
-    /// Browser-level CDP endpoint (`ws://127.0.0.1:<port>`).
+    /// Browser-level CDP endpoint
+    /// (`ws://127.0.0.1:<port>/devtools/browser`).
     ws_url: String,
-    child: Child,
     page: Mutex<Option<PageTarget>>,
-    /// Persistent WebSocket — obscura keeps page/session state per
+    /// Persistent WebSocket — the engine keeps page/session state per
     /// connection, so every command must reuse this one socket.
     socket: CdpSocket,
 }
 
-impl Drop for CdpBrowserSession {
-    fn drop(&mut self) {
-        // Kill the serve process when the last Arc reference drops
-        // (normally at process exit for the shared session).
-        let _ = self.child.start_kill();
-    }
-}
-
 impl CdpBrowserSession {
-    /// Spawn `obscura serve` on the shared (stealth) binary and wait for the
-    /// CDP WebSocket URL on stdout.
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned-lock / validation invariant — see site message"
-    )]
+    /// Attach to the endpoint sourcehound publishes for the browser profile.
+    ///
+    /// `cloakctl.cdp` is idempotent: it returns the running endpoint rather
+    /// than starting a rival server, so re-attaching after a process restart
+    /// costs one MCP round-trip and no new engine.
     pub async fn start() -> Result<Self> {
-        let binary = ObscuraProvider::ensure_binary().await?;
-        let port = free_port();
-        let stealth = crate::config::runtime_config().tools.obscura_stealth;
-
-        info!(%port, stealth, "starting shared Obscura CDP session");
-        let mut cmd = Command::new(&binary);
-        cmd.arg("serve").arg("--port").arg(port.to_string());
-        if stealth {
-            cmd.arg("--stealth");
-        }
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-        let mut child = cmd.spawn().map_err(|e| {
-            Error::Agent(format!(
-                "Failed to start Obscura CDP session from {}: {e}",
-                binary.display()
-            ))
-        })?;
-
-        let stdout = child.stdout.take().expect("stdout piped above");
-        let mut reader = BufReader::new(stdout).lines();
-        let ws_url =
-            tokio::time::timeout(SERVE_START_TIMEOUT, async {
-                while let Some(line) = reader.next_line().await.map_err(|e| {
-                    Error::Agent(format!("Failed to read Obscura serve stdout: {e}"))
-                })? {
-                    if let Some(url) = parse_ws_url(&line) {
-                        return Ok::<String, Error>(url);
-                    }
-                }
-                // Child exited before emitting a URL — surface its stderr.
-                let stderr = match child.stderr.take() {
-                    Some(mut err) => {
-                        let mut buf = String::new();
-                        use tokio::io::AsyncReadExt;
-                        let _ = err.read_to_string(&mut buf).await;
-                        buf
-                    }
-                    None => String::new(),
-                };
-                Err(Error::Agent(format!(
-                    "Obscura serve exited before emitting a WebSocket URL: {}",
-                    stderr.chars().take(300).collect::<String>()
-                )))
-            })
-            .await
-            .map_err(|_| {
-                Error::Agent("Timed out waiting for Obscura CDP WebSocket URL".to_string())
-            })??;
-
-        // Drain the rest of stdout so a chatty serve process can't fill the
-        // pipe buffer and stall — the CDP protocol continues over the
-        // WebSocket, not stdin/stdout.
-        tokio::spawn(async move { while let Ok(Some(_line)) = reader.next_line().await {} });
+        let profile = browser_profile();
+        let published = Sourcehound::global()
+            .call(SH_TOOL_CDP, json!({ "profile": profile }))
+            .await?;
+        let ws_url = published
+            .get("ws_url")
+            .and_then(Value::as_str)
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                Error::Agent(format!(
+                    "sourcehound `cloakctl.cdp` published no ws_url for profile `{profile}`"
+                ))
+            })?
+            .to_string();
 
         // Connect the persistent socket BEFORE returning: without it the
-        // per-command fresh connections of cdp_utils would lose obscura's
+        // per-command fresh connections of cdp_utils would lose the engine's
         // per-connection page/session state.
         let socket = CdpSocket::connect(&ws_url).await?;
-        info!(%ws_url, "Obscura CDP session ready");
+        info!(%ws_url, %profile, "sourcehound CDP session ready");
 
         // Auto-load the persistent cookie store into the fresh session so
         // previously imported browser cookies (accounts) apply immediately
         // without re-importing or re-logging-in. This MUST happen before any
-        // page target exists: obscura only makes browser-level
+        // page target exists: the engine only makes browser-level
         // Storage.setCookies visible to pages created AFTER the set (a set
         // performed on a live page is never seen by that page, even after
         // navigation). `ensure_page` therefore must NOT re-apply (verified
         // live: set-before-page = authenticated, set-after-page = anonymous).
         let session = Self {
             ws_url,
-            child,
             page: Mutex::new(None),
             socket,
         };
@@ -245,7 +194,8 @@ impl CdpBrowserSession {
     /// browser level. Best-effort: a missing/unreadable store or a server
     /// that rejects the endpoint is logged, never fatal.
     ///
-    /// Cookies are sent in chunks of 400: obscura (like real Chromium CDP)
+    /// Cookies are sent in chunks of 400: the engine (like real Chromium
+    /// CDP)
     /// rejects oversized single `Storage.setCookies` frames, and a multi-
     /// hundred-cookie store must still load completely.
     async fn apply_stored_cookies(&self) {
@@ -282,7 +232,7 @@ impl CdpBrowserSession {
         let page = self.ensure_page().await?;
         self.page_cmd(&page, "Page.navigate", json!({ "url": url }))
             .await?;
-        // Let the page settle (mirrors igs-rust's post-nav settle).
+        // Let the page settle before reading content back.
         tokio::time::sleep(PAGE_SETTLE).await;
         self.page_markdown(&page).await
     }
@@ -367,10 +317,10 @@ impl CdpBrowserSession {
         let _ = self.page_cmd(&page, "Page.enable", json!({})).await;
 
         // Deliberately NO cookie re-apply here. `start()` already loaded the
-        // store at browser level before any page existed, and obscura only
+        // store at browser level before any page existed, and the engine only
         // makes those cookies visible to pages created AFTER the set — so
         // this page inherits them automatically. Re-applying now would be a
-        // set-after-page, which obscura never reflects on this page (even
+        // set-after-page, which it never reflects on this page (even
         // after navigation) and would silently leave the session logged out.
         let _ = self.page_cmd(&page, "Runtime.enable", json!({})).await;
         *guard = Some(PageTarget {
@@ -472,7 +422,7 @@ pub async fn resolve_cdp_ws_url() -> Result<String> {
 /// Send a raw CDP command over the shared session's **persistent** socket.
 ///
 /// Used by the `browser_cdp` tool when `BROWSER_CDP_URL` is unset. Because
-/// obscura keeps pages/sessions per connection, this must reuse the shared
+/// the engine keeps pages/sessions per connection, this must reuse the shared
 /// socket rather than opening a fresh connection per command.
 pub async fn send_shared_session_cmd(
     method: &str,
@@ -483,13 +433,13 @@ pub async fn send_shared_session_cmd(
     session.send(session_id, method, params).await
 }
 
-/// Import cookies into the shared Obscura session via CDP `Storage.setCookies`,
+/// Import cookies into the attached CDP session via `Storage.setCookies`,
 /// then persist them to the cookie store so every future session (new
 /// process) auto-loads them — the multi-browser import keeps accounts usable
 /// without re-login across runs.
 ///
 /// Returns the number of cookies successfully applied. Browser-level method
-/// (no page session required) — verified against Obscura `serve --stealth`.
+/// (no page session required) — verified live against the published endpoint.
 pub async fn import_cookies(cookies: &[crate::cookies::Cookie]) -> Result<usize> {
     if cookies.is_empty() {
         return Ok(0);
@@ -528,7 +478,7 @@ pub async fn import_cookies(cookies: &[crate::cookies::Cookie]) -> Result<usize>
     Ok(applied)
 }
 
-/// Export all cookies currently in the shared Obscura session via CDP
+/// Export all cookies currently in the attached CDP session via
 /// `Storage.getCookies`, normalized to the operant [`crate::cookies::Cookie`]
 /// model. Falls back to the persistent cookie store when the session reports
 /// none (fresh process before any import).
@@ -578,7 +528,7 @@ pub async fn export_cookies() -> Result<Vec<crate::cookies::Cookie>> {
     Ok(crate::cookies::load_cookie_store())
 }
 
-/// Clear all cookies in the shared Obscura session via CDP `Storage.clearCookies`
+/// Clear all cookies in the attached CDP session via `Storage.clearCookies`
 /// and wipe the persistent store.
 pub async fn clear_cookies() -> Result<()> {
     crate::cookies::clear_cookie_store();
@@ -597,33 +547,6 @@ pub async fn ensure_shared_page_session_id() -> Result<String> {
     let session = get_or_start_shared_session().await?;
     let page = session.ensure_page().await?;
     Ok(page.session_id)
-}
-
-#[expect(
-    clippy::expect_used,
-    reason = "poisoned-lock / validation invariant — see site message"
-)]
-/// Find an available TCP port on localhost.
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
-    listener.local_addr().expect("local addr").port()
-}
-
-/// Extract the CDP WebSocket URL from an `obscura serve` stdout line.
-fn parse_ws_url(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    let start = trimmed.find("ws://")?;
-    let url = &trimmed[start..];
-    // The URL runs to end-of-line; strip trailing punctuation/log noise.
-    let end = url
-        .find(|c: char| c.is_whitespace() || c == ',' || c == ']')
-        .unwrap_or(url.len());
-    let url = &url[..end];
-    if url.len() > 6 {
-        Some(url.to_string())
-    } else {
-        None
-    }
 }
 
 /// Escape a string for safe interpolation inside a single-quoted JavaScript
@@ -663,33 +586,6 @@ mod tests {
         assert_eq!(js_escape("foo\\bar"), "foo\\\\bar");
         assert_eq!(js_escape("a\nb\tc"), "a\\nb\\tc");
         assert_eq!(js_escape("plain"), "plain");
-    }
-
-    #[test]
-    fn parse_ws_url_extracts_endpoint() {
-        assert_eq!(
-            parse_ws_url("obscura listening on ws://127.0.0.1:9222"),
-            Some("ws://127.0.0.1:9222".to_string())
-        );
-        assert_eq!(
-            parse_ws_url("ws://127.0.0.1:9222/devtools/browser"),
-            Some("ws://127.0.0.1:9222/devtools/browser".to_string())
-        );
-        // Trailing noise after the URL is stripped.
-        assert_eq!(
-            parse_ws_url("ws://127.0.0.1:9222, other"),
-            Some("ws://127.0.0.1:9222".to_string())
-        );
-        assert_eq!(parse_ws_url("no ws url here"), None);
-    }
-
-    #[test]
-    fn free_port_returns_usable_port() {
-        let port = free_port();
-        assert!(port > 0);
-        // The port should be bindable.
-        let listener = std::net::TcpListener::bind(("127.0.0.1", port));
-        assert!(listener.is_ok());
     }
 
     #[test]

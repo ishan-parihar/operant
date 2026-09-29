@@ -548,7 +548,7 @@ mod tests {
             "GITHUB_TOKEN",
             "NOTION_API_TOKEN",
             "SOME_SECRET",
-            "IGS_HOST",
+            "SOURCEHOUND_HOST",
         ] {
             let in_file = has_provider_env_config(&format!("{key}=value\n"));
             let in_ambient = has_ambient_provider_config(&env(&[(key, "value")]));

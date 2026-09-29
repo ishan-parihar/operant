@@ -32,7 +32,6 @@ pub use super::file_state::FileStateTool;
 pub use super::file_tools::{FileListTool, FileReadTool, FileSearchTool, FileWriteTool};
 pub use super::home_assistant_tool::HomeAssistantTool;
 pub use super::http_tool::HttpRequestTool;
-pub use super::igs::{WebCrawlTool, WebExtractTool, WebScrapeTool};
 pub use super::image_generation_tool::ImageGenerationTool;
 pub use super::insights_tool::InsightsTool;
 pub use super::kanban_tool::KanbanTool;
@@ -48,6 +47,7 @@ pub use super::process_tool::ProcessTool;
 pub use super::reaction_tool::ReactionTool;
 pub use super::send_message_tool::SendMessageTool;
 pub use super::skills_tool::{SkillManageTool, SkillViewTool, SkillsTool};
+pub use super::sourcehound::{WebCrawlTool, WebExtractTool, WebScrapeTool};
 pub use super::spotify_tool::{
     SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
     SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool,
@@ -86,11 +86,11 @@ pub async fn register_builtin_tools(
     registry.register(ToolBackendTool).await?;
     registry.register(WebSearchTool).await?;
     registry.register(WebFetchTool).await?;
-    // IGS-backed web tools (web_scrape / web_extract / web_crawl). They
-    // self-disable via is_available() when the `igs` binary is not installed.
-    registry.register(WebScrapeTool).await?;
-    registry.register(WebExtractTool).await?;
-    registry.register(WebCrawlTool).await?;
+    // sourcehound-backed web tools (web_scrape / web_extract / web_crawl). They
+    // self-disable via is_available() when the `sourcehound` binary is not installed.
+    registry.register(WebScrapeTool::global()).await?;
+    registry.register(WebExtractTool::global()).await?;
+    registry.register(WebCrawlTool::global()).await?;
     registry.register(XaiHttpTool).await?;
     registry.register(CodeExecutionTool).await?;
     // Prime Kernel (plan 015): persistent stateful Python kernel + continual

@@ -252,7 +252,7 @@ enum Commands {
         #[arg(long, global = true)]
         json: bool,
     },
-    /// Import / export / list browser cookies for the Obscura session
+    /// Import / export / list browser cookies for the browser session
     /// (multi-browser cookie import from Chrome, Brave, Edge, Firefox, …)
     Cookies {
         #[command(subcommand)]
@@ -3055,9 +3055,9 @@ mod tests {
         seed.flush_if_dirty().await.unwrap();
 
         let (loaded, provider) = load_memory_manager(dir.clone()).await.unwrap();
-        // With the default config, provider may be Some(agentmemory) or None
+        // With the default config, provider may be Some(memory_wire) or None
         // (builtin/disabled) — both are valid; the manager must still load.
-        assert!(provider.is_none() || provider.unwrap().name() == "agentmemory");
+        assert!(provider.is_none() || provider.unwrap().name() == "memory_wire");
 
         assert_eq!(loaded.search("Loaded memory").await.len(), 1);
 

@@ -1,13 +1,13 @@
 mod ddg;
 mod exa;
-mod igs;
 mod searxng;
+mod sourcehound;
 mod tavily;
 
 pub use ddg::DDGProvider;
 pub use exa::ExaProvider;
-pub use igs::IgsSearchProvider;
 pub use searxng::SearXNGProvider;
+pub use sourcehound::SourcehoundSearchProvider;
 pub use tavily::TavilyProvider;
 
 use crate::error::Result;

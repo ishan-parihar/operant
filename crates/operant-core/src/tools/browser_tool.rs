@@ -4,13 +4,9 @@
 //! It allows the agent to navigate to URLs, take snapshots, and interact with page elements.
 //!
 //! Supported providers (configured via `browser.provider` in config.toml):
-//! - `igs` (default) - IGS headless browser via the `igs` binary (Obscura)
+//! - `sourcehound` (default) - sourcehound MCP server (`sourcehound mcp`),
+//!   driving cloakctl for navigation and scraping
 //! - `lightpanda` - Local Lightpanda binary (auto-downloaded from GitHub Releases)
-//! - `obscura` - Local Obscura binary (auto-downloaded). Full interactive
-//!   automation over CDP: operant spawns the shared binary in `serve` mode
-//!   (stealth by default) and drives `Page.navigate` / `Runtime.evaluate` /
-//!   `LP.getMarkdown` over a WebSocket, so navigate/snapshot/click/type/scroll
-//!   all work — same binary IGS web tools use.
 //! - `camofox` - Camofox REST API (`CAMOFOX_URL`)
 //! - `browserbase` - Browserbase cloud (`BROWSERBASE_API_KEY`)
 //! - `browser-use` - Browser Use cloud (`BROWSER_USE_API_KEY`)
@@ -19,11 +15,10 @@
 //! ## Troubleshooting
 //! If you see "Permission denied (os error 13)" or "binary not found" errors:
 //! 1. Ensure you have internet access to download the binary from GitHub
-//! 2. The binary is downloaded to `~/.operant/bin/browser` (Lightpanda) or
-//!    `~/.operant/bin/obscura` (Obscura). When IGS is installed the `obscura`
-//!    provider reuses IGS's managed copy (`~/.config/igs-mcp/bin/obscura`,
-//!    or `$IGS_CONFIG_DIR/bin/obscura`) so browser + IGS web tools share one
-//!    binary - check those paths if `browser.provider = "obscura"` fails.
+//! 2. The Lightpanda binary is downloaded to `~/.operant/bin/browser`. The
+//!    `sourcehound` provider needs no download — it needs the `sourcehound`
+//!    binary on `PATH` (or `$SOURCEHOUND_BINARY` set); check that instead if
+//!    `browser.provider = "sourcehound"` fails.
 //! 3. On Linux, you may need to install dependencies: `sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2`
 
 use async_trait::async_trait;
@@ -61,13 +56,13 @@ impl BrowserTool {
     }
 
     /// Handle the cookie commands (`cookies_import` / `cookies_list` /
-    /// `cookies_clear`) against the shared Obscura CDP session. Lets the
+    /// `cookies_clear`) against the attached CDP session. Lets the
     /// agent import browser cookies (multi-browser) so authenticated
     /// sessions work without manual login.
     async fn handle_cookie_command(&self, args: &BrowserArgs) -> ToolResult {
         match args.command.as_str() {
             "cookies_list" => {
-                let cookies = match crate::obscura_cdp::export_cookies().await {
+                let cookies = match crate::sourcehound_cdp::export_cookies().await {
                     Ok(c) => c,
                     Err(e) => return ToolResult::error(self.name(), format!("CDP error: {e}")),
                 };
@@ -85,7 +80,7 @@ impl BrowserTool {
                     }),
                 );
             }
-            "cookies_clear" => match crate::obscura_cdp::clear_cookies().await {
+            "cookies_clear" => match crate::sourcehound_cdp::clear_cookies().await {
                 Ok(()) => {
                     return ToolResult::success(
                         self.name(),
@@ -165,13 +160,13 @@ impl BrowserTool {
             );
         }
 
-        match crate::obscura_cdp::import_cookies(&cookies).await {
+        match crate::sourcehound_cdp::import_cookies(&cookies).await {
             Ok(applied) => ToolResult::success(
                 self.name(),
                 serde_json::json!({
                     "applied": applied,
                     "total": cookies.len(),
-                    "message": format!("Applied {applied}/{} cookies to the Obscura session", cookies.len()),
+                    "message": format!("Applied {applied}/{} cookies to the browser session", cookies.len()),
                 }),
             ),
             Err(e) => ToolResult::error(self.name(), format!("CDP error: {e}")),
@@ -244,9 +239,8 @@ impl OperantTool for BrowserTool {
     fn description(&self) -> &str {
         "Browser automation tool for navigating and interacting with websites. \
          Supports multiple providers configured via browser.provider in config.toml:\n\
-         - igs (default): IGS headless browser via igs binary (Obscura)\n\
+         - sourcehound (default): sourcehound MCP server (cloakctl-driven navigation)\n\
          - lightpanda: Local Lightpanda binary (auto-downloaded)\n\
-         - obscura: Local Obscura binary (CDP-driven interactive browser, stealth by default)\n\
          - camofox: Camofox REST API (CAMOFOX_URL)\n\
          - browserbase: Browserbase cloud (BROWSERBASE_API_KEY)\n\
          - browser-use: Browser Use cloud (BROWSER_USE_API_KEY)\n\
@@ -299,7 +293,7 @@ impl OperantTool for BrowserTool {
 
         // SSRF protection for URL-fetching commands: `navigate` (and
         // `snapshot`, which reloads the current page URL) pass the URL to
-        // local browser binaries (lightpanda/obscura/igs) that fetch it
+        // local browser backends (lightpanda, sourcehound) that fetch it
         // directly. Without a guard, the agent could be prompted to
         // navigate to cloud metadata (169.254.169.254), localhost, or
         // internal services. Hermes guards every browser navigation with
@@ -490,10 +484,10 @@ mod tests {
             )
             .await;
         // scroll must pass argument validation regardless of provider.
-        // Success depends on environment: when the `igs` binary is installed
-        // the scroll actually executes (and may succeed); otherwise the tool
-        // degrades to a graceful "binary not found" error. Either way it must
-        // never fail argument validation.
+        // Success depends on environment: when the backing provider is
+        // installed the scroll actually executes (and may succeed); otherwise
+        // the tool degrades to a graceful "not available" error. Either way it
+        // must never fail argument validation.
         if !result.success {
             let error = result.error.unwrap_or_default();
             assert!(
