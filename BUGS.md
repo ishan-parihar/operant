@@ -2307,47 +2307,68 @@ synthetic `Rgb(1,2,3)`), the `stats_dialog` heatmap data encoding, and the
 deliberately high-contrast unthemed text in `ask_user_dialog.rs`. A mechanical
 sweep would have destroyed all three.
 
-**MEASURED at iter-472, and the trade is worse than "7 of 8 themes change".**
-Contrast of each candidate foreground against that theme's `panel_bg()`, with
-the caveat that a value resolving to a named ANSI slot is terminal-dependent and
-so is a lower bound rather than a measurement:
+**MEASURED at iter-472, then MEASURED AGAIN at iter-474 and withdrawn. The first
+measurement used the wrong background.**
 
-| theme | `error()` on `panel_bg` | `TOOL_ERROR` on `panel_bg` | |
-|---|---|---|---|
-| default | 5.41 | 7.31 | worse, both pass |
-| dark | 5.09 | 7.61 | worse, both pass |
-| **light** | **4.69** | **2.20** | **swap FIXES it** |
-| solarized | 3.25 | 6.44 | worse, **swap fails AA** |
-| nord | 3.05 | 5.35 | worse, **swap fails AA** |
-| dracula | 4.53 | 6.11 | worse, both pass |
-| monokai | 3.93 | 6.37 | worse, **swap fails AA** |
-| deuteranopia | 8.03 | 8.03 | identical, by construction |
+What iter-472 claimed, kept here so the claim is not re-filed:
 
-So the swap is **worse on six of eight themes, three of them into an AA failure,
-better on one, identical on one.** "Better on one" is light, and that is the
-only thing recommending it.
+> Contrast of each candidate foreground against that theme's `panel_bg()`.
+> On `light`, `TOOL_ERROR` renders at **2.20:1** — well under the 4.5:1 AA
+> threshold — at all six tool-error sites, today, on current code. Therefore the
+> fix is to darken the `light` theme's `error` value, and NOT the six-site swap,
+> which trades three AA passes for one.
 
-**The finding underneath, which is a live defect independent of the theme
-question:** on the `light` theme, `TOOL_ERROR` renders at **2.20:1** — bright
-orange on a near-white panel, well under the 4.5:1 AA threshold. That is true
-today, on the current code, at every one of the six tool-error sites. It is not
-an appearance preference and it is not a trade; it is an accessibility failure
-that this entry described as a colour decision for two iterations without ever
-checking the number.
+**Every one of those numbers was computed against a background that is never
+painted behind those six sites.** `render/mod.rs:103` fills the **entire frame**
+with `.bg(Color::Black)` — a hardcoded ANSI slot, theme-invariant — and
+`render/messages.rs` paints no background of its own; its only two `.bg()` uses
+are local (the search-match highlight at `:55` and the accent bar at `:174`). All
+six `TOOL_ERROR` sites are reached through `render/messages.rs:284`, `:389` and
+`:436`, so they inherit the frame fill. `panel_bg()` is not behind them in any
+theme, including `light`.
 
-Why the two obvious fixes do not both work: `error()` fixes light and breaks
-solarized/nord/monokai, because the palette's own `error` values were chosen for
-hue fidelity against each theme rather than for contrast against its panel. So
-the fix is **not** the six-site swap. It is to darken the `light` theme's `error`
-value — it is `Rgb(211, 47, 47)`, and clearing 4.5:1 against `Rgb(248, 248, 248)`
-needs something considerably darker — which is a one-value change that reaches
-every `error()` consumer in that theme and is therefore a visible change for the
-user to approve.
+Against the background actually painted, `Rgb(255, 140, 0)` on `Color::Black`
+is **9.00:1** — passing AA, and identical in all 8 themes precisely because the
+background is theme-invariant. There is no light-theme failure. The "2.20:1 live
+accessibility defect" does not exist, and the value I proposed darkening was not
+broken.
 
-Recorded rather than applied: it is a colour the user sees, and this entry's whole
-point is that the choice is theirs. But the framing is corrected — R40-30 is not
-"should tool errors follow the theme", it is "the light theme's error colour
-fails contrast, and the theme-following swap is the wrong fix for it".
+Worse, the swap comparison **reverses**. Against black rather than `panel_bg`,
+the palette's own `error` values are:
+
+| theme | `error()` on black | vs `TOOL_ERROR` 9.00 |
+|---|---|---|
+| default | 6.66 | worse |
+| dark | 6.02 | worse |
+| light | 4.22 | worse |
+| solarized | 4.54 | worse |
+| nord | 5.13 | worse |
+| dracula | 6.68 | worse |
+| monokai | 5.55 | worse |
+| deuteranopia | 9.00 | identical, by construction |
+
+So the swap is **worse on seven of eight themes and wins on none**, where
+iter-472 had it "worse on six, better on one, identical on one". The single
+theme recommending the swap was the one theme whose background I had invented.
+
+**Two errors, both mine, and the second is the one that mattered.** First, I
+measured contrast against `panel_bg()` without establishing that `panel_bg` is
+what the text sits on — a foreground's contrast is meaningless without its
+background, and I had checked the *values* of two colours while never checking
+what was behind them. Second, and this is the generalisable one: I had already
+learned at iter-471 that ranking options by plausibility beats measuring, and I
+applied the method without asking the prior question the method exists to
+answer. Measuring the contrast correctly would have been impossible without first
+reading the render path, and reading the render path is what iter-471's
+"direction of use" lesson was really about.
+
+**R40-30 is closed, not escalated.** The status quo is measurably the best
+available option: `TOOL_ERROR` is the highest-contrast choice on the painted
+background in all 8 themes, it carries the deuteranopia property that
+`deuteranopia_uses_blue_for_success` exists to protect, and the only theme where
+it is not an improvement is deuteranopia itself, where it is the same value.
+Nothing here needs the user's decision, and the one-value change I was about to
+propose would have been a regression.
 
 ### R40-31 — selected-row secondary text sits under 4.5:1 contrast on 6 of 8 themes (OPEN, owner decision, iter-463)
 
