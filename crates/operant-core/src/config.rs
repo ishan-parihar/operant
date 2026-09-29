@@ -2184,6 +2184,74 @@ obscura_stealth = false
         );
     }
 
+    /// Pins the `[browser]` block of `operant.example.toml` to the code.
+    ///
+    /// The example previously advertised `igs (default)` while
+    /// `BrowserSettings::default()` returned `obscura`, and omitted `obscura`
+    /// from the list entirely — so the one provider a fresh install actually
+    /// uses was undocumented, and the documented default was wrong. The
+    /// existing `example_toml_parses` covers `agent`, `tui` and `autonomous`
+    /// but nothing here, which is how the drift survived. Two properties:
+    ///
+    /// 1. The value marked `(default)` is the one the code defaults to.
+    /// 2. Every provider the example names is genuinely accepted by
+    ///    `build_browser_provider`. An unknown name silently falls back to
+    ///    Lightpanda, so a typo would otherwise be invisible.
+    #[test]
+    fn example_toml_documents_the_real_browser_default_and_providers() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("operant.example.toml");
+        let raw = std::fs::read_to_string(&root).unwrap();
+
+        let block = raw
+            .split("[browser]")
+            .nth(1)
+            .expect("operant.example.toml has no [browser] section")
+            .split("\n[")
+            .next()
+            .expect("[browser] section is empty");
+        let list_line = block
+            .lines()
+            .find(|l| l.trim_start().starts_with("# provider:"))
+            .expect("[browser] section has no `# provider:` list line");
+
+        let mut documented_default: Option<&str> = None;
+        for entry in list_line
+            .trim_start()
+            .trim_start_matches("# provider:")
+            .split('|')
+            .map(str::trim)
+        {
+            let name = entry.trim_end_matches("(default)").trim();
+            assert!(!name.is_empty(), "empty provider entry in: {list_line}");
+
+            let built = crate::browser_provider::build_browser_provider(name);
+            assert_eq!(
+                built.name(),
+                name,
+                "operant.example.toml documents browser provider `{name}`, which \
+                 build_browser_provider does not accept — it silently falls back \
+                 to `{}`",
+                built.name()
+            );
+            if entry.contains("(default)") {
+                documented_default = Some(name);
+            }
+        }
+
+        assert_eq!(
+            documented_default,
+            Some(BrowserSettings::default().provider.as_str()),
+            "operant.example.toml marks a different browser provider as the \
+             default than BrowserSettings::default() returns ({:?})",
+            BrowserSettings::default().provider
+        );
+    }
+
     // Both tests mutate the process-wide current directory via
     // `with_current_dir`, which races any concurrently-running test that
     // reads `std::env::current_dir()` (e.g. the #[serial] LCM rollup test's

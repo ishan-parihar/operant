@@ -2175,21 +2175,40 @@ iter-455 unrepairable claim, then the iter-455/456 orphan claim).
 3. **`v0.1.3`/`v0.1.4` are lightweight while `v0.1.2`/`v0.2.0` are annotated.**
    Cosmetic, but it is why `git describe` under-reports, and it costs the tag a
    message and a tagger identity. Not worth rewriting published history for.
-### R40-29 — `browser.provider` defaults to `obscura` in code but `igs` in every doc (OPEN, owner decision, iter-455)
+### R40-29 — RESOLVED: the example config misstated the browser default and omitted the real one entirely (fixed iter-459)
 `crates/operant-core/src/config.rs:1181` defaults `browser.provider` to
-`"obscura"`. `AGENTS.md`, `operant.example.toml` and the deployability audit all
-state the default is `"igs"`. **Both values are valid** — Obscura is the engine
-the `igs` binary provides — so this is a naming/product decision, not a bug in
-either direction.
+`"obscura"`, while `AGENTS.md`, `operant.example.toml` and the deployability
+audit all said `igs`. The observation was **true**; my framing of it as an
+owner decision was **wrong**, and I had also missed part of the defect.
 
-**Why it is filed rather than fixed:** it is the same class as R40-26. A
-"which default is correct" question whose answer belongs to the user, where
-quietly editing the docs to match the code (or the code to match the docs)
-would erase the fact that a decision was never made. Note that my own earlier
-audit reported the default as `igs` because it read the docs — an instance of
-the same error this file keeps recording, where a documented value was reported
-as the observed one.
+**`obscura` and `igs` are the same engine, not two options.** `browser_provider.rs:9`
+describes `"obscura"` as "Local Obscura binary (shared with IGS)", and
+`ObscuraProvider` resolves `OBSCURA_BIN` -> config override -> *the IGS-managed
+binary* -> an operant-managed copy, with a test comment noting that downloads
+land in IGS's `bin/` "so igs reuses them". `igs` is the CLI wrapper over the same
+browser; `obscura` drives it directly over CDP. So AGENTS.md's stated intent —
+"Default: IGS ... Do NOT switch the default away from igs" — **is satisfied** by
+the code as written. There was no design decision outstanding, and changing the
+default to `igs` would have been a behaviour change justified by a misreading.
 
-Two coherent options: ratify `igs` as the user-facing name and leave the code
-alone, or ratify `obscura` and update the three doc sites. Either way the four
-sites should end up agreeing.
+**The part I missed:** `operant.example.toml` did not merely state the wrong
+default, it **omitted `obscura` from the option list entirely**. The one
+provider a fresh install actually uses was undocumented, and the list's
+`default` marker pointed at a different one.
+
+Fixed at iter-459: the example now marks `obscura` as the default, lists it, and
+carries a note that the uncommented `provider = "igs"` line selects the CLI
+wrapper explicitly (same engine, different driver) and can be commented out to
+inherit the default.
+
+**Why it drifted, and the guard.** `config::tests::example_toml_parses` pins
+`agent.model`, `tui.rich_output` and two `autonomous` fields — nothing in
+`[browser]`. Fixed without a guard, it would simply re-permit the drift, so
+`example_toml_documents_the_real_browser_default_and_providers` now pins two
+properties: the value marked `(default)` equals `BrowserSettings::default()`, and
+every documented provider is genuinely accepted by `build_browser_provider` (an
+unknown name silently falls back to Lightpanda, so a typo is otherwise
+invisible). Both assertions mutation-proven independently — restoring the exact
+shipped bug, and adding a bogus provider, each fail the guard while the
+sibling test still passes.
+

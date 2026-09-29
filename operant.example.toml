@@ -411,13 +411,18 @@ enabled = true
 # agentmemory_auto_spawn = true
 
 [browser]
-# provider: igs (default) | lightpanda | camofox | browserbase | browser-use | firecrawl
+# provider: obscura (default) | igs | lightpanda | camofox | browserbase | browser-use | firecrawl
+# - obscura:      local Obscura binary, shared with IGS; CDP-driven, stealth by default
 # - igs:         IGS headless browser via the `igs` binary (Obscura, zero API keys)
 # - lightpanda:  local binary from github.com/lightpanda-io/browser (downloaded automatically)
 # - camofox:     local anti-detection browser REST API (CAMOFOX_URL)
 # - browserbase: cloud (BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
 # - browser-use: cloud AI agent (BROWSER_USE_API_KEY)
 # - firecrawl:   scrape API (FIRECRAWL_API_KEY)
+# NOTE: the code default is "obscura" (see BrowserSettings::default). The line
+# below selects "igs" explicitly, which is the IGS CLI wrapper rather than the
+# direct CDP driver — same engine, different driver. Comment it out to inherit
+# the default.
 provider = "igs"
 
 # ── Advanced sections (uncomment to configure) ───────────────────────────────
