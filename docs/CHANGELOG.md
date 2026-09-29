@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1] - 2026-09-30
 
 Foundation for post-turn features (reflection / advisor / dreaming).
 A `TurnEnd` event (turn id, iterations, tool counts/durations, capped result
@@ -163,6 +163,27 @@ gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
   `send_channel_message`, and the state file records the platform so a
   non-Telegram turn is not announced on Telegram (pre-existing files without the
   field fall back to telegram, the only adapter that recorded turn state).
+- **Channel feature flags selected nothing.** The gateway's dependency line
+hardcoded 21 `channel-*` features, so cargo's feature union switched them all
+on no matter what was requested — dropping channels from the CLI defaults
+produced a byte-identical binary. Each CLI `channel-*` now forwards to both
+`operant-channels` and `operant-gateway`, the hardcoded list is down to the
+9 the gateway's own source structurally requires, and a manifest-contract test
+locks the wiring. Default builds resolve the same 23 channels as before.
+- **The prompt-injection detector ran nowhere.** `PromptGuard` (override /
+role-confusion / JSON-injection / exfiltration / jailbreak patterns) compiled
+and re-exported with zero production call sites. It now scans inbound text at
+the runtime turn entry point and records the verdict; the default stays
+`Warn`, so turns proceed exactly as before.
+- **Five `web_search_tool` tests flaked on a leaked proxy, not on wiremock.**
+`proxy_config` tests mutated the process-global proxy without restoring it,
+and the mock-backed search tests read it back — routing loopback URLs to a
+dead port. A snapshot-restore guard plus a shared reader/mutator mutex fixed
+it (0 failures in 13 parallel runs after 4-of-7 failing).
+- **`lifeos_enabled` configured nothing and is gone.** The key gated no code —
+no LifeOS tool module or cargo feature exists — so it was removed from the
+schema and the example together. Existing configs carrying it now fail parse
+under `deny_unknown_fields` instead of being silently ignored.
 
 ### Added
 
