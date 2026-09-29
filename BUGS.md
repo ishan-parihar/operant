@@ -2028,26 +2028,63 @@ second half would silently drop every channel from the binary. That is a real
 refactor of the feature graph across three crates, and it is worth doing
 deliberately rather than as a side effect of a dead-code cleanup.
 
-### R40-26 — AGENTS.md's platform count is stale by 9, and the code has drifted from a stated design preference
+### R40-26 — WITHDRAWN: AGENTS.md's "7 platforms" is ACCURATE. The finding compared two different subsystems (RETRACTED iter-458)
+**This entry previously claimed AGENTS.md's platform count was "stale by 9" and
+that the code had drifted from a stated design preference. There is no drift,
+and the claim was a category error.** Withdrawn in full.
 
-AGENTS.md:190 says `**Supported: 7 platforms**` — telegram, discord, slack,
-whatsapp, email_smtp, sms_twilio, webhooks — and that same list appears at
-lines 262, 488, 623 and 929. Measured reality: **16 channels are reachable**
-(9 referenced from the CLI plus 7 through the factory), not 7, and 23 are
-compiled by default.
+**What AGENTS.md actually claims.** The four sites (lines 190, 262, 488, 623,
+929) say `**Supported: 7 platforms** — telegram, discord, slack, whatsapp,
+email_smtp, sms_twilio, webhooks`, and the section header at line 188 is
+`### Platform Adapters (Gateway)`. That claim is about the **gateway platform
+adapters in `crates/operant-core/src/gateway/`**, and it is **exactly right**:
 
-This is filed separately from R40-25 because the remedy is NOT a doc fix.
-AGENTS.md lists the 7-platform limit under "Design Preferences (DO NOT
-CHANGE) — the user's intentional design choices". So the code compiling 16 is
-**drift away from a stated intent**, not an out-of-date document, and silently
-rewriting the number to "16" would erase the fact that the design intent was
-never carried through. The nine extra reachable channels (irc, qq, signal,
-mattermost, dingtalk, imessage, twitter, linq, wati, mochat, wecom) are each a
-real adapter with a working factory arm, so removing them to reach 7 is a
-product decision with a migration cost, not a cleanup.
+| module | adapter |
+|---|---|
+| `telegram.rs` | telegram |
+| `discord.rs` | discord |
+| `slack.rs` | slack |
+| `whatsapp.rs` | whatsapp |
+| `email.rs` | email_smtp |
+| `sms.rs` | sms_twilio |
+| `webhook.rs` | webhooks |
 
-Owner call: ratify 16 and update the four AGENTS.md sites, or cut back to the
-documented 7. Not decided unilaterally.
+Seven adapters, one per claimed platform. (`admin.rs`, `lifecycle.rs` and
+`types.rs` are also in that directory but are infrastructure, not platforms.)
+
+**Why the entry was wrong.** I counted `operant-channels` factory arms — 21
+unique dispatch arms, 10 of them (`dingtalk`, `imessage`, `lark`, `linq`,
+`mochat`, `twitter`, `voice-call`, `wati`, `wechat`, `wecom`) not named
+anywhere in `operant-cli/src` — and compared that against the gateway's 7.
+**`operant-channels` and `operant-core/src/gateway/` are different subsystems.**
+AGENTS.md never mentions `operant-channels` at all: `grep -iE
+'channel-?feature|operant-channels|channel adapter' AGENTS.md` returns nothing.
+So the document makes no claim that the channel count contradicts, and my
+"drift away from a stated design preference" argument had no premise.
+
+**Two further errors inside the original entry**, recorded because they are the
+kind that survive review: it said "the nine extra reachable channels" and then
+listed **eleven** names; and four of those names — `irc`, `qq`, `signal`,
+`mattermost` — are among the 20 phantom platforms that AGENTS.md records as
+**purged in iter-50**. So the entry contradicted both itself and the audit it
+cited, in a document whose whole purpose is to stop exactly that.
+
+**Nothing to do.** The genuine questions about the channel subsystem — that 23
+channel features compile by default, and that 10 are reachable only through the
+config-driven factory — are already recorded on their own merits in R40-25, with
+the measured proof that removing them from the CLI is a no-op.
+
+#### The transferable lesson
+
+This is the **second** false entry filed in one sitting, and the same error
+shape as R40-28: I took a number from one context and reported it against a
+claim from another, without checking that the two were the same subject. R40-28
+compared *local* tag refs against *remote* state; R40-26 compared *channel*
+adapters against a *gateway* claim. In both, a cheap check would have caught it
+— `git ls-remote` for the tags, `ls crates/operant-core/src/gateway/` for the
+adapters — and in both the plausible-sounding number is what made it convincing
+enough to file. **Before filing a "the docs are stale" finding, grep the doc for
+the thing the finding is about and confirm the doc actually claims it.**
 
 ### R40-27 — Plan G's four "dead code in the shipped binary" claims are all false; verified, not assumed (iter-452)
 
@@ -2083,40 +2120,61 @@ establish it.
 Nothing to do here. The AGENTS.md platform-count drift is real and stays filed
 as R40-26, which is a design-intent question rather than dead code.
 
-### R40-28 — `v0.1.3` and `v0.1.4` are orphan tags: lightweight, on commits that are not main history (OPEN, owner decision, iter-455)
-Two of the five releases this project advertises contain no `main` history at
-all. Both tags are **lightweight** (a single entry pointing straight at a
-commit — contrast `v0.2.0`, which has both a tag object and a `^{}` commit
-dereference, i.e. is annotated), and both point at commits reachable only from
-`archive/stash-*` branches. They are never ancestors of `main`, which is why
-`git describe` correctly reports **v0.1.2** as the most recent real tag.
-`v0.1.3` still renders on the releases page as an 18 July 2026 release.
+### R40-28 — WITHDRAWN: the "orphan tag" finding was false. Real residue: a stale local tag, and `v0.1.4` has no release (RETRACTED iter-458)
+**This entry previously claimed that `v0.1.3` and `v0.1.4` were orphan tags
+pointing at commits that are not `main` history, and recommended deleting them.
+That was false, and it was wrong twice over before it was caught.** Withdrawn in
+full; the real (much smaller) residue is below.
 
-**I was wrong that this is unrepairable.** I earlier escalated it as needing a
-force-push that AGENTS.md forbids. It does not:
+**Why the claim was false.** The remote tag targets are ordinary `main` commits:
 
-```console
-$ git push --dry-run origin :refs/tags/v0.1.3
-- [deleted] v0.1.3
-```
+| tag | target | in `git log origin/main`? | subject |
+|---|---|---|---|
+| `v0.1.3` | `f8069a02` | **yes**, 1 line | `chore(release): cut v0.1.3` (2026-04-20) |
+| `v0.1.4` | `fddbd265` | **yes**, 1 line | `fix(ci): move tdg-rust clone before rust-cache step` (2026-07-19) |
 
-Deleting a tag is a plain ref delete and rewrites **no branch history**.
-AGENTS.md's prohibition is on force-pushing to `main` — a branch. So the tags
-were always repairable, and had I not tested it the user would have been asked
-to accept a permanent defect as the price of a rule I had misread.
+Both are genuine ancestors of `main`. Had the recommendation been applied, it
+would have deleted two valid release markers.
 
-**Not applied, deliberately.** This is destructive and outward-facing on
-release history I did not create, so it is the owner's call. Two coherent
-options:
+**Two independent measurement errors produced it**, and both are worth
+recording because either alone would have been enough:
 
-1. `git push origin :refs/tags/v0.1.3 :refs/tags/v0.1.4` — the releases page
-   then shows only releases that correspond to real `main` history. v0.1.2 and
-   v0.2.0 are annotated and correct, so nothing legitimate is lost. Recoverable:
-   both commit SHAs are recorded in this entry's git history if a user needs
-   the old refs back.
-2. Leave them. The cost is that a reader of the releases page sees a July
-   release that no commit on `main` produced.
+1. **I inspected local refs and reported them as remote state.** The local
+   `v0.1.3`/`v0.1.4` are *divergent* — local `v0.1.3` is `93ff0361`, remote is
+   `f8069a02`; identical subject, different commit. The local ones live only on
+   `archive/stash-*` branches, so `git branch --contains` and
+   `git log origin/main` both reported "not in main" and I believed them. The
+   divergence is detectable at fetch time, and I had seen that signal without
+   reading it: `git fetch --tags` fails with `! [rejected] v0.1.3 -> v0.1.3
+   (would clobber existing tag)`. **A tag that cannot be fetched is a fact
+   about the tag, not a warning to be ignored.**
+2. **`git describe` was worthless as evidence.** It reported `v0.1.2` because it
+   ignores **lightweight** tags by default — and `v0.1.3`/`v0.1.4` are
+   lightweight while `v0.1.2`/`v0.2.0` are annotated. That is the entire
+   explanation, with no divergent history involved. To include lightweight tags
+   you must pass `--tags`, which then correctly reports `v0.2.0-13-gcea14fef`.
 
+I also over-corrected on top of the error: having found the claim needed a
+forbidden force-push, I "corrected" it to repairable-via-`git push origin
+:refs/tags/...` and recommended deletion. The repairability was true and
+irrelevant; the premise was false. **A correct answer to the wrong question is
+still a wrong answer**, and I have now shipped two of them in one entry (the
+iter-455 unrepairable claim, then the iter-455/456 orphan claim).
+
+#### What is actually true, and worth fixing
+
+1. **A stale local tag shadows the remote, breaking `git fetch --tags`.** This
+   clone carries `v0.1.3` -> `93ff0361` and `v0.1.4` -> `e781fcb9`, neither of
+   which is on `main`. Any `git fetch --tags` is rejected until they are
+   corrected. Fixed at iter-458 with `git fetch origin --tags --force`, which is
+   a local-ref operation only and pushes nothing.
+2. **`v0.1.4` has a tag but no GitHub release.** `gh release list` shows
+   `v0.2.0` (Latest), `v0.1.3`, `v0.1.2` — and no `v0.1.4`. So the tag exists on
+   a real `main` commit while the release entry was never published. That is a
+   genuine gap and the owner's call: publish it, or drop the tag.
+3. **`v0.1.3`/`v0.1.4` are lightweight while `v0.1.2`/`v0.2.0` are annotated.**
+   Cosmetic, but it is why `git describe` under-reports, and it costs the tag a
+   message and a tagger identity. Not worth rewriting published history for.
 ### R40-29 — `browser.provider` defaults to `obscura` in code but `igs` in every doc (OPEN, owner decision, iter-455)
 `crates/operant-core/src/config.rs:1181` defaults `browser.provider` to
 `"obscura"`. `AGENTS.md`, `operant.example.toml` and the deployability audit all
