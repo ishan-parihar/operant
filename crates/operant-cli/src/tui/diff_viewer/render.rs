@@ -171,7 +171,7 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
         let base_style = if selected {
             Style::default()
                 .add_modifier(Modifier::BOLD)
-                .fg(theme_colors::text())
+                .fg(theme_colors::on_selection())
                 .bg(bg)
         } else {
             Style::default().fg(theme_colors::text()).bg(bg)
@@ -193,7 +193,7 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
                 stats_text,
                 Style::default()
                     .fg(if selected {
-                        theme_colors::SELECTED_ROW_FG
+                        theme_colors::on_selection()
                     } else {
                         stats_color
                     })

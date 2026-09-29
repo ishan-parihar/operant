@@ -719,7 +719,7 @@ fn render_agent_detail(def: &AgentDefinition, area: Rect, buf: &mut Buffer) {
 fn render_agent_editor(state: &AgentsMenuState, area: Rect, buf: &mut Buffer) {
     let editor = &state.editor;
     let selected_style = Style::default()
-        .fg(theme_colors::text())
+        .fg(theme_colors::on_selection())
         .bg(theme_colors::accent())
         .add_modifier(Modifier::BOLD);
     let normal_style = Style::default().fg(theme_colors::text());
@@ -814,14 +814,14 @@ fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Li
     };
     let title_style = if selected {
         Style::default()
-            .fg(theme_colors::text())
+            .fg(theme_colors::on_selection())
             .bg(bg)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme_colors::text()).bg(bg)
     };
     let meta_style = if selected {
-        Style::default().fg(theme_colors::SELECTED_ROW_FG).bg(bg)
+        Style::default().fg(theme_colors::on_selection()).bg(bg)
     } else {
         Style::default().fg(theme_colors::muted()).bg(bg)
     };

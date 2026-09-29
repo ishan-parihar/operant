@@ -574,14 +574,14 @@ fn push_list_row(lines: &mut Vec<Line<'static>>, label: &str, badge: &str, selec
     };
     let row_style = if selected {
         Style::default()
-            .fg(theme_colors::text())
+            .fg(theme_colors::on_selection())
             .bg(bg)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme_colors::text()).bg(bg)
     };
     let badge_style = if selected {
-        Style::default().fg(theme_colors::SELECTED_ROW_FG).bg(bg)
+        Style::default().fg(theme_colors::on_selection()).bg(bg)
     } else {
         Style::default().fg(theme_colors::muted()).bg(bg)
     };

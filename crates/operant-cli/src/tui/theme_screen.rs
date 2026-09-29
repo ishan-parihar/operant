@@ -177,12 +177,12 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
             theme_colors::panel_bg()
         };
         let fg = if is_selected {
-            Color::White
+            theme_colors::on_selection()
         } else {
             theme_colors::text()
         };
         let desc_fg = if is_selected {
-            theme_colors::SELECTED_ROW_FG
+            theme_colors::on_selection()
         } else {
             theme_colors::muted()
         };

@@ -2491,3 +2491,75 @@ is the only option that improves the title and the secondary line together, or
 which costs less than this entry originally claimed since the background still
 marks the row. What iter-463 did was only name the constant — byte-identical on
 all eight themes, so it deliberately does not pre-empt any of this.
+
+**RESOLVED at iter-468 — the defect is fixed, and the options list above is
+superseded.** All five corrections above measured something I had not measured.
+The one finding that survived all of them is the plain one: light text on a
+selected row's background is unreadable, and the palette has a role for the
+alternative. So 11 style sites across 5 files now call `on_selection()` instead:
+
+| site | was | now |
+|---|---|---|
+| `agents_view.rs:722, 817, 824` | `text()` / `SELECTED_ROW_FG` | `on_selection()` |
+| `hooks_config_menu.rs:577, 584` | `text()` / `SELECTED_ROW_FG` | `on_selection()` |
+| `theme_screen.rs:180, 185` | `Color::White` / `SELECTED_ROW_FG` | `on_selection()` |
+| `diff_viewer/render.rs:174, 196` | `text()` / `SELECTED_ROW_FG` | `on_selection()` |
+| `export_dialog.rs:127, 129` | `text()` / `Rgb(245, 220, 232)` | `on_selection()` |
+
+Measured, on the six themes whose `accent()` is a literal: the replaced
+foregrounds read **1.29:1 to 2.88:1**, and `on_selection()` (which returns
+`text_dark`) reads **4.08:1 to 9.01:1** on the same six. On `default` and `light`
+`accent()` is a named ANSI slot (Cyan / Blue) so the ratio is terminal-dependent
+and not computable from source; `text_dark` is `Color::Black` on both, so every
+candidate foreground coincides there and the change is a no-op on those two themes.
+
+`SELECTED_ROW_FG` is deleted — zero references remain. Its doc comment was the
+most harmful artefact of this entry: it explicitly warned "Do NOT route this
+through `on_selection()`", citing the exact substitution iter-468 went on to make.
+The role it named as wrong is the right one. The warning now lives on
+`on_selection()` itself, where the regression would actually be reintroduced.
+
+Three corrections to my own numbers, all from reading rather than scanning:
+
+  - **Convention B is 4 sites, not 5.** iter-466 cited `agents_view.rs:721-723`
+    as a `Color::Black` site and, worse, as the clearest evidence of drift — "a
+    file disagreeing with itself about the same widget". It is not `Color::Black`;
+    it is `theme_colors::text()`, i.e. another convention-A site. That evidence is
+    gone, and the drift argument now rests only on the two conventions having
+    arrived in the same commit.
+  - **There were 10 selected-row shapes, not 9.** `export_dialog.rs:122` was
+    missed because I built the inventory from files I had already read instead of
+    from the two literal shapes: five inline `.bg(theme_colors::accent())` and
+    five `let bg = if (is_)selected {`. That grep finds all ten, including
+    `export_dialog.rs`, which also had a light `let fg` that was not even
+    conditional on `selected`.
+  - **`export_dialog.rs:129` held `Rgb(245, 220, 232)`** — a near-duplicate of
+    the deleted pink `Rgb(248, 220, 236)`, euclidean 5.0 and well inside the
+    `<50` threshold of the near-duplicate scan run at iter-464. That scan excluded
+    `theme_colors.rs`, so the pink's only entries were its four use sites, and the
+    pair should have surfaced. It did not. The gap: that scan looked for near
+    duplicates *across* files, so two values in the same role but different files
+    were only caught by luck of which files the other values happened to sit in.
+
+**Still open, and deliberately not touched.** Four sites keep the hardcoded
+`Color::Black` — `memory_file_selector.rs:185`, `mcp_view.rs:433` and `:586`,
+`settings_screen/render.rs:238`. Measured 5.71:1 to 12.74:1, so these are legible
+and are **not** a defect; changing them would trade 10.50:1 for 6.24:1 on nord for
+no functional gain. They are a consistency question only: the tree now has
+`on_selection()` at 11 sites and a hardcoded ANSI slot at 4, for the same job.
+Whoever does that should treat it as cosmetic, not a fix.
+
+Gates: `cargo fmt --all` clean, `check -p operant-cli --bin operant` exit 0,
+`test -p operant-cli --bin operant` 826/826 exit 0. Count unchanged from iter-463
+because values were replaced rather than behaviour added, so there is nothing new
+to pin.
+
+Process note, the fifth time on this problem. A verification probe using a
+±22-line window reported `theme_colors::text()` at two sites where a direct read
+showed `Color::Black`, and `NONE` at two sites I had just changed. Cause is
+structural, not a bad pattern: sites of the shape `let fg = if selected { … }`
+followed by `.fg(fg)` contain no literal `.fg(theme_colors::on_selection())` text
+to match, and a blind window bleeds into the neighbouring row. Discarded it and
+relied on direct reads plus the gates. The lesson is the same one as the doc
+comment that had to be deleted: for this class of question, the instrument keeps
+disagreeing with the file, and the file wins.

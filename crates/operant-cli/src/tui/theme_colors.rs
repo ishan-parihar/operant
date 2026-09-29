@@ -446,29 +446,6 @@ pub const DIALOG_TEXT_BRIGHT: Color = Color::Rgb(200, 200, 200);
 /// nothing about the rendering changes.
 pub const TOOL_ERROR: Color = Color::Rgb(255, 140, 0);
 
-/// Secondary text on a selected list row: the metadata line, the status badge,
-/// a description, or a diff's stats row. Four sites shared one literal.
-///
-/// Do NOT route this through `on_selection()`, which is the obvious-looking
-/// substitution and is wrong on both counts. `on_selection()` returns
-/// `text_dark` — a DARK foreground meant for text sitting on a selection
-/// *background*, the opposite value class from this pale pink — and it varies
-/// per theme (`Black`, `Rgb(33, 33, 33)`, …). The role reads like a match and
-/// is not one.
-///
-/// **Open question, deliberately not decided here.** The selected row's own
-/// background is `accent()`, and `accent()` returns `p.emphasis`
-/// (`theme_colors.rs:322`). This pale pink on top of it measures 1.29:1 to
-/// 2.88:1 on the six themes whose `emphasis` is a literal — below the 4.5:1
-/// WCAG AA threshold for normal text. `default` and `light` resolve `accent()`
-/// to a named ANSI slot whose rendered RGB depends on the user's terminal, so
-/// they are not computable from source. The selected *title* uses
-/// `theme_colors::text()`, so this concerns secondary text only. Whether to
-/// lighten this foreground, darken the selection background, or leave it is a
-/// per-theme appearance decision (BUGS.md R40-31), and deduping the literal —
-/// which is byte-identical on all eight themes — is not that decision.
-pub const SELECTED_ROW_FG: Color = Color::Rgb(248, 220, 236);
-
 /// The highlighted background behind a search-match substring, used by both the
 /// inline transcript search and the global-search overlay.
 ///
@@ -484,7 +461,19 @@ pub const SEARCH_MATCH_BG: Color = Color::Rgb(60, 50, 0);
 /// in a private `dim_style()`, so the two could drift apart unnoticed.
 pub const BANNER_DIM: Color = Color::Rgb(140, 110, 0);
 
-/// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`].
+/// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`], and on
+/// top of `accent()` when a list row is selected — `accent()` returns
+/// `p.emphasis`, which carries the same value as `selection_bg` on every theme
+/// whose accent is a literal, so this one role covers both cases.
+///
+/// **Do NOT put a light foreground on a selected row's background.** That was the
+/// defect fixed at iter-468: the four list-row renderers used `theme_colors::text()`
+/// for the selected title and a pale pink for the secondary line, measuring
+/// 1.29:1 to 2.88:1 on the six themes whose `accent()` is a literal. `text_dark`
+/// reads 4.08:1 to 9.01:1 on those same six. On `default` and `light`,
+/// `accent()` is a named ANSI slot (Cyan / Blue), so the ratio is
+/// terminal-dependent and not computable from source; `text_dark` is
+/// `Color::Black` on both, so every foreground option coincides there.
 pub fn on_selection() -> Color {
     with_active(|p| p.text_dark)
 }

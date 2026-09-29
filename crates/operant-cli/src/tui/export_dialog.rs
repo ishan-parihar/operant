@@ -4,7 +4,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
@@ -124,9 +124,13 @@ fn export_option_row(
     } else {
         theme_colors::panel_bg()
     };
-    let fg = theme_colors::text();
+    let fg = if selected {
+        theme_colors::on_selection()
+    } else {
+        theme_colors::text()
+    };
     let desc_fg = if selected {
-        Color::Rgb(245, 220, 232)
+        theme_colors::on_selection()
     } else {
         theme_colors::muted()
     };
