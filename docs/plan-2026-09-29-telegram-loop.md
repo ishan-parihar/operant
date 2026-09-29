@@ -2,10 +2,59 @@
 
 Everything here is backed by a measured observation. Nothing is speculative.
 
-## Tier 1 — data loss / undebuggable
+## Tier 1 — data loss
 
-### D1. Telegram startup probe discards pending updates
-`crates/operant-core/src/gateway/telegram.rs:692-707`
+### D1. Telegram startup probe discards pending updates — fix in 47f318a4, POST-FIX UNVERIFIED
+`crates/operant-core/src/gateway/telegram.rs:692`
+
+The probe posted `{offset:0, timeout:0}`, read the result, and advanced
+`offset = update_id + 1`. The real poll loop is the sole dispatcher, so the
+first real poll after a boot would skip exactly the updates the probe had seen.
+
+**Mechanism confirmed in code** (`telegram.rs:874`): the offset file is persisted
+only `if had_updates`. The probe raises the offset, the real poll then receives
+an empty result, so nothing is ever written.
+
+**Evidence status — read this before citing it.** The defect is confirmed in the
+mock, where the probe demonstrably consumed an update the poll never saw. It is
+**not** confirmed against production, and neither of the two lost test messages
+is evidence for it:
+
+- 11:15:51 — received, allowlisted, `Starting agent run`, then killed 5.2s later
+  with the process. Never skipped; see D2.
+- 11:26:06 — the log has **zero lines between 11:16 and 11:33**, so no gateway
+  was running. There was no probe to consume it. The message was simply
+  unreachable, then picked up on a later boot.
+
+Attributing either message to D1 was wrong. The only remaining production
+reproduction is the `OFFLINE_QUEUED_TEST_441` run, which was ambiguous (the
+"1 message stored" count was `tg history`'s fetch total, not proof of silence).
+
+**Outstanding:** the fix is committed but not built or deployed — the installed
+binary is pre-fix. A post-fix stop → queue → start run is required before D1 can
+be called verified.
+
+### D2. In-flight turns are lost when the process dies — **the real cause of the 11:15 stuck turn**
+`~/.operant/logs/gateway.log` is the ground truth (45 MB, 867,909 lines, full
+structured tracing with span fields). An earlier note in this doc claimed the
+gateway initialised no tracing subscriber; that was wrong — it was reading a
+foreground stdout redirect, not the log.
+
+```
+11:15:51.552  Starting agent run
+11:15:56.793  Stopping platform adapter, platform: telegram
+11:15:56.796  Telegram adapter stopped
+11:34:25.005  WARN Detected interrupted turn from previous session
+```
+
+The turn ran 5.2s and was terminated with the process. The gateway *detects*
+this on the next boot and warns (`gateway_runner.rs:3012`), but **it never tells
+the user** — the handler pushes `(channel_id, timestamp)` into a list and
+returns; nothing sends a message to that channel. So the user sees silence for
+18 minutes with no explanation anywhere except the server log.
+
+That is the concrete fix: on detecting an interrupted turn, notify the channel
+("your previous turn was interrupted when the gateway restarted").
 
 ```rust
 if let Some(updates) = data["result"].as_array() {
@@ -34,10 +83,12 @@ consumed unread.
 
 **Cost:** one assignment removed.
 
-### D2. Gateway logs 5 lines and no tracing subscriber
-`operant gateway run` → 2 banner lines, then nothing. `RUST_LOG=debug` has no
-effect because no subscriber is initialised on this path. Every hop had to be
-recovered from the transport's own view instead of the log.
+### D3. Gateway logs 5 lines in the foreground
+`operant gateway run` prints a two-line banner to stdout, which looks like an
+unloggable binary. It is not: structured logs go to `~/.operant/logs/gateway.log`
+with span fields (`in run with user_query:`, `in execute with tool_name:`).
+Reading the banner instead of that file is what made several findings here
+initially wrong.
 
 **Cost:** small, but it's what made the other three defects slow to find.
 
