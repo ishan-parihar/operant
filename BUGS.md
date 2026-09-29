@@ -2048,3 +2048,37 @@ product decision with a migration cost, not a cleanup.
 
 Owner call: ratify 16 and update the four AGENTS.md sites, or cut back to the
 documented 7. Not decided unilaterally.
+
+### R40-27 — Plan G's four "dead code in the shipped binary" claims are all false; verified, not assumed (iter-452)
+
+R40-13 has been carried as "the largest remaining engineering item" and as
+"the biggest lever on binary size and attack surface". I finally tested it
+instead of restating it. **All four claims fail.** Two of my own measurement
+passes were wrong before I got there, and both are recorded here because the
+errors are the reusable part.
+
+| claim | verdict | evidence |
+|---|---|---|
+| `operant-channels` 75k lines dead-linked | **FALSE** | declared at `crates/operant-cli/Cargo.toml:21`, pulled in by `agent-runtime` at `:106` |
+| 14,094-line channels orchestrator dead-linked | **FALSE** | `orchestrator/factory.rs` is the *live* config-driven dispatcher — 21 unique channel arms (R40-25) |
+| `operant-runtime` 89k-line `RuntimeAgent` legacy stack | **FALSE** | `RuntimeAgent` appears in **zero** `.rs` files. It occurs only in 3 markdown files. The "89k" was my own bad measurement: `find crates -name '*.rs' -path '*runtime*'` sums *every* file whose path contains "runtime", across multiple crates — it never isolated a `RuntimeAgent` |
+| 4 default-feature crates in the graph, unreferenced from `operant-cli/src` | **FALSE as dead code** | all 4 are in `operant-cli`'s graph at full depth. "0 references from `operant-cli/src`" means reached *transitively*, not unused |
+
+**My two bad measurements**, both the same mistake: I grepped for a quoted
+string (`"operant-channels"`) when Cargo declares a dependency as an unquoted
+key (`operant-channels = { ... }`), so a correct dependency reported as absent.
+Twice. The channel-feature version of the same error is in R40-25. **When
+auditing a manifest, parse it; do not grep it.**
+
+**The methodology error underneath all of it.** "In the dependency graph" and
+"reachable" are different properties, and the second is what matters. The
+`strings` probe from R40-25 is the honest test: bluesky/notion/reddit appear
+**0 times** in the release binary while telegram/discord/slack appear 73/66/40.
+The linker already removes unreachable code, so an unreferenced crate or an
+undispatchable adapter costs **compile time, not shipped bytes and not runtime
+attack surface**. Every "dead code in the shipped binary" claim needs a
+`strings`/binary probe to be worth anything; a dependency-graph check cannot
+establish it.
+
+Nothing to do here. The AGENTS.md platform-count drift is real and stays filed
+as R40-26, which is a design-intent question rather than dead code.
