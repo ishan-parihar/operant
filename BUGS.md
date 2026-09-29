@@ -2364,11 +2364,42 @@ Verified at all four sites — `agents_view.rs:810`, `hooks_config_menu.rs:570`,
 redundant second cue, not a load-bearing one, and no option below needs to
 preserve it in order to keep selected rows identifiable.
 
-Owner call, and it is a per-theme appearance decision: (a) leave it, since the
-background identifies the row and the title is legible, (b) lighten
-`SELECTED_ROW_FG` per theme, (c) darken the selected-row background so light
-secondary text reads on it, or (d) use `theme_colors::text()` when selected —
-which the title already does, and which costs less than this entry originally
-claimed, because the background still marks the row. What iter-463 did was only
-name the constant — byte-identical on all eight themes, so it deliberately does
-not pre-empt any of this.
+**Third correction at iter-465, and this one resizes the finding.** I had
+measured only the pink pairing and treated it as the defect. Adding two control
+pairings shows it is not an outlier — it is one of three, and the other two are
+the same shape:
+
+| pairing | dark | light | solarized | nord | dracula | monokai | deuteranopia |
+|---|---|---|---|---|---|---|---|
+| selected secondary: `SELECTED_ROW_FG` on `accent()` | 1.73 | n/a | 2.88 | 1.57 | 1.89 | 1.29 | 2.65 |
+| unselected secondary: `muted()` on `panel_bg()` | 4.02 | 4.80 | 2.79 | 1.69 | 3.03 | 3.03 | 4.24 |
+| **selected primary: `text()` on `accent()`** | 1.76 | n/a | 1.38 | 1.48 | 2.26 | 1.55 | 2.47 |
+
+The third row is the control I should have taken first. The selected row's
+*title* — its most important text — is **worse** than the pink on four of six
+measurable themes, and 1.38:1 on solarized is the worst number anywhere in this
+entry. Verified the foregrounds are as stated: `agents_view.rs:815`,
+`hooks_config_menu.rs:575` and `diff_viewer/render.rs:171` all use
+`theme_colors::text()` for the selected primary line, and `theme_screen.rs:179`
+uses `Color::White` — a different light foreground, same problem.
+
+So the cause is not the pink. `accent()` is a light colour and these themes put
+light text on it. Option (b) below, "lighten `SELECTED_ROW_FG` per theme", would
+fix four sites and leave the title at 1.38:1 — treating the symptom while the
+primary label stays the least legible text in the row. If anything is done here,
+(c) is the one that addresses the cause, because it improves the title and the
+secondary line together.
+
+Owner call, and it is a per-theme appearance decision. Note that option (a)'s
+original justification included "the title is legible", which the control
+measurement above now **falsifies** — the title is the least legible text in the
+row, not a saving grace. What survives is the background half, which was verified
+at all four sites. So: (a) leave it, justified by the background identifying the
+row and nothing else, (b) lighten `SELECTED_ROW_FG` per theme — fixes the four
+secondary sites and leaves the title untouched at 1.38:1, so this treats the
+symptom, (c) darken the selected-row background so light text reads on it, which
+is the only option that improves the title and the secondary line together, or
+(d) use `theme_colors::text()` when selected — which the title already does, and
+which costs less than this entry originally claimed since the background still
+marks the row. What iter-463 did was only name the constant — byte-identical on
+all eight themes, so it deliberately does not pre-empt any of this.
