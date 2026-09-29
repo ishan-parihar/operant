@@ -419,6 +419,71 @@ fn test_shift_enter_inserts_a_newline_instead_of_submitting() {
     assert!(!app.is_streaming);
 }
 
+// The remaining three Prompt chords. iter-453 deferred these as "needs
+// history-search, completion and clipboard state" — that was a guess, and
+// checking proved it wrong on all three. `yank()` reads the KILL RING, not the
+// clipboard; `suggestions` and `history` are public fields; and the overlay's
+// `snapshot` is public, so the entry count is assertable. Nothing here needs
+// state that is awkward to construct.
+//
+// Same discipline as iter-453: assert the specific EFFECT, not that "something
+// happened", because iter-429's failure was a chord dispatching a different
+// action than the catalogue claimed.
+
+#[test]
+fn test_ctrl_r_opens_history_search_carrying_the_history() {
+    let mut app = make_app();
+    app.prompt_input.history = vec!["first command".to_string(), "second".to_string()];
+
+    // Fixture must start closed, or "did it open?" cannot be distinguished from
+    // "it was already open and nothing happened".
+    assert!(!app.history_search_overlay.visible);
+
+    app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::CONTROL));
+
+    assert!(app.history_search_overlay.visible);
+    // Not just "a dialog opened": the entries must be the ones we seeded. An
+    // overlay that opened empty would satisfy a bare `visible` assertion.
+    assert_eq!(app.history_search_overlay.snapshot.len(), 2);
+}
+
+#[test]
+fn test_tab_accepts_the_typeahead_suggestion() {
+    use crate::tui::prompt_input::{TypeaheadSource, TypeaheadSuggestion};
+
+    let mut app = make_app();
+    app.prompt_input.text = "/he".to_string();
+    app.prompt_input.cursor = 3;
+    app.prompt_input.suggestions = vec![TypeaheadSuggestion {
+        text: "/help".to_string(),
+        description: "Show help".to_string(),
+        source: TypeaheadSource::SlashCommand,
+    }];
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Tab, KeyModifiers::NONE));
+
+    // SlashCommand REPLACES the whole buffer, so this asserts the accept path
+    // ran rather than Tab merely cycling a highlight.
+    assert_eq!(app.prompt_input.text, "/help");
+    assert_eq!(app.prompt_input.suggestion_index, Some(0));
+}
+
+#[test]
+fn test_ctrl_y_yanks_from_the_kill_ring_at_the_cursor() {
+    let mut app = make_app();
+    app.prompt_input.kill_ring.push("world".to_string());
+    app.prompt_input.text = "hello ".to_string();
+    app.prompt_input.cursor = app.prompt_input.text.len();
+    app.refresh_prompt_input();
+
+    app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::CONTROL));
+
+    // Inserted AT the cursor, not appended to the end, and not read from the
+    // system clipboard — the kill ring is the only source.
+    assert_eq!(app.prompt_input.text, "hello world");
+}
+
 #[test]
 fn test_question_mark_shortcut_types_into_non_empty_prompt() {
     let mut app = make_app();
