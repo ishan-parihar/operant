@@ -113,6 +113,19 @@ if [ -d "$RUNTIME_LIB_DIR" ] && [ -d "$ORT_DIR/lib" ]; then
   export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$_ORT_LINK_FLAGS"
   # Preserve a caller's own RUSTFLAGS rather than clobbering them.
   export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$_ORT_LINK_FLAGS"
+else
+  # Say what is missing, here, rather than letting the build die two minutes
+  # later with "unable to find library -lonnxruntime" and no connection to the
+  # cause. Six builds failed that way on 2026-09-29 before this branch existed.
+  if [ ! -d "$ORT_DIR/lib" ]; then
+    echo "[dev-env] WARNING: ONNX Runtime not found at $ORT_DIR/lib" >&2
+    echo "[dev-env]          builds will fail at the link step." >&2
+    echo "[dev-env]          run: bash scripts/provision-build-deps.sh" >&2
+  fi
+  if [ ! -d "$RUNTIME_LIB_DIR" ]; then
+    echo "[dev-env] WARNING: no runtime lib dir at $RUNTIME_LIB_DIR" >&2
+    echo "[dev-env]          the built binary would exit 127 on install." >&2
+  fi
 fi
 
 # pip-installed cmake lands in a venv. Prepend it only if it is actually there —
