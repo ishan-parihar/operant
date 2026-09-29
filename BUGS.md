@@ -1941,3 +1941,110 @@ Interim handling: not gitignored yet, because adding an ignore rule without
 knowing what writes the path risks hiding a live bug rather than fixing it. The
 directory is untracked, so it cannot enter a release. Worth `.gitignore`-ing
 once the creator is known.
+
+### R40-25 — 7 channel adapters are compiled into every binary but have no dispatch arm anywhere (iter-451, measured)
+
+`operant-cli's` `default = ["agent-runtime", "gateway"]`, and `agent-runtime`
+enables **23** `channel-*` features. Of those, 9 are referenced from
+`operant-cli/src`. The remaining 14 looked dead — and **that first measurement
+was wrong**, which is the useful part of this entry.
+
+**The wrong measurement, kept on the record.** Grepping `operant-cli/src` for
+channel names finds 9, and the naive conclusion is "the other 14 are dead
+weight". But `operant-channels/src/orchestrator/factory.rs` is a *config-driven*
+dispatcher: it matches on a channel name at runtime and constructs the adapter
+without the CLI ever naming it. Seven of the 14 are live through it — `dingtalk`,
+`imessage`, `linq`, `mochat`, `twitter`, `wati`, `wecom`. This is the same
+failure shape as iter-429's wrong-action keybindings, inverted: **absence of a
+reference is not evidence of absence of a capability.** A source-presence test
+cannot see runtime dispatch.
+
+**The measurement that does hold.** Re-checked against every dispatch site
+(`orchestrator/{mod,factory,runtime_types,prompts}.rs`,
+`operant-core/tools/{send_message_tool,reaction_tool}.rs`,
+`operant-runtime/daemon/mod.rs`, `operant-cli/{cmd_channel,cmd_setup}.rs`) —
+30 unique channel names, cross-checked with hyphens AND underscores normalised,
+because a `whatsapp_cloud` arm would have made a live channel look dead. Seven
+appear in **no** dispatch arm:
+
+    acp-server  bluesky  clawdtalk  nextcloud  notion  reddit  whatsapp-cloud
+
+Each has a real cfg-gated implementation (2–4 files), so all seven compile into
+the shipped binary. `bluesky`/`notion`/`reddit` do have string literals in their
+own source (`channel: "bluesky".to_string()`), but those are self-references
+inside the adapter, not dispatch sites. And `operant acp` is verified
+independent of `channel-acp-server`: `cmd_acp.rs:39` calls
+`operant_core::acp::server::run_stdio_server`, a different module entirely.
+
+**CORRECTION — I applied the change, measured it, and reverted it.** The
+paragraph above originally claimed the removal "is a real reduction in shipped
+code and attack surface". That was false, and measurement is what caught it.
+
+I removed the seven from the `agent-runtime` array in
+`crates/operant-cli/Cargo.toml` and rebuilt release. Result: **byte-identical
+binary, 51,026,384 bytes before and after, 0-byte delta.** Worse, the build log
+showed only **1 crate recompiled versus 12** in the baseline build, and
+`operant-channels` was not among them. A real feature change cannot recompile
+nothing, so the edit was a no-op.
+
+**Why: `operant-gateway/Cargo.toml` hardcodes the features in `[dependencies]`,
+not `[features]`:**
+
+    operant-channels = { workspace = true, features = [
+        "channel-signal", "channel-acp-server", "channel-email", ... ] }
+
+Cargo unions features across the whole dependency graph, so those 21 channels
+are enabled on `operant-channels` unconditionally no matter what `operant-cli`
+asks for. The string probe confirmed the removals never took effect — the
+`operant-cli` manifest simply is not where those features come from.
+
+Three things this entry got wrong before measurement, all worth keeping:
+
+  - "compiled into the shipped binary" — they are *compiled*, yes, but the
+    `strings` probe found **0 occurrences** of bluesky/notion/reddit/clawdtalk/
+    nextcloud in the release binary while telegram/discord/slack were present
+    73/66/40 times. The linker already drops them as unreachable. So they cost
+    **compile time only** — not binary size, and not runtime attack surface.
+  - "the individual `channel-*` features stay declared, so anyone who wants one
+    can still enable it" — true, verified (`channel-bluesky = [...]` is still in
+    the manifest), but irrelevant, because the hardcoded gateway dependency
+    enables them anyway. Enabling is not the problem; nothing can *dis*able them.
+  - The fix was framed as a one-line manifest edit. It is a three-crate
+    refactor, and I would not have found that without a build.
+
+**This is the real defect, and it is bigger than the seven channels.**
+`operant-gateway` has `default = []` and 24 correctly-written forwarding
+features (`channel-email = ["operant-channels/channel-email"]`, ...). The
+hardcoded `[dependencies]` list makes **all 24 decorative** — they forward
+features that are already switched on. The dependency list defeats the entire
+forwarding mechanism it sits next to.
+
+Correct fix, deliberately NOT done here: delete the hardcoded list from
+`operant-gateway`'s `[dependencies]`, then make `operant-cli`'s `channel-*`
+features forward to **both** `operant-channels/channel-*` and
+`operant-gateway/channel-*`. `operant-cli`'s `gateway = ["dep:operant-gateway"]`
+currently passes no channel flags, so removing the hardcoded list without the
+second half would silently drop every channel from the binary. That is a real
+refactor of the feature graph across three crates, and it is worth doing
+deliberately rather than as a side effect of a dead-code cleanup.
+
+### R40-26 — AGENTS.md's platform count is stale by 9, and the code has drifted from a stated design preference
+
+AGENTS.md:190 says `**Supported: 7 platforms**` — telegram, discord, slack,
+whatsapp, email_smtp, sms_twilio, webhooks — and that same list appears at
+lines 262, 488, 623 and 929. Measured reality: **16 channels are reachable**
+(9 referenced from the CLI plus 7 through the factory), not 7, and 23 are
+compiled by default.
+
+This is filed separately from R40-25 because the remedy is NOT a doc fix.
+AGENTS.md lists the 7-platform limit under "Design Preferences (DO NOT
+CHANGE) — the user's intentional design choices". So the code compiling 16 is
+**drift away from a stated intent**, not an out-of-date document, and silently
+rewriting the number to "16" would erase the fact that the design intent was
+never carried through. The nine extra reachable channels (irc, qq, signal,
+mattermost, dingtalk, imessage, twitter, linq, wati, mochat, wecom) are each a
+real adapter with a working factory arm, so removing them to reach 7 is a
+product decision with a migration cost, not a cleanup.
+
+Owner call: ratify 16 and update the four AGENTS.md sites, or cut back to the
+documented 7. Not decided unilaterally.
