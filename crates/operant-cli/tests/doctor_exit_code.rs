@@ -6,11 +6,25 @@
 //! drive the real binary, so the only way to pass is for the whole path — .env
 //! read, ambient scan, glyph, vector, `doctor_exit_code` — to agree.
 //!
-//! The environment variable that redirects the config directory is `HERMES_HOME`
-//! (`operant_home()` in operant-core/src/platform.rs reads only that), not
-//! `OPERANT_CONFIG_DIR`. Setting the wrong one silently exercises the developer's
-//! real ~/.operant instead of the fixture, which is how this whole class of
-//! defect stayed invisible for so long.
+//! A doctor fixture has to set TWO different environment variables, because
+//! doctor's two file-reading checks resolve their paths differently:
+//!
+//!   the .env credential check   operant_home()/.env  -> HERMES_HOME
+//!                                (checks_config.rs:21 `let hh = operant_home()`)
+//!   the config file             operant_config_dir_override() -> OPERANT_CONFIG_DIR
+//!                                (config.rs:1659)
+//!
+//! Setting only one of them silently reads the developer's real ~/.operant
+//! instead of the fixture. A .env containing no credential then still exits 0,
+//! because the real one has a key in it, and the result reads like a regression
+//! in the credential check rather than a broken harness. This cost a full
+//! debugging round three separate times on 2026-09-29; `doctor_cmd` below sets
+//! both, and any new fixture must do the same.
+//!
+//! The ambient scan is the other trap: `has_ambient_provider_config` reads the
+//! real process environment, so a fixture that does not clear it will pass on
+//! the developer's own exported keys. `env_clear` plus the explicit
+//! `env_remove` list is deliberate, not redundant.
 
 // Integration test binaries are not covered by the `#![cfg_attr(test, ...)]`
 // exemption in main.rs, so the gate's -D flags reach here. `expect` is used only
@@ -78,7 +92,11 @@ fn doctor_cmd(home: &Path) -> Command {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("HOME", home)
-        .env("HERMES_HOME", home);
+        .env("HERMES_HOME", home)
+        // The third one, for the reason in the module docs: the config file is
+        // resolved by OPERANT_CONFIG_DIR, not by HERMES_HOME. Without it a
+        // fixture also reads the developer's real operant.toml.
+        .env("OPERANT_CONFIG_DIR", home);
     // Belt and braces: strip the variables the ambient scan looks at, in case
     // `env_clear` is ever not enough.
     for key in [
