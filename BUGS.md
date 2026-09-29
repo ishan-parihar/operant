@@ -2541,6 +2541,28 @@ Three corrections to my own numbers, all from reading rather than scanning:
     duplicates *across* files, so two values in the same role but different files
     were only caught by luck of which files the other values happened to sit in.
 
+    **Gap closed at iter-470, and the answer is that nothing was behind it.**
+    Re-ran the scan over every file pairing rather than only cross-file ones
+    (`Color::Rgb` at call sites, `theme_colors.rs` and test files excluded, 42
+    distinct values, threshold euclidean < 12). 12 pairs, none a role duplicate:
+
+      - 5 same-file pairs, all `(1, 2, 3)` vs `(0, 0, 0)` inside `color_depth.rs`.
+        These are quantizer test *inputs*; a distance between two synthetic
+        fixtures is not a signal. Already ruled out at iter-461, and re-ruling
+        them out here is the point — the gap produced no false negatives either.
+      - 7 cross-file pairs, all clustering in the dark-background range. The
+        closest is the one worth naming: `Rgb(112, 112, 126)` at
+        `messages/mod.rs:60` against `Rgb(110, 110, 130)` at
+        `render/messages.rs:143`, euclidean 4.90. Read both rather than trusting
+        the proximity: the first is `TRANSCRIPT_SUBTLE`, a transcript foreground
+        tier, the second is the **scrollbar thumb**. Different roles, so the
+        tightest pair in the set is a coincidence.
+
+    Same negative result as the 60 pairs measured at iter-464, reached by the
+    instrument that had the bug in it. Recording it so the gap is not reopened by
+    the next person, and so the iter-464 figure is not mistaken for a scan that
+    covered this shape.
+
 **Still open, and deliberately not touched.** Four sites keep the hardcoded
 `Color::Black` — `memory_file_selector.rs:185`, `mcp_view.rs:433` and `:586`,
 `settings_screen/render.rs:238`. Measured 5.71:1 to 12.74:1, so these are legible
