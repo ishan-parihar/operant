@@ -1,10 +1,25 @@
 name: CI
 
+# The GitHub Actions quota is exhausted, so CI no longer runs on every push.
+# Pushing to main used to cost a 2-minute run each time, and this repo takes
+# many commits a day from more than one agent, which is what drained it.
+#
+# What this means in practice: the local loop is now the gate. Before pushing,
+# run the same checks the jobs run:
+#
+#   source scripts/dev-env.sh
+#   export CARGO_TARGET_DIR=$HOME/.cache/operant-target
+#   cargo fmt --all --check
+#   bash scripts/clippy-warning-gate.sh
+#   RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features
+#   cargo test -p operant-cli --test doctor_exit_code   # the e2e doctor gate
+#
+# `workflow_dispatch` below runs all of it on demand, and pushes of a `v*` tag
+# still trigger it so a release cannot skip the gate.
 on:
-  push:
-    branches: ['main']
-    tags: ['v*']
   workflow_dispatch:
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
