@@ -18,7 +18,14 @@ operant-core = { path = "../operant-core" }
 operant-harness = { workspace = true }
 
 # Optional subsystem crates — feature-gated like operant
-operant-channels = { workspace = true, optional = true }
+# operant-channels is a feature carrier: this crate never names it, but the
+# gateway (its only consumer) does, so the channel-* features below have to
+# reach it. `default-features = false` keeps operant-channels' own 21-channel
+# default set from re-enabling everything behind the caller's back — that is
+# what made every channel flag below decorative. Path rather than
+# `workspace = true` because a member may not disable the workspace entry's
+# default features.
+operant-channels = { path = "../operant-channels", optional = true, default-features = false }
 operant-tools = { workspace = true, optional = true }
 operant-runtime = { workspace = true, optional = true }
 operant-gateway = { workspace = true, optional = true }
@@ -131,33 +138,41 @@ agent-runtime = [
 ]
 
 # Major subsystems
+# No channel flags here on purpose: the channel-* features below already
+# forward to operant-gateway, and re-listing them would pin a second copy of
+# the same selection that nothing could switch off.
 gateway = ["dep:operant-gateway"]
 
-# Channels — each forwards directly to operant-channels (1 hop)
-channel-telegram = ["operant-channels/channel-telegram"]
-channel-discord = ["operant-channels/channel-discord"]
-channel-slack = ["operant-channels/channel-slack"]
-channel-email = ["operant-channels/channel-email"]
-channel-signal = ["operant-channels/channel-signal"]
-channel-mattermost = ["operant-channels/channel-mattermost"]
-channel-irc = ["operant-channels/channel-irc"]
-channel-imessage = ["operant-channels/channel-imessage"]
-channel-dingtalk = ["operant-channels/channel-dingtalk"]
-channel-qq = ["operant-channels/channel-qq"]
-channel-bluesky = ["operant-channels/channel-bluesky"]
-channel-twitter = ["operant-channels/channel-twitter"]
-channel-reddit = ["operant-channels/channel-reddit"]
-channel-notion = ["operant-channels/channel-notion"]
-channel-linq = ["operant-channels/channel-linq"]
-channel-wati = ["operant-channels/channel-wati"]
-channel-nextcloud = ["operant-channels/channel-nextcloud"]
-channel-mochat = ["operant-channels/channel-mochat"]
-channel-wecom = ["operant-channels/channel-wecom"]
-channel-clawdtalk = ["operant-channels/channel-clawdtalk"]
-channel-webhook = ["operant-channels/channel-webhook"]
-channel-acp-server = ["operant-channels/channel-acp-server"]
-channel-whatsapp-cloud = ["operant-channels/channel-whatsapp-cloud"]
-channel-mqtt = ["operant-channels/channel-mqtt"]
+# Channels — each forwards to BOTH consumers: operant-channels (which compiles
+# the channel) and operant-gateway (which wires it into the gateway). The `?`
+# on the gateway hop keeps operant-gateway optional: the flag is passed only
+# when the `gateway` feature already pulled the crate in, and is a no-op when
+# it did not. Forwarding to operant-channels alone left operant-gateway's own
+# channel-* features dead, so the whole set was unselectable.
+channel-telegram = ["operant-channels/channel-telegram", "operant-gateway?/channel-telegram"]
+channel-discord = ["operant-channels/channel-discord", "operant-gateway?/channel-discord"]
+channel-slack = ["operant-channels/channel-slack", "operant-gateway?/channel-slack"]
+channel-email = ["operant-channels/channel-email", "operant-gateway?/channel-email"]
+channel-signal = ["operant-channels/channel-signal", "operant-gateway?/channel-signal"]
+channel-mattermost = ["operant-channels/channel-mattermost", "operant-gateway?/channel-mattermost"]
+channel-irc = ["operant-channels/channel-irc", "operant-gateway?/channel-irc"]
+channel-imessage = ["operant-channels/channel-imessage", "operant-gateway?/channel-imessage"]
+channel-dingtalk = ["operant-channels/channel-dingtalk", "operant-gateway?/channel-dingtalk"]
+channel-qq = ["operant-channels/channel-qq", "operant-gateway?/channel-qq"]
+channel-bluesky = ["operant-channels/channel-bluesky", "operant-gateway?/channel-bluesky"]
+channel-twitter = ["operant-channels/channel-twitter", "operant-gateway?/channel-twitter"]
+channel-reddit = ["operant-channels/channel-reddit", "operant-gateway?/channel-reddit"]
+channel-notion = ["operant-channels/channel-notion", "operant-gateway?/channel-notion"]
+channel-linq = ["operant-channels/channel-linq", "operant-gateway?/channel-linq"]
+channel-wati = ["operant-channels/channel-wati", "operant-gateway?/channel-wati"]
+channel-nextcloud = ["operant-channels/channel-nextcloud", "operant-gateway?/channel-nextcloud"]
+channel-mochat = ["operant-channels/channel-mochat", "operant-gateway?/channel-mochat"]
+channel-wecom = ["operant-channels/channel-wecom", "operant-gateway?/channel-wecom"]
+channel-clawdtalk = ["operant-channels/channel-clawdtalk", "operant-gateway?/channel-clawdtalk"]
+channel-webhook = ["operant-channels/channel-webhook", "operant-gateway?/channel-webhook"]
+channel-acp-server = ["operant-channels/channel-acp-server", "operant-gateway?/channel-acp-server"]
+channel-whatsapp-cloud = ["operant-channels/channel-whatsapp-cloud", "operant-gateway?/channel-whatsapp-cloud"]
+channel-mqtt = ["operant-channels/channel-mqtt", "operant-gateway?/channel-mqtt"]
 
 # Backends and platform flags
 hardware = ["dep:operant-hardware", "operant-hardware/hardware"]

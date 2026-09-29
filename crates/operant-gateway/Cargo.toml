@@ -11,13 +11,29 @@ operant-api.workspace = true
 operant-config.workspace = true
 operant-memory.workspace = true
 operant-providers.workspace = true
-operant-channels = { workspace = true, features = [
-    "channel-signal", "channel-acp-server", "channel-email",
-    "channel-mattermost", "channel-imessage", "channel-irc",
-    "channel-dingtalk", "channel-qq", "channel-twitter", "channel-mochat",
-    "channel-wecom", "channel-clawdtalk", "channel-notion", "channel-reddit",
-    "channel-bluesky", "channel-linq", "channel-wati", "channel-nextcloud",
-    "channel-whatsapp-cloud", "channel-telegram", "channel-webhook",
+# The channels that must exist even with every feature below off, and nothing
+# more. Two groups, both structural rather than preference:
+#
+#   named unconditionally by this crate's own source — WhatsApp + Wati +
+#   GmailPush + NextcloudTalk + Linq (lib.rs) and AcpServer (acp.rs) are
+#   AppState fields with handlers and routes attached, so dropping them needs
+#   those call sites cfg-gated first;
+#   required by operant-channels itself — orchestrator/mod.rs re-exports
+#   Discord, DiscordHistory, Slack and Webhook with no cfg gate, so that crate
+#   does not compile with them off. Gating those four re-exports lowers this
+#   floor to the six above.
+#
+# Everything else reaches operant-channels only through the forwarding features
+# in [features]. A name added to this list can never be switched off again,
+# which is what made every forwarding feature decorative.
+#
+# Path rather than `workspace = true`: the workspace entry leaves default
+# features on and a member may not turn them off, so inheriting it would pull
+# operant-channels' own 21-channel default set back in and re-decorate the lot.
+operant-channels = { path = "../operant-channels", default-features = false, features = [
+    "channel-acp-server", "channel-discord", "channel-email", "channel-linq",
+    "channel-nextcloud", "channel-slack", "channel-wati", "channel-webhook",
+    "channel-whatsapp-cloud",
 ] }
 operant-runtime.workspace = true
 operant-tools.workspace = true
@@ -86,7 +102,9 @@ rand = "0.8"
 default = []
 gateway-voice-duplex = []
 tls = []
-# Forward channel features to operant-channels so gateway can use channel types
+# Forward channel features to operant-channels so gateway can use channel types.
+# operant-cli forwards its own channel-* features here, so selecting a channel
+# at the top of the graph reaches the gateway instead of being dropped.
 channel-email = ["operant-channels/channel-email"]
 channel-linq = ["operant-channels/channel-linq"]
 channel-nextcloud = ["operant-channels/channel-nextcloud"]
