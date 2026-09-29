@@ -74,12 +74,17 @@ impl KeyBindingRegistry {
                 context: BindingContext::Global,
                 description: "Global search",
             },
+            // Not a vim action. The dispatcher (app/key_handling.rs:1064)
+            // starts/stops VOICE hold-to-talk, and only when a voice recorder
+            // is configured (`self.voice_recorder.is_some()`), so on a machine
+            // without one this chord does nothing at all. Vim mode is real but
+            // is reached through the `/vim` slash command, not this chord.
             DefaultBinding {
                 key: KeyCode::Char('v'),
                 modifiers: KeyModifiers::ALT,
-                action: KeyAction::ToggleVimMode,
+                action: KeyAction::Custom(6),
                 context: BindingContext::Global,
-                description: "Toggle Vim mode",
+                description: "Toggle voice recording (needs a voice recorder)",
             },
             DefaultBinding {
                 key: KeyCode::Char('m'),
@@ -113,16 +118,25 @@ impl KeyBindingRegistry {
             DefaultBinding {
                 key: KeyCode::Tab,
                 modifiers: KeyModifiers::NONE,
-                action: KeyAction::CompletionNext,
+                action: KeyAction::CompletionAccept,
                 context: BindingContext::Prompt,
-                description: "Next completion",
+                description: "Accept completion",
             },
+            // Not a completion action. The dispatcher (app/key_handling.rs:1520)
+            // cycles the permission mode Default -> AcceptEdits ->
+            // BypassPermissions -> Default. There is no completion cycling to
+            // do: the plain-Tab arm above ACCEPTS the selected suggestion
+            // rather than advancing to the next one. Catalogued as
+            // CompletionPrev, so /keys told users Shift+Tab navigated
+            // completions when it changed their permission posture — a
+            // security-relevant mislabel, since BypassPermissions is one of
+            // the three states.
             DefaultBinding {
                 key: KeyCode::Tab,
                 modifiers: KeyModifiers::SHIFT,
-                action: KeyAction::CompletionPrev,
+                action: KeyAction::Custom(5),
                 context: BindingContext::Prompt,
-                description: "Previous completion",
+                description: "Cycle permission mode",
             },
             DefaultBinding {
                 key: KeyCode::Up,
@@ -239,13 +253,13 @@ impl KeyBindingRegistry {
                 context: BindingContext::Prompt,
                 description: "Undo",
             },
-            DefaultBinding {
-                key: KeyCode::Char('y'),
-                modifiers: KeyModifiers::SHIFT | KeyModifiers::CONTROL,
-                action: KeyAction::Redo,
-                context: BindingContext::Prompt,
-                description: "Redo",
-            },
+            // Ctrl+Shift+Y used to be catalogued as Redo, but there is no redo
+            // implementation anywhere in the TUI — no `fn redo`, no `.redo()`
+            // call site, and this was the only reference to `KeyAction::Redo`
+            // in the registry. /keys advertised a capability that does not
+            // exist. Removed rather than papered over; adding redo is a
+            // feature, not a catalogue fix. The `KeyAction::Redo` variant
+            // itself is kept so a future implementation has somewhere to land.
             DefaultBinding {
                 key: KeyCode::Char('v'),
                 modifiers: KeyModifiers::ALT,

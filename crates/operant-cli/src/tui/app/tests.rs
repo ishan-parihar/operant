@@ -484,6 +484,112 @@ fn test_ctrl_y_yanks_from_the_kill_ring_at_the_cursor() {
     assert_eq!(app.prompt_input.text, "hello world");
 }
 
+// ---- Pins for the four wrong-action entries found at iter-455 ----
+//
+// Writing the missing Prompt pins surfaced four catalogue entries whose
+// advertised action is not what the chord does. All four are the iter-429
+// shape: the chord IS dispatched, so a source grep passes, but it does
+// something else. These assert the REAL behaviour, so the descriptions cannot
+// drift back.
+
+#[test]
+fn test_shift_tab_cycles_permission_mode_not_completions() {
+    let mut app = make_app();
+    // Seeded with a non-empty suggestion so the "previous completion" reading
+    // is actually testable: if Tab-family keys cycled completions, this would
+    // change. It must NOT, and the permission mode must move.
+    app.prompt_input.suggestions = vec![crate::tui::prompt_input::TypeaheadSuggestion {
+        text: "/help".to_string(),
+        description: "Show help".to_string(),
+        source: crate::tui::prompt_input::TypeaheadSource::SlashCommand,
+    }];
+    let before = app.settings.permission_mode.clone();
+    let before_idx = app.prompt_input.suggestion_index;
+
+    app.handle_key_event(press_key(KeyCode::BackTab, KeyModifiers::SHIFT));
+
+    assert_ne!(
+        app.settings.permission_mode, before,
+        "Shift+Tab is catalogued as \"Cycle permission mode\" (Custom(5)); it must \
+         not be left doing nothing"
+    );
+    // The security-relevant part: BypassPermissions is one of the states this
+    // cycles through, so a user who believed this key only moved through
+    // completions would not expect it to change their permission posture.
+    assert_eq!(
+        app.prompt_input.suggestion_index, before_idx,
+        "Shift+Tab must not touch completion state"
+    );
+}
+
+#[test]
+fn test_alt_v_does_not_toggle_vim_mode() {
+    let mut app = make_app();
+    // No voice recorder is configured on a bare App, which is exactly the
+    // condition under which the dispatcher's guard fails. The point of this
+    // test is the negative: Alt+V is catalogued as voice (Custom(6)), NOT as
+    // ToggleVimMode, and must not silently become a vim toggle.
+    assert!(!app.prompt_input.vim_enabled);
+
+    app.handle_key_event(press_key(KeyCode::Char('v'), KeyModifiers::ALT));
+
+    assert!(
+        !app.prompt_input.vim_enabled,
+        "Alt+V must not enter vim mode; vim is reached via the /vim slash command"
+    );
+}
+
+#[test]
+fn test_registry_advertises_no_binding_for_an_unimplemented_action() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS, KeyAction};
+    let registry = &*DEFAULT_KEYBINDINGS;
+
+    // (1) `KeyAction::Redo` had a catalogue entry for Ctrl+Shift+Y and no
+    // implementation anywhere — no `fn redo`, no `.redo()` call site. The
+    // variant is deliberately KEPT so a future redo has somewhere to land, so
+    // this cannot be a "variant must be used" check; it pins the specific
+    // pairing instead.
+    for context in BindingContext::ALL {
+        for binding in registry.get_bindings(context) {
+            assert!(
+                !matches!(binding.action, KeyAction::Redo),
+                "Ctrl+Shift+Y is catalogued as Redo again, but no redo \
+                 implementation exists in the TUI — /keys is advertising a \
+                 capability that does not exist"
+            );
+        }
+    }
+
+    // (2) and (3) the two entries whose ACTION was wrong rather than absent.
+    // These are the ones the behavioural tests above cannot catch: those pin
+    // dispatch, and the defect was in the catalogue, so re-labelling the entry
+    // while leaving dispatch alone would satisfy both. Only a catalogue
+    // assertion sees it.
+    let alt_v = registry
+        .get_bindings(BindingContext::Global)
+        .into_iter()
+        .find(|b| b.key == KeyCode::Char('v') && b.modifiers == KeyModifiers::ALT)
+        .expect("Alt+V should still be catalogued — it starts voice recording");
+    assert!(
+        !matches!(alt_v.action, KeyAction::ToggleVimMode),
+        "Alt+V is catalogued as ToggleVimMode again, but the dispatcher runs \
+         voice hold-to-talk. Vim mode is reached via the /vim slash command."
+    );
+
+    let shift_tab = registry
+        .get_bindings(BindingContext::Prompt)
+        .into_iter()
+        .find(|b| b.key == KeyCode::Tab && b.modifiers.contains(KeyModifiers::SHIFT))
+        .expect("Shift+Tab should still be catalogued — it cycles permissions");
+    assert!(
+        !matches!(shift_tab.action, KeyAction::CompletionPrev),
+        "Shift+Tab is catalogued as CompletionPrev again, but the dispatcher \
+         cycles the PERMISSION mode. That is security-relevant: a user who \
+         thought the key only moved through completions would not expect it to \
+         reach BypassPermissions."
+    );
+}
+
 #[test]
 fn test_question_mark_shortcut_types_into_non_empty_prompt() {
     let mut app = make_app();
