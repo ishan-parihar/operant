@@ -719,11 +719,34 @@ mod tests {
         ));
     }
 
+    /// Serialise against the `proxy_config` tests that mutate the
+    /// process-global runtime proxy config (BUGS.md R40-23).
+    ///
+    /// `search_duckduckgo_at` / `search_tavily_at` build their `reqwest` client
+    /// through `operant_config::schema::apply_runtime_proxy_to_builder`, so
+    /// they observe that global. When a mutating test left it set to a proxy
+    /// nothing was listening on, every loopback `wiremock` URL was routed at
+    /// that dead proxy and failed with `Connection refused` — reported against
+    /// the *original* URL, which is why the failure looked like a port race.
+    ///
+    /// Asserts the guard is the shared lock, so a refactor that gives each
+    /// caller a private mutex fails here instead of silently dropping the
+    /// exclusion.
+    async fn web_search_proxy_guard() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = crate::proxy_config::proxy_global_test_lock().await;
+        assert!(
+            crate::proxy_config::proxy_global_test_lock_is_held(),
+            "BUGS.md R40-23: this test must hold the shared runtime-proxy lock"
+        );
+        guard
+    }
+
     #[tokio::test]
     async fn test_duckduckgo_request_reports_forbidden_status() {
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let _lock = web_search_proxy_guard().await;
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/html/"))
@@ -747,6 +770,7 @@ mod tests {
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let _lock = web_search_proxy_guard().await;
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/html/"))
@@ -778,6 +802,7 @@ mod tests {
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let _lock = web_search_proxy_guard().await;
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/html/"))
@@ -803,6 +828,7 @@ mod tests {
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let _lock = web_search_proxy_guard().await;
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/html/"))
@@ -1102,6 +1128,7 @@ mod tests {
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
+        let _lock = web_search_proxy_guard().await;
         let server = MockServer::start().await;
 
         Mock::given(method("POST"))

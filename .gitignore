@@ -97,6 +97,11 @@ hermes*.db
 *.log
 logs/.superpowers/
 
+# Coverage reports (scripts/coverage.sh; regenerable, never commit)
+coverage/
+cobertura.xml
+*.profraw
+
 # ---- tool-state / session artifacts (never commit) ----
 # skills runtime tracking (usage stats, curator scratch)
 skills/.usage.json

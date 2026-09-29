@@ -435,6 +435,69 @@ impl Tool for ProxyConfigTool {
     }
 }
 
+/// Test-only serialisation for the **process-global** runtime proxy config
+/// (`operant_config::schema::set_runtime_proxy_config`).
+///
+/// BUGS.md R40-23. The `proxy_config` tests drive the `set` action, which
+/// mutates that global. Every test that then builds a `reqwest` client through
+/// `operant_config::schema::apply_runtime_proxy_to_builder` inherits the
+/// mutation, so a loopback `wiremock` URL gets routed at the test's proxy
+/// instead — and fails with `Connection refused` reported against the
+/// *original* URL. That is a cross-module race, so the lock has to be shared:
+/// mutators take it, and readers of the global take it.
+///
+/// A `tokio` mutex rather than `std::sync::Mutex` because the mutating window
+/// spans an `.await` and only `tokio::sync::MutexGuard` is `Send`.
+#[cfg(test)]
+fn proxy_global_test_lock_cell() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
+pub(crate) async fn proxy_global_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    proxy_global_test_lock_cell().lock().await
+}
+
+/// Whether the shared lock is currently held.
+///
+/// Lets a reader-side test assert that the guard it just took is the *shared*
+/// one, rather than some private mutex — so a refactor that silently gives
+/// each caller its own lock fails instead of quietly removing the exclusion.
+#[cfg(test)]
+pub(crate) fn proxy_global_test_lock_is_held() -> bool {
+    // `tokio::sync::Mutex` has no `is_locked`; `try_lock` returning `WouldBlock`
+    // is the same fact.
+    proxy_global_test_lock_cell().try_lock().is_err()
+}
+
+/// Test-only guard that restores the process-global runtime proxy config when
+/// it drops, so a mutating test cannot leak its proxy to later tests.
+///
+/// The lock alone is not enough: it stops a reader observing the mutation
+/// *during* the mutator, but the mutated value would still be there for every
+/// test that runs afterwards. Both halves are required.
+#[cfg(test)]
+pub(crate) struct RuntimeProxyRestore {
+    saved: ProxyConfig,
+}
+
+#[cfg(test)]
+impl RuntimeProxyRestore {
+    pub(crate) fn new() -> Self {
+        Self {
+            saved: runtime_proxy_config(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for RuntimeProxyRestore {
+    fn drop(&mut self) {
+        set_runtime_proxy_config(self.saved.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +539,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_scope_services_requires_services_entries() {
+        let _lock = proxy_global_test_lock().await;
+        let _restore = RuntimeProxyRestore::new();
         let tmp = TempDir::new().unwrap();
         let tool = ProxyConfigTool::new(Box::pin(test_config(&tmp)).await, test_security());
 
@@ -501,6 +566,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_and_get_round_trip_proxy_scope() {
+        let _lock = proxy_global_test_lock().await;
+        let _restore = RuntimeProxyRestore::new();
         let tmp = TempDir::new().unwrap();
         let tool = ProxyConfigTool::new(Box::pin(test_config(&tmp)).await, test_security());
 
@@ -523,6 +590,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_null_proxy_url_clears_existing_value() {
+        let _lock = proxy_global_test_lock().await;
+        let _restore = RuntimeProxyRestore::new();
         let tmp = TempDir::new().unwrap();
         let tool = ProxyConfigTool::new(Box::pin(test_config(&tmp)).await, test_security());
 
@@ -549,5 +618,64 @@ mod tests {
         let parsed: Value = serde_json::from_str(&get_result.output).unwrap();
         assert!(parsed["proxy"]["http_proxy"].is_null());
         assert!(parsed["runtime_proxy"]["http_proxy"].is_null());
+    }
+
+    /// Regression (BUGS.md R40-23), half 1 of 2: the runtime proxy config is
+    /// process-global, so a mutating test that leaves it dirty poisons every
+    /// later test that builds a `reqwest` client via
+    /// `apply_runtime_proxy_to_builder`. That is how loopback `wiremock` URLs
+    /// in `web_search_tool` got routed at a dead proxy and failed with
+    /// `Connection refused` roughly one run in three.
+    ///
+    /// Exact oracle, and mutation-kill: delete the `Drop` impl for
+    /// [`RuntimeProxyRestore`] and the final assertion sees the leaked proxy
+    /// and fails. Deterministic — no scheduling race.
+    #[tokio::test]
+    async fn runtime_proxy_restore_guard_reinstates_the_previous_global() {
+        let _lock = proxy_global_test_lock().await;
+        // Assert the *exact* prior value comes back rather than assuming a
+        // clean start: a parallel test may legitimately hold a proxy here, and
+        // this test must not depend on the ambient value.
+        let baseline = runtime_proxy_config().http_proxy.clone();
+
+        {
+            let _restore = RuntimeProxyRestore::new();
+            set_runtime_proxy_config(ProxyConfig {
+                enabled: true,
+                http_proxy: Some("http://127.0.0.1:7890".into()),
+                ..ProxyConfig::default()
+            });
+            assert_eq!(
+                runtime_proxy_config().http_proxy.as_deref(),
+                Some("http://127.0.0.1:7890"),
+                "the mutation must be visible while the guard is alive"
+            );
+        }
+
+        assert_eq!(
+            runtime_proxy_config().http_proxy,
+            baseline,
+            "the guard must reinstate the pre-existing global on drop"
+        );
+    }
+
+    /// Regression (BUGS.md R40-23), half 2 of 2: mutators and readers must
+    /// contend on the *same* lock, not merely on some lock.
+    ///
+    /// Exact oracle, and mutation-kill: make `proxy_global_test_lock` hand
+    /// each caller a private mutex (drop the shared `OnceLock` cell) and the
+    /// assertion below sees the shared lock unheld and fails.
+    ///
+    /// Deliberately asserts nothing about the lock being *free* on entry: under
+    /// `cargo test` parallelism a peer test may hold it, and an earlier
+    /// version of this test did exactly that and flaked.
+    #[tokio::test]
+    async fn proxy_global_test_lock_is_shared_between_callers() {
+        let guard = proxy_global_test_lock().await;
+        assert!(
+            proxy_global_test_lock_is_held(),
+            "the guard returned by proxy_global_test_lock must be the shared lock"
+        );
+        drop(guard);
     }
 }

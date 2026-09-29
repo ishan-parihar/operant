@@ -16,8 +16,14 @@ name: CI
 #   cargo test -p operant-cli --test doctor_exit_code           # the e2e doctor gate
 #
 # The workspace suite is the one to run: it is the only thing that executes the
-# 3,751 test functions, and with no push trigger nothing runs them automatically.
+# 10,241 test functions, and with no push trigger nothing runs them automatically.
 # It takes a while on a 2-CPU box -- budget the time rather than skipping it.
+#
+# That 10,241 is a static count of `#[test]` / `#[tokio::test(...)]` attributes
+# across crates/**/*.rs, not a run result, so treat it as a size indicator:
+#   grep -rEc '^\s*#\[(tokio::)?test(\(|\])' --include=*.rs crates/ | awk -F: '{s+=$2} END {print s}'
+# Re-measure it when this number is touched; the previous value here (3,751) was
+# left over from before the suite roughly tripled and had drifted unchecked.
 #
 # A v* tag triggers build.yml and test.yml, so a release is still verified; the
 # local loop above is what stands in for this workflow in the meantime.
