@@ -310,23 +310,59 @@ assert.
 Because agentgateway exposes an **OpenAI-compatible API** and operant's
 OpenAI path is driven by a configurable `client.base_url`
 (`operant.example.toml`, default `https://api.openai.com/v1`), operant can
-plausibly be pointed at an agentgateway instance **as a config change rather
-than a rewrite.**
+point at an agentgateway instance **as a config change rather than a rewrite.**
 
-What that would buy, and what it would not:
+**The compatibility question is now answered, and the answer is yes.** Verified
+in agentgateway's own source at `c9573ed1`, not inferred:
+
+- **Streaming SSE** is first-class, not a shim — `ChatCompletionChunk` and
+  `StreamResponseDelta` with `content` / `tool_calls` / `reasoning_content`,
+  and `data: [DONE]` is appended on clean body close rather than left to the
+  upstream.
+- **Tool calling works in both directions, cross-provider.** The golden fixtures
+  are byte-exact round-trip tests, and `multi-turn-tools.json` contains exactly
+  the shape operant emits: `user → assistant(tool_calls) → tool(tool_call_id) →
+  assistant(tool_calls) → tool(tool_call_id)`, with snapshots asserting
+  conversion to Gemini/Vertex and Bedrock.
+- **Streaming tool calls with incremental argument fragments** — the same
+  `index → id` plus incremental-merge pattern operant already implements in
+  `crates/operant-core/src/agent/clients/openai.rs` (`StreamToolCallIndex`,
+  `merge_stream_tool_call`). agentgateway emits the OpenAI-standard form, so
+  that client code needs no change.
+- There is a documented client-integration catalog for exactly this shape
+  (Codex, Cursor, Copilot, Claude Code) pointed at the OpenAI-compatible
+  endpoint — a tested configuration, not a stretch.
+
+So the spike will work. The question is whether it is *worth* running, and the
+answer is a qualified no:
 
 | | |
 |---|---|
-| **Buys** | one endpoint for many providers; load balancing and failover across them; budget and spend enforcement; guardrails; OTel traces for agent traffic |
-| **Does not buy** | anything about operant's own inference code — that stays |
-| **Costs** | a new always-on process to deploy and operate; a hop in the request path; a hard dependency on a project self-described as in active development |
-| **Unverified** | whether agentgateway's OpenAI surface covers operant's streaming **and tool-call** requirements. This is the whole question, and it is one integration test. |
+| **Buys** | 21 providers from config instead of a Rust adapter each; virtual-model aliasing with weighted/failover/CEL routing; per-key budgets with token-bucket limiting; guardrails (regex, PII, OpenAI moderation, Bedrock Guardrails, Model Armor); OTel traces |
+| **Does not buy** | anything about operant's own inference code — that stays, and it already exists: a provider trait, an OpenAI client with streaming tool-call merge, an Anthropic client with `cache_control`, and `FallbackModelClient` |
+| **Costs — deployment shape** | the mature product is aimed at **fleets**. Virtual keys issued to "users or applications", RBAC with a CEL policy engine, multi-tenant cost analytics, ACME, a Postgres option, and a 92 MB binary carrying an embedded React UI and two allocators. operant is a single-developer local/VPS tool; this is org-grade machinery to obtain the ~20% that fits one user (failover, guardrails, one dashboard), with the other 80% as permanent surface area. **The mismatch is in the problem being solved, not the protocol.** |
+| **Costs — supply** | **bus factor of one** on the core proxy at Solo.io. Not visible in the star count. |
+| **Costs — churn** | the current v1.6 alpha shipped **two wire-format-breaking changes two days apart**, one of which (`(breaking) llm: default messages -> responses`) changes the default upstream format for Anthropic Messages — *precisely* the path operant's Anthropic client uses. Both are un-tagged; pinning to v1.5.0 avoids them, tracking head absorbs them. |
+| **Costs — translation** | behind the gateway, agentgateway re-encodes operant's request into the upstream's format. Its fixtures show that round-trips correctly, but that layer is still moving, and it becomes a dependency on someone else's release cadence. |
 
-**Recommendation: this is a 30-minute experiment, not an adoption decision.**
-Point `client.base_url` at a standalone agentgateway, send one tool-calling
-request, and see whether streaming and tool calls survive. If they do, it is
-a genuinely useful option for multi-provider deployments. If they do not, the
-category error stands and nothing was spent.
+**Recommendation: decline the gateway-as-control-plane migration; do not spend
+the spike either, unless a concrete trigger appears.** The trigger would be
+"we need more providers" or "we need spend visibility across a team" — either
+makes it a good answer. "Our inference path should be better" is a different
+layer, and the honest answer is that the premise was wrong.
+
+**The direct competitor is LiteLLM Proxy**, not agentgateway — older, larger
+provider catalogue, the de-facto-standard config surface, the same
+OpenAI-compatible endpoint. agentgateway's documented edge is Rust (single
+static binary, no Python runtime) and a real streaming-guardrail path. Its
+published head-to-head benchmark against LiteLLM is vendor marketing; treat the
+numbers accordingly. SaaS options (Portkey, Cloudflare AI Gateway, Helicone,
+Braintrust) are the wrong category for a local-first binary.
+
+**Standing recommendation, unchanged: keep operant's own abstraction.** It is
+already written, tested, released, and is 80% of the value for a single-user
+deployment. The remaining 20% is ~2 config files and zero dependencies — until
+the day it is not, and then this section is the spike to run.
 
 ---
 
