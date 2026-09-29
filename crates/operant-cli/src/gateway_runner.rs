@@ -994,11 +994,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                        your request.";
         let msg = OutgoingMessage::new(channel_id, notice).no_markdown();
         match gateway.send_to_platform(platform, msg).await {
-            Ok(_) => tracing::info!(
-                channel_id = %channel_id,
-                platform = %platform,
-                "Delivered interrupted-turn notice"
-            ),
+            Ok(_) => {
+                tracing::info!(
+                    channel_id = %channel_id,
+                    platform = %platform,
+                    "Delivered interrupted-turn notice"
+                );
+                // Mark the turn terminal so the same interrupted turn is not
+                // re-notified on every subsequent boot. Without this, a user
+                // who never replies gets the notice forever.
+                save_turn_state_in_for(
+                    &operant_core::platform::operant_home(),
+                    channel_id,
+                    "interrupted",
+                    platform,
+                );
+            }
             Err(e) => tracing::error!(
                 channel_id = %channel_id,
                 platform = %platform,
