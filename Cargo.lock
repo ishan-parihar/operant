@@ -4715,7 +4715,7 @@ dependencies = [
 
 [[package]]
 name = "operant-api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4731,7 +4731,7 @@ dependencies = [
 
 [[package]]
 name = "operant-channels"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -4787,7 +4787,7 @@ dependencies = [
 
 [[package]]
 name = "operant-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4842,7 +4842,7 @@ dependencies = [
 
 [[package]]
 name = "operant-config"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4880,7 +4880,7 @@ dependencies = [
 
 [[package]]
 name = "operant-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "anyhow",
@@ -4934,7 +4934,7 @@ dependencies = [
 
 [[package]]
 name = "operant-gateway"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4986,7 +4986,7 @@ dependencies = [
 
 [[package]]
 name = "operant-hardware"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5009,7 +5009,7 @@ dependencies = [
 
 [[package]]
 name = "operant-harness"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -5024,7 +5024,7 @@ dependencies = [
 
 [[package]]
 name = "operant-infra"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5041,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "operant-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5050,7 +5050,7 @@ dependencies = [
 
 [[package]]
 name = "operant-memory"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5073,7 +5073,7 @@ dependencies = [
 
 [[package]]
 name = "operant-plugins"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5093,7 +5093,7 @@ dependencies = [
 
 [[package]]
 name = "operant-providers"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5129,7 +5129,7 @@ dependencies = [
 
 [[package]]
 name = "operant-runtime"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5211,7 +5211,7 @@ dependencies = [
 
 [[package]]
 name = "operant-tool-call-parser"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "regex",
  "serde",
@@ -5221,7 +5221,7 @@ dependencies = [
 
 [[package]]
 name = "operant-tool-planning"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "operant-api",
  "serde",
@@ -5231,7 +5231,7 @@ dependencies = [
 
 [[package]]
 name = "operant-tools"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
