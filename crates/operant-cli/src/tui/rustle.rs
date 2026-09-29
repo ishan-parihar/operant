@@ -1,7 +1,7 @@
 // (iter-392: the `#![allow(dead_code)]` suppression is gone — this module is
 // reached from `render/welcome.rs::render_welcome_box`.)
 use crate::tui::theme_colors;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 // (iter-144: RustlePose enum deleted — rustle_lines() ignores the pose
@@ -16,7 +16,7 @@ fn accent_style() -> Style {
 }
 
 fn dim_style() -> Style {
-    Style::default().fg(Color::Rgb(140, 110, 0))
+    Style::default().fg(theme_colors::BANNER_DIM)
 }
 
 pub fn rustle_lines() -> [Line<'static>; 5] {
@@ -45,6 +45,9 @@ pub fn rustle_lines() -> [Line<'static>; 5] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // See banner.rs: `Color` left the module-level import at iter-463, when
+    // `dim_style` moved to `theme_colors::BANNER_DIM`.
+    use ratatui::style::Color;
 
     #[test]
     fn rustle_lines_returns_5_lines() {

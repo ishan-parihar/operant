@@ -182,7 +182,7 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
             theme_colors::text()
         };
         let desc_fg = if is_selected {
-            Color::Rgb(248, 220, 236)
+            theme_colors::SELECTED_ROW_FG
         } else {
             theme_colors::muted()
         };

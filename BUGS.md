@@ -2290,3 +2290,50 @@ The rest were quantizer fixtures in `color_depth.rs` (pure primaries and the
 synthetic `Rgb(1,2,3)`), the `stats_dialog` heatmap data encoding, and the
 deliberately high-contrast unthemed text in `ask_user_dialog.rs`. A mechanical
 sweep would have destroyed all three.
+
+### R40-31 — selected-row secondary text sits under 4.5:1 contrast on 6 of 8 themes (OPEN, owner decision, iter-463)
+
+`SELECTED_ROW_FG` (`Rgb(248, 220, 236)`, a pale pink) is the foreground for a
+selected row's **secondary** text: the metadata line in `agents_view.rs:824`, the
+badge in `hooks_config_menu.rs:584`, the description in `theme_screen.rs:185`,
+and the stats line in `diff_viewer/render.rs:196`. The selected row's background
+is `theme_colors::accent()`.
+
+Measured WCAG contrast of the pink against `accent()`:
+
+| theme | `accent()` = `emphasis` | contrast | AA-normal (4.5:1) |
+|---|---|---|---|
+| default | `Cyan` (ANSI slot) | not computable | — |
+| dark | `Rgb(100, 181, 246)` | 1.73 | FAIL |
+| light | `Blue` (ANSI slot) | not computable | — |
+| solarized | `Rgb(38, 139, 210)` | 2.88 | FAIL |
+| nord | `Rgb(136, 192, 208)` | 1.57 | FAIL |
+| dracula | `Rgb(189, 147, 249)` | 1.89 | FAIL |
+| monokai | `Rgb(102, 217, 239)` | 1.29 | FAIL |
+| deuteranopia | `Rgb(0, 150, 200)` | 2.65 | FAIL |
+
+`default` and `light` resolve `accent()` to a **named ANSI colour**, so their
+rendered RGB — and therefore their contrast — depends on the user's terminal
+palette. They are genuinely not measurable from source, and a claim covering
+all eight themes would be false. Note also that this concerns secondary text
+only: the selected row's *title* uses `theme_colors::text()`.
+
+**I got this number wrong twice before getting it right, and both wrong turns
+are worth recording.** The first pass computed against `selection_bg`, on the
+inference that a selected row uses the selection background — the code says
+`let bg = if selected { theme_colors::accent() }`, and I had never read it. The
+second pass computed against the palette's `accent` *field*, and
+`theme_colors.rs:322` is `with_active(|p| p.emphasis)` — a different field that
+happens to share the name. Both passes produced confident, plausible, wrong
+numbers. The value that made the second error visible is that `default`'s
+`emphasis` is `Cyan` while its `accent` field is also a colour: same
+"selection" intuition, wrong variable.
+
+Owner call, and it is a per-theme appearance decision: (a) leave it, on the
+grounds that the row is still identifiable from its background and the title
+text is legible, (b) lighten `SELECTED_ROW_FG` per theme, (c) darken the
+selected-row background so light secondary text reads on it, or (d) use
+`theme_colors::text()`, which is what the title already does, at the cost of the
+secondary line losing its distinction from the title. What iter-463 did was only
+name the constant — byte-identical on all eight themes, so it deliberately does
+not pre-empt this.

@@ -6,6 +6,7 @@ use crate::tui::messages::{
     RenderContext, render_thinking_live_content, render_transcript_assistant_message_tagged,
     render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
 };
+use crate::tui::theme_colors;
 use crate::tui::transcript_turn::{TranscriptTurn, build_transcript_turns};
 use crate::tui::virtual_list::VirtualList;
 use ratatui::Frame;
@@ -50,7 +51,9 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                             if span.content.to_lowercase().contains(query_lc.as_str()) {
                                 Span::styled(
                                     span.content,
-                                    span.style.bg(Color::Rgb(60, 50, 0)).fg(Color::Yellow),
+                                    span.style
+                                        .bg(theme_colors::SEARCH_MATCH_BG)
+                                        .fg(Color::Yellow),
                                 )
                             } else {
                                 span

@@ -332,7 +332,9 @@ pub fn render_global_search(
                             Span::styled(before, style),
                             Span::styled(
                                 matched,
-                                style.bg(Color::Rgb(60, 50, 0)).fg(theme_colors::warning()),
+                                style
+                                    .bg(theme_colors::SEARCH_MATCH_BG)
+                                    .fg(theme_colors::warning()),
                             ),
                             Span::styled(after, style),
                         ]

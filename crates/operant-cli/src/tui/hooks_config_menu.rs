@@ -581,7 +581,7 @@ fn push_list_row(lines: &mut Vec<Line<'static>>, label: &str, badge: &str, selec
         Style::default().fg(theme_colors::text()).bg(bg)
     };
     let badge_style = if selected {
-        Style::default().fg(Color::Rgb(248, 220, 236)).bg(bg)
+        Style::default().fg(theme_colors::SELECTED_ROW_FG).bg(bg)
     } else {
         Style::default().fg(theme_colors::muted()).bg(bg)
     };

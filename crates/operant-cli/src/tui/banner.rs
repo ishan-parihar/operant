@@ -14,10 +14,8 @@
 //! Used by `render::render_banner_block` (above the welcome panel).
 
 use crate::tui::theme_colors;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-
-const BANNER_DIM: Color = Color::Rgb(140, 110, 0);
 
 /// The banner wordmark reads the active theme's accent — the same accessor
 /// `rustle::accent_style` uses, so the logo and the mascot stay one design
@@ -29,7 +27,7 @@ fn accent() -> Style {
 }
 
 fn dim() -> Style {
-    Style::default().fg(BANNER_DIM)
+    Style::default().fg(theme_colors::BANNER_DIM)
 }
 
 /// Full OPERANT wordmark — 7 lines × 56 columns.
@@ -145,6 +143,10 @@ pub fn banner_with_subtitle(width: u16, version: &str) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The module-level import dropped `Color` at iter-463, when the only
+    // non-test use (`BANNER_DIM`) moved to `theme_colors`. These assertions
+    // still need the type.
+    use ratatui::style::Color;
 
     #[test]
     fn full_art_is_seven_lines_uniform_width() {

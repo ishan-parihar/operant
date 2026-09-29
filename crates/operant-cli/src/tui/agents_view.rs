@@ -821,7 +821,7 @@ fn agent_list_row(title: String, meta: String, selected: bool, width: u16) -> Li
         Style::default().fg(theme_colors::text()).bg(bg)
     };
     let meta_style = if selected {
-        Style::default().fg(Color::Rgb(248, 220, 236)).bg(bg)
+        Style::default().fg(theme_colors::SELECTED_ROW_FG).bg(bg)
     } else {
         Style::default().fg(theme_colors::muted()).bg(bg)
     };

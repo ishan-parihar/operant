@@ -193,7 +193,7 @@ fn render_file_list(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
                 stats_text,
                 Style::default()
                     .fg(if selected {
-                        Color::Rgb(248, 220, 236)
+                        theme_colors::SELECTED_ROW_FG
                     } else {
                         stats_color
                     })
