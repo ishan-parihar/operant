@@ -39,6 +39,44 @@ fi
 
 # ONNX Runtime (prebuilt tarball from microsoft/onnxruntime releases)
 export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"
+# Dynamic linking of the ONNX runtime is a LOCAL-ONLY choice, and it is the
+# reason a locally built operant differs from a released one. Measured on the
+# same source, same commit:
+#
+#   CI release v0.2.0   NEEDED: libstdc++ libgcc_s libm libc ld-linux  (no onnx)
+#                       52 MB, statically linked ONNX, self-contained
+#   this dev-env        NEEDED: ... plus libonnxruntime.so.1
+#                       31 MB, needs a shared library at runtime
+#
+# Every problem chased in iters 425-430 -- the missing RUNPATH, the ONNX copy in
+# install.sh, the provisioning step in build.yml -- comes from this one line plus
+# ORT_LIB_LOCATION above. CI sources neither, so the published binary has never
+# needed the shared object.
+#
+# MEASURED, do not assume -- and note the second hypothesis also failed. Two
+# attempts to reproduce the release build locally, both on this machine:
+#
+#   ORT_PREFER_DYNAMIC_LINK=0 (ORT_LIB_LOCATION left pointing at local/)
+#     error: ort-sys could not link to the ONNX Runtime build in
+#            '.../local/onnxruntime-linux-x64-1.20.1/lib'
+#
+#   both variables emptied
+#     [ort-sys] [DEBUG] doing full static linking since no single-file library
+#     was found
+#     .../ort-sys-2.0.0-rc.12/build/static_link/mod.rs:134: panicked
+#
+# The local tarball ships only shared objects (libonnxruntime.so, .so.1,
+# .so.1.20.1) and no single-file static library, which is what the second
+# attempt was looking for and could not find. The CI runner evidently resolves an
+# ONNX distribution this one does not have; that was not identified, and the
+# mechanism behind the self-contained 52 MB release binary is therefore NOT
+# established. What is established is only the negative: neither of the two
+# obvious ways to build it statically works here.
+#
+# So a local build legitimately needs the shared library, which is what the
+# RUNPATH in this file is for, and iter-430's attempt to provision ONNX in CI was
+# a regression reverted in c2f7d59c. Matching the release build locally is an
+# open question, not a one-line flip. Do not write otherwise.
 export ORT_PREFER_DYNAMIC_LINK="${ORT_PREFER_DYNAMIC_LINK:-1}"
 
 # Bindgen needs GCC's resource headers (stddef.h etc.) on systems without clang resource dir
