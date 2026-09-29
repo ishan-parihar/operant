@@ -428,7 +428,7 @@ pub const DIALOG_TEXT_BRIGHT: Color = Color::Rgb(200, 200, 200);
 /// A tool call that failed: the error glyph, its label, the standalone
 /// block's preview, and the group header's error count.
 ///
-/// This is deliberately a constant rather than a [`palette`] lookup, and the
+/// This is deliberately a constant rather than a `palette` lookup, and the
 /// reason is accessibility rather than convenience. `Rgb(255, 140, 0)` is the
 /// `error` value of the **deuteranopia** palette, which is not a coincidence:
 /// a red/green-safe palette has to use orange, because red is exactly the
