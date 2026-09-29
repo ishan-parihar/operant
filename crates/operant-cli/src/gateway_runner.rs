@@ -946,28 +946,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // process died 5.2s later, and the next boot logged the warning to the
     // server log while Telegram showed 18 minutes of silence.
     //
-    // Notify now. `send_channel_message` is called before the gateway is
-    // running, so it takes the one-shot branch and builds adapters from
-    // config — correct for a boot-time notice.
+    // Interrupted-turn detection. The scan runs here (it is pure I/O and must
+    // happen before anything is started), but the NOTICE is deferred until
+    // after `start_with_channel` below. Sending it from here would take
+    // `send_channel_message`'s one-shot branch, build throwaway adapters, and
+    // in practice return Ok without the message ever reaching Telegram --
+    // verified against the live gateway on 2026-09-30, with no
+    // "Failed to deliver" line because nothing errored.
+    //
+    // Deferring it rides the live polling adapter, which is the path the rest
+    // of the gateway uses.
     let interrupted = collect_interrupted_turns();
     if !interrupted.is_empty() {
         tracing::warn!(
             count = interrupted.len(),
-            "Notifying channels of interrupted turns from previous session"
+            "Detected interrupted turns from previous session"
         );
-        for (channel_id, _ts, platform) in &interrupted {
-            let notice = "⚠️ Your previous turn was interrupted — the agent restarted \
-                           before it finished. Nothing was sent back. Please re-send \
-                           your request.";
-            if let Err(e) = send_channel_message(app_config, platform, channel_id, notice).await {
-                tracing::error!(
-                    channel_id = %channel_id,
-                    platform = %platform,
-                    error = %e,
-                    "Failed to deliver interrupted-turn notice"
-                );
-            }
-        }
     }
 
     let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
@@ -979,6 +973,40 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         .start_with_channel(message_tx)
         .await
         .context("Failed to start gateway channel")?;
+
+    // Now that the adapters are live, deliver the deferred interrupted-turn
+    // notices.
+    //
+    // Send through the LOCAL `gateway` handle, NOT `send_channel_message`.
+    // That helper takes `runner().lock().await` (:757), and `start_gateway`
+    // holds that same mutex via `let mut guard = runner().lock().await` (:836)
+    // for its entire body -- the guard is never dropped before this point. So
+    // the call self-deadlocks: no error, no timeout, no log line. Measured on
+    // 2026-09-30 as "detection logged, then silence" -- `Delivered` and
+    // `Failed to deliver` both 0 across the whole log, process alive and
+    // polling, because the dispatch loop is separate from this one.
+    //
+    // The local handle is alive here (start_with_channel just ran on it) and
+    // needs no global lock.
+    for (channel_id, _ts, platform) in &interrupted {
+        let notice = "⚠️ Your previous turn was interrupted — the agent restarted \
+                       before it finished. Nothing was sent back. Please re-send \
+                       your request.";
+        let msg = OutgoingMessage::new(channel_id, notice).no_markdown();
+        match gateway.send_to_platform(platform, msg).await {
+            Ok(_) => tracing::info!(
+                channel_id = %channel_id,
+                platform = %platform,
+                "Delivered interrupted-turn notice"
+            ),
+            Err(e) => tracing::error!(
+                channel_id = %channel_id,
+                platform = %platform,
+                error = %e,
+                "Failed to deliver interrupted-turn notice"
+            ),
+        }
+    }
 
     let gw = gateway.clone();
     let admins_configured = !dispatch_config.admins.is_empty();
