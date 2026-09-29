@@ -2222,8 +2222,8 @@ shipped bug, and adding a bogus provider, each fail the guard while the
 sibling test still passes.
 
 
-### R40-30 — tool-error rendering hardcodes the deuteranopia palette's error colour on all 8 themes (OPEN, owner decision, iter-461)
-Six sites in the TUI use `Color::Rgb(255, 140, 0)` for tool errors: five in
+### R40-30 — tool-error colour: the dedup is done, the appearance question is not (PART RESOLVED, iter-461/iter-462)
+Six sites in the TUI used `Color::Rgb(255, 140, 0)` for tool errors: five in
 `tui/render/tools.rs` (173, 355, 381, 467, 471) and one in `tui/messages/tools.rs:240`,
 where the local is literally named `error_color` next to `ToolStatus::Error`.
 
@@ -2244,21 +2244,43 @@ across all eight palettes, `error` is:
 | dracula | `Rgb(249, 38, 114)` |
 | deuteranopia | `Rgb(255, 140, 0)` |
 
-**So these six sites are not a missed dedup and must not be treated as one.**
-Routing them through `palette.error()` would be the "obvious" theme fix, and it
-would change appearance on 7 of 8 themes — which is the per-theme appearance
-decision this file keeps declining to make unilaterally. It is also worth
-noting what today's behaviour actually means: a deuteranopia user gets a
+**These six sites were not a palette-migration opportunity, and must not become
+one.** Routing them through `palette.error()` would be the "obvious" theme fix,
+and it would change appearance on 7 of 8 themes — which is the per-theme
+appearance decision this file keeps declining to make unilaterally. It is also
+worth noting what today's behaviour actually means: a deuteranopia user gets a
 colourblind-safe error colour on *every* theme, while everyone else gets a
 colour chosen for them. That is defensible, and it is a real accessibility
 property rather than an accident to clean up.
 
-Owner call, genuinely a product question: (a) leave the six sites as they are
-(theme-independent, always colourblind-safe), (b) route them through
-`palette.error()` and accept the 7-theme appearance change, or (c) add an
-`error_accessible` accessor that returns the deuteranopia value for every theme
-and route them through that — which preserves today's appearance exactly while
-making the intent explicit and reversible.
+**Resolved at iter-462 — the dedup half was never an appearance decision.**
+Filing this as an owner decision put a pure refactor behind a product question.
+The six sites now share a role-named constant, `theme_colors::TOOL_ERROR`,
+matching the pattern already established in that file for `DIALOG_DIM` /
+`DIALOG_TEXT_BRIGHT` / `FOOTER_DIM` (iter-421, iter-425). All six route through
+it and **zero** `Rgb(255, 140, 0)` literals remain outside `theme_colors.rs`. The
+rendered colour is byte-identical on all eight themes, so nothing about the
+appearance changed. A function returning one fixed colour would have been an
+accessor with no variation in it, so a `const` is the honest form.
+
+The rationale moved onto the constant, following the precedent of
+`DIALOG_TEXT_BRIGHT`'s warning about the tempting-but-wrong `text_selection_bg`
+substitution: an explicit "do NOT route this through `palette.error()`, that
+changes 7 of 8 themes" note, so the next person does not perform the obvious
+theme fix and quietly lose the accessibility property. Guarded by
+`tool_error_constant_tracks_the_deuteranopia_error_value`, which pins the
+constant to `ColorPalette::for_theme("deuteranopia").error` — editing the
+constant away from that value fails, instead of silently dropping the property
+while its doc comment still claims it. Mutation-proven: drifting it to the
+default theme's `Rgb(255, 87, 51)` fails with the exact expected diff.
+
+**Still open, and it is the appearance question only:** should tool errors follow
+the active theme, or stay theme-independent? Staying independent means a
+deuteranope gets a colourblind-safe error colour on every theme while everyone
+else gets a colour chosen for them. Following the theme means deleting the
+constant and calling `palette.error()`, changing the rendered colour on seven of
+eight themes. That is a per-theme appearance decision and it is not mine to
+make.
 
 **Not filed as a colour-literal cleanup item.** It was found by scanning for
 exact-duplicate `Rgb` values, which is worth repeating: that scan returned 15

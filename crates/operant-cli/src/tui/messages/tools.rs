@@ -236,8 +236,9 @@ pub fn render_tool_result_success(output: &str, truncated: bool) -> Vec<Line<'st
 /// Render a tool result (error variant).
 pub fn render_tool_result_error(error: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    // Use orange instead of red for color-blind accessibility
-    let error_color = Color::Rgb(255, 140, 0); // Orange
+    // Orange, not red: see `theme_colors::TOOL_ERROR` for why this is a
+    // constant rather than a palette lookup.
+    let error_color = theme_colors::TOOL_ERROR;
     lines.push(Line::from(vec![Span::styled(
         "  Error",
         Style::default()

@@ -170,7 +170,7 @@ pub(crate) fn render_tool_block_lines(
     // Output preview (done/error state)
     if let Some(ref preview) = block.output_preview {
         let preview_style = match block.status {
-            ToolStatus::Error => Style::default().fg(Color::Rgb(255, 140, 0)),
+            ToolStatus::Error => Style::default().fg(theme_colors::TOOL_ERROR),
             _ => Style::default().fg(Color::DarkGray),
         };
         for line_text in preview.lines() {
@@ -352,7 +352,7 @@ pub(crate) fn render_tool_group_lines(
 
     // Errors tint the whole group, matching the standalone block's accent.
     let accent = if errored > 0 {
-        Color::Rgb(255, 140, 0)
+        theme_colors::TOOL_ERROR
     } else {
         accent_primary()
     };
@@ -378,7 +378,7 @@ pub(crate) fn render_tool_group_lines(
         header.push(Span::styled(
             format!("  · {errored} error"),
             Style::default()
-                .fg(Color::Rgb(255, 140, 0))
+                .fg(theme_colors::TOOL_ERROR)
                 .add_modifier(Modifier::DIM),
         ));
     }
@@ -464,11 +464,11 @@ pub(crate) fn render_tool_group_lines(
             ToolStatus::Error => {
                 spans.push(Span::styled(
                     "\u{26a0} ".to_string(),
-                    Style::default().fg(Color::Rgb(255, 140, 0)),
+                    Style::default().fg(theme_colors::TOOL_ERROR),
                 ));
                 spans.push(Span::styled(
                     label,
-                    Style::default().fg(Color::Rgb(255, 140, 0)),
+                    Style::default().fg(theme_colors::TOOL_ERROR),
                 ));
             }
         }

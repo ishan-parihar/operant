@@ -425,6 +425,27 @@ pub const FOOTER_DIM: Color = Color::Rgb(110, 110, 124);
 /// fallback beside it.
 pub const DIALOG_TEXT_BRIGHT: Color = Color::Rgb(200, 200, 200);
 
+/// A tool call that failed: the error glyph, its label, the standalone
+/// block's preview, and the group header's error count.
+///
+/// This is deliberately a constant rather than a [`palette`] lookup, and the
+/// reason is accessibility rather than convenience. `Rgb(255, 140, 0)` is the
+/// `error` value of the **deuteranopia** palette, which is not a coincidence:
+/// a red/green-safe palette has to use orange, because red is exactly the
+/// colour a deuteranope cannot reliably tell from green. Hardcoding it means
+/// tool errors are colourblind-safe on every theme, and the price is that a
+/// user on any other theme also gets orange.
+///
+/// Do NOT "fix" this to `palette.error()`. That is the obvious theme
+/// substitution and it is wrong: `error` ranges from `Rgb(191, 97, 106)`
+/// (nord) to `Rgb(255, 140, 0)` (deuteranopia), so routing through the palette
+/// changes the rendered colour on seven of eight themes. Whether tool errors
+/// *should* follow the theme is a genuine per-theme appearance decision
+/// (BUGS.md R40-30), and it is not this constant's job to make it silently.
+/// The value here is identical to the previous literal at all six sites, so
+/// nothing about the rendering changes.
+pub const TOOL_ERROR: Color = Color::Rgb(255, 140, 0);
+
 /// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`].
 pub fn on_selection() -> Color {
     with_active(|p| p.text_dark)
@@ -471,6 +492,19 @@ pub(crate) mod tests {
         assert_eq!(palette.success, Color::Rgb(0, 150, 200));
         // Error should be orange, not red
         assert_eq!(palette.error, Color::Rgb(255, 140, 0));
+    }
+
+    /// Pins [`TOOL_ERROR`] to the palette value that justifies it.
+    ///
+    /// The six tool-error sites deliberately bypass `palette.error()`, which is
+    /// only defensible while the constant IS the deuteranopia palette's error
+    /// colour: a red/green-safe palette uses orange, which is precisely what
+    /// makes tool errors colourblind-safe on every theme. Editing the constant
+    /// to any other value silently drops that property while leaving the
+    /// rationale in its doc comment intact, so tie the two together.
+    #[test]
+    fn tool_error_constant_tracks_the_deuteranopia_error_value() {
+        assert_eq!(TOOL_ERROR, ColorPalette::for_theme("deuteranopia").error);
     }
 
     #[test]
