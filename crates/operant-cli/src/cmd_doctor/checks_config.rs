@@ -142,7 +142,24 @@ pub fn run_config_checks(
                 );
             }
         }
+    } else if has_ambient_provider_config(&std::env::vars().collect::<Vec<_>>()) {
+        // No .env file, but the process environment supplies a credential. That
+        // is a complete, working install: .env is one of two sources, not the
+        // only one, so its absence is information rather than a failure.
+        //
+        // The .env-exists arm above consults BOTH sources
+        // (`has_provider_env_config(content) || has_ambient_provider_config(..)`).
+        // This arm used to consult neither, which is the iter-426 defect in its
+        // sibling branch: a user who exports a key in their shell and never
+        // creates .env — a valid configuration — was told their install was
+        // broken, and `operant doctor` exited 1 on a machine that worked.
+        check_info(&format!(
+            "{}/.env not created (using credentials from the environment)",
+            dhh
+        ));
     } else {
+        // Neither source has a credential, so no model can be called. Same
+        // verdict as the empty-.env case above, and for the same reason.
         check_fail(&format!("{}/.env file missing", dhh), "");
         issues.push("Run 'operant setup' to create .env".to_string());
     }
