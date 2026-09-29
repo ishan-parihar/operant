@@ -937,8 +937,38 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         *gw_guard = Some(gateway.clone());
     }
 
-    // Check for interrupted turns from previous session
-    check_interrupted_turns();
+    // Check for interrupted turns from previous session.
+    //
+    // The scan used to be called as a bare statement: it logged a WARN naming
+    // the channel and then discarded the (channel_id, timestamp) pairs. The
+    // user got nothing — a turn killed mid-flight by a restart simply vanished
+    // from their side. Observed 2026-09-29: a turn started at 11:15:51, the
+    // process died 5.2s later, and the next boot logged the warning to the
+    // server log while Telegram showed 18 minutes of silence.
+    //
+    // Notify now. `send_channel_message` is called before the gateway is
+    // running, so it takes the one-shot branch and builds adapters from
+    // config — correct for a boot-time notice.
+    let interrupted = collect_interrupted_turns();
+    if !interrupted.is_empty() {
+        tracing::warn!(
+            count = interrupted.len(),
+            "Notifying channels of interrupted turns from previous session"
+        );
+        for (channel_id, _ts, platform) in &interrupted {
+            let notice = "⚠️ Your previous turn was interrupted — the agent restarted \
+                           before it finished. Nothing was sent back. Please re-send \
+                           your request.";
+            if let Err(e) = send_channel_message(app_config, platform, channel_id, notice).await {
+                tracing::error!(
+                    channel_id = %channel_id,
+                    platform = %platform,
+                    error = %e,
+                    "Failed to deliver interrupted-turn notice"
+                );
+            }
+        }
+    }
 
     let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
     // Clone kept by the dispatch loop so a queued message can be re-injected
@@ -2967,6 +2997,20 @@ fn save_turn_state(channel_id: &str, status: &str) {
 /// Same as `save_turn_state` but writes to a caller-provided base directory.
 /// Exposed for tests so they don't pollute the real operant home.
 fn save_turn_state_in(base_dir: &std::path::Path, channel_id: &str, status: &str) {
+    save_turn_state_in_for(base_dir, channel_id, status, "telegram")
+}
+
+/// Persist turn state, recording the originating platform.
+///
+/// The platform is part of the record because the boot-time interrupted-turn
+/// notice has to deliver on the same platform the turn arrived on. Without it,
+/// a Discord or Slack channel_id would be notified through Telegram.
+fn save_turn_state_in_for(
+    base_dir: &std::path::Path,
+    channel_id: &str,
+    status: &str,
+    platform: &str,
+) {
     let dir = base_dir.join(".turn_state");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{}.json", sanitize_channel_id(channel_id)));
@@ -2975,6 +3019,7 @@ fn save_turn_state_in(base_dir: &std::path::Path, channel_id: &str, status: &str
         "channel_id": channel_id,
         "status": status,
         "timestamp": ts,
+        "platform": platform,
     });
     let _ = std::fs::write(path, json.to_string());
 }
@@ -2984,13 +3029,22 @@ fn save_turn_state_in(base_dir: &std::path::Path, channel_id: &str, status: &str
 /// Scans every file under `<operant_home>/.turn_state/` so all concurrent
 /// channels are reported, not just whichever one happened to win the
 /// last-write race on the old single-file scheme.
-pub fn check_interrupted_turns() {
-    check_interrupted_turns_in(&operant_core::platform::operant_home());
+/// Scan for turns left `pending` by a previous process and return them
+/// WITH their originating platform, so the caller can deliver the
+/// interrupted-turn notice on the channel the turn actually arrived on.
+///
+/// This replaces the old `check_interrupted_turns()`, which logged a warning
+/// naming the channel and then discarded the result — leaving the user with
+/// silence and no explanation. State files are rewritten with a terminal
+/// status ("complete"/"failed") when a turn finishes, so a turn is reported
+/// once, not on every boot.
+pub fn collect_interrupted_turns() -> Vec<(String, String, String)> {
+    check_interrupted_turns_in(&operant_core::platform::operant_home())
 }
 
 /// Same as `check_interrupted_turns` but reads from a caller-provided base
 /// directory. Exposed for tests.
-fn check_interrupted_turns_in(base_dir: &std::path::Path) -> Vec<(String, String)> {
+fn check_interrupted_turns_in(base_dir: &std::path::Path) -> Vec<(String, String, String)> {
     let dir = base_dir.join(".turn_state");
     let mut found = Vec::new();
     let entries = match std::fs::read_dir(&dir) {
@@ -3013,12 +3067,19 @@ fn check_interrupted_turns_in(base_dir: &std::path::Path) -> Vec<(String, String
         if state.get("status").and_then(|s| s.as_str()) == Some("pending") {
             let channel_id = state["channel_id"].as_str().unwrap_or("").to_string();
             let timestamp = state["timestamp"].as_str().unwrap_or("").to_string();
+            // Older state files predate the `platform` field; telegram is the
+            // only adapter that recorded turn state until now.
+            let platform = state
+                .get("platform")
+                .and_then(|p| p.as_str())
+                .unwrap_or("telegram")
+                .to_string();
             tracing::warn!(
                 channel_id = %channel_id,
                 timestamp = %timestamp,
                 "Detected interrupted turn from previous session"
             );
-            found.push((channel_id, timestamp));
+            found.push((channel_id, timestamp, platform));
         }
     }
     found
@@ -3093,9 +3154,51 @@ mod turn_state_tests {
             interrupted
         );
 
-        let channel_ids: Vec<&str> = interrupted.iter().map(|(id, _)| id.as_str()).collect();
+        let channel_ids: Vec<&str> = interrupted.iter().map(|(id, _, _)| id.as_str()).collect();
         assert!(channel_ids.contains(&"slack_channel_1"));
         assert!(channel_ids.contains(&"discord_channel_2"));
+    }
+
+    /// The boot-time notice delivers on the platform the turn arrived on. The
+    /// state file now records it, so a Discord turn is not announced through
+    /// Telegram.
+    #[test]
+    fn interrupted_turn_records_originating_platform() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        save_turn_state_in_for(base, "dc_chan", "pending", "discord");
+        save_turn_state_in_for(base, "tg_chan", "pending", "telegram");
+
+        let interrupted = check_interrupted_turns_in(base);
+        let by_channel: std::collections::HashMap<_, _> = interrupted
+            .iter()
+            .map(|(c, _, p)| (c.as_str(), p.as_str()))
+            .collect();
+        assert_eq!(by_channel.get("dc_chan"), Some(&"discord"));
+        assert_eq!(by_channel.get("tg_chan"), Some(&"telegram"));
+    }
+
+    /// A state file written before the `platform` field existed must still be
+    /// reported, with telegram as the fallback.
+    #[test]
+    fn interrupted_turn_defaults_platform_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        std::fs::create_dir_all(base.join(".turn_state")).unwrap();
+        std::fs::write(
+            base.join(".turn_state").join("legacy.json"),
+            r#"{"channel_id":"legacy","status":"pending","timestamp":"2026-09-29T00:00:00Z"}"#,
+        )
+        .unwrap();
+
+        let interrupted = check_interrupted_turns_in(base);
+        assert_eq!(interrupted.len(), 1);
+        assert_eq!(interrupted[0].0, "legacy");
+        assert_eq!(
+            interrupted[0].2, "telegram",
+            "legacy file falls back to telegram"
+        );
     }
 
     #[test]
@@ -3109,7 +3212,8 @@ mod turn_state_tests {
 
         let interrupted = check_interrupted_turns_in(base);
         // Only "still_pending" should be reported — "completed_chan" was
-        // marked complete after its pending state.
+        // marked complete after its pending state. This is also what keeps
+        // the boot-time notice from re-firing on every restart.
         assert_eq!(interrupted.len(), 1);
         assert_eq!(interrupted[0].0, "still_pending");
     }
