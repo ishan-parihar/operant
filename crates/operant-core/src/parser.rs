@@ -270,11 +270,34 @@ impl ToolCallParser {
                 }
                 events.push(ParserEvent::ToolCall(tool_call));
             } else {
-                warn!(content = %content, "Failed to parse tool_call content");
-                events.push(ParserEvent::Error(format!(
-                    "Failed to parse tool_call: {}",
-                    truncate_string(content, 100)
-                )));
+                // `content` is model-emitted and routinely carries shell
+                // fragments naming credentials, e.g.
+                //   if [ -n "$TAVILY_API_KEY" ]; then ...
+                // The redactor does NOT help here: it matches literal secret
+                // values and `NAME=value` assignments, not a bare `$VAR`
+                // reference, so it returns this input unchanged. Measured — a
+                // redaction wrap at this site was a verified no-op.
+                //
+                // So log the SHAPE, not the content: length plus a prefix cut
+                // before any '$', '=' or quote, so no variable name survives.
+                let preview: String = content
+                    .chars()
+                    .take_while(|c| !matches!(c, '$' | '=' | '"' | '\''))
+                    .take(40)
+                    .collect();
+                warn!(
+                    content_len = content.len(),
+                    prefix = %preview,
+                    "Failed to parse tool_call content"
+                );
+                // This event is injected into the CONVERSATION, so it must not
+                // echo model output either. State the problem; the model
+                // re-issues the call.
+                events.push(ParserEvent::Error(
+                    "Failed to parse tool_call: arguments were truncated before valid \
+                     JSON. Re-issue the call with well-formed JSON arguments."
+                        .to_string(),
+                ));
             }
         }
 

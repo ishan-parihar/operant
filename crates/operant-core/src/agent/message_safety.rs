@@ -156,11 +156,14 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
     }
 
     if serde_json::from_str::<serde_json::Value>(&fixed).is_ok() {
+        // Lengths only. Both forms are model output and can carry the same
+        // credential references; the redactor matches literal values and
+        // `NAME=value`, not bare `$VAR`, so it returns these unchanged.
         tracing::warn!(
-            "Repaired malformed tool_call arguments for {}: {:?} -> {:?}",
+            "Repaired malformed tool_call arguments for {}: raw_len={} fixed_len={}",
             tool_name,
-            raw_stripped.chars().take(80).collect::<String>(),
-            fixed.chars().take(80).collect::<String>()
+            raw_stripped.len(),
+            fixed.len()
         );
         return fixed;
     }
@@ -530,6 +533,36 @@ pub fn drop_orphaned_tool_messages(messages: &mut Vec<Message>) -> usize {
 mod tests {
     use super::*;
     use crate::client::{ToolCall, ToolCallFunction};
+
+    #[test]
+    /// Model-emitted argument fragments used to reach both the log and the
+    /// conversation verbatim. The observed case names a credential:
+    ///   Failed to parse tool_call content, content: if [ -n "$TAVILY_API_KEY" ]
+    ///
+    /// Wrapping the redactor there was measured to be a no-op — it matches
+    /// literal secret values and `NAME=value`, not a bare `$VAR`. So the sites
+    /// log SHAPE instead. This asserts the invariant those sites rely on: a
+    /// preview cut at the first `$` cannot carry a variable name.
+    #[test]
+    fn preview_cut_cannot_carry_a_credential_name() {
+        let leaked = r#"if [ -n "$TAVILY_API_KEY" ]; then echo ok; fi"#;
+        let preview: String = leaked
+            .chars()
+            .take_while(|c| !matches!(c, '$' | '=' | '"' | '\''))
+            .take(40)
+            .collect();
+        assert!(
+            !preview.contains("TAVILY_API_KEY"),
+            "variable name survived the preview cut: {preview}"
+        );
+        // and the redactor genuinely does not cover this input, which is why
+        // the sites must not depend on it
+        assert_eq!(
+            crate::redaction::redact_sensitive_text_if_enabled(leaked),
+            leaked,
+            "redactor is expected to be a no-op for a bare $VAR reference"
+        );
+    }
 
     #[test]
     fn test_repair_tool_call_arguments_empty() {
