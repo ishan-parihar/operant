@@ -2420,6 +2420,64 @@ decision about which foreground belongs on which theme. Option (b) and (c) below
 are both worse than that, and I am recording that only because I wrote them before
 taking this measurement.
 
+**Fifth correction at iter-467, and this one says the previous recommendation was
+wrong too.** `Color::Black` is not the best available foreground, and the reason is
+that the palette already has the role for exactly this job and I claimed it did
+not. `theme_colors.rs:454` documents it — "`text_dark` — a DARK foreground meant
+for text sitting on a selection" — and `on_selection()` returns it. At iter-463 I
+dismissed `on_selection()` on the stated ground that it "returns `text_dark`,
+which is a per-theme *dark* foreground for text on a selection background, a
+different role and a different value class". The value-class reasoning was fine;
+what I got wrong was calling that a *different role* from the one in question. It
+is the same role, and it is the role this situation calls for.
+
+All three candidate foregrounds on `accent()`, measured:
+
+| theme | `on_selection()` | `Color::Black` | light fg (current, 4 sites) |
+|---|---|---|---|
+| dark | 7.27 | 9.48 | 1.76 |
+| solarized | **4.08** | 5.71 | 1.38 |
+| nord | 6.24 | 10.50 | 1.48 |
+| dracula | 5.90 | 8.71 | 2.26 |
+| monokai | 9.01 | 12.74 | 1.55 |
+| deuteranopia | **4.35** | 6.20 | 2.47 |
+
+`default` and `light` resolve `accent()` to Cyan and Blue, ANSI slots whose
+rendered value is terminal-dependent, so they are not measurable from source. On
+both of those `text_dark` *is* `Color::Black`, so all three columns coincide there.
+
+Two further measurements worth recording, both of which kill options above:
+
+  - **Swapping the background is a no-op.** `selection_bg()` equals `emphasis` in
+    every measurable theme (dark `Rgb(100, 181, 246)`, solarized
+    `Rgb(38, 139, 210)`, nord `Rgb(136, 192, 208)`, dracula `Rgb(189, 147, 249)`,
+    monokai `Rgb(102, 217, 239)`, deuteranopia `Rgb(0, 150, 200)`) — which is the
+    same value `accent()` returns. So "use `selection_bg()` for the selected
+    background" changes nothing at all, and the background is simply not the
+    variable here. The foreground is the only thing that varies.
+  - **This is not legacy-versus-modern drift.** Both conventions arrive in the same
+    commit, `23e087d3` ("TUI upgrade attempt - claurst port"), so it is
+    inconsistency inside a single import rather than a newer style displacing an
+    older one. That removes the usual argument for deferring to whichever site is
+    newer.
+
+So the recommendation has to be stated more carefully than iter-466 did. Aligning
+the 4 to `Color::Black` is the smallest diff and the most legible on all six
+measurable themes, but it is a *hardcoded ANSI slot*, so it contradicts the
+direction every other colour change in this file has taken — role-named palette
+accessors replacing literals. `on_selection()` is the role-correct choice and
+already has 6 call sites, but it reads 4.08 and 4.35 on solarized and
+deuteranopia, marginally under the 4.5 AA figure, and closing that would need
+per-theme `text_dark` nudging — which is the per-theme design work this entry
+already established is not mechanical.
+
+Both options are defensible, which is the actual difference from iter-463: the
+four light-foreground sites are an unambiguous defect at 1.38–2.47, and *what to
+replace them with* is a genuine trade-off rather than a missing value. If a
+single default is wanted, the direction argument favours `on_selection()` over
+introducing four more hardcoded slots, at the cost of the two marginal themes;
+that is a recommendation, not a measurement.
+
 Owner call, and it is a per-theme appearance decision. Note that option (a)'s
 original justification included "the title is legible", which the control
 measurement above now **falsifies** — the title is the least legible text in the
