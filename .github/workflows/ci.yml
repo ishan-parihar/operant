@@ -1,13 +1,44 @@
 name: CI
 
+# The GitHub Actions quota is exhausted, so CI no longer runs on every push.
+# Pushing to main used to cost a 2-minute run each time, and this repo takes
+# many commits a day from more than one agent, which is what drained it.
+#
+# What this means in practice: the local loop is now the gate. Before pushing,
+# run the same checks the jobs run:
+#
+#   source scripts/dev-env.sh
+#   export CARGO_TARGET_DIR=$HOME/.cache/operant-target
+#   cargo fmt --all --check
+#   bash scripts/clippy-warning-gate.sh
+#   RUSTDOCFLAGS=-Dwarnings cargo doc --workspace --no-deps --all-features
+#   cargo test --workspace                                      # the full suite
+#   cargo test -p operant-cli --test doctor_exit_code           # the e2e doctor gate
+#
+# The workspace suite is the one to run: it is the only thing that executes the
+# 3,751 test functions, and with no push trigger nothing runs them automatically.
+# It takes a while on a 2-CPU box -- budget the time rather than skipping it.
+#
+# A v* tag triggers build.yml and test.yml, so a release is still verified; the
+# local loop above is what stands in for this workflow in the meantime.
+# `workflow_dispatch` only. There is deliberately no `push` trigger at all --
+# not even on a v* tag -- because the Actions quota is exhausted and a tag push
+# would auto-run the full fmt + clippy + doc + matrix at exactly the moment a
+# release is being cut. build.yml and test.yml also trigger on v* tags, so a
+# release is still verified; this is the job that would be redundant with them.
+# Re-add `push: branches: ['main']` when quota is available.
 on:
-  push:
-    branches: ['main']
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Superseded runs were billing in parallel: 190 runs had accumulated with no
+# concurrency group anywhere, so a newer push did not cancel the older one.
+# cancel-in-progress makes the newest run the only one that counts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
