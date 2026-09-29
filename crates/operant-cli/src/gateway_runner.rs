@@ -951,6 +951,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         .context("Failed to start gateway channel")?;
 
     let gw = gateway.clone();
+    let admins_configured = !dispatch_config.admins.is_empty();
     let admins = dispatch_config.admins.clone();
     let telegram_token = dispatch_config.telegram_token.clone();
 
@@ -2413,8 +2414,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let _ = std::fs::write(&pid_path, &pid_str);
     }
 
+    // An empty admins list means every Telegram user who finds the bot can
+    // drive the agent, with this process's model credentials. `operant gateway
+    // status` says so, but only that command -- `gateway run` started an open
+    // bot silently, and that is the one people actually type. Say it here.
+    let admin_note = if admins_configured {
+        String::new()
+    } else {
+        format!(
+            "\n  WARNING: no admins configured -- ANY user who can reach this bot \
+             can start agent turns.\n  Set [gateway] admins = [\"<telegram user id>\"] \
+             to restrict it."
+        )
+    };
+
     Ok(format!(
-        "Gateway started with {} platform(s).",
+        "Gateway started with {} platform(s).{admin_note}",
         platform_count
     ))
 }
