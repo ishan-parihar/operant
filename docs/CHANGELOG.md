@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Foundation for post-turn features (reflection / advisor / dreaming).
+A `TurnEnd` event (turn id, iterations, tool counts/durations, capped result
+summary) is emitted once per completed turn at the turn-end chokepoint onto a
+`TurnEndBus` broadcast seam; with no subscribers attached the emit site costs
+a field read. Deterministic tool-loop anomaly detectors (empty result,
+malformed output, error signal) re-enter the loop through the existing
+continuation shape, capped at 3 retries per turn; the dead `evaluate_response`
+self-critique now executes on the response path with its score exposed.
+Batches with >1 file mutation or any approval-gated call run sequentially
+instead of sharing the 8-worker pool; all provider stream tasks are bound to
+their stream handle (`AbortOnDrop`) so early drops stop the task.
+
 Parity work against the `jcode` reference agent (iters 347-409). The TUI
 gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 

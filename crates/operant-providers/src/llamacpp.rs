@@ -4,9 +4,9 @@
 //! events correctly for local models; the chat-completions path is not used.
 
 use crate::traits::{
-    ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    Provider, StreamChunk, StreamError, StreamEvent, StreamOptions, StreamResult,
-    ToolCall as ProviderToolCall,
+    AbortOnDrop, ChatMessage, ChatRequest as ProviderChatRequest,
+    ChatResponse as ProviderChatResponse, Provider, StreamChunk, StreamError, StreamEvent,
+    StreamOptions, StreamResult, ToolCall as ProviderToolCall,
 };
 use async_trait::async_trait;
 use futures_util::{StreamExt, stream};
@@ -383,7 +383,7 @@ impl LlamaCppProvider {
         let credential = self.credential.clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut req = client.post(&url).json(&payload);
             if let Some(key) = credential.as_deref().filter(|k| !k.is_empty()) {
                 req = req.header("Authorization", format!("Bearer {key}"));
@@ -416,7 +416,11 @@ impl LlamaCppProvider {
                 }
             }
         });
-        stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|e| (e, rx)) }).boxed()
+        let guard = AbortOnDrop::new(&handle);
+        stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|e| (e, (rx, guard)))
+        })
+        .boxed()
     }
 }
 
@@ -777,7 +781,7 @@ fn parse_sse_responses(
 
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         if let Err(e) = response.error_for_status_ref() {
             let _ = tx.send(Err(StreamError::Http(e.to_string()))).await;
             return;
@@ -1011,7 +1015,12 @@ fn parse_sse_responses(
         let _ = tx.send(Ok(StreamEvent::Final)).await;
     });
 
-    stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|e| (e, rx)) }).boxed()
+    let guard = AbortOnDrop::new(&handle);
+
+    stream::unfold((rx, guard), |(mut rx, guard)| async move {
+        rx.recv().await.map(|e| (e, (rx, guard)))
+    })
+    .boxed()
 }
 
 /// Convert a `StreamEvent` stream into a `StreamChunk` stream (text only).
@@ -1020,7 +1029,7 @@ fn text_chunks(
 ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
     use crate::traits::StreamChunk;
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut events = events;
         while let Some(event) = events.next().await {
             match event {
@@ -1042,7 +1051,119 @@ fn text_chunks(
         }
         let _ = tx.send(Ok(StreamChunk::final_chunk())).await;
     });
-    stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|c| (c, rx)) }).boxed()
+    let guard = AbortOnDrop::new(&handle);
+    stream::unfold((rx, guard), |(mut rx, guard)| async move {
+        rx.recv().await.map(|c| (c, (rx, guard)))
+    })
+    .boxed()
+}
+
+#[cfg(test)]
+mod unfold_abort_tests {
+    use crate::traits::{AbortOnDrop, StreamChunk, StreamEvent, StreamResult};
+    use futures_util::stream::{self, StreamExt};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    /// `llamacpp.rs` has three `tokio::spawn` + `stream::unfold` pairs
+    /// (`stream_chat`, `parse_sse_responses`, `text_chunks`). All three use
+    /// this guard shape, so one test covers them.
+    #[tokio::test]
+    async fn dropping_the_unfold_stream_aborts_the_sse_producer() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_clone = Arc::clone(&finished);
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = tx.send(Ok(StreamEvent::Final)).await;
+            finished_clone.store(true, Ordering::SeqCst);
+        });
+        let observer = handle.abort_handle();
+        let guard = AbortOnDrop::new(&handle);
+
+        let stream = stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|event| (event, (rx, guard)))
+        })
+        .boxed();
+
+        assert!(!observer.is_finished());
+        drop(stream);
+
+        let cancelled = timeout(Duration::from_secs(2), async {
+            while !observer.is_finished() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            cancelled.is_ok(),
+            "dropping the returned stream must abort the SSE producer within 2s"
+        );
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "aborted producer must not have run its completion side effect"
+        );
+    }
+
+    /// A producer that only forwards an inner stream is still bound: dropping
+    /// the outer stream aborts the forwarder, which drops the inner stream,
+    /// releasing the inner producer. `text_chunks` is that shape.
+    #[tokio::test]
+    async fn dropping_the_unfold_stream_aborts_a_forwarding_producer() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_clone = Arc::clone(&finished);
+
+        let (inner_tx, inner_rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+        let inner = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            finished_clone.store(true, Ordering::SeqCst);
+            let _ = inner_tx.send(Ok(StreamChunk::final_chunk())).await;
+        });
+        let inner_observer = inner.abort_handle();
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+        let inner_rx_stream = stream::unfold(inner_rx, |mut rx| async move {
+            rx.recv().await.map(|c| (c, rx))
+        })
+        .boxed();
+        let handle = tokio::spawn(async move {
+            let mut events = inner_rx_stream;
+            while let Some(event) = events.next().await {
+                if tx.send(event).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let outer_observer = handle.abort_handle();
+        let guard = AbortOnDrop::new(&handle);
+
+        let outer = stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|chunk| (chunk, (rx, guard)))
+        })
+        .boxed();
+
+        drop(outer);
+
+        let cancelled = timeout(Duration::from_secs(2), async {
+            while !outer_observer.is_finished() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(cancelled.is_ok(), "forwarder must be aborted");
+
+        // The forwarder's inner stream was dropped, so the inner producer no
+        // longer has a consumer. It has nothing to keep it running either.
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "an unconsumed inner producer must not have run its completion side effect"
+        );
+        drop(inner_observer);
+    }
 }
 
 #[cfg(test)]

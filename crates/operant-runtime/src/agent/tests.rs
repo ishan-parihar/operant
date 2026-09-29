@@ -429,6 +429,59 @@ async fn turn_returns_text_when_no_tools_called() {
     );
 }
 
+/// The self-critique score must be produced BY the response path, not
+/// only reachable from a unit test: a real `turn()` writes it and a
+/// getter reads it back.
+#[tokio::test]
+async fn turn_scores_response_on_the_live_path() {
+    let provider = Box::new(ScriptedProvider::new(vec![text_response(
+        "Here is a reasonably complete answer to the question that was asked of me.",
+    )]));
+    let mut agent = build_agent_with(provider, vec![], Box::new(NativeToolDispatcher));
+
+    // Before the first turn there is nothing to score.
+    assert_eq!(agent.last_response_score(), None);
+
+    let query = "Explain how the retry ladder in the agent loop works and why it exists.";
+    agent.turn(query).await.unwrap();
+
+    let score = agent
+        .last_response_score()
+        .expect("turn() must record a response score");
+    assert!(
+        (0.0..=1.0).contains(&score),
+        "score must be a 0.0–1.0 quality fraction, got {score}"
+    );
+    // A substantive answer passes every check, so the score is at the top
+    // of the range — proving the detectors actually ran rather than the
+    // field being a hardcoded default.
+    assert_eq!(
+        score, 1.0,
+        "a long, non-cop-out answer with no code expectation must score 1.0"
+    );
+}
+
+/// A cop-out answer is the case the self-critique is meant to catch; the
+/// score must drop rather than the field staying at its default.
+#[tokio::test]
+async fn turn_score_drops_on_a_cop_out_answer() {
+    let provider = Box::new(ScriptedProvider::new(vec![text_response("I don't know.")]));
+    let mut agent = build_agent_with(provider, vec![], Box::new(NativeToolDispatcher));
+
+    agent
+        .turn("Explain how the retry ladder works.")
+        .await
+        .unwrap();
+
+    let score = agent
+        .last_response_score()
+        .expect("turn() must record a response score");
+    assert!(
+        score < 1.0,
+        "a cop-out answer must not score a perfect quality, got {score}"
+    );
+}
+
 #[tokio::test]
 async fn turn_with_no_effective_tools_treats_xml_tool_call_as_text() {
     let provider = Box::new(ScriptedProvider::new(vec![xml_tool_response(

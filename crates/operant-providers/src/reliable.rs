@@ -1,6 +1,7 @@
 use super::Provider;
 use super::traits::{
-    ChatMessage, ChatRequest, ChatResponse, StreamChunk, StreamEvent, StreamOptions, StreamResult,
+    AbortOnDrop, ChatMessage, ChatRequest, ChatResponse, StreamChunk, StreamEvent, StreamOptions,
+    StreamResult,
 };
 use async_trait::async_trait;
 use futures_util::{StreamExt, stream};
@@ -1240,7 +1241,7 @@ impl Provider for ReliableProvider {
             let stream = provider.stream_chat(req, &current_model, temperature, options);
             let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
 
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut stream = stream;
                 while let Some(event) = stream.next().await {
                     if let Err(ref e) = event {
@@ -1256,8 +1257,9 @@ impl Provider for ReliableProvider {
                 }
             });
 
-            return stream::unfold(rx, |mut rx| async move {
-                rx.recv().await.map(|event| (event, rx))
+            let guard = AbortOnDrop::new(&handle);
+            return stream::unfold((rx, guard), |(mut rx, guard)| async move {
+                rx.recv().await.map(|event| (event, (rx, guard)))
             })
             .boxed();
         }
@@ -1308,7 +1310,7 @@ impl Provider for ReliableProvider {
             // Use a channel to bridge the stream with logging
             let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
 
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut stream = stream;
                 while let Some(chunk) = stream.next().await {
                     if let Err(ref e) = chunk {
@@ -1325,8 +1327,9 @@ impl Provider for ReliableProvider {
             });
 
             // Convert channel receiver to stream
-            return stream::unfold(rx, |mut rx| async move {
-                rx.recv().await.map(|chunk| (chunk, rx))
+            let guard = AbortOnDrop::new(&handle);
+            return stream::unfold((rx, guard), |(mut rx, guard)| async move {
+                rx.recv().await.map(|chunk| (chunk, (rx, guard)))
             })
             .boxed();
         }
@@ -1368,7 +1371,7 @@ impl Provider for ReliableProvider {
 
             let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
 
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut stream = stream;
                 while let Some(chunk) = stream.next().await {
                     if let Err(ref e) = chunk {
@@ -1384,8 +1387,9 @@ impl Provider for ReliableProvider {
                 }
             });
 
-            return stream::unfold(rx, |mut rx| async move {
-                rx.recv().await.map(|chunk| (chunk, rx))
+            let guard = AbortOnDrop::new(&handle);
+            return stream::unfold((rx, guard), |(mut rx, guard)| async move {
+                rx.recv().await.map(|chunk| (chunk, (rx, guard)))
             })
             .boxed();
         }

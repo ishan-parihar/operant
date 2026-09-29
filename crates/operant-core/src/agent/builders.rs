@@ -68,6 +68,7 @@ impl OperantAgent {
             memory_manager: None,
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
+            turn_end_bus: None,
             hook_registry: None,
             harness_prompt_slot: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -132,6 +133,7 @@ impl OperantAgent {
             memory_manager: None,
             memory_provider: None,
             memory_sync_executor: Arc::new(std::sync::Mutex::new(None)),
+            turn_end_bus: None,
             hook_registry: None,
             harness_prompt_slot: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
@@ -260,6 +262,19 @@ impl OperantAgent {
             ),
         );
         self.memory_provider = Some(memory_provider);
+        self
+    }
+
+    /// Attach the post-turn event seam
+    /// ([`crate::turn_end::TurnEndBus`]). Post-turn features (reflection,
+    /// advisor, dreaming) create a bus, subscribe to it, and hand it over
+    /// here; the agent then emits one `TurnEnd` per completed turn and
+    /// reports per-tool durations back to it.
+    ///
+    /// Leaving the bus unset (the default) is free: the turn-end chokepoint
+    /// is a single `None` check that builds nothing.
+    pub fn with_turn_end_bus(mut self, bus: crate::turn_end::TurnEndBus) -> Self {
+        self.turn_end_bus = Some(bus);
         self
     }
 

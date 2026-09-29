@@ -1942,6 +1942,44 @@ fn should_execute_tools_in_parallel_returns_true_when_cli_has_no_interactive_app
     ));
 }
 
+#[test]
+fn should_execute_tools_in_parallel_serializes_multiple_file_mutations() {
+    // The old predicate returned true here — the batch ran concurrently and
+    // two mutations to the same path could interleave.
+    let calls = vec![
+        ParsedToolCall {
+            name: "file_write".to_string(),
+            arguments: serde_json::json!({"path": "a.txt", "content": "x"}),
+            tool_call_id: None,
+        },
+        ParsedToolCall {
+            name: "file_edit".to_string(),
+            arguments: serde_json::json!({"path": "b.txt"}),
+            tool_call_id: None,
+        },
+    ];
+
+    assert!(!should_execute_tools_in_parallel(&calls, None));
+}
+
+#[test]
+fn should_execute_tools_in_parallel_keeps_single_mutation_parallel() {
+    let calls = vec![
+        ParsedToolCall {
+            name: "file_write".to_string(),
+            arguments: serde_json::json!({"path": "a.txt", "content": "x"}),
+            tool_call_id: None,
+        },
+        ParsedToolCall {
+            name: "http_request".to_string(),
+            arguments: serde_json::json!({"url": "https://example.com"}),
+            tool_call_id: None,
+        },
+    ];
+
+    assert!(should_execute_tools_in_parallel(&calls, None));
+}
+
 #[tokio::test]
 async fn run_tool_call_loop_executes_multiple_tools_with_ordered_results() {
     let provider = ScriptedProvider::from_text_responses(vec![

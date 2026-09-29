@@ -1,7 +1,7 @@
 use crate::traits::{
-    ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    Provider, ProviderCapabilities, StreamChunk, StreamError, StreamEvent, StreamOptions,
-    StreamResult, TokenUsage, ToolCall as ProviderToolCall,
+    AbortOnDrop, ChatMessage, ChatRequest as ProviderChatRequest,
+    ChatResponse as ProviderChatResponse, Provider, ProviderCapabilities, StreamChunk, StreamError,
+    StreamEvent, StreamOptions, StreamResult, TokenUsage, ToolCall as ProviderToolCall,
 };
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -1129,7 +1129,7 @@ impl Provider for AnthropicProvider {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(64);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut req = client
                 .post(&url)
                 .header("anthropic-version", "2023-06-01")
@@ -1171,8 +1171,10 @@ impl Provider for AnthropicProvider {
             Self::parse_anthropic_sse(response, &tx).await;
         });
 
-        stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (event, rx))
+        let guard = AbortOnDrop::new(&handle);
+
+        stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|event| (event, (rx, guard)))
         })
         .boxed()
     }
@@ -1182,6 +1184,56 @@ impl Provider for AnthropicProvider {
 mod tests {
     use super::*;
     use crate::auth::anthropic_token::{AnthropicAuthKind, detect_auth_kind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    /// `stream_chat_native` is the one `tokio::spawn` + `stream::unfold` pair
+    /// in this file. It uses the same guard shape as its siblings in
+    /// `compatible.rs` / `openrouter.rs` (`stream::unfold((rx, guard), ..)`),
+    /// so this proves that wiring is load-bearing: dropping the returned
+    /// stream aborts the SSE producer instead of leaving it reading the
+    /// response body for a caller that is gone. The guard itself is covered
+    /// once in `crate::traits::abort_on_drop_tests`.
+    #[tokio::test]
+    async fn dropping_the_unfold_stream_aborts_the_sse_producer() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_clone = Arc::clone(&finished);
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(64);
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = tx.send(Ok(StreamEvent::Final)).await;
+            finished_clone.store(true, Ordering::SeqCst);
+        });
+        let observer = handle.abort_handle();
+        let guard = AbortOnDrop::new(&handle);
+
+        let stream = stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|event| (event, (rx, guard)))
+        })
+        .boxed();
+
+        assert!(!observer.is_finished());
+        drop(stream);
+
+        let cancelled = timeout(Duration::from_secs(2), async {
+            while !observer.is_finished() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            cancelled.is_ok(),
+            "dropping the returned stream must abort the SSE producer within 2s"
+        );
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "aborted producer must not have run its completion side effect"
+        );
+    }
 
     /// Fake Anthropic SSE stream covering the message_start → content → delta
     /// → stop sequence with usage in both the start frame and the stop delta.

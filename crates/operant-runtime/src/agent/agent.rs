@@ -86,6 +86,11 @@ pub struct Agent {
     turns_since_memory: u64,
     /// Completed turns since the last skill-creation nudge fired.
     turns_since_skill: u64,
+    /// Quality score (0.0–1.0) of the most recent final response, from
+    /// [`super::eval::evaluate_response`]. Written on every response path
+    /// (plain and streamed) so a loop decision can read the verdict
+    /// without re-running the heuristics. `None` until the first turn.
+    last_response_score: Option<f64>,
 }
 
 /// Bundle of late-bound channel-map handles owned by an Agent. Cloning is
@@ -433,6 +438,7 @@ impl AgentBuilder {
             channel_handles: AgentChannelHandles::default(),
             turns_since_memory: 0,
             turns_since_skill: 0,
+            last_response_score: None,
         })
     }
 }
@@ -488,6 +494,41 @@ impl Agent {
     /// Skill trigger: emits an `evolution_nudge` observer event (`kind =
     /// "skill"`) every `creation_nudge_interval` turns so UIs can prompt the
     /// user/agent to create or upgrade a skill.
+    /// Score a final response against its query with
+    /// [`super::eval::evaluate_response`] and keep the verdict on
+    /// [`Self::last_response_score`]. Executed on both response paths
+    /// (`turn` and `turn_streamed`) so the score is never absent when a
+    /// loop decision wants it. The complexity tier is the same
+    /// [`super::eval::estimate_complexity`] the router already uses, so
+    /// self-critique and routing agree on what "hard" means.
+    fn record_response_score(&mut self, user_message: &str, response: &str) {
+        let complexity = super::eval::estimate_complexity(user_message);
+        let result = super::eval::evaluate_response(
+            user_message,
+            response,
+            complexity,
+            self.config.auto_classify.as_ref(),
+        );
+        tracing::debug!(
+            score = result.score,
+            complexity = ?complexity,
+            failed_checks = ?result
+                .checks
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| c.name)
+                .collect::<Vec<_>>(),
+            "Response self-critique"
+        );
+        self.last_response_score = Some(result.score);
+    }
+
+    /// Quality score (0.0–1.0) of the most recent final response, or
+    /// `None` before the first turn completes.
+    pub fn last_response_score(&self) -> Option<f64> {
+        self.last_response_score
+    }
+
     async fn fire_evolution_triggers(&mut self, final_text: &str) {
         if self.advance_memory_trigger() {
             self.run_memory_review(final_text).await;
@@ -1669,6 +1710,12 @@ impl Agent {
 
                 self.fire_evolution_triggers(&final_text).await;
 
+                // Self-critique on the response path: score the final answer
+                // against the query's complexity and keep the verdict on the
+                // agent so a loop decision can read it. No revise loop here
+                // — that is a later feature built on top of this score.
+                self.record_response_score(user_message, &final_text);
+
                 return Ok(final_text);
             }
 
@@ -2190,6 +2237,8 @@ impl Agent {
                     cost_usd: None,
                 });
                 self.fire_evolution_triggers(&final_text).await;
+                // Self-critique on the streamed response path (see `turn`).
+                self.record_response_score(user_message, &final_text);
                 return Ok(final_text);
             }
 

@@ -151,6 +151,23 @@ pub async fn execute_one_tool(
 
 // ── Parallel / sequential decision ───────────────────────────────────────
 
+/// Tools that mutate the filesystem. Two of these in one batch can
+/// interleave (one reads a path the other is rewriting), so the batch is
+/// serialized. Mirrors `operant_core`'s classifier.
+fn is_file_mutation_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "file_write"
+            | "file_edit"
+            | "patch"
+            | "write_file"
+            | "create_file"
+            | "aft_write"
+            | "aft_edit"
+            | "aft_apply_patch"
+    )
+}
+
 pub fn should_execute_tools_in_parallel(
     tool_calls: &[ParsedToolCall],
     approval: Option<&ApprovalManager>,
@@ -172,6 +189,18 @@ pub fn should_execute_tools_in_parallel(
     {
         // Approval-gated calls must keep sequential handling so the caller can
         // enforce CLI prompt/deny policy consistently.
+        return false;
+    }
+
+    // More than one filesystem mutation in the same batch: concurrent
+    // read-modify-write on the same path interleaves. Independent batches
+    // (reads, web fetches) keep the concurrent pool.
+    if tool_calls
+        .iter()
+        .filter(|call| is_file_mutation_tool(&call.name))
+        .count()
+        > 1
+    {
         return false;
     }
 

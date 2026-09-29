@@ -3,9 +3,9 @@ use crate::auth::AuthService;
 use crate::auth::openai_oauth::extract_account_id_from_jwt;
 use crate::multimodal;
 use crate::traits::{
-    ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    Provider, ProviderCapabilities, StreamChunk, StreamError, StreamEvent, StreamOptions,
-    StreamResult, ToolCall as ProviderToolCall,
+    AbortOnDrop, ChatMessage, ChatRequest as ProviderChatRequest,
+    ChatResponse as ProviderChatResponse, Provider, ProviderCapabilities, StreamChunk, StreamError,
+    StreamEvent, StreamOptions, StreamResult, ToolCall as ProviderToolCall,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -1395,7 +1395,7 @@ impl Provider for OpenAiCodexProvider {
         let count_tokens = options.count_tokens;
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(16);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let config = operant_config::schema::MultimodalConfig::default();
             let prepared =
                 match crate::multimodal::prepare_messages_for_provider(&messages, &config).await {
@@ -1443,8 +1443,10 @@ impl Provider for OpenAiCodexProvider {
             }
         });
 
-        stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (event, rx))
+        let guard = AbortOnDrop::new(&handle);
+
+        stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|event| (event, (rx, guard)))
         })
         .boxed()
     }

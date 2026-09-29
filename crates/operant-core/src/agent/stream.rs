@@ -827,8 +827,8 @@ impl OperantAgent {
             pending.push((idx, tool_call, args));
         }
 
-        // ── Phase 2: Concurrent execution ───────────────────────────────
-        // Use a semaphore to limit concurrency to 8 (matching hermes).
+        // Phase 2: Execute. Batches that can interfere with each other run
+        // sequentially; everything else uses the 8-worker pool.
         // If only 1 tool is pending, skip the overhead and execute directly.
         if pending.is_empty() {
             // All tools were handled in pre-flight (errors/blocked/denied)
@@ -861,6 +861,7 @@ impl OperantAgent {
                 arguments: normalized_tool_args(&tool_call),
             })
             .await;
+            let tool_started = std::time::Instant::now();
             let tool_future = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
             // Interactive tools (clarify / approval_request) block waiting
             // for a human — the generic tool timeout (30s) would kill the
@@ -875,6 +876,9 @@ impl OperantAgent {
             } else {
                 timeout(self.config.tool_timeout, tool_future).await
             };
+            if let Some(ref bus) = self.turn_end_bus {
+                bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
+            }
             early_results[idx] = Some(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
@@ -883,8 +887,49 @@ impl OperantAgent {
                     format!("Tool timed out after {:?}", self.config.tool_timeout),
                 ),
             });
+        } else if !batch_allows_parallel_execution(
+            pending.iter().map(|(_, tc, _)| tc.function.name.as_str()),
+        ) {
+            // Interfering batch (multiple file mutations, or an
+            // approval/permission-gated call): run one at a time so a
+            // mutation can't race another read/write of the same path and
+            // an approved destructive call can't overlap unrelated work.
+            // Same per-call body as the pool below, awaited in order.
+            for (idx, tool_call, args) in pending {
+                let name = tool_call.function.name.clone();
+                self.emit(AgentEvent::ToolStart {
+                    tool_call_id: tool_call.id.clone(),
+                    name: name.clone(),
+                    arguments: normalized_tool_args(&tool_call),
+                })
+                .await;
+                let tool_started = std::time::Instant::now();
+                let tool_ctx = ToolContext::default().with_metadata(
+                    "session_id",
+                    self.persistent_session_id
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                );
+                let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
+                let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                    timeout(LONG_RUNNING_TOOL_TIMEOUT, exec).await
+                } else {
+                    timeout(self.config.tool_timeout, exec).await
+                };
+                if let Some(ref bus) = self.turn_end_bus {
+                    bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
+                }
+                early_results[idx] = Some(match result {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
+                    Err(_) => ToolResult::error(
+                        &tool_call.id,
+                        format!("Tool timed out after {:?}", self.config.tool_timeout),
+                    ),
+                });
+            }
         } else {
-            // Multiple tools — execute concurrently with semaphore
+            // Multiple independent tools — execute concurrently with semaphore
             let semaphore = StdArc::new(Semaphore::new(8));
             let tool_timeout = self.config.tool_timeout;
 
@@ -944,6 +989,7 @@ impl OperantAgent {
                                 .clone()
                                 .unwrap_or_else(|| "default".to_string()),
                         );
+                        let exec_started = std::time::Instant::now();
                         let exec = registry.execute(&name, &tool_call.id, args, tool_ctx);
                         // Interactive tools exempt from the generic tool
                         // timeout (see is_interactive_tool); long-running
@@ -957,6 +1003,10 @@ impl OperantAgent {
                         } else {
                             timeout(tool_timeout, exec).await
                         };
+
+                        if let Some(ref bus) = self.turn_end_bus {
+                            bus.record_tool_duration(exec_started.elapsed().as_millis() as u64);
+                        }
 
                         (
                             idx,

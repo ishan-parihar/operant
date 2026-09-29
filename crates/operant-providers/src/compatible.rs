@@ -4,9 +4,9 @@
 
 use crate::multimodal;
 use crate::traits::{
-    ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    Provider, StreamChunk, StreamError, StreamEvent, StreamOptions, StreamResult, TokenUsage,
-    ToolCall as ProviderToolCall,
+    AbortOnDrop, ChatMessage, ChatRequest as ProviderChatRequest,
+    ChatResponse as ProviderChatResponse, Provider, StreamChunk, StreamError, StreamEvent,
+    StreamOptions, StreamResult, TokenUsage, ToolCall as ProviderToolCall,
 };
 use async_trait::async_trait;
 use futures_util::{StreamExt, stream};
@@ -1213,7 +1213,7 @@ fn sse_bytes_to_chunks(
 ) -> stream::BoxStream<'static, StreamResult<StreamChunk>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut buffer = String::new();
 
         match response.error_for_status_ref() {
@@ -1290,8 +1290,13 @@ fn sse_bytes_to_chunks(
         let _ = tx.send(Ok(StreamChunk::final_chunk())).await;
     });
 
-    stream::unfold(rx, |mut rx| async {
-        rx.recv().await.map(|chunk| (chunk, rx))
+    // Bind the producer's lifetime to the returned stream: dropping the
+    // stream aborts the task instead of letting it drain the response body
+    // to completion. See `traits::AbortOnDrop`.
+    let guard = AbortOnDrop::new(&handle);
+
+    stream::unfold((rx, guard), |(mut rx, guard)| async move {
+        rx.recv().await.map(|chunk| (chunk, (rx, guard)))
     })
     .boxed()
 }
@@ -1311,7 +1316,7 @@ fn sse_bytes_to_events_for_contract(
 ) -> stream::BoxStream<'static, StreamResult<StreamEvent>> {
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut buffer = String::new();
         let mut tool_calls: Vec<StreamToolCallAccumulator> = Vec::new();
         let mut used_tool_call_ids = std::collections::HashSet::new();
@@ -1469,8 +1474,10 @@ fn sse_bytes_to_events_for_contract(
         let _ = tx.send(Ok(StreamEvent::Final)).await;
     });
 
-    stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|event| (event, rx))
+    let guard = AbortOnDrop::new(&handle);
+
+    stream::unfold((rx, guard), |(mut rx, guard)| async move {
+        rx.recv().await.map(|event| (event, (rx, guard)))
     })
     .boxed()
 }
@@ -2310,7 +2317,7 @@ impl Provider for OpenAiCompatibleProvider {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamEvent>>(100);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let normalized = match Self::normalize_messages_for_upstream(&messages_owned).await {
                 Ok(n) => n,
                 Err(err) => {
@@ -2426,8 +2433,10 @@ impl Provider for OpenAiCompatibleProvider {
             }
         });
 
-        stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|event| (event, rx))
+        let guard = AbortOnDrop::new(&handle);
+
+        stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|event| (event, (rx, guard)))
         })
         .boxed()
     }
@@ -2451,7 +2460,7 @@ impl Provider for OpenAiCompatibleProvider {
         // Use a channel to bridge the async HTTP response to the stream
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // Normalize image markers in the user-supplied message before
             // forwarding upstream — see issue #6399 for the OpenAI-compatible
             // remote-vs-local file path problem.
@@ -2557,8 +2566,10 @@ impl Provider for OpenAiCompatibleProvider {
         });
 
         // Convert channel receiver to stream
-        stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|chunk| (chunk, rx))
+        let guard = AbortOnDrop::new(&handle);
+
+        stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|chunk| (chunk, (rx, guard)))
         })
         .boxed()
     }
@@ -2579,7 +2590,7 @@ impl Provider for OpenAiCompatibleProvider {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let normalized = match Self::normalize_messages_for_upstream(&messages_owned).await {
                 Ok(n) => n,
                 Err(err) => {
@@ -2651,8 +2662,10 @@ impl Provider for OpenAiCompatibleProvider {
             }
         });
 
-        stream::unfold(rx, |mut rx| async move {
-            rx.recv().await.map(|chunk| (chunk, rx))
+        let guard = AbortOnDrop::new(&handle);
+
+        stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|chunk| (chunk, (rx, guard)))
         })
         .boxed()
     }
@@ -2672,6 +2685,85 @@ impl Provider for OpenAiCompatibleProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    /// Every `tokio::spawn` + `stream::unfold` pair in this module binds its
+    /// producer with `AbortOnDrop` and carries the guard through the unfold
+    /// state (`stream::unfold((rx, guard), ..)`) — five sites, byte-identical
+    /// shape. This proves the shape is load-bearing: dropping the stream
+    /// aborts the producer instead of leaving it to drain the SSE body for a
+    /// caller that is gone. The guard itself is tested once in
+    /// `crate::traits::abort_on_drop_tests`; this asserts the wiring shape the
+    /// five sites use actually cancels the task.
+    #[tokio::test]
+    async fn dropping_the_unfold_stream_aborts_the_sse_producer() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_clone = Arc::clone(&finished);
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = tx.send(Ok(StreamChunk::final_chunk())).await;
+            finished_clone.store(true, Ordering::SeqCst);
+        });
+        let observer = handle.abort_handle();
+        let guard = AbortOnDrop::new(&handle);
+
+        // Same construction as `sse_bytes_to_chunks` and its four siblings.
+        let stream = stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|chunk| (chunk, (rx, guard)))
+        })
+        .boxed();
+
+        assert!(!observer.is_finished());
+        drop(stream);
+
+        let cancelled = timeout(Duration::from_secs(2), async {
+            while !observer.is_finished() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            cancelled.is_ok(),
+            "dropping the returned stream must abort the SSE producer within 2s"
+        );
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "aborted producer must not have run its completion side effect"
+        );
+    }
+
+    /// Draining a stream to completion must not be disturbed by the guard:
+    /// `abort` on a finished task is a no-op, so the happy path is unchanged.
+    #[tokio::test]
+    async fn draining_the_unfold_stream_still_delivers_events() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamResult<StreamChunk>>(100);
+        let handle = tokio::spawn(async move {
+            for i in 0..3 {
+                let _ = tx.send(Ok(StreamChunk::delta(format!("{i}")))).await;
+            }
+        });
+        let guard = AbortOnDrop::new(&handle);
+
+        let mut stream = stream::unfold((rx, guard), |(mut rx, guard)| async move {
+            rx.recv().await.map(|chunk| (chunk, (rx, guard)))
+        })
+        .boxed();
+
+        let mut received = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(chunk) = chunk {
+                received.push(chunk.delta);
+            }
+        }
+
+        assert_eq!(received, vec!["0", "1", "2"]);
+    }
 
     fn make_provider(name: &str, url: &str, key: Option<&str>) -> OpenAiCompatibleProvider {
         OpenAiCompatibleProvider::new(name, url, key, AuthStyle::Bearer)

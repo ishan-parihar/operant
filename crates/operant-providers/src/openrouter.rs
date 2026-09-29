@@ -1,9 +1,9 @@
 use crate::compatible::sse_bytes_to_events;
 use crate::multimodal;
 use crate::traits::{
-    ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    Provider, ProviderCapabilities, StreamError, StreamEvent, StreamOptions, StreamResult,
-    TokenUsage, ToolCall as ProviderToolCall,
+    AbortOnDrop, ChatMessage, ChatRequest as ProviderChatRequest,
+    ChatResponse as ProviderChatResponse, Provider, ProviderCapabilities, StreamError, StreamEvent,
+    StreamOptions, StreamResult, TokenUsage, ToolCall as ProviderToolCall,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt as _;
@@ -44,22 +44,6 @@ struct Message {
 enum MessageContent {
     Text(String),
     Parts(Vec<MessagePart>),
-}
-
-/// RAII guard that aborts a spawned tokio task when dropped.
-///
-/// Used by `stream_chat` to bind the SSE-forwarding task's lifetime to the
-/// returned stream. When a caller cancels the stream (timeout, user abort,
-/// client disconnect), the guard is dropped together with the stream state
-/// and the in-flight HTTP request is cancelled so it stops consuming
-/// bandwidth and connection-pool slots. `AbortHandle::abort` is a no-op
-/// after the task has finished naturally, so the happy path is unaffected.
-struct AbortOnDrop(tokio::task::AbortHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 /// Marker placed on a content block to opt it into OpenRouter prompt caching.
@@ -797,7 +781,7 @@ impl Provider for OpenRouterProvider {
         // consuming OpenRouter quota for a request the caller no longer
         // wants. `AbortHandle::abort` is a no-op if the task has already
         // finished, so the happy path is unaffected. See #5822.
-        let guard = AbortOnDrop(handle.abort_handle());
+        let guard = AbortOnDrop::new(&handle);
 
         stream::unfold((rx, guard), |(mut rx, guard)| async move {
             rx.recv().await.map(|event| (event, (rx, guard)))
@@ -1948,49 +1932,9 @@ mod tests {
         assert_eq!(prov["allow_fallbacks"], false);
     }
 
-    /// Regression for #5822.
-    ///
-    /// `AbortOnDrop` must cancel the bound tokio task when it is dropped.
-    /// This guards the `stream_chat` invariant that a dropped stream stops
-    /// the in-flight SSE-forwarding task instead of letting it run to
-    /// completion.
-    #[tokio::test]
-    async fn abort_on_drop_cancels_long_running_task() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use tokio::time::{Duration, timeout};
-
-        let finished = Arc::new(AtomicBool::new(false));
-        let finished_clone = Arc::clone(&finished);
-
-        let handle = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            finished_clone.store(true, Ordering::SeqCst);
-        });
-        let raw_handle = handle.abort_handle();
-        let guard = AbortOnDrop(handle.abort_handle());
-
-        assert!(!raw_handle.is_finished());
-
-        drop(guard);
-
-        let cancelled = timeout(Duration::from_secs(2), async {
-            loop {
-                if raw_handle.is_finished() {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-
-        assert!(
-            cancelled.is_ok(),
-            "task should be aborted within 2 s of AbortOnDrop being dropped"
-        );
-        assert!(
-            !finished.load(Ordering::SeqCst),
-            "cancelled task must not have run its completion side effect"
-        );
-    }
+    // Regression for #5822 lives in `crate::traits::abort_on_drop_tests`:
+    // `dropping_the_guard_aborts_the_producer_task` proves the guard shape
+    // `stream_chat` uses (`stream::unfold((rx, guard), ..)`) aborts the
+    // producer task when the stream is dropped. Kept here as a single
+    // pointer rather than a duplicate of that test.
 }

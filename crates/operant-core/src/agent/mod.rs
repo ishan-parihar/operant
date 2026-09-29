@@ -367,6 +367,13 @@ pub struct OperantAgent {
     /// and other background writes sequentially without blocking the agent loop.
     /// Ported from hermes-agent's MemoryManager._submit_background() pattern.
     memory_sync_executor: Arc<std::sync::Mutex<Option<crate::memory_provider::MemorySyncExecutor>>>,
+    /// Post-turn event seam. When set, one `TurnEnd` is emitted per
+    /// completed turn at the turn-end chokepoint, after the memory
+    /// `sync_turn` / `queue_prefetch` hooks, and `execute_tools` reports
+    /// per-tool durations back to the bus. `None` (the default) means no
+    /// seam is attached: the emit site is a single `None` check that
+    /// constructs nothing and never touches the conversation history.
+    turn_end_bus: Option<crate::turn_end::TurnEndBus>,
     /// Hook registry for lifecycle events (AgentStart, AgentEnd, etc.).
     /// When set, the agent emits events at key lifecycle points.
     hook_registry: Option<Arc<crate::gateway_pipeline::HookRegistry>>,
@@ -567,6 +574,72 @@ fn is_long_running_tool(name: &str) -> bool {
 /// only a backstop against a wedged receiver/child — never the governing
 /// timeout.
 const LONG_RUNNING_TOOL_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// Tools that mutate the filesystem. Two of these in the same batch can
+/// interleave (one reads a file the other is rewriting, or both write the
+/// same path), so a batch with more than one mutation runs sequentially.
+fn is_file_mutation_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "file_write"
+            | "file_edit"
+            | "patch"
+            | "write_file"
+            | "create_file"
+            | "aft_write"
+            | "aft_edit"
+            | "aft_apply_patch"
+    )
+}
+
+/// Whether this tool goes through the interactive permission gate. The gate
+/// is already sequential (phase 1), but the *effect* of an approved call
+/// still lands in the concurrent pool — so a batch containing one is
+/// serialized too, matching the runtime tool loop's approval rule.
+///
+/// This is the same list the permission prompt uses, `file_read` included:
+/// an approved read must not overlap a concurrent mutation, and sharing one
+/// list means the gate and the predicate cannot drift apart.
+fn is_permission_gated_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "bash"
+            | "terminal"
+            | "execute_command"
+            | "code_execution"
+            | "file_read"
+            | "file_write"
+            | "file_edit"
+            | "patch"
+            | "process"
+            | "browser"
+    )
+}
+
+/// Decide whether a tool batch may use the concurrent pool or must run
+/// sequentially.
+///
+/// Parallel is the default (independent reads / web fetches should overlap),
+/// so this only vetoes batches that can interfere with each other:
+///
+/// * more than one filesystem mutation, or
+/// * any approval/permission-gated call.
+///
+/// The predicate is deliberately a pure function of the batch's tool names so
+/// it is directly unit-testable without an agent, registry, or network.
+fn batch_allows_parallel_execution<'a>(names: impl Iterator<Item = &'a str>) -> bool {
+    let mut mutations = 0usize;
+    let mut gated = false;
+    for name in names {
+        if is_file_mutation_tool(name) {
+            mutations += 1;
+        }
+        if is_permission_gated_tool(name) {
+            gated = true;
+        }
+    }
+    mutations <= 1 && !gated
+}
 
 /// Load the persistent tool-approval allowlist: config seeds + patterns
 /// persisted on disk (hermes `load_permanent_allowlist` parity). Best-effort
@@ -1955,6 +2028,93 @@ mod tests {
         assert_eq!(deny, ToolPermissionResponse::Deny);
         assert_ne!(allow_once, deny);
         assert_ne!(always, allow_session);
+    }
+
+    #[test]
+    fn parallel_batch_with_no_file_mutations_and_no_gate_stays_parallel() {
+        // The old code ran this concurrently; the predicate must not change
+        // that. `file_read` is absent here because it is permission-gated — a
+        // gated batch serializes.
+        assert!(batch_allows_parallel_execution(
+            ["web_search", "web_search", "glob_search", "web_scrape"].into_iter()
+        ));
+    }
+
+    #[test]
+    fn two_file_mutations_serialize() {
+        // Batch the 8-worker pool would have run concurrently — read-modify-
+        // -write on the same path can interleave.
+        assert!(!batch_allows_parallel_execution(
+            ["aft_write", "aft_apply_patch", "web_search"].into_iter()
+        ));
+        assert!(!batch_allows_parallel_execution(
+            ["file_write", "file_edit"].into_iter()
+        ));
+    }
+
+    #[test]
+    fn single_file_mutation_alongside_reads_stays_parallel() {
+        // One mutation cannot race itself; the veto is only for >1.
+        assert!(batch_allows_parallel_execution(
+            ["write_file", "web_search", "glob_search"].into_iter()
+        ));
+    }
+
+    #[test]
+    fn any_approval_gated_call_serializes_the_batch() {
+        assert!(!batch_allows_parallel_execution(
+            ["web_search", "bash"].into_iter()
+        ));
+        assert!(!batch_allows_parallel_execution(
+            ["process", "web_search"].into_iter()
+        ));
+        assert!(!batch_allows_parallel_execution(
+            ["file_read", "file_read"].into_iter()
+        ));
+    }
+
+    #[test]
+    fn mutation_and_gate_classifiers_cover_their_tools() {
+        for name in [
+            "file_write",
+            "file_edit",
+            "patch",
+            "write_file",
+            "create_file",
+            "aft_write",
+            "aft_edit",
+            "aft_apply_patch",
+        ] {
+            assert!(
+                is_file_mutation_tool(name),
+                "{name} should count as a mutation"
+            );
+        }
+        for name in ["web_search", "file_read", "glob_search", "web_scrape"] {
+            assert!(
+                !is_file_mutation_tool(name),
+                "{name} must not count as a mutation"
+            );
+        }
+        for name in [
+            "bash",
+            "terminal",
+            "execute_command",
+            "code_execution",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "patch",
+            "process",
+            "browser",
+        ] {
+            assert!(
+                is_permission_gated_tool(name),
+                "{name} should be permission-gated"
+            );
+        }
+        assert!(!is_permission_gated_tool("web_search"));
+        assert!(!is_permission_gated_tool("glob_search"));
     }
 
     #[test]
