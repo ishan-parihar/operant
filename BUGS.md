@@ -2750,6 +2750,40 @@ Recorded rather than acted on, because all three are appearance or design calls.
 The do-not-substitute note is now on `status_badge` itself, so the substitution I
 was about to make cannot silently ship.
 
+**CLOSED at iter-475 — the accessibility concern is mitigated by WCAG 1.4.1, and I
+had not checked for it.** The residual filed above was that a deuteranope cannot
+reliably distinguish this function's green badge from its red one. True, and
+irrelevant, because colour is not how these badges convey their state. Every one
+of the five visible badges carries a text label naming the state it represents:
+
+| state | rendered text |
+|---|---|
+| `Connected` | ` REMOTE (N peer[s]) ` / ` REMOTE ` |
+| `Connecting` | ` {spinner} CONNECTING... ` |
+| `Reconnecting` | ` {spinner} RECONNECTING (#N) ` |
+| `Failed` | ` BRIDGE ✗ ` |
+| `OutboundOnly` | ` OUTBOUND ` |
+| `Disconnected` | `None` — not rendered |
+
+WCAG 1.4.1 *Use of Color* requires that colour not be the only visual means of
+conveying information, and a text label naming the state satisfies it. So the
+deuteranopia question is a question about whether the *palette* distinguishes two
+states more legibly than their labels do — an appearance judgement, not a
+conformance failure.
+
+That collapses the residual to a preference, which is the smallest and most honest
+form of the item. Options (i) accept, (ii) re-hue the badges, and (iii) add a
+background-tuned role all remain available and all remain appearance decisions;
+what is withdrawn is the framing that presented colour as the sole carrier of the
+state, because it never was.
+
+Third colour-measurement error of a distinct class in this session, after reading
+names instead of values (iter-463, 466) and direction of use (iter-471): this one
+is failing to ask what standard the finding is measured against before calling it
+an accessibility failure. A contrast ratio is not an accessibility verdict on its
+own; 1.4.1 and 1.4.3 are separate criteria, and only the second is what the
+contrast numbers speak to.
+
 ### R40-33 — the remaining ~188 `DarkGray`/`Black` colour sites are blocked *structurally*, and one measurement settles it
 
 This closes a question that had been carried as four separate refutations across
