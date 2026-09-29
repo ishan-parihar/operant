@@ -83,12 +83,19 @@ Not optional, and it is the cheapest thing on this list.
   - `iter-453/454/457` — behavioural pins for `Ctrl+U`, `Ctrl+W`, `Enter+Shift`,
     `Ctrl+R`, `Tab`, `Ctrl+Y`, `Down`
   - `iter-459` — `operant.example.toml` listed the wrong browser default
-- **Pre-flight, all verified this session:** CI green on `ca811f70`; all three
+- **Pre-flight, all verified this session:** CI was green on `ca811f70`; all three
   native legs green as of the v0.2.0 build; crate version and changelog agree.
+  **Caveat added at iter-483:** the peer stopped `ci.yml` running on pushes to
+  `main` (the Actions quota was exhausted — 190 concurrent runs had been
+  billing). So "CI green" above is a point-in-time observation, not a standing
+  gate, and **the local loop is now the gate** for everything except the
+  release build. The release path itself is unaffected: `build.yml` still
+  triggers on `tags: ['v*']`, and `release.yml` still gates on that Build
+  completing with a tag on the head SHA. Tagging v0.2.1 still publishes.
 - Tag, confirm the tag-triggered Build, then confirm the release actually
   attached assets. A release entry with no artifacts is not a release.
 
-### Item 2 — Add a local doc gate (small, prevents a recurring class)
+### Item 2 — Add a local doc gate (small, now load-bearing)
 
 `scripts/check.sh` has no `doc` subcommand. Add one that runs CI's exact
 invocation, so the rustdoc gap stops being invisible:
@@ -97,9 +104,18 @@ invocation, so the rustdoc gap stops being invisible:
 RUSTDOCFLAGS="-Dwarnings" cargo doc --workspace --all-features --no-deps
 ```
 
-The reason this is item 2 and not a footnote: three separate gate gaps this
-session all had the same shape — a gate I believed covered more than it does.
-Writing the third one down is what stops the fourth.
+**This moved from "prevents a recurring class" to the only rustdoc gate that
+exists.** At iter-483 the peer stopped `ci.yml` running on pushes to `main`
+(the Actions quota was exhausted). `build.yml` still fires on tags, so
+*release* verification is intact — but nothing checks docs on an ordinary
+commit any more. A broken intra-doc link committed tomorrow would ship
+unnoticed, which is exactly the failure that cost 31 red commits at iter-476.
+
+The peer made the local loop explicit in `ci.yml`'s comments (`cargo fmt
+--all --check` and friends) and documented that "the local loop is now the
+gate". This item is the missing piece of that loop. Three separate gate gaps
+this session all had the same shape — a gate I believed covered more than it
+does — and this is the third.
 
 ### Item 3 — R40-24: the `$HOME/` directory (small investigation)
 
