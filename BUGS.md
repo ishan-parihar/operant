@@ -2370,7 +2370,7 @@ it is not an improvement is deuteranopia itself, where it is the same value.
 Nothing here needs the user's decision, and the one-value change I was about to
 propose would have been a regression.
 
-### R40-31 — selected-row secondary text sits under 4.5:1 contrast on 6 of 8 themes (OPEN, owner decision, iter-463)
+### R40-31 — selected-row secondary text sits under 4.5:1 contrast on 6 of 8 themes (RESOLVED at iter-468 — a real defect, not an owner decision; routed through `on_selection()`)
 
 `SELECTED_ROW_FG` (`Rgb(248, 220, 236)`, a pale pink) is the foreground for a
 selected row's **secondary** text: the metadata line in `agents_view.rs:824`, the
@@ -2662,7 +2662,7 @@ This does not change the "still open" list above. Those four sites put
 `Color::Black` on an `accent()` background, whereas `plugins_hub.rs` put black on
 green, so it was never in that list — it is a sibling finding, not a member of it.
 
-### R40-32 — `bridge_state.rs` hardcodes the one colour the accessibility palette exists to avoid, for a state that is not success
+### R40-32 — `bridge_state.rs` hardcodes the one colour the accessibility palette exists to avoid, for a state that is not success (WITHDRAWN at iter-471, CLOSED at iter-475 — WCAG 1.4.1 is satisfied, so colour was never the sole carrier)
 
 `bridge_state.rs:57` renders a " REMOTE " badge as
 `.fg(Color::Black).bg(Color::Green)`, keyed on `peer_count > 0`. Unlike
