@@ -689,7 +689,17 @@ impl PlatformAdapter for TelegramAdapter {
                         'restart: while running.load(Ordering::SeqCst) {
                             let mut offset: i64 = 0;
 
-                            // === STARTUP PROBE: claim any pending updates before long-poll starts ===
+                            // === STARTUP PROBE: check for pending updates before long-poll starts ===
+                            // The probe is a no-op by design and MUST NOT advance the offset.
+                            //
+                            // This loop's only job is to log whether anything is pending; the
+                            // real poll below (same URL, same `offset`) is the sole dispatcher
+                            // — it iterates `result` and sends each update to `message_tx`.
+                            // An earlier version advanced `offset = update_id + 1` here, which
+                            // made the first real poll skip exactly the updates this probe had
+                            // just seen: anything queued while the gateway was down was
+                            // consumed unread, with no error. Removing the assignment restores
+                            // the intended "probe, then dispatch" split.
                             if let Ok(resp) = client
                                 .post(&url)
                                 .json(&serde_json::json!({
@@ -700,12 +710,12 @@ impl PlatformAdapter for TelegramAdapter {
                                 .await
                                 && let Ok(data) = resp.json::<serde_json::Value>().await
                                 && let Some(updates) = data["result"].as_array()
+                                && !updates.is_empty()
                             {
-                                for update in updates {
-                                    if let Some(update_id) = update["update_id"].as_i64() {
-                                        offset = update_id + 1;
-                                    }
-                                }
+                                tracing::info!(
+                                    "Startup probe found {} pending update(s); deferring to poll loop",
+                                    updates.len()
+                                );
                             }
                             tracing::info!("Startup probe completed, initial offset: {}", offset);
 

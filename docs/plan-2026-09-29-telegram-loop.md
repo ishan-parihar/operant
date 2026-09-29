@@ -17,15 +17,22 @@ if let Some(updates) = data["result"].as_array() {
 }
 ```
 
-The probe exists to advance the offset past updates it cannot process, so
-returning `[]` is the *safe* fix. The alternative — dispatching them — would
-need a re-entrancy guarantee.
+The probe exists to report whether anything is pending. The real poll loop
+below it — same URL, same `offset` — is the **sole dispatcher**: it iterates
+`result` and sends each update to `message_tx` (`telegram.rs:789`).
+
+So the probe's `offset = update_id + 1` is the entire bug. It made the first
+real poll skip precisely the updates the probe had just seen.
+
+**Fix:** delete the offset assignment. The probe then logs, and the next poll
+re-fetches at the unchanged offset and dispatches. This is client-side only —
+returning `[]` server-side would do nothing on its own, because the client is
+what advances the offset.
 
 **Severity:** silent data loss. Anything queued while the gateway is down is
 consumed unread.
 
-**Cost:** one line. Serve `[]` from the probe and let the real poll loop (which
-carries the offset) pick the updates up on its next iteration.
+**Cost:** one assignment removed.
 
 ### D2. Gateway logs 5 lines and no tracing subscriber
 `operant gateway run` → 2 banner lines, then nothing. `RUST_LOG=debug` has no
