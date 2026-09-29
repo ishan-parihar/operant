@@ -247,6 +247,39 @@ const HARDLINE_BLOCKLIST: &[HardlineEntry] = &[
     },
 ];
 
+/// Compile every `is_regex` hardline pattern, once, preserving table order.
+///
+/// Returns one `Vec<Regex>` per blocklist entry; non-regex entries get an empty
+/// `Vec`, which the matcher never consults. Indexing by table position (rather
+/// than flattening) is what keeps the reported category identical to the
+/// pre-existing first-match-wins order.
+fn compile_hardline_regexes(blocklist: &[HardlineEntry]) -> Result<Vec<Vec<Regex>>, regex::Error> {
+    blocklist
+        .iter()
+        .map(|entry| {
+            if !entry.is_regex {
+                return Ok(Vec::new());
+            }
+            entry.patterns.iter().map(|p| Regex::new(p)).collect()
+        })
+        .collect()
+}
+
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+/// Precompiled hardline regexes, mirroring `HARDLINE_BLOCKLIST` by index.
+///
+/// Compiling at first use rather than per check is a correctness fix, not just
+/// a speed one. The previous `Regex::new(pattern).ok().unwrap_or(false)` turned
+/// a malformed literal into a blocklist entry that could never fire — and a
+/// safety list that silently stops matching is worse than no list, because
+/// every caller still reports "checked". Here an authoring typo panics on the
+/// first check instead, and `hardline_regex_patterns_all_compile` locks the
+/// shipped table at test time.
+static HARDFINE_REGEXES: LazyLock<Vec<Vec<Regex>>> = LazyLock::new(|| {
+    compile_hardline_regexes(HARDLINE_BLOCKLIST)
+        .expect("hardline blocklist regex literal is invalid — authoring bug")
+});
+
 // ============================================================================
 // Dangerous Pattern Detection (Layer 2)
 // ============================================================================
@@ -493,13 +526,12 @@ impl Default for ApprovalGuard {
 fn check_hardline_blocklist(command: &str) -> Option<&'static str> {
     let command_lower = command.to_lowercase();
 
-    for entry in HARDLINE_BLOCKLIST {
-        for pattern in entry.patterns {
+    for (entry_idx, entry) in HARDLINE_BLOCKLIST.iter().enumerate() {
+        for (pattern_idx, pattern) in entry.patterns.iter().enumerate() {
             let matched = if entry.is_regex {
-                Regex::new(pattern)
-                    .ok()
-                    .map(|re| re.is_match(command))
-                    .unwrap_or(false)
+                // Precompiled at first use: a malformed pattern is impossible
+                // here because the table would already have panicked.
+                HARDFINE_REGEXES[entry_idx][pattern_idx].is_match(command)
             } else {
                 command_lower.contains(&pattern.to_lowercase())
             };
@@ -1016,6 +1048,58 @@ mod tests {
         assert_eq!(
             guard.check("echo nmap is a tool", &ctx),
             ApprovalVerdict::Allowed
+        );
+    }
+
+    // ---- Hardline Regex Compilation Tests ----
+
+    /// The shipped table must compile. `compile_hardline_regexes` returns
+    /// `Err` for a malformed literal instead of folding it into a non-match,
+    /// so this fails loudly if a `is_regex` pattern is ever edited into
+    /// something `regex` cannot parse.
+    #[test]
+    fn hardline_regex_patterns_all_compile() {
+        let compiled = compile_hardline_regexes(HARDLINE_BLOCKLIST);
+        assert!(
+            compiled.is_ok(),
+            "a shipped hardline blocklist regex is malformed: {:?}",
+            compiled.err()
+        );
+        // The precompiled table must still mirror the source table, or the
+        // index-based lookup in `check_hardline_blocklist` would read the
+        // wrong pattern. Non-regex entries compile to an empty vec by design.
+        for (idx, entry) in HARDLINE_BLOCKLIST.iter().enumerate() {
+            if !entry.is_regex {
+                continue;
+            }
+            assert_eq!(
+                compiled.as_ref().expect("checked above")[idx].len(),
+                entry.patterns.len(),
+                "compiled table desynced from HARDLINE_BLOCKLIST at entry {idx}"
+            );
+        }
+        // And there is at least one regex entry, so the test is not vacuous.
+        assert!(
+            HARDLINE_BLOCKLIST.iter().any(|e| e.is_regex),
+            "fixture is vacuous: no is_regex entries to compile"
+        );
+    }
+
+    /// The regression guard for the swallow. An unparseable pattern used to
+    /// become `Regex::new(..).ok().map(..).unwrap_or(false)` — a silent
+    /// non-match, i.e. a hardline entry that could never block. The compiler
+    /// must surface it as an error so it can never reach the matcher.
+    #[test]
+    fn malformed_hardline_regex_is_reported_not_swallowed() {
+        let broken = [HardlineEntry {
+            category: "TEST_MALFORMED",
+            patterns: &["rm -rf ("], // unclosed group
+            is_regex: true,
+        }];
+        let outcome = compile_hardline_regexes(&broken);
+        assert!(
+            outcome.is_err(),
+            "a malformed hardline pattern must fail compilation, not degrade to a non-match"
         );
     }
 

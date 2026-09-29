@@ -269,7 +269,6 @@ aft_enabled = true
 # Web tools (web_search, web_scrape, web_extract) via the sourcehound MCP
 # server. Requires the `sourcehound` binary (SOURCEHOUND_BINARY override or PATH).
 # Search provider preference lives in [web_tools] preferred_provider.
-lifeos_enabled = false
 # Progressive tool disclosure (hermes `tools.tool_search` parity).
 # When active, MCP server tools (`mcp_*`) are replaced in the model-visible
 # tools array by a `tool_search` / `tool_describe` / `tool_call` bridge and

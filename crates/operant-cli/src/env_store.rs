@@ -10,6 +10,31 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+/// Create the temp file for an atomic secrets write, owner-only from byte one.
+///
+/// `File::create` applies the umask default (0644 on a stock system), so the
+/// API keys sat world-readable for the whole window between create and the
+/// `chmod` that only ran *after* the rename. `OpenOptionsExt::mode` is applied
+/// by the same `open(2)` that creates the file, so there is no window at all.
+/// Same pattern as `operant-config`'s `write_secret_file`.
+#[cfg(unix)]
+fn create_secret_temp(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+}
+
+/// Non-Unix has no POSIX mode bits; the post-rename `set_secret_perms` call is
+/// a no-op there and the platform default applies.
+#[cfg(not(unix))]
+fn create_secret_temp(path: &Path) -> io::Result<fs::File> {
+    fs::File::create(path)
+}
+
 /// Path to the user's `.env` secrets file (`~/.operant/.env`).
 ///
 /// During tests, override with `HERMES_TEST_ENV_PATH` to use a temp path.
@@ -101,7 +126,7 @@ pub fn save_env_value(key: &str, value: &str) -> Result<()> {
 
     // Atomic write: temp file → rename
     let tmp_path = path.with_extension(".env.tmp");
-    let mut out = fs::File::create(&tmp_path).context("Failed to create temp .env file")?;
+    let mut out = create_secret_temp(&tmp_path).context("Failed to create temp .env file")?;
     for (k, v) in &entries {
         writeln!(out, "{}={}", k, v).context("Failed to write to temp .env file")?;
     }
@@ -109,7 +134,10 @@ pub fn save_env_value(key: &str, value: &str) -> Result<()> {
     out.sync_all()?;
     fs::rename(&tmp_path, &path).context("Failed to atomically replace .env file")?;
 
-    operant_core::fs_secrets::set_secret_perms(&path).ok();
+    // Propagated, not swallowed: a secrets file we could not tighten is a
+    // condition the caller must be able to see and report.
+    operant_core::fs_secrets::set_secret_perms(&path)
+        .context("Failed to tighten .env permissions")?;
 
     Ok(())
 }
@@ -138,7 +166,7 @@ pub fn remove_env_value(key: &str) -> Result<()> {
     }
 
     let tmp_path = path.with_extension(".env.tmp");
-    let mut out = fs::File::create(&tmp_path).context("Failed to create temp .env file")?;
+    let mut out = create_secret_temp(&tmp_path).context("Failed to create temp .env file")?;
     for (k, v) in &entries {
         writeln!(out, "{}={}", k, v)?;
     }
@@ -146,7 +174,9 @@ pub fn remove_env_value(key: &str) -> Result<()> {
     out.sync_all()?;
     fs::rename(&tmp_path, &path).context("Failed to atomically replace .env file")?;
 
-    operant_core::fs_secrets::set_secret_perms(&path).ok();
+    // Propagated, not swallowed — see `save_env_value`.
+    operant_core::fs_secrets::set_secret_perms(&path)
+        .context("Failed to tighten .env permissions")?;
 
     Ok(())
 }
@@ -225,6 +255,51 @@ mod tests {
             assert!(!env.contains_key("KEY_A"));
             assert_eq!(env.get("KEY_B").map(|s| s.as_str()), Some("updated_b"));
             assert_eq!(env.get("KEY_C").map(|s| s.as_str()), Some("value_c"));
+        });
+    }
+
+    // ---- Secrets file permissions ----
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).expect("stat").permissions().mode() & 0o777
+    }
+
+    /// The window this closes: the temp file must be owner-only AT CREATION,
+    /// before a single key is written to it. Asserting only on the final
+    /// `.env` would pass even with the old `File::create` + post-rename
+    /// `chmod`, because that chmod repairs the end state and leaves the
+    /// exposure window untouched — which is exactly the defect.
+    #[cfg(unix)]
+    #[test]
+    fn temp_file_is_owner_only_from_creation() {
+        let dir = tmp_env();
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("probe.env.tmp");
+
+        let mut f = create_secret_temp(&path).expect("create temp");
+        f.write_all(b"SECRET=abc123\n").expect("write");
+        drop(f);
+
+        assert_eq!(
+            mode_of(&path),
+            0o600,
+            "temp secrets file was world-readable while holding the key"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    /// End-to-end: the `.env` the user ends up with is owner-only after both a
+    /// write and a removal.
+    #[cfg(unix)]
+    #[test]
+    fn saved_env_file_is_owner_only() {
+        with_env(|path| {
+            save_env_value("PERM_KEY", "sk-do-not-leak").expect("save");
+            assert_eq!(mode_of(path), 0o600, "saved .env was not 0600");
+            remove_env_value("PERM_KEY").expect("remove");
+            assert_eq!(mode_of(path), 0o600, "rewritten .env was not 0600");
         });
     }
 }

@@ -1865,6 +1865,20 @@ pub fn load_dotenv_file(path: &Path) -> ConfigResult<()> {
             let expanded = expand_env_vars(value);
 
             if std::env::var(key).is_err() {
+                // SAFETY: single-threaded at the point this runs.
+                // `load_dotenv_file` is reached only from `CliConfig::load()`
+                // (this file, step 2 of its documented load order), which
+                // executes once during startup config load. At that moment the
+                // only tokio worker is the one polling `main`'s future: no
+                // agent, gateway, channel, or provider task has been spawned
+                // yet, and this process performs no other `set_var` before
+                // this point. So no thread can be concurrently reading the
+                // environment, which is the precondition `set_var` needs.
+                //
+                // It IS set to default-false, so it cannot pre-empt a variable
+                // a user exported deliberately. See the sibling sites in
+                // `cmd_auth.rs` and `operant-core/src/env_passthrough.rs` for
+                // the cases that cannot make this claim.
                 unsafe {
                     std::env::set_var(key, expanded);
                 }

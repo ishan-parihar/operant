@@ -289,6 +289,43 @@ impl PromptGuard {
     }
 }
 
+/// The single production entry point for scanning inbound user text.
+///
+/// Every agent turn funnels through one call to this, so a finding is
+/// recorded exactly once per turn no matter which surface delivered the text.
+/// Uses the default [`PromptGuard`], whose [`GuardAction`] is [`GuardAction::Warn`]:
+/// the turn always proceeds and the verdict is only written to the `tracing`
+/// stream. That default is deliberate and unchanged — `Block` is a product
+/// policy decision, not something to ship silently, because a false positive
+/// on a Warn-only guard costs a log line while a false positive on a blocking
+/// one silently eats a user's turn.
+///
+/// The verdict is returned so a caller that later adopts `Block` (or
+/// `Sanitize`) has the handle it needs without re-running the scan.
+pub fn scan_user_message(user_message: &str) -> GuardResult {
+    let verdict = PromptGuard::new().scan(user_message);
+    match &verdict {
+        GuardResult::Safe => {}
+        GuardResult::Suspicious(patterns, score) => {
+            tracing::warn!(
+                score = *score,
+                patterns = %patterns.join(", "),
+                action = "warn",
+                "prompt_guard: suspicious inbound user message (recorded, not blocked)"
+            );
+        }
+        GuardResult::Blocked(reason) => {
+            tracing::warn!(
+                score = 1.0_f64,
+                patterns = %reason,
+                action = "warn",
+                "prompt_guard: suspicious inbound user message (recorded, not blocked)"
+            );
+        }
+    }
+    verdict
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

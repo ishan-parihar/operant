@@ -903,8 +903,17 @@ pub struct ToolSettings {
     /// aft always falls back to the built-in tools.
     #[serde(default = "default_true")]
     pub aft_enabled: bool,
-    #[serde(default)]
-    pub lifeos_enabled: bool,
+    // NOTE: `lifeos_enabled` used to live here. It was removed, together with
+    // its line in `operant.example.toml`, because it gated nothing: a
+    // repo-wide search found the identifier in exactly three places — this
+    // struct, its own `Default`, and the example file — and no LifeOS tool
+    // module or `lifeos` cargo feature exists in the tree to gate. A flag
+    // that reads as a switch for 22 Notion-backed tools but reads back
+    // whatever the user typed is worse than an absent key: it invites the
+    // belief that the tools are present and gated when neither is true.
+    // (`docs/CHANGELOG.md` and `AGENTS.md` still describe LifeOS as a
+    // feature-gated integration; that documentation drift is pre-existing and
+    // was left alone here.) Locked by `lifeos_key_is_gone_from_config`.
     /// Progressive tool disclosure (hermes `tools.tool_search` parity).
     ///
     /// When active, MCP server tools (`mcp_*` names) are replaced in the
@@ -1006,7 +1015,6 @@ impl Default for ToolSettings {
             disabled_tools: Vec::new(),
             disabled_toolsets: Vec::new(),
             aft_enabled: true,
-            lifeos_enabled: false,
             tool_search: ToolSearchSettings::default(),
         }
     }
@@ -2104,6 +2112,35 @@ wonderful_unknown_key = 42
         assert_eq!(
             config.autonomous.status_path,
             PathBuf::from("autonomous-status.toml")
+        );
+    }
+
+    /// The inert `lifeos_enabled` key is gone from both the schema and the
+    /// shipped example, and the two have to move together: `ToolSettings` is
+    /// `deny_unknown_fields`, so a `lifeos_enabled` line left in
+    /// `operant.example.toml` makes `example_toml_parses` fail outright. This
+    /// test names that coupling so the next person adding a tools flag cannot
+    /// reintroduce the split, and so a future LifeOS implementation re-adds
+    /// the key deliberately rather than by accident.
+    #[test]
+    fn lifeos_key_is_gone_from_config() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("operant.example.toml");
+        let raw = std::fs::read_to_string(&root).unwrap();
+        assert!(
+            !raw.contains("lifeos"),
+            "operant.example.toml still advertises lifeos_enabled, which gates nothing"
+        );
+        // And a config that still carries it is now rejected rather than
+        // silently accepted-and-ignored, which is the point of removing it.
+        let with_key = "[tools]\nlifeos_enabled = true\n";
+        assert!(
+            parse_config_str(with_key, Path::new("memory://lifeos-probe")).is_err(),
+            "a stale lifeos_enabled must not parse silently into a field that gates nothing"
         );
     }
 

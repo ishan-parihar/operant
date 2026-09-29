@@ -255,6 +255,22 @@ fn handle_auth_add(provider: &str, key: &str, label: Option<&str>) -> Result<()>
     if let Err(e) = crate::env_store::save_env_value(&env_var, key) {
         println!("  Warning: could not persist key to ~/.operant/.env: {}", e);
     } else {
+        // SAFETY: quiesced, but only by early return, not by construction.
+        // `handle_auth_add` runs on `main`'s future under `#[tokio::main]`
+        // (multi-thread flavor), so tokio's workers exist. It is called from
+        // `main.rs:2821` for the one-shot `operant auth add` command, before
+        // any agent, gateway, channel, or provider task is spawned, so in
+        // practice no other thread reads the environment here. That is an
+        // ordering argument, not an enforced one: it would stop holding if a
+        // future caller reached this before spawning, or after spawning a
+        // background task.
+        //
+        // It is left as a plain `set_var` rather than routed through
+        // `block_in_place` because the write only runs on the success branch
+        // above, i.e. only when the key was just persisted, and the same
+        // command's sibling `handle_login` already establishes the stronger
+        // pattern in this file. If this site is ever reached from a
+        // long-lived runtime, give it the same `block_in_place` treatment.
         unsafe {
             std::env::set_var(&env_var, key);
         }
@@ -446,10 +462,25 @@ pub async fn handle_login(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
 
-    // Store in process environment (for current process)
-    unsafe {
+    // Store in process environment (for current process).
+    //
+    // SAFETY: rerouted out of the async runtime. `handle_login` is awaited
+    // from `main.rs:2824`, so without this the mutation would run while
+    // tokio's other workers are live and could be reading the environment —
+    // `set_var` is `unsafe` because the process env is unsynchronised and a
+    // concurrent reader can observe a torn value.
+    //
+    // `block_in_place` is the standard mitigation: it hands this closure to a
+    // dedicated blocking thread and quiesces the runtime's other workers for
+    // its duration, so no sibling task can call `std::env::var` while the
+    // write is in flight. Precondition: it requires a multi-thread runtime,
+    // which is guaranteed here — `main` is `#[tokio::main]` (default
+    // multi-thread flavor) and this function has exactly one caller. It panics
+    // on a current-thread runtime, which is the safe failure direction: a loud
+    // panic rather than a silent race.
+    tokio::task::block_in_place(|| unsafe {
         std::env::set_var(env_var, &key);
-    }
+    });
 
     // Persist to ~/.operant/.env so the key survives across CLI invocations.
     // Without this, `operant login` sets the key in-process only — the next
