@@ -102,7 +102,17 @@ export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-$LOCAL_DIR/lib:$ORT_DIR/lib}"
 # the user's library directory, which outlives any checkout.
 RUNTIME_LIB_DIR="${RUNTIME_LIB_DIR:-$HOME/.local/lib/operant}"
 if [ -d "$RUNTIME_LIB_DIR" ] && [ -d "$ORT_DIR/lib" ]; then
-  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-L native=$ORT_DIR/lib -C link-arg=-Wl,-rpath,$RUNTIME_LIB_DIR"
+  # BOTH names, deliberately. CARGO_TARGET_<triple>_RUSTFLAGS is only read by
+  # cargo when it is cross-compiling to that triple, so on a native build the
+  # linker search path and rpath were silently dropped and the build died with
+  # a bare "linking with `cc` failed" and no hint which library was missing.
+  # Every native ONNX build in this repo needed a manual RUSTFLAGS= prefix
+  # until this was set under both. Verified: with only the per-target form,
+  # `echo $RUSTFLAGS` is empty after sourcing this file.
+  _ORT_LINK_FLAGS="-L native=$ORT_DIR/lib -C link-arg=-Wl,-rpath,$RUNTIME_LIB_DIR"
+  export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$_ORT_LINK_FLAGS"
+  # Preserve a caller's own RUSTFLAGS rather than clobbering them.
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }$_ORT_LINK_FLAGS"
 fi
 
 # pip-installed cmake lands in a venv. Prepend it only if it is actually there —
