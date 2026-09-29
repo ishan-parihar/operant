@@ -2390,6 +2390,36 @@ primary label stays the least legible text in the row. If anything is done here,
 (c) is the one that addresses the cause, because it improves the title and the
 secondary line together.
 
+**Fourth correction at iter-466, and this one supplies the answer.** I had
+assumed the four light-foreground sites were the only convention. They are not —
+five other sites render a selected row on the same `accent()` background using
+`Color::Black`, and the two conventions are not close:
+
+| theme | `accent()` | A: light fg (these 4 sites) | B: `Color::Black` (5 sites) |
+|---|---|---|---|
+| dark | `Rgb(100, 181, 246)` | 1.76 | **9.48** |
+| solarized | `Rgb(38, 139, 210)` | 1.38 | **5.71** |
+| nord | `Rgb(136, 192, 208)` | 1.48 | **10.50** |
+| dracula | `Rgb(189, 147, 249)` | 2.26 | **8.71** |
+| monokai | `Rgb(102, 217, 239)` | 1.55 | **12.74** |
+| deuteranopia | `Rgb(0, 150, 200)` | 2.47 | **6.20** |
+
+Convention B sites, all `.fg(Color::Black).bg(theme_colors::accent())`:
+`mcp_view.rs:433`, `mcp_view.rs:586`, `memory_file_selector.rs:185`,
+`settings_screen/render.rs:238`, `agents_view.rs:723`. All six measurable themes
+pass; convention A fails on all six. `agents_view.rs` contains **both** — line 723
+uses `Color::Black` and line 810 the pale pink — which is the clearest evidence
+this is drift rather than a deliberate distinction between two kinds of row.
+
+So this stops being a design question with a menu and becomes a consistency
+question with an in-tree precedent: 5 sites already do the legible thing, 4 do
+not, and the same file does both. The minimal change is to give the four
+`Color::Black` like the other five, which is also strictly less work than any
+per-theme tuning — it needs no new palette entry, no per-theme value, and no
+decision about which foreground belongs on which theme. Option (b) and (c) below
+are both worse than that, and I am recording that only because I wrote them before
+taking this measurement.
+
 Owner call, and it is a per-theme appearance decision. Note that option (a)'s
 original justification included "the title is legible", which the control
 measurement above now **falsifies** — the title is the least legible text in the
