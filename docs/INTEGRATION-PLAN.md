@@ -106,31 +106,45 @@ additions at seams that already exist.
 
 ## 3. memory-wire — the honest mapping
 
-### 3.1 The fork: subprocess, or in-process library?
+### 3.1 Integration mode: in-process library (decided at iter-485)
 
-| | **A. Subprocess + HTTP** | **B. cargo git-dep on `memory_wire`** |
+I originally recommended a subprocess. **That recommendation is superseded.**
+memory-wire is under active development and being upgraded specifically for
+operant integration, and you have decided to bake it into the binary. That is
+coherent and I am adopting it — a cargo git dependency tracks your *branch*
+rather than a released version, which is exactly the right coupling while the
+crate is moving.
+
+| | **A. Subprocess + HTTP** | **B. cargo git-dep — ADOPTED** |
 |---|---|---|
-| our code | `MemoryWireProvider` posting to `http://127.0.0.1:<port>` | `MemoryWireProvider` calling `memory_wire::api::*` directly |
-| binary cost | +1 process (memory-wire is already installed at `~/.local/bin/memory-wire`) | **+16,985 lines** in the operant binary |
-| what we can reach | the HTTP routes only: `recall`, `retain`, `reflect`, `stats`, `config`, `memories` | **everything**, including `recall_with_weights`, `retain_tagged`, `retain_doc` |
-| failure mode | process can die; needs supervision | a panic in their code takes down the agent |
-| isolation | clean — their bugs cannot corrupt our state | shared process, shared allocator |
-| version coupling | only the wire contract | must agree on versions with a 0.4.0 crate |
+| our code | `MemoryWireProvider` posting to `127.0.0.1:<port>` | `MemoryWireProvider` calling `memory_wire::api::*` directly |
+| binary cost | +1 process | **+16,985 lines** in the operant release artifact |
+| reach | HTTP routes only | **everything**, incl. `recall_with_weights`, `retain_tagged`, `retain_doc` |
+| failure mode | process death → memory miss | **their panic kills the agent mid-turn** |
+| isolation | clean | shared process and allocator |
+| version coupling | wire contract only | must agree on versions with a 0.x crate |
 
-**Recommendation: A (subprocess).** Reasons, in order of weight:
+What you gain, concretely: `recall_with_weights` and `retain_tagged`/
+`retain_doc` are reachable in-process, which is a real capability the HTTP
+surface does not expose. That is worth more than a localhost hop.
 
-1. **We already run it.** `~/.local/bin/memory-wire` is installed. Option B adds
-   17k lines to a binary we ship as a release artifact for a capability we can
-   reach over HTTP.
-2. **Isolation is the point of "must not modify".** If their code panics inside
-   our process, an agent mid-turn dies. Behind a subprocess it degrades to a
-   memory miss, which is exactly how agentmemory already behaves.
-3. Their crate is **0.4.0** — young. Taking a compile-time dependency on a young
-   crate to save one localhost hop is a bad trade.
+**Three consequences to own, since this is a 0.x crate in our release path:**
 
-The one thing B uniquely offers is `recall_with_weights`. If weighted recall
-turns out to matter, it can be requested over HTTP later or we can gate it
-behind a feature — **it is not a reason to choose B now.**
+1. **Every memory-wire change is an operant rebuild.** `cargo update` moves us
+   to your HEAD, so a breaking change in a 0.x crate is *our* breaking change.
+   Pin with `rev = "..."` if a given moment of your branch is not release-ready.
+2. **A panic in their code is fatal to an in-flight turn.** Subprocess isolation
+   degrades to a memory miss; in-process does not. The cheapest mitigation is a
+   `catch_unwind` at the `MemoryProvider` boundary, converting a panic into a
+   degraded-memory state rather than a dead agent. Worth doing regardless of
+   mode.
+3. **Version drift is our problem at build time.** A 0.x crate may bump its
+   minor version on any commit, so `Cargo.lock` will churn. That is expected, not
+   a defect, but it means the lock diff needs review discipline.
+
+Note that sourcehound stays a **subprocess** — 52,093 lines with a 23-line
+barrel lib over a server and a browser subsystem is not a library worth
+compiling into a release artifact (§4.2).
 
 ### 3.2 The mapping, trait method by trait method
 
@@ -378,9 +392,10 @@ you already have. Say which one you actually want and I will scope it honestly.
 
 Four decisions, all of which change the work rather than decorate it:
 
-1. **memory-wire: subprocess or in-process library?** I recommend subprocess
-   (§3.1). In-process costs 17k lines in the release binary and shares a failure
-   domain with a 0.4.0 crate, to save a localhost hop.
+1. **memory-wire: in-process library, per your decision at iter-485.** §3.1 now
+   records what that costs and what to do about it. The one thing I would add
+   regardless of mode: a `catch_unwind` at the `MemoryProvider` boundary, so a
+   panic in a 0.x crate degrades to a memory miss instead of killing a turn.
 2. **The `sync_turn` write policy.** If we retain every turn, the bank grows
    fast. Options: retain every turn, retain every Nth, retain only turns that
    produced a tool call, or run `/reflect` on a size trigger. This is a number
