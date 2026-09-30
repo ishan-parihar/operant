@@ -120,7 +120,7 @@ gitignore is doing its job; leave them alone.
 
 ## Operant Project Context
 
-- Current release line: `0.2.0`
+- Current release line: `0.2.1`
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is
@@ -136,9 +136,14 @@ gitignore is doing its job; leave them alone.
   the same change
 - When user-facing behavior changes, update `README.md`, `CHANGELOG.md`, and
   screenshots in `assets/` if the UI changed materially
-- Tagged releases are created from `CHANGELOG.md`: push `vX.Y.Z`, then GitHub
-  Actions builds artifacts and publishes the GitHub Release from the matching
-  changelog section
+- Tagged releases are created from `CHANGELOG.md` and built on the LOCAL
+  machine — never on GitHub. The Actions quota is exhausted, so every
+  workflow is `workflow_dispatch`-only: no push and no tag triggers anything.
+  Release procedure: write the dated `## [X.Y.Z]` section, commit, push the
+  tag `vX.Y.Z` (marks the release, builds nothing), then locally
+  `cargo build --release -p operant-cli`, package the artifacts, and publish
+  with `gh release create vX.Y.Z --notes-file <extracted section> <artifacts>`.
+  Do NOT re-add push/tag triggers without quota to spend.
 - Preferred verification commands (always run via `./scripts/check.sh`):
   - `cargo fmt --all`
   - `cargo check --workspace`

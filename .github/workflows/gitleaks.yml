@@ -8,10 +8,10 @@ name: Secret Scan
 # `--redact` is not optional: without it, a real hit prints the matched secret
 # into the run log, which is a public log on a public repo. Gitleaks reports
 # the file, line, and rule and substitutes a hash.
+# Dispatch-only by policy (AGENTS.md): per-push scans burned the Actions
+# quota, so this runs only when invoked by hand. Tags do NOT trigger it —
+# releases are built and published from the local machine.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:

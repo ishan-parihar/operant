@@ -1,8 +1,10 @@
 name: Build
 
+# Dispatch-only by policy (AGENTS.md): the Actions quota is exhausted, so no
+# push and no tag triggers anything. Releases are built on the local machine
+# and published with `gh release create`; pushing a v* tag marks the release
+# but builds nothing. Re-add a tag trigger only with quota to spend.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:

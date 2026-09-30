@@ -1,8 +1,8 @@
 name: Test
 
+# Dispatch-only by policy (AGENTS.md): the Actions quota is exhausted, so no
+# push and no tag triggers anything. Re-add a tag trigger only with quota.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
