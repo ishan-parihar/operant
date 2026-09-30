@@ -1360,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_error_code_context_overflow_from_status() {
+    fn test_error_code_context_overflow_without_status() {
         let c = classify_api_error(None, "error", Some("context_length_exceeded"));
         assert_eq!(c.reason, FailoverReason::ContextOverflow);
         assert!(c.should_compress);
@@ -1389,5 +1389,146 @@ mod tests {
         let c = classify_api_error(None, "error", Some("context_length_exceeded"));
         assert_eq!(c.reason, FailoverReason::ContextOverflow);
         assert!(c.should_compress);
+    }
+
+    /// Table-driven coverage for the producible `FailoverReason` variants that had
+    /// no direct test. Each row pins the FULL recovery tuple read off its
+    /// production site, so a flag flip (retry / fallback / compress / rotate)
+    /// fails here instead of silently changing recovery behavior.
+    ///
+    /// Sites: Timeout → `classify_by_status` 408; PayloadTooLarge → 413;
+    /// ImageTooLarge / InvalidEncryptedContent / MultimodalToolContentUnsupported
+    /// → `classify_400`; ProviderPolicyBlocked → 404 guardrail branch
+    /// (the 400 branch is the same tuple); LongContextTier /
+    /// OauthLongContextBetaForbidden → the step-1 provider-specific checks.
+    /// `AuthPermanent` and `UpstreamRateLimit` are unproducible today and
+    /// deliberately excluded.
+    #[test]
+    fn table_driven_variant_coverage() {
+        struct Row {
+            name: &'static str,
+            status: Option<u16>,
+            body: &'static str,
+            code: Option<&'static str>,
+            reason: FailoverReason,
+            retryable: bool,
+            fallback: bool,
+            compress: bool,
+            rotate: bool,
+        }
+
+        let rows = [
+            Row {
+                name: "timeout_408",
+                status: Some(408),
+                body: "request timed out waiting for the upstream model",
+                code: None,
+                reason: FailoverReason::Timeout,
+                retryable: true,
+                fallback: false,
+                compress: false,
+                rotate: false,
+            },
+            Row {
+                name: "payload_too_large_413",
+                status: Some(413),
+                body: "request entity too large: 245mb",
+                code: None,
+                reason: FailoverReason::PayloadTooLarge,
+                retryable: true,
+                fallback: false,
+                compress: true,
+                rotate: false,
+            },
+            Row {
+                name: "image_too_large_400",
+                status: Some(400),
+                body: "image dimensions exceed 8000px per-image limit",
+                code: None,
+                reason: FailoverReason::ImageTooLarge,
+                retryable: true,
+                fallback: false,
+                compress: false,
+                rotate: false,
+            },
+            Row {
+                name: "provider_policy_blocked_404",
+                status: Some(404),
+                body: "no endpoints available matching your data policy",
+                code: None,
+                reason: FailoverReason::ProviderPolicyBlocked,
+                retryable: false,
+                fallback: false,
+                compress: false,
+                rotate: false,
+            },
+            Row {
+                name: "invalid_encrypted_content_400",
+                status: Some(400),
+                body: "encrypted reasoning replay blob rejected",
+                code: Some("invalid_encrypted_content"),
+                reason: FailoverReason::InvalidEncryptedContent,
+                retryable: true,
+                fallback: false,
+                compress: false,
+                rotate: false,
+            },
+            Row {
+                name: "multimodal_tool_content_400",
+                status: Some(400),
+                body: "tool message content must be a string",
+                code: None,
+                reason: FailoverReason::MultimodalToolContentUnsupported,
+                retryable: true,
+                fallback: false,
+                compress: false,
+                rotate: false,
+            },
+            Row {
+                name: "long_context_tier_429",
+                status: Some(429),
+                body: "extra usage required for long context requests",
+                code: None,
+                reason: FailoverReason::LongContextTier,
+                retryable: true,
+                fallback: false,
+                compress: true,
+                rotate: false,
+            },
+            Row {
+                name: "oauth_long_context_beta_400",
+                status: Some(400),
+                body: "the 1m long context beta is not yet available on this subscription",
+                code: None,
+                reason: FailoverReason::OauthLongContextBetaForbidden,
+                retryable: true,
+                fallback: false,
+                compress: false,
+                rotate: false,
+            },
+        ];
+
+        assert_eq!(rows.len(), 8, "all uncovered variants stay pinned");
+        for row in &rows {
+            let c = classify_api_error(row.status, row.body, row.code);
+            assert_eq!(c.reason, row.reason, "{}: reason", row.name);
+            assert_eq!(c.status_code, row.status, "{}: status_code", row.name);
+            assert_eq!(c.retryable, row.retryable, "{}: retryable", row.name);
+            assert_eq!(
+                c.should_fallback, row.fallback,
+                "{}: should_fallback",
+                row.name
+            );
+            assert_eq!(
+                c.should_compress, row.compress,
+                "{}: should_compress",
+                row.name
+            );
+            assert_eq!(
+                c.should_rotate_credential, row.rotate,
+                "{}: should_rotate_credential",
+                row.name
+            );
+        }
     }
 }
