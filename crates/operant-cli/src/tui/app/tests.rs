@@ -7,6 +7,13 @@ use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
 
 fn make_app() -> App {
+    // `App::new` calls `set_active_theme_enum`, which writes the process-global
+    // palette. Serialise on the same lock the theme-asserting tests hold, or a
+    // concurrent `make_app` resets the palette between one of those tests'
+    // `set_active_theme` and its assertion.
+    let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let config = AppConfig::default();
     let settings = Settings::default();
     let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());

@@ -1,0 +1,25 @@
+{
+  "name": "connect-dialog",
+  "surface": "crates/operant-cli/src/tui/dialog_select.rs::render_dialog_select",
+  "opens_with": "/connect",
+  "keys": "/connect<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/connect<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.connect_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Connect a provider",
+    "contains:Search",
+    "contains:Popular"
+  ],
+  "baseline": "connect-dialog.txt",
+  "style_baseline": "connect-dialog.style.txt",
+  "notes": "The shared DialogSelect renderer, used by three surfaces (connect_dialog, import_config_picker, command_palette) — so this scenario plus those two pin one renderer three times with different item sets, which is how a category/filter/badge regression in DialogSelectState gets caught. ENV: the item list comes from the provider catalogue."
+}

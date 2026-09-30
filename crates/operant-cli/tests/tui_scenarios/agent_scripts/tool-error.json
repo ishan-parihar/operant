@@ -1,0 +1,6 @@
+[
+  {"type":"content","text":"Trying a tool that will fail."},
+  {"type":"tool_start","id":"call_err","name":"shell","arguments":"{\"cmd\":\"exit 3\"}"},
+  {"type":"tool_error","id":"call_err","name":"shell","error":"exit status 3"},
+  {"type":"done","text":"The shell command exited 3."}
+]

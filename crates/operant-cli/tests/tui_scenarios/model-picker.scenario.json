@@ -1,0 +1,24 @@
+{
+  "name": "model-picker",
+  "surface": "crates/operant-cli/src/tui/model_picker.rs::render_model_picker",
+  "opens_with": "/model",
+  "keys": "/model<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/model<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.model_picker == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Select model",
+    "contains:Search"
+  ],
+  "baseline": "model-picker.txt",
+  "style_baseline": "model-picker.style.txt",
+  "notes": "ENV, two dependencies. (1) /model opens connect_dialog INSTEAD of model_picker when App::has_credentials is false, so this scenario needs a seeded auth.json. (2) No agent_script is set on purpose: agent_script sets is_mock, which SKIPS load_models_dev(), emptying the model list. So this is the one scenario in the corpus that accepts the network fetch — its baseline IS the model catalogue and must be regenerated when models.dev changes. <ctrl+a> is the documented key opener and IS a legal token, but carries the same has_credentials guard plus an !is_streaming guard."
+}

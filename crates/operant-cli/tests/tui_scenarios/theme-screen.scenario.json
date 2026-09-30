@@ -1,0 +1,24 @@
+{
+  "name": "theme-screen",
+  "surface": "crates/operant-cli/src/tui/theme_screen.rs::render_theme_screen",
+  "opens_with": "/theme",
+  "keys": "/theme<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/theme<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.theme_screen == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Choose a theme",
+    "contains:Applies immediately"
+  ],
+  "baseline": "theme-screen.txt",
+  "style_baseline": "theme-screen.style.txt",
+  "notes": "Every palette in the corpus hangs off this overlay, which makes it the natural place to catch a regression in theme_colors::* — the accent helpers also feed the selection bar in nearly every other surface. The style baseline here is the cheapest canary for a palette-wide change."
+}

@@ -1,0 +1,18 @@
+{
+  "name": "usage-overlay",
+  "surface": "crates/operant-cli/src/tui/usage_overlay.rs::render_usage_overlay",
+  "opens_with": "F8",
+  "keys": "<f8>",
+  "size": "120x40",
+  "assert": [
+    "usage_overlay == true",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:F8 \u00b7 usage",
+    "contains:cache prefix"
+  ],
+  "baseline": "usage-overlay.txt",
+  "style_baseline": "usage-overlay.style.txt",
+  "notes": "A PERSISTENT (non-modal) panel drawn above the base chrome but below every overlay, so any modal correctly occludes it \u2014 that z-order relationship is the whole reason it has its own scenario. Asserted via the new top-level `usage_overlay` key for the same reason as debug-overlay: it is not a modal, so putting it in overlay_flags() would corrupt any_modal_open. The prior needles were 'Usage' and 'Cost'; the render emits ' F8 \u00b7 usage ' and ' cost ' (lowercase), so both were mis-cased."
+}

@@ -1,0 +1,16 @@
+{
+  "name": "context-menu",
+  "surface": "crates/operant-cli/src/tui/render/selection.rs::render_context_menu",
+  "opens_with": "Ctrl+Shift+M",
+  "keys": "/voice<enter><ctrl+shift+m>",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Copy"
+  ],
+  "baseline": "context-menu.txt",
+  "style_baseline": "context-menu.style.txt",
+  "notes": "A rounded-bordered popup whose item ENABLEDNESS depends on state: the Selection kind disables Copy when selection_text is empty, the Message kind disables both when there is no message at the index. any_modal_open is TRUE while it is open \u2014 the context menu is one of only two extras outside overlay_flags() that any_modal_open ORs in \u2014 which is why this scenario asserts the flag is up, not down."
+}

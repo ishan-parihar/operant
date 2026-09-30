@@ -1,6 +1,6 @@
 // (iter-392: the `#![allow(dead_code)]` suppression is gone — this module is
 // reached from `render/welcome.rs::render_welcome_box`.)
-use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -11,12 +11,12 @@ use ratatui::text::{Line, Span};
 
 fn accent_style() -> Style {
     Style::default()
-        .fg(theme_colors::accent())
+        .fg(theme::accent_color())
         .add_modifier(Modifier::BOLD)
 }
 
 fn dim_style() -> Style {
-    Style::default().fg(theme_colors::BANNER_DIM)
+    Style::default().fg(theme::dim_color())
 }
 
 pub fn rustle_lines() -> [Line<'static>; 5] {
@@ -45,9 +45,6 @@ pub fn rustle_lines() -> [Line<'static>; 5] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // See banner.rs: `Color` left the module-level import at iter-463, when
-    // `dim_style` moved to `theme_colors::BANNER_DIM`.
-    use ratatui::style::Color;
 
     #[test]
     fn rustle_lines_returns_5_lines() {
@@ -55,32 +52,44 @@ mod tests {
         assert_eq!(lines.len(), 5);
     }
 
-    /// The mascot wordmark reads the active palette, so `/theme` repaints it.
-    /// It used to carry its own inline `Color::Rgb(255, 191, 0)`, which meant
-    /// every non-default theme rendered a default-amber mascot next to a
-    /// themed banner.
+    /// The mascot emits the `Accent` role default; the per-frame substitution
+    /// resolves it. Asserting the emitted colour against the active palette
+    /// would be wrong by design — see the matching note in `banner.rs`.
+    #[test]
+    fn rustle_emits_the_accent_role_default() {
+        assert_eq!(
+            rustle_lines()[1].spans[1].style.fg,
+            Some(theme::accent_color())
+        );
+    }
+
     #[test]
     fn rustle_wordmark_follows_the_active_theme_accent() {
-        fn wordmark_fg() -> Color {
-            rustle_lines()[1].spans[1].style.fg.unwrap_or(Color::Reset)
-        }
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget;
+
+        // Column 4 of row 1 is inside the `OPERANT` wordmark span.
+        let paint = || {
+            let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 20, 5));
+            for (row, line) in rustle_lines().into_iter().enumerate() {
+                line.render(Rect::new(0, row as u16, 20, 1), &mut buf);
+            }
+            crate::tui::vendor::style::theme_mode::adapt_buffer_for_display(&mut buf);
+            buf[(4, 1)].fg
+        };
 
         let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
-        theme_colors::set_active_theme("nord");
-        let nord = wordmark_fg();
-        assert_eq!(
-            nord,
-            theme_colors::accent(),
-            "mascot must use the palette accent"
-        );
+        crate::tui::theme_colors::set_active_theme("nord");
+        let nord = paint();
+        assert_eq!(nord, crate::tui::theme_colors::accent());
 
-        theme_colors::set_active_theme("dracula");
-        let dracula = wordmark_fg();
+        crate::tui::theme_colors::set_active_theme("dracula");
+        let dracula = paint();
         assert_ne!(nord, dracula, "switching theme must repaint the mascot");
 
-        theme_colors::set_active_theme("default");
+        crate::tui::theme_colors::set_active_theme("default");
     }
 }

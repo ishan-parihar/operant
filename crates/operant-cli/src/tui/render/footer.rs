@@ -3,17 +3,17 @@
 use crate::tui::app::App;
 use crate::tui::figures;
 use crate::tui::prompt_input::{InputMode, TypeaheadSource, VimMode, render_prompt_input};
-use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use super::{
-    STATUS_THINKING, STATUS_THINKING_ELLIPSIS, accent_primary, shimmer_spans, spinner_char,
-    spinner_color, truncate_middle, truncate_text,
+    STATUS_THINKING, STATUS_THINKING_ELLIPSIS, shimmer_spans, spinner_char, spinner_color,
+    truncate_middle, truncate_text,
 };
 
 pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
@@ -41,8 +41,8 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
             _ => None,
         };
 
-        let pink = app.accent_color;
-        let dim = theme_colors::FOOTER_DIM;
+        let pill_bg = theme::accent_color();
+        let dim = theme::dim_color();
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -64,8 +64,8 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
                 spans.push(Span::styled(
                     format!(" {} ", mode.to_uppercase()),
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(pink)
+                        .fg(theme::user_bg())
+                        .bg(pill_bg)
                         .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::raw(" "));
@@ -73,7 +73,7 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
             spans.push(Span::styled(
                 model_short,
                 Style::default()
-                    .fg(theme_colors::text())
+                    .fg(theme::ai_text())
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::styled(
@@ -112,7 +112,7 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
                         live_subagents,
                         if live_subagents == 1 { "" } else { "s" }
                     ),
-                    Style::default().fg(theme_colors::accent()),
+                    Style::default().fg(theme::accent_color()),
                 ));
             }
 
@@ -163,7 +163,7 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
         } else {
             InputMode::Default
         },
-        app.accent_color,
+        theme::accent_color(),
         app.settings_screen.cursor_blink_enabled,
     );
 }
@@ -201,7 +201,7 @@ pub(crate) fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
                 figures::black_circle()
             ),
             Style::default()
-                .fg(theme_colors::error())
+                .fg(theme::error_color())
                 .add_modifier(Modifier::BOLD),
         )]
     } else if app.is_streaming || app.display_turn_state().is_noteworthy() {
@@ -247,13 +247,13 @@ pub(crate) fn render_status_row(frame: &mut Frame, app: &App, area: Rect) {
         vec![Span::styled(
             format!("{} {} for {}", figures::TEARDROP_ASTERISK, verb, elapsed),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::DIM),
         )]
     } else if let Some(status) = app.status_message.as_deref() {
         vec![Span::styled(
             status.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]
     } else {
         Vec::new()
@@ -293,7 +293,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         vec![Span::styled(
             format!(" {} REC — speak now", figures::black_circle()),
             Style::default()
-                .fg(theme_colors::error())
+                .fg(theme::error_color())
                 .add_modifier(Modifier::BOLD),
         )]
     } else {
@@ -315,7 +315,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
             spans.push(Span::styled(
                 format!(" {} ", bg_counts.label()),
-                Style::default().fg(theme_colors::muted()),
+                Style::default().fg(theme::dim_color()),
             ));
         }
 
@@ -326,41 +326,41 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::raw("  "));
             }
             let (label, style) = match app.prompt_input.vim_mode {
-                VimMode::Insert => ("-- INSERT --", Style::default().fg(Color::DarkGray)),
+                VimMode::Insert => ("-- INSERT --", Style::default().fg(theme::dim_color())),
                 VimMode::Normal => (
                     "-- NORMAL --",
                     Style::default()
-                        .fg(theme_colors::success())
+                        .fg(theme::success_color())
                         .add_modifier(Modifier::BOLD),
                 ),
                 VimMode::Visual => (
                     "-- VISUAL --",
                     Style::default()
-                        .fg(Color::Magenta)
+                        .fg(theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                 ),
                 VimMode::VisualLine => (
                     "-- VISUAL LINE --",
                     Style::default()
-                        .fg(Color::Magenta)
+                        .fg(theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                 ),
                 VimMode::VisualBlock => (
                     "-- VISUAL BLOCK --",
                     Style::default()
-                        .fg(Color::Magenta)
+                        .fg(theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                 ),
                 VimMode::Command => (
                     "-- COMMAND --",
                     Style::default()
-                        .fg(theme_colors::accent())
+                        .fg(theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                 ),
                 VimMode::Search => (
                     "-- SEARCH --",
                     Style::default()
-                        .fg(theme_colors::warning())
+                        .fg(theme::warning_color())
                         .add_modifier(Modifier::BOLD),
                 ),
             };
@@ -375,7 +375,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled(
                 "[BASH]",
                 Style::default()
-                    .fg(theme_colors::warning())
+                    .fg(theme::warning_color())
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -392,7 +392,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(
                         "\u{23f5}\u{23f5} bypass",
                         Style::default()
-                            .fg(theme_colors::error())
+                            .fg(theme::error_color())
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
@@ -402,14 +402,17 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     }
                     spans.push(Span::styled(
                         "accept-edits",
-                        Style::default().fg(theme_colors::warning()),
+                        Style::default().fg(theme::warning_color()),
                     ));
                 }
                 PermissionMode::Plan => {
                     if !spans.is_empty() {
                         spans.push(Span::raw("  "));
                     }
-                    spans.push(Span::styled("plan", Style::default().fg(Color::Blue)));
+                    spans.push(Span::styled(
+                        "plan",
+                        Style::default().fg(theme::info_color()),
+                    ));
                 }
                 PermissionMode::Default => {}
             }
@@ -421,7 +424,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         if spans.is_empty() && app.is_streaming {
             spans.push(Span::styled(
                 "esc interrupt",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ));
         }
 
@@ -450,20 +453,20 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     parts.push(Span::styled(
                         format!("{}% context used — /compact now", used_pct),
                         Style::default()
-                            .fg(theme_colors::error())
+                            .fg(theme::error_color())
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else {
                     parts.push(Span::styled(
                         format!("{}% until auto-compact", left_pct),
-                        Style::default().fg(theme_colors::warning()),
+                        Style::default().fg(theme::warning_color()),
                     ));
                 }
             } else if used_pct >= 70 {
                 // 70–84%: mild warning.
                 parts.push(Span::styled(
                     format!("{}% until auto-compact", left_pct),
-                    Style::default().fg(theme_colors::warning()),
+                    Style::default().fg(theme::warning_color()),
                 ));
             } else {
                 // Normal: dim display.
@@ -471,7 +474,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 let total_k = app.context_window_size / 1000;
                 parts.push(Span::styled(
                     format!("{}k/{}k", used_k, total_k),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::dim_color()),
                 ));
             }
         }
@@ -487,7 +490,10 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 format!("${:.2}", app.cost_usd)
             };
-            parts.push(Span::styled(cost_str, Style::default().fg(Color::DarkGray)));
+            parts.push(Span::styled(
+                cost_str,
+                Style::default().fg(theme::dim_color()),
+            ));
         }
 
         // 3b. Per-turn metrics — wall clock for the turn in flight (kept
@@ -502,7 +508,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
             parts.push(Span::styled(
                 format!("{}:{:02}", total_secs / 60, total_secs % 60),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ));
 
             // A sub-second turn has no meaningful rate yet (and the division
@@ -513,7 +519,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 }
                 parts.push(Span::styled(
                     format!("{:.0} tok/s", app.turn_output_tokens as f64 / secs),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::dim_color()),
                 ));
             }
 
@@ -537,7 +543,10 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 if app.turn_cache_write_tokens > 0 {
                     deltas.push_str(&format!(" \u{21ba}{}", app.turn_cache_write_tokens));
                 }
-                parts.push(Span::styled(deltas, Style::default().fg(Color::DarkGray)));
+                parts.push(Span::styled(
+                    deltas,
+                    Style::default().fg(theme::dim_color()),
+                ));
             }
         }
 
@@ -549,9 +558,9 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 parts.push(Span::raw("  "));
             }
             let color = if pct >= 90.0 {
-                theme_colors::error()
+                theme::error_color()
             } else {
-                theme_colors::warning()
+                theme::warning_color()
             };
             parts.push(Span::styled(
                 format!("5h:{:.0}%", pct),
@@ -565,9 +574,9 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 parts.push(Span::raw("  "));
             }
             let color = if pct >= 90.0 {
-                theme_colors::error()
+                theme::error_color()
             } else {
-                theme_colors::warning()
+                theme::warning_color()
             };
             parts.push(Span::styled(
                 format!("7d:{:.0}%", pct),
@@ -618,11 +627,11 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     pill.push_str(&format!("drp:{}", snap.memory_jobs_dropped));
                 }
                 let color = if mem_recent {
-                    theme_colors::error()
+                    theme::error_color()
                 } else if stream_recent {
-                    theme_colors::warning()
+                    theme::warning_color()
                 } else {
-                    Color::DarkGray
+                    theme::dim_color()
                 };
                 parts.push(Span::styled(pill, Style::default().fg(color)));
             }
@@ -657,7 +666,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                     }
                     pill.push_str(&format!("skills:{}", skills_count));
                 }
-                parts.push(Span::styled(pill, Style::default().fg(Color::DarkGray)));
+                parts.push(Span::styled(pill, Style::default().fg(theme::dim_color())));
             }
         }
 
@@ -670,7 +679,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
             parts.push(Span::styled(
                 format!("⎇ {}", branch),
-                Style::default().fg(theme_colors::accent()),
+                Style::default().fg(theme::accent_color()),
             ));
         }
 
@@ -695,7 +704,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             };
             parts.push(Span::styled(
                 display_dir,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ));
         }
 
@@ -706,7 +715,7 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
             parts.push(Span::styled(
                 format!("[{}]", app.output_style),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ));
         }
 
@@ -766,22 +775,22 @@ pub(crate) fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect
         let is_selected = start + row == selected;
         let accent_style = if is_selected {
             Style::default()
-                .fg(accent_primary())
+                .fg(theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::dim_color())
         };
         let label_style = if is_selected {
             Style::default()
-                .fg(accent_primary())
+                .fg(theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme_colors::text())
+            Style::default().fg(theme::ai_text())
         };
         let detail_style = if is_selected {
-            Style::default().fg(accent_primary())
+            Style::default().fg(theme::accent_color())
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::dim_color())
         };
         let mut spans = vec![Span::styled(
             if is_selected { "\u{203a} " } else { "  " },
@@ -796,7 +805,7 @@ pub(crate) fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect
                 ));
                 spans.push(Span::styled(
                     " [cmd] ",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::dim_color()),
                 ));
                 if !suggestion.description.is_empty() {
                     spans.push(Span::styled(
@@ -817,7 +826,7 @@ pub(crate) fn render_prompt_suggestions(frame: &mut Frame, app: &App, area: Rect
                 if !suggestion.description.is_empty() {
                     spans.push(Span::styled(
                         " \u{2014} ",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::dim_color()),
                     ));
                     spans.push(Span::styled(
                         truncate_text(&suggestion.description, area.width as usize / 2),

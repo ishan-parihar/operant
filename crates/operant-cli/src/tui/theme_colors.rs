@@ -13,6 +13,9 @@ use std::sync::RwLock;
 
 use ratatui::style::Color;
 
+use crate::tui::vendor::style::palette::{self, Palette, Role};
+use crate::tui::vendor::style::theme_mode::{self, ThemeMode};
+
 /// Color palette for a specific theme.
 #[derive(Debug, Clone)]
 pub struct ColorPalette {
@@ -307,14 +310,187 @@ fn with_active(f: impl FnOnce(&ColorPalette) -> Color) -> Color {
 /// rather than one per styled span. [`crate::tui::color_depth::detect`] is
 /// itself cached, so the detection cost is paid once per process, here.
 pub fn set_active_theme(theme_name: &str) {
-    let next = crate::tui::color_depth::quantize_palette(
-        &ColorPalette::for_theme(theme_name),
-        crate::tui::color_depth::detect(),
-    );
+    let source = ColorPalette::for_theme(theme_name);
+    let next =
+        crate::tui::color_depth::quantize_palette(&source, crate::tui::color_depth::detect());
     match ACTIVE.write() {
         Ok(mut guard) => *guard = next,
         Err(poisoned) => *poisoned.into_inner() = next,
     }
+    sync_role_palette(&source);
+}
+
+// ---------------------------------------------------------------------------
+// Bridge: this palette → the vendored 22-role palette
+// ---------------------------------------------------------------------------
+//
+// The vendored design system (`crate::tui::vendor::style`) carries its own
+// palette: 22 semantic roles, each with a FROZEN default RGB, plus a
+// per-frame buffer pass (`theme_mode::adapt_buffer_for_display`) that rewrites
+// any cell whose colour IS a role's default onto that role's configured value.
+// That pass is the whole theming mechanism, and it is a no-op unless a role
+// carries a configured value.
+//
+// So there are two palettes in the process — this file's 18-field
+// `ColorPalette` and the role table — and they have to be bridged, not merged:
+// deleting either would strand half the TUI. [`sync_role_palette`] seeds the
+// role table from whichever `ColorPalette` is active, which is what makes
+// `/theme` drive both from one action.
+//
+// The migration unit is the *call site*, not the draw: a widget becomes
+// themable once it calls a `style::theme::*` accessor (those deliberately
+// return the role's DEFAULT, so the buffer pass rewrites it). This seed only
+// makes that possible; it does not by itself restyle anything.
+
+/// Every [`ColorPalette`] field, in declaration order.
+///
+/// The role seed table ([`roles_for_field`]) and the collision test in this
+/// module's `tests` both read this one list, so a new field cannot be added
+/// without the seed table and its safety test seeing it.
+fn palette_fields(p: &ColorPalette) -> [(&'static str, Color); 18] {
+    [
+        ("error", p.error),
+        ("success", p.success),
+        ("warning", p.warning),
+        ("info", p.info),
+        ("action", p.action),
+        ("disabled", p.disabled),
+        ("accent", p.accent),
+        ("secondary_accent", p.secondary_accent),
+        ("text_light", p.text_light),
+        ("text_dark", p.text_dark),
+        ("border", p.border),
+        ("emphasis", p.emphasis),
+        ("text", p.text),
+        ("muted", p.muted),
+        ("panel_bg", p.panel_bg),
+        ("overlay_bg", p.overlay_bg),
+        ("selection_bg", p.selection_bg),
+        ("text_selection_bg", p.text_selection_bg),
+    ]
+}
+
+/// Which jcode roles a [`ColorPalette`] field seeds.
+///
+/// Several roles share a field when operant has no closer counterpart:
+/// `emphasis` is the accent role proper, `accent` doubles as the header icon,
+/// and so on. `emphasis` — not `accent` — is [`Role::Accent`] because
+/// `emphasis` is what this file's `accent()` accessor already returns and
+/// therefore what the whole chrome is composed against today.
+///
+/// Four fields have no role counterpart and are deliberately left un-seeded:
+/// `text_dark` (a *foreground* for use on top of a selection background, not a
+/// shade), `overlay_bg` (a dimming wash, not a surface),
+/// `text_selection_bg` (a mouse-drag highlight that is `Rgb(200,200,200)` in
+/// all eight themes, so it carries no theme signal), and `secondary_accent`
+/// (the jcode `Ai` role would be its home, but `success` claims it — see
+/// below). They keep reading their own accessors, which `/theme` already
+/// drives.
+fn roles_for_field(field: &str) -> &'static [Role] {
+    match field {
+        // Primary/secondary accents: user turns + the header session icon.
+        "accent" => &[Role::User, Role::HeaderIcon],
+        // `Ai` and `Success` share `success`. The `Ai` half is forced, not
+        // chosen: jcode's frozen `Ai` default (129,199,132) is byte-identical
+        // to the `dark` theme's `success`, so if `success` seeded any other
+        // role then every un-migrated `theme_colors::success()` cell in the
+        // TUI would be repainted to that role's colour. See the collision note
+        // on `sync_role_palette`.
+        "success" => &[Role::Ai, Role::Success],
+        // Same forced pairing for `Tool`: jcode's `Tool` default (120,120,120)
+        // is the `dark` and `deuteranopia` themes' `muted`.
+        "muted" => &[Role::Tool, Role::Dim],
+        "info" => &[Role::FileLink, Role::Info],
+        "action" => &[Role::System],
+        "disabled" => &[Role::Pending],
+        // The accent role.
+        "emphasis" => &[Role::Accent],
+        // `HeaderSession` is forced the same way as `Ai`/`Tool`: jcode's
+        // `HeaderSession` default (255,255,255) is the `default` and `light`
+        // themes' `text_light`.
+        "text_light" => &[Role::UserText, Role::HeaderSession],
+        "text" => &[Role::AiText, Role::HeaderName],
+        "panel_bg" => &[Role::UserBg],
+        "border" => &[Role::Border],
+        "selection_bg" => &[Role::SelectionBg],
+        // Lifecycle indicators borrow the status colours they already use:
+        // a queued prompt is an attention-coloured prompt, ASAP is urgent.
+        "warning" => &[Role::Queued, Role::Warning],
+        "error" => &[Role::Asap, Role::Error],
+        // No role counterpart — see the doc comment.
+        "text_dark" | "overlay_bg" | "text_selection_bg" | "secondary_accent" => &[],
+        // Unknown field name: seed nothing. `seed_covers_every_role` in the
+        // tests below fails if this arm is ever reached by a real field.
+        _ => &[],
+    }
+}
+
+/// Resolve a palette colour to the RGB triple a role slot holds.
+///
+/// `Color::Rgb` and `Color::Indexed` carry their own value. A ratatui *named*
+/// colour does not, so the handful operant's palettes actually use are mapped
+/// to the xterm base-16 entry they render as. A name outside that table leaves
+/// its role un-seeded — and therefore un-substituted — rather than guessing a
+/// value that would repaint a surface to the wrong colour.
+fn role_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Indexed(index) => Some(crate::tui::vendor::style::color::indexed_to_rgb(index)),
+        Color::Black => Some((0, 0, 0)),
+        Color::DarkGray => Some((128, 128, 128)),
+        Color::Blue => Some((0, 0, 255)),
+        Color::Cyan => Some((0, 255, 255)),
+        Color::White => Some((255, 255, 255)),
+        other => {
+            tracing::debug!(
+                ?other,
+                "named colour has no role seed; role left un-substituted"
+            );
+            None
+        }
+    }
+}
+
+/// Push `source` into the vendored role palette and set the theme mode.
+///
+/// # The collision rule this function has to honour
+///
+/// The buffer pass attributes a colour to a role by EXACT match against that
+/// role's frozen default, then replaces it with the role's configured value.
+/// So if a theme's own value for field F happens to be some *other* role's
+/// default D, then every un-migrated `theme_colors::F()` cell in the TUI —
+/// hundreds of them — would be silently repainted to whatever `D`'s role was
+/// seeded with.
+///
+/// The only way to prevent that is for `D`'s role to be seeded from the very
+/// field that carries `D`, which makes the substitution a no-op. Three role
+/// defaults collide with an operant value today (`Ai`/`Tool`/`HeaderSession`,
+/// see [`roles_for_field`]); `seed_never_repaints_an_operant_value` in the
+/// tests below fails the build if a fourth appears.
+fn sync_role_palette(source: &ColorPalette) {
+    palette::set_palette(role_palette_for(source));
+    // jcode's `ThemeMode` exists because jcode ships ONE dark palette and
+    // adapts it for light terminals at the buffer. operant ships eight
+    // self-contained palettes — `light` already carries dark inks on a
+    // near-white surface — so the seed above IS the light adaptation.
+    // Staying in `Dark` mode disables the second, luminance-flipping pass,
+    // which would otherwise double-adapt colours this palette already got
+    // right: the `light` theme's `text` (Rgb(33,33,33)) would flip back to
+    // near-white and disappear.
+    theme_mode::set_theme_mode(ThemeMode::Dark);
+}
+
+/// The role palette `source` seeds. Split out from [`sync_role_palette`] so
+/// the collision test below can inspect it without touching the process-global.
+fn role_palette_for(source: &ColorPalette) -> Palette {
+    let mut next = Palette::default();
+    for (field, color) in palette_fields(source) {
+        let Some(rgb) = role_rgb(color) else { continue };
+        for role in roles_for_field(field) {
+            next.set(*role, rgb);
+        }
+    }
+    next
 }
 
 /// Accent bar / selection accent.
@@ -381,10 +557,9 @@ pub fn disabled() -> Color {
 // Fixed neutral greys — deliberately NOT palette roles
 // ---------------------------------------------------------------------------
 //
-// These three are the same colour repeated across the UI: six dialogs each
-// declared `let dim = Color::Rgb(90, 90, 90)`, two declared
-// `let muted = Color::Rgb(180, 180, 180)`, and the footer declared its own
-// `let dim = Color::Rgb(110, 110, 124)`.
+// These two are the same colour repeated across the UI: six dialogs each
+// declared `let dim = Color::Rgb(90, 90, 90)` and two declared
+// `let muted = Color::Rgb(180, 180, 180)`.
 //
 // They are constants, not accessors, on purpose. Routing them through the
 // palette would CHANGE their appearance: this palette's `muted()` is
@@ -395,19 +570,16 @@ pub fn disabled() -> Color {
 // themed is a per-theme design decision, not a refactor, and it is deliberately
 // not made here.
 //
-// The two greys that both read as "dim" are kept apart on purpose: the footer's
-// is a different value, and a single `dim` name across seven files is a trap
-// for whoever eventually does that design work.
+// The footer's own `Rgb(110, 110, 124)` and the banner's `Rgb(140, 110, 0)`
+// used to live here as `FOOTER_DIM` / `BANNER_DIM` for the same reason. The
+// chrome migration moved them to the `Dim` role instead, because the base
+// chrome is the one surface whose colour `/theme` must visibly repaint.
 
 /// The dimmest text tier used by the dialogs. Was `Rgb(90, 90, 90)`.
 pub const DIALOG_DIM: Color = Color::Rgb(90, 90, 90);
 
 /// The mid-strength text tier used by the dialogs. Was `Rgb(180, 180, 180)`.
 pub const DIALOG_MUTED: Color = Color::Rgb(180, 180, 180);
-
-/// The footer's own dim tier. Was `Rgb(110, 110, 124)`, and was named `dim`
-/// like the dialogs' `Rgb(90, 90, 90)` despite being a different colour.
-pub const FOOTER_DIM: Color = Color::Rgb(110, 110, 124);
 
 /// The brightest of the dialog text tiers: a SELECTED item's description line,
 /// and the "press Enter to use custom model" hint.
@@ -455,11 +627,6 @@ pub const TOOL_ERROR: Color = Color::Rgb(255, 140, 0);
 /// coupled to a hardcoded bg", so unifying the two foregrounds is its own
 /// appearance decision rather than a leftover.
 pub const SEARCH_MATCH_BG: Color = Color::Rgb(60, 50, 0);
-
-/// The dim tier of the banner's box frame, shared with the rustle idle
-/// animation drawn inside it. `rustle.rs` carried its own copy of this literal
-/// in a private `dim_style()`, so the two could drift apart unnoticed.
-pub const BANNER_DIM: Color = Color::Rgb(140, 110, 0);
 
 /// Foreground to use on top of [`selection_bg`] / [`text_selection_bg`], and on
 /// top of `accent()` when a list row is selected — `accent()` returns
@@ -540,6 +707,119 @@ pub(crate) mod tests {
         let dark = ColorPalette::for_theme("dark");
         assert_ne!(default.error, dark.error);
         assert_ne!(default.border, dark.border);
+    }
+
+    /// The bridge's whole point: one `/theme` action moves BOTH palettes.
+    ///
+    /// `set_active_theme` is the only write path for operant's palette, so
+    /// this is the single point at which the role palette has to follow. If it
+    /// ever stops doing so, every migrated surface freezes on whatever
+    /// jcode's frozen role defaults are.
+    #[test]
+    fn switching_theme_rebuilds_the_role_palette() {
+        let _guard = ACTIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_active_theme("dark");
+        let dark = palette::palette();
+        set_active_theme("light");
+        let light = palette::palette();
+        set_active_theme("default");
+
+        assert_ne!(dark, light, "the role palette must follow /theme");
+        for role in [Role::Accent, Role::Border, Role::AiText, Role::UserBg] {
+            assert_ne!(dark.rgb(role), light.rgb(role), "{role:?} must repaint");
+        }
+    }
+
+    /// Every role must be overridden, or the per-frame substitution is a no-op
+    /// for it and no surface that migrated to it can ever be themed.
+    #[test]
+    fn every_role_is_seeded() {
+        let seeded = role_palette_for(&ColorPalette::for_theme("nord"));
+        for role in palette::ALL_ROLES {
+            assert!(
+                seeded.is_overridden(*role),
+                "{role:?} is never seeded, so no surface using it can ever be themed"
+            );
+        }
+    }
+
+    /// The safety property the whole seed table exists to hold: whenever a
+    /// theme's own value for a field IS some role's frozen default, that role
+    /// must be seeded from the very field carrying it.
+    ///
+    /// Otherwise the per-frame substitution would attribute those cells to
+    /// the other role and repaint hundreds of un-migrated surfaces to an
+    /// unrelated colour. Three pairs collide today (`Ai`/`dark.success`,
+    /// `Tool`/`dark.muted`, `HeaderSession`/`default.text_light`); this fails
+    /// if a theme edit adds a fourth without fixing the seed table.
+    #[test]
+    fn seed_never_repaints_an_operant_value() {
+        for name in [
+            "default",
+            "dark",
+            "light",
+            "solarized",
+            "nord",
+            "dracula",
+            "monokai",
+            "deuteranopia",
+        ] {
+            let source = ColorPalette::for_theme(name);
+            let seeded = role_palette_for(&source);
+            for (field, color) in palette_fields(&source) {
+                let Some(value) = role_rgb(color) else {
+                    continue;
+                };
+                let Some(role) = palette::ALL_ROLES
+                    .iter()
+                    .copied()
+                    .find(|role| role.default_rgb() == value)
+                else {
+                    continue;
+                };
+                assert_eq!(
+                    seeded.rgb(role),
+                    value,
+                    "{name}.{field} = {value:?}, which is the frozen default of {role:?}; \
+                     {role:?} is seeded with {:?} instead, so every {field}() cell in the TUI \
+                     would be silently repainted. Seed {role:?} from a field carrying {value:?}.",
+                    seeded.rgb(role)
+                );
+            }
+        }
+    }
+
+    /// A typo in the seed table's field names would silently un-seed a role
+    /// (and could open a collision), so pin both directions: every role is
+    /// reached, and the only fields with no role are the documented ones.
+    #[test]
+    fn seed_covers_every_role() {
+        let source = ColorPalette::for_theme("default");
+        let mut covered: Vec<Role> = palette_fields(&source)
+            .iter()
+            .flat_map(|(field, _)| roles_for_field(field).iter().copied())
+            .collect();
+        covered.sort();
+        covered.dedup();
+        let mut expected = palette::ALL_ROLES.to_vec();
+        expected.sort();
+        assert_eq!(covered, expected, "seed table does not cover every role");
+
+        let mut unmapped: Vec<&str> = palette_fields(&source)
+            .iter()
+            .filter(|(field, _)| roles_for_field(field).is_empty())
+            .map(|(field, _)| *field)
+            .collect();
+        unmapped.sort_unstable();
+        assert_eq!(
+            unmapped,
+            [
+                "overlay_bg",
+                "secondary_accent",
+                "text_dark",
+                "text_selection_bg"
+            ]
+        );
     }
 
     #[test]

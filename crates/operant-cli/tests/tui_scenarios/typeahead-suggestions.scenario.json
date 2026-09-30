@@ -1,0 +1,22 @@
+{
+  "name": "typeahead-suggestions",
+  "surface": "crates/operant-cli/src/tui/render/footer.rs::render_prompt_suggestions",
+  "opens_with": "/",
+  "keys": "/",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/"
+    }
+  ],
+  "assert": [
+    "focus == Input"
+  ],
+  "assert_screen": [
+    "contains:[cmd]"
+  ],
+  "baseline": "typeahead-suggestions.txt",
+  "style_baseline": "typeahead-suggestions.style.txt",
+  "notes": "The typeahead popup is chunk[4] of the render_app layout — a separately budgeted row group that vanishes silently when suggestions go empty, taking the input's vertical position with it. ENV: the ORDER of the rows comes from ~/.operant/slash-usage.json (recency then frequency), so the text baseline is machine-specific; assert_screen deliberately checks only the recency-independent '[cmd]' marker. OBSERVED while authoring: two-or-more-character prefixes ('/sk', '/he', '/ex') currently paint zero rows while single-character prefixes ('/', '/s', '/h', '/st') do — a real inconsistency worth a follow-up, but not this scenario's job."
+}

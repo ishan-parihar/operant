@@ -3,14 +3,14 @@
 use crate::tui::adapter_types::constants::APP_VERSION;
 use crate::tui::app::App;
 use crate::tui::rustle::rustle_lines;
-use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
-use super::{WELCOME_BOX_HEIGHT, accent_primary, display_width, truncate_end};
+use super::{WELCOME_BOX_HEIGHT, display_width, truncate_end};
 
 #[allow(dead_code)] // Prepared for welcome screen rendering — not yet wired into render_app()
 pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> {
@@ -24,10 +24,10 @@ pub(crate) fn startup_notice_lines(app: &App, width: u16) -> Vec<Line<'static>> 
 
     if let Some(url) = app.remote_session_url.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled(" link ", Style::default().fg(accent_primary())),
+            Span::styled(" link ", Style::default().fg(theme::accent_color())),
             Span::styled(
                 truncate_end(url, max_width),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ),
         ]));
     }
@@ -109,12 +109,12 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 "Operant ",
                 Style::default()
-                    .fg(accent_primary())
+                    .fg(theme::accent_color())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("v{}", APP_VERSION),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ),
         ]);
         frame.render_widget(Paragraph::new(vec![line]), area);
@@ -128,7 +128,7 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Outer border with title "Operant vX.Y"
-    let accent = app.accent_color;
+    let accent = theme::accent_color();
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -140,7 +140,7 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(
                 format!("v{} ", APP_VERSION),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ),
         ]));
     frame.render_widget(outer_block, box_area);
@@ -192,7 +192,7 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
     left_lines.push(Line::from(Span::styled(
         welcome_msg,
         Style::default()
-            .fg(theme_colors::text())
+            .fg(theme::ai_text())
             .add_modifier(Modifier::BOLD),
     )));
     left_lines.push(Line::from(""));
@@ -258,7 +258,7 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("  ", Style::default()),
             Span::styled(
                 chunk.iter().collect::<String>(),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme::dim_color()),
             ),
         ]));
     }
@@ -284,27 +284,27 @@ pub(crate) fn render_welcome_box(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("  ", Style::default()),
         Span::styled(
             format!("{} tools", tool_count.max(1)),
-            Style::default().fg(theme_colors::text()),
+            Style::default().fg(theme::ai_text()),
         ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(theme::dim_color())),
         Span::styled(
             format!("{} MCP", mcp_count),
-            Style::default().fg(theme_colors::text()),
+            Style::default().fg(theme::ai_text()),
         ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(theme::dim_color())),
         Span::styled(
             format!("{} skills", skills_count),
-            Style::default().fg(theme_colors::text()),
+            Style::default().fg(theme::ai_text()),
         ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(theme::dim_color())),
         Span::styled(
             format!("{} memories", mem_count),
-            Style::default().fg(theme_colors::text()),
+            Style::default().fg(theme::ai_text()),
         ),
     ]));
     right_lines.push(Line::from(Span::styled(
         "  /help for commands",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     frame.render_widget(

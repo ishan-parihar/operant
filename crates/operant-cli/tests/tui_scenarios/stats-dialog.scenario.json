@@ -1,0 +1,19 @@
+{
+  "name": "stats-dialog",
+  "surface": "crates/operant-cli/src/tui/stats_dialog.rs::render_stats_dialog",
+  "opens_with": "/stats",
+  "keys": "/stats<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.stats_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Cost & stats",
+    "contains:Total tokens",
+    "contains:Total cost"
+  ],
+  "baseline": "stats-dialog.txt",
+  "style_baseline": "stats-dialog.style.txt",
+  "notes": "Renders directly into frame.buffer_mut() rather than as a widget, so it bypasses the normal clear/border path — a distinct code shape worth isolating in a baseline. Four-tab header (Overview / Daily Tokens / Cost Heatmap / Models) with only the first tab reachable from this opener."
+}

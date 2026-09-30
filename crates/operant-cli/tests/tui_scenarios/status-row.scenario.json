@@ -1,0 +1,23 @@
+{
+  "name": "status-row",
+  "surface": "crates/operant-cli/src/tui/render/footer.rs::render_status_row",
+  "opens_with": "/status",
+  "keys": "/status<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/status<enter>"
+    }
+  ],
+  "assert": [
+    "status_message contains Session status"
+  ],
+  "assert_screen": [
+    "contains:Session status",
+    "contains:idle"
+  ],
+  "baseline": "status-row.txt",
+  "style_baseline": "status-row.style.txt",
+  "notes": "The status row only exists when should_render_status_row() is true, which needs a status_message while idle — /status is the cheapest way to arm it. It also pushes a system annotation, so this one scenario pins both the status row and the system-annotation transcript style. Catches the status row losing a row to render_app's prompt_height clamp when the message wraps (the div_ceil(display_width(text)) measurement path). NOTE: deliberately does NOT assert any_modal_open — on a host with audio, voice_mode_notice is visible from frame 0, so any_modal_open is true for the whole run and the assertion would be host-dependent rather than surface-dependent."
+}

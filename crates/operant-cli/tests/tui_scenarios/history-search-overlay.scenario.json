@@ -1,0 +1,18 @@
+{
+  "name": "history-search-overlay",
+  "surface": "crates/operant-cli/src/tui/overlays.rs::render_history_search_overlay",
+  "opens_with": "Ctrl+R",
+  "keys": "<ctrl+r>",
+  "size": "120x40",
+  "assert": [
+    "overlays.history_search_overlay == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:History Search",
+    "contains:results"
+  ],
+  "baseline": "history-search-overlay.txt",
+  "style_baseline": "history-search-overlay.style.txt",
+  "notes": "The one overlay with a legal non-slash opener, because ctrl+r IS in the token set. Its result count and rows come from the real prompt history, so this is the corpus's clearest ENV-dependent baseline: pin HOME and seed a fixture history file, or keep it out of the blocking tier. The overlay also forces prompt_focused false (render/mod.rs:107), which is a state worth a follow-up scenario of its own."
+}

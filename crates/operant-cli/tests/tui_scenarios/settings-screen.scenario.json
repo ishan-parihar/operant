@@ -1,0 +1,24 @@
+{
+  "name": "settings-screen",
+  "surface": "crates/operant-cli/src/tui/settings_screen.rs::render_settings_screen",
+  "opens_with": "/settings",
+  "keys": "/settings<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/settings<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.settings_screen == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Settings",
+    "contains:Type to search settings"
+  ],
+  "baseline": "settings-screen.txt",
+  "style_baseline": "settings-screen.style.txt",
+  "notes": "The highest-priority full-screen overlay (drawn before theme / stats / mcp / agents). Two-column settings list with a search box and boolean/enum value cells. ENV: rows reflect the live settings.json, so pin it. A narrow variant matters here more than anywhere — the two-column layout is the most width-sensitive in the corpus."
+}

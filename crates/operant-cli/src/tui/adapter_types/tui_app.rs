@@ -755,7 +755,7 @@ impl TuiApp {
     pub async fn run_headless(
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
-        agent_script: Option<Vec<operant_core::agent::AgentEvent>>,
+        agent_script: Option<Vec<crate::cmd_tui_debug::MockAgentEvent>>,
         size: (u16, u16),
         max_frames: Option<u64>,
         frame_capture: Option<(Vec<u64>, std::path::PathBuf)>,
@@ -773,48 +773,116 @@ impl TuiApp {
             tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
         self.app.permission_rx = Some(permission_rx);
 
+        // Created before the mock/live split so the mock path can drive
+        // `ask_user_dialog` through the same channel the clarify tool uses.
+        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
+            operant_core::user_question::UserQuestionRequest,
+        >();
+        let _ = operant_core::user_question::set_user_question_sender(uq_tx.clone());
+        self.app.user_question_rx = Some(uq_rx);
+
         let config = self.app.config.clone();
         let mcp_manager = operant_core::mcp::McpManager::new();
         let skills_dir = config.skills.root_dir.clone();
 
         let is_mock = agent_script.is_some();
-        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> =
-            if let Some(script) = agent_script {
-                // Mock path: inject scripted AgentEvents through the real
-                // agent_event_rx channel instead of spawning a network agent.
-                // Events are buffered; is_streaming keeps the run loop alive to
-                // process them; a pre-resolved run_complete oneshot guarantees
-                // the loop terminates (is_streaming flips false) even if the
-                // script omits a Done event. No network calls on this path.
-                for ev in script {
-                    let _ = agent_tx.try_send(ev);
-                }
-                drop(agent_tx);
-                self.app.is_streaming = true;
-                self.app.begin_turn();
-                let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-                let _ = done_tx.send(Ok(()));
-                self.app.run_complete_rx = Some(done_rx);
-                None
-            } else {
-                match crate::create_runtime_agent(
-                    &config,
-                    &config.agent,
-                    None,
-                    agent_tx,
-                    &mcp_manager,
-                    &skills_dir,
-                    Some(std::sync::Arc::clone(&self.metrics)),
-                )
-                .await
-                {
-                    Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
-                    Err(e) => {
-                        self.app.status_message = Some(format!("Agent init failed: {}", e));
-                        None
+        let agent: Option<std::sync::Arc<operant_core::agent::OperantAgent>> = if let Some(script) =
+            agent_script
+        {
+            // Mock path: inject scripted events through the real channels
+            // the TUI already drains, instead of spawning a network agent.
+            // AgentEvents are buffered on `agent_event_rx`; the four
+            // channel-fed variants go onto `permission_tx` / `uq_tx` /
+            // the background-delegation registry, which is exactly where
+            // a live agent puts them. is_streaming keeps the run loop
+            // alive to process them; a pre-resolved run_complete oneshot
+            // guarantees the loop terminates (is_streaming flips false)
+            // even if the script omits a Done event. No network calls on
+            // this path.
+            for ev in script {
+                match ev {
+                    crate::cmd_tui_debug::MockAgentEvent::User { text } => {
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        self.app.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(text),
+                        });
+                    }
+                    crate::cmd_tui_debug::MockAgentEvent::PermissionRequest {
+                        tool,
+                        tool_id,
+                        description,
+                    } => {
+                        let (tx, _rx) = tokio::sync::oneshot::channel();
+                        let _ =
+                            permission_tx.try_send(operant_core::agent::ToolPermissionRequest {
+                                tool_name: tool,
+                                tool_id,
+                                description,
+                                danger_explanation: String::new(),
+                                input_preview: None,
+                                response_tx: tx,
+                            });
+                    }
+                    crate::cmd_tui_debug::MockAgentEvent::UserQuestion { question, choices } => {
+                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                        let _ = uq_tx.send(operant_core::user_question::UserQuestionRequest {
+                            question,
+                            choices,
+                            reply_tx,
+                        });
+                    }
+                    crate::cmd_tui_debug::MockAgentEvent::BackgroundTask {
+                        goal,
+                        model,
+                        status,
+                    } => {
+                        let id =
+                            operant_core::tools::async_delegation::create_record(&goal, &model);
+                        match status.as_str() {
+                            "completed" => operant_core::tools::async_delegation::mark_completed(
+                                &id, "(seeded)",
+                            ),
+                            "failed" => operant_core::tools::async_delegation::mark_failed(
+                                &id,
+                                "(seeded failure)",
+                            ),
+                            _ => {}
+                        }
+                    }
+                    other => {
+                        if let Some(ev) = other.into_agent_event() {
+                            let _ = agent_tx.try_send(ev);
+                        }
                     }
                 }
-            };
+            }
+            drop(agent_tx);
+            self.app.is_streaming = true;
+            self.app.begin_turn();
+            let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+            let _ = done_tx.send(Ok(()));
+            self.app.run_complete_rx = Some(done_rx);
+            None
+        } else {
+            match crate::create_runtime_agent(
+                &config,
+                &config.agent,
+                None,
+                agent_tx,
+                &mcp_manager,
+                &skills_dir,
+                Some(std::sync::Arc::clone(&self.metrics)),
+            )
+            .await
+            {
+                Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                Err(e) => {
+                    self.app.status_message = Some(format!("Agent init failed: {}", e));
+                    None
+                }
+            }
+        };
 
         self.app.core_mcp_manager = Some(std::sync::Arc::new(mcp_manager));
         if let Some(ref agent) = agent {
@@ -827,12 +895,6 @@ impl TuiApp {
             // connecting its MCP server (fast reconnect).
             self.app.core_memory_provider = agent.memory_provider();
         }
-
-        let (uq_tx, uq_rx) = tokio::sync::mpsc::unbounded_channel::<
-            operant_core::user_question::UserQuestionRequest,
-        >();
-        let _ = operant_core::user_question::set_user_question_sender(uq_tx);
-        self.app.user_question_rx = Some(uq_rx);
 
         self.app.refresh_context_window_size();
         // Skip the network models.dev fetch on the deterministic mock path.

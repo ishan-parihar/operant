@@ -1,0 +1,21 @@
+{
+  "name": "bypass-permissions-dialog",
+  "surface": "crates/operant-cli/src/tui/bypass_permissions_dialog.rs::render_bypass_permissions_dialog",
+  "opens_with": "(--bypass-permissions on `simulate`, mirroring the real CLI flag)",
+  "keys": "",
+  "size": "120x40",
+  "assert": [
+    "overlays.bypass_permissions_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:I accept",
+    "contains:Yes"
+  ],
+  "baseline": "bypass-permissions-dialog.txt",
+  "style_baseline": "bypass-permissions-dialog.style.txt",
+  "notes": "Red-bordered risk warning with an explicit accept/decline choice. The default selection is index 0 (decline), so assert_screen pins BOTH option strings to catch a default flip. This is the cheapest unblock in the corpus \u2014 one boolean at an existing parameter. Reachable since `simulate` grew a --bypass-permissions flag that is threaded into the existing TuiApp::enter parameter. It has to be a flag and not an agent-script event: the dialog is raised in TuiApp::enter, before any key or event is processed.",
+  "flags": [
+    "--bypass-permissions"
+  ]
+}

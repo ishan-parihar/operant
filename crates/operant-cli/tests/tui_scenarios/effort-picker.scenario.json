@@ -1,0 +1,19 @@
+{
+  "name": "effort-picker",
+  "surface": "crates/operant-cli/src/effort_picker.rs::render_effort_picker",
+  "opens_with": "/effort",
+  "keys": "/effort<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.effort_picker == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Effort level",
+    "contains:normal",
+    "contains:high"
+  ],
+  "baseline": "effort-picker.txt",
+  "style_baseline": "effort-picker.style.txt",
+  "notes": "Radio group with a distinct glyph per level (circle / half / three-quarter / full). The selection cursor sits on the CURRENT level, so which row is marked is ENV-dependent (settings.json) while the four level names are not. Smallest overlay in the corpus, which makes it the best canary for the modal-shadow and border-accent code shared by all of them."
+}

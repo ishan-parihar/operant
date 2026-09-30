@@ -13,22 +13,9 @@
 //!
 //! Used by `render::render_banner_block` (above the welcome panel).
 
-use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-
-/// The banner wordmark reads the active theme's accent — the same accessor
-/// `rustle::accent_style` uses, so the logo and the mascot stay one design
-/// system under every theme rather than freezing on the default theme's amber.
-fn accent() -> Style {
-    Style::default()
-        .fg(theme_colors::accent())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn dim() -> Style {
-    Style::default().fg(theme_colors::BANNER_DIM)
-}
 
 /// Full OPERANT wordmark — 7 lines × 56 columns.
 ///
@@ -40,6 +27,16 @@ fn dim() -> Style {
 /// | | | | |/ /| |  | | |___| |_| /\__/ /\ \__/\| |___
 /// \_| |_/___/ \_|  |_/\____/ \___/\____/  \____/\____/
 /// ```
+fn accent_style() -> Style {
+    Style::default()
+        .fg(theme::accent_color())
+        .add_modifier(Modifier::BOLD)
+}
+
+fn dim_style() -> Style {
+    Style::default().fg(theme::dim_color())
+}
+
 pub const FULL_ART: [&str; 7] = [
     " ██████╗ ██████╗ ███████╗██████╗  █████╗ ███╗   ██╗████████╗",
     "██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗████╗  ██║╚══██╔══╝",
@@ -96,7 +93,7 @@ pub fn banner_lines(width: u16) -> Vec<Line<'static>> {
             let trailing_len = line.len().saturating_sub(trimmed.len());
             let mut spans: Vec<Span<'static>> = Vec::with_capacity(2);
             if !trimmed.is_empty() {
-                spans.push(Span::styled(trimmed.to_string(), accent()));
+                spans.push(Span::styled(trimmed.to_string(), accent_style()));
             }
             if trailing_len > 0 {
                 spans.push(Span::raw(" ".repeat(trailing_len)));
@@ -106,11 +103,11 @@ pub fn banner_lines(width: u16) -> Vec<Line<'static>> {
     } else {
         // Below 40 cols: styled single-line wordmark + dim version tag.
         out.push(Line::from(vec![
-            Span::styled("OPERANT", accent()),
+            Span::styled("OPERANT", accent_style()),
             Span::raw(" "),
-            Span::styled("·", dim()),
+            Span::styled("·", dim_style()),
             Span::raw(" "),
-            Span::styled("the personal AI agent", dim()),
+            Span::styled("the personal AI agent", dim_style()),
         ]));
     }
 
@@ -132,9 +129,9 @@ pub fn banner_with_subtitle(width: u16, version: &str) -> Vec<Line<'static>> {
         let left_rule = "─".repeat(rule_total / 2);
         let right_rule = "─".repeat(rule_total - rule_total / 2);
         lines.push(Line::from(vec![
-            Span::styled(left_rule, dim()),
-            Span::styled(version_label, dim()),
-            Span::styled(right_rule, dim()),
+            Span::styled(left_rule, dim_style()),
+            Span::styled(version_label, dim_style()),
+            Span::styled(right_rule, dim_style()),
         ]));
     }
     lines
@@ -143,10 +140,8 @@ pub fn banner_with_subtitle(width: u16, version: &str) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // The module-level import dropped `Color` at iter-463, when the only
-    // non-test use (`BANNER_DIM`) moved to `theme_colors`. These assertions
-    // still need the type.
-    use ratatui::style::Color;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
 
     #[test]
     fn full_art_is_seven_lines_uniform_width() {
@@ -205,12 +200,12 @@ mod tests {
 
     // ── Theme-driven accent ────────────────────────────────────────────────
     //
-    // `BANNER_ACCENT` used to be a `const` pinned to the default theme's
-    // amber, and `ACCENT_PRIMARY` was a second, duplicate `const` in
-    // `messages/mod.rs` and a third in `prompt_input/mod.rs`. The
-    // `theme_colors` accessors are runtime `fn`s (the active palette lives
-    // behind a lock), so none of the three could be a `const` and all three
-    // had to be deleted. The wordmark now reads the active palette.
+    // The wordmark emits the `Accent` role's FROZEN default, and the per-frame
+    // buffer pass rewrites it onto the active theme's value. Asserting
+    // `wordmark_fg == theme_colors::accent()` would therefore be wrong twice
+    // over: the emitted colour is theme-independent by design, and the
+    // resolved colour only exists after the pass. So these tests drive the real
+    // pipeline: paint, substitute, read the cell back.
 
     /// Run `f` with `theme` active, then restore the default palette. Shares
     /// the palette lock the other theme-mutating tests serialize on. The
@@ -226,47 +221,47 @@ mod tests {
         out
     }
 
-    /// Foreground of the first span of the first banner line.
-    fn first_wordmark_fg(width: u16) -> Color {
-        banner_lines(width)
-            .into_iter()
-            .next()
-            .and_then(|line| {
-                line.spans
-                    .first()
-                    .map(|s| s.style.fg.unwrap_or(Color::Reset))
-            })
-            .unwrap_or(Color::Reset)
+    /// The colour the call site EMITS: always the role default, by design.
+    #[test]
+    fn wordmark_emits_the_accent_role_default() {
+        for width in [100, 50, 30] {
+            let fg = banner_lines(width)
+                .into_iter()
+                .next()
+                .and_then(|line| line.spans.first().map(|s| s.style.fg))
+                .unwrap_or(None);
+            assert_eq!(
+                fg,
+                Some(theme::accent_color()),
+                "width {width} must emit the role default so the buffer can substitute it"
+            );
+        }
     }
 
-    /// The wordmark foreground must come from the palette, so switching theme
-    /// repaints it. Before the fix it was the default theme's amber under every
-    /// theme.
+    /// The resolved colour after the per-frame substitution, which is where the
+    /// active theme actually shows up.
     #[test]
     fn banner_wordmark_follows_the_active_theme_accent() {
-        let (nord_fg, nord_accent) =
-            with_theme("nord", || (first_wordmark_fg(100), theme_colors::accent()));
+        let paint = |width: u16| {
+            let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 8));
+            for (row, line) in banner_lines(width).into_iter().enumerate() {
+                line.render(Rect::new(0, row as u16, 60, 1), &mut buf);
+            }
+            crate::tui::vendor::style::theme_mode::adapt_buffer_for_display(&mut buf);
+            buf[(0, 0)].fg
+        };
+
+        let nord = with_theme("nord", || (paint(100), crate::tui::theme_colors::accent()));
         assert_eq!(
-            nord_fg, nord_accent,
-            "wordmark must render the active palette accent"
+            nord.0, nord.1,
+            "after substitution the wordmark must show the active theme's accent"
         );
 
-        let (monokai_fg, monokai_accent) = with_theme("monokai", || {
-            (first_wordmark_fg(100), theme_colors::accent())
-        });
-        assert_eq!(monokai_fg, monokai_accent);
-        assert_ne!(
-            nord_fg, monokai_fg,
-            "switching theme must repaint the wordmark, not leave default amber"
-        );
+        let monokai = with_theme("monokai", || paint(100));
+        assert_ne!(nord.0, monokai, "switching theme must repaint the wordmark");
 
-        // The narrow (<40 col) fallback path styles the same way.
-        let (narrow_fg, narrow_accent) =
-            with_theme("nord", || (first_wordmark_fg(30), theme_colors::accent()));
-        assert_eq!(
-            narrow_fg, narrow_accent,
-            "narrow fallback must use the accent too"
-        );
+        // The narrow (<40 col) fallback path goes through the same substitution.
+        assert_eq!(with_theme("nord", || paint(30)), nord.0);
     }
 
     // ── The durable gate: no hardcoded default-theme amber anywhere else ───
@@ -275,10 +270,8 @@ mod tests {
     // `Color::Rgb(255, 191, 0)` literals; nothing flagged them, so they came
     // back. This walks the whole crate so the next one fails the build.
 
-    /// The palette that defines the colour, plus `app/enums.rs::ACCENT_BUILD`
-    /// — a tracked hardcode owned by a separate change. Remove that second
-    /// entry when `ACCENT_BUILD` is migrated to `theme_colors::accent()`.
-    const AMBER_EXEMPT: [&str; 2] = ["src/tui/theme_colors.rs", "src/tui/app/enums.rs"];
+    /// The palette that defines the colour.
+    const AMBER_EXEMPT: [&str; 1] = ["src/tui/theme_colors.rs"];
 
     /// Assembled at runtime so this file — which lives inside the tree being
     /// walked — never holds a needle in live code and trips its own gate. The
@@ -347,11 +340,11 @@ mod tests {
     /// the only source; a surviving one would reintroduce the same theme bug
     /// under a different name.
     ///
-    /// Fix a hit by calling the `theme_colors` accessor that matches what the
-    /// colour does — `accent()` for an accent foreground, `selection_bg()` for
-    /// a selected-row background. Do not freeze a palette value into a `const`:
-    /// the accessors are runtime `fn`s (the palette lives behind a lock), so a
-    /// `const` pins every theme to default amber.
+    /// Fix a hit by calling the role accessor that matches what the colour
+    /// does — `theme::accent_color()` for an accent foreground,
+    /// `theme::selection_bg_color()` for a selected-row background. Do not
+    /// freeze a palette value into a `const`: the accessors are runtime `fn`s,
+    /// so a `const` pins every theme to default amber.
     #[test]
     fn tui_sources_must_not_hardcode_the_default_theme_amber() {
         let mut failures = Vec::new();
@@ -364,9 +357,10 @@ mod tests {
         assert!(
             failures.is_empty(),
             "default-theme amber leaked into live TUI code again:\n  {}\n\
-             Call the `theme_colors` accessor that matches what the colour does \
-             (`accent()` for an accent foreground, `selection_bg()` for a \
-             selected-row background) — never a `const`.",
+             Call the role accessor that matches what the colour does \
+             (`theme::accent_color()` for an accent foreground, \
+             `theme::selection_bg_color()` for a selected-row background) — \
+             never a `const`.",
             failures.join("\n  ")
         );
     }

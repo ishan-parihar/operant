@@ -1,0 +1,29 @@
+{
+  "$comment": "Surfaces the corpus tracks but deliberately does NOT execute. Every entry names the render target, the baseline filenames a future run should create if the surface is ever unblocked, and the single reason it cannot run today. A surface belongs here rather than as a *.scenario.json because a scenario file that cannot pass teaches people to ignore red; see docs/tui-debugging.md. Nothing in this file is ever reported as PASSED.",
+  "excluded": [
+    {
+      "name": "mcp-approval",
+      "surface": "crates/operant-cli/src/tui/dialogs/mcp_approval.rs::render_mcp_approval_dialog",
+      "baseline": "mcp-approval.txt",
+      "style_baseline": "mcp-approval.style.txt",
+      "reason": "PRODUCT GAP, not a harness gap: McpApprovalDialogState::show (dialogs/mcp_approval.rs:88) has NO call site anywhere in the workspace and is marked #[allow(dead_code)]. The dialog is fully built — render, key handling, Z-order branch in render_app, dialog_priority entry, overlay_flags entry — but nothing in operant ever opens it, so there is no real sequence of events a scenario could reproduce.",
+      "unblock_when": "Whatever actually arms an MCP server approval calls show(); that call site should drive this scenario via the same seed the real handshake uses."
+    },
+    {
+      "name": "mcp-approval-dialog",
+      "surface": "crates/operant-cli/src/tui/dialogs/mcp_approval.rs::render_mcp_approval_dialog",
+      "baseline": "mcp-approval-dialog.txt",
+      "style_baseline": "mcp-approval-dialog.style.txt",
+      "reason": "Same product gap as mcp-approval, which is the state-level alias of it. Kept as a separate entry so the 1:1 surface-to-scenario mapping in _validate.py's SURFACES ledger stays complete: render_app has its own `if app.mcp_approval.visible` branch and this is that branch.",
+      "unblock_when": "Same as mcp-approval."
+    },
+    {
+      "name": "selection-highlight",
+      "surface": "crates/operant-cli/src/tui/render/selection.rs::apply_selection_highlight",
+      "baseline": "selection-highlight.txt",
+      "style_baseline": "selection-highlight.style.txt",
+      "reason": "Two independent blockers, and the first alone is not worth clearing on its own. (1) apply_selection_highlight returns immediately unless BOTH selection_anchor and selection_focus are Some; the only writer is the mouse handler (tui/app/mouse.rs) and App::run drives a Vec<KeyEvent>, so mouse injection would mean a new App field and a new branch in the event pump. (2) Even with that, the pass is style-only by design — the text is unchanged — so no --assert or --assert-screen clause can detect it. The style baseline this scenario actually needs is out of scope while tui_scenarios/baselines/ is intentionally empty.",
+      "unblock_when": "A mouse-injection seam on the simulated-event pump AND the style baseline. Text assertions can never cover this surface."
+    }
+  ]
+}

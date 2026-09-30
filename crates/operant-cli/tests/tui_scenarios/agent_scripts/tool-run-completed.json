@@ -1,0 +1,6 @@
+[
+  {"type":"user","text":"Reading the file."},
+  {"type":"tool_start","id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"},
+  {"type":"tool_complete","id":"call_1","name":"read_file","output":"# operant\n\nterminal-native AI agent"},
+  {"type":"done","text":"The file header is `# operant`."}
+]

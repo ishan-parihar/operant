@@ -1,0 +1,17 @@
+{
+  "name": "notification-banner",
+  "surface": "crates/operant-cli/src/tui/notifications.rs::render_notification_banner",
+  "opens_with": "/voice (clear any boot notice), then /copy with no assistant message to copy",
+  "keys": "/voice<enter>/copy<enter>",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == false"
+  ],
+  "assert_screen": [
+    "contains:No assistant message to copy",
+    "not-contains:Session status"
+  ],
+  "baseline": "notification-banner.txt",
+  "style_baseline": "notification-banner.style.txt",
+  "notes": "The toast counterpart to the error modal: same notification queue, Warning kind instead of Error, suppressed whenever is_modal_open(app) is true (render/mod.rs:437). The leading /voice is load-bearing, not decorative — it REPLACES a boot-time voice_mode_notice with a fresh invisible state, which is the only way to get any_modal_open to false on a host with a working audio device. Without it this scenario fails on every audio-capable machine and passes on every silent one, which is exactly the kind of host-dependent gate that erodes trust in a visual corpus. Worth noting for the product: /voice silently hiding a visible notice (rather than dismissing it) is arguably its own bug. The not-contains side of the needles is what proves the banner is a distinct surface from the status row rather than the same text arriving twice."
+}

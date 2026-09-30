@@ -1,0 +1,18 @@
+{
+  "name": "hooks-config-menu",
+  "surface": "crates/operant-cli/src/tui/hooks_config_menu.rs::render_hooks_config_menu",
+  "opens_with": "/hooks",
+  "keys": "/hooks<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.hooks_config_menu == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Hooks — Select Event",
+    "contains:No hooks configured"
+  ],
+  "baseline": "hooks-config-menu.txt",
+  "style_baseline": "hooks-config-menu.style.txt",
+  "notes": "Drill-down menu (event list -> matcher list). Only the first level is reachable; the drill-down needs an enter key on a selected row and is the natural next scenario. The empty state is asserted because that is what a default install shows."
+}

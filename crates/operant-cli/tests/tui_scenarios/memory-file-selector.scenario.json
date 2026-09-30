@@ -1,0 +1,24 @@
+{
+  "name": "memory-file-selector",
+  "surface": "crates/operant-cli/src/tui/memory_file_selector.rs::render_memory_file_selector",
+  "opens_with": "/memory",
+  "keys": "/memory<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/memory<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.memory_file_selector == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Memory — choose a file",
+    "contains:navigate"
+  ],
+  "baseline": "memory-file-selector.txt",
+  "style_baseline": "memory-file-selector.style.txt",
+  "notes": "Three-scope selector (User / Project / Local) with absolute paths in the rows — inherently ENV-dependent, and the reason its baseline is a good canary for path-truncation regressions (truncate_middle on long repo paths)."
+}

@@ -1,0 +1,19 @@
+{
+  "name": "ask-user-dialog",
+  "surface": "crates/operant-cli/src/tui/ask_user_dialog.rs::render_ask_user_dialog",
+  "opens_with": "(agent-driven AskUserQuestion, via --agent-script)",
+  "keys": "",
+  "size": "120x40",
+  "assert": [
+    "overlays.ask_user_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Question",
+    "contains:1 sqlite"
+  ],
+  "baseline": "ask-user-dialog.txt",
+  "style_baseline": "ask-user-dialog.style.txt",
+  "notes": "Renders ABOVE bypass_permissions_dialog specifically so a startup risk prompt can never obscure the model's question \u2014 the Z-order comment on that render call is the whole point of this scenario. Reachable since MockAgentEvent grew a user_question variant: run_headless already builds the unbounded user-question channel and App::run already drains it into ask_user_dialog, so the mock path sends on that same channel.",
+  "agent_script": "ask-user-question.json"
+}

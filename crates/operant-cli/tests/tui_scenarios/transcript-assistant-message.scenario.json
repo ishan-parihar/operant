@@ -1,0 +1,19 @@
+{
+  "name": "transcript-assistant-message",
+  "surface": "crates/operant-cli/src/tui/render/messages.rs::render_messages",
+  "opens_with": "(agent script only — no keystroke opens it)",
+  "keys": "",
+  "size": "120x40",
+  "agent_script": "assistant-simple.json",
+  "assert": [
+    "messages == 1",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:Hello from the mock agent.",
+    "not-contains:Shortcuts & commands"
+  ],
+  "baseline": "transcript-assistant-message.txt",
+  "style_baseline": "transcript-assistant-message.style.txt",
+  "notes": "The transcript is the one surface every other overlay occludes, so it is the ground truth for 'did render_app paint anything'. Catches a regression where render_messages returns early, drops the assistant gutter indent, or the final-render-after-last-key pass at the tail of TuiApp::run_headless stops firing (that pass is what makes the last key's effect visible at all). is_streaming == false proves the Done event terminated the turn rather than the run being force-cut at the frame cap."
+}

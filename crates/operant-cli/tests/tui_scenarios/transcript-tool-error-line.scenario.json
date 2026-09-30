@@ -1,0 +1,18 @@
+{
+  "name": "transcript-tool-error-line",
+  "surface": "crates/operant-cli/src/tui/render/messages.rs::render_messages",
+  "opens_with": "(agent script only — no keystroke opens it)",
+  "keys": "",
+  "size": "120x40",
+  "agent_script": "tool-error.json",
+  "assert": [
+    "messages == 2",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:exited 3"
+  ],
+  "baseline": "transcript-tool-error-line.txt",
+  "style_baseline": "transcript-tool-error-line.style.txt",
+  "notes": "A tool FAILURE inside an otherwise successful turn. Distinct from transcript-assistant-message because the error text must survive into the flushed assistant message and must be styled differently from ordinary content — a regression that swallowed ToolError, or that rendered it as a normal assistant line, shows up here. Complements the blocked `tool-block` scenario, which covers the tool BLOCK; this covers the error SURFACING in the transcript."
+}

@@ -1,0 +1,5 @@
+[
+  {"type":"thinking","content":"The request needs the network before I can continue."},
+  {"type":"content","text":"Calling out to the network now."},
+  {"type":"error","error":"provider overloaded_error (529): the upstream is saturated, retry shortly"}
+]

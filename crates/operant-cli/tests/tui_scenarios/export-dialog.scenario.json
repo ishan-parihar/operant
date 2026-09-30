@@ -1,0 +1,19 @@
+{
+  "name": "export-dialog",
+  "surface": "crates/operant-cli/src/tui/export_dialog.rs::render_export_dialog",
+  "opens_with": "/export",
+  "keys": "/export<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.export_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Export conversation",
+    "contains:Markdown",
+    "contains:enter export"
+  ],
+  "baseline": "export-dialog.txt",
+  "style_baseline": "export-dialog.style.txt",
+  "notes": "Two-format picker with numbered shortcuts and a footer legend. The legend ('tab/left/right switch · enter export · 1/2 choose') is the only place that string exists, so it is a precise canary for the legend row losing a cell."
+}

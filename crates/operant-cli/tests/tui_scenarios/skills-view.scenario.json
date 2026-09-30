@@ -1,0 +1,25 @@
+{
+  "name": "skills-view",
+  "surface": "crates/operant-cli/src/tui/skills_view.rs::render_skills_view",
+  "opens_with": "/skills",
+  "keys": "/skills<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/skills<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.skills_view == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Skills",
+    "contains:Category",
+    "contains:Version"
+  ],
+  "baseline": "skills-view.txt",
+  "style_baseline": "skills-view.style.txt",
+  "notes": "Table with a selection-cursor glyph and a '#' index column. ENV: rows come from the installed skills directory, so pin OPERANT_HOME and seed a fixture. The selection cursor is a style-baseline item (accent colour) as much as a text one."
+}

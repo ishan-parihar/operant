@@ -1,0 +1,8 @@
+[
+  {"type":"reasoning","text":"The user asked a two-part question."},
+  {"type":"reasoning","text":"Answer the first part, then the second."},
+  {"type":"content","text":"First part of the answer. "},
+  {"type":"content","text":"Second part of the answer. "},
+  {"type":"content","text":"That is the whole answer."},
+  {"type":"done","text":"First part of the answer. Second part of the answer. That is the whole answer."}
+]

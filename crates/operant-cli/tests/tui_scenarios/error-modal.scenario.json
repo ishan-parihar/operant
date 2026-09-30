@@ -1,0 +1,24 @@
+{
+  "name": "error-modal",
+  "surface": "crates/operant-cli/src/tui/render/utils.rs::render_error_modal",
+  "opens_with": "(a scripted agent error \u2014 no keystroke opens it)",
+  "keys": "",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "120x24"
+    }
+  ],
+  "agent_script": "error-modal.json",
+  "assert": [
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:\u26a0 Error",
+    "contains:overloaded_error",
+    "not-contains:Response complete"
+  ],
+  "baseline": "error-modal.txt",
+  "style_baseline": "error-modal.style.txt",
+  "notes": "The highest-priority surface in the ladder: it renders and then RETURNS, so every other overlay and notification is suppressed while it is up. Three regressions it uniquely protects: the early return being lost, the scroll-offset / footer-anchored layout, and the '\u26a0 Error' header. not-contains:Response complete is the early-return discriminator \u2014 that toast is drawn by the code path the return skips, so losing the return makes the needle fail. any_modal_open is deliberately NOT asserted: the error modal is a Notification and not an overlay_flags entry, so it never sets that flag, and the boot-time voice_mode_notice that does set it cannot be dismissed here without also dismissing the modal (Esc and prompt-submit both call dismiss_error_notifications). The script ends at `error` with no trailing `done` because that is the real agent's shape: both AgentEvent::Error sites in operant-core/src/agent/run.rs (445, 1652) return Err immediately, and handle_agent_event auto-dismisses error notifications on the next Content/Thinking/Reasoning/Done \u2014 so an error-then-done script dismisses the modal before it is ever painted."
+}

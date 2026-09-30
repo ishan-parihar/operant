@@ -1,0 +1,19 @@
+{
+  "name": "custom-provider-dialog",
+  "surface": "crates/operant-cli/src/tui/custom_provider_dialog.rs::render_custom_provider_dialog",
+  "opens_with": "/connect, then filter to Custom OpenAI-Compatible",
+  "keys": "/connect<enter>Custom<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.custom_provider_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Connect Custom OpenAI-Compatible",
+    "contains:https://your-openai-compatible-endpoint/v1",
+    "contains:tab switch field"
+  ],
+  "baseline": "custom-provider-dialog.txt",
+  "style_baseline": "custom-provider-dialog.style.txt",
+  "notes": "Two-field form (URL then API Key) with a tab-switch hint. Only the URL field's placeholder is asserted because it is a compile-time constant, whereas the API-key field shows real user input on a configured host — an ENV leak the needle deliberately avoids."
+}

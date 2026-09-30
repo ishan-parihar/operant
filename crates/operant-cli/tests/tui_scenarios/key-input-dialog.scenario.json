@@ -1,0 +1,19 @@
+{
+  "name": "key-input-dialog",
+  "surface": "crates/operant-cli/src/tui/key_input_dialog.rs::render_key_input_dialog",
+  "opens_with": "/connect, then filter to a key-based provider",
+  "keys": "/connect<enter>Anthropic<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.key_input_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Connect Anthropic",
+    "contains:paste your API key here",
+    "contains:enter confirm"
+  ],
+  "baseline": "key-input-dialog.txt",
+  "style_baseline": "key-input-dialog.style.txt",
+  "notes": "Reached through the connect dialog's FILTER rather than a fixed <down> count, so the scenario survives changes to the provider catalogue ORDER. filter_push matches on title/description/category substring and leaves selected_index at 0, so the filtered-first row is the one submitted. The masked-input underscore is the detail worth baselining."
+}

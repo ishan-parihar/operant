@@ -1,0 +1,24 @@
+{
+  "name": "global-search",
+  "surface": "crates/operant-cli/src/tui/overlays.rs::render_global_search",
+  "opens_with": "/search",
+  "keys": "/search<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/search<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.global_search == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Esc: close",
+    "contains:Search"
+  ],
+  "baseline": "global-search.txt",
+  "style_baseline": "global-search.style.txt",
+  "notes": "Ctrl+P also opens it but ctrl+p is NOT a token, so /search (and its /find alias) is the reachable opener. Pins the titled-border chrome, a different border style from the rounded popups elsewhere — a good palette-regression canary."
+}

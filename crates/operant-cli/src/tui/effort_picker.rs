@@ -5,13 +5,13 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::tui::model_picker::EffortLevel;
 use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
-use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 #[derive(Debug, Default, Clone)]
 pub struct EffortPickerState {
@@ -69,7 +69,7 @@ pub fn render_effort_picker(frame: &mut Frame, state: &EffortPickerState, area: 
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta))
+        .border_style(Style::default().fg(theme::accent_color()))
         .title(Span::styled(
             " Effort level ",
             Style::default().add_modifier(Modifier::BOLD),
@@ -87,11 +87,11 @@ pub fn render_effort_picker(frame: &mut Frame, state: &EffortPickerState, area: 
         let prefix = if selected { "›" } else { " " };
         let style = if selected {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Magenta)
+                .fg(theme::user_bg())
+                .bg(theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme_colors::text())
+            Style::default().fg(theme::ai_text())
         };
         lines.push(Line::from(vec![
             Span::styled(format!("  {} ", prefix), style),
@@ -101,7 +101,7 @@ pub fn render_effort_picker(frame: &mut Frame, state: &EffortPickerState, area: 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  ↑/↓ to choose · Enter to apply · Esc to cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     frame.render_widget(Paragraph::new(lines).block(block), dlg);

@@ -1,0 +1,18 @@
+{
+  "name": "rewind-flow",
+  "surface": "crates/operant-cli/src/tui/overlays.rs::render_rewind_flow",
+  "opens_with": "/rewind",
+  "keys": "/rewind<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.rewind_flow == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Rewind — Select Message",
+    "contains:Select a message to rewind to"
+  ],
+  "baseline": "rewind-flow.txt",
+  "style_baseline": "rewind-flow.style.txt",
+  "notes": "A multi-STEP flow, not a static dialog: selector -> confirm -> reject. Only the selector step is reachable without a populated transcript; the confirm step needs an agent_script that leaves messages in the buffer. Extend this scenario rather than adding a new one."
+}

@@ -4,7 +4,7 @@
 // Extracted from the prompt_input/mod.rs monolith.
 
 use super::*;
-use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -127,8 +127,8 @@ pub fn render_prompt_input(
     }
 
     let accent = match mode {
-        InputMode::Readonly => theme_colors::accent(), // locked while streaming — theme accent
-        _ => accent_override,                          // use mode-aware accent color
+        InputMode::Readonly => theme::accent_color(), // locked while streaming — theme accent
+        _ => accent_override,                         // use mode-aware accent color
     };
     let prompt_prefix = format!("{PROMPT_POINTER} ");
     let prefix_width = UnicodeWidthStr::width(prompt_prefix.as_str()) as u16;
@@ -198,9 +198,9 @@ pub fn render_prompt_input(
     };
 
     let text_style = if state.text.is_empty() && !focused {
-        Style::default().fg(Color::DarkGray).bg(Color::Black)
+        Style::default().fg(theme::dim_color()).bg(theme::user_bg())
     } else {
-        Style::default().fg(theme_colors::text()).bg(Color::Black)
+        Style::default().fg(theme::ai_text()).bg(theme::user_bg())
     };
 
     // Wrap each logical line into visual rows that fit `available_width`,
@@ -346,7 +346,7 @@ pub fn render_prompt_input(
                 if current_symbol.is_empty() || current_symbol == " " {
                     // Empty position — show a cursor bar
                     cell.set_symbol("▏");
-                    cell.set_style(Style::default().fg(theme_colors::text()).bg(Color::Black));
+                    cell.set_style(Style::default().fg(theme::ai_text()).bg(theme::user_bg()));
                 } else {
                     // Non-empty position — reverse video
                     cell.set_style(
@@ -370,14 +370,14 @@ pub fn render_prompt_input(
             let buf_text = format!(":{}\u{2588}", state.vim_command_buf);
             Some(Line::from(vec![Span::styled(
                 buf_text,
-                Style::default().fg(theme_colors::accent()),
+                Style::default().fg(theme::accent_color()),
             )]))
         }
         VimMode::Search => {
             let buf_text = format!("/{}\u{2588}", state.vim_search_buf);
             Some(Line::from(vec![Span::styled(
                 buf_text,
-                Style::default().fg(theme_colors::warning()),
+                Style::default().fg(theme::warning_color()),
             )]))
         }
         _ => None,

@@ -5,8 +5,9 @@ use crate::tui::figures;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{accent_primary, display_width, shimmer_spans, take_width};
+use super::{display_width, shimmer_spans, take_width};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 pub(crate) fn build_tool_names(
     messages: &[crate::tui::adapter_types::types::Message],
@@ -96,7 +97,7 @@ pub(crate) fn render_tool_block_lines(
     let accent = if block.status == ToolStatus::Error {
         theme_colors::error()
     } else {
-        accent_primary()
+        theme::accent_color()
     };
     let mut header_spans = vec![Span::styled(
         "   ~ ".to_string(),
@@ -354,7 +355,7 @@ pub(crate) fn render_tool_group_lines(
     let accent = if errored > 0 {
         theme_colors::TOOL_ERROR
     } else {
-        accent_primary()
+        theme::accent_color()
     };
     let mut header = vec![Span::styled(
         "   ~ ".to_string(),

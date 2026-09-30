@@ -66,10 +66,12 @@ use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_colors;
 use crate::tui::theme_screen::render_theme_screen;
 use crate::tui::usage_overlay::{UsageMetrics, render_usage_overlay};
+use crate::tui::vendor::style::theme;
+use crate::tui::vendor::style::theme_mode;
 use crate::tui::voice_mode_notice::render_voice_mode_notice;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::widgets::Block;
 
 // Spinner frames matching the TypeScript SpinnerGlyph: platform-specific base
@@ -85,11 +87,6 @@ const SPINNER: &[char] = &[
     '\u{00b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273d}', '\u{273b}',
     '\u{2736}', '\u{2733}', '\u{2722}', '\u{00b7}',
 ];
-/// Accent bar / selection colour. Palette-driven: `/theme` repaints it.
-pub(crate) fn accent_primary() -> Color {
-    theme_colors::accent()
-}
-
 const WELCOME_BOX_HEIGHT: u16 = 9;
 const STATUS_THINKING: &str = "thinking";
 const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
@@ -97,10 +94,14 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
     app.last_selectable_area.set(size);
 
-    // Fill the entire frame with a black background so the terminal's default
-    // color (blue on Windows) doesn't bleed through cells not covered by widgets.
+    // Fill the entire frame with the palette's surface colour so the terminal's
+    // default (blue on Windows) doesn't bleed through cells no widget covers.
     frame.render_widget(
-        Block::default().style(Style::default().bg(Color::Black).fg(theme_colors::text())),
+        Block::default().style(
+            Style::default()
+                .bg(theme::user_bg())
+                .fg(theme_colors::text()),
+        ),
         size,
     );
 
@@ -428,9 +429,11 @@ pub fn render_app(frame: &mut Frame, app: &App) {
             app.footer_right_column_area.get(),
             is_welcome_screen,
         );
-        return; // Don't render other overlays/notifications when error modal is showing
+        // Don't render other overlays/notifications when error modal is showing.
+        // The substitution pass still has to run — see the tail of this fn.
+        theme_mode::adapt_buffer_for_display(frame.buffer_mut());
+        return;
     }
-
     let modal_active = is_modal_open(app);
 
     // Render non-error notifications as toast banners (unless another modal is open)
@@ -490,4 +493,143 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // Re-emit every pinned graphic, and blank the cells it owns so the flush
     // ratatui runs after this closure has nothing to rewrite underneath it.
     crate::tui::pinned_images::prepare_strip(frame.buffer_mut(), &app.pinned_images, chunks[0]);
+
+    // ---- Per-frame colour substitution (the single theming choke point) ----
+    //
+    // Every migrated call site emits a `style::theme::*` role DEFAULT; this pass
+    // rewrites each such cell onto the configured role colour, so one `/theme`
+    // action repaints the whole frame without any widget knowing about it.
+    // It must stay the LAST colour transform in the function — the error-modal
+    // branch above has its own copy of this call because it returns early.
+    theme_mode::adapt_buffer_for_display(frame.buffer_mut());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
+
+    use crate::tui::vendor::style::palette::Role;
+
+    fn make_app() -> App {
+        let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());
+        App::new(
+            operant_core::config::AppConfig::default(),
+            crate::tui::adapter_types::Settings::default(),
+            cost_tracker,
+            crate::commands::CommandRegistry::new(),
+        )
+    }
+
+    /// Hold the palette lock for the whole body.
+    ///
+    /// Holding it per-theme is not enough here, because `App::new` itself calls
+    /// `set_active_theme_enum`. Building the `App` outside the lock lets a
+    /// concurrent test's `App::new` reset the process-global palette between
+    /// this test's `set_active_theme` and its `paint`, and the frame then comes
+    /// back in the default theme — a real flake, not a theoretical one.
+    fn with_palette_lock<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::tui::vendor::style::color::pin_truecolor_for_tests();
+        f()
+    }
+
+    /// Paint one frame with `name` active. Caller must hold the palette lock.
+    fn frame_under(name: &str, app: &App) -> Buffer {
+        theme_colors::set_active_theme(name);
+        painted_frame(app)
+    }
+
+    /// One full `render_app` into a 120x40 test frame, post-substitution.
+    fn painted_frame(app: &App) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test backend");
+        terminal.draw(|f| render_app(f, app)).expect("draw");
+        terminal.backend().buffer().clone()
+    }
+
+    /// The distinct foreground colours present in a frame, as `Color`.
+    fn foregrounds(buf: &Buffer) -> Vec<Color> {
+        let mut seen: Vec<Color> = buf.content.iter().map(|c| c.fg).collect();
+        seen.sort_by_key(|c| format!("{c:?}"));
+        seen.dedup();
+        seen
+    }
+
+    /// The end-to-end proof that `/theme` repaints the frame: two themes must
+    /// produce different foregrounds in the finished buffer.
+    ///
+    /// This is the only test that exercises the whole chain — role call site →
+    /// buffer → `adapt_buffer_for_display` — and it is the regression net for
+    /// the choke point. If the pass is removed, or a call site reverts to
+    /// `theme_colors`, the two frames converge and this fails.
+    #[test]
+    fn switching_theme_repaints_the_frame() {
+        with_palette_lock(|| {
+            let app = make_app();
+            let dark = frame_under("dark", &app);
+            let light = frame_under("light", &app);
+            theme_colors::set_active_theme("default");
+            assert_ne!(
+                foregrounds(&dark),
+                foregrounds(&light),
+                "the frame must not be theme-invariant"
+            );
+        });
+    }
+
+    /// The base fill is the largest surface in the frame and was a hardcoded
+    /// `Color::Black` until the role migration. It must follow the theme.
+    #[test]
+    fn base_fill_follows_the_theme() {
+        with_palette_lock(|| {
+            let app = make_app();
+            let dark = frame_under("dark", &app);
+            let light = frame_under("light", &app);
+            theme_colors::set_active_theme("default");
+            // Row 0 col 0 is a cell no widget claims, so it still holds the fill.
+            assert_ne!(
+                dark[(0, 0)].bg,
+                light[(0, 0)].bg,
+                "the base fill must repaint"
+            );
+            assert_ne!(
+                dark[(0, 0)].bg,
+                Color::Black,
+                "the fill is no longer frozen black"
+            );
+        });
+    }
+
+    /// The accent bar / prompt rule is the surface `ACCENT_BUILD` used to freeze
+    /// to the default theme's amber, which is why `/theme` could not repaint it
+    /// on seven of eight themes. Assert the resolved accent really lands in the
+    /// finished frame, not merely that the two frames differ somehow.
+    #[test]
+    fn accent_role_reaches_the_frame() {
+        let accent_in_frame = |name: &str, app: &App| {
+            let buf = frame_under(name, app);
+            // The resolved role colour, not `theme_colors::accent()`: the
+            // `default` and `light` themes hold a *named* accent (Cyan / Blue)
+            // and a role slot can only carry RGB, so the frame gets the xterm
+            // RGB of that name.
+            let accent = crate::tui::vendor::style::palette::palette().color(Role::Accent);
+            assert!(
+                buf.content.iter().any(|c| c.fg == accent),
+                "{name}: no cell resolved to the theme accent {accent:?}"
+            );
+            accent
+        };
+        with_palette_lock(|| {
+            let app = make_app();
+            let dark = accent_in_frame("dark", &app);
+            let light = accent_in_frame("light", &app);
+            theme_colors::set_active_theme("default");
+            assert_ne!(dark, light);
+        });
+    }
 }

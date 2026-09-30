@@ -29,6 +29,7 @@ use std::path::PathBuf;
 
 use crate::tui::overlays::centered_rect;
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JourneyPane {
@@ -191,7 +192,7 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta))
+        .border_style(Style::default().fg(theme::accent_color()))
         .title(Span::styled(
             " Journey — skills + memories ",
             Style::default().add_modifier(Modifier::BOLD),

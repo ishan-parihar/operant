@@ -1,0 +1,17 @@
+{
+  "name": "plugins-hub",
+  "surface": "crates/operant-cli/src/tui/plugins_hub.rs::render_plugins_hub",
+  "opens_with": "/plugins",
+  "keys": "/plugins<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.plugins_hub == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Plugins"
+  ],
+  "baseline": "plugins-hub.txt",
+  "style_baseline": "plugins-hub.style.txt",
+  "notes": "The empty-state variant of the hub. ENV: on a host with plugins installed a table replaces the empty-state prose, so the text baseline is machine-specific; the needle is deliberately only the panel title, which is stable in both states."
+}

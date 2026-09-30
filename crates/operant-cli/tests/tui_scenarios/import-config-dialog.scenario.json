@@ -1,0 +1,18 @@
+{
+  "name": "import-config-dialog",
+  "surface": "crates/operant-cli/src/tui/import_config_dialog.rs::render_import_config_dialog",
+  "opens_with": "/import-config, then Enter on the first row",
+  "keys": "/import-config<enter><enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.import_config_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Import config",
+    "contains:Preview the content to import"
+  ],
+  "baseline": "import-config-dialog.txt",
+  "style_baseline": "import-config-dialog.style.txt",
+  "notes": "The preview/confirm step behind import-config-picker. ENV: reaching it at all requires build_import_preview to succeed, which needs ~/.claude/CLAUDE.md — on a host without it the opener degrades to a status_message and the overlay never opens. The needle is the static instruction line, present whether or not the preview found content."
+}

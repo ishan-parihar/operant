@@ -215,6 +215,13 @@ pub enum TuiDebugSubcommand {
         /// `tui-frames`). Created if missing.
         #[arg(long)]
         capture_dir: Option<std::path::PathBuf>,
+
+        /// Start with the `--dangerously-skip-permissions` confirmation
+        /// dialog already open, the same way the real flag does. The dialog
+        /// is only raised in `TuiApp::enter`, before any event or key is
+        /// processed, so it cannot be reached from an agent script.
+        #[arg(long)]
+        bypass_permissions: bool,
     },
 }
 
@@ -259,6 +266,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             accept_baseline,
             capture_frames,
             capture_dir,
+            bypass_permissions,
         } => {
             debug_simulate(
                 config,
@@ -275,6 +283,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
                     accept_baseline,
                     capture_frames,
                     capture_dir,
+                    bypass_permissions,
                 },
             )
             .await
@@ -1043,6 +1052,47 @@ fn save_settings(settings: &crate::tui::adapter_types::config::Settings) -> Resu
     settings.save_sync()
 }
 
+/// Parse a generic chord the explicit token table does not name:
+/// `<ctrl+<letter>>` / `<alt+<letter>>` (optionally `+shift`), and the whole
+/// `<f1>`..`<f12>` family.
+///
+/// `None` means "not a chord" and hands the token back to `parse_key_sequence`
+/// to type as literal characters — the contract the corpus relies on, so a
+/// typo'd binding shows up as typed text rather than a silent no-op.
+fn parse_generic_chord(
+    lower: &str,
+) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    // Digits only, so `<f13>` stays unrecognised rather than wrapping.
+    if let Some(num) = lower.strip_prefix('f')
+        && let Ok(n) = num.parse::<u8>()
+        && (1..=12).contains(&n)
+    {
+        return Some((KeyCode::F(n), KeyModifiers::NONE));
+    }
+
+    let mut parts = lower.rsplitn(2, '+');
+    let last = parts.next()?;
+    let head = parts.next()?;
+    if last.chars().count() != 1 || head.is_empty() {
+        return None;
+    }
+    let mut modifiers = KeyModifiers::NONE;
+    for seg in head.split('+') {
+        match seg {
+            "ctrl" | "control" => modifiers.insert(KeyModifiers::CONTROL),
+            "alt" | "meta" | "option" => modifiers.insert(KeyModifiers::ALT),
+            "shift" => modifiers.insert(KeyModifiers::SHIFT),
+            _ => return None,
+        }
+    }
+    if modifiers == KeyModifiers::NONE {
+        return None;
+    }
+    Some((KeyCode::Char(last.chars().next()?), modifiers))
+}
+
 fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     let mut events = Vec::new();
@@ -1085,10 +1135,16 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
                     modifiers.insert(KeyModifiers::SHIFT);
                     KeyCode::BackTab
                 }
-                _ => {
-                    parsed = false;
-                    KeyCode::Null
-                }
+                _ => match parse_generic_chord(&lower) {
+                    Some((code, mods)) => {
+                        modifiers = mods;
+                        code
+                    }
+                    None => {
+                        parsed = false;
+                        KeyCode::Null
+                    }
+                },
             };
             if parsed {
                 events.push(KeyEvent {
@@ -1225,9 +1281,47 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
 /// subset of `operant_core::agent::AgentEvent` — enough to drive the TUI's
 /// streaming/tool/done/error rendering deterministically offline, without
 /// adding serde derives to the core event type.
+///
+/// Four variants do NOT map to an `AgentEvent` because the TUI receives them
+/// on channels rather than the event stream: `User` seeds the transcript turn
+/// that `build_transcript_turns` anchors on, and `PermissionRequest` /
+/// `UserQuestion` / `BackgroundTask` feed the same plumbing the live agent
+/// feeds. `into_agent_event` returns `None` for those; `run_headless`
+/// dispatches them by hand.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum MockAgentEvent {
+pub(crate) enum MockAgentEvent {
+    /// A user turn. `build_transcript_turns` starts a new turn at every
+    /// `Role::User` message, and tool blocks are only partitioned onto a turn
+    /// that has one — so a script with tool events but no `user` event paints
+    /// no tool block at all.
+    User {
+        text: String,
+    },
+    /// A tool-permission request, as the agent would raise it.
+    PermissionRequest {
+        tool: String,
+        #[serde(default)]
+        tool_id: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// A model-initiated question, as the `clarify` tool would raise it.
+    UserQuestion {
+        question: String,
+        #[serde(default)]
+        choices: Option<Vec<String>>,
+    },
+    /// A background delegation record, registered through the same
+    /// process-wide registry `SubAgentTool::dispatch_background` writes to.
+    BackgroundTask {
+        goal: String,
+        #[serde(default)]
+        model: String,
+        /// `pending` (default), `completed` or `failed`.
+        #[serde(default)]
+        status: String,
+    },
     Thinking {
         content: String,
     },
@@ -1272,9 +1366,15 @@ enum MockAgentEvent {
 }
 
 impl MockAgentEvent {
-    fn into_agent_event(self) -> operant_core::agent::AgentEvent {
+    /// `None` for the four channel-fed variants, which `run_headless`
+    /// dispatches by hand instead of pushing onto `agent_event_rx`.
+    pub(crate) fn into_agent_event(self) -> Option<operant_core::agent::AgentEvent> {
         use operant_core::agent::AgentEvent as AE;
-        match self {
+        Some(match self {
+            MockAgentEvent::User { .. }
+            | MockAgentEvent::PermissionRequest { .. }
+            | MockAgentEvent::UserQuestion { .. }
+            | MockAgentEvent::BackgroundTask { .. } => return None,
             MockAgentEvent::Thinking { content } => AE::Thinking { content },
             MockAgentEvent::Reasoning { text } => AE::Reasoning { text },
             MockAgentEvent::Content { text } => AE::Content { text },
@@ -1315,7 +1415,7 @@ impl MockAgentEvent {
                 AE::Done { message: msg }
             }
             MockAgentEvent::Error { error } => AE::Error { error },
-        }
+        })
     }
 }
 
@@ -1334,6 +1434,7 @@ struct SimulateArgs {
     accept_baseline: bool,
     capture_frames: Option<String>,
     capture_dir: Option<std::path::PathBuf>,
+    bypass_permissions: bool,
 }
 
 async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
@@ -1394,16 +1495,19 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
         let mock: Vec<MockAgentEvent> = serde_json::from_str(&raw)
             .map_err(|e| anyhow::anyhow!("Failed to parse agent script {:?}: {}", path, e))?;
         println!("Injecting {} mock agent events.", mock.len());
-        Some(
-            mock.into_iter()
-                .map(MockAgentEvent::into_agent_event)
-                .collect(),
-        )
+        Some(mock)
     } else {
         None
     };
 
-    let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true, false).await?;
+    let tui_app = TuiApp::enter(
+        config.clone(),
+        None,
+        LaunchMode::Landing,
+        true,
+        args.bypass_permissions,
+    )
+    .await?;
     let (events, app, screen, capture_status) = tui_app
         .run_headless(parsed_keys, script, dims, frame_cap, frame_capture)
         .await?;
@@ -1768,6 +1872,139 @@ mod tests {
         assert!(
             diff.contains("--- baseline screen.golden"),
             "bad header: {diff}"
+        );
+    }
+
+    #[test]
+    fn explicit_tokens_keep_their_original_meaning() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let cases: Vec<(&str, KeyCode, KeyModifiers)> = vec![
+            ("<enter>", KeyCode::Enter, KeyModifiers::NONE),
+            ("<esc>", KeyCode::Esc, KeyModifiers::NONE),
+            ("<escape>", KeyCode::Esc, KeyModifiers::NONE),
+            ("<tab>", KeyCode::Tab, KeyModifiers::NONE),
+            ("<up>", KeyCode::Up, KeyModifiers::NONE),
+            ("<down>", KeyCode::Down, KeyModifiers::NONE),
+            ("<left>", KeyCode::Left, KeyModifiers::NONE),
+            ("<right>", KeyCode::Right, KeyModifiers::NONE),
+            ("<backspace>", KeyCode::Backspace, KeyModifiers::NONE),
+            ("<bs>", KeyCode::Backspace, KeyModifiers::NONE),
+            ("<ctrl+a>", KeyCode::Char('a'), KeyModifiers::CONTROL),
+            ("<ctrl+c>", KeyCode::Char('c'), KeyModifiers::CONTROL),
+            ("<ctrl+t>", KeyCode::Char('t'), KeyModifiers::CONTROL),
+            ("<ctrl+r>", KeyCode::Char('r'), KeyModifiers::CONTROL),
+            ("<shift+tab>", KeyCode::BackTab, KeyModifiers::SHIFT),
+        ];
+        for (token, code, mods) in cases {
+            let events = parse_key_sequence(token);
+            assert_eq!(
+                events.len(),
+                1,
+                "{token} should be one event, got {events:?}"
+            );
+            assert_eq!(events[0].code, code, "{token} code");
+            assert_eq!(events[0].modifiers, mods, "{token} modifiers");
+        }
+    }
+
+    #[test]
+    fn generic_ctrl_and_alt_chords_parse() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let cases: Vec<(&str, KeyCode, KeyModifiers)> = vec![
+            ("<ctrl+k>", KeyCode::Char('k'), KeyModifiers::CONTROL),
+            ("<ctrl+j>", KeyCode::Char('j'), KeyModifiers::CONTROL),
+            ("<ctrl+z>", KeyCode::Char('z'), KeyModifiers::CONTROL),
+            ("<alt+k>", KeyCode::Char('k'), KeyModifiers::ALT),
+            ("<alt+v>", KeyCode::Char('v'), KeyModifiers::ALT),
+            ("<CTRL+K>", KeyCode::Char('k'), KeyModifiers::CONTROL),
+            (
+                "<ctrl+shift+m>",
+                KeyCode::Char('m'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            (
+                "<alt+shift+x>",
+                KeyCode::Char('x'),
+                KeyModifiers::ALT | KeyModifiers::SHIFT,
+            ),
+            (
+                "<ctrl+alt+p>",
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        ];
+        for (token, code, mods) in cases {
+            let events = parse_key_sequence(token);
+            assert_eq!(
+                events.len(),
+                1,
+                "{token} should be one event, got {events:?}"
+            );
+            assert_eq!(events[0].code, code, "{token} code");
+            assert_eq!(events[0].modifiers, mods, "{token} modifiers");
+        }
+    }
+
+    #[test]
+    fn function_key_family_parses() {
+        use crossterm::event::KeyCode;
+        for n in 1u8..=12 {
+            let token = format!("<f{n}>");
+            let events = parse_key_sequence(&token);
+            assert_eq!(events.len(), 1, "{token} should be one event");
+            assert_eq!(events[0].code, KeyCode::F(n), "{token}");
+        }
+    }
+
+    #[test]
+    fn unrecognised_token_falls_back_to_literal_characters() {
+        // The literal-fallback contract: an unknown `<…>` is typed as its own
+        // characters, so a scenario naming a binding the parser does not know
+        // shows up as typed text rather than a silent no-op.
+        for token in [
+            "<f13>",
+            "<f0>",
+            "<foo>",
+            "<ctrl+>",
+            "<ctrl+shift+>",
+            "<hyper+a>",
+            "<a>",
+        ] {
+            let events = parse_key_sequence(token);
+            let typed: String = events
+                .iter()
+                .filter_map(|e| match e.code {
+                    crossterm::event::KeyCode::Char(c) => Some(c),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(typed, token, "{token} must type as its literal characters");
+        }
+    }
+
+    #[test]
+    fn tokens_and_literals_interleave_in_order() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let shape: Vec<(KeyCode, KeyModifiers)> =
+            parse_key_sequence("/voice<enter><ctrl+k>ab<esc>")
+                .iter()
+                .map(|e| (e.code, e.modifiers))
+                .collect();
+        assert_eq!(
+            shape,
+            vec![
+                (KeyCode::Char('/'), KeyModifiers::NONE),
+                (KeyCode::Char('v'), KeyModifiers::NONE),
+                (KeyCode::Char('o'), KeyModifiers::NONE),
+                (KeyCode::Char('i'), KeyModifiers::NONE),
+                (KeyCode::Char('c'), KeyModifiers::NONE),
+                (KeyCode::Char('e'), KeyModifiers::NONE),
+                (KeyCode::Enter, KeyModifiers::NONE),
+                (KeyCode::Char('k'), KeyModifiers::CONTROL),
+                (KeyCode::Char('a'), KeyModifiers::NONE),
+                (KeyCode::Char('b'), KeyModifiers::NONE),
+                (KeyCode::Esc, KeyModifiers::NONE),
+            ]
         );
     }
 

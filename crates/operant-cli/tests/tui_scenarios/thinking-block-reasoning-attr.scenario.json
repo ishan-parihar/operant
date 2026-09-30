@@ -1,0 +1,27 @@
+{
+  "name": "thinking-block-reasoning-attr",
+  "surface": "crates/operant-cli/src/tui/render/messages.rs::render_thinking_item",
+  "opens_with": "/reasoning (toggles show_reasoning)",
+  "keys": "/reasoning<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "120x40",
+      "keys": "/reasoning<enter>/reasoning<enter>",
+      "assert": [
+        "show_reasoning == false"
+      ]
+    }
+  ],
+  "agent_script": "reasoning-then-answer.json",
+  "assert": [
+    "show_reasoning == true"
+  ],
+  "assert_screen": [
+    "contains:Thinking:",
+    "contains:reasoning panel"
+  ],
+  "baseline": "thinking-block-reasoning-attr.txt",
+  "style_baseline": "thinking-block-reasoning-attr.style.txt",
+  "notes": "The same thinking row driven by the OTHER event variant — Reasoning (a live streaming delta) rather than Thinking (a completed block) — and through the /reasoning toggle rather than by default. Two render inputs on one renderer is the point: a regression that collapsed Reasoning into Thinking, or that stopped honouring show_reasoning, would pass with only one of these baselined. The variant presses /reasoning a second time to pin the toggle-off state."
+}

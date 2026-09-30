@@ -1,0 +1,5 @@
+[
+  {"type":"user","text":"Which database should I point the migration at?"},
+  {"type":"user_question","question":"Which database should the migration target?","choices":["sqlite","postgres","qdrant"]},
+  {"type":"done","text":""}
+]

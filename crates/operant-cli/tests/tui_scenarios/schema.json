@@ -1,0 +1,485 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://operant.local/schemas/tui-scenario-corpus-v1.json",
+  "title": "operant TUI headless visual-regression scenario corpus (v1)",
+  "description": "Contract for the Phase 0 `--suite` runner. One `*.scenario.json` file per renderable TUI surface. The runner renders each scenario headlessly via ratatui's TestBackend (TuiApp::run_headless), writes a text dump and a style dump, and diffs both against the committed baselines named here. Every field below was cross-checked against the real implementation: `assert` paths against App::debug_snapshot()/overlay_flags() in crates/operant-cli/src/tui/app/commands.rs, `keys` tokens against parse_key_sequence() in crates/operant-cli/src/cmd_tui_debug.rs, and `agent_script` event shapes against MockAgentEvent in the same file.",
+  "file_layout": {
+    "scenarios_glob": "*.scenario.json",
+    "schema": "schema.json",
+    "agent_scripts_dir": "agent_scripts/",
+    "baselines_dir": "baselines/",
+    "notes": [
+      "The runner MUST only pick up files matching `*.scenario.json`; any other file in this directory (README.md, tooling, this schema) is ignored.",
+      "`baselines/` is created by Phase 0 on first `--update-baselines` run; the corpus only names the files.",
+      "Two baselines per scenario: `<baseline>` (text) and `<style_baseline>` (style grid).",
+      "`excluded.json` is the single source of truth for surfaces the corpus tracks but does not execute. Each entry names the surface, the baselines a future run should create, one `reason`, and an `unblock_when`. It is NOT a pass list: the runner prints its size so a run can never quietly shrink its own regression net, and _validate.py cross-checks it against the SURFACES ledger so an entry can never drift out of sync with the render ladder."
+    ],
+    "excluded_file": "excluded.json"
+  },
+  "fields": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "meaning": "Unique kebab-case id; also the primary key the runner keys baselines on and the name it prints in CI.",
+      "notes": "Must be unique across the directory. Renaming a scenario orphans its baselines \u2014 treat as a breaking change."
+    },
+    "surface": {
+      "type": "string",
+      "required": true,
+      "meaning": "The source path or `module::fn` that renders this surface.",
+      "notes": "Points at the render function, not the state struct, so a refactor that moves a renderer shows up as a one-line diff here. Use `<file>::<fn>` for `render_*` functions and a bare `<file>` for state-only surfaces."
+    },
+    "opens_with": {
+      "type": "string",
+      "required": true,
+      "meaning": "The slash command or key chord that opens the surface, in human form (`/help`, `Ctrl+R`).",
+      "notes": "Documentation only \u2014 the machine-readable opener is `keys`. Listed separately so a reader can grep openers without parsing key syntax."
+    },
+    "keys": {
+      "type": "string",
+      "required": true,
+      "meaning": "Full key sequence for the scenario, INCLUDING the opener and any closing keys, in `--keys` syntax.",
+      "notes": "See `key_syntax`. An empty string is legal and means 'render the landing frame with zero keystrokes'."
+    },
+    "flags": {
+      "type": "array",
+      "required": false,
+      "items": {
+        "type": "string"
+      },
+      "meaning": "Extra CLI flags appended verbatim to the `simulate` invocation, for state that cannot be produced by a key or an agent-script event.",
+      "notes": "Currently only `--bypass-permissions` is used. That one is a flag rather than a script event because `TuiApp::enter` raises the dialog before any key or event is processed, and it mirrors the real `operant --dangerously-skip-permissions`. The runner MUST NOT invent or infer flags; anything here is echoed into the command line."
+    },
+    "size": {
+      "type": "string",
+      "required": true,
+      "pattern": "^[0-9]+x[0-9]+$",
+      "meaning": "Terminal size as WxH passed to `--size`.",
+      "notes": "Default corpus size is 120x40. `run_headless` clamps to at least 20x5 via `width.max(20)` / `height.max(5)`, so values below that are silently altered \u2014 do not use them. Narrow/short coverage belongs in `variants`, not here."
+    },
+    "variants": {
+      "type": "array",
+      "required": false,
+      "items": {
+        "type": "object",
+        "required": [
+          "size"
+        ],
+        "properties": {
+          "size": {
+            "type": "string",
+            "required": true,
+            "pattern": "^[0-9]+x[0-9]+$",
+            "meaning": "Alternate terminal size for this scenario."
+          },
+          "keys": {
+            "type": "string",
+            "required": false,
+            "meaning": "Alternate key sequence; defaults to the scenario's `keys` when omitted."
+          },
+          "assert": {
+            "type": "array",
+            "required": false,
+            "items": {
+              "type": "string"
+            },
+            "meaning": "State assertions applied INSTEAD OF the scenario's `assert` for this variant."
+          },
+          "assert_screen": {
+            "type": "array",
+            "required": false,
+            "items": {
+              "type": "string"
+            },
+            "meaning": "Screen assertions applied INSTEAD OF the scenario's `assert_screen` for this variant."
+          }
+        },
+        "meaning": "Extra renders of the same surface at other geometries, for narrow/short-terminal layout regressions. Each variant gets its OWN pair of baselines, named `<baseline stem>.<W>x<H>.txt` / `.style.txt`."
+      }
+    },
+    "agent_script": {
+      "type": "string",
+      "required": false,
+      "meaning": "Filename under `agent_scripts/` passed verbatim to `--agent-script`.",
+      "notes": "Omit for surfaces that need no agent output. Setting it flips `run_headless` onto the mock path: no network, no models.dev fetch. Every script MUST end in a `done` or `error` event \u2014 see `agent_script_contract`."
+    },
+    "assert": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      },
+      "meaning": "State assertions joined with `,` and passed to `--assert`.",
+      "notes": "See `assertion_syntax`. At least one entry MUST prove the surface actually opened \u2014 not merely that a key was accepted. An unresolvable path is a HARD FAILURE of the run (evaluate_assertions bails with \"Unknown assertion path\"), so a typo here silently removes the surface from coverage."
+    },
+    "assert_screen": {
+      "type": "array",
+      "required": false,
+      "items": {
+        "type": "string"
+      },
+      "meaning": "Screen assertions joined with `,` and passed to `--assert-screen`.",
+      "notes": "See `screen_assertion_syntax`. Matched against `screen.join(\"\\n\")` where each row is `trim_end()`-ed. Comma is the clause separator, so a needle containing a literal comma must be avoided or the clause will be split."
+    },
+    "baseline": {
+      "type": "string",
+      "required": true,
+      "meaning": "Filename under `baselines/` holding the text dump for this scenario.",
+      "notes": "See `baseline_formats.text`."
+    },
+    "style_baseline": {
+      "type": "string",
+      "required": true,
+      "meaning": "Filename under `baselines/` holding the per-cell style dump for this scenario.",
+      "notes": "See `baseline_formats.style`. This is what catches a colour regression, which the text dump cannot."
+    },
+    "notes": {
+      "type": "string",
+      "required": false,
+      "meaning": "Why this scenario exists / what regression it catches."
+    },
+    "reachability": {
+      "type": "string",
+      "required": false,
+      "enum": [
+        "live",
+        "blocked"
+      ],
+      "default": "live",
+      "meaning": "`live` = executes green against the real binary today. `blocked` = the surface is rendered by render_app but cannot be reached through `parse_key_sequence`'s current token set or the headless driver; the scenario states exactly what Phase 0 must change.",
+      "notes": "Phase 0's runner MUST report `blocked` scenarios as SKIPPED-with-reason rather than as failures, and MUST print the `blocked_by` text, so an unreachable surface never reads as a passing surface."
+    },
+    "blocked_by": {
+      "type": "string",
+      "required": false,
+      "meaning": "Required only when `reachability == \"blocked\"`. One sentence naming the exact missing capability and where it would have to be added.",
+      "notes": "Each of these names a concrete, small change: a new token in parse_key_sequence, a flag on TuiApp::enter, or a new event channel in run_headless."
+    }
+  },
+  "key_syntax": {
+    "grammar": "A --keys string is a flat char stream. Everything not matched below is emitted as a literal KeyCode::Char.",
+    "named_tokens": [
+      "<enter>",
+      "<esc>",
+      "<escape> (alias of <esc>)",
+      "<tab>",
+      "<up>",
+      "<down>",
+      "<left>",
+      "<right>",
+      "<backspace>",
+      "<bs> (alias of <backspace>)",
+      "<ctrl+a>",
+      "<ctrl+c>",
+      "<ctrl+t>",
+      "<ctrl+r>",
+      "<shift+tab>"
+    ],
+    "generic_grammars": {
+      "function_keys": "<f1> .. <f12> -> KeyCode::F(n). Digits only and 1..=12 only, so `<f0>` and `<f13>` stay unrecognised instead of wrapping.",
+      "modifier_chords": "<ctrl+<c>> / <alt+<c>> / any `+`-joined combination of ctrl|control|alt|meta|option|shift, ending in a single character. At least one modifier is required. Case-insensitive: `<CTRL+K>` == `<ctrl+k>`. Examples: <ctrl+k>, <alt+v>, <ctrl+shift+m>, <ctrl+alt+p>."
+    },
+    "escapes": [
+      "\\n -> Enter",
+      "\\t -> Tab",
+      "\\\\ -> literal backslash"
+    ],
+    "unrecognised_bracketed_token": "FALLS THROUGH AS LITERAL CHARACTERS. parse_key_sequence sets parsed=false and then emits '<', then each inner char, then '>'. There is no error. `<f13>` therefore types the six characters `<f13>`; it does NOT press F13. This is the single largest footgun in the corpus and it is deliberately preserved: a scenario naming a binding the parser does not know must show up as typed text, never as a silent no-op.",
+    "not_supported_today": [
+      "<home>",
+      "<end>",
+      "<pageup>",
+      "<pagedown>",
+      "<delete>",
+      "<insert>",
+      "<space>",
+      "bare <shift+<letter>> (no ctrl/alt), multi-character <ctrl+key> such as <ctrl+backspace>"
+    ],
+    "notes": "Slash commands are typed literally: `/help<enter>` is 5 chars + Enter = 6 key events."
+  },
+  "assertion_syntax": {
+    "operators": [
+      "==",
+      "!=",
+      "contains"
+    ],
+    "clause_form": "`path OP value`, comma-separated",
+    "contains_delimiter": "' contains ' \u2014 the operator must be surrounded by spaces, otherwise it is not recognised and the clause is a parse error.",
+    "value_quoting": "Outer matching single or double quotes are stripped from the value. Omit them unless the value itself needs them.",
+    "legacy_alias": "A path ending in `.visible` is rewritten to `overlays.<base>`. `help_overlay.visible == true` and `overlays.help_overlay == true` are equivalent; the corpus uses the canonical form.",
+    "type_coercion": "Booleans and numbers are parsed from the value string and compared to the JSON node; strings compare by equality; `contains` does a substring test against the node's display form. `status_message` is `null` when unset, so `status_message contains x` FAILS on a null node \u2014 use `==` for presence checks.",
+    "top_level_paths": {
+      "should_exit": "bool",
+      "is_streaming": "bool",
+      "is_simulating": "bool (always true under the runner)",
+      "plan_mode": "bool",
+      "show_help": "bool",
+      "show_reasoning": "bool",
+      "fast_mode": "bool",
+      "messages": "number (count, not text)",
+      "status_message": "string | null",
+      "model": "string",
+      "provider": "string | null",
+      "focus": "string (Debug of the Focus enum, e.g. \"Input\", \"Prompt\", \"None\")",
+      "token_count": "number",
+      "any_modal_open": "bool",
+      "overlays": "object of 34 booleans \u2014 the ONLY place a dialog/overlay visibility can be asserted"
+    },
+    "overlay_paths_exhaustive": [
+      "help_overlay",
+      "history_search_overlay",
+      "global_search",
+      "rewind_flow",
+      "settings_screen",
+      "theme_screen",
+      "stats_dialog",
+      "mcp_view",
+      "agents_menu",
+      "diff_viewer",
+      "memory_file_selector",
+      "skills_view",
+      "plugins_hub",
+      "journey_view",
+      "hooks_config_menu",
+      "voice_mode_notice",
+      "model_picker",
+      "session_browser",
+      "session_branching",
+      "export_dialog",
+      "context_viz",
+      "mcp_approval",
+      "bypass_permissions_dialog",
+      "effort_picker",
+      "key_input_dialog",
+      "custom_provider_dialog",
+      "free_mode_dialog",
+      "device_auth_dialog",
+      "connect_dialog",
+      "import_config_picker",
+      "import_config_dialog",
+      "command_palette",
+      "ask_user_dialog",
+      "permission_request"
+    ],
+    "not_in_snapshot": [
+      "usage_overlay \u2014 rendered by render_app (F8) but absent from overlay_flags(), so `overlays.usage_overlay` FAILS with \"Unknown assertion path\"",
+      "debug_hub / debug overlay \u2014 rendered by render_app (F12) but absent from overlay_flags()",
+      "tool_use_blocks, context_menu_state, selection_anchor/focus, notifications, streaming_text, system_annotations, background_tasks \u2014 none are exposed by debug_snapshot()"
+    ]
+  },
+  "screen_assertion_syntax": {
+    "clauses": [
+      "contains:TEXT",
+      "not-contains:TEXT"
+    ],
+    "haystack": "screen.join(\"\\n\")",
+    "row_production": "Each buffer row is the concatenation of cell symbols, then trim_end(). Trailing spaces are therefore absent; a needle must not rely on them. Wide/combining glyphs appear as the raw symbol string.",
+    "comma_caveat": "evaluate_screen_assertions splits on ','. A needle containing a comma cannot be expressed.",
+    "notes": "Screen assertions are the ONLY way to verify a surface that debug_snapshot() does not expose (footer, typeahead, transcript text, tool blocks)."
+  },
+  "agent_script_contract": {
+    "format": "A JSON array of objects tagged by `type` (serde `rename_all = \"snake_case\"`).",
+    "variants": {
+      "user": {
+        "required": [
+          "text"
+        ],
+        "optional": [],
+        "channel": "app.messages",
+        "notes": "NOT an AgentEvent. `build_transcript_turns` starts a new turn only at a `Role::User` message, and `render_messages` partitions tool blocks onto a turn \u2014 so a script with tool events and no `user` event populates tool state and paints no tool block. Lead the script with `user` whenever it contains tool_* events."
+      },
+      "permission_request": {
+        "required": [
+          "tool"
+        ],
+        "optional": [
+          "tool_id",
+          "description"
+        ],
+        "optional_default": "\"\" for both",
+        "channel": "permission_tx",
+        "notes": "NOT an AgentEvent. Sends on the same bounded channel `agent.with_permissions(permission_tx)` writes to, which `App::run` drains into the `permission_request` dialog. Raises `overlays.permission_request`."
+      },
+      "user_question": {
+        "required": [
+          "question"
+        ],
+        "optional": [
+          "choices"
+        ],
+        "channel": "user_question_tx",
+        "notes": "NOT an AgentEvent. Sends on the unbounded channel the `clarify` tool writes to (registered globally via `set_user_question_sender`), which `App::run` drains into `ask_user_dialog`. Omit `choices` for the free-text form."
+      },
+      "background_task": {
+        "required": [
+          "goal"
+        ],
+        "optional": [
+          "model",
+          "status"
+        ],
+        "optional_default": "\"offline-capture\" / \"pending\"",
+        "channel": "async_delegation registry",
+        "notes": "NOT an AgentEvent. Calls operant_core's public `create_record` / `mark_completed` / `mark_failed` \u2014 the same process-wide registry `SubAgentTool::dispatch_background` writes and that `BackgroundTaskState::refresh` reads. `status` is one of `pending`, `completed`, `failed`. The rendered row is derived from that record, never injected into TUI state."
+      },
+      "thinking": {
+        "required": [
+          "content"
+        ],
+        "optional": []
+      },
+      "reasoning": {
+        "required": [
+          "text"
+        ],
+        "optional": []
+      },
+      "content": {
+        "required": [
+          "text"
+        ],
+        "optional": []
+      },
+      "tool_start": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "optional": [
+          "arguments"
+        ],
+        "optional_default": ""
+      },
+      "tool_complete": {
+        "required": [
+          "id"
+        ],
+        "optional": [
+          "name",
+          "output"
+        ],
+        "optional_default": ""
+      },
+      "tool_error": {
+        "required": [
+          "id",
+          "error"
+        ],
+        "optional": [
+          "name"
+        ]
+      },
+      "usage": {
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "optional": [],
+        "notes": "total_tokens is computed as the sum; do not supply it."
+      },
+      "done": {
+        "required": [],
+        "optional": [
+          "text",
+          "reasoning"
+        ],
+        "optional_default": "",
+        "notes": "Terminal for a normal turn. DO NOT follow an `error` with a `done`: `handle_agent_event` auto-dismisses error notifications on the next Content/Thinking/Reasoning/Done, and the real agent never emits Done after Error (both `AgentEvent::Error` sites in operant-core/src/agent/run.rs return Err immediately). An error-then-done script silently swallows the error modal."
+      },
+      "error": {
+        "required": [
+          "error"
+        ],
+        "optional": [],
+        "notes": "Terminal. Raises an `Error:` transcript line AND an Error notification, which is what puts the error modal on screen."
+      }
+    },
+    "unknown_field": "Rejected by serde (the enum is not `deny_unknown_fields`-tolerant by default); an unrecognised key fails the whole script parse with \"Failed to parse agent script\".",
+    "termination": "MUST end in `done` or `error`. run_headless pre-resolves the run_complete oneshot so the loop terminates regardless, but a script with no terminal event leaves the transcript mid-turn and the run reads like a hang.",
+    "known_limitations": [
+      "tool_start/tool_complete/tool_error only paint a tool block if the script leads with a `user` event \u2014 see the `user` variant above.",
+      "`error` paints the error modal only while it is the LAST event; see `done` above.",
+      "The `mcp_approval` dialog cannot be produced by any script, because `McpApprovalDialogState::show` has no call site anywhere in the workspace (it is `#[allow(dead_code)]`). That is a product gap, not a harness one \u2014 see excluded.json.",
+      "`apply_selection_highlight` cannot be produced: its only state writer is the mouse handler, and `App::run` drives a `Vec<KeyEvent>` with no mouse source. See excluded.json.",
+      "Setting agent_script sets is_mock, which SKIPS load_models_dev(). The model picker's list is therefore empty on the mock path \u2014 a model-picker scenario that wants a populated list must run without an agent_script and accept the network dependency."
+    ],
+    "library_entries": {
+      "assistant-simple.json": "One Content + Done. The minimal healthy transcript.",
+      "usage.json": "Content + Usage + Done. The only way to get non-zero token glyphs in the footer without a network turn.",
+      "stream-multi-chunk.json": "Two Reasoning events then three Content events. Exercises the thinking row and proves the stream coalesces into one message.",
+      "reasoning-then-answer.json": "Thinking + Reasoning + Content + Done(reasoning). Pairs with stream-multi-chunk to cover both mock event variants of the same render path.",
+      "tool-error.json": "User + Content + ToolStart + ToolError + Done. Proves the failure text survives into the flushed assistant message.",
+      "tool-run-completed.json": "User + Content + ToolStart + ToolComplete + Done. The `user` event is what makes the tool block paint; it is the tool-block scenario's script.",
+      "error-modal.json": "Thinking + Content + Error, and NOTHING after. The error-modal scenario's script: a trailing `done` would auto-dismiss the modal it is meant to show.",
+      "permission-request.json": "User + permission_request + Done. Raises the permission dialog through the real `permission_rx` channel.",
+      "ask-user-question.json": "User + user_question + Done. Raises the ask-user dialog through the real user-question channel.",
+      "background-task.json": "Two background_task records (one pending, one completed) + Done. Produces the two background-task rows plus the footer count.",
+      "empty.json": "A single Done and nothing else. Reserved as the runner's own minimal-termination fixture \u2014 deliberately NOT referenced by any scenario, because its job is to prove a one-event script still flips is_streaming and ends the loop, which is a harness property rather than a surface."
+    }
+  },
+  "baseline_formats": {
+    "text": {
+      "filename": "<baseline>, e.g. baselines/help-overlay.txt",
+      "encoding": "UTF-8, LF line endings, single trailing newline",
+      "content": "The exact bytes `--dump-screen` writes today: `screen.join(\"\\n\")`, i.e. one row per line, no trailing newline beyond the final row's own terminator.",
+      "row_definition": "For y in 0..height: concatenate buf.content()[y*width .. (y+1)*width] cell symbols, then trim_end().",
+      "row_count": "Exactly `height` rows \u2014 trailing all-blank rows are KEPT (they are trimmed of trailing spaces but not dropped). A row count change is itself a regression signal.",
+      "diff": "Line-by-line. Report the first differing row index, both rows, and the 0-based column of the first differing character.",
+      "known_nondeterminism": "Rows that embed wall-clock time, absolute paths, git output, session/skill/plugin listings, model ids, or `~/.operant/slash-usage.json`-driven ordering differ per machine. Scenarios whose surface reads those carry an `env_requirements` note; the runner should either mask them or keep such baselines out of the blocking set."
+    },
+    "style": {
+      "filename": "<style_baseline>, e.g. baselines/help-overlay.style.txt",
+      "encoding": "UTF-8, LF line endings, single trailing newline",
+      "purpose": "Catches colour and modifier regressions, which the text dump cannot see. Two surfaces can render identical text with inverted palettes; only this file notices.",
+      "layout": "A header line, then exactly `height` grid lines of exactly `width` tokens, space-separated.",
+      "header_line": "operant-style-v1 <width>x<height>",
+      "token_grammar": "<fg>/<bg>/<mods>@<symbol>",
+      "symbol_field": "The cell symbol with these substitutions, so a style file stays one-token-per-cell and diff-friendly: space -> `_`; empty symbol or NUL -> `~`; backslash -> `\\\\`; any other control char -> `?`; a cell whose symbol is wider than 1 column (wide CJK/emoji) is written once, in the cell where it STARTS, and its continuation cells are written as `~/<same fg>/<same bg>/-`. Every other printable char is written literally.",
+      "fg_field": "One of: `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `darkgray`, `lightred`, `lightgreen`, `lightyellow`, `lightblue`, `lightmagenta`, `lightcyan`, `white`, `rgb:RRGGBB`, `indexed:N`. `Color::Reset` -> `reset`.",
+      "bg_field": "Same vocabulary as fg. An unset background is written as `-`; `Color::Reset` background is written as `reset`.",
+      "mods_field": "A `-`-joined, alphabetically sorted, `+`-separated subset of `b`(bold) `i`(italic) `u`(underline) `r`(reversed) `d`(dim) `x`(crossedout); the literal `-` when no modifier is set. A style with fg=X, bg=-, no modifiers encodes as `X/-/-@_`.",
+      "example_line": "cyan/-/b-@\u2588 and -/darkgray/-@_ are both valid tokens for that row.",
+      "diff": "Token-by-token on the grid, plus a whole-line check on the header. Report the first differing (row, col) and both tokens.",
+      "normalisation": "The writer MUST NOT normalise or reorder anything; the dump is a verbatim projection of the TestBackend buffer so any post-processing would hide exactly the regressions this file exists to catch."
+    }
+  },
+  "runner_contract": {
+    "phase_0_flags_to_add": [
+      "--suite <glob|dir> \u2014 walk the corpus",
+      "--dump-style <path> \u2014 write the style baseline described above",
+      "--baseline <path> \u2014 write the text baseline described above",
+      "--update-baselines \u2014 rewrite baselines instead of diffing"
+    ],
+    "existing_flags_the_runner_must_reuse_unchanged": [
+      "--keys",
+      "--size",
+      "--assert",
+      "--assert-screen",
+      "--agent-script",
+      "--dump-screen",
+      "--max-frames",
+      "--bypass-permissions",
+      "per-scenario `flags` (appended verbatim)"
+    ],
+    "determinism_requirements": [
+      "Never run two scenarios concurrently in one process: the mock path and slash-command handling touch process-wide state (slash usage store, notification and background-task registries, audio detection).",
+      "Freeze or record the clock. Several surfaces embed elapsed time (footer turn timer, session-start-seeded tips).",
+      "Pin HOME (or OPERANT_HOME) to a fixture directory seeded with skills/plugins/auth so `/skills`, `/plugins` and `/model` render the same rows on every machine.",
+      "Set the terminal size explicitly per scenario; never inherit the developer's tty."
+    ]
+  },
+  "conventions": {
+    "naming": "scenario file = `<name>.scenario.json`; baselines = `<name>.txt` and `<name>.style.txt`; variants append `.<W>x<H>` before the extension.",
+    "env_requirements": "Recorded in `notes` as a leading `ENV:` clause when a scenario reads machine state. The runner may parse it to decide whether to run the scenario in a blocking or advisory tier.",
+    "assertion_style": "One assertion per surface is a common failure mode \u2014 `any_modal_open == true` alone would pass for 29 different overlays. Every scenario asserts its OWN `overlays.<name> == true`. Two further rules learned the hard way: (1) assert a surface's OWN text, not a proxy \u2014 `any_modal_open == false` proves nothing about whether a surface rendered, and the two non-modal panels (usage_overlay, debug_overlay) are exposed as TOP-LEVEL snapshot keys precisely because folding them into overlay_flags() would make any_modal_open lie. (2) a needle may not contain a comma: evaluate_screen_assertions splits clauses on ','. `contains:\u25ba [y] Yes, allow once` silently becomes two clauses \u2014 stop the needle at the last comma-free word.",
+    "any_modal_open_is_host_dependent": "any_modal_open ORs all 34 overlay flags plus show_help and context_menu_state. On a host with a working audio device, TuiApp::enter calls voice_mode_notice.show_if_available(..) and the notice is visible from frame 0, so any_modal_open is TRUE for the entire run. An `any_modal_open == false` assertion is therefore only meaningful on a host where the boot notice did not appear \u2014 use a leading `/voice<enter>` (which replaces the notice with a fresh invisible state) when a scenario genuinely needs no modal open, as `notification-banner` does. An `any_modal_open == true` assertion, by contrast, is always safe.",
+    "blocked_scenario_policy": "`reachability: \"blocked\"` is a TEMPORARY marker for a surface that will be unblocked in this iteration; the runner prints `blocked_by` and counts it as SKIPPED. A surface that cannot be made reachable belongs in `excluded.json` instead, not here \u2014 a scenario file that cannot pass teaches people to ignore red. The corpus currently has zero blocked entries; anything marked blocked makes _validate.py warn.",
+    "host_dependent_startup_state": "On a host with a working audio device, TuiApp::enter calls `voice_mode_notice.show_if_available(..)`, so voice_mode_notice is visible from frame 0 and `any_modal_open` is TRUE before any key is pressed. A scenario that needs a clean start must lead with `/voice<enter>`, which replaces the notice with a fresh invisible state and is idempotent on a silent host. `<esc>` also works, EXCEPT when an Error notification is current: Esc then hits `dismiss_error_notifications()` and takes the modal down with it. The error-modal scenario therefore sends no keys at all and does not assert any_modal_open."
+  },
+  "authoring_tools": {
+    "_validate.py": "Static corpus checker. Encodes the ground truth (the 15 debug_snapshot top-level keys, the 34 overlay_flags keys, the parse_key_sequence token table, the MockAgentEvent variant table) and fails on: unparseable JSON, missing/mistyped fields, a key token the parser does not recognise, an assert path that does not resolve, a screen clause that is not contains:/not-contains:, a needle containing the ',' clause separator, a missing or malformed agent script, a script that does not end in done/error, and any surface with no scenario.",
+    "_run.py": "Prototype Phase 0 runner. Executes every `live` scenario and every variant using ONLY flags that exist today \u2014 --keys, --size, --assert, --assert-screen, --agent-script, --dump-screen. Never uses --dump-style or --baseline, which Phase 0 must add."
+  }
+}

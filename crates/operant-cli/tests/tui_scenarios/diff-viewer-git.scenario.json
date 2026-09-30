@@ -1,0 +1,25 @@
+{
+  "name": "diff-viewer-git",
+  "surface": "crates/operant-cli/src/tui/diff_viewer.rs::render_diff_dialog",
+  "opens_with": "/diff",
+  "keys": "/diff<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/diff<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.diff_viewer == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Review changes",
+    "contains:git diff mode",
+    "contains:files"
+  ],
+  "baseline": "diff-viewer-git.txt",
+  "style_baseline": "diff-viewer-git.style.txt",
+  "notes": "The git-diff mode of the viewer: file list left, hunk detail right, with +/- counts in the header. Strongly ENV-dependent (it renders the working tree's own diff), so this baseline is machine-specific by construction \u2014 pin the repo state or keep it advisory. Catches the pane split and the add/delete colour coding, which is pure style-baseline territory. The third needle was 'Files'; the header renders 'N files' (lowercase), so it was mis-cased and could never match."
+}

@@ -1,0 +1,19 @@
+{
+  "name": "free-mode-dialog",
+  "surface": "crates/operant-cli/src/tui/free_mode_dialog.rs::render_free_mode_dialog",
+  "opens_with": "/connect, then filter to Free Mode",
+  "keys": "/connect<enter>Free<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.free_mode_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Connect Free",
+    "contains:multi-provider",
+    "contains:TIP"
+  ],
+  "baseline": "free-mode-dialog.txt",
+  "style_baseline": "free-mode-dialog.style.txt",
+  "notes": "Multi-provider composite setup: one row per free-tier upstream, each with its own key field. The '0/5 keys' counter in the title is ENV-dependent (it counts already-stored keys), so only the stable title prefix is asserted. The opener targets index 0 of the catalogue, so no <down> is needed."
+}

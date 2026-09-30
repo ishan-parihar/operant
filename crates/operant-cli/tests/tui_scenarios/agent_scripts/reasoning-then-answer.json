@@ -1,0 +1,6 @@
+[
+  {"type":"thinking","content":"I should reason before answering so the reasoning panel has something to show."},
+  {"type":"reasoning","text":"Step 1: read the request. Step 2: answer it directly."},
+  {"type":"content","text":"Here is the answer."},
+  {"type":"done","text":"Here is the answer.","reasoning":"Step 1: read the request. Step 2: answer it directly."}
+]

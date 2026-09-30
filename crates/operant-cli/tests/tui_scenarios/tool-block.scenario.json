@@ -1,0 +1,18 @@
+{
+  "name": "tool-block",
+  "surface": "crates/operant-cli/src/tui/render/tools.rs::render_tool_items_lines",
+  "opens_with": "(/voice to clear the boot notice, then an agent script)",
+  "keys": "/voice<enter>",
+  "size": "120x40",
+  "agent_script": "tool-run-completed.json",
+  "assert": [
+    "any_modal_open == false"
+  ],
+  "assert_screen": [
+    "contains:read_file",
+    "contains:README.md"
+  ],
+  "baseline": "tool-block.txt",
+  "style_baseline": "tool-block.style.txt",
+  "notes": "Tool blocks are a distinct render path (render_tool_items_lines) with four status colours (Queued / Running / Done / Error) and a 3-line output preview \u2014 exactly the kind of thing the style baseline exists for and the text dump cannot see. The script leads with a `user` event because build_transcript_turns starts a turn only at a Role::User message and render_messages partitions tool blocks onto a turn: without it the tool state populates and paints nothing."
+}

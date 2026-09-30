@@ -110,6 +110,15 @@ impl App {
             "token_count": self.token_count,
             "any_modal_open": self.any_modal_open(),
             "overlays": serde_json::Value::Object(overlays),
+            // Non-modal surfaces, deliberately NOT in `overlays`:
+            // `any_modal_open()` is derived from `overlay_flags()`, and both
+            // of these render below every modal (render/mod.rs) without
+            // gating input. Folding them in would make `any_modal_open`
+            // claim a modal is up when none is, which changes real
+            // behaviour — it gates error-modal precedence, toast
+            // suppression, and key routing.
+            "usage_overlay": self.usage_overlay.visible,
+            "debug_overlay": self.debug_hub.overlay_visible(),
         })
     }
 
@@ -1852,6 +1861,11 @@ mod tests {
     use operant_core::config::AppConfig;
 
     fn make_app() -> App {
+        // `App::new` writes the process-global palette — see the note on the
+        // twin helper in `app/tests.rs`.
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let config = AppConfig::default();
         let settings = Settings::default();
         let cost_tracker = std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new());

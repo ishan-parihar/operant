@@ -1,0 +1,17 @@
+{
+  "name": "session-branching",
+  "surface": "crates/operant-cli/src/tui/session_branching.rs::render_session_branching",
+  "opens_with": "/branch",
+  "keys": "/branch<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.session_branching == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Session Branches"
+  ],
+  "baseline": "session-branching.txt",
+  "style_baseline": "session-branching.style.txt",
+  "notes": "Renders into the buffer directly. Empty state on a fresh DB. Reachable by /branch; the Ctrl+B binding key_handling.rs documents is NOT a legal token, so /branch is the only reachable opener."
+}

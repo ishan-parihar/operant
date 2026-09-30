@@ -1,0 +1,19 @@
+{
+  "name": "import-config-picker",
+  "surface": "crates/operant-cli/src/tui/dialog_select.rs::render_dialog_select",
+  "opens_with": "/import-config",
+  "keys": "/import-config<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.import_config_picker == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Import config",
+    "contains:CLAUDE.md",
+    "contains:SAFE"
+  ],
+  "baseline": "import-config-picker.txt",
+  "style_baseline": "import-config-picker.style.txt",
+  "notes": "The second DialogSelect instantiation. The SAFE badge on the 'Both' row is a distinct badge-rendering path from the FREE / LOCAL badges in the connect dialog, so it is asserted explicitly."
+}

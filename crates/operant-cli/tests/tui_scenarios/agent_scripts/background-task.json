@@ -1,0 +1,5 @@
+[
+  {"type":"background_task","goal":"Audit the browser stack for leaked handles","model":"offline-capture","status":"pending"},
+  {"type":"background_task","goal":"Index the vendored TUI design-system crates","model":"offline-capture","status":"completed"},
+  {"type":"done","text":""}
+]

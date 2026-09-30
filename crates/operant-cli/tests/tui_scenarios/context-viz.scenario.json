@@ -1,0 +1,25 @@
+{
+  "name": "context-viz",
+  "surface": "crates/operant-cli/src/tui/context_viz.rs::render_context_viz",
+  "opens_with": "/context",
+  "keys": "/context<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/context<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.context_viz == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Context & usage",
+    "contains:Context window",
+    "contains:Rate limits"
+  ],
+  "baseline": "context-viz.txt",
+  "style_baseline": "context-viz.style.txt",
+  "notes": "The gauge surface: a filled/empty block meter plus rate-limit rows plus a cost row, all driven by live counters. The meter's fill level is ENV-dependent (tokens used) but the LABEL rows are not, which is why the needles are the labels. NOTE: /context is a TOGGLE — a scenario that presses it twice ends with the overlay closed, so never append a second /context to `keys`."
+}

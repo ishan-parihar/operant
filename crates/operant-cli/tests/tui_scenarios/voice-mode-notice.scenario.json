@@ -1,0 +1,18 @@
+{
+  "name": "voice-mode-notice",
+  "surface": "crates/operant-cli/src/tui/voice_mode_notice.rs::render_voice_mode_notice",
+  "opens_with": "(shown at boot when audio is available)",
+  "keys": "",
+  "size": "120x40",
+  "assert": [
+    "overlays.voice_mode_notice == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Voice mode is available",
+    "contains:Alt+V"
+  ],
+  "baseline": "voice-mode-notice.txt",
+  "style_baseline": "voice-mode-notice.style.txt",
+  "notes": "ENV: TuiApp::enter calls voice_mode_notice.show_if_available(audio_env.available, false), so on a host with a working recorder this overlay is VISIBLE FROM THE FIRST FRAME with zero keystrokes. Two consequences the runner must handle: this scenario only exists on audio-capable hosts, and on such hosts voice_mode_notice makes any_modal_open true for EVERY other scenario, which suppresses notification-banner. Note also that /voice REPLACES the notice with a fresh (invisible) state rather than dismissing it, so /voice is NOT a valid opener here."
+}

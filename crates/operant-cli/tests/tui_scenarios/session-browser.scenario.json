@@ -1,0 +1,18 @@
+{
+  "name": "session-browser",
+  "surface": "crates/operant-cli/src/tui/session_browser.rs::render_session_browser",
+  "opens_with": "/resume",
+  "keys": "/resume<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.session_browser == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Sessions",
+    "contains:Enter=resume"
+  ],
+  "baseline": "session-browser.txt",
+  "style_baseline": "session-browser.style.txt",
+  "notes": "ENV: rows come from the sessions table in the live database; the empty state is asserted. /rename, /session and /sessions all reach this overlay with different sub-states — /rename additionally calls start_rename(), swapping the footer hint row, so a follow-up scenario should cover it."
+}

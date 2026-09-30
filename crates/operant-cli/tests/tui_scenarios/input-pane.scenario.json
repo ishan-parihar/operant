@@ -1,0 +1,16 @@
+{
+  "name": "input-pane",
+  "surface": "crates/operant-cli/src/tui/render/footer.rs::render_input",
+  "opens_with": "(type any character)",
+  "keys": "hello",
+  "size": "120x40",
+  "assert": [
+    "focus == Input"
+  ],
+  "assert_screen": [
+    "contains:hello"
+  ],
+  "baseline": "input-pane.txt",
+  "style_baseline": "input-pane.style.txt",
+  "notes": "Catches the long-standing 'input not visible' bug class: render_app clamps prompt_height against a reserved budget (1 messages row + separator + status + suggestions + 2 footer rows) so a composer can never push itself off screen. Five characters is a single content row, so the border row plus the model/mode status line make the block three rows tall — the clamp arithmetic is exercised."
+}

@@ -1,0 +1,18 @@
+{
+  "name": "debug-overlay",
+  "surface": "crates/operant-cli/src/tui/debug/overlay.rs::render_debug_overlay",
+  "opens_with": "F12",
+  "keys": "<f12>",
+  "size": "120x40",
+  "assert": [
+    "debug_overlay == true",
+    "is_simulating == true"
+  ],
+  "assert_screen": [
+    "contains:Debug (F12 to close)",
+    "contains:Recent events"
+  ],
+  "baseline": "debug-overlay.txt",
+  "style_baseline": "debug-overlay.style.txt",
+  "notes": "The topmost surface in the entire ladder: rendered last, after the selection pass, so nothing can occlude it. Asserted via the new top-level `debug_overlay` key rather than `overlays.debug_overlay` \u2014 it is deliberately NOT an entry in overlay_flags(), because any_modal_open() is derived from that list and folding a key-driven diagnostics panel into it would make unrelated `any_modal_open == false` assertions lie. The prior needle was 'Events'; the render emits ' Recent events (newest first) ' (lowercase e), so the needles are now the bordered title and the log header it actually draws."
+}

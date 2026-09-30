@@ -1,0 +1,19 @@
+{
+  "name": "footer-bar",
+  "surface": "crates/operant-cli/src/tui/render/footer.rs::render_footer",
+  "opens_with": "(always visible)",
+  "keys": "",
+  "size": "120x40",
+  "agent_script": "usage.json",
+  "assert": [
+    "messages == 1"
+  ],
+  "assert_screen": [
+    "contains:shortcuts",
+    "contains:1420",
+    "contains:233"
+  ],
+  "baseline": "footer-bar.txt",
+  "style_baseline": "footer-bar.style.txt",
+  "notes": "The footer is the only place the token / cost / turn counters live, and it is rendered from chunk[5] — a fixed 2-row budget that a regression in any of the five sibling chunks can steal. usage.json is what makes the token glyphs non-zero, so this also pins the up/down arrows and their column alignment. ENV: the left third shows model · provider, which come from operant.toml."
+}

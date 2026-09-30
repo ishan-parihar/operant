@@ -1,0 +1,25 @@
+{
+  "name": "journey-view",
+  "surface": "crates/operant-cli/src/tui/journey_view.rs::render_journey_view",
+  "opens_with": "/journey",
+  "keys": "/journey<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/journey<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.journey_view == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Journey — skills + memories",
+    "contains:Skills (",
+    "contains:Memories ("
+  ],
+  "baseline": "journey-view.txt",
+  "style_baseline": "journey-view.style.txt",
+  "notes": "Two independent panels side by side, each with its own count in the title — the only surface where two data sources must stay column-aligned. A regression in one panel's width desyncs them, which the text dump catches via the shared border row."
+}

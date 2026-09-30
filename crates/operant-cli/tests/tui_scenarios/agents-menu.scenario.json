@@ -1,0 +1,19 @@
+{
+  "name": "agents-menu",
+  "surface": "crates/operant-cli/src/tui/agents_view.rs::render_agents_menu",
+  "opens_with": "/agents",
+  "keys": "/agents<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.agents_menu == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Agents",
+    "contains:Create new agent",
+    "contains:active"
+  ],
+  "baseline": "agents-menu.txt",
+  "style_baseline": "agents-menu.style.txt",
+  "notes": "Renders into the buffer directly, like the MCP view. Has a footer hint row and an inline editor mode; the editor is reachable with a character key and would be a good follow-up scenario. ENV: agent definitions come from ~/.operant/agents, so pin it."
+}

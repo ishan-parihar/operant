@@ -1,0 +1,5 @@
+[
+  {"type":"user","text":"Delete the build directory."},
+  {"type":"permission_request","tool":"bash","tool_id":"call_perm_1","description":"rm -rf ./target"},
+  {"type":"done","text":""}
+]

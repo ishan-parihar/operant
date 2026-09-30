@@ -1,0 +1,17 @@
+{
+  "name": "command-palette",
+  "surface": "crates/operant-cli/src/tui/dialog_select.rs::render_dialog_select",
+  "opens_with": "Ctrl+K",
+  "keys": "<ctrl+k>",
+  "size": "120x40",
+  "assert": [
+    "overlays.command_palette == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Command"
+  ],
+  "baseline": "command-palette.txt",
+  "style_baseline": "command-palette.style.txt",
+  "notes": "The third DialogSelect instantiation, opened by the generic command list. Reachable since parse_key_sequence grew the generic <ctrl+<letter>> chord family \u2014 Ctrl+K is a real binding (key_handling.rs:1309, test_command_palette_opens_via_ctrl_k)."
+}

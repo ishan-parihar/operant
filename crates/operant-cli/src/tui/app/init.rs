@@ -118,7 +118,7 @@ impl App {
             fast_mode: false,
             agent_mode: None,
             agent_mode_changed: false,
-            accent_color: ACCENT_BUILD,
+            accent_color: crate::tui::vendor::style::theme::accent_color(),
             agent_status: Vec::new(),
             cursor_pos: 0,
             auto_scroll: true,

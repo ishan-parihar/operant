@@ -1,0 +1,5 @@
+[
+  {"type":"content","text":"Checking token spend for this turn."},
+  {"type":"usage","input_tokens":1420,"output_tokens":233},
+  {"type":"done","text":"Turn used 1653 tokens."}
+]

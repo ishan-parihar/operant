@@ -1,0 +1,34 @@
+{
+  "name": "help-overlay",
+  "surface": "crates/operant-cli/src/tui/overlays.rs::render_help_overlay",
+  "opens_with": "/help",
+  "keys": "/help<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "120x40",
+      "keys": "/help<enter><esc>",
+      "assert": [
+        "overlays.help_overlay == false"
+      ],
+      "assert_screen": [
+        "not-contains:Shortcuts & commands"
+      ]
+    },
+    {
+      "size": "80x24"
+    }
+  ],
+  "assert": [
+    "overlays.help_overlay == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Shortcuts & commands",
+    "contains:Keyboard Shortcuts",
+    "contains:Slash Commands"
+  ],
+  "baseline": "help-overlay.txt",
+  "style_baseline": "help-overlay.style.txt",
+  "notes": "The largest always-available overlay and the one with the most render paths (filter box, two-column shortcut/slash split, scrolling). Also exercises the /help TOGGLE bug class from iter-82: pressing it twice must show the same overlay, not two different ones — hence the close variant, which baselines the Esc path too."
+}

@@ -1,0 +1,19 @@
+{
+  "name": "permission-dialog",
+  "surface": "crates/operant-cli/src/tui/dialogs/permission.rs::render_permission_dialog",
+  "opens_with": "(agent-driven tool permission request, via --agent-script)",
+  "keys": "",
+  "size": "120x40",
+  "assert": [
+    "overlays.permission_request == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Permission Required",
+    "contains:\u25ba [y] Yes"
+  ],
+  "baseline": "permission-dialog.txt",
+  "style_baseline": "permission-dialog.style.txt",
+  "notes": "The FIRST overlay in Z-order, drawn before every other. assert_screen pins the \u25ba marker on '[y] Yes, allow once' so a regression that flips the default from Allow to Deny \u2014 the most consequential default in the whole TUI \u2014 shows up as a text diff rather than a silent behaviour change. The needle stops at 'Yes' because evaluate_screen_assertions splits clauses on ',' and the full option label contains one. Reachable since MockAgentEvent grew a permission_request variant: run_headless already creates the permission_tx/rx pair and App::run already drains it into this dialog, so the mock path just sends on the same channel with_permissions() would.",
+  "agent_script": "permission-request.json"
+}

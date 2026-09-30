@@ -1,0 +1,18 @@
+{
+  "name": "device-auth-dialog",
+  "surface": "crates/operant-cli/src/tui/device_auth_dialog.rs::render_device_auth_dialog",
+  "opens_with": "/connect, then filter to OpenAI Codex",
+  "keys": "/connect<enter>OpenAI Codex<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.device_auth_dialog == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Connect OpenAI Codex",
+    "contains:Requesting device code"
+  ],
+  "baseline": "device-auth-dialog.txt",
+  "style_baseline": "device-auth-dialog.style.txt",
+  "notes": "The device-code / browser-OAuth surface. IMPORTANT: the connect handler's 'github-copilot' arm is DEAD — the catalogue id is 'copilot' (provider.rs:804), so selecting GitHub Copilot falls through the match to the catch-all and opens key_input_dialog instead. This scenario therefore routes through 'OpenAI Codex', whose id ('openai-codex') IS matched. That mismatch is a product bug, not a scenario bug; it deserves a BUGS.md entry."
+}

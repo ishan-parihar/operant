@@ -3,7 +3,7 @@
 //! Contains all enum and struct definitions used throughout the app module:
 //! `SystemMessageStyle`, `ContextMenuKind`, `ContextMenuState`, `ContextMenuItem`,
 //! `KeyContext`, `DialogPriority`, `ToolStatus`, `TurnState`, `ToolUseBlock`,
-//! `TurnMetadata`, `FocusTarget`, `SystemAnnotation`, and `ACCENT_BUILD`.
+//! `TurnMetadata`, `FocusTarget`, and `SystemAnnotation`.
 
 /// Visual style for inline system messages in the conversation pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,6 +309,3 @@ pub enum FocusTarget {
     /// Keyboard input goes to the transcript/message pane (scroll, etc.).
     Transcript,
 }
-
-/// Accent color for build mode (default pink).
-pub const ACCENT_BUILD: ratatui::style::Color = ratatui::style::Color::Rgb(255, 191, 0);

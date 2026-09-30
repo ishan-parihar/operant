@@ -1,0 +1,25 @@
+{
+  "name": "mcp-view",
+  "surface": "crates/operant-cli/src/tui/mcp_view.rs::render_mcp_view",
+  "opens_with": "/mcp",
+  "keys": "/mcp<enter>",
+  "size": "120x40",
+  "variants": [
+    {
+      "size": "80x24",
+      "keys": "/mcp<enter>"
+    }
+  ],
+  "assert": [
+    "overlays.mcp_view == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:MCP",
+    "contains:Servers",
+    "contains:Tools"
+  ],
+  "baseline": "mcp-view.txt",
+  "style_baseline": "mcp-view.style.txt",
+  "notes": "Split-pane Servers | Tools. The opener must be `/mcp` with NO arguments: handle_tui_command explicitly returns false for `mcp` when args are non-empty, so `/mcp r` (the documented reconnect form) is NOT a valid opener here. ENV: server and tool counts come from the live operant.toml."
+}

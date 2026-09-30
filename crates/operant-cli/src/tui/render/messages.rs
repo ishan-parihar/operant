@@ -15,10 +15,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use super::RenderedLineItem;
 use super::cache::*;
 use super::tools::{render_tool_items_lines, tool_group_ranges};
-use super::{RenderedLineItem, accent_primary};
 use super::{build_tool_names, render_system_annotation_lines, shimmer_spans};
+use crate::tui::vendor::style::theme;
 
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
@@ -171,7 +172,7 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             indicator,
             Style::default()
                 .fg(Color::Black)
-                .bg(accent_primary())
+                .bg(theme::accent_color())
                 .add_modifier(Modifier::BOLD),
         )]);
         frame.render_widget(Paragraph::new(vec![ind_line]), ind_area);

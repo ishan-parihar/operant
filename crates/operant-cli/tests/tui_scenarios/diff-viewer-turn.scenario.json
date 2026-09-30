@@ -1,0 +1,18 @@
+{
+  "name": "diff-viewer-turn",
+  "surface": "crates/operant-cli/src/tui/diff_viewer.rs::render_diff_dialog",
+  "opens_with": "/changes",
+  "keys": "/changes<enter>",
+  "size": "120x40",
+  "assert": [
+    "overlays.diff_viewer == true",
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:Changes from this turn",
+    "contains:turn diff mode"
+  ],
+  "baseline": "diff-viewer-turn.txt",
+  "style_baseline": "diff-viewer-turn.style.txt",
+  "notes": "The turn-diff mode of the SAME renderer, reached by a different opener (`/changes` -> diff_viewer.open_turn instead of open). Two scenarios on one render function is deliberate: the two modes build different state and different header text, so a regression that swapped them would be invisible with only one baselined. The empty-state sentence is asserted because 'no changes captured' is the most common real state and the most likely to regress."
+}

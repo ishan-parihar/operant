@@ -1,0 +1,19 @@
+{
+  "name": "background-task-rows",
+  "surface": "crates/operant-cli/src/tui/background_tasks.rs::render_rows",
+  "opens_with": "(/voice to clear the boot notice; rows come from the agent script)",
+  "keys": "/voice<enter>",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == false"
+  ],
+  "assert_screen": [
+    "contains:Audit the browser stack",
+    "contains:Index the vendored TUI design-system crates",
+    "contains:1 running \u00b7 1 done \u00b7 0 failed"
+  ],
+  "baseline": "background-task-rows.txt",
+  "style_baseline": "background-task-rows.style.txt",
+  "notes": "Docked bottom-left of the messages area, drawn after render_messages and before every overlay. The rows are DERIVED from operant_core's process-wide async_delegation registry, so the script seeds real records through the same public create_record/mark_completed the real delegate_task(background=true) path calls \u2014 nothing is injected into the TUI's own state. The leading /voice is load-bearing: voice_mode_notice is visible from frame 0 on a host with an audio device, and it ORs into any_modal_open. Two rows (one spawned, one done) plus the footer count is the at-capacity-adjacent case the rows_area clamp regression needs.",
+  "agent_script": "background-task.json"
+}
