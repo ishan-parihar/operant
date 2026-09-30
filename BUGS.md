@@ -2834,3 +2834,64 @@ Recorded as a closure, not a deferral. The sites are not waiting on a measuremen
 or on a decision I have not made; they are waiting on someone choosing to change
 appearance on 7 of 8 themes for ~188 sites, which is a legitimate thing to want
 and is not a bug.
+
+## R41 (2026-09-30) — Organism OS audit (see docs/ORGANISM-OS-UPGRADE-OUTLINE.md)
+
+### R41-1 — `operant architecture pool-import` cannot parse any real organism pool (OPEN, High)
+`crates/operant-harness/src/pool.rs:32-136` compiles a `PoolManifest` that
+`docs/harness-kernel.md:99` describes as "a hermes `_pool.yaml`". The real
+organism schema is `_org.yaml`, and the two are incompatible in three
+independent, each-fatal ways:
+
+1. **Name is nested.** The real file has no top-level `name`; it is
+   `pool.name`. The shipped `#[serde(default)] name: String` yields `""`, so
+   `compile()` returns `"pool manifest has empty \`name\`"` — an error naming a
+   symptom the operator cannot act on.
+2. **Service key is `id`, not `name`.** Real entries are
+   `{id, entry_point, accepts, returns}`. `PoolService.name` is a *required*
+   field, so serde hard-fails at parse.
+3. **No verb prefixes.** Real service ids are `identity`, `values`, `logbook`,
+   `employee-telemetry`, `ad-rg-lifecycle`. `READ_ONLY_VERBS` requires
+   `query.`/`fetch.`/`get.`/… prefixes, so even a fixed parser would reject
+   every real service.
+
+**Proof (this session).** The shipped struct was replicated verbatim into a
+standalone crate and fed six real organism manifests. All six fail identically:
+
+```
+foundations/identity-core   PARSE ERROR -> services_offered[0]: missing field `name`
+foundations/flight-ledger   PARSE ERROR -> services_offered[0]: missing field `name`
+foundations/research-vault  PARSE ERROR -> services_offered[0]: missing field `name`
+swarm/task-grid             PARSE ERROR -> services_offered[0]: missing field `name`
+swarm/workforce-ops         PARSE ERROR -> services_offered[0]: missing field `name`
+ventures/saas-studio        PARSE ERROR -> services_offered[0]: missing field `name`
+```
+
+**Root cause.** The acceptance was tested against a hand-written fixture that
+matches the wrong schema — `pool.rs:153-170` is a `relationship-intel`
+manifest with dotted verb names, a shape no real pool has. The feature is
+therefore green in CI and inert against its actual input. This is the same
+class of defect as the `embedded-web` embed (docs/BUGS.md, iter-439): a check
+that cannot distinguish "wired correctly" from "never exercised".
+
+**Additionally wrong once the schema parses.** `pooled_sub_systems` is read as
+a top-level list, but AD-060 expresses pooling as exact-name symlinks under
+`sub-systems/` — the compiler models a field that does not exist and misses
+the mechanism that does. `read_only: true` is hardcoded into the emitted
+config, so it asserts a property it never verified. And `entry_point` /
+`accepts` / `returns` are dropped, discarding the three fields that make a
+service contract executable (AD-070: "Entry points are executable verbatim").
+
+**Fix plan.** `docs/ORGANISM-OS-UPGRADE-OUTLINE.md` §3.3 and Wave 0: real
+`OrgManifest` schema, read-only as an `access`-mode property rather than a verb
+prefix, carry the contract fields, model pooling as symlinks, and replace the
+synthetic fixture with the **actual bytes** of the six real pools checked into
+`crates/operant-harness/tests/fixtures/`.
+
+### R41-2 — No first-class org substrate in operant (OPEN, planning)
+Greps for `notice_board` / `employee_id` / `worklog` / `ArchitecturalDecision`
+across `crates/**/*.rs` return nothing. Operant has kanban, cron, personality
+and identity, but no employee registry, no inter-agent notice board, no
+append-only worklog, no AD/RG lifecycle, and no runtime fail-closed pre-tick
+gate. The plan is `docs/ORGANISM-OS-UPGRADE-OUTLINE.md` (Waves 1-4). Not a
+defect — a scoped design deliverable, recorded so the gap is tracked.
