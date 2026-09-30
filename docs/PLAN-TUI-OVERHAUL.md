@@ -1,299 +1,280 @@
-# Plan: TUI Visual Overhaul → jcode parity
+# Plan v2: TUI Overhaul → jcode parity (rev. 2)
 
-> Status: proposed. Scope decided by user: **local pty + tmux capture** for the feedback loop
-> (telegram delivery dropped), **phased port — foundations first, then surfaces in order**.
-> Reference: `parent-projects/jcode` (`jcode-tui*`, 15 crates, 376 files / 259,323 LOC).
-> Subject: `crates/operant-cli/src/tui/` (156 files / 57,186 LOC).
-
----
-
-## 0. The finding that reframes this
-
-jcode is **not** a design-token temple. Grepped clean, it has:
-
-- **no spacing scale** — no `Padding` constant, no `Margin`, `ratatui::layout::Margin` imported
-  exactly once (`session_picker.rs:16`), and no `theme::space` of any kind.
-- **no typography scale** — `Modifier::BOLD` applied inline per title (~20 sites), no size/weight
-  abstraction, three grey constants standing in for text tiers.
-
-So "make it look like jcode" is **not** "add design tokens". jcode's quality comes from four
-things it *does* have, and operant lacks all four:
-
-| # | jcode has | operant lacks |
-|---|-----------|---------------|
-| 1 | 22 **semantic roles** + one buffer-level substitution choke point (`jcode-tui-style` 5,019 LOC; `palette.rs:30-80`, `adapt_buffer_for_display` at `ui.rs:2669`) | 18 palette fields but **4 competing accent sources** and ~300 hardcoded colors that bypass the palette |
-| 2 | **one** modal/box idiom — `render_rounded_box` (`jcode-tui-render/src/lib.rs:9-14`), every overlay gets title + bottom hint + dim border (`ui_overlays.rs:71-83`) | **16** modal sizing formulas and **5** title idioms |
-| 3 | **frame hygiene** — full clear per frame (`ui.rs:2694-2700`) + `BeginSynchronizedUpdate` (`run_shell.rs:477,:516`) + `SoftRepaint` sentinel (`run_shell.rs:189-222`) | no clear, no sync, `Color::Black` hardcoded as the base fill (`render/mod.rs:103`) |
-| 4 | **narrow-terminal floors + graceful collapse** (`MIN_CHAT_WIDTH=20`, `MIN_DIAGRAM_WIDTH=24`, …, `ui.rs:2835-2836`), a 10-step footer compaction ladder (`ui_input.rs:2027-2038`) | none; insets disagree `-4`×12 / `-2`×2 / unclamped×3 |
-
-Consequence for the plan: phases 0–1 and 3.1–3.2 are where the win is. Phases 4–5 are the
-difference between "looks tidy" and "feels designed". I am deliberately adding one thing jcode
-lacks — a **spacing scale** (§1.4) — because 16 divergent modal formulas is a *correctness*
-smell, not a taste question.
+> Supersedes rev. 1 (preserved at `docs/PLAN-TUI-OVERHAUL-v1.md`, commit `8580b453`).
+> Adds: a liftability audit of jcode's 16 crates, Rust-practice corrections, and a
+> fleet-deployment topology.
+> **Decision requested:** Option B (hybrid lift) is recommended. See §0.
 
 ---
 
-## 1. The feedback loop already exists — and works
+## 0. The decision: three options, one verdict
 
-`operant tui debug simulate` drives the **real** `App::run` loop against a ratatui
-`TestBackend`, replays scripted keys, injects deterministic mock agent events, dumps the final
-screen, and asserts on both state JSON and screen text. Verified live, exit 0.
+The brief offered "copy jcode's files and discard operant's TUI." I tested that literally.
+It is **~19,500 LOC liftable out of 259,323 — 7.5%.** The other 92.5% is welded.
 
-`App::run<B: ratatui::backend::Backend>` (`tui/app/mod.rs:776-782`) is **generic over the backend**,
-so production and headless share one code path with zero shimming. This is the right seam and we
-keep it.
+| Option | Verdict | Why |
+|---|---|---|
+| **A. Hand-refactor everything** | Rejected | Fixing ~300 hardcoded colors across 39 files by hand is high-labour, low-leverage, and leaves the 4 genuinely-welded quality gaps (role substitution, one modal idiom, frame hygiene, narrow-terminal collapse) to be reinvented badly. |
+| **B. Lift the foundation, keep the behaviour layer** ✅ | **Recommended** | The 4 things operant lacks all live in liftable crates. Keeps vim mode (which jcode has no equivalent of), keeps 349 tests, keeps operant-specific agent wiring. |
+| **C. Discard operant's TUI, port jcode's** | Rejected | Would delete `prompt_input/vim.rs` (1,420 LOC) — **jcode has no modal editor at all** — plus 349 tests and all operant-specific wiring. Then require porting 133k LOC of `app/` welded to jcode-app-core (155,549 LOC) and jcode-base (133,293 LOC). |
 
+### Why C is a trap, specifically
+
+- **jcode has no vim mode.** `rg -i 'vim'` across the whole TUI = **3 files**, all readline key-repeat
+  hints (`session_picker.rs:1154`, `inline_interactive.rs:3311,3336`). A repo-wide search for
+  `NormalMode|InsertMode|VisualMode|CountPrefix` = **zero hits**. operant's 1,420-LOC modal editor is
+  **unique to operant**. A port deletes a feature nothing can replace.
+- **LaTeX is a wash, not a jcode win.** jcode's is 1,294 LOC of glue over a third-party
+  `mdwright-latex 0.1.3` (`markdown_latex_image.rs:309` is the single integration point) vs
+  operant's own 1,552-LOC `latex.rs`. jcode's version *adds* an unpinned 0.1.x dependency.
+- **jcode's logic layer is a rewrite, not a port.** `src/tui/app/` is 175 files / 133,183 LOC = 61%
+  of `jcode-tui`. 129 of 299 src files (43%) reference `App`. `app/commands.rs` alone hits
+  `jcode_provider_core` 78 times. It reads jcode's own on-disk layout
+  (`session_picker/loading.rs:213` → `storage::jcode_dir()/cache/…`).
+
+### Two suspected blockers that turned out **not** to be blockers
+
+- **No workspace inheritance.** jcode's root `Cargo.toml:8` has `[workspace]` with **only `members`** —
+  no `[workspace.dependencies]`, no `[workspace.package]`. `rg 'workspace\s*=\s*true'` across all 16
+  manifests = **zero hits**. A straight file copy resolves; only `path = "../jcode-*"` edges need
+  repointing.
+- **Licence is compatible.** jcode is MIT (Copyright © 2025 Jeremy Huang), single root `LICENSE`, no
+  per-crate files. operant is MIT OR Apache-2.0. **Condition: the copyright + permission notice must
+  travel with every lifted file.**
+
+---
+
+## 1. Lift manifest — what to copy, and how
+
+**~19,500 LOC across 11 crates.** Ratatui 0.30 in both trees, so versions align.
+
+| Priority | Crate | LOC | Modification needed |
+|---|---|---|---|
+| **1** | `jcode-tui-style` | 5,256 | **One line.** `src/lib.rs:34` calls `jcode_logging::warn` → repoint at operant's log facade or `eprintln!`. `jcode-logging` drags in jcode-core + jcode-storage + tokio — do **not** copy it. The 2 `jcode_app_core` mentions (`color.rs:45,72`) are doc comments; drop them. |
+| **2** | `jcode-render-core` | 4,532 | **None.** Deps: `pulldown-cmark`, `serde`, `unicode-width`. Documented as ratatui-free. |
+| **3** | `jcode-config-types` | 2,684 | **None.** Deps: `serde`, `serde_json`. Its 1 external ref is a doc comment (`lib.rs:1321`). |
+| **4** | `jcode-tui-workspace` | 1,232 | **None.** Sole dep `ratatui 0.30`. **Best lift in the repo** — and a *capability operant has no equivalent for*. |
+| **5** | `jcode-tui-account-picker` | 1,607 | **None.** Deps: anyhow, crossterm, ratatui, serde_json. 0 external refs. |
+| **6** | `jcode-tui-anim` | 1,131 | **None — the only zero-dependency crate.** Replicate jcode's `opt-level = 3` profile pin or the idle-animation CPU rationale is lost. |
+| **7** | `jcode-terminal-image` | 759 | **None.** Deps: base64, crossterm. Replaces operant's 873-LOC `pinned_images.rs` protocol half. |
+| **8** | `jcode-tui-core` | 3,241 | 2 refs in one file (`graph_topology.rs:58,302`) → copy `jcode-memory-types` (4-dep leaf) or stub 5 types. |
+| **9** | `jcode-tui-tool-display` | 257 | **None.** serde_json + unicode-width. |
+| **10** | `jcode-tui-visual-debug` | 857 | 2 log calls (`lib.rs:284,478`). **Reconsider** — operant already has `cmd_tui_debug.rs`; overlap likely. |
+| **11** | `jcode-tui-render` | 5,590 | Lifts with 1 import, **but 77% is a swarm/memory visualizer** (`swarm_gallery.rs` 3,099 + `swarm_tiles.rs` 611 + `memory_tiles.rs` 587 = 4,297). Only `lib.rs` 202 + `chrome.rs` 91 + `layout.rs` 64 = **357 LOC is reusable** — the `render_rounded_box` / `clear_area` / right-rail chrome we want. **Copy those 3 files, skip the swarm.** |
+
+Tiny DTO leaves (`jcode-message-types`, `jcode-session-types`, `jcode-memory-types`,
+`jcode-usage-types`) only if §4 picks up the pickers/usage overlay.
+
+### Do NOT lift
+
+| Crate | LOC | Why |
+|---|---|---|
+| `jcode-tui` | 218,416 | 116/302 files reference `App`; needs jcode-app-core + jcode-base. |
+| `jcode-tui-mermaid` | 11,541 | Pinned git dep on one person's fork (`1jehuang/mermaid-rs-renderer` tag v0.3.1) + resvg/usvg/ratatui-image. Supply-chain risk. |
+| `jcode-tui-messages` | 1,559 | Its types *are* jcode's session/message model. |
+| `jcode-tui-permissions` | 866 | Welded to jcode-base's safety model. |
+| `jcode-tui-markdown` | 9,847 | Needs syntect→`regex-onig` (C oniguruma) + third-party `mdwright-latex` 0.1.3. Borderline; defer. |
+
+### The pattern worth taking even though the code isn't liftable
+
+jcode's render layer **is** decoupled — every render fn takes `&dyn TuiState`, never `&App`. Two
+implementors: `impl TuiState for App` (`app/tui_state.rs:568`, 2,501 LOC) and
+`impl TuiState for TestState` (`ui_tests/mod.rs:157`, a hand-written double). The `ui_tests/` suite is
+**19 files / 10,729 LOC** driving that double through the real render path.
+
+**Take the shape, not the trait.** See §2(a).
+
+---
+
+## 2. Rust-practice corrections to rev. 1
+
+Four places where blind porting of the exemplar would be *wrong*:
+
+**(a) Do not port the 143-method `TuiState` trait.** It has ~143 methods and its signatures expose 12
+jcode app-core types (`AuthStatus`, `ContextInfo`, `SidePanelSnapshot`, `BatchProgress`, …) resolving
+through `pub use jcode_app_core::*` → 289k LOC. Lifting it means either faking 143 accessors or
+copying a quarter-million lines to satisfy a signature. Per **ch.6** it is also the ❌ case: a `dyn
+Trait` that fat is vtable indirection over a huge surface. Per **ch.1 §1.8** those 12 types are
+*coincidental* similarity, not shared knowledge.
+
+operant already has the ✅ pattern: `App::run<B: ratatui::backend::Backend>` (`app/mod.rs:776-782`)
+is generic, and renderers take `&App`. **Keep it.** Take only the *testing* idea: a lightweight state
+double so surfaces can be rendered without a full `App`.
+
+**(b) A single `modal_frame()` is still correct — but that is not a licence to add a token layer.**
+**ch.1 §1.8**: "duplication is far cheaper than the wrong abstraction." 16 modal formulas is one
+knowledge (must change together), so extracting is right. But jcode has **no spacing scale at all**
+(grep-confirmed zero `Margin::`/`Padding::`/`theme::space`), so rev. 1's spacing scale is a
+*deliberate deviation*, not a port. Keep it minimal: a `space` const set and a `pad_v`. No type
+scale, no token struct hierarchy.
+
+**(c) The per-frame buffer substitution must be measured, not assumed.** **ch.3**: "Don't guess,
+measure", always with `--release`. `adapt_buffer_for_display` walks every cell each frame — 4,800
+cells at 120×40. Budget a micro-benchmark. Note the contrast-repair binary search is a **startup**
+transform, not a per-frame one.
+
+**(d) Two upstream patterns to reject as cargo-cult:**
+- `FullFrameInvalidation::SoftRepaint` — fills the previous buffer with a `U+FDD0` sentinel to force a
+  full re-emit without a clear escape (`run_shell.rs:189-222`). Clever, but it works around a flicker
+  bug in jcode's terminal-image placeholders. **Only adopt if we hit that bug.**
+- Oklab harmony scoring — 2,357 LOC to score palettes. **Defer.** Our problem is 300 hardcoded colors
+  bypassing the palette, not an unmeasured palette.
+
+---
+
+## 3. Revised phase outline
+
+Rev. 1's phases 0/2/3/4 stand. Changes: **Phase 1 becomes a lift**, a new **Phase 2.5** appears, and
+two upstream patterns are explicitly rejected.
+
+### Phase 0 — Make the ugliness visible *(unchanged, strictly sequential)*
+
+| # | Task | Done when |
+|---|------|-----------|
+| 0.1 | `--dump-style`: serialise `symbol`+`fg`+`bg`+`modifier` per cell. Today `tui_app.rs:933` extracts `c.symbol()` only, so **a palette regression is structurally invisible** | a theme change produces a different dump |
+| 0.2 | `--baseline <path>`: unified diff, non-zero exit. Baselines in `crates/operant-cli/tests/tui_baselines/` | changing one colour fails with a readable diff |
+| 0.3 | `--capture-frames 0,3,7`: per-frame buffer capture. `FrameRendered` exists (`event_bus.rs:96-100`) but records timing only | a mid-stream frame is diffable |
+| 0.4 | Scenario corpus, one per surface, all 43 `render_*` entry points + the 13-overlay pack | a new surface without a scenario fails the gate |
+| 0.5 | `tmux` real-terminal capture (`capture-pane -p -e`) for interactive-only paths `TestBackend` bypasses: raw mode, alt-screen, mouse, real `FocusGained` | a real `operant chat` pane is diffed the same way |
+| 0.6 | Fix the stale header at `cmd_tui_debug.rs:13-15` ("does NOT render anything" — false since `Simulate` exists) | docs match reality |
+
+### Phase 1 — Lift the foundation *(sequential; replaces rev. 1 phases 1.1–1.7)*
+
+| # | Task | Source | Done when |
+|---|------|--------|-----------|
+| 1.1 | Vendor `jcode-tui-style` as new workspace crate `operant-tui-style`. Repoint the 1 log line. Strip `jcode_*` doc comments. Add the MIT attribution header. | 5,256 LOC | compiles; `cargo test -p operant-tui-style` green |
+| 1.2 | Vendor `jcode-render-core` (ratatui-free markdown prep) | 4,532 LOC | compiles |
+| 1.3 | Vendor `jcode-tui-render`'s **3 generic files only** — `lib.rs`, `chrome.rs`, `layout.rs`. **Skip the 4,297 LOC of swarm visualizer.** | 357 LOC | `render_rounded_box`, `clear_area`, `right_rail_border_style` available |
+| 1.4 | Vendor `jcode-tui-workspace` — **new capability for operant** | 1,232 LOC | widget renders in a TestBackend |
+| 1.5 | Vendor `jcode-tui-anim` + replicate the `opt-level=3` pin | 1,131 LOC | compiles |
+| 1.6 | Wire `adapt_buffer_for_display(frame.buffer_mut())` into `render_app` after the draw — **the substitution choke point** | — | `/theme` repaints every surface |
+| 1.7 | Retire the competing accents. `app.accent_color`/`ACCENT_BUILD` (`app/enums.rs:314`, `Rgb(255,191,0)`) is byte-identical to the theme's `emphasis` yet a separate literal, so **`/theme` cannot repaint it on 7 of 8 themes**. Plus hardcoded `Magenta` at `journey_view.rs:194` and `effort_picker.rs:72`. | — | grep finds exactly one accent source |
+| 1.8 | One modal idiom `modal_frame(title, hint)` + a minimal `space` const set. Replaces 16 sizing formulas and 5 title idioms. | — | one function sizes every modal |
+| 1.9 | Frame hygiene: full clear + `BeginSynchronizedUpdate`. Drop hardcoded `Color::Black` base fill (`render/mod.rs:103`). | — | no stale cells, no flicker |
+| 1.10 | **Benchmark 1.6** against the noise floor, `--release`, ≥3 repeats (ch.3) | — | recorded number, not an estimate |
+
+### Phase 2 — Loop architecture *(sequential; mostly unchanged)*
+
+`needs_redraw: bool` discipline · named redraw reasons · extract the 9 inline channel drains · event
+coalescing · **make `dialog_priority()` the router** (currently computed and discarded at
+`key_handling.rs:45-47`, under a comment admitting it's "for debugging") · reassert terminal modes on
+`FocusGained`.
+
+### Phase 2.5 — De-serialize the dispatch ladder *(NEW; prerequisite for any fleet)*
+
+`render_app` (`render/mod.rs:96`) is a 399-line ladder with **35 `if app.X.visible` branches**. Every
+surface agent would edit that one file → merge-conflict storm, and 35 hand-edited rows is exactly the
+kind of table that rots.
+
+Convert to a **z-ordered dispatch table owned by one file**, `render/dispatch.rs`:
+
+```rust
+// render/dispatch.rs — FROZEN after Phase 2.5. Surface agents never edit this.
+pub const ENTRIES: &[Entry] = &[ /* 43 pre-seeded rows, z-order high→low */ ];
 ```
-operant tui debug simulate \
-  --keys "/help<enter>" \
-  --agent-script ag.json \
-  --assert "overlays.help_overlay == true,any_modal_open == true" \
-  --assert-screen "contains:Shortcuts" \
-  --dump-screen out.txt --size 120x40
-```
 
-**Three real gaps, all additive:**
+Each surface module exports `pub const ENTRY: Entry`. Phase 2.5 **pre-creates all 43 rows as stubs**
+returning an empty render, so a surface agent's entire footprint is: its own file, its scenario, its
+baseline. Zero shared edits.
 
-| Gap | Evidence | Consequence |
-|-----|----------|-------------|
-| **No baseline diff** | `--dump-screen` writes text (`cmd_tui_debug.rs:1357-1360`); `--assert-screen` is substring-only (`:1383-1412`) | visual drift between runs is undetectable; you can only assert a string is *present* |
-| **Final frame only** | one explicit draw at `tui_app.rs:922` | streaming progression, animation state, mid-sequence scroll never captured. `FrameRendered{…}` event exists (`event_bus.rs:96-100`) but records *timing only* |
-| **Text-only dump** | `tui_app.rs:933` extracts `c.symbol()` and nothing else | `fg`/`bg`/`modifier`/`underline_color` are dropped — **a palette or contrast regression is structurally invisible** |
+**Justification** (ch.1 §1.8): 35 branches is 3+, and overlay z-order is genuinely one piece of shared
+knowledge. The stronger justification is not DRY — it is that it makes the work parallelisable.
 
-Also: 349 TUI tests, ~0 visual. The flagship `test_dialog_open_close_scenarios`
-(`tui/app/tests.rs:1454-1507`) drives 13 overlays and asserts **state JSON only** — it would pass
-with a completely broken render. No `insta`/`expectrl`/`vt100` anywhere; `ratatui 0.30.2` ships
-`TestBackend` in-tree so no new dependency is needed.
+### Phase 3 — Surfaces *(massively parallel, one surface per agent)*
 
-And a doc bug: `cmd_tui_debug.rs:13-15` still claims the subcommand "does NOT render anything".
+Conversation → chrome → management panels → pickers → overlays. Each agent owns exactly one surface
+file + one scenario + one baseline, reusing the frozen Phase 1 foundation.
+
+### Phase 4 — Affordances *(deferred, parallelisable, lowest risk)*
+
+Narrow-terminal `MIN_*` floors + graceful collapse · empty states · focus indication · overflow
+labelling (`↑N` / `+N more`) · one hint line · truncation primitives · actionable errors · resize
+preserves reading position. All absent from operant today; take the *design* from jcode, write the
+operant implementation.
 
 ---
 
-## 2. Why it looks ugly — ranked, measured, with the jcode counterpart
+## 4. Fleet deployment topology
 
-### 2.1 No spacing system *(the single biggest offender)*
-`Padding::` — **1 use** in 57,186 LOC (`Padding::new(1,0,1,0)`). `Margin::` — **0 uses**. No spacing
-constants. Only three layout constants exist under `render/`: `WELCOME_BOX_HEIGHT`, `STATUS_THINKING`,
-`STATUS_THINKING_ELLIPSIS` (`render/mod.rs:93-95`). Chat chrome is raw `Span::raw("  ")` at six
-sites (`render/footer.rs:311,322,336,361,372,384`) and `" {} "` pills at seven more.
+**The phases are not equally parallelisable, and that is the whole scheduling problem.**
 
-Modal vertical inset: `-4` in 12 surfaces, `-2` in 2 (`ask_user_dialog.rs:209`,
-`free_mode_dialog.rs:220`), **unclamped** in 3 (`custom_provider_dialog.rs:125`,
-`key_input_dialog.rs:104`, `memory_file_selector.rs:129`). Widths span **44–90** with no scale —
-`effort_picker` is 44 wide, `journey_view` is 90.
+| Phase | Parallelism | Why |
+|---|---|---|
+| 0 | **1 agent** | touches `tui_app.rs`, `cmd_tui_debug.rs`, event bus — all shared |
+| 1 | **1 agent** (or 2: crate-vendor ∥ wiring) | all 43 surfaces depend on it; a half-lifted foundation is worse than none |
+| 2 | **1 agent** | the hot loop |
+| 2.5 | **1 agent** | the dispatch table must be frozen before anyone branches |
+| **3** | **N agents, one per surface** | 43 surfaces, disjoint file ownership, zero shared edits *by construction* |
+| **4** | **N agents, one per affordance** | same |
 
-A correct clamp already exists and is used by only 2 of 16 sites:
-`overlays/layout.rs:111-112` (`begin_modal_frame` `:137`, `begin_modal_buf` `:152`).
+So: **four sequential agents, then fan out to ~43.** Deploying a fleet at Phase 0 would be the
+mistake — there is nothing independent to work on.
 
-### 2.2 Five incompatible title conventions across 23 sites
-| Format | Sites |
-|---|---|
-| plain `&str`, no colour, no BOLD | 6 — `session_browser.rs:388`, `history_search.rs:579`, `message_selector.rs:196`, `rewind_flow.rs:150`, `mcp_view.rs:618`, `global_search.rs:162` |
-| `Span::styled` + BOLD + themed fg | 4 — `mcp_approval.rs:291`, `debug/overlay.rs:39`, `bypass_permissions_dialog.rs:85`, `mcp_view.rs:333` |
-| `Span::styled` + BOLD, **no fg** | 4 — `effort_picker.rs:73`, `journey_view.rs:195`, `plugins_hub.rs:165`, `skills_view.rs:172` |
-| multi-span | 2 — `welcome.rs:136`, `bypass_permissions_dialog.rs:85` |
-| `title_alignment(Center)` | 1 — `session_browser.rs:389` (the only centred title in the app) |
+### Per-agent contract (Phase 3/4)
 
-Plus a 6th idiom in `overlays/layout.rs:158` used by `theme_screen.rs` and `settings_screen` and
-by no `Block`-titled dialog. Key-hint text has 4 spellings of the same fact: `"Esc to cancel"` ×3,
-`"Esc close"`, `"Esc: close"`, `"Esc to close."`.
+Each agent receives:
+1. its surface file path — **the only production file it may edit**
+2. the frozen foundation API (`Role::*`, `modal_frame()`, `space::*`, `render_rounded_box`)
+3. its scenario + baseline paths
+4. the verification block below
 
-### 2.3 Four competing accent sources for one role
-Four structurally identical management overlays differ only in which colour they reach for:
-`skills_view.rs:169` `accent()` · `plugins_hub.rs:163` `success()` · `journey_view.rs:194`
-hardcoded `Color::Magenta` · `effort_picker.rs:72` hardcoded `Color::Magenta`.
-
-Worse, the 4th source is `app.accent_color` = `ACCENT_BUILD = Rgb(255,191,0)` (`app/enums.rs:314`),
-which is **byte-identical to the default theme's `emphasis` and `selection_bg`**
-(`theme_colors.rs:89,94`) but is a separate literal — so **`/theme` cannot repaint it** on 7 of 8
-themes. `banner.rs:275-280,345` documents this as a known pending migration.
-
-Also: `Color::DarkGray` hardcoded at 22 sites in `stats_dialog/render.rs` alone, 16 in
-`journey_view.rs`, 7 in `dialogs/mcp_approval.rs` — while `DIALOG_DIM` (`theme_colors.rs:403`) and
-`DIALOG_MUTED` (`:406`) exist for exactly this role and are used at only 6 and 5 sites.
-
-### 2.4 The palette is real but leaky
-625 `theme_colors::` call sites across 60 files — the majority path is correct. Surviving beside it:
-**50 `Color::Rgb` literals in 18 files** and **250 named-ANSI `Color::X` uses in 39 files**
-(268 total − 16 in `theme_colors.rs` − 2 in `color_depth.rs`). `Color::Black` is the hardcoded
-frame background at `render/mod.rs:103`, `debug/overlay.rs:46,120`, `prompt_input/render.rs:201,203,349`
-— the base fill ignores `panel_bg`/`overlay_bg`.
-
-`stats_dialog/render.rs` is the worst cluster: 9 RGB literals + 22 `Color::DarkGray` alongside 24
-palette calls, and the 5-stop heat ramp **declared twice** (`:311-317` inline, `:395-403` as a match
-arm — and `Rgb(0,150,0)` at `:399` has no counterpart in the inline version).
-
-Duplicated values: `Rgb(200,200,200)` ×9, `Rgb(0,150,200)` ×7, `Rgb(255,191,0)` ×5,
-`Rgb(100,181,246)` ×5 (dark theme makes info = action = accent = emphasis = selection_bg).
-
-### 2.5 Two render-pass idioms force duplicated helpers
-Some surfaces call `frame.render_widget`, others take `frame.buffer_mut()`. Consequence:
-`overlays/layout.rs` ships **every shared helper twice** — `render_dark_overlay`/`_buf` (`:63`/`:68`),
-`render_dialog_bg`/`_buf` (`:79`/`:84`), `render_modal_title_frame`/`_buf` (`:158`/`:183`).
-`centered_rect` is implemented twice: `overlays/layout.rs:27` and `dialogs/permission.rs:339`.
-
-Ratatui's own `List`/`ListItem` are effectively unused (`List::new` ×3, `ListItem::new` ×2 against
-`Paragraph::new` ×134) — which is why selection/highlight is re-implemented per view.
-
-### 2.6 3 rounded surfaces against 22 square
-`BorderType::Rounded` at exactly 3 sites: `render/selection.rs:168`, `render/welcome.rs:134`,
-`render/utils.rs:82`. The other 22 `Borders::ALL` are square. The entire 3,307-LOC `messages/` layer
-and `render/messages.rs` (553 LOC) are **borderless**. Only 2 divider idioms exist: the 1-row blank
-`chunks[1]` (`render/mod.rs:231`) and `Borders::TOP` (`debug/overlay.rs:115`).
-
-### 2.7 The event loop is a 545-line flat `loop`
-`app/mod.rs:776-1321`: **9 inline `try_recv` drains**, a `tokio::spawn` embedded in the loop body
-(`:857-880`), and the draw→poll→dispatch triad never extracted. `render_app` is a 399-line ladder
-with **35 overlay `if app.X.visible` branches** (`render/mod.rs:96`).
-
-`dialog_priority()` — a 34-arm priority chain (`app/dialog_routing.rs:6-101`) — is **computed and
-discarded** at `key_handling.rs:45-47` (`let _priority = self.dialog_priority();`, under a comment
-that says outright "we assert the current handler matches that priority for debugging"). It is a
-debug assertion, not the router. Real routing is ~30 `if state.visible { match key.code }` gates across
-31 `match` sites in a 2,088-line file.
+Explicitly forbidden: editing `render/dispatch.rs`, editing another surface, editing
+`theme_colors.rs`/`operant-tui-style`, or running `cargo fmt --all` (see §6).
 
 ---
 
-## 3. Phase 0 — Make the ugliness visible and regression-proof
+## 5. Verification gate (every iteration)
 
-**Prerequisite for everything.** Until style is in the snapshot, no visual change is verifiable.
-
-| # | Task | Files | Done when |
-|---|------|-------|-----------|
-| 0.1 | **Style-aware dump.** Add `--dump-style` to `simulate`: serialise `symbol` + `fg` + `bg` + `modifier` per cell (TOON or a compact `fg:bg:sym` grid), not `c.symbol()` alone. | `tui_app.rs:924-939`, `cmd_tui_debug.rs` | a theme change produces a **different** dump; a palette regression is detectable |
-| 0.2 | **Baseline diff.** Add `--baseline <path>`: compare rendered screen to a committed golden file, print a unified diff, exit non-zero on drift. Baselines in `crates/operant-cli/tests/tui_baselines/`. | `cmd_tui_debug.rs` | deliberately changing one colour fails the gate with a readable diff |
-| 0.3 | **Per-frame capture.** Extend `FrameRendered` to optionally carry buffer content; add `--capture-frames 0,3,7` to snapshot at chosen frames so streaming / animation / mid-scroll states are covered. | `event_bus.rs:96-100`, `debug_hub.rs:74-84`, `app/mod.rs:1151` | a mid-stream frame is capturable and diffable |
-| 0.4 | **Scenario corpus.** One scenario file per surface — all **43** `render_*` entry points plus the 13-overlay regression pack. Schema: `{ keys, agent_script, size, assert, assert_screen, baseline }`. Runner walks the directory. | new `tui_scenarios/` + runner | `operant tui debug simulate --suite` runs all surfaces green; a new surface without a scenario fails CI |
-| 0.5 | **Real-terminal capture.** `tmux`-based: launch the real binary in a detached pane at a fixed size, `send-keys` the scenario, `capture-pane -p -e` (ANSI preserved). Covers the interactive-only paths `TestBackend` deliberately bypasses: raw mode, alt-screen, mouse capture, real `Event::FocusGained` reassertion, OSC 8, pinned images. | new `scripts/tui-capture.sh` | a real `operant chat` pane is captured and diffed the same way as the headless dumps |
-| 0.6 | **Fix the stale header.** `cmd_tui_debug.rs:13-15` says the subcommand "does NOT render anything". | 1 line | docs match reality |
-
-`tmux` and `script` are on PATH; `vhs`, `asciinema`, `expect`, `ttyd`, headless chromium are not.
-No new crate needed.
-
----
-
-## 4. Phase 1 — Design foundation
-
-The jcode-tui-style analogue. Wrap `theme_colors.rs`, do not rewrite it.
-
-| # | Task | Port from | Done when |
-|---|------|-----------|-----------|
-| 1.1 | **`Role` enum + frozen default table.** 22 named roles over the existing 18 fields (`User, Ai, Tool, FileLink, Dim, Accent, System, Queued, Pending, UserText, UserBg, AiText, HeaderIcon, HeaderName, HeaderSession, Success, Warning, Error, Info, Border, SelectionBg, …`). Defaults byte-frozen in a redundant `HAND_TUNED` table so tooling can't drift them. | `palette.rs:30-80`, `palette.rs:148-173`, `palette.rs:776-799` | `Role::default_rgb()` is the single source; changing it is a deliberate edit |
-| 1.2 | **Buffer-level substitution choke point.** One `adapt_buffer_for_display(&mut Buffer)` after every draw: apply theme overrides → adapt unconfigured → contrast-repair. Role accessors return the **default**; substitution happens once per frame, so no cell is remapped twice. | `ui.rs:2659-2680`, `palette.rs:362-373`, `palette.rs:618-699` | `/theme` repaints **every** surface, including `app.accent_color`; an unconfigured palette is a byte-identical no-op |
-| 1.3 | **Kill the competing accents.** `app.accent_color`/`ACCENT_BUILD` (`app/enums.rs:314`) becomes a *role*, not a colour. `journey_view.rs:194` and `effort_picker.rs:72` hardcoded `Magenta` → roles. | — | exactly one accent source |
-| 1.4 | **Spacing scale** *(deliberate deviation — jcode has none)*. A small `space` const set (`XXS…XXL`) + `pad(h)`/`pad_v(v)` helpers. Chrome stops using `Span::raw("  ")`. | — | no raw-space padding remains in chrome |
-| 1.5 | **One modal idiom.** `modal_frame(title, hint) -> Rect` → rounded border, themed bold title, `title_bottom` hint line, dim border, shared clamp. Replaces all 16 sizing formulas and all 6 title idioms. One `Esc to close · …` hint spelling. | `render_rounded_box` `jcode-tui-render/src/lib.rs:9-14`; `ui_overlays.rs:71-83`; `chrome.rs:31-36` | every modal is sized by one function; grep finds one title idiom |
-| 1.6 | **Frame hygiene.** Full clear per frame; wrap the draw in `BeginSynchronizedUpdate`/`EndSynchronizedUpdate`; add `SoftRepaint` sentinel invalidation. Kill hardcoded `Color::Black` as the base fill. | `ui.rs:2694-2700`, `run_shell.rs:189-222`, `run_shell.rs:477,:516` | no stale cells after a layout change; no flicker on repaint |
-| 1.7 | **Contrast + light/dark repair.** HSL lightness inversion with a WCAG binary-search repair on **foregrounds only**, target contrast 7.0. | `theme_mode.rs:108-220` | light theme and 256-colour terminals stay legible |
-| 1.8 | *(deferred)* **Oklab harmony scoring** — `harmony.rs` is 2,357 LOC in jcode. Worth it only if palette work continues past parity. | `jcode-tui-style/src/harmony/` | — |
-
----
-
-## 5. Phase 2 — Loop architecture
-
-| # | Task | Port from | Done when |
-|---|------|-----------|-----------|
-| 2.1 | **`needs_redraw: bool` discipline.** Every branch returns a bool OR, not a repaint-everything loop. Idle costs nothing. | `run_shell.rs:654-753` | idle CPU drops; every repaint has a cause |
-| 2.2 | **Named redraw reasons.** `live_activity_redraw_reason() -> Option<&'static str>` so "why is this a full frame" is answerable without bisecting. | `redraw_schedule.rs:630-662` (reason table `:160-186`) | the F12 overlay reports the exact predicate |
-| 2.3 | **Extract the 9 inline channel drains** into named handlers; move the embedded `tokio::spawn` out of the loop body. | — | `app/mod.rs:776` shrinks to a readable loop |
-| 2.4 | **Event coalescing.** Drain up to N extra events after a focus/key event so a held key coalesces into one frame. | `app/local.rs:141-158` | held-key bursts cost one frame, not N |
-| 2.5 | **Actually route by priority.** Make `dialog_priority()` the router instead of a discarded assertion. | `dialog_routing.rs:6-101` | one `if` chain, not 30 scattered gates |
-| 2.6 | **Reassert terminal modes on `FocusGained`.** Terminals and multiplexers clear modes behind your back. | `tui/mod.rs:187-216` | returning to the pane keeps bracketed paste / mouse / focus events |
-
----
-
-## 6. Phase 3 — Surfaces in order
-
-Ordered by user-visible frequency. Each step reuses the Phase 1 foundation and regenerates that
-surface's baselines.
-
-| # | Surface group | Current | Target shape |
-|---|---------------|---------|---------------|
-| 3.1 | **Main conversation** — transcript, tool blocks, reasoning | `render/messages.rs` (553), `render/tools.rs`, `messages/` (3,307) | borderless, structure from role colour + glyph prefixes (jcode's approach). The `▼ Thinking` shimmer stays. Tool rows: model intent by default, technical detail behind a toggle. |
-| 3.2 | **Chrome** — header, status, composer, footer | no header exists; `render/footer.rs` (751 LOC) | jcode `ui_header.rs` + `ui_input.rs:774/2444`. Add a real header. Replace the half-used `Length(2)` footer with jcode's **10-step compaction ladder** (`ui_input.rs:2027-2038`) so it always answers where-am-I / what's-running / how-full-is-context. |
-| 3.3 | **Management panels** — MCP, Skills, Plugins, Hooks, Journey, Agents, Context, Usage | 8 surfaces, 4 differing border colours, `mcp_view.rs` at 50 palette sites | one idiom, `Percentage` splits replaced with ratio-as-upper-bound + min floors |
-| 3.4 | **Pickers** — `dialog_select` (one renderer, 4 surfaces), effort, model, session browser, memory selector | widths 44–60, hardcoded `Color::White` highlight at `dialog_select.rs:200,:316` | one `picker()` idiom; selection uses `Role::SelectionBg` + `on_selection()` |
-| 3.5 | **Overlays** — help, history/global search, rewind, settings, theme, stats, diff | 13 overlays, 2 render-pass idioms | one box idiom; scroll % folded into the title; kill the frame/buf helper duplication |
-
-**Cross-cutting:** `McpViewState`, `SettingsScreen`, `PromptInputState` are already separate structs —
-good. Leave `VirtualList<T: VirtualItem>` alone; it is sound.
-
----
-
-## 7. Phase 4 — Affordances operant does not have at all
-
-None of these exist today. This is the "feels designed" layer.
-
-| # | Affordance | jcode reference |
-|---|-----------|-----------------|
-| 4.1 | **Narrow-terminal floors + graceful collapse.** `MIN_CHAT_WIDTH`, `MIN_*` per surface; if a floor can't be met, don't split the pane out at all. | `ui.rs:2835-2836`, `:2946-2950` |
-| 4.2 | **Empty states** for every panel and picker — "type to search" vs "no matches" are different strings. | `ui_input.rs:157-162`, `navigation.rs:1102,1119` |
-| 4.3 | **Focus indication** — the focused pane's border takes the focus colour; explicit focus flags threaded to renderers. | `chrome.rs:33-36`, `ui.rs:3374-3386` |
-| 4.4 | **Overflow labelling** — `↑N` above, `+N more` below. Never a silent truncation. | `ui_input.rs:303-314` |
-| 4.5 | **One hint line** — priority-ordered, mode-aware, suppressed when an overlay owns the rows. Replaces 4 `Esc` spellings. | `ui_input.rs:2483-2513` |
-| 4.6 | **Truncation primitives** — clip / ellipsis / suffix-preserving, all `unicode_width`-aware. Suffix-preserving matters for paths and branch names. | `jcode-tui-render/src/lib.rs:71-195` |
-| 4.7 | **Actionable errors** — a failure names the recovery command and restores your input. | `tui_lifecycle.rs:337-351` |
-| 4.8 | **Resize preserves reading position** instead of teleporting to the new bottom. | `app.rs:890-894`, `local.rs:90` |
-
----
-
-## 8. Sequencing and honest sizing
-
-This is **many iterations**, not one. `AGENTS.md` requires one commit + push per iteration, and
-every phase above is independently shippable and reviewable.
-
-| Iteration | Content | Risk |
-|-----------|---------|------|
-| 1 | Phase 0 (0.1–0.6) | Low — additive, no visual change yet. Unblocks everything. |
-| 2 | 1.1–1.3 (roles, substitution, kill competing accents) | Medium — touches every render site. Baselines will churn; that is the point. |
-| 3 | 1.4–1.5 (spacing scale, one modal idiom) | Medium — 16 modal call sites + 23 title sites. Biggest single visual win. |
-| 4 | 1.6–1.7 (frame hygiene, contrast repair) | Low-medium — self-contained in `draw`. |
-| 5 | Phase 2 (loop architecture) | Medium — behaviour-preserving but touches the hot loop. |
-| 6+ | Phase 3, one surface group per iteration | Low each, cumulative |
-| n | Phase 4 | Low — additive affordances |
-
-**Expected win:** phases 0–1 + 3.1–3.2 address causes 2.1–2.7, which the audit ranks as the
-dominant contributors. Claiming parity is not honest until baselines from those steps are reviewed
-side-by-side against jcode at the same terminal size.
-
-**Not doing (YAGNI unless asked):** Oklab harmony scoring (1.8, 2,357 LOC upstream), jcode's 3D idle
-donut, the 15-widget HUD, inline interactive pickers, copy-mode with edge autoscroll, workspace map.
-
----
-
-## 9. Verification gate (every iteration)
-
-Per `AGENTS.md`, scoped and local. GitHub Actions runs are banned — read-only `gh run` inspection only.
+Per `AGENTS.md`: scoped, local. GitHub Actions runs are banned; read-only `gh run` inspection only.
 
 ```bash
 source scripts/dev-env.sh
-cargo fmt --all
+rustfmt --check --edition 2024 <changed files>          # NOT cargo fmt --all — see §6
 ./scripts/check.sh check -p operant-cli --bin operant
-./scripts/check.sh test  -p operant-cli --bin operant -- tui          # state + buffer assertions
-./scripts/check.sh test  -p operant-cli --test tui_scenarios          # the corpus
-./scripts/tui-capture.sh --all                                       # tmux real-terminal spot check
-bash scripts/clippy-warning-gate.sh                                  # no NEW warnings vs allowlist
+./scripts/check.sh test  -p operant-cli --bin operant -- tui
+./scripts/check.sh test  -p operant-cli --test tui_scenarios
+./scripts/tui-capture.sh --all                          # tmux real-terminal spot check
+bash scripts/clippy-warning-gate.sh                     # no NEW warnings vs allowlist
 ```
 
-Plus, for a visual iteration:
+Phase 1 additionally: `./scripts/check.sh test -p operant-tui-style` — the lifted crate's own tests
+must pass.
 
-```bash
-# regenerate baselines, then read the diff — never auto-commit a baseline
-./scripts/tui-baselines.sh accept
-git diff --stat crates/operant-cli/tests/tui_baselines/
-```
+Baselines: `./scripts/tui-baselines.sh accept` then **read the diff**. A regeneration touching more
+files than the iteration changed means the change was too broad — split it.
 
-A baseline regeneration that touches more files than the iteration changed is a signal the change
-was too broad. Split it.
+### Working-tree constraint (live, blocking)
 
-### Working-tree constraint (live)
-
-Peer WIP is **uncommitted and must not be staged or reformatted**:
+Peer WIP is uncommitted and **must not be staged, reformatted, or stashed**:
 `crates/operant-core/tests/stream_interrupt.rs`, `crates/operant-core/src/agent/stream_retry_budget.rs`,
 `crates/operant-cli/src/gateway_commands.rs`, `gateway_runner.rs`, `BUGS.md`, `Cargo.toml`,
 `Cargo.lock`, `docs/plan-2026-09-29-telegram-loop.md`, `plans/telegram-ux-fixes.md`,
-`docs/ORGANISM-OS-UPGRADE-OUTLINE.md`, plus the dirty `crates/operant-core/src/agent/*` files.
+`docs/ORGANISM-OS-UPGRADE-OUTLINE.md`, plus dirty `crates/operant-core/src/agent/*`.
 
-`cargo fmt --all` will touch `gateway_commands.rs:517` and dirty the tree. Use
-`rustfmt --check --edition 2024 <changed files>` for this work, and stage explicit paths only.
-`git pull --ff-only` is currently blocked by this WIP — do not stash.
+Consequences for this work:
+- `cargo fmt --all` will reformat `gateway_commands.rs:517` and dirty the tree → use targeted `rustfmt`.
+- `git pull --ff-only` is blocked → work from current `main`, do not stash.
+- Phase 1 adds a **new crate to the workspace**, requiring a root `Cargo.toml` edit — a file *already
+  dirty from peer work*. **Resolution needed before Phase 1:** either the peer lands first, or we
+  stage the workspace-member line as an isolated hunk with explicit paths.
+
+---
+
+## 6. Honest sizing
+
+| Iteration | Content | Risk |
+|---|---|---|
+| 1 | Phase 0 | Low — additive, no visual change. Unblocks everything. |
+| 2 | Phase 1.1–1.5 (vendor crates) | Low — copy + small edits, licence-compatible |
+| 3 | Phase 1.6–1.9 (wire + unify) + benchmark | Medium — touches every render site; baselines churn by design |
+| 4 | Phase 2 | Medium — behaviour-preserving, hot loop |
+| 5 | Phase 2.5 | Low — mechanical, but **blocks all parallelism** |
+| 6..48 | Phase 3, one surface per iteration | Low each, cumulative |
+| 49+ | Phase 4 | Low — additive |
+
+**Not doing unless asked:** Oklab harmony scoring (2,357 LOC upstream) · jcode's 3D idle donut · the
+15-widget HUD · inline interactive pickers (6,280 LOC, welded) · copy-mode edge autoscroll ·
+`SoftRepaint` sentinel · mermaid diagram rendering (pinned git dep).
+
+**The parity claim is not honest until baselines from Phase 1 + Phase 3.1–3.2 are reviewed
+side-by-side against jcode at matched terminal sizes.**
