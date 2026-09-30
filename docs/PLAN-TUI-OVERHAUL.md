@@ -12,6 +12,10 @@
 | `iter-517` | Vendored 4 jcode crates (~9.6k LOC) as modules under `tui/vendor/`. 144 vendored tests green, 0 warnings. |
 | `iter-518` | Phase 0 gate: `--baseline` drift detection, `--capture-frames`, `--capture-dir`, `scripts/tui-capture.sh`. Drift failure independently verified. |
 | `iter-519` | Phase 1a/1b: both palettes bridged, `adapt_buffer_for_display` wired as the choke point, base chrome migrated, competing accents retired. Corpus green at 50 scenarios / 67 variant-runs. |
+| `iter-520` | This document updated with landed state and the two sequencing constraints below. |
+| `iter-521` | Phase 1.8: `modal_frame` primitive + `space.rs` ladder. **Zero call sites migrated** — the 22 sizing and 23 title sites stay untouched so goldens stay valid. |
+| `iter-522` | Phase 0.1: `--dump-style` / `--style-baseline` per-cell style gate, the colour-depth divergence fix, and 120 regenerated goldens. `verify` PASSED with 0 drift across 60 gated scenarios. |
+| `iter-523` | `docs/tui-debugging.md`: documented the style goldens and the `deterministic: false` mechanism; corrected a claim that had become false. |
 
 **Two constraints discovered during implementation — both change how the remaining work must be sequenced.**
 
@@ -143,7 +147,7 @@ transform, not a per-frame one.
 Rev. 1's phases 0/2/3/4 stand. Changes: **Phase 1 becomes a lift**, a new **Phase 2.5** appears, and
 two upstream patterns are explicitly rejected.
 
-### Phase 0 — Make the ugliness visible *(0.2–0.6 landed iter-518; 0.1 in flight)*
+### Phase 0 — Make the ugliness visible *(LANDED: 0.2–0.6 iter-518, 0.1 iter-522)*
 
 | # | Task | Done when |
 |---|------|-----------|
