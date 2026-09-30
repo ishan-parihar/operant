@@ -3,7 +3,23 @@
 > Supersedes rev. 1 (preserved at `docs/PLAN-TUI-OVERHAUL-v1.md`, commit `8580b453`).
 > Adds: a liftability audit of jcode's 16 crates, Rust-practice corrections, and a
 > fleet-deployment topology.
-> **Decision requested:** Option B (hybrid lift) is recommended. See §0.
+> **Decision:** Option B (hybrid lift). Accepted. See §0.
+
+## Status
+
+| Iteration | Landed |
+|---|---|
+| `iter-517` | Vendored 4 jcode crates (~9.6k LOC) as modules under `tui/vendor/`. 144 vendored tests green, 0 warnings. |
+| `iter-518` | Phase 0 gate: `--baseline` drift detection, `--capture-frames`, `--capture-dir`, `scripts/tui-capture.sh`. Drift failure independently verified. |
+| `iter-519` | Phase 1a/1b: both palettes bridged, `adapt_buffer_for_display` wired as the choke point, base chrome migrated, competing accents retired. Corpus green at 50 scenarios / 67 variant-runs. |
+
+**Two constraints discovered during implementation — both change how the remaining work must be sequenced.**
+
+**(1) The palette bridge has a collision rule that is not optional.**
+`adapt_buffer_for_display` substitutes by *exact RGB match against each role's frozen default*, so seeding all 22 roles means any operant colour that happens to equal some role's default is silently repainted. Two real collisions exist: `dark.success` `(129,199,132)` **is** jcode's `Ai` default, and `dark`/`deuteranopia` `muted` `(120,120,120)` **is** jcode's `Tool` default. Seeding those roles from the semantically obvious fields would have turned every success-green cell red. `theme_colors.rs` now carries a documented collision rule and a table-driven test pinning it across all 8 themes. **Any future role addition must re-run that test** — it is the only thing standing between a palette change and an invisible, TUI-wide colour regression.
+
+**(2) Goldens must be captured against a frozen render, so the primitive is built before the migration.**
+The visual goldens are the regression net for all later surface work. Therefore: land the new primitive (`modal_frame`, spacing scale) with its tests **while changing no rendered output**, commit the goldens against the current stable render, and only then flip call sites — each flip verified by the goldens. Building the primitive first also means a wrong abstraction is caught by unit tests, which goldens cannot do.
 
 ---
 
@@ -127,7 +143,7 @@ transform, not a per-frame one.
 Rev. 1's phases 0/2/3/4 stand. Changes: **Phase 1 becomes a lift**, a new **Phase 2.5** appears, and
 two upstream patterns are explicitly rejected.
 
-### Phase 0 — Make the ugliness visible *(unchanged, strictly sequential)*
+### Phase 0 — Make the ugliness visible *(0.2–0.6 landed iter-518; 0.1 in flight)*
 
 | # | Task | Done when |
 |---|------|-----------|
@@ -140,6 +156,12 @@ two upstream patterns are explicitly rejected.
 
 ### Phase 1 — Lift the foundation *(sequential; replaces rev. 1 phases 1.1–1.7)*
 
+> **1.1–1.7 landed** (iter-517, iter-519). One deviation from plan: the crates were vendored as
+> **modules under `operant-cli/src/tui/`**, not as new workspace crates, because the repo-root
+> `Cargo.toml` carried another agent's uncommitted work and adding `[workspace] members` would have
+> meant staging a line inside their diff. Every crate `operant-cli` already depended on was
+> present, so no manifest change was needed and the move stays reversible.
+
 | # | Task | Source | Done when |
 |---|------|--------|-----------|
 | 1.1 | Vendor `jcode-tui-style` as new workspace crate `operant-tui-style`. Repoint the 1 log line. Strip `jcode_*` doc comments. Add the MIT attribution header. | 5,256 LOC | compiles; `cargo test -p operant-tui-style` green |
@@ -149,7 +171,7 @@ two upstream patterns are explicitly rejected.
 | 1.5 | Vendor `jcode-tui-anim` + replicate the `opt-level=3` pin | 1,131 LOC | compiles |
 | 1.6 | Wire `adapt_buffer_for_display(frame.buffer_mut())` into `render_app` after the draw — **the substitution choke point** | — | `/theme` repaints every surface |
 | 1.7 | Retire the competing accents. `app.accent_color`/`ACCENT_BUILD` (`app/enums.rs:314`, `Rgb(255,191,0)`) is byte-identical to the theme's `emphasis` yet a separate literal, so **`/theme` cannot repaint it on 7 of 8 themes**. Plus hardcoded `Magenta` at `journey_view.rs:194` and `effort_picker.rs:72`. | — | grep finds exactly one accent source |
-| 1.8 | One modal idiom `modal_frame(title, hint)` + a minimal `space` const set. Replaces 16 sizing formulas and 5 title idioms. | — | one function sizes every modal |
+| 1.8 | One modal idiom `modal_frame(title, hint)` + a minimal `space` const set. Replaces 16 sizing formulas and 5 title idioms. | — | one function sizes every modal — **primitive landing now, call sites NOT yet migrated** (see constraint 2) |
 | 1.9 | Frame hygiene: full clear + `BeginSynchronizedUpdate`. Drop hardcoded `Color::Black` base fill (`render/mod.rs:103`). | — | no stale cells, no flicker |
 | 1.10 | **Benchmark 1.6** against the noise floor, `--release`, ≥3 repeats (ch.3) | — | recorded number, not an estimate |
 
