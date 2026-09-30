@@ -694,20 +694,6 @@ fn generate_id() -> u64 {
         .as_nanos() as u64
 }
 
-/// Truncate a string for display
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
-        s.to_string()
-    } else {
-        format!(
-            "{}...",
-            s.chars()
-                .take(max_len.saturating_sub(3))
-                .collect::<String>()
-        )
-    }
-}
-
 /// Stream-based parser that can be polled incrementally
 pub struct ToolCallStreamParser {
     parser: ToolCallParser,
