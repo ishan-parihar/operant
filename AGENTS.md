@@ -144,6 +144,14 @@ gitignore is doing its job; leave them alone.
   `cargo build --release -p operant-cli`, package the artifacts, and publish
   with `gh release create vX.Y.Z --notes-file <extracted section> <artifacts>`.
   Do NOT re-add push/tag triggers without quota to spend.
+- GitHub Actions RUNS are banned — not reads. No workflow runs, no dispatch,
+  no push/tag triggers: the quota is exhausted and every run burns minutes.
+  Read-only API queries (`gh run view` / `list`, log fetching) cost zero
+  quota and are PERMITTED for failure diagnosis. ALL verification (`check` /
+  `test` / `clippy` / `fmt` / `doc`) and ALL release builds run on the LOCAL
+  machine only. The permitted GitHub operations are git itself
+  (pull/push/tag), `gh release create` for publishing locally-built
+  artifacts, and read-only run/log inspection.
 - Preferred verification commands (always run via `./scripts/check.sh`):
   - `cargo fmt --all`
   - `cargo check --workspace`
