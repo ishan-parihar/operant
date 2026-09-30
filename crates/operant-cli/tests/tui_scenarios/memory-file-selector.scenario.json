@@ -15,10 +15,16 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Memory — choose a file",
+    "contains:Memory \u2014 choose a file",
     "contains:navigate"
   ],
   "baseline": "memory-file-selector.txt",
   "style_baseline": "memory-file-selector.style.txt",
-  "notes": "Three-scope selector (User / Project / Local) with absolute paths in the rows — inherently ENV-dependent, and the reason its baseline is a good canary for path-truncation regressions (truncate_middle on long repo paths)."
+  "notes": "Three-scope selector (User / Project / Local) with absolute paths in the rows \u2014 inherently ENV-dependent, and the reason its baseline is a good canary for path-truncation regressions (truncate_middle on long repo paths).",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "The surface renders the checkout's own absolute paths in its Project and Local rows (the working directory and the resolved project root). Those strings are stable across two runs on ONE machine, so a same-machine determinism proof passes, but they differ on every other checkout location - which makes the golden machine-dependent in exactly the way that matters.",
+    "varying_region": "rows 20-21, the 'Project  <abs path>' and 'Local  <abs path>' value columns. Observed live as '/home/ishanp/.../agentic-harness/operant' versus a captured '/tmp/operant-verify/...'.",
+    "unblock_when": "The renderer is given a configurable project root (or the harness is given a fixed absolute fixture path to run from) so the rendered strings stop tracking the real checkout."
+  }
 }

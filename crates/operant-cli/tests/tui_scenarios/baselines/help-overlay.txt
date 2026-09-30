@@ -1,0 +1,40 @@
+
+
+
+            Shortcuts & commands                                                                        esc
+
+            Search shortcuts or commands
+            Keyboard Shortcuts                      │ Slash Commands
+                                                    │
+            Navigation                              │ Account
+             PageUp / PgDn       Scroll messages    │  /login           Log in to Operant
+             j / k               Scroll one line    │  /logout          Log out of Operant
+             Home / End          Top / bottom       │  /update          Update Operant Agent to the latest
+                                                    │version
+            Input                                   │
+             Enter               Submit message     │ Context
+             Up / Down           Input history      │  /compress        Compress conversation context (add
+             Ctrl+R              Search history     │'here [N]' to keep recent N turns)
+             Esc                 Cancel / close     │
+                                                    │ Diagnostics
+            App                                     │  /billing         Manage Nous terminal billing — buy
+             F1 / ?              Toggle help        │credits, auto-reload, limits
+             Ctrl+Shift+A        Model picker       │  /credits         Show Nous credit balance and top up
+           (Ctrl+A)                                 │  /debug           Upload debug report (system info +
+             Ctrl+K              Command palette    │logs) and get shareable links
+             Ctrl+C              Cancel / quit      │  /doctor          Run diagnostics
+             Ctrl+D              Quit (empty input) │  /heapdump        Show debug snapshot
+             Ctrl+L              Clear input line   │  /insights        Show usage insights and analytics
+             t                   (unbound — use     │  /mouse           Show mouse capture info
+           mouse-click to toggle thinking)          │  /pet             Pet the mascot
+                                                    │  /status          Show session, model, token, and
+                                                    │context info
+                                                    │  /terminal-setup  Show terminal capability info
+                                                    │  /time            Show the current time
+ offline-c                                          │  /usage           Show token usage and rate limits for  shortcuts
+──────────                                          │the current session                                      ──────────
+❯ ▏                                                 │  /version        (v)  Show Operant Agent version
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

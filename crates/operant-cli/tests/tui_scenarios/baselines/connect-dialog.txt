@@ -1,0 +1,40 @@
+
+
+
+
+
+
+                             Connect a provider                                     esc
+
+                             Search
+
+                             Popular
+                             Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F
+                             Custom OpenAI-Compatible Custom URL + API key
+                             OpenAI (API key)
+                             Anthropic (API key)
+                             Google AI Studio (API key)
+                             xAI (API key)
+                             Mistral (API key)
+                             Groq (API key)
+                             DeepSeek (API key)
+                             NVIDIA NIM (API key)
+                             OpenRouter (API key)
+                             Together AI (API key)
+                             Vercel AI Gateway (API key)
+
+                             International
+                             Z.AI / GLM (API key)
+                             Kimi / Kimi Coding Plan (API key)
+                             Kimi / Moonshot (China) (API key)
+                             Moonshot (API key)
+                             StepFun Step Plan (API key)
+                             MiniMax (API key)
+                             MiniMax (China) (API key)
+ offline-capture · local     Alibaba DashScope (API key)                                                    ? shortcuts
+───────────────────────────                                                                 ────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

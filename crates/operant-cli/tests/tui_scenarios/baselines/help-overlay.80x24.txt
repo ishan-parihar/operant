@@ -1,0 +1,24 @@
+
+
+
+    Shortcuts & commands                                                esc
+
+    Search shortcuts or commands
+    Keyboard Shortcuts            │ Slash Commands
+                                  │
+    Navigation                    │ Account
+     PageUp / PgDn       Scroll   │  /login           Log in to Operant
+   messages                       │  /logout          Log out of Operant
+     j / k               Scroll   │  /update          Update Operant Agent to
+   one line                       │the latest version
+     Home / End          Top /    │
+   bottom                         │ Context
+                                  │  /compress        Compress conversation
+    Input                         │context (add 'here [N]' to keep recent N
+ o   Enter               Submit   │turns)                                     s
+── message                        │                                           ──
+❯    Up / Down           Input    │ Diagnostics
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+
+                                                               0k/200k  $0.0000
+

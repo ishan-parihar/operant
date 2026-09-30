@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /▏
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+› /new                                     [cmd] Start a new session (fresh session ID + history)
+  /redraw                                  [cmd] Force a full UI repaint (recovers from terminal drift)
+  /history                                 [cmd] Show conversation history
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

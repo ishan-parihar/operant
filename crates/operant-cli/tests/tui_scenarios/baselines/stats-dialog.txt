@@ -1,0 +1,40 @@
+
+
+
+
+
+
+                Cost & stats                                                                        esc
+               Overview  ·  Daily Tokens  ·  Cost Heatmap  ·  Models
+               Total tokens: 0
+                 Input:    0
+                 Output:   0
+
+               Total cost: $0.00
+
+               Streak: ● 0 days  (longest: 0 days)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-captu  tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll                                         ? shortcuts
+──────────────                                                                                            ──────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

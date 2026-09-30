@@ -1,0 +1,40 @@
+▏
+▏   Which database should I point the migration at?
+▏
+
+
+
+
+
+
+
+
+
+
+                               ╭─ Question ─────────────────────────────────────────────╮
+                               │                                                        │
+                               │Which database should the migration target?             │
+                               │                                                        │
+                               │▶ 1 sqlite                                              │
+                               │  2 postgres                                            │
+                               │  3 qdrant                                              │
+                               │                                                        │
+                               │  type to fill custom answer…                           │
+                               │                                                        │
+                               │  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
+                               │                                                        │
+                               ╰────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+✻ shipped for 0s
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                 0k/200k  $0.0000  0:00
+

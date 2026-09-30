@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+                           Choose a theme                                                esc
+                           Applies immediately — the whole TUI repaints in this palette.
+                                     Default     Operant default — dark background, cyan accen
+
+                                     Dark        High-contrast dark theme
+
+                                     Light       Light background with dark text
+
+                                     Solarized   Solarized Dark — warm tones with blue accents
+
+                                     Nord        Nord — cool blue-grey palette
+
+                                     Dracula     Dracula — purple/pink dark theme
+                           ↑↓ navigate  ·  enter apply  ·  esc cancel
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

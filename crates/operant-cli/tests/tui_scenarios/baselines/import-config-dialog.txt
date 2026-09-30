@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+                Import config                                                                       esc
+                Preview the content to import from ~/.claude; Enter to confirm, Esc to cancel.
+                 Nothing to import.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                Enter to import  ·  Esc to cancel
+ offline-captu                                                                                              ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

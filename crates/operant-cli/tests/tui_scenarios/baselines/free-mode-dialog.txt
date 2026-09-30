@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+                    Connect Free (multi-provider — 0/5 keys)                                 esc
+
+                    Stack free tiers behind one endpoint.
+                    TIP More keys = better availability and higher caps.
+
+                    ▸ Groq            console.groq.com
+                        paste your API key here..._
+                      Cerebras        cloud.cerebras.ai
+                        paste your API key here...
+                      Google Gemini   aistudio.google.com
+                        paste your API key here...
+                      Mistral         console.mistral.ai
+                        paste your API key here...
+                      ↓ 1 more
+
+                    ↑/↓ next field    paste at least 1 key — as many as you can add is better
+
+
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

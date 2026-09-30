@@ -1,0 +1,24 @@
+
+
+           Settings — Operant                                Esc close
+           Type to search settings...
+
+             ► Max Tokens                              0
+               Auto-compact                            false
+               Desktop notifications                   false
+               Show turn duration                      false
+               Output Style                            default
+               Reduce motion                           false
+
+           Maximum tokens per response.
+
+
+
+
+ offline                                                                ortcuts
+────────                                                                ────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+
+                                                               0k/200k  $0.0000
+

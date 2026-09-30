@@ -14,5 +14,11 @@
   ],
   "baseline": "debug-overlay.txt",
   "style_baseline": "debug-overlay.style.txt",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "The overlay prints the last frame's wall-clock render duration, measured by TuiDebugHub::record_frame and rendered as `Render: <n>ms last`. A debug binary on a loaded machine renders the same frame in 9ms one run and 10ms the next. No env var reaches it: record_frame takes a real measurement and stores it in an AtomicU64, so this is not a clock that can be frozen from outside.",
+    "varying_region": "Row 26 (0-based), col 13 — the tens digit of the millisecond count in the `Render: <n>ms last` row, in BOTH dumps: the text diff shows `9ms` vs `10ms` and the style diff lands on the same cell with `1` as the symbol in place of `0`.",
+    "surface_of_fix": "Have record_frame clamp or skip recording when App::is_simulating is set, or expose a frozen-duration override on TuiDebugHub. Both are production changes made for a test, so the golden is withheld instead."
+  },
   "notes": "The topmost surface in the entire ladder: rendered last, after the selection pass, so nothing can occlude it. Asserted via the new top-level `debug_overlay` key rather than `overlays.debug_overlay` \u2014 it is deliberately NOT an entry in overlay_flags(), because any_modal_open() is derived from that list and folding a key-driven diagnostics panel into it would make unrelated `any_modal_open == false` assertions lie. The prior needle was 'Events'; the render emits ' Recent events (newest first) ' (lowercase e), so the needles are now the bordered title and the log header it actually draws."
 }

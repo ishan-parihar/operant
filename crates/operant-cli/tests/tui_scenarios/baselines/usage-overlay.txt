@@ -1,0 +1,40 @@
+
+                                                                                          ┌────────────────────────────┐
+                                                                                          │ F8 · usage                 │
+                                                                                          │ cost          $0.0000      │
+                                                                                          │ cache prefix  —            │
+                                                                                          │ last turn     —            │
+                                                                                          │ session tokens—            │
+                                                                                          └────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

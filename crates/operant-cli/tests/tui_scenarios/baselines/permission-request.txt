@@ -1,0 +1,40 @@
+▏
+▏   Delete the build directory.
+▏
+
+
+
+
+
+
+
+
+
+
+
+                    ┌ Permission Required ─────────────────────────────────────────────────────────┐
+                    │  Tool: bash                                                                  │
+                    │                                                                              │
+                    │  rm -rf ./target                                                             │
+                    │                                                                              │
+                    │  ► [y] Yes, allow once                                                       │
+                    │    [Y] Yes, allow this session                                               │
+                    │    [p] Yes, always allow (persistent)                                        │
+                    │    [n] No, deny                                                              │
+                    │                                                                              │
+                    └──────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+✻ shipped for 0s
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ How can I help you?
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                 0k/200k  $0.0000  0:00
+

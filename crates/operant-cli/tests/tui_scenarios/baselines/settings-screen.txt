@@ -1,0 +1,40 @@
+
+
+
+               Settings — Operant                                                                Esc close
+               Type to search settings...
+
+                 ► Max Tokens                              0
+                   Auto-compact                            false
+                   Desktop notifications                   false
+                   Show turn duration                      false
+                   Output Style                            default
+                   Reduce motion                           false
+                   Terminal progress bar                   false
+                   Verbose logging                         false
+                   Cursor blinking                         false
+                   Auto-copy on highlight                  false
+                   Show current directory                  false
+                   Show git branch                         false
+                   Auto-compact threshold                  0
+
+               Maximum tokens per response.
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-cap                                                                                                ? shortcuts
+────────────                                                                                                ────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

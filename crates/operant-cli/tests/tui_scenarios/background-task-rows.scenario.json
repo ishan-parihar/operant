@@ -14,6 +14,12 @@
   ],
   "baseline": "background-task-rows.txt",
   "style_baseline": "background-task-rows.style.txt",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "TWO wall-clock reads, both in the row text, neither reachable by an env pin. (1) The age column renders whole seconds since the record was created (`spawned 0s` on one render, `spawned 1s` on the next). (2) The record id itself embeds the creation timestamp: async_delegation::create_record mints `dlg-<unix-seconds>-<n>`, so `dlg-1790783249-1` becomes `dlg-1790783250-1` one second later. Measured over 6 renders: 2 runs matched run 0 exactly, 1 differed only in the age digit, 3 differed only in the id's seconds field.",
+    "varying_region": "Row 28 (0-based), col 15 — the middle component of the task id inside `dlg-<secs>-<n>`; and row 29, col 28 — the age digit in `spawned <n>s`. Both surfaces (text and style) show them: the style diff lands on the same cells with the same digit as the symbol.",
+    "surface_of_fix": "Inject a clock into operant_core::tools::async_delegation (create_record + the age renderer both take time from std::time), and give the headless driver a frozen Instant. Neither is an env var, which is why this is withheld rather than pinned."
+  },
   "notes": "Docked bottom-left of the messages area, drawn after render_messages and before every overlay. The rows are DERIVED from operant_core's process-wide async_delegation registry, so the script seeds real records through the same public create_record/mark_completed the real delegate_task(background=true) path calls \u2014 nothing is injected into the TUI's own state. The leading /voice is load-bearing: voice_mode_notice is visible from frame 0 on a host with an audio device, and it ORs into any_modal_open. Two rows (one spawned, one done) plus the footer count is the at-capacity-adjacent case the rows_area clamp regression needs.",
   "agent_script": "background-task.json"
 }

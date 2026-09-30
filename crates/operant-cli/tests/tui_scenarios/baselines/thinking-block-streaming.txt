@@ -1,0 +1,40 @@
+  ▶ Thinking: The user asked a two-part question.Answer the first part, then the secon…
+     First part of the answer. Second part of the answer. That is the whole answer.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✻ finished for 0s
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                 0k/200k  $0.0000  0:00
+

@@ -1,0 +1,40 @@
+
+
+
+
+
+
+                Agents                                                                              esc
+                0 active  ·  0 definitions
+                [+ Create new agent]  Create a reusable workspace agent
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-captu  enter open  ·  esc close                                                                    ? shortcuts
+──────────────                                                                                            ──────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

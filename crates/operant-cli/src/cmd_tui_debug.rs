@@ -165,6 +165,16 @@ pub enum TuiDebugSubcommand {
         #[arg(long)]
         dump_screen: Option<std::path::PathBuf>,
 
+        /// Optional path to dump the final rendered screen as a per-cell
+        /// colour/modifier grid (`operant-style-v1` format: a header line
+        /// then `height` lines of `width` `<fg>/<bg>/<mods>@<symbol>` tokens).
+        /// A verbatim projection of the TestBackend buffer — nothing is
+        /// normalised or collapsed, because a colour regression is invisible
+        /// in `--dump-screen`. See tui_scenarios/schema.json →
+        /// `baseline_formats.style`.
+        #[arg(long)]
+        dump_style: Option<std::path::PathBuf>,
+
         /// Optional screen-content assertions, comma-separated
         /// (e.g. "contains:Help,not-contains:Error"). Matched against the
         /// full rendered screen text. Fails the run on mismatch.
@@ -197,11 +207,20 @@ pub enum TuiDebugSubcommand {
         #[arg(long)]
         baseline: Option<std::path::PathBuf>,
 
-        /// Rewrite `--baseline` in place from the current render and exit 0.
-        /// Never implicit: a deliberate visual change must be accepted by a
-        /// human running this flag.
+        /// Rewrite `--baseline` (and `--style-baseline`, when given) in place
+        /// from the current render and exit 0. Never implicit: a deliberate
+        /// visual change must be accepted by a human running this flag.
         #[arg(long)]
         accept_baseline: bool,
+
+        /// Committed golden for the per-cell style grid, diffed exactly like
+        /// `--baseline`: a match confirms and exits 0, drift prints the first
+        /// differing (row, col) with both tokens to stderr and exits
+        /// non-zero, and a missing file bootstraps (created, exit 0). The two
+        /// baseline flags are independent, so a surface can gate on text,
+        /// style, or both, in one invocation.
+        #[arg(long)]
+        style_baseline: Option<std::path::PathBuf>,
 
         /// Comma-separated frame indices to capture as text, e.g. "0,3,7".
         /// Indices are 0-based over painted frames (`0` = the first frame
@@ -258,12 +277,14 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             output,
             assert,
             dump_screen,
+            dump_style,
             assert_screen,
             agent_script,
             size,
             max_frames,
             baseline,
             accept_baseline,
+            style_baseline,
             capture_frames,
             capture_dir,
             bypass_permissions,
@@ -275,12 +296,14 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
                     output,
                     assert_str: assert,
                     dump_screen,
+                    dump_style,
                     assert_screen,
                     agent_script,
                     size,
                     max_frames,
                     baseline,
                     accept_baseline,
+                    style_baseline,
                     capture_frames,
                     capture_dir,
                     bypass_permissions,
@@ -1426,12 +1449,14 @@ struct SimulateArgs {
     output: Option<std::path::PathBuf>,
     assert_str: Option<String>,
     dump_screen: Option<std::path::PathBuf>,
+    dump_style: Option<std::path::PathBuf>,
     assert_screen: Option<String>,
     agent_script: Option<std::path::PathBuf>,
     size: Option<String>,
     max_frames: Option<u64>,
     baseline: Option<std::path::PathBuf>,
     accept_baseline: bool,
+    style_baseline: Option<std::path::PathBuf>,
     capture_frames: Option<String>,
     capture_dir: Option<std::path::PathBuf>,
     bypass_permissions: bool,
@@ -1508,7 +1533,7 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
         args.bypass_permissions,
     )
     .await?;
-    let (events, app, screen, capture_status) = tui_app
+    let (events, app, screen, capture_status, style_dump) = tui_app
         .run_headless(parsed_keys, script, dims, frame_cap, frame_capture)
         .await?;
 
@@ -1533,6 +1558,11 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
     if let Some(ref screen_path) = args.dump_screen {
         std::fs::write(screen_path, screen.join("\n"))?;
         println!("Saved final rendered screen to {:?}", screen_path);
+    }
+
+    if let Some(ref style_path) = args.dump_style {
+        std::fs::write(style_path, &style_dump)?;
+        println!("Saved final rendered style grid to {:?}", style_path);
     }
 
     // Report per-frame capture outcome. A requested frame the run never
@@ -1578,6 +1608,10 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
 
     if let Some(ref baseline) = args.baseline {
         check_baseline(baseline, &screen, args.accept_baseline)?;
+    }
+
+    if let Some(ref style_baseline) = args.style_baseline {
+        check_style_baseline(style_baseline, &style_dump, args.accept_baseline)?;
     }
 
     println!("Simulation succeeded without errors.");
@@ -1716,6 +1750,148 @@ fn unified_screen_diff(baseline: &std::path::Path, expected: &str, actual: &str)
         .to_string()
         .trim_end()
         .to_string()
+}
+
+/// One place a style grid differs from its golden, in buffer coordinates.
+#[derive(Debug, PartialEq, Eq)]
+struct StyleDrift {
+    /// 0-based row within the grid (the header line is not counted).
+    row: usize,
+    /// 0-based column within the row.
+    col: usize,
+    /// The token the golden holds, or the whole expected header line when
+    /// `row`/`col` are not meaningful.
+    expected: String,
+    /// The token this run rendered.
+    actual: String,
+    /// How many cells differ in the whole grid, so a single wrong colour is
+    /// visibly distinguishable from a whole repaint.
+    cells: usize,
+}
+
+/// Compare the `operant-style-v1` style grid against a committed golden.
+///
+/// Same contract as [`check_baseline`] — `--accept-baseline` or a missing file
+/// writes and exits 0, a match confirms and exits 0, drift exits non-zero and
+/// leaves the golden intact — but the report is token-level. A unified diff
+/// over a 120x40 grid replaces an entire 120-token line and never says WHICH
+/// cell moved, so the first difference is located as (row, col) with both
+/// tokens. No line diff is printed for the style grid at all: it would be
+/// kilobytes of tokens to say the same thing far more slowly.
+fn check_style_baseline(baseline: &std::path::Path, actual: &str, accept: bool) -> Result<()> {
+    if accept {
+        write_baseline(baseline, actual)?;
+        println!(
+            "Accepted style baseline {:?} ({} bytes).",
+            baseline,
+            actual.len()
+        );
+        return Ok(());
+    }
+
+    if !baseline.exists() {
+        write_baseline(baseline, actual)?;
+        println!(
+            "Style baseline created at {:?} — no golden existed yet. Commit it; the next \
+             run will diff against it and fail on drift.",
+            baseline
+        );
+        return Ok(());
+    }
+
+    let expected = std::fs::read_to_string(baseline)
+        .map_err(|e| anyhow::anyhow!("Cannot read style baseline {:?}: {}", baseline, e))?;
+    let expected = normalize_baseline(&expected);
+
+    if expected == actual {
+        println!("  ✓ style baseline matches {:?}", baseline);
+        return Ok(());
+    }
+
+    let Some(drift) = style_drift(&expected, actual) else {
+        return Err(anyhow::anyhow!(
+            "Style baseline {:?} differs, but the difference is in line shape, not in any \
+             single cell token. Re-run with --accept-baseline if intended.",
+            baseline
+        ));
+    };
+
+    eprintln!("Style drift from baseline {:?}:", baseline);
+    if drift.row == usize::MAX {
+        eprintln!("  header line:");
+        eprintln!("    expected: {}", drift.expected);
+        eprintln!("    actual  : {}", drift.actual);
+    } else {
+        eprintln!(
+            "  first differing cell at (row {}, col {}) of {} differing cell(s):",
+            drift.row, drift.col, drift.cells
+        );
+        eprintln!("    expected: {}", drift.expected);
+        eprintln!("    actual  : {}", drift.actual);
+    }
+    eprintln!("\nIf this change is intended, re-run with --accept-baseline to rewrite the golden.");
+    anyhow::bail!(
+        "Rendered style grid differs from baseline {:?} at (row {}, col {}): expected {}, got {}",
+        baseline,
+        drift.row,
+        drift.col,
+        drift.expected,
+        drift.actual
+    );
+}
+
+/// First cell where two `operant-style-v1` dumps disagree, plus the total
+/// number of differing cells, or `None` when they differ only in line shape
+/// (row count, or a row that is not a whole number of tokens) — that case is
+/// reported without coordinates because there is no cell to point at.
+/// `row == usize::MAX` marks a header-line difference.
+fn style_drift(expected: &str, actual: &str) -> Option<StyleDrift> {
+    let (Some(exp_header), Some(act_header)) = (expected.lines().next(), actual.lines().next())
+    else {
+        return None;
+    };
+    if exp_header != act_header {
+        return Some(StyleDrift {
+            row: usize::MAX,
+            col: usize::MAX,
+            expected: exp_header.to_string(),
+            actual: act_header.to_string(),
+            cells: 0,
+        });
+    }
+    let exp_rows: Vec<&str> = expected.lines().skip(1).collect();
+    let act_rows: Vec<&str> = actual.lines().skip(1).collect();
+    if exp_rows.len() != act_rows.len() {
+        return None;
+    }
+    let mut first: Option<StyleDrift> = None;
+    let mut cells = 0usize;
+    for (row, (exp_row, act_row)) in exp_rows.iter().zip(act_rows.iter()).enumerate() {
+        let exp_tokens: Vec<&str> = exp_row.split(' ').collect();
+        let act_tokens: Vec<&str> = act_row.split(' ').collect();
+        if exp_tokens.len() != act_tokens.len() {
+            return None;
+        }
+        for (col, (exp, act)) in exp_tokens.iter().zip(act_tokens.iter()).enumerate() {
+            if exp == act {
+                continue;
+            }
+            cells += 1;
+            if first.is_none() {
+                first = Some(StyleDrift {
+                    row,
+                    col,
+                    expected: (*exp).to_string(),
+                    actual: (*act).to_string(),
+                    cells: 0,
+                });
+            }
+        }
+    }
+    first.map(|mut d| {
+        d.cells = cells;
+        d
+    })
 }
 
 /// Evaluate comma-separated screen-content assertions against the rendered
@@ -2018,5 +2194,164 @@ mod tests {
             crate::tui::debug::debug_hub::buffer_rows(&buf),
             vec!["ab", "cd"]
         );
+    }
+
+    // ── Style baseline gate ───────────────────────────────────────────
+
+    /// A 2x2 `operant-style-v1` grid, optionally with one cell overridden.
+    fn style_grid(cells: [(&str, &str); 4]) -> String {
+        let mut out = String::from("operant-style-v1 2x2\n");
+        for row in cells.chunks(2) {
+            let tokens: Vec<String> = row
+                .iter()
+                .map(|(style, sym)| format!("{style}@{sym}"))
+                .collect();
+            out.push_str(&tokens.join(" "));
+            out.push('\n');
+        }
+        out
+    }
+
+    fn plain_grid() -> String {
+        style_grid([
+            ("red/-/-", "a"),
+            ("-/-/-", "b"),
+            ("cyan/blue/b", "x"),
+            ("-/-/-", "y"),
+        ])
+    }
+
+    #[test]
+    fn style_baseline_bootstraps_then_matches() {
+        let dir = tmpdir("style-bootstrap");
+        let golden = dir.join("screen.style.txt");
+        let grid = plain_grid();
+
+        check_style_baseline(&golden, &grid, false).expect("bootstrap succeeds");
+        assert_eq!(
+            std::fs::read_to_string(&golden).expect("read"),
+            grid,
+            "the golden is the dump verbatim"
+        );
+
+        check_style_baseline(&golden, &grid, false).expect("identical render matches");
+        // CRLF + a missing final newline in the golden must canonicalise away
+        // rather than read as drift, exactly like the text baseline.
+        std::fs::write(&golden, grid.replace('\n', "\r\n").trim_end()).expect("seed crlf");
+        check_style_baseline(&golden, &grid, false).expect("canonicalised match");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn style_baseline_drift_names_row_col_and_both_tokens() {
+        let dir = tmpdir("style-drift");
+        let golden = dir.join("screen.style.txt");
+        check_style_baseline(&golden, &plain_grid(), false).expect("bootstrap");
+
+        // ONE cell's colour changes, in row 1 col 1.
+        let drifted = style_grid([
+            ("red/-/-", "a"),
+            ("-/-/-", "b"),
+            ("cyan/blue/b", "x"),
+            ("magenta/-/-", "y"),
+        ]);
+        let err = check_style_baseline(&golden, &drifted, false).expect_err("drift must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("(row 1, col 1)"), "no coordinates: {msg}");
+        assert!(msg.contains("-/-/-"), "no expected token: {msg}");
+        assert!(msg.contains("magenta/-/-"), "no actual token: {msg}");
+        // The golden survives a failing comparison.
+        assert_eq!(
+            std::fs::read_to_string(&golden).expect("read"),
+            plain_grid()
+        );
+
+        // ...and --accept-baseline is the only way to move it.
+        check_style_baseline(&golden, &drifted, true).expect("accept");
+        assert_eq!(std::fs::read_to_string(&golden).expect("read"), drifted);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn style_drift_locates_the_exact_cell() {
+        let expected = plain_grid();
+        // Same drift the gate reports: row 1, col 1.
+        let actual = style_grid([
+            ("red/-/-", "a"),
+            ("-/-/-", "b"),
+            ("cyan/blue/b", "x"),
+            ("magenta/-/-", "y"),
+        ]);
+        let drift = style_drift(&expected, &actual).expect("drift");
+        assert_eq!((drift.row, drift.col), (1, 1));
+        assert_eq!(drift.expected, "-/-/-@y");
+        assert_eq!(drift.actual, "magenta/-/-@y");
+        assert_eq!(drift.cells, 1, "one changed cell, not a repaint");
+
+        // First-cell drift is (0, 0), not (1, 1) — the header is not a row.
+        let head = style_grid([
+            ("green/-/-", "a"),
+            ("-/-/-", "b"),
+            ("cyan/blue/b", "x"),
+            ("-/-/-", "y"),
+        ]);
+        let drift = style_drift(&expected, &head).expect("drift");
+        assert_eq!((drift.row, drift.col), (0, 0));
+    }
+
+    #[test]
+    fn style_drift_counts_every_differing_cell() {
+        let expected = plain_grid();
+        // Row 0 fully repainted plus one cell in row 1. The FIRST cell is what
+        // gets reported, but the count is what tells you which bug to go
+        // looking for: one wrong colour, or a row that stopped rendering.
+        let actual = style_grid([
+            ("blue/-/-", "p"),
+            ("blue/-/-", "q"),
+            ("cyan/blue/b", "x"),
+            ("magenta/-/-", "y"),
+        ]);
+        let drift = style_drift(&expected, &actual).expect("drift");
+        assert_eq!((drift.row, drift.col), (0, 0));
+        assert_eq!(drift.expected, "red/-/-@a");
+        assert_eq!(drift.actual, "blue/-/-@p");
+        assert_eq!(drift.cells, 3);
+    }
+
+    #[test]
+    fn style_drift_reports_header_and_line_shape_without_cells() {
+        let expected = plain_grid();
+        assert_eq!(style_drift(&expected, &expected), None);
+
+        // A different geometry is a header difference, not a cell difference.
+        let resized = "operant-style-v1 4x2\nred/-/-@a -/-/-@b\nred/-/-@c -/-/-@d\n";
+        let drift = style_drift(&expected, resized).expect("header drift");
+        assert_eq!(drift.row, usize::MAX);
+        assert_eq!(drift.expected, "operant-style-v1 2x2");
+        assert_eq!(drift.actual, "operant-style-v1 4x2");
+
+        // A short row and an extra row are line-shape problems: the gate
+        // must still fail, but it has no cell to point at.
+        let short_row = "operant-style-v1 2x2\nred/-/-@a -/-/-@b\n";
+        assert_eq!(style_drift(&expected, short_row), None);
+        let extra_row = "operant-style-v1 2x2\nred/-/-@a -/-/-@b\n\
+                         red/-/-@a -/-/-@b\nred/-/-@a -/-/-@b\n";
+        assert_eq!(style_drift(&expected, extra_row), None);
+    }
+
+    #[test]
+    fn style_baseline_line_shape_drift_fails_without_coordinates() {
+        let dir = tmpdir("style-shape");
+        let golden = dir.join("screen.style.txt");
+        check_style_baseline(&golden, &plain_grid(), false).expect("bootstrap");
+        // A dropped grid row must still be a failure, never a pass.
+        let truncated = "operant-style-v1 2x2\nred/-/-@a -/-/-@b\n";
+        let err = check_style_baseline(&golden, truncated, false).expect_err("row count must fail");
+        assert!(
+            err.to_string().contains("line shape"),
+            "unexpected error: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

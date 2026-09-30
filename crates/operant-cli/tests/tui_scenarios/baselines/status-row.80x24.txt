@@ -1,0 +1,24 @@
+  ─ Session status — model: offline-capture · provider: (default) · title: (unti
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Session status — model: offline-capture · provider: (default) · title:
+(untitled) · messages: 0 · tokens: 0 · cost: $0.0000 · idle
+ offline-capture · local                                            ? shortcuts
+────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+
+                                                               0k/200k  $0.0000
+

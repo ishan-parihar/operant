@@ -21,5 +21,11 @@
   ],
   "baseline": "diff-viewer-git.txt",
   "style_baseline": "diff-viewer-git.style.txt",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "It renders the WORKING TREE's own `git diff`, so the golden is a snapshot of whatever was uncommitted in the corpus directory when it was captured \u2014 and it drifts on every unrelated edit to any file, on every commit, and on every branch. Not machine-specific in the usual sense: machine-INDEPENDENT of the hardware and entirely dependent on the source tree, which is the worst possible property for a golden, because the tree changes constantly during the very work the gate exists to police. Observed directly: it drifted during a `verify` run that overlapped edits to two files in this same directory, and passed again once the tree settled.",
+    "varying_region": "The file list and the hunk bodies, i.e. every row the diff viewer paints \u2014 there is no stable subset to point at. Its own notes already called this out before Phase 0; the four-render proof is what turned the prediction into a measurement.",
+    "surface_of_fix": "Give the scenario a fixture: point the viewer at a seeded diff from a temp file (or an env-selected diff source) instead of the live repository. Until then the text assertions still cover it \u2014 only the golden is withheld. Note diff-viewer-turn, which reaches the SAME renderer through /changes, IS goldened: it renders a stored turn diff from the mock agent script, which is static."
+  },
   "notes": "The git-diff mode of the viewer: file list left, hunk detail right, with +/- counts in the header. Strongly ENV-dependent (it renders the working tree's own diff), so this baseline is machine-specific by construction \u2014 pin the repo state or keep it advisory. Catches the pane split and the add/delete colour coding, which is pure style-baseline territory. The third needle was 'Files'; the header renders 'N files' (lowercase), so it was mis-cased and could never match."
 }

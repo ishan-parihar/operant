@@ -1,0 +1,24 @@
+
+        ┌ Search [Esc: close, Enter: insert, ↑↓: navigate] ────────────┐
+        │/ █                                                           │
+        │──────────────────────────────────────────────────────────────│
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+        │                                                              │
+ offline│Type to search                                                │ortcuts
+────────└──────────────────────────────────────────────────────────────┘────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+
+                                                               0k/200k  $0.0000
+

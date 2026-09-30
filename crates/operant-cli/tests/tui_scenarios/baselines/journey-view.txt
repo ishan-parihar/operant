@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+               ┌ Journey — skills + memories ───────────────────────────────────────────────────────────┐
+               │┌ Skills (101) ────────────────────────────┐┌ Memories (0) ────────────────────────────┐│
+               ││ Name                     Category       V││No memories stored yet.                   ││
+               ││                                          ││                                          ││
+               ││›ai-slop-cleaner                         0││Memories accumulate as you use operant.   ││
+               ││ airtable                                1││Use /memory to manage MEMORY.md directly. ││
+               ││ architecture-diagram                    1││                                          ││
+               ││ arxiv                                   1││                                          ││
+               ││ ascii-art                               4││                                          ││
+               ││ ascii-video                             0││                                          ││
+               ││ autonomous-loops                        0││                                          ││
+               ││ axi                                     0││                                          ││
+               ││ baoyu-infographic                       1││                                          ││
+               ││ blogwatcher                             2││                                          ││
+               ││ briefing                                0││                                          ││
+               ││ calendar                 productivity   1││                                          ││
+               ││ claude-code                             2││                                          ││
+               ││ claude-design                           1││                                          ││
+               ││ codebase-inspection                     1││                                          ││
+               ││ codex                                   1││                                          ││
+               ││ comfyui                  creative       5││                                          ││
+               ││ components                              0││                                          ││
+               ││                                          ││                                          ││
+               ││                                          ││                                          ││
+               │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory · 125 edges · 6│
+               └────────────────────────────────────────────────────────────────────────────────────────┘
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

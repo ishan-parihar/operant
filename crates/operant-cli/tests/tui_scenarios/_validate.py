@@ -307,7 +307,51 @@ print(f"[6] agent scripts checked: {len(used_scripts)} referenced, "
       f"{len(orphans)} unreferenced")
 
 
-# ---- 7. completeness ---------------------------------------------------------
+# ---- 7. determinism declaration + committed baselines ------------------------
+# The regression net must not be able to shrink quietly. A scenario that stops
+# being deterministic is allowed to lose its golden, but only by saying so in
+# its own file with a reason and a varying region; and a scenario that claims
+# to be deterministic must HAVE both goldens on disk.
+BASE = ROOT / "baselines"
+declared_baselines, gated, withheld = {}, 0, []
+for name, d in scenarios.items():
+    nondet = d.get("deterministic") is False
+    if "deterministic" in d and not nondet:
+        errors.append(f"{name}: 'deterministic' must be omitted or false, got "
+                      f"{d['deterministic']!r} — write nothing at all when a scenario IS "
+                      f"deterministic, so the field's presence always means excluded")
+    if nondet:
+        nd = d.get("nondeterminism") or {}
+        for f in ("reason", "varying_region"):
+            if not nd.get(f):
+                errors.append(f"{name}: deterministic=false but "
+                              f"nondeterminism.{f} is missing — an exclusion with no "
+                              f"stated cause is indistinguishable from a bug")
+        withheld.append(name)
+    want = [(d["baseline"], f"{name}"), (d["style_baseline"], f"{name}")]
+    for v in d.get("variants", []) or []:
+        stem = pathlib.Path(d["baseline"]).stem
+        sstem = pathlib.Path(d["style_baseline"]).stem
+        want.append((f"{stem}.{v['size']}.txt", f"{name}@{v['size']}"))
+        want.append((f"{sstem}.{v['size']}.txt", f"{name}@{v['size']}"))
+    for fname, where in want:
+        declared_baselines[fname] = where
+        if not (BASE / fname).exists():
+            if nondet:
+                continue
+            errors.append(f"{where}: committed baseline baselines/{fname} is missing — "
+                          f"run `python3 _run.py prove {name}`")
+        else:
+            gated += 1
+orphans = sorted(p.name for p in BASE.glob("*") if p.name not in declared_baselines)
+for o in orphans:
+    errors.append(f"baselines/{o} is not named by any scenario — a golden nobody gates on")
+print(f"[7] baselines: {gated} committed for {len(scenarios) - len(withheld)} gated "
+      f"scenario(s); {len(withheld)} scenario(s) withhold theirs as nondeterministic: "
+      f"{', '.join(sorted(withheld)) or 'none'}")
+
+
+# ---- 8. completeness ---------------------------------------------------------
 excluded = {}
 _excl_path = ROOT / "excluded.json"
 if _excl_path.exists():

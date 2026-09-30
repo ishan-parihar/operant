@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-capture · local                                            ? shortcuts
+────────────────────────────────────────────────────────────────────────────────
+❯ /▏
+────────────────────────────────────────────────────────────────────────────────
+
+› /new                       [cmd] Start a new session (fresh session ID + hist
+  /redraw                    [cmd] Force a full UI repaint (recovers from termi
+  /history                   [cmd] Show conversation history
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+
+                                                               0k/200k  $0.0000
+

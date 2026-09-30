@@ -740,8 +740,12 @@ impl TuiApp {
 
     /// Run the real `App::run` loop headlessly against a `TestBackend`,
     /// replaying `keys`. Returns the captured event log, the final `App`
-    /// state (for assertions), and the final rendered screen as trimmed
-    /// text rows (for screen-content assertions and snapshots).
+    /// state (for assertions), the final rendered screen as trimmed text
+    /// rows (for screen-content assertions and snapshots), and the same
+    /// buffer projected as the `operant-style-v1` per-cell colour/modifier
+    /// grid (the style baseline). The last two are both built from the final
+    /// `TestBackend` buffer, so a text baseline and a style baseline always
+    /// describe the same frame.
     ///
     /// `frame_capture` arms per-frame text capture inside the run loop: the
     /// given 0-based painted-frame indices are written to `dir` as
@@ -764,6 +768,7 @@ impl TuiApp {
         crate::tui::app::App,
         Vec<String>,
         Option<(Vec<u64>, Vec<u64>)>,
+        String,
     )> {
         let (agent_tx, agent_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
@@ -1001,9 +1006,13 @@ impl TuiApp {
         // Capture the final rendered screen as trimmed text rows. The
         // TestBackend buffer is row-major; chunk the flat cell slice by width.
         let screen = crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer());
+        // Same buffer, same frame: the style grid is projected here rather
+        // than in the caller so the two baselines can never diverge.
+        let style_dump =
+            crate::tui::debug::debug_hub::buffer_style_dump(terminal.backend().buffer());
         let events = self.app.debug_hub.event_bus().recent(1000);
         let capture_status = self.app.debug_hub.frame_capture_status();
-        Ok((events, self.app, screen, capture_status))
+        Ok((events, self.app, screen, capture_status, style_dump))
     }
 }
 

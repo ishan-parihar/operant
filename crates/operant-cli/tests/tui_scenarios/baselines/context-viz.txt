@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+                          Context & usage                                                 esc
+                          Token window, rate limits, and session cost.
+                          Context window
+                          [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+
+                          Rate limits
+                          5-hour   no data
+                          7-day    no data
+
+                          Session cost:  $0.0000
+
+
+
+
+
+
+
+                          enter/esc close
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

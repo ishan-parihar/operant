@@ -1,0 +1,40 @@
+
+
+
+
+
+             Changes from this turn                                                                    esc
+             0 files  ·  +0 -0  ·  turn diff mode
+
+             No changes were captured for this turn.
+
+             Use /review for the current git diff, or make an edit and reopen /changes.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ offline-ca                                                                                                   shortcuts
+───────────                                                                                                  ───────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

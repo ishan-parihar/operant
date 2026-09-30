@@ -85,7 +85,47 @@ static DETECTED: OnceLock<ColorDepth> = OnceLock::new();
 
 /// The terminal's colour depth, detected once and cached for the process.
 pub fn detect() -> ColorDepth {
-    *DETECTED.get_or_init(|| detect_from(|key| std::env::var(key).ok()))
+    *DETECTED.get_or_init(|| {
+        let depth = detect_from(|key| std::env::var(key).ok());
+        align_vendored_detector(depth);
+        depth
+    })
+}
+
+/// Make the vendored design system's depth answer agree with ours.
+///
+/// The vendored jcode style layer runs a SECOND, independent depth detection:
+/// [`crate::tui::vendor::style::color::color_capability`]. Unlike [`detect`],
+/// it never consults [`COLOR_DEPTH_OVERRIDE_VAR`] — it reads `COLORTERM`,
+/// `TERM` and terminal-name heuristics and stops there. Its answer reaches the
+/// frame through [`crate::tui::vendor::style::color::rgb`], which every palette
+/// substitution funnels through (`palette::remap_named_with` for named colours,
+/// `configured_native_color` for concrete ones), so a single frame could carry
+/// TWO encodings: the operant palette quantized to truecolor while one cell the
+/// per-frame buffer pass rewrote came back `Color::Indexed`.
+///
+/// That is not hypothetical. With `OPERANT_COLOR_DEPTH=truecolor` on a
+/// `TERM=xterm-256color` process, `[Esc to dismiss]` in the voice-mode notice
+/// painted `Color::DarkGray` → `Role::Dim` → `muted` → `color::rgb(204,155,31)`
+/// → `Color::Indexed(172)`, while every neighbouring cell stayed `rgb:`. Same
+/// colour, two encodings, in one 120x40 grid — and which encoding you got
+/// depended on the terminal rather than on the documented override.
+///
+/// Fixing it here — at the single place depth is resolved, so no draw path can
+/// observe a different depth — needs no vendor edit:
+/// [`crate::tui::vendor::style::color::pin_truecolor_for_tests`] is the
+/// vendored module's own published seam for forcing its answer to TrueColor,
+/// and it is the only disagreement that changes an ENCODING. At `Palette256`
+/// and `Palette16` both pipelines already emit `Color::Indexed`, so the frame
+/// is encoding-uniform without help.
+///
+/// Deliberately NOT done: editing the vendored file. Its own doc comment still
+/// says production never calls the pin; that comment is now narrower than
+/// reality and belongs upstream, not in a vendored copy we must not touch.
+fn align_vendored_detector(depth: ColorDepth) {
+    if depth == ColorDepth::Truecolor {
+        crate::tui::vendor::style::color::pin_truecolor_for_tests();
+    }
 }
 
 /// Decide the depth purely from an environment lookup.
@@ -554,6 +594,49 @@ mod tests {
                 matches!(got, Color::Indexed(16..=231)),
                 "{rgb:?} should stay in the cube, got {got:?}"
             );
+        }
+    }
+
+    #[test]
+    fn align_vendored_detector_makes_the_two_pipelines_emit_one_encoding() {
+        // Serialize against the vendored style tests, which mutate the same
+        // process-global capability.
+        let _lock = crate::tui::vendor::style::STYLE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // `muted` in the default theme — the colour whose DarkGray->Dim rewrite
+        // produced the mixed-encoding frame.
+        let (r, g, b) = (204u8, 155, 31);
+
+        // The defect: with OPERANT_COLOR_DEPTH=truecolor on a 256-colour TERM,
+        // `detect()` returned Truecolor (palette stayed rgb:) while the
+        // vendored pipeline independently chose Color256 and rewrote one cell to
+        // `Color::Indexed(172)`.
+        align_vendored_detector(ColorDepth::Truecolor);
+
+        // Post-condition: once we have resolved Truecolor, every substitution
+        // must come back as a triple, so a frame cannot mix `rgb:` and
+        // `indexed:` encodings. NOTE: on a host that already reports truecolor
+        // this passes whether or not the call above happens, so it only fails on
+        // a 256-colour host — which is the case the corpus pins and the case
+        // that produced the bad golden.
+        assert_eq!(
+            crate::tui::vendor::style::color::rgb(r, g, b),
+            Color::Rgb(r, g, b),
+            "the vendored quantiser must agree with the resolved depth, or one \
+             frame carries two colour encodings"
+        );
+
+        // The other depths need no alignment: both pipelines already emit
+        // `Color::Indexed` there, so alignment is a deliberate no-op rather
+        // than a panic.
+        for depth in [
+            ColorDepth::Palette256,
+            ColorDepth::Palette16,
+            ColorDepth::None,
+        ] {
+            align_vendored_detector(depth);
         }
     }
 

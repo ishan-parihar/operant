@@ -151,6 +151,48 @@
       "meaning": "`live` = executes green against the real binary today. `blocked` = the surface is rendered by render_app but cannot be reached through `parse_key_sequence`'s current token set or the headless driver; the scenario states exactly what Phase 0 must change.",
       "notes": "Phase 0's runner MUST report `blocked` scenarios as SKIPPED-with-reason rather than as failures, and MUST print the `blocked_by` text, so an unreachable surface never reads as a passing surface."
     },
+    "deterministic": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "enum": [
+        false
+      ],
+      "meaning": "`false` = this scenario still runs and still asserts, but NO golden is committed for it, because two renders of it disagree. The runner prints the reason on every run so the exclusion is never silent.",
+      "notes": "Added in Phase 0. Omit the field entirely for a scenario that is deterministic — `true` is never written, so the presence of the field alone always means \"excluded, and here is why\". This is deliberately NOT `excluded.json`: that file is for surfaces the corpus cannot EXECUTE (its _validate.py cross-check rejects an entry that still has a scenario file), whereas a nondeterministic scenario executes perfectly well and only its golden is withheld."
+    },
+    "nondeterminism": {
+      "type": "object",
+      "required": false,
+      "properties": {
+        "reason": {
+          "type": "string",
+          "required": true,
+          "meaning": "The actual cause, named. \"wall clock in the footer turn timer\", not \"flaky\"."
+        },
+        "varying_region": {
+          "type": "string",
+          "required": true,
+          "meaning": "Where it varies, precisely enough to grep for: the row/field and what differs."
+        },
+        "surface_of_fix": {
+          "type": "string",
+          "required": false,
+          "meaning": "What would have to change for the golden to become committable — e.g. \"inject a clock into App\", \"a fixture HOME seeded with skills\"."
+        }
+      },
+      "meaning": "Required whenever `deterministic` is `false`. `_validate.py` fails a scenario that sets the flag without both required strings.",
+      "notes": "Written from the runner's own two-render byte diff, never from a guess: the runner prints the first differing (row, col) of whichever dump moved."
+    },
+    "env": {
+      "type": "object",
+      "required": false,
+      "additionalProperties": {
+        "type": "string"
+      },
+      "meaning": "Extra environment variables for this scenario's `simulate` process, merged over the runner's pinned set.",
+      "notes": "Added in Phase 0. The runner already pins the variables every surface is known to read (see `runner_contract.determinism_requirements`); this exists for a scenario that needs one more, e.g. a fixture that forces a listing surface. A scenario that pins its way to determinism MUST still pass the two-render proof — pinning that only hides the variation is the failure mode this whole gate exists to prevent."
+    },
     "blocked_by": {
       "type": "string",
       "required": false,
@@ -450,8 +492,15 @@
       "--suite <glob|dir> \u2014 walk the corpus",
       "--dump-style <path> \u2014 write the style baseline described above",
       "--baseline <path> \u2014 write the text baseline described above",
+      "--style-baseline <path> \u2014 GATE on the style baseline, mirroring --baseline: match exits 0, drift prints the first differing (row, col) with both tokens to stderr and exits non-zero, a missing file bootstraps. --accept-baseline covers it and --baseline alike",
       "--update-baselines \u2014 rewrite baselines instead of diffing"
     ],
+    "cli_shape": {
+      "write_pair": "--dump-screen (text) and --dump-style (style) are pure writes, exactly like each other; neither diffs.",
+      "gate_pair": "--baseline (text) and --style-baseline (style) are the gates, exactly like each other. They are independent, so one invocation can gate on text, style, or both.",
+      "accept": "One --accept-baseline rewrites whichever gates were passed. It was already the single accept switch for the text golden and stays that way; adding a second one would let a change be accepted for the pixels but not the characters.",
+      "why_not_dump_style_diffs": "A flag that sometimes writes and sometimes diffs surprises the reader and makes `--dump-style` unusable as a plain debugging aid, which is what --capture-frames and --dump-screen already provide."
+    },
     "existing_flags_the_runner_must_reuse_unchanged": [
       "--keys",
       "--size",
@@ -467,7 +516,10 @@
       "Never run two scenarios concurrently in one process: the mock path and slash-command handling touch process-wide state (slash usage store, notification and background-task registries, audio detection).",
       "Freeze or record the clock. Several surfaces embed elapsed time (footer turn timer, session-start-seeded tips).",
       "Pin HOME (or OPERANT_HOME) to a fixture directory seeded with skills/plugins/auth so `/skills`, `/plugins` and `/model` render the same rows on every machine.",
-      "Set the terminal size explicitly per scenario; never inherit the developer's tty."
+      "Set the terminal size explicitly per scenario; never inherit the developer's tty.",
+      "Pin the colour depth. tui/color_depth.rs::detect() quantizes the entire palette from NO_COLOR / OPERANT_COLOR_DEPTH / COLORTERM / TERM, so an unpinned style baseline renders different fg/bg on a truecolor laptop than on a 256-colour CI runner. The runner sets OPERANT_COLOR_DEPTH=truecolor and drops NO_COLOR. Two colour pipelines used to answer this question independently: the vendored jcode style layer ran its own detection that never read OPERANT_COLOR_DEPTH, and its answer reached the frame through vendor::style::color::rgb() — so a single 120x40 grid could carry BOTH encodings (a truecolor palette plus one `indexed:N` run wherever the per-frame buffer pass rewrote a named colour). That is fixed at the source in color_depth::align_vendored_detector, which forces the vendored detector to agree with the resolved depth; a style baseline must never mix encodings, because the encoding then encodes the generating machine's TERM rather than the design.",
+      "Pin the onboarding gate. TuiApp::enter auto-opens the 'Connect a provider' dialog when `!has_credentials && !has_completed_onboarding` (tui/adapter_types/tui_app.rs:378) — one env key and one $HOME/.operant/settings.json flag, both machine-local. A developer who has onboarded and a fresh CI runner therefore render DIFFERENT first frames, and the whole corpus fails on the machine that has never run `operant setup`. The runner sets a non-empty placeholder ANTHROPIC_API_KEY and points HOME at an empty fixture, where the missing settings.json deserialises to Settings::default() on every machine.",
+      "A scenario is only goldened after FOUR renders: two byte-diffed against each other (the determinism proof), a third that writes the golden, and a fourth that gates the committed file. A golden trusted on the strength of an agreeing pair is a golden trusted on luck."
     ]
   },
   "conventions": {
@@ -475,11 +527,12 @@
     "env_requirements": "Recorded in `notes` as a leading `ENV:` clause when a scenario reads machine state. The runner may parse it to decide whether to run the scenario in a blocking or advisory tier.",
     "assertion_style": "One assertion per surface is a common failure mode \u2014 `any_modal_open == true` alone would pass for 29 different overlays. Every scenario asserts its OWN `overlays.<name> == true`. Two further rules learned the hard way: (1) assert a surface's OWN text, not a proxy \u2014 `any_modal_open == false` proves nothing about whether a surface rendered, and the two non-modal panels (usage_overlay, debug_overlay) are exposed as TOP-LEVEL snapshot keys precisely because folding them into overlay_flags() would make any_modal_open lie. (2) a needle may not contain a comma: evaluate_screen_assertions splits clauses on ','. `contains:\u25ba [y] Yes, allow once` silently becomes two clauses \u2014 stop the needle at the last comma-free word.",
     "any_modal_open_is_host_dependent": "any_modal_open ORs all 34 overlay flags plus show_help and context_menu_state. On a host with a working audio device, TuiApp::enter calls voice_mode_notice.show_if_available(..) and the notice is visible from frame 0, so any_modal_open is TRUE for the entire run. An `any_modal_open == false` assertion is therefore only meaningful on a host where the boot notice did not appear \u2014 use a leading `/voice<enter>` (which replaces the notice with a fresh invisible state) when a scenario genuinely needs no modal open, as `notification-banner` does. An `any_modal_open == true` assertion, by contrast, is always safe.",
+    "audio_availability_is_a_machine_fact_not_an_env_var": "operant_core::voice::detect_audio_environment() returns `available = warnings.is_empty()`, and warns when the process is over SSH, inside a container (/.dockerenv or KUBERNETES_SERVICE_HOST), under WSL (/proc/version mentions microsoft), or when none of termux-microphone-record/ffmpeg/arecord/sox resolves on PATH. TuiApp::enter passes that to voice_mode_notice.show_if_available(..), so the notice occupies 2 rows from frame 0 on a machine with a recorder and is absent on one without — shifting the layout of nearly every baseline. The runner pins PATH to a fixed declared value so the corpus never silently inherits a developer's shell PATH, and the four-render proof catches run-to-run drift. MEASURED with PATH=/nonexistent: help-overlay, footer-bar, diff-viewer-git and global-search all change text, and voice-mode-notice exits 1 because its assertion REQUIRES the notice to be visible. /.dockerenv and /proc/version are file facts no env pin can reach, so the corpus is reproducible on a non-container, non-WSL, non-SSH host whose PATH resolves a recorder — not on literally any machine. Closing the gap needs a product change (gate the notice on config rather than on hardware probing), not another pin.",
     "blocked_scenario_policy": "`reachability: \"blocked\"` is a TEMPORARY marker for a surface that will be unblocked in this iteration; the runner prints `blocked_by` and counts it as SKIPPED. A surface that cannot be made reachable belongs in `excluded.json` instead, not here \u2014 a scenario file that cannot pass teaches people to ignore red. The corpus currently has zero blocked entries; anything marked blocked makes _validate.py warn.",
     "host_dependent_startup_state": "On a host with a working audio device, TuiApp::enter calls `voice_mode_notice.show_if_available(..)`, so voice_mode_notice is visible from frame 0 and `any_modal_open` is TRUE before any key is pressed. A scenario that needs a clean start must lead with `/voice<enter>`, which replaces the notice with a fresh invisible state and is idempotent on a silent host. `<esc>` also works, EXCEPT when an Error notification is current: Esc then hits `dismiss_error_notifications()` and takes the modal down with it. The error-modal scenario therefore sends no keys at all and does not assert any_modal_open."
   },
   "authoring_tools": {
-    "_validate.py": "Static corpus checker. Encodes the ground truth (the 15 debug_snapshot top-level keys, the 34 overlay_flags keys, the parse_key_sequence token table, the MockAgentEvent variant table) and fails on: unparseable JSON, missing/mistyped fields, a key token the parser does not recognise, an assert path that does not resolve, a screen clause that is not contains:/not-contains:, a needle containing the ',' clause separator, a missing or malformed agent script, a script that does not end in done/error, and any surface with no scenario.",
-    "_run.py": "Prototype Phase 0 runner. Executes every `live` scenario and every variant using ONLY flags that exist today \u2014 --keys, --size, --assert, --assert-screen, --agent-script, --dump-screen. Never uses --dump-style or --baseline, which Phase 0 must add."
+    "_validate.py": "Static corpus checker. Encodes the ground truth (the 15 debug_snapshot top-level keys, the 34 overlay_flags keys, the parse_key_sequence token table, the MockAgentEvent variant table) and fails on: unparseable JSON, missing/mistyped fields, a key token the parser does not recognise, an assert path that does not resolve, a screen clause that is not contains:/not-contains:, a needle containing the ',' clause separator, a missing or malformed agent script, a script that does not end in done/error, a `deterministic: false` without a `nondeterminism` reason and varying_region, a missing committed baseline for a scenario that claims to be deterministic, an orphan baseline with no scenario, and any surface with no scenario.",
+    "_run.py": "The Phase 0 runner. Three modes: `exec` (assertions only, for authoring), `prove` (four renders per scenario: two byte-diffed, one that writes the goldens, one that gates them \u2014 the determinism proof), and `verify` (the CI gate: one render per scenario diffed against both committed goldens, and a MISSING golden is a failure rather than a silent bootstrap). Regenerate and verify with `python3 _run.py prove` then `python3 _run.py verify`. Pins its own config, HOME, HERMES_HOME, colour depth, clock and locale so nothing depends on the developer's real ~/.operant."
   }
 }

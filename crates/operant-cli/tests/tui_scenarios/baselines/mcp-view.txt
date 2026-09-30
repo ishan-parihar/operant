@@ -1,0 +1,40 @@
+
+
+
+
+
+         MCP — 1 servers · 0 tools                                                                     Esc close
+        ┌ Servers ─────────────────────────┐┌ Tools ───────────────────────────────────────────────────────────┐
+        │stdio                             ││/ filter tools                                                    │
+        │› ○ agentmemory  0 tools  0 res  0││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  │└──────────────────────────────────────────────────────────────────┘
+        │                                  │┌ Tool Detail ─────────────────────────────────────────────────────┐
+        │                                  ││Select a tool to view details.                                    │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+        │                                  ││                                                                  │
+ offli  └──────────────────────────────────┘└──────────────────────────────────────────────────────────────────┘  tcuts
+──────   Tab switch pane   / filter tools   e error detail   a auth   r reconnect                                 ──────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

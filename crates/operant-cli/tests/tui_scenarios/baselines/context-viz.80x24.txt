@@ -1,0 +1,24 @@
+
+
+
+      Context & usage                                                 esc
+      Token window, rate limits, and session cost.
+      Context window
+      [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+
+      Rate limits
+      5-hour   no data
+      7-day    no data
+
+      Session cost:  $0.0000
+
+
+
+
+ off                                                                        uts
+────                                                                        ────
+❯ ▏
+ 🎤    enter/esc close                                                       igur
+
+                                                               0k/200k  $0.0000
+

@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                      ┌ Effort level ────────────────────────────┐
+                                      │    ○  low                                │
+                                      │  › ◐  normal                             │
+                                      │    ◕  high                               │
+                                      │    ●  max                                │
+                                      │                                          │
+                                      │  ↑/↓ to choose · Enter to apply · Esc to │
+                                      │                                          │
+                                      │                                          │
+                                      │                                          │
+                                      └──────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

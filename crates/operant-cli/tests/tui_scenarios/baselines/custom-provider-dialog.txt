@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        Connect Custom OpenAI-Compatible                                 esc
+
+                        URL:
+                        https://your-openai-compatible-endpoint/v1_
+
+                        API Key:
+                        paste your API key here...
+
+                        tab switch field   fill URL field
+
+
+
+
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+

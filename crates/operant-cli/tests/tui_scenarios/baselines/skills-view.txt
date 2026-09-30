@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+                    ┌ Skills ──────────────────────────────────────────────────────────────────────┐
+                    │ #    Name                     Category       Version                         │
+                    │                                                                              │
+                    │ › 1    ai-slop-cleaner                         0.1.0                         │
+                    │   2    airtable                                1.1.0                         │
+                    │   3    architecture-diagram                    1.0.0                         │
+                    │   4    arxiv                                   1.0.0                         │
+                    │   5    ascii-art                               4.0.0                         │
+                    │   6    ascii-video                             0.1.0                         │
+                    │   7    autonomous-loops                        0.1.0                         │
+                    │   8    axi                                     0.1.0                         │
+                    │   9    baoyu-infographic                       1.56.1                        │
+                    │   10   blogwatcher                             2.0.0                         │
+                    │   11   briefing                                0.1.0                         │
+                    │   12   claude-code                             2.2.1                         │
+                    │   13   claude-design                           1.1.0                         │
+                    │   14   codebase-inspection                     1.0.0                         │
+                    │   15   codex                                   1.0.1                         │
+                    │   16   components                              0.1.0                         │
+                    │Clean AI-generated code slop with a regression-safe, deletion-first workflow… │
+                    │ ↑/↓ navigate · Enter inspect · Esc close                                     │
+                    │                                                                              │
+                    │                                                                              │
+                    └──────────────────────────────────────────────────────────────────────────────┘
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                           0k/200k  $0.0000  skills:101
+

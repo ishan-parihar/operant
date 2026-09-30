@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                         ┌ Rewind — Select Message ───────────────────────────────────────────┐
+                         │  Select a message to rewind to:                                    │
+                         │                                                                    │
+                         │  (no messages)                                                     │
+                         └────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+ offline-capture · local                                                                                    ? shortcuts
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ ▏
+ 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+
+                                                                                                       0k/200k  $0.0000
+
