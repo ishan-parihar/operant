@@ -1074,10 +1074,12 @@ impl Default for ApprovalsConfig {
 pub struct SecurityConfig {
     pub allow_private_urls: Option<bool>,
     pub redact_secrets: Option<bool>,
-    pub tirith_enabled: Option<bool>,
-    pub tirith_path: Option<String>,
-    pub tirith_timeout: Option<u64>,
-    pub tirith_fail_open: Option<bool>,
+    // NOTE: `tirith_*` keys used to live here. They were removed with no
+    // replacement: no tirith module ever existed in the tree (only a doc
+    // comment advertising one), so the four fields were defined, defaulted
+    // (fail-open), and never read. This struct has `#[serde(default)]` and
+    // no `deny_unknown_fields`, so existing configs carrying `tirith_*`
+    // keys still parse — the keys are simply ignored, as they always were.
     pub website_blocklist: WebsiteBlocklistConfig,
     pub command_allowlist: Vec<String>,
     pub quick_commands: HashMap<String, String>,
@@ -1088,10 +1090,6 @@ impl Default for SecurityConfig {
         Self {
             allow_private_urls: Some(false),
             redact_secrets: Some(true),
-            tirith_enabled: Some(true),
-            tirith_path: Some("tirith".to_string()),
-            tirith_timeout: Some(5),
-            tirith_fail_open: Some(true),
             website_blocklist: WebsiteBlocklistConfig::default(),
             command_allowlist: Vec::new(),
             quick_commands: HashMap::new(),
