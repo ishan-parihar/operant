@@ -1137,31 +1137,15 @@ async fn step_browser_and_skills(config: &mut AppConfig) -> Result<()> {
     print_page_header("Browser & Skills Setup");
 
     // ── Browser ──────────────────────────────────────────────────────────────
-    let bin_path = operant_core::tools::browser_downloader::BrowserDownloader::default_bin_path();
-    let browser_ok =
-        operant_core::tools::browser_downloader::BrowserDownloader::verify_binary(&bin_path)
-            .await
-            .is_ok();
-
-    if browser_ok {
-        print_success(&format!(
-            "Lightpanda browser already installed at {}",
-            bin_path.display()
+    // sourcehound has no release binaries, so there is nothing to download —
+    // just report whether the binary resolves, and how to fix it if not.
+    if operant_core::tools::sourcehound::is_available() {
+        print_success("sourcehound browser engine found (browser + web tools ready)");
+    } else {
+        print_warning(&format!(
+            "sourcehound binary not found — browser and web tools will error until it is installed:\n{}",
+            operant_core::tools::sourcehound::SOURCEHOUND_INSTALL_HINT
         ));
-    } else if prompt_yes_no("Install Lightpanda browser for web automation?", true)? {
-        print_info("Downloading Lightpanda browser binary...");
-        match operant_core::tools::browser_downloader::BrowserDownloader::download_binary().await {
-            Ok(path) => {
-                config.tools.browser_binary_path = Some(path.clone());
-                print_success(&format!("Browser installed at {}", path.display()));
-            }
-            Err(e) => {
-                print_warning(&format!(
-                    "Browser install failed: {}. Will retry on first use.",
-                    e
-                ));
-            }
-        }
     }
 
     // ── Skills directory ─────────────────────────────────────────────────────

@@ -141,9 +141,7 @@ fn print_tool_summary(config: &AppConfig) {
         ("Text-to-Speech", config.tts.enabled, None),
         (
             "Browser Automation",
-            config.tools.browser_binary_path.is_some()
-                || operant_core::tools::browser_downloader::BrowserDownloader::default_bin_path()
-                    .exists(),
+            operant_core::tools::sourcehound::is_available(),
             None,
         ),
         ("Terminal/Commands", true, None),

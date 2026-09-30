@@ -10,7 +10,6 @@ pub mod async_delegation;
 pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
 pub mod browser_dialog_tool;
-pub mod browser_downloader;
 pub mod browser_tool;
 pub mod builtin;
 pub mod cdp_utils;

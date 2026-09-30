@@ -6,20 +6,16 @@
 //! Supported providers (configured via `browser.provider` in config.toml):
 //! - `sourcehound` (default) - sourcehound MCP server (`sourcehound mcp`),
 //!   driving cloakctl for navigation and scraping
-//! - `lightpanda` - Local Lightpanda binary (auto-downloaded from GitHub Releases)
 //! - `camofox` - Camofox REST API (`CAMOFOX_URL`)
 //! - `browserbase` - Browserbase cloud (`BROWSERBASE_API_KEY`)
 //! - `browser-use` - Browser Use cloud (`BROWSER_USE_API_KEY`)
 //! - `firecrawl` - Firecrawl scrape API (`FIRECRAWL_API_KEY`)
 //!
 //! ## Troubleshooting
-//! If you see "Permission denied (os error 13)" or "binary not found" errors:
-//! 1. Ensure you have internet access to download the binary from GitHub
-//! 2. The Lightpanda binary is downloaded to `~/.operant/bin/browser`. The
-//!    `sourcehound` provider needs no download — it needs the `sourcehound`
-//!    binary on `PATH` (or `$SOURCEHOUND_BINARY` set); check that instead if
-//!    `browser.provider = "sourcehound"` fails.
-//! 3. On Linux, you may need to install dependencies: `sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2`
+//! The `sourcehound` provider needs no download — it needs the `sourcehound`
+//! binary on `PATH` (or `$SOURCEHOUND_BINARY` set). A missing binary surfaces
+//! as the install hint in [`crate::tools::sourcehound::SOURCEHOUND_INSTALL_HINT`].
+//! On Linux you may need to install dependencies: `sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2`
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -240,7 +236,6 @@ impl OperantTool for BrowserTool {
         "Browser automation tool for navigating and interacting with websites. \
          Supports multiple providers configured via browser.provider in config.toml:\n\
          - sourcehound (default): sourcehound MCP server (cloakctl-driven navigation)\n\
-         - lightpanda: Local Lightpanda binary (auto-downloaded)\n\
          - camofox: Camofox REST API (CAMOFOX_URL)\n\
          - browserbase: Browserbase cloud (BROWSERBASE_API_KEY)\n\
          - browser-use: Browser Use cloud (BROWSER_USE_API_KEY)\n\
@@ -293,7 +288,7 @@ impl OperantTool for BrowserTool {
 
         // SSRF protection for URL-fetching commands: `navigate` (and
         // `snapshot`, which reloads the current page URL) pass the URL to
-        // local browser backends (lightpanda, sourcehound) that fetch it
+        // local browser backends (sourcehound) that fetch it
         // directly. Without a guard, the agent could be prompted to
         // navigate to cloud metadata (169.254.169.254), localhost, or
         // internal services. Hermes guards every browser navigation with

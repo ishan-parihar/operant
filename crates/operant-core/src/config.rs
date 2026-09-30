@@ -883,6 +883,9 @@ impl std::str::FromStr for TerminalBackend {
 pub struct ToolSettings {
     pub registry_timeout_secs: u64,
     pub event_channel_size: usize,
+    /// Accepted but ignored: the only local browser backend is `sourcehound`,
+    /// which is resolved from `SOURCEHOUND_BINARY` / `PATH`, not from a path in
+    /// the config. Kept so an existing `operant.toml` still parses.
     pub browser_binary_path: Option<PathBuf>,
     pub web: WebToolSettings,
     pub http: HttpToolSettings,
@@ -1135,7 +1138,6 @@ impl Default for MemorySettings {
 /// `provider` selects the browser backend:
 /// - `"sourcehound"` (default) — the sourcehound browser engine driven over
 ///   its MCP server (`cloakctl.navigate` / `cloakctl.read` / `cloakctl.act`)
-/// - `"lightpanda"` — local binary, auto-downloaded from GitHub Releases
 /// - `"camofox"` — local anti-detection browser REST API (`CAMOFOX_URL`)
 /// - `"browserbase"` — Browserbase cloud (`BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID`)
 /// - `"browser-use"` — Browser Use cloud agent (`BROWSER_USE_API_KEY`)
@@ -2156,7 +2158,7 @@ wonderful_unknown_key = 42
     /// 1. The value marked `(default)` is the one the code defaults to.
     /// 2. Every provider the example names is genuinely accepted by
     ///    `build_browser_provider`. An unknown name silently falls back to
-    ///    Lightpanda, so a typo would otherwise be invisible.
+    ///    sourcehound, so a typo would otherwise be invisible.
     #[test]
     fn example_toml_documents_the_real_browser_default_and_providers() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

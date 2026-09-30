@@ -5,7 +5,6 @@
 //!
 //! | Value           | Backend                                         |
 //! |-----------------|-------------------------------------------------|
-//! | `"lightpanda"`  | Local Lightpanda binary (auto-downloaded)       |
 //! | `"sourcehound"` | sourcehound browser engine over MCP (CDP-capable) |
 //! | `"camofox"`     | Camofox REST API (`CAMOFOX_URL`)                |
 //! | `"browserbase"` | Browserbase cloud (`BROWSERBASE_API_KEY`)       |
@@ -14,7 +13,6 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::tools::sourcehound::Sourcehound;
@@ -64,84 +62,6 @@ pub trait BrowserProvider: Send + Sync {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Lightpanda — local binary, auto-downloaded from GitHub Releases
-// ---------------------------------------------------------------------------
-
-pub struct LightpandaProvider;
-
-impl LightpandaProvider {
-    async fn ensure_binary(&self) -> Result<std::path::PathBuf> {
-        let bin_path = crate::tools::browser_downloader::BrowserDownloader::default_bin_path();
-        if bin_path.exists() {
-            return Ok(bin_path);
-        }
-        crate::tools::browser_downloader::BrowserDownloader::download_binary().await
-    }
-
-    async fn run(&self, args: &[&str]) -> Result<String> {
-        let bin = self.ensure_binary().await?;
-        let out = tokio::time::timeout(
-            Duration::from_secs(30),
-            tokio::process::Command::new(&bin).args(args).output(),
-        )
-        .await
-        .map_err(|_| Error::Agent("browser timeout".into()))??;
-
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        } else {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            // Check for permission denied errors
-            if stderr.contains("Permission denied") || stderr.contains("os error 13") {
-                Err(Error::Agent(
-                    "Lightpanda binary execution failed: Permission denied. \
-                     Ensure ~/.operant/bin/browser is executable (chmod +x) or \
-                     try setting BROWSER_PROVIDER=camofox in config.toml (requires Docker). \
-                     See https://github.com/lightpanda-io/browser/releases for manual installation."
-                        .into(),
-                ))
-            } else {
-                Err(Error::Agent(format!("browser error: {}", stderr)))
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl BrowserProvider for LightpandaProvider {
-    fn name(&self) -> &str {
-        "lightpanda"
-    }
-    fn is_configured(&self) -> bool {
-        true
-    }
-    async fn navigate(&self, url: &str) -> Result<String> {
-        self.run(&["fetch", "--dump", "markdown", url]).await
-    }
-    async fn snapshot(&self) -> Result<String> {
-        Err(Error::Agent(
-            "Lightpanda fetch mode: use navigate(url) to get page content".into(),
-        ))
-    }
-    async fn click(&self, _selector: &str) -> Result<String> {
-        Err(Error::Agent(
-            "Lightpanda fetch mode does not support click interactions".into(),
-        ))
-    }
-    async fn type_text(&self, _selector: &str, _text: &str) -> Result<String> {
-        Err(Error::Agent(
-            "Lightpanda fetch mode does not support type interactions".into(),
-        ))
-    }
-    async fn scroll(&self, _direction: &str) -> Result<String> {
-        Err(Error::Agent(
-            "Lightpanda fetch mode does not support scroll".into(),
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Sourcehound — browser engine driven over MCP (`sourcehound mcp`, stdio)
 // ---------------------------------------------------------------------------
@@ -623,14 +543,14 @@ pub fn build_browser_provider(name: &str) -> std::sync::Arc<dyn BrowserProvider>
         other => {
             // The catch-all exists so a misspelled provider name is not a hard
             // failure. Say so: a stale `[browser] provider` value (the retired
-            // `igs` / `obscura` names) would otherwise degrade to a
-            // fetch-only browser without a word.
+            // `igs` / `obscura` / `lightpanda` names) would otherwise land on
+            // a browser nobody asked for without a word.
             tracing::warn!(
                 provider = other,
-                fallback = "lightpanda",
+                fallback = "sourcehound",
                 "unknown browser provider — falling back"
             );
-            std::sync::Arc::new(LightpandaProvider) // default: lightpanda
+            std::sync::Arc::new(SourcehoundProvider::new()) // default: sourcehound
         }
     }
 }
@@ -852,24 +772,18 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn test_default_is_lightpanda() {
-        let p = build_browser_provider("lightpanda");
-        assert_eq!(p.name(), "lightpanda");
-    }
-
-    #[test]
-    fn test_unknown_falls_back_to_lightpanda() {
+    fn test_unknown_falls_back_to_sourcehound() {
         let p = build_browser_provider("unknown");
-        assert_eq!(p.name(), "lightpanda");
+        assert_eq!(p.name(), "sourcehound");
     }
 
     #[test]
-    fn retired_provider_names_fall_back_to_lightpanda() {
-        // The retired `igs` / `obscura` names used to resolve to their own
-        // providers. A config still naming one now hits the catch-all, so the
-        // fallback has to stay the fetch-only default rather than fail.
-        for retired in ["igs", "obscura"] {
-            assert_eq!(build_browser_provider(retired).name(), "lightpanda");
+    fn retired_provider_names_fall_back_to_sourcehound() {
+        // The retired `igs` / `obscura` / `lightpanda` names used to resolve to
+        // their own providers. A config still naming one now hits the catch-all,
+        // so the fallback has to stay the documented default rather than fail.
+        for retired in ["igs", "obscura", "lightpanda"] {
+            assert_eq!(build_browser_provider(retired).name(), "sourcehound");
         }
     }
 

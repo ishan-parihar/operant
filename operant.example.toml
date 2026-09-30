@@ -396,10 +396,9 @@ provider = "memory-wire"
 enabled = true
 
 [browser]
-# provider: sourcehound (default) | lightpanda | camofox | browserbase | browser-use | firecrawl
+# provider: sourcehound (default) | camofox | browserbase | browser-use | firecrawl
 # - sourcehound:  sourcehound browser engine over MCP; sourcehound owns the engine,
 #                 its profile cookie jar, and the DevTools endpoint operant attaches to
-# - lightpanda:  local binary from github.com/lightpanda-io/browser (downloaded automatically)
 # - camofox:     local anti-detection browser REST API (CAMOFOX_URL)
 # - browserbase: cloud (BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
 # - browser-use: cloud AI agent (BROWSER_USE_API_KEY)

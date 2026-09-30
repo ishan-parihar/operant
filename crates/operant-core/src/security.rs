@@ -5,10 +5,6 @@
 //!
 //! Modules:
 //!
-//! - **tirith_security** — Subprocess wrapper for the `tirith` policy-as-code
-//!   scanner.  Automatically downloads the binary from GitHub releases on first
-//!   use.  Respects `fail_open` / `fail_closed` configuration.
-//!
 //! - **url_safety** — SSRF protection via DNS resolution + IP class checks.
 //!   Checks resolved addresses against private, loopback, link-local, CGNAT,
 //!   benchmarking, and cloud-metadata ranges.  Fail-closed on DNS errors.

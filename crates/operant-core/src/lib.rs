@@ -134,7 +134,7 @@ pub use approval::{
 };
 pub use browser_provider::{
     BrowserProvider, BrowserUseProvider, BrowserbaseProvider, CamofoxProvider, FirecrawlProvider,
-    LightpandaProvider, build_browser_provider,
+    build_browser_provider,
 };
 pub use client::{Message, OpenAIClient};
 pub use config::{
