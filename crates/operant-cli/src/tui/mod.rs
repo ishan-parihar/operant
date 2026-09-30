@@ -49,6 +49,7 @@ pub mod session_browser;
 pub mod settings_screen;
 pub mod skills_view;
 pub mod slash_usage;
+pub mod space;
 pub mod stats_dialog;
 pub mod terminal_setup;
 pub mod transcript_turn;
