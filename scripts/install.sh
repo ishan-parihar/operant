@@ -7,8 +7,9 @@ set -e
 cd "$(dirname "$0")"
 
 # ── Native build dependency preflight ──
-# crates/operant-core/build.rs emits `cargo:rustc-link-lib=sonic` unconditionally,
-# so libsonic is a hard link requirement, not a nice-to-have.
+# No sonic check: operant-core/build.rs emits no `-lsonic` (nothing references
+# a sonic symbol; the audio backend is stubbed), so libsonic is neither
+# required nor consulted. A stale local/lib/libsonic.a on disk is inert.
 #
 # ONNX Runtime is also NOT optional, contrary to what this comment used to claim.
 # Measured on the shipped binary:
@@ -19,23 +20,6 @@ cd "$(dirname "$0")"
 # always needs it. The rpath added in iter-425 points at ~/.local/lib/operant for
 # this reason, and the install step below populates that directory.
 echo "=== Checking Native Build Dependencies ==="
-SONIC_OK=0
-if [ -e /usr/lib/x86_64-linux-gnu/libsonic.so.0 ]; then
-    SONIC_OK=1
-    echo "  ok   libsonic (system)"
-elif [ -f "local/lib/libsonic.a" ]; then
-    SONIC_OK=1
-    echo "  ok   libsonic (local/lib/libsonic.a)"
-fi
-if [ "$SONIC_OK" -eq 0 ]; then
-    echo "  FAIL libsonic not found — espeak-ng (TTS) cannot link."
-    echo ""
-    echo "  Run:  ./scripts/provision-build-deps.sh"
-    echo "  That provisions libclang, ONNX Runtime and the alsa/sonic shims into"
-    echo "  the repo's local/ directory, which is where operant-core/build.rs looks."
-    echo ""
-    exit 1
-fi
 for tool in cmake pkg-config; do
     if command -v "$tool" >/dev/null 2>&1; then
         echo "  ok   $tool"
@@ -79,15 +63,6 @@ if [ -d "$HOME/.cargo/bin" ]; then
 fi
 
 echo ""
-echo "=== Installing Browser Dependencies (igs + obscura) ==="
-# The agent's IGS web tools and the shared obscura browser are driven via the
-# `igs` and `obscura` CLIs on PATH. Provision them globally (idempotent; reuses
-# the IGS-managed obscura so browser + IGS share one binary).
-# Best-effort: browser deps are optional — never abort operant's install if
-# the download is unavailable (offline / unsupported platform).
-bash "$(dirname "$0")/install-browser-deps.sh" || echo "WARN: browser deps provisioning failed (non-fatal)"
-
-echo ""
 echo "=== Seeding Bundled Skills ==="
 # Pack the 29-skill pool shipped with the repo into the user skills directory
 # (~/.operant/skills) so a fresh install is agent-ready from scratch. Idempotent
@@ -120,5 +95,5 @@ echo "To initialize configuration: operant setup"
 echo "To start the dashboard: operant dashboard"
 echo "To start the gateway: operant gateway start"
 echo ""
-echo "Browser tooling: igs -> $(command -v igs || echo MISSING), obscura -> $(command -v obscura || echo MISSING)"
+echo "Browser tooling: sourcehound -> $(command -v sourcehound || echo MISSING)"
 echo "Skills: $(find "${HERMES_SKILLS_DIR:-${HERMES_HOME:-$HOME/.operant}/skills}" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ') installed"

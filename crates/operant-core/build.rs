@@ -1,32 +1,21 @@
 fn main() {
-    // Link against system sonic library for espeak-rs-sys (TTS dependency).
+    // No `rustc-link-lib=sonic` is emitted here, deliberately. History: the
+    // flag was first gated to Linux (the only sonic artifact was a Linux ELF
+    // `local/lib/libsonic.a`, which ld64 rejected on macOS), then deleted
+    // outright — because untracking that archive (iter-499) removed the only
+    // copy any fresh checkout could link, and `Native (Linux x86_64)` failed
+    // with `unable to find library -lsonic`. Nothing references a sonic
+    // symbol: espeak-rs-sys links its own bundled speechPlayer/espeak-ng/ucd
+    // (plus per-platform extras), libsonic is an audio-BACKEND dependency,
+    // and the backend is stubbed out below. Proven by deletion twice: the
+    // Linux link is clean with the flag gone AND with no sonic artifact on
+    // disk at all. If an environment ever builds the real audio backend, the
+    // symbols come back — re-add the flag then, not before.
+    //
     // The payload dir is a machine-local prerequisite: repo-local `local/lib`
     // (gitignored) or $OPERANT_NATIVE_LIB_DIR. The search path MUST come from
     // build.rs — cargo's build.rustflags don't reach rustdoc, so doctests
     // (which link with CWD in a temp dir) only see link-search emitted here.
-    // Linux only.
-    //
-    // The only sonic artifact this repo carries is a Linux x86-64 ELF archive
-    // (`local/lib/libsonic.a` — verified ELF present, Mach-O absent), so
-    // requiring `-lsonic` on macOS made ld64 reject it outright:
-    //   ld: archive member '/' not a mach-o file in '.../local/lib/libsonic.a'
-    // which failed `Native (macOS ARM64)` in the release-gating native job.
-    //
-    // Nothing here actually needs it. espeak-rs-sys never links sonic itself: it
-    // links its own bundled speechPlayer/espeak-ng/ucd, then adds
-    // Foundation + c++ on macOS, msvcrtd on Windows and stdc++ on Linux. libsonic
-    // is an audio-BACKEND dependency, and the audio backend is stubbed out below,
-    // so no sonic symbol is ever referenced. Verified rather than argued:
-    // deleting this line entirely still links operant-cli cleanly on Linux
-    // (exit 0, full TTS stack).
-    //
-    // Kept for Linux rather than dropped globally, deliberately. If an
-    // environment ever builds the real audio backend instead of the stubs, the
-    // symbols would come back, and a conditional that is wrong in one direction
-    // is recoverable while a missing link flag is not.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        println!("cargo:rustc-link-lib=sonic");
-    }
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
     let dir = std::env::var("OPERANT_NATIVE_LIB_DIR")
         .unwrap_or_else(|_| format!("{manifest}/../../local/lib"));
