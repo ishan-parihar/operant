@@ -45,6 +45,7 @@ pub mod send_message_tool;
 pub mod session_search_tool;
 pub mod skills_tool;
 pub mod sourcehound;
+pub mod sourcehound_update;
 pub mod spotify_tool;
 pub mod sub_agent_tool;
 pub mod terminal_backend;

@@ -11,10 +11,12 @@
 //! ## Resolution
 //!
 //! [`find_sourcehound_binary`] follows the `aft_bridge.rs` shape: the
-//! `SOURCEHOUND_BINARY` env override, then `sourcehound` on PATH. No
-//! GitHub-release download: sourcehound publishes only local build artifacts
-//! and this workspace is not its release surface — a missing binary is a
-//! documented install hint, not a silent 150 MB fetch.
+//! `SOURCEHOUND_BINARY` env override, then `sourcehound` on PATH. A missing
+//! binary is a documented install hint, not a silent fetch — but an
+//! *installed* binary is kept current by
+//! [`crate::tools::sourcehound_update`], which polls the release tags (via
+//! the `gh` CLI, authenticated for the private repo) once per session and
+//! replaces the binary in the background on a verified newer asset.
 //!
 //! ## Tool names
 //!
@@ -160,6 +162,9 @@ impl Sourcehound {
     /// server omits it (older build, or a tool with no output schema) the
     /// first text content block is returned, parsed as JSON when possible.
     pub async fn call(&self, tool: &str, arguments: Value) -> Result<Value> {
+        // First call per session kicks the background auto-update poll; the
+        // current call always uses the installed binary, update or not.
+        crate::tools::sourcehound_update::kick_update_check();
         let client = self.client().await?;
         // A sourcehound started with a `tools.groups` allow-list that omits
         // `web` answers every web call with a bare "unknown tool". Catch it
