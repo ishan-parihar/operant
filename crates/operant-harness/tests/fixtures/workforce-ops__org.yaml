@@ -1,0 +1,129 @@
+pool:
+  name: workforce-ops
+  type: system
+  tier: swarm
+  category: infrastructure
+  ad_scope: HR-AD-001
+  parent: null
+
+# Department declaration (AXE-AD-011 Am.3): this pool IS a department;
+# its cron jobs are its employees. class: staffed | utility | dormant.
+department:
+  charter: "Agent swarm auditing, employee performance reviews, telemetry observability, and org health digests"
+  class: staffed
+
+services_offered:
+  - id: employee-telemetry
+    entry_point: "CLI: hr"
+    accepts:
+      - runs
+      - review
+      - digest
+    returns:
+      - execution_metrics
+      - token_usage
+      - error_logs
+    purpose: "Runtime execution telemetry, performance monitoring, and error traces for all autonomous cron-agents"
+  - id: efficacy-diagnostics
+    entry_point: "CLI: hr efficacy"
+    accepts:
+      - efficacy
+      - --since-hours
+      - --min-runs
+      - --pool
+    returns:
+      - diagnostic_findings
+    purpose: "AXE-AD-024 Efficacy Observer: advisory diagnostic interpretation layer (loops, waste, dormancy, recording gaps) over the same stores hr review aggregates"
+  - id: efficacy-digest
+    entry_point: "Python: scripts/efficacy_digest.py"
+    accepts:
+      - --dept-report
+      - --ceo-report
+      - --emit-notices
+      - --pool
+    returns:
+      - dept_head_reports
+      - ceo_strategy_digest
+    purpose: "AXE-AD-024 department-head alignment auditors + weekly CEO strategy digest, routed via the AXE notice board"
+  - id: staff-review
+    entry_point: "CLI: hr"
+    accepts:
+      - review
+      - show
+      - artifacts
+    returns:
+      - performance_review
+      - tool_calls
+      - reasoning_stream
+    purpose: "In-depth agent performance evaluation, tool call stream audit, and artifact validation"
+  - id: org-audit
+    entry_point: "CLI: hr"
+    accepts:
+      - audit
+      - coverage
+      - capabilities
+    returns:
+      - org_health_report
+      - skill_mismatches
+      - dormant_employees
+    purpose: "Swarm-wide organizational health audit, persona consistency, and skill coverage mapping"
+
+services_consumed:
+  - id: ad-rg-lifecycle
+    provider: meta-governance
+    purpose: "Architecture discipline decisions and regression guard compliance"
+    access: cli
+  - id: infra-utilities
+    provider: platform-infra
+    purpose: "Underlying system utilities and process supervision"
+    access: cli
+
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "HR-AD-", frontmatter_required: [Status, Date, Deciders, Description], required: false }
+      regressions/: { suffix: .md, prefix: "HR-RG-", frontmatter_required: [Severity, Date, Description], required: false }
+      strategies/: { suffix: .md, required: false, description: "Custody-transferred strategy docs (CP-AD-017) — graduate is single physical home" }
+  scripts/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: ['.py', '.sh']
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+    description: "Per-pool cron job definitions (AD-026) — declared so pooled consumers can route to them"
+  lib/:
+    suffix: .py
+    required: false
+    description: "Shared library modules (AD-059 engine split pattern)"
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+    description: "Canonical pool skills (AD-028) — symlinked from the global skills tree"
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "Native genome organs (AD-060 P6) — foundations keep their own sub-systems complete (_pool.yaml + AGENTS.md) at EVERY depth so graduates navigate them as sub-sub-systems through pooled symlinks (AD-061)"
+  tests/:
+    suffix: .py
+    required: false
+    description: "Live-data test suite (HR-RG-003) — efficacy engine false-positive calibration tests"
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"

@@ -1,0 +1,102 @@
+pool:
+  name: research-vault
+  type: system
+  tier: foundational
+  category: research-intelligence
+  ad_scope: KOSMOS-AD-001
+  parent: null
+  role: foundational
+  domain: research-intelligence
+  _legacy_tier: foundational
+  _legacy_type: system
+  _legacy_category: research-intelligence
+services_offered:
+- id: research-kb
+  entry_point: 'CLI: kosmos (~/KosmOS/kosmos)'
+  accepts:
+  - search
+  - where
+  - scope
+  - hierarchy
+  - progress loop-once
+  - edges
+  returns: graph/index queries + R&D packets over the three-realm corpus
+external_body:
+  vault_path: ~/KosmOS
+  router_doc: ~/KosmOS/AGENTS.md
+  smoke_gate: ~/KosmOS/tests/smoke_cli.py --gate
+services_consumed:
+- id: ad-rg-lifecycle
+  provider: meta-governance
+  purpose: arch CLI for this pool's AD/RG lifecycle (AD-051/052)
+  access: cli
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: KOSMOS-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: KOSMOS-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+      strategies/:
+        suffix: .md
+        required: false
+        description: "Custody-transferred strategy docs (CP-AD-017) \u2014 graduate\
+          \ is single physical home"
+  scripts/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: ['.py', '.sh']
+    required: false
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+    description: "Per-pool cron job definitions (AD-026) \u2014 declared so pooled\
+      \ consumers can route to them"
+  lib/:
+    suffix: .py
+    required: false
+    description: Shared library modules (AD-059 engine split pattern)
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+    description: "Canonical pool skills (AD-028) \u2014 symlinked from the global\
+      \ skills tree"
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "Native genome organs (AD-060 P6) \u2014 foundations keep their own\
+      \ sub-systems complete (_pool.yaml + AGENTS.md) at EVERY depth so graduates\
+      \ navigate them as sub-sub-systems through pooled symlinks (AD-061)"
+required_files:
+- AGENTS.md
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Unified research instrument: markdown+YAML knowledge base'
+  class: staffed

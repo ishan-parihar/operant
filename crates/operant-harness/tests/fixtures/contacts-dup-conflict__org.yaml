@@ -1,0 +1,34 @@
+pool:
+  name: contacts
+  type: sub-system
+  parent: relationship-intel
+  category: data-intelligence
+  ad_scope: RI-AD-035
+  role: sub-system
+  domain: relationship-intelligence
+  _legacy_tier: null
+  _legacy_type: sub-system
+  _legacy_category: data-intelligence
+  genome_layer: data-intelligence
+directories:
+  core/:
+    suffix: ['.py']
+    required: false
+    required: true
+  data/:
+    allow_any: true
+    required: true
+  references/:
+    suffix: .md
+    required: false
+  templates/:
+    allow_any: true
+    required: false
+required_files:
+- AGENTS.md
+rules:
+- Each contact is a directory named by kebab-case real name slug
+- contact.yaml has YAML frontmatter + markdown body
+- Journal entries are dated markdown files with frontmatter tags
+- Insights are synthesis outputs that update contact.yaml
+- "Tag taxonomy enforced \u2014 must be in taxonomy.yaml"

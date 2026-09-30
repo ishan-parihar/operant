@@ -96,8 +96,11 @@ ids; use replace to mutate.
 `operant architecture validate` — load + patch + build. Non-zero exit
 on any error.
 
-`operant architecture pool-import` — compile a `~/.hermes/systems/<pool>/_pool.yaml`
-into architecture rows. Read-only verb check enforced.
+`operant architecture pool-import` — compile a real organism pool manifest
+(`~/.hermes/organism/<stratum>/<pool>/_org.yaml`, canonical; `_pool.yaml` is
+the legacy dialect) into architecture rows. Read-only is derived from each
+consumer edge's `access` mode and carries a `read_only_reason` provenance;
+unclassified access is rejected without an explicit approval token.
 
 ## Security
 
@@ -177,5 +180,5 @@ operator, not a bug.
 | 3 | patch replace/insert/disable, malformed ⇒ boot refuses, dump matches golden | ✓ (12 composition tests + 3 from_toml tests + 3 CLI test runs) |
 | 4 | drop valid wasm ≤ 2s; corrupt ⇒ old serves; signature every load | partial (kernel-side ABA generation done; dir watcher + Extism integration in operant-plugins is host-side) |
 | 5 | agent mounts config row; visible next turn; unauthorized ⇒ denial; 30-turn soak | partial (harness_dump live; mount/unmount stubs return structured denial; skill authored) |
-| 6 | both pilots importable without recompile; write attempts structurally impossible | ✓ (pool compiler + read-only verb check; CLI surface; no write-capable adapter exists) |
+| 6 | both pilots importable without recompile; write attempts structurally impossible | ✓ (iter-514 — pool compiler verified against all 32 real `_pool.yaml`: 32/32 compile, was 0/32. Access-mode-derived read-only with provenance; unclassified access rejected without an approval token) |
 | 7 | final cargo test --workspace --all-features --lib green | see audit pass below |

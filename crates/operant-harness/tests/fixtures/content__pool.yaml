@@ -1,0 +1,30 @@
+# _pool.yaml — Sub-system structure for content (canonical format, RG-027)
+
+pool:
+  name: content
+  type: sub-system
+  parent: relationship-intel
+  category: publishing
+  ad_scope: RI-AD-035
+
+directories:
+  core/:
+    allow_any: true
+    required: true
+  data/:
+    allow_any: true
+    required: true
+  references/:
+    suffix: .md
+    required: false
+
+required_files:
+  - AGENTS.md
+
+# Semantic rules (not enforced by linter)
+rules:
+  - Each content piece is a directory named by kebab-case slug
+  - content.yaml has YAML frontmatter + markdown body
+  - Pipeline stage transitions validated by FSM (idea→brief→draft→review→scheduled→published→measured→archived)
+  - Audience segments use same diagnostic filters as recon engine
+  - Strategy bridge configs decouple strategic-engine from audience/content

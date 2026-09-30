@@ -1,0 +1,171 @@
+pool:
+  name: career-pipeline
+  type: system
+  tier: compass-graduate
+  category: task-execution
+  ad_scope: JE-AD-001
+  parent: null
+  role: venture
+  domain: task-execution
+  _legacy_tier: compass-graduate
+  _legacy_type: system
+  _legacy_category: task-execution
+  graduation:
+    path_ref: path-002
+    stage: sprouted
+    graduated_on: '2026-09-04'
+    genome_template_passed:
+      G1: true
+      G2: true
+      G3: true
+      G4: true
+      G5: true
+      G6: true
+      G7: true
+      G8: true
+      G9: true
+    parent_compass: compass
+    self_reports_via: data/compass-alignment.json
+    pooled_foundations:
+    - identity-core
+    - strategy
+    - content-campaigns
+    status: true
+    graduation_date: '2026-07-31'
+    graduation_stage: 2
+    graduation_ad: AD-015
+    strategy_refs:
+    - strategy-20260809-004
+    - strategy-20260809-018
+    shared_services:
+    - forge
+    - grounding
+    - alignment
+    - insights
+    - strategy-read
+surface_registry:
+- id: wealth
+  owner: job-engine
+  gate:
+    blocked: false
+    reason: "Revenue-critical job pipeline (path-002) \u2014 unblocked"
+services_consumed:
+- id: identity
+  provider: identity-core
+  purpose: "Identitarian grounding (name/values/voice) for application materials \u2014\
+    \ candidate-profile data is local per ID-AD-001"
+  access: cli
+- id: infra-utilities
+  provider: platform-infra
+  purpose: Inbox scanner and outreach engine utilities
+  access: import
+- id: professional-identity
+  provider: identity-core
+  purpose: candidate-profile + resume corpus pooled into identity/professional (ID-AD-004);
+    read via ~/.hermes/data/candidate-profile.yaml symlink; generation stays here
+  access: symlink+cli
+- id: platform-identity
+  provider: identity-core
+  purpose: freelance/contra profiles + USP + form-response policy pooled into identity/platforms
+    (ID-AD-004); read via ~/.hermes/data/freelance-profile.yaml symlink
+  access: symlink+cli
+pooled_sub_systems:
+- content-campaigns
+- strategy
+services_offered:
+- id: job-pipeline
+  sub_system: applications
+  entry_point: 'Pooled sub-system: applications/ (funnel FSM); scripts/ for inbox-scanner,
+    interview-tracker'
+  accepts:
+  - lead_ref
+  - application_op
+  returns:
+  - funnel_state
+relationships:
+  depends_on:
+  - identity-core
+  - platform-infra
+directories:
+  core/:
+    suffix: ['.md', '.yaml']
+    required: false
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: JE-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: JE-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  kb/:
+    allow_any: true
+    required: false
+  scripts/:
+    suffix:
+    - .py
+    - .sh
+    shebang: true
+    required: false
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+  tests/:
+    suffix: .py
+    required: false
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "AD-060 P6 unified genome \u2014 NATIVE organs owned (applications)\
+      \ + POOLED foundation categories (campaigns, strategy)"
+  logs/:
+    allow_any: true
+    required: false
+    description: "Runtime run logs (JSONL) — e.g. phase-3-enrich runs"
+  screenshots/:
+    allow_any: true
+    required: false
+    description: "Runtime browser/ATS error screenshots for debugging"
+  templates/:
+    allow_any: true
+    required: false
+    description: "Output templates (candidate-package.yaml, application materials)"
+  archive/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+    purposes:
+    - audits
+    - designs
+    - standards
+    - templates
+    - research
+    - market-research
+required_files:
+- AGENTS.md
+- STATUS.md
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Job application pipeline: ATS auto-apply, outreach, inbox scanning, lead
+    scoring (path-002)'
+  class: staffed

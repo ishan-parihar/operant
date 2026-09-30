@@ -1,0 +1,74 @@
+pool:
+  name: graveyard
+  type: system
+  category: infrastructure
+  ad_scope: AD-021
+  parent: null
+  role: foundational
+  domain: infrastructure
+  _legacy_tier: null
+  _legacy_type: system
+  _legacy_category: infrastructure
+directories:
+  .:
+    allow_any: true
+  revenue-engine-pre-split/:
+    allow_any: true
+    sub_dirs:
+      core/:
+        allow_any: true
+        required: false
+      cron-jobs/:
+        allow_any: true
+        required: false
+      scripts/:
+        allow_any: true
+        required: false
+      data/:
+        allow_any: true
+        required: false
+      references/:
+        allow_any: true
+        required: false
+      bin/:
+        allow_any: true
+        required: false
+      sub-systems/:
+        allow_any: true
+        required: false
+      archive/:
+        allow_any: true
+        required: false
+      kb/:
+        allow_any: true
+        required: false
+      skills/:
+        allow_any: true
+        required: false
+  personal-brand-tech/:
+    allow_any: true
+    sub_dirs:
+      core/:
+        allow_any: true
+        required: false
+      cron-jobs/:
+        allow_any: true
+        required: false
+      scripts/:
+        allow_any: true
+        required: false
+      data/:
+        allow_any: true
+        required: false
+      references/:
+        allow_any: true
+        required: false
+      sub-systems/:
+        allow_any: true
+        required: false
+      skills/:
+        allow_any: true
+        required: false
+department:
+  charter: "Superseded artifacts \u2014 read-only history, no live operations"
+  class: utility

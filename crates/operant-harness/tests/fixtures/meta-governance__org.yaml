@@ -1,0 +1,101 @@
+pool:
+  name: meta-governance
+  tier: meta-system
+  category: infrastructure
+  type: meta-system
+  ad_scope: AD-021
+  parent: null
+  role: meta-system
+  domain: infrastructure
+  _legacy_tier: foundational
+  _legacy_type: meta-system
+  _legacy_category: infrastructure
+services_offered:
+- id: ad-rg-lifecycle
+  entry_point: 'CLI: arch (~/bin/arch)'
+  accepts:
+  - new
+  - update
+  - supersede
+  - validate
+  - emit
+  - stats
+  - search
+  - show
+  returns: AD/RG governance records + pool validation for all systems
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+  templates/:
+    suffix: .md
+    required: false
+  scripts/:
+    allow_any: true
+    required: false
+  tests/:
+    allow_any: true
+    required: false
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+  references/:
+    suffix: .md
+    required: false
+    allow_root_files:
+      - service-registry.md
+      - INDEX.md
+    purposes:
+      - audits
+      - designs
+      - standards
+      - templates
+      - research
+  data/:
+    allow_any: true
+    required: false
+    sub_dirs:
+      audit-reports/:
+        suffix: .md
+        required: false
+        description: Architecture audit reports (system, graduate, foundation deployability)
+  archive/:
+    allow_any: true
+    required: false
+  mcp/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: ['.py', '.sh']
+  cron-jobs/:
+    suffix: .md
+  lib/:
+    suffix: .py
+  sub-systems/:
+    allow_any: true
+required_files:
+- AGENTS.md
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Meta-governance: AD/RG records, pool isolation, CLI compliance, system
+    lifecycle discipline'
+  class: staffed

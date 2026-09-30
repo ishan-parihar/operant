@@ -1,0 +1,112 @@
+pool:
+  name: agent-fabric
+  type: system
+  tier: swarm
+  category: infrastructure
+  ad_scope: AF-AD-001
+  parent: null
+
+# Department declaration (AXE-AD-011 Am.3): this pool IS a department;
+# its cron jobs are its employees. class: staffed | utility | dormant.
+department:
+  charter: "Design layer of the agent org: AgentSpec template, per-dept worklog substrate, PDCA feedback loops, and social-context injection — every cron-agent is an instance of the spec this pool owns."
+  class: staffed
+
+services_offered:
+  - id: agent-spec
+    entry_point: "CLI: af"
+    accepts:
+      - spec
+      - context
+    returns:
+      - agent_specification
+      - social_context
+    purpose: "AgentSpec template validation, persona contracts, and multi-stream social context injection"
+  - id: collaboration-substrate
+    entry_point: "CLI: af"
+    accepts:
+      - assignment
+      - worklog
+      - observe
+    returns:
+      - assignment_status
+      - department_worklog
+      - execution_receipt
+    purpose: "Cross-agent task assignments, meta-cognitive department worklogs, and post-job telemetry"
+  - id: feedback-loops
+    entry_point: "CLI: af"
+    accepts:
+      - loops
+    returns:
+      - pdca_improvements
+      - persona_evolution
+    purpose: "Plan-Do-Check-Act continuous self-improvement loops for autonomous employees"
+
+services_consumed:
+  - id: ad-rg-lifecycle
+    provider: meta-governance
+    purpose: "Architecture discipline decisions and regression guard compliance"
+    access: cli
+  - id: axe-feedback
+    provider: task-grid
+    purpose: "Error notification and notice board routing for failed executions"
+    access: cli
+  - id: infra-utilities
+    provider: platform-infra
+    purpose: "Underlying process supervision and runtime utilities"
+    access: cli
+
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "AF-AD-", frontmatter_required: [Status, Date, Deciders, Description], required: false }
+      regressions/: { suffix: .md, prefix: "AF-RG-", frontmatter_required: [Severity, Date, Description], required: false }
+      strategies/: { suffix: .md, required: false, description: "Custody-transferred strategy docs (CP-AD-017) — graduate is single physical home" }
+  scripts/:
+    allow_any: true
+    required: false
+  tests/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+    purposes:
+      - audits
+      - designs
+      - standards
+      - templates
+      - research
+  archive/:
+    allow_any: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: ['.py', '.sh']
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+    description: "Per-pool cron job definitions (AD-026) — declared so pooled consumers can route to them"
+  lib/:
+    suffix: .py
+    required: false
+    description: "Shared library modules (AD-059 engine split pattern)"
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+    description: "Canonical pool skills (AD-028) — symlinked from the global skills tree"
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "Native genome organs (AD-060 P6) — foundations keep their own sub-systems complete (_pool.yaml + AGENTS.md) at EVERY depth so graduates navigate them as sub-sub-systems through pooled symlinks (AD-061)"
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"

@@ -1,0 +1,75 @@
+# _pool.yaml — Pool structure declaration (validatable by pool_lint.py, AD-023)
+
+pool:
+  name: personal-os
+  tier: foundational
+  category: identity
+  type: system
+  ad_scope: PO-AD-038
+  parent: null
+
+services_offered:
+  - id: identity
+    sub_system: profile
+    entry_point: "YAML: sub-systems/profile/data/"
+    accepts: [path_ref or contact_id]
+    returns: [identity_data]
+
+
+services_consumed:
+  - id: grounding
+    provider: compass
+    purpose: State snapshot collection for compass bridge sub-system
+    access: import
+  - id: financial-state
+    provider: financial-os
+    purpose: Financial balance and runway data for logbook
+    access: symlink
+# AD-062 cross-system relationships (grounded in services_consumed)
+# AD-062 cross-system relationships (grounded in services_consumed)
+# Grounded in services_consumed: compass grounding import (state snapshots),
+# financial-os financial-state (ledger symlink).
+relationships:
+  depends_on:
+    - compass
+    - financial-os
+
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "PO-AD-", frontmatter_required: [Status, Date, Deciders, Description], required: false }
+      regressions/: { suffix: .md, prefix: "PO-RG-", frontmatter_required: [Severity, Date, Description], required: false }
+  bin/:
+    allow_any: True
+    required: false
+  scripts/:
+    suffix: .sh
+    required: false
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+  data/:
+    allow_any: True
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+  templates/:
+    suffix: .md
+    required: false
+  sub-systems/:
+    pattern: "*/AGENTS.md"
+    required: true
+
+  archive/:
+    allow_any: true
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"

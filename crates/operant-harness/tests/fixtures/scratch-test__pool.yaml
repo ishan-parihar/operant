@@ -1,0 +1,52 @@
+pool:
+  name: scratch-test
+  type: system
+  tier: foundational
+  category: infrastructure
+  ad_scope: SCT-AD-001
+  parent: null
+
+services_offered:
+  # - id: {service-id}
+  #   entry_point: "CLI: ..."
+  #   accepts: [...]
+  #   returns: [...]
+
+services_consumed:
+  # - id: {service-id}
+  #   provider: {provider-pool}
+  #   purpose: "..."
+  #   access: cli|symlink
+
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "SCT-AD-", frontmatter_required: [Status, Date, Deciders, Description], required: false }
+      regressions/: { suffix: .md, prefix: "SCT-RG-", frontmatter_required: [Severity, Date, Description], required: false }
+  scripts/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  bin/:
+    allow_any: true
+    required: false
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "Native genome organs (AD-060 P6) — foundations keep their own sub-systems complete (_pool.yaml + AGENTS.md) so graduates navigate them as sub-sub-systems through pooled symlinks"
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"

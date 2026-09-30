@@ -1,0 +1,94 @@
+pool:
+  name: task-grid
+  tier: swarm
+  category: task-execution
+  type: system
+  ad_scope: AXE-AD-001
+  parent: null
+  role: swarm
+  domain: task-execution
+services_offered:
+- id: axe-feedback
+  sub_system: (root)
+  entry_point: 'Python: scripts/axe_feedback.py'
+  accepts:
+  - component
+  - summary
+  - title
+  - body
+  - board
+services_consumed:
+- id: infra-utilities
+  provider: platform-infra
+  purpose: AXE tick script needs infra utilities
+  access: import
+relationships:
+  depends_on:
+  - platform-infra
+  loops:
+  - platform-infra
+directories:
+  tests/:
+    allow_any: true
+    required: false
+  mcp/:
+    allow_any: true
+    required: false
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: AXE-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: AXE-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+  scripts/:
+    suffix:
+    - .py
+    - .sh
+    required: false
+    shebang: true
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+    purposes:
+      - audits
+      - designs
+      - standards
+      - templates
+      - research
+  archive/:
+    allow_any: true
+    required: false
+  sub-systems/:
+    pattern: '*/AGENTS.md'
+    required: false
+  cron-jobs/:
+    suffix: .md
+required_files:
+- AGENTS.md
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'AXE agent command center: notice board, registry, kanban tasks, delegation
+    chains, tick loop'
+  class: staffed

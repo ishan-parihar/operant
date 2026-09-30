@@ -1,0 +1,61 @@
+# _pool.yaml — Pool structure declaration (validatable by system-integrity, AD-023, RG-027)
+
+pool:
+  name: financial-os
+  tier: foundational
+  category: financial-intelligence
+  type: system
+  ad_scope: FM-AD-001
+  parent: null
+
+services_offered:
+  - id: financial-state
+    sub_system: ledger
+    entry_point: "Python: scripts/fin_store.py"
+    accepts: []
+    returns: [balance, runway, monthly_burn]
+
+
+services_consumed:
+  - id: forecasting
+    provider: compass
+    purpose: Strategic forecasting for financial projections
+    access: import
+# AD-062 cross-system relationships (grounded in services_consumed)
+# AD-062 cross-system relationships (grounded in services_consumed)
+# Grounded in services_consumed: compass forecasting import.
+relationships:
+  depends_on:
+    - compass
+
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "FM-AD-", frontmatter_required: [Status, Date, Deciders, Description], required: false }
+      regressions/: { suffix: .md, prefix: "FM-RG-", frontmatter_required: [Severity, Date, Description], required: false }
+  bin/:
+    allow_any: true
+    required: false
+  scripts/:
+    suffix: [.py, .sh]
+    required: false
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  sub-systems/:
+    pattern: "*/AGENTS.md"
+    required: true
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"

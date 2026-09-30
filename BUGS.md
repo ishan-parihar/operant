@@ -2837,7 +2837,7 @@ and is not a bug.
 
 ## R41 (2026-09-30) — Organism OS audit (see docs/ORGANISM-OS-UPGRADE-OUTLINE.md)
 
-### R41-1 — `operant architecture pool-import` cannot parse any real organism pool (OPEN, High)
+### R41-1 — `operant architecture pool-import` cannot parse any real organism pool (FIXED iter-514, was High)
 `crates/operant-harness/src/pool.rs:32-136` compiles a `PoolManifest` that
 `docs/harness-kernel.md:99` describes as "a hermes `_pool.yaml`". The real
 organism schema is `_org.yaml`, and the two are incompatible in three
@@ -2855,17 +2855,28 @@ independent, each-fatal ways:
    `query.`/`fetch.`/`get.`/… prefixes, so even a fixed parser would reject
    every real service.
 
-**Proof (this session).** The shipped struct was replicated verbatim into a
-standalone crate and fed six real organism manifests. All six fail identically:
+**Proof (iter-514, corrected).** The original entry here claimed "6/6 real
+manifests fail at parse". That was wrong on the count and the failure stage, and
+understated the blast radius. Re-measured by replicating the shipped struct
+**and** the shipped `compile()` verbatim against **all 32** real `_pool.yaml`
+files under `~/.hermes/organism/**`:
 
 ```
-foundations/identity-core   PARSE ERROR -> services_offered[0]: missing field `name`
-foundations/flight-ledger   PARSE ERROR -> services_offered[0]: missing field `name`
-foundations/research-vault  PARSE ERROR -> services_offered[0]: missing field `name`
-swarm/task-grid             PARSE ERROR -> services_offered[0]: missing field `name`
-swarm/workforce-ops         PARSE ERROR -> services_offered[0]: missing field `name`
-ventures/saas-studio        PARSE ERROR -> services_offered[0]: missing field `name`
+compile OK      : 0
+parse fail      : 5    services_offered/consumed[N]: missing field `name`
+empty-name fail : 27   parses, then compile() rejects on empty `name`
+TOTAL UNUSABLE  : 32 / 32
 ```
+
+Two corrections: (a) the manifest is `_pool.yaml`, not `_org.yaml` — both exist
+per pool, and `_pool.yaml` is the richer dialect (adds `genome`, `interface`,
+`sla`, `target_pool`, `sub_systems`); (b) only 5 fail at parse. The other 27
+parse *successfully* because `#[serde(default)] name` swallows the missing
+top-level key and they die later in `compile()`. So the real root cause is
+narrower and worse-reading than "wrong schema": **`#[serde(default)]` converts
+a hard parse failure into a deferred, mislabelled compile error** across 84%
+of real pools. `docs/harness-kernel.md:99` also documents a path that does not
+exist (`~/.hermes/systems/<pool>/_pool.yaml`).
 
 **Root cause.** The acceptance was tested against a hand-written fixture that
 matches the wrong schema — `pool.rs:153-170` is a `relationship-intel`
@@ -2882,11 +2893,27 @@ config, so it asserts a property it never verified. And `entry_point` /
 `accepts` / `returns` are dropped, discarding the three fields that make a
 service contract executable (AD-070: "Entry points are executable verbatim").
 
-**Fix plan.** `docs/ORGANISM-OS-UPGRADE-OUTLINE.md` §3.3 and Wave 0: real
-`OrgManifest` schema, read-only as an `access`-mode property rather than a verb
-prefix, carry the contract fields, model pooling as symlinks, and replace the
-synthetic fixture with the **actual bytes** of the six real pools checked into
-`crates/operant-harness/tests/fixtures/`.
+**RESOLUTION (iter-514).** Fixed. `pool.rs` now models both dialects —
+`OrgManifest` (canonical) and the legacy `PoolManifest` — behind an explicit
+`ManifestDialect` boundary, with `pool.name` resolution, `access`-mode-derived
+read-only carrying a `read_only_reason` provenance instead of a hardcoded
+`true`, contract fields preserved, and `route`/`list` discovery over a declared
+root. 22 real manifests are checked into
+`crates/operant-harness/tests/fixtures/` (all verified byte-identical to their
+sources by sha256), and `tests/pool_real_manifests.rs` (30 tests) refuses to
+pass if any stops parsing.
+
+Independent verification: the fixed `load_and_compile` was run against all 32
+real `_pool.yaml` files → **32/32 compile, 0 failures** (was 0/32). Suite is
+99 tests, 0 failures. Both new gates are **mutation-proven red**: neutralizing
+the unclassified-access check fails
+`pool::tests::unclassified_access_is_rejected_without_approval` (40 pass / 1
+fail), and forcing `require_fresh_registry` to always pass fails
+`stale_registry_is_rejected` (29 pass / 1 fail). `cargo clippy
+--workspace --all-targets` gate: 0 new warnings.
+
+Residual, non-blocking: the new public types are reachable as
+`operant_harness::pool::*` but are not re-exported at the crate root.
 
 ### R41-2 — No first-class org substrate in operant (OPEN, planning)
 Greps for `notice_board` / `employee_id` / `worklog` / `ArchitecturalDecision`

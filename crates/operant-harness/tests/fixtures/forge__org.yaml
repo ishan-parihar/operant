@@ -1,0 +1,66 @@
+pool:
+  name: forge
+  type: sub-system
+  parent: strategy-incubator
+  category: strategy
+  role: sub-system
+  domain: strategy
+  _legacy_tier: null
+  _legacy_type: sub-system
+  _legacy_category: strategy
+  genome_layer: strategy
+directories:
+  core/:
+    suffix: ['.py']
+    required: false
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: CP-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: CP-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        required: false
+  scripts/:
+    suffix:
+    - .py
+    - .sh
+    shebang: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+  references/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: .py
+    required: false
+  mcp/:
+    allow_any: true
+    required: false
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+required_files:
+- AGENTS.md
+services_consumed:
+- trajectory
+- notion
+forbidden:
+- __pycache__/
+- '*.pyc'

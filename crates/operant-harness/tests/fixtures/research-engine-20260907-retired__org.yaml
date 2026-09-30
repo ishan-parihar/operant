@@ -1,0 +1,121 @@
+pool:
+  name: research-engine
+  tier: foundational
+  category: research-intelligence
+  type: system
+  ad_scope: RE-AD-001
+  parent: null
+  role: foundational
+  domain: research-intelligence
+  _legacy_tier: foundational
+  _legacy_type: system
+  _legacy_category: research-intelligence
+services_offered:
+- id: research-intel
+  entry_point: 'CLI: research intel update|report|add'
+  accepts:
+  - action
+  - repo
+  - reason
+  returns:
+  - tracker_state
+  - report
+- id: research-news
+  entry_point: 'CLI: research news'
+  accepts:
+  - reason
+  returns:
+  - edge_discovery
+  - kb_items
+- id: research-kb
+  entry_point: 'CLI: research kb'
+  accepts:
+  - reason
+  returns:
+  - kb_entry
+  - coverage
+- id: research-report
+  entry_point: 'CLI: research report'
+  accepts: []
+  returns:
+  - sub_system_status
+  - kb_counts
+services_consumed:
+- id: infra-utilities
+  provider: hermes-agent-infra
+  purpose: Script utilities for research workflows
+  access: import
+- id: logbook
+  provider: logbook
+  purpose: "Physiological symptom feedstock for personal-medical-research (RE-AD-001,\
+    \ LB-RG-003) \u2014 reads data/logbook.db read-only"
+  access: file
+relationships:
+  depends_on:
+  - hermes-agent-infra
+  - logbook
+directories:
+  Emergence/:
+    allow_any: true
+    required: false
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: RE-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: RE-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+  references/:
+    suffix: .md
+    required: false
+    purposes:
+      - audits
+      - designs
+      - standards
+      - templates
+      - research
+      - rd-ontology
+    sub_dirs:
+      rd-ontology/:
+        allow_any: true
+        required: false
+  scripts/:
+    suffix: .py
+    shebang: true
+    required: false
+  bin/:
+    allow_any: true
+    required: false
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+  sub-systems/:
+    pattern: '*/AGENTS.md'
+    required: false
+  archive/:
+    allow_any: true
+required_files:
+- AGENTS.md
+allowed_root_files:
+- _tree.yaml
+- emerge.py
+- domain_manager.py
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Research-intelligence foundation: market/platform KBs pooled by graduates'
+  class: staffed

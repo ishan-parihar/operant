@@ -1,0 +1,112 @@
+pool:
+  name: identity-core
+  type: system
+  tier: foundational
+  category: identity
+  ad_scope: ID-AD-001
+  parent: null
+  role: foundational
+  domain: identity
+  _legacy_tier: foundational
+  _legacy_type: system
+  _legacy_category: identity
+services_offered:
+- id: identity
+  entry_point: "CLI: identity (bin/identity) \u2014 get/dialectic/history; set/propose/validate\
+    \ for writes (ID-AD-003)"
+  accepts:
+  - section
+  returns:
+  - identity_doc
+- id: values
+  entry_point: 'CLI: identity values'
+  accepts: []
+  returns:
+  - values_md
+- id: professional-identity
+  entry_point: sub-systems/professional/data/candidate-profile.yaml + resumes/ (ID-AD-004
+    D2); consumer symlink ~/.hermes/data/candidate-profile.yaml; writes via identity
+    CLI contracts
+  accepts:
+  - read
+  returns:
+  - candidate_profile
+  - resume_corpus
+- id: platform-identity
+  entry_point: sub-systems/platforms/data/{freelance,contra}-profile.yaml, usp-negotiation-profile.md,
+    form-response-policy.yaml (ID-AD-004 D2); consumer symlink ~/.hermes/data/freelance-profile.yaml
+  accepts:
+  - read
+  returns:
+  - platform_profile
+services_consumed:
+- id: logbook
+  provider: flight-ledger
+  purpose: Subjective channel intake for self-diagnostics + healing outcome writeback
+    (ID-AD-002)
+  access: cli
+directories:
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: ID-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: ID-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+  scripts/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: ['.py', '.sh']
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+    description: "Per-pool cron job definitions (AD-026) \u2014 declared so pooled\
+      \ consumers can route to them"
+  lib/:
+    suffix: .py
+    required: false
+    description: Shared library modules (AD-059 engine split pattern)
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+    description: "Canonical pool skills (AD-028) \u2014 symlinked from the global\
+      \ skills tree"
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "Native genome organs (AD-060 P6) \u2014 foundations keep their own\
+      \ sub-systems complete (_pool.yaml + AGENTS.md) at EVERY depth so graduates\
+      \ navigate them as sub-sub-systems through pooled symlinks (AD-061)"
+required_files:
+- AGENTS.md
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Identitarian foundation: canonical identity, values, historical record,
+    professional/platform identity'
+  class: staffed

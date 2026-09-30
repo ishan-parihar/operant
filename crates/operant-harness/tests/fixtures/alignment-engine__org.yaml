@@ -1,0 +1,52 @@
+pool:
+  name: alignment-engine
+  type: sub-system
+  parent: campaigns
+  category: alignment
+  ad_scope: CAM-AD-002
+  layer: align
+  description: Strategic alignment integration, compass bridge updates, research protocol
+    redirection
+  status: active
+  role: sub-system
+  domain: content-campaigns
+  _legacy_tier: null
+  _legacy_type: sub-system
+  _legacy_category: alignment
+  genome_layer: alignment
+services_offered:
+- strategy_bridge_sync
+- research_protocol_directives
+- compass_alignment_feed
+services_consumed:
+- feedback_engine: campaigns/feedback-engine
+- research_protocols: campaigns/research-protocols
+- compass_alignment: compass/alignment
+- compass_grounding: compass/grounding
+interfaces:
+- input: strategy_delta.yaml (from feedback-engine)
+- input: compass_strategy.yaml (from compass/alignment)
+- output: research_protocol_directive.yaml (consumed by research-protocols)
+- output: alignment_feed.json (consumed by compass/alignment)
+relationships:
+  depends_on:
+  - campaigns/feedback-engine
+  - campaigns/research-protocols
+  - compass/alignment
+  - compass/grounding
+directories:
+  core/:
+    suffix: .py
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  data/:
+    allow_any: true
+    required: false
+required_files:
+- AGENTS.md
+rules:
+- L4 Align layer of campaigns: closes the feedback loop via compass alignment
+- Writes to parent campaigns/data/ (alignment_feed.json, research_protocol_directive.yaml)
+- Consumes feedback-engine deltas + compass alignment; never creates content directly

@@ -1,0 +1,114 @@
+pool:
+  name: presentation-engine
+  role: foundational
+  domain: presentation
+  ad_prefix: PR-AD
+  ad_scope: presentation
+  description: >
+    Foundational system that owns the rendering, validation, and lifecycle
+    of presentation artifacts. Currently powered by archify (HTML diagrams);
+    architecture is multimodal — slots left for: slide decks (slideforge),
+    PDF renderers, Loom video scripts, Notion push, Obsidian embed.
+    Triggered by `arch graph --render --engine <name>` or by any pool
+    that wants to publish a structured visual artifact.
+
+# Structure declaration (RG-027 / AD-061 routing contract)
+directories:
+  bin/:
+    suffix: [".py", ".mjs", ".js", ".sh"]
+    required: false
+  core/:
+    allow_any: true
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "PR-AD-", frontmatter_required: [Status, Date, Deciders], required: false }
+      regressions/: { suffix: .md, prefix: "PR-RG-", frontmatter_required: [Severity, Date], required: false }
+  data/:
+    allow_any: true
+    required: false
+  sub-systems/:
+    allow_any: true
+    required: false
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"
+
+# Pool genome (4 layers, AD-074 + CP-AD-017)
+genome:
+  produce:    # the renderer
+    archify: "archify bin (archify.mjs) — node-edge HTML diagrams"
+  operate:    # the orchestration CLI
+    pe: "~/bin/pe — render, validate, deliver, list, doctor"
+  observe:    # artifact registry
+    artifacts_db: "<presentation-engine-pool>/data/artifacts.db"
+    render_log: "~/.hermes/logs/presentation-engine/render.log"
+  align:      # cross-pool contract
+    consumes: ["arch CLI", "archify", "relations.yaml", "architecture-registry.yaml"]
+    produces: ["HTML diagrams", "slide decks (future)", "Loom scripts (future)"]
+
+# Services offered to other pools
+services_offered:
+  - id: pe-render
+    description: Render a presentation artifact from a typed spec (archify JSON, slideforge, etc.)
+    interface: "pe render <type> <spec.json> <output.html> --engine <name> --quality showcase"
+    sla: "< 5s for typical org-architecture diagram; < 30s for full showcase render"
+  - id: pe-validate
+    description: Pre-delivery validation (9 artifact checks, drift, overflow)
+    interface: "pe validate <type> <spec.json> --quality showcase"
+    sla: "< 2s"
+  - id: pe-list
+    description: List all artifacts rendered by this engine
+    interface: "pe list [--pool <name>] [--since <date>] [--type <diagram_type>]"
+    sla: "< 1s"
+  - id: pe-doctor
+    description: Run renderer health checks (node available, archify on PATH, schema files present)
+    interface: "pe doctor"
+    sla: "< 3s"
+
+# Services consumed from other pools
+services_consumed:
+  - id: arch-registry
+    provider: architecture
+    purpose: registry of every pool + role + graduation stage (the input to org-graph renders)
+  - id: arch-relations
+    provider: architecture
+    purpose: relations.yaml — the edge graph
+  - id: arch-cron-signal
+    provider: architecture
+    purpose: jobs.json upstream_signal + downstream_signal (input to lean view)
+  - id: archify-cli
+    provider: hermes-agent-infra
+    purpose: the archify.mjs binary (the actual SVG renderer)
+  - id: archify-skill
+    provider: hermes-agent-infra
+    purpose: the schema files + example files (the contract for what can be rendered)
+  - id: forge
+    provider: compass
+    purpose: alignment — every presentation aligns with the 7-path strategy
+
+# Pooled sub-systems (AD-060) — this pool extends the archify skill as a sub-system
+pooled_sub_systems:
+  - name: archify
+    target_pool: hermes-agent-infra
+    sub_system: archify
+    note: symlink to ~/.agents/skills/archify (or ~/.hermes/skills/archify) — the rendering engine
+
+# AD-060 sub-systems directory
+sub_systems:
+  - name: archify
+    kind: pooled
+    target: ~/.hermes/skills/archify
+    role: renderer
+    version: 2.17

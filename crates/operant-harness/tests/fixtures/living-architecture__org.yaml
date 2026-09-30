@@ -1,0 +1,49 @@
+pool:
+  name: living-architecture
+  type: sub-system
+  parent: architecture
+  category: publishing
+  role: sub-system
+  domain: publishing
+  genome_layer: ALIGN
+directories:
+  core/:
+    suffix: .py
+    required: false
+  bin/:
+    suffix: [.py, .sh]
+    shebang: true
+    required: false
+    description: "Canonical living-arch CLI entrypoint (AD-074)"
+  kb/:
+    pattern: "*.md"
+    required: false
+    description: "Generated meta-systemic knowledge base chapters and index"
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+    description: "Canonical living-architecture skill surface"
+  data/:
+    allow_any: true
+    required: false
+
+services_offered:
+- id: living-arch-cli
+  entry_point: 'CLI: living-arch'
+  accepts:
+  - compile
+  - status
+  - deck
+  - views
+  returns: compiled architecture snapshot, executive presentation deck, pooled CLI documentation, and operational views
+  outputs:
+  - data/cli/
+  - data/compiled/cli-surface.json
+  - data/views/cli-operational-surface.md
+  - data/views/living-architecture.md
+  - data/views/executive-presentation-deck.md
+  - kb/
+
+required_files:
+  - AGENTS.md
+  - smoke.yaml

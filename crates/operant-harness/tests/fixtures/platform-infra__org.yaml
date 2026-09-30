@@ -1,0 +1,132 @@
+pool:
+  name: platform-infra
+  tier: foundational
+  category: infrastructure
+  type: system
+  ad_scope: HI-AD-038
+  parent: null
+  role: foundational
+  domain: infrastructure
+  _legacy_tier: foundational
+  _legacy_type: system
+  _legacy_category: infrastructure
+sub_systems:
+- browser-infrastructure
+- communication
+- content-publishing
+- cron-management
+- hermes-platform
+- mcp-integration
+- vps-operations
+services_offered:
+- id: infra-utilities
+  sub_system: (root)
+  entry_point: sys.path.insert(0, ~/.hermes/organism/foundations/platform-infra/scripts)
+  accepts:
+  - function call
+  returns:
+  - return value
+- id: cloudflare-tunnel
+  sub_system: vps-operations
+  entry_point: 'Host binary /usr/local/bin/cloudflared; skill: cloudflare-tunnel'
+  accepts:
+  - tunnel_config
+  - dns_record
+  - auth_token
+  returns:
+  - tunnel_status
+  - dns_status
+  - public_url
+- id: notion
+  sub_system: (root)
+  entry_point: 'CLI: ntn + NOTION_API_TOKEN env'
+  purpose: Legacy Notion API surface (deprecated as canonical data source per HI-RG-026;
+    offered for logbook sync bridge only)
+  accepts:
+  - query
+  - page_op
+  returns:
+  - page_json
+services_consumed:
+- id: axe-feedback
+  provider: task-grid
+  purpose: Cron-management injects axe-awareness blocks into cron jobs (HI-AD-040);
+    axe_feedback.py feeds execution errors back into the AXE loop (AD-048)
+  access: import
+relationships:
+  depends_on:
+  - task-grid
+  loops:
+  - task-grid
+directories:
+  bin/:
+    suffix: [".py", ".sh"]
+    required: false
+  core/:
+    suffix: .py
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: HI-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: HI-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+      tls/:
+        allow_any: true
+        required: false
+  data/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+    purposes:
+      - audits
+      - designs
+      - standards
+      - templates
+      - research
+  scripts/:
+    suffix:
+    - .py
+    - .sh
+    shebang: true
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  audit/:
+    allow_any: true
+  mcp/:
+    allow_any: true
+  sub-systems/:
+    allow_any: true
+required_files:
+- AGENTS.md
+allowed_root_files:
+- MANIFEST.md
+- cli-version-registry.yaml
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Hermes Agent infrastructure: VPS health, CLIs, browser stack, gateway,
+    platform ops'
+  class: staffed

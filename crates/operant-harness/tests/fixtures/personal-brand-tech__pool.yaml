@@ -1,0 +1,105 @@
+# _pool.yaml — Pool structure declaration (validatable by system-integrity, AD-023, RG-027)
+
+pool:
+  name: personal-brand-tech
+  type: system
+  ad_scope: AD-055
+  parent: null
+
+compass_graduate:
+  status: false
+  path_ref: path-004
+  graduation_date: null
+  graduation_stage: 1
+  strategy_refs: [strategy-20260809-009]
+  shared_services: [forge, grounding, alignment, insights, strategy-read, identity, campaigns]
+
+services_offered:
+  - id: content-surface
+    entry_point: "CLI: pbt content"
+    accepts: [surface, content_slug, action]
+    returns: [content_state, distribution_queue, engagement_data]
+    note: "Tech-persona distribution surface — the shared social media platform (LinkedIn/X/blog) that job-engine, freelance-engine, and saas-engine consume for content distribution"
+
+services_consumed:
+  - id: identity
+    provider: personal-os
+    purpose: "Ishan's identity and candidate profile for content authorship"
+    access: symlink
+  - id: campaigns
+    provider: campaigns
+    purpose: "Audience segments and outreach campaigns tagged pb-tech-*"
+    access: cli
+  - id: research-engine
+    provider: research-engine
+    purpose: "Research-KB seeds (platform-intel papers, holonic-news) for content-pillar essay briefs — no thin-air content"
+    access: cli
+  - id: forge
+    provider: compass
+    purpose: "Task engine for strategy-009 milestones and content production tasks"
+    access: symlink
+  - id: strategy-read
+    provider: compass
+    purpose: "Read strategy-009 artifact and path-004 milestones"
+    access: symlink
+
+directories:
+  core/:
+    allow_any: true
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: "PBT-AD-"
+        frontmatter_required: [Status, Date, Deciders, Description]
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: "PBT-RG-"
+        frontmatter_required: [Severity, Date, Description]
+        required: false
+  bin/:
+    allow_any: true
+    required: false
+  scripts/:
+    suffix: ['.py', '.sh']
+    shebang: true
+    required: false
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+  data/:
+    allow_any: true
+    required: false
+    sub_dirs:
+      compass-services/:
+        allow_any: true
+        required: false
+        description: "Symlinks to compass shared sub-systems (CP-AD-010)"
+  kb/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  templates/:
+    allow_any: true
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+  tests/:
+    suffix: .py
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  sub-systems/:
+    pattern: "*/AGENTS.md"
+    required: false
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"

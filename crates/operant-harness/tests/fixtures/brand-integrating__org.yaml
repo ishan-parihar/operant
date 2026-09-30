@@ -1,0 +1,177 @@
+pool:
+  name: brand-integrating
+  type: system
+  tier: compass-graduate
+  category: identity
+  ad_scope: PBI-AD-001
+  prefix: PBI
+  parent: null
+  role: venture
+  domain: identity
+  _legacy_tier: compass-graduate
+  _legacy_type: system
+  _legacy_category: identity
+  graduation:
+    path_ref: path-004
+    stage: sprouted
+    graduated_on: '2026-09-04'
+    genome_template_passed:
+      G1: true
+      G2: true
+      G3: true
+      G4: true
+      G5: true
+      G6: true
+      G7: true
+      G8: true
+      G9: true
+    parent_compass: compass
+    self_reports_via: data/compass-alignment.json
+    pooled_foundations:
+    - site-factory
+    - strategy
+    - relationship-crm
+    - content-campaigns
+    status: true
+    graduation_date: '2026-08-18'
+    graduation_stage: 2
+    strategy_refs:
+    - strategy-20260809-011
+    shared_services:
+    - strategy
+    - alignment
+    - insights
+    - campaigns
+    - webdev
+    - relationship-intel
+    - identity
+surface_registry:
+- id: ishan-parihar
+  owner: personal-brand-integrating
+  gate:
+    blocked: true
+    gate_ad: PBI-AD-001
+    reason: Blocked until Phase 0 complete (first essays + community setup)
+    check: personal-brand-integrating Phase 0 complete
+services_offered:
+- id: content-surface
+  entry_point: Campaigns + content pipeline (pooled)
+  accepts:
+  - surface
+  - piece_type
+  returns:
+  - published_piece
+  - engagement
+- id: community
+  entry_point: 'CLI: community_ops <session_id> <action> (scripts/community_ops.py)'
+  accepts:
+  - session_id
+  - action
+  returns:
+  - session_state
+  - attendance
+- id: product-ops
+  entry_point: 'CLI: product_ops <product_id> <action> (scripts/product_ops.py)'
+  accepts:
+  - product_id
+  - action
+  returns:
+  - product_state
+  - revenue
+services_consumed:
+- id: identity
+  provider: identity-core
+  purpose: "Brand identity \u2014 Ishan Parihar, systemic polymathic integrator (heals\
+    \ broken, grounds uprooted)"
+  access: symlink
+- id: forge
+  provider: strategy-incubator
+  purpose: Task engine for content + community milestones
+  access: symlink
+- id: strategy-read
+  provider: strategy-incubator
+  purpose: Strategy-011 governance + sequencing checks
+  access: symlink
+pooled_sub_systems:
+- content-campaigns
+- site-factory
+- relationship-crm
+- strategy
+relationships:
+  depends_on:
+  - identity-core
+  - content-campaigns
+  - site-factory
+  - relationship-crm
+  - strategy-incubator
+  - brand-polarizing
+directories:
+  core/:
+    suffix: ['.md', '.yaml']
+    sub_dirs:
+      decisions/:
+        suffix: .md
+        prefix: PBI-AD-
+        frontmatter_required:
+        - Status
+        - Date
+        - Deciders
+        - Description
+        required: false
+      regressions/:
+        suffix: .md
+        prefix: PBI-RG-
+        frontmatter_required:
+        - Severity
+        - Date
+        - Description
+        required: false
+      strategies/:
+        suffix: .md
+        required: false
+  scripts/:
+    allow_any: true
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  archive/:
+    allow_any: true
+    required: false
+  data/:
+    allow_any: true
+    required: false
+  bin/:
+    suffix: ['.py', '.sh']
+    required: false
+    required: false
+  cron-jobs/:
+    suffix: .md
+    required: false
+    description: "Per-pool cron job definitions (AD-026) \u2014 declared so pooled\
+      \ consumers can route to them"
+  lib/:
+    suffix: .py
+    required: false
+    description: Shared library modules (AD-059 engine split pattern)
+  skills/:
+    pattern: '*/SKILL.md'
+    required: false
+    description: "Canonical pool skills (AD-028) \u2014 symlinked from the global\
+      \ skills tree"
+  sub-systems/:
+    allow_any: true
+    required: false
+    description: "Native genome organs (AD-060 P6) \u2014 foundations keep their own\
+      \ sub-systems complete (_pool.yaml + AGENTS.md) at EVERY depth so graduates\
+      \ navigate them as sub-sub-systems through pooled symlinks (AD-061)"
+required_files:
+- AGENTS.md
+- STATUS.md
+forbidden:
+- __pycache__/
+- '*.pyc'
+department:
+  charter: 'Integrating personal brand surface (ishan-parihar): self-help educational
+    content'
+  class: staffed

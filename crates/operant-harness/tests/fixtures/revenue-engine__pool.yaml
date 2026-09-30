@@ -1,0 +1,60 @@
+# _pool.yaml — Pool structure declaration (validatable by pool_lint.py, AD-023)
+
+pool:
+  name: revenue-engine
+  type: system
+  ad_scope: AD-015
+  parent: null
+
+services_consumed:
+  - id: identity
+    provider: personal-os
+    purpose: Candidate profile for job applications
+    access: symlink
+  - id: infra-utilities
+    provider: hermes-agent-infra
+    purpose: Inbox scanner and outreach engine utilities
+    access: import
+
+directories:
+  core/:
+    allow_any: true
+    sub_dirs:
+      decisions/: { suffix: .md, prefix: "RV-AD-", frontmatter_required: [Status, Date, Deciders, Description], required: false }
+      regressions/: { suffix: .md, prefix: "RV-RG-", frontmatter_required: [Severity, Date, Description], required: false }
+  cron-jobs/:
+    suffix: .md
+    required: false
+  data/:
+    allow_any: True
+    required: false
+  kb/:
+    allow_any: True
+    required: false
+  references/:
+    suffix: .md
+    required: false
+  scripts/:
+    suffix: ['.py', '.sh']
+    shebang: True
+    required: false
+  skills/:
+    pattern: "*/SKILL.md"
+    required: false
+  tests/:
+    suffix: .py
+    required: false
+  archive/:
+    allow_any: True
+    required: false
+  sub-systems/:
+    pattern: "*/AGENTS.md"
+    required: false
+
+required_files:
+  - AGENTS.md
+
+forbidden:
+  - __pycache__/
+  - "*.pyc"
+

@@ -203,18 +203,32 @@ organism has the operating discipline. They are complementary, not competing.**
 ### 3.3 The one thing that is worse than absent: `pool.rs`
 
 `crates/operant-harness/src/pool.rs` (222 LOC) compiles a `PoolManifest`
-described in `docs/harness-kernel.md:99` as *"a hermes `_pool.yaml`"*. It does
-not compile a hermes `_org.yaml`. Proven this session by replicating the
-shipped struct verbatim and feeding it six real organism pools:
+described in `docs/harness-kernel.md:99` as *"a hermes `_pool.yaml`"*.
 
-```
-foundations/identity-core  PARSE ERROR -> services_offered[0]: missing field `name`
-foundations/flight-ledger  PARSE ERROR -> services_offered[0]: missing field `name`
-foundations/research-vault PARSE ERROR -> services_offered[0]: missing field `name`
-swarm/task-grid            PARSE ERROR -> services_offered[0]: missing field `name`
-swarm/workforce-ops        PARSE ERROR -> services_offered[0]: missing field `name`
-ventures/saas-studio       PARSE ERROR -> services_offered[0]: missing field `name`
-```
+> **CORRECTION (iter-514).** The original version of this section reported
+> "6/6 real organism pools fail at parse". That was wrong on both the count and
+> the failure stage, and it understated the blast radius. Re-measured
+> 2026-09-30 against **all 32** real `_pool.yaml` files, replicating the shipped
+> struct *and* the shipped `compile()` verbatim:
+>
+> ```
+> compile OK      : 0
+> parse fail      : 5    services_offered/consumed[N]: missing field `name`
+> empty-name fail : 27   parses, then compile() rejects on empty `name`
+> TOTAL UNUSABLE  : 32 / 32
+> ```
+>
+> Two corrections follow. First, the manifest is `_pool.yaml`, not `_org.yaml` —
+> both exist and coexist per pool, and `_pool.yaml` is the richer of the two (it
+> adds `genome`, `interface`, `sla`, `target_pool`, `sub_systems`). Second, the
+> failure is **not** uniform: only 5 fail at parse. The other 27 parse
+> *successfully* because `#[serde(default)] name` swallows the missing top-level
+> key, and then die inside `compile()`. So the true root cause is narrower and
+> worse-reading than "wrong schema": **`#[serde(default)]` converts a hard parse
+> failure into a deferred, mislabelled compile error** across 84% of real pools.
+> `docs/harness-kernel.md:99` also documents the wrong path
+> (`~/.hermes/systems/<pool>/_pool.yaml`); real pools live under
+> `~/.hermes/organism/<stratum>/<pool>/_pool.yaml`.
 
 Three independent schema mismatches, each fatal on its own:
 
