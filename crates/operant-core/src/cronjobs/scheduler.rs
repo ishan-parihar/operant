@@ -10,6 +10,7 @@ use tracing::{debug, error, info, warn};
 use crate::agent::OperantAgent;
 use crate::cronjobs::db::{CronDb, CronJob};
 use crate::error::Error;
+use crate::org::identity_gate::{GateBlock, GateDecision, IdentityGate};
 
 /// Message sent from the cron scheduler to the gateway for delivery.
 pub struct CronDelivery {
@@ -22,6 +23,16 @@ pub struct CronScheduler {
     db: Arc<CronDb>,
     agent: Arc<OperantAgent>,
     delivery_tx: Option<mpsc::UnboundedSender<CronDelivery>>,
+    /// The Wave 1 fail-closed identity gate (packet B).
+    ///
+    /// `None` — the default — is the **org layer off** state: no registry is
+    /// consulted and the tick path is byte-identical to the pre-gate code.
+    /// A gate is only reachable by explicitly calling
+    /// [`CronScheduler::with_org_gate`], so the gate is dark-mergeable
+    /// (`docs/harness-kernel.md:7`): upgrading operant cannot block a job
+    /// until an operator installs the gate. See
+    /// `docs/WAVE1-DECISIONS.md` §3.2.
+    org_gate: Option<Arc<IdentityGate>>,
 }
 
 impl CronScheduler {
@@ -30,11 +41,24 @@ impl CronScheduler {
             db,
             agent,
             delivery_tx: None,
+            org_gate: None,
         }
     }
 
     pub fn with_delivery(mut self, tx: mpsc::UnboundedSender<CronDelivery>) -> Self {
         self.delivery_tx = Some(tx);
+        self
+    }
+
+    /// Install the fail-closed org identity gate (WAVE1-DECISIONS §3.2).
+    ///
+    /// Not called by any default boot path — this is the opt-in that keeps the
+    /// gate dark-mergeable. Once installed, a job whose employee record is
+    /// missing or incomplete is **blocked before dispatch** (never warned
+    /// about), and the block is not retried until the job's next scheduled
+    /// tick.
+    pub fn with_org_gate(mut self, gate: Arc<IdentityGate>) -> Self {
+        self.org_gate = Some(gate);
         self
     }
 
@@ -77,8 +101,75 @@ impl CronScheduler {
         Ok(())
     }
 
+    /// The Wave 1 org-identity gate decision for `job`, as a block reason.
+    ///
+    /// Returns `None` when the job may run — either because the org layer is
+    /// off (the default, dark-mergeable state) or because the job's employee
+    /// record is complete. Returns `Some(GateBlock)` when the job's identity
+    /// is incomplete and must not dispatch.
+    ///
+    /// The expected `employee_id` is derived here via §3.1.1's rule
+    /// (`derive_employee_id`, packet A) so the gate checks the *join*, not
+    /// just the field's presence: a row belonging to a different job is not
+    /// this job's identity and must block.
+    fn org_gate_block(&self, job: &CronJob) -> Option<GateBlock> {
+        let gate = self.org_gate.as_ref()?;
+        let expected_employee_id = crate::org::employee::derive_employee_id(&job.id);
+        match gate.check(&job.id, &expected_employee_id) {
+            GateDecision::Allow { .. } => None,
+            GateDecision::Block(block) => Some(block),
+        }
+    }
+
+    /// Fail-closed side effect for a gate block: log at `error!`, persist the
+    /// block on the job row, and advance `next_run_at` — then return without
+    /// executing.
+    ///
+    /// **Why `mark_job_run` still runs on a block.** §3.2 says a block must not
+    /// be *retried* — the job's next attempt is its next scheduled tick. In
+    /// the live scheduler, skipping `mark_job_run` would leave `next_run_at`
+    /// in the past, so `get_due_jobs` would re-select the same job every 60s
+    /// and the "no retry" rule would turn into a busy-spin that never runs the
+    /// job but hammers the DB forever. Persisting the run with the block
+    /// message both honours the no-retry rule and makes the block *visible*:
+    /// `last_status`/`last_error` carry the actionable message, so the job's
+    /// own `operant cron list` output names the job and the missing fields
+    /// without the operator reading logs.
+    fn record_gate_block(&self, job: &CronJob, block: GateBlock) -> Result<(), Error> {
+        let message = block.message();
+        // error!, not warn! — §3.2 rule 1. A blocked job is a fault, not a
+        // notice, and warn! is what a "not a warning" acceptance means.
+        error!("{message}");
+        // The employee id the gate resolved (or could not), for the log line's
+        // operator context. Kept in the message already; this is the structured
+        // companion.
+        tracing::error!(
+            job_id = %job.id,
+            job_name = %job.name,
+            missing = ?block.missing_fields(),
+            "org identity gate blocked the tick; not dispatching"
+        );
+        self.db.mark_job_run(
+            &job.id,
+            false,
+            Some(message),
+            None,
+            self.compute_next_run(job),
+        )?;
+        Ok(())
+    }
+
     async fn run_job(&self, job: &CronJob) -> Result<(), Error> {
         info!("Executing cron job {}: {}", job.id, job.name);
+
+        // ── Wave 1 fail-closed org identity gate (WAVE1-DECISIONS §3.2) ──
+        // Runs immediately before dispatch, not at schedule time, so the check
+        // sees the job exactly as it is about to run. No-op when the org layer
+        // is off (`org_gate == None`), which keeps the pre-gate path
+        // byte-identical on upgrade.
+        if let Some(block) = self.org_gate_block(job) {
+            return self.record_gate_block(job, block);
+        }
 
         let (success, _output, final_response, error_msg) = if job.no_agent {
             self.run_script_job(job).await

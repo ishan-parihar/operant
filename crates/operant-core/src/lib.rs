@@ -90,6 +90,7 @@ pub mod models_dev;
 pub mod oauth;
 pub mod oauth_refresh;
 pub mod observer;
+pub mod org;
 pub mod parser;
 pub mod persistence_seam;
 pub mod pii;

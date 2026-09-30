@@ -63,12 +63,18 @@ pub enum KanbanSubcommand {
         id: String,
     },
     /// Block a task
+    ///
+    /// **Breaking change (Wave 1, WAVE1-DECISIONS §3.5):** `--reason` used to
+    /// be optional here and defaulted to the literal string
+    /// `"Blocked via CLI"` — a reason-shaped value that carries no causal
+    /// information, which is precisely the AD-032 failure mode the `--reason`
+    /// mandate exists to remove. It is now required, matching `unblock`.
     Block {
         /// Task ID to block
         id: String,
-        /// Reason for blocking
-        #[arg(long)]
-        reason: Option<String>,
+        /// Why this task is being blocked (required; recorded on the task event)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
     },
     /// Add a comment to a task
     Comment {
@@ -255,9 +261,7 @@ pub async fn handle_kanban_command(
             .await
         }
         KanbanSubcommand::Complete { id } => cmd_complete(config, board_slug, &id).await,
-        KanbanSubcommand::Block { id, reason } => {
-            cmd_block(config, board_slug, &id, reason.as_deref()).await
-        }
+        KanbanSubcommand::Block { id, reason } => cmd_block(config, board_slug, &id, &reason).await,
         KanbanSubcommand::Comment { id, message } => {
             cmd_comment(config, board_slug, &id, &message).await
         }
@@ -501,16 +505,17 @@ async fn cmd_complete(config: &AppConfig, board_slug: &str, id: &str) -> Result<
     Ok(())
 }
 
-async fn cmd_block(
-    config: &AppConfig,
-    board_slug: &str,
-    id: &str,
-    reason: Option<&str>,
-) -> Result<()> {
+async fn cmd_block(config: &AppConfig, board_slug: &str, id: &str, reason: &str) -> Result<()> {
+    crate::cmd_org::require_reason("kanban block", reason)?;
     let db = open_db(config, board_slug)?;
-    db.block_task(id, reason.unwrap_or("Blocked via CLI"), None)
+    // `block_task` takes `reason: &str` and writes it into the `blocked`
+    // `task_events` row as `{"reason": ...}` (kanban/db.rs:487-524). Before
+    // WAVE1-DECISIONS §3.5 this call was handed `reason.unwrap_or("Blocked
+    // via CLI")` — a NOT NULL-satisfying string that recorded nothing. The
+    // reason now reaches the event row, which is where §3.5 says it belongs.
+    db.block_task(id, reason, None)
         .context("Failed to block task")?;
-    println!("Task '{}' blocked.", id);
+    println!("Task '{}' blocked: {}", id, reason);
     Ok(())
 }
 
@@ -697,10 +702,11 @@ async fn cmd_assign(config: &AppConfig, board_slug: &str, id: &str, assignee: &s
 }
 
 async fn cmd_unblock(config: &AppConfig, board_slug: &str, id: &str, reason: &str) -> Result<()> {
+    crate::cmd_org::require_reason("kanban unblock", reason)?;
     let db = open_db(config, board_slug)?;
     db.add_comment(id, "cli", &format!("Unblocked: {}", reason))
         .context("Failed to record unblock")?;
-    println!("Task '{}' unblocked.", id);
+    println!("Task '{}' unblocked: {}", id, reason);
     Ok(())
 }
 

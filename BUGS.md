@@ -1887,36 +1887,109 @@ same stale ref, not a reverted file.
   Every push this session was a fast-forward, verified with
   `git merge-base --is-ancestor` before pushing and `git ls-remote` after.
 
-### R40-23 — 12 wiremock tests flake under parallel load; mechanism not pinned (iter-449, measured not fixed)
+### R40-23 — 5 web_search_tool tests flaked under parallel load; cause was a process-global proxy leak, not wiremock (FIXED)
 
-`operant-tools` starts 12 `wiremock` `MockServer::start()` servers across
-`web_fetch.rs`, `web_search_tool.rs` and `jira_tool.rs`, all on OS-assigned
-ephemeral ports. Under `cargo test` parallelism they intermittently fail with
-`Connection refused (os error 111)`, which surfaces as a request that never
-reaches its own mock.
+**Root cause: test-isolation defect. `operant-tools`' `proxy_config` tests mutate a
+process-global and never restore it, and the 5 `web_search_tool` tests are the
+only ones that read it back.**
 
-Measured, not assumed:
+`operant_config::schema` holds the runtime proxy config in a process-wide
+`RwLock<ProxyConfig>`. `ProxyConfigTool::handle_set` calls
+`set_runtime_proxy_config(..)` after saving, and the test
+`proxy_config::tests::set_null_proxy_url_clears_existing_value` drives exactly
+that with `"http_proxy": "http://127.0.0.1:7890"`. It left the global at
+`{enabled: true, http_proxy: Some("http://127.0.0.1:7890"), scope: Zeroclaw,
+services: []}` for the remainder of the test binary.
 
-| run mode | runs | result |
+`search_duckduckgo_at` and `search_tavily_at` build their `reqwest` client
+through `apply_runtime_proxy_to_builder`, which reads that global. With a proxy
+set and `no_proxy: []`, a request to a loopback `wiremock` URL is routed to the
+proxy instead. Nothing listens on 7890, so the connect is refused — and reqwest
+reports the refusal against the **original** URL, which is why this looked like a
+port race for so long. The `web_fetch` and `jira_tool` `MockServer` tests build a
+plain `reqwest::Client` with no proxy hook, which is exactly why those 7 never
+flaked and the 5 that go through the helper always did.
+
+The failing set was *always the same 5 tests* (or a prefix subset), never a
+random selection — the tell that this was shared state rather than a race.
+
+**The two candidates from iter-449 are both falsified, by measurement:**
+
+| candidate | verdict | evidence |
 |---|---|---|
-| default (parallel) | 3 | `1161 ok` / `5 failed` / `1 failed` |
-| `--test-threads=1` | 4 | `1161 passed, 0 failed` — every time |
+| bind/rebind TOCTOU on the ephemeral port | **impossible** | `wiremock` 0.6.5 `builder.rs:107` binds `127.0.0.1:0` **once** and `bare_server.rs:55` hands that same `std::net::TcpListener` to `run_server`, which owns the fd for the thread's life. There is no bind→drop→rebind anywhere. |
+| fd exhaustion killing `accept()` | **falsified** | peak open fds sampled over whole runs: **105–127**, against a 524288 soft limit. |
+| runtime starvation of the server | **falsified** | each `BareMockServer` runs on its own `std::thread` with its own current-thread runtime, so it never contends with the test's pool; and starvation would surface as request **timeouts**, not `ECONNREFUSED`. Zero timeouts observed. |
 
-So it is a concurrency defect in those tests, not the environment. Ruled out
-port exhaustion: the ephemeral range is 32768–60999 (~28k) and the suite runs in
-~5s, so 12 servers cannot plausibly collide on volume.
+Direct confirmation: a probe added to the 5 tests recorded port liveness and the
+live proxy state at the instant of failure. The port was **ALIVE** at probe time
+(`Ok("ALIVE")` before *and* after the request) — so the port was never the
+problem — while the global read
+`ProxyConfig { enabled: true, http_proxy: Some("http://127.0.0.1:7890"), .. }`.
+That is the whole mechanism in one measurement. The probe was removed after use.
 
-**Not fixed, and the mechanism is genuinely unidentified.** Two candidates were
-not distinguished: a bind/rebind TOCTOU on the ephemeral port (bind `:0`, read
-the assigned port, close, rebind — a classic wiremock race), or runtime
-starvation where the server task is not being scheduled. Writing a fix for a
-race I cannot reproduce on demand is how a test suite ends up permanently serial
-and slow, which is a worse outcome than a recorded flake. The measurement above
-is the actionable artifact: re-run with `--test-threads=1` to confirm any change
-actually helped, because "it passed once" proves nothing against a 1-in-3 rate.
+**Fix** (`crates/operant-tools/src/proxy_config.rs`, `web_search_tool.rs`): both
+halves are required, and neither alone is sufficient —
+- `RuntimeProxyRestore`, a snapshot-and-restore `Drop` guard, so a mutating test
+  cannot leave the global dirty for tests that run *after* it;
+- a shared `tokio::sync::Mutex` (`proxy_global_test_lock`) taken by the 3
+  `set`-driving `proxy_config` tests **and** the 5 reader tests, so a reader
+  cannot observe a mutation *during* the mutator's window. `tokio` rather than
+  `std::sync::Mutex` because the mutating window spans an `.await`.
 
-Blocks nothing. `ci.yml` runs no test job, and `release.yml` gates on the Build
-workflow, not on tests. Severity is test-hygiene, not correctness.
+| measurement | before | after |
+|---|---|---|
+| parallel `--test-threads=24` | **4 of 7 runs failed** | **0 of 8 runs failed** (8/8 clean) |
+| failures per failing run | 5 | 0 |
+
+Mutation-kill proof (both halves, one build, two orthogonal mutations): removing
+the `Drop` restore and handing each caller a private mutex instead of the shared
+one produced **7 failed / 0 passed** — the 2 new tests plus all 5 victims, which
+assert the guard they hold is the shared lock. An earlier racy version of the
+detector was discarded: focused it fired 0/6 times, because `tokio::spawn` on the
+current-thread `#[tokio::test]` runtime is not scheduled during the test's sleep.
+A test that cannot reliably go red is not evidence, so it was replaced with the
+two deterministic ones.
+
+**Channels side, measured (asked for as "~545 tests"):** the figure is a *static
+source* count and only 310 of the 545 are reachable, which is worth stating
+plainly because the gap is not a flake — it is code that never compiles:
+
+| file | static `#[test]`s | actually run | why |
+|---|---|---|---|
+| telegram | 194 | **194** | needs `--features channel-telegram`; off by default |
+| mattermost | 46 | **46** | default features |
+| transcription | 37 | **37** | default features |
+| wati | 33 | **33** | default features |
+| matrix | 115 | **0** | `channel-matrix = []` is declared inert; the module sits behind the *undeclared* `channels-vendor` cfg, so **no cargo feature can reach it** |
+| lark | 75 | **0** | same undeclared `channels-vendor` cfg |
+| line | 45 | **0** | same undeclared `channels-vendor` cfg |
+| **total** | **545** | **310** | |
+
+Results, both configurations, 5 runs each:
+
+| build | runs | result |
+|---|---|---|
+| default features (1045 registered) | 5 parallel + 5 serial | **0 failures** |
+| `--features channel-telegram` (1241 registered) | 5 parallel + 5 serial | **0 failures** (`1240 passed, 1 ignored`, every time) |
+
+So the channels side is clean — no R40-23-class flake, and no `Connection
+refused` or timeout signature in any of the 20 runs. The 235 `matrix`/`lark`/`line`
+tests are a **coverage** gap, not a flake: they are inert vendor adapters and
+cannot be measured until they are either wired to a declared feature or given real
+SDK dependencies.
+
+**Also found while building the coverage run:** `cargo check --workspace
+--all-features` does **not** compile in this environment, contrary to the
+"validated to compile with 0 errors" claim in AGENTS.md. `pulp 0.22.3` (pulled in
+by `exr` ← `image 0.25.10`) trips a const-eval assertion on rustc 1.98.0:
+`error[E0080]: evaluation panicked: assertion failed: size_of::<T>() ==
+size_of::<U>()` at `pulp-0.22.3/src/lib.rs:3291`. A *targeted*
+`--features channel-telegram` build of the same crate is fine, so it is the
+whole-workspace `--all-features` feature union that trips it.
+
+Severity was test-hygiene throughout and remains so: no product code path is
+involved, and `ci.yml` runs no test job.
 
 ### R40-24 — `$HOME/.operant/` written into the repo root; creator not identified (iter-449, observed)
 
@@ -2915,10 +2988,412 @@ fail), and forcing `require_fresh_registry` to always pass fails
 Residual, non-blocking: the new public types are reachable as
 `operant_harness::pool::*` but are not re-exported at the crate root.
 
-### R41-2 — No first-class org substrate in operant (OPEN, planning)
-Greps for `notice_board` / `employee_id` / `worklog` / `ArchitecturalDecision`
-across `crates/**/*.rs` return nothing. Operant has kanban, cron, personality
-and identity, but no employee registry, no inter-agent notice board, no
-append-only worklog, no AD/RG lifecycle, and no runtime fail-closed pre-tick
-gate. The plan is `docs/ORGANISM-OS-UPGRADE-OUTLINE.md` (Waves 1-4). Not a
-defect — a scoped design deliverable, recorded so the gap is tracked.
+### R41-2 — No first-class org substrate in operant (PARTIALLY LANDED iter-517)
+Originally: greps for `notice_board` / `employee_id` / `worklog` /
+`ArchitecturalDecision` across `crates/**/*.rs` returned nothing. Operant had
+kanban, cron, personality and identity, but no employee registry, no
+inter-agent notice board, no append-only worklog, no AD/RG lifecycle, and no
+fail-closed pre-tick gate.
+
+**Wave 1 landed (iter-517).** `crates/operant-core/src/org/` now provides the
+employee registry (`employees` + `employee_cron_jobs`), the notice board
+(typed `agent:`/`dept:`/`team:` recipients, ack, TTL, pinning, batched GC), and
+the worklog (framework-only writes, `improvement_proposal` first-class). All
+four tables live in the **existing** `operant_kanban.db` — no second store. The
+`operant org` CLI group (15 subcommands) requires `--reason` on every mutating
+command, and `kanban block --reason` was converged from optional to required (a
+**breaking CLI change**, deliberately — an empty/omitted reason is the AD-032
+"logged but read by nobody" failure).
+
+**Still open — the identity gate is DARK, not active.** `IdentityGate` is
+consulted at `crates/operant-core/src/cronjobs/scheduler.rs:170`, but
+`with_org_gate` is called **only from tests**. There is no config key and no
+boot path that constructs a gate, so with today's boot code **no job is ever
+blocked**. This is intentional and correct for dark-mergeability (a gate that
+blocked all 102 existing jobs on upgrade would be an outage), but it means the
+fail-closed guarantee is **not yet in force**. Wiring it is the first task of
+Wave 2; do not read Wave 1 as "the gate now protects production".
+
+**Corrected block-candidate count: 4, not 6 (iter-518).** The original "~6 of
+102 rows would block" figure was measured against `CronJob.skills` (plural)
+alone. `CronJob` carries **both** `skill` and `skills` (`db.rs:49-50`); over
+the live 102 jobs, 91 set `skill`, 96 set `skills`, and 89 set both. Reading
+only the plural produced `[]` for perfectly well-specified jobs — two of the
+six candidates (e.g. `210544ad44bd` Web Deploy Health Daily, which carries
+`skill: website-design`) were false positives. `employee_from_cron_job` is now
+plural-first with a **singular fallback**, with the fallback recorded as
+provenance rather than silently merged. The genuine blockers are 4: two
+disabled legacy jobs and two enabled empty-prompt placeholders. A job with
+neither field set still backfills to `[]` and is still reported invalid —
+the fallback uses the job's own declared skill, never an invention.
+
+Remaining Waves 2-4: runtime smoke-gate (`doctor --gate` + entry points
+refusing to spawn on exit 2), maintenance contracts, persona contracts, the
+AD/RG lifecycle with a staleness-checked derived registry, and the
+SELF/PEER/DEPT/ORG self-evolution loops. The collective-intelligence
+architecture (notice feeds, department boards, CEO alignment meetings) is
+specified in `docs/CHRONOGRAPH-DESIGN.md`, which names four concrete
+Wave 1 gaps: **no recipient resolver** (`dept:`/`team:`/`role:` selectors are
+stored but expand to nobody, so such a notice reaches no inbox), **no org
+chart** (`reports_to`/`peers` are absent, so there is no department-head
+authority), **no loop/depth/budget guard** on multi-agent notice
+interaction, and **no first-class feed model** beyond exact selector matching.
+
+## Round 42 (2026-09-30) — TWO gateway stacks, and two misattributions of mine
+
+### R42-1 — the Telegram gateway and the WS/ACP gateway run DIFFERENT agents (the doc never says so)
+
+Verified by type, not by prose:
+
+- `crates/operant-gateway/src/ws.rs:721` calls `agent.turn_streamed(...)`, and
+  `ws.rs:679` imports `operant_runtime::agent::TurnEvent`. The WS and ACP paths
+  run on `operant_runtime::agent::Agent`.
+- `crates/operant-cli/src/gateway_runner.rs:9` imports
+  `operant_core::agent::{AgentEvent, OperantAgent}` and `:349` declares
+  `agent: Arc<OperantAgent>`. The **Telegram** gateway runs on
+  `operant-core`'s `OperantAgent`.
+- `grep -rn "operant_runtime::agent" crates/operant-cli/src/` returns **nothing**.
+
+So R23/R24/R25 are **TRUE** — they were written about the WS/ACP stack and
+verified against `ws.rs`/`acp_server.rs`. They simply do not apply to Telegram.
+Nothing in this file ever distinguished the two.
+
+**Why this entry exists**: the absence of that distinction has now caused a wrong
+diagnosis three separate times. The orchestrator (`operant-channels`, 14,094
+lines, with a working `CancellationToken`-based `/stop`) is dead code — recorded
+at R-something as `run_message_dispatch_loop`/`start_channels` having zero
+callers. The Telegram path is `gateway_runner.rs`. An agent grepping this file
+for "what runs the agent" finds R23's runtime-agent answer and silently applies
+it to a Telegram bug. **When debugging a gateway bug, first establish which of
+the two stacks owns the surface, by the agent type on the struct field.**
+
+### R42-2 — R4-1 is NOT the cause of the 4-minute provider-death stalls (my misattribution)
+
+I attributed ~4-minute silent stalls to R4-1's empty-response ladder. **That was
+mine and it was wrong.** The ladder (R4-1) is real and correctly fixed: the
+`EmptyResponseCounter`/`should_retry` path exists in
+`operant-core/src/agent/turn_rules.rs` and handles free-tier empty responses.
+The stalls came from a different loop — the **mid-stream stream-drop retry
+ladder** in `operant-core/src/agent/run.rs`, which was bounded only by attempt
+count and sat *inside* one outer iteration, so the 20-minute turn ceiling was
+never reached while it spun. Theoretical worst case 4 x 600s ~ 40 minutes, not
+4. It is now bounded by wall clock (45s, derived from the gateway's 60s
+heartbeat) with `Error::StreamDied { cause, attempts, elapsed_secs }`.
+`max_retries` is deliberately untouched, so a fast-flap provider still gets its
+three retries; only the pathological slow one is cut. Incident shape: 4 attempts
+/ 240s -> 1 attempt / 60s.
+
+R4-1's own text is accurate. The false statement was the causal link I drew
+from it during diagnosis.
+
+### R42-3 — R4-1's entry is DUPLICATED verbatim in this file
+
+`### R4-1 — Empty-response retry ladder (FIXED 7960e614)` appears twice, at the
+top of the file, with near-identical bodies (lines ~26-29 and ~40-43), under two
+separate `## Round 4 (2026-08-06)` headings. Not merged here: rewriting a fixed
+entry's history is worse than a duplicate, and this file's convention is to
+append. Recorded so the next reader does not read it as two distinct bugs.
+
+### R42-4 — four session-id namespaces, one of which nothing reads
+
+1. `OperantAgent::session_id` (`operant-core/src/agent/builders.rs`) — the
+   live slot for Telegram; now `Arc<RwLock<Option<String>>>` with
+   `set_session_id`/`session_id`, mirroring `set_model`.
+2. `PersistentSessionStore` via `with_persistent_session` — the only production
+   caller is `operant-gateway/src/ws.rs:373`, i.e. the WS/TUI stack.
+3. `store.get_or_create_session(&source, false)` at
+   `operant-core/src/gateway/mod.rs:383` — return value **discarded** with
+   `let _ =`; the row is created and never read back under its id.
+4. `sess_<uuid>` — a per-turn mint that used to be created fresh on every
+   Telegram turn, orphaning each turn's tool trajectory. Removed; the agent slot
+   now resolves once and stores back.
+
+### R42-5 — `/stop` was structurally incapable of stopping a stream
+
+The reported symptom was "`/stop` did not stop the streaming". Root cause was
+not the command handler, which was a lying stub in a different way (it wrote
+`interrupted=true` session metadata **read by zero call sites** and returned
+"Stopping current agent turn" unconditionally). Root cause: the SSE consume loop
+`while let Some(chunk_result) = stream.next().await` in
+`operant-core/src/agent/stream.rs` had **no interrupt check at all**. The
+`InterruptFlag` was consulted only between tool calls, so no fix to the handler
+could have changed the outcome. Now a per-chunk guard breaks into the existing
+partial-content flush. Regression test
+`crates/operant-core/tests/stream_interrupt.rs` is teeth-proven: it fails with
+the guard removed.
+
+### R42-6 — pre-existing red gates in files byte-identical to HEAD
+
+Not caused by this round; recorded because they mean the test gate has been
+untrustworthy for a while.
+
+- `cargo clippy -p operant-core --all-targets -- -D warnings`: 2 lib findings
+  (`agent/message_safety.rs:546` `duplicate_macro_attributes`,
+  `pool_adapter.rs:94` `clippy::question_mark`) and 2 test findings
+  (`tests/pool_bundle_e2e.rs:14` unused import,
+  `tests/harness_same_name_replace.rs:68` dead field).
+- `crates/operant-cli/tests/autonomous_ticks.rs` **does not compile**: missing
+  `Ordering` import, no `Clone` on two fakes, `Option::is_none_and` unavailable.
+- `crates/operant-channels/src/orchestrator/` (14,094 lines) is dead code with a
+  working `/stop` in it — see R42-1.
+
+### R42-7 — `#[instrument]` recorded the ENTIRE user prompt into gateway.log (FIXED)
+
+Found by the live test, not by any unit test. The suite sends a canary string as
+prompt text and asserts it never appears in the log; it appeared 3 times.
+
+`crates/operant-core/src/agent/run.rs:196` read:
+
+```rust
+#[instrument(skip(self), fields(model = % self.config.model))]
+pub async fn run(&self, user_query: String) -> Result<Message> {
+```
+
+Only `self` is skipped, so `tracing` records **`user_query` as a span field** and
+the default formatter prints the whole prompt under the `Starting agent run`
+span. Every user message the bot has ever handled was in the 46 MB
+`~/.operant/logs/gateway.log`, in plaintext, on the same file that already held
+30 unredacted bot tokens (R42-8). PRE-EXISTING, not introduced by this round —
+the attribute is unchanged at HEAD.
+
+- **Fix**: `skip(self, user_query)`. One word.
+- **Swept for the class**: all 7 `#[instrument]` sites in the workspace were
+  checked. The other 6 were already correct — `client.rs:251` `chat` and
+  `:340` `chat_streaming` skip `messages`, `:286` `embeddings` skips `inputs`,
+  `tools.rs:390`/`:407` skip `tool`, and `tools.rs:593` `execute` skips both
+  `args` and `context`. `run()` was the only instance.
+- **Verified live**: after redeploy, the canary is absent and all 5 live tests
+  pass. The redaction machinery on the error paths was never involved — this
+  path never passed through it.
+- **Detection note**: the canary assertion is the only thing that caught this.
+  Every test in the tree passed while the leak was live, because nothing
+  asserted on log CONTENT.
+
+### R42-8 — two live Telegram bot tokens remain unredacted in gateway.log (OPEN, user declined)
+
+`grep` finds 2 distinct bot tokens across 30 unredacted occurrences in
+`~/.operant/logs/gateway.log` (46 MB). Some lines show `[REDACTED TELEGRAM
+TOKEN]`, so a redaction filter exists and works — it simply does not match the
+token when it appears URL-embedded. `redact_secrets` defaults to `true` in
+config. The user was told and explicitly declined rotation ("do not care about
+the telegram bot tokens"). Recorded here so the state is not lost: **this is
+documented, not remediated.** Rotation is a human step.
+
+### R42-9 — one intermittent lib-test failure, cause unidentified (OPEN — SUPERSEDED by the correction below)
+
+Immediately after the R42-7 edit, `cargo test -p operant-core --lib` reported
+**2015 passed / 1 failed**. The failure never recurred: 6 subsequent full-lib
+runs (4 explicit plus 2 that produced empty failure blocks) were all
+**2016 / 0**. The failing test's NAME was never captured, so no cause is
+assigned and none is guessed. Per the project's standing rule this is recorded
+as observed-once-unresolved rather than filed as a flake. It is NOT the
+duplicate-`#[test]` issue of R42-6, which is fixed and accounted for.
+
+**This entry was wrong on two counts and is retained only as history: the name
+was in fact captured on a later attempt, and the cause was identified. See the
+correction immediately below.**
+
+### R42-9 — CORRECTION (supersedes the note above): the intermittent failure was DIAGNOSED
+
+**The entry above recorded this as "cause unidentified". That was wrong, and the
+error was mine: I had already found the cause and filed the old text anyway.**
+
+The test is `agent::iteration_budget::tests::test_budget_concurrent_consume_refund`
+(`crates/operant-core/src/agent/iteration_budget.rs`). It was not flaky. It
+**asserted on thread scheduling rather than on `IterationBudget`.**
+
+The original shape released all 10 threads from ONE barrier — 5 consumers doing
+15 `consume()` each, 5 refunders doing 10 `refund()` each — then asserted
+`total_consumed > 50`. If the consumers finished their attempts before any
+refunder was scheduled, they consumed exactly the 50 cap, every refund then
+landed at `used == 0` where `refund()` is a documented no-op, and the assert
+failed. That is a legal interleaving, not a defect in the budget.
+
+- **Why it looked random**: it reproduced 2/2 on the first run after a rebuild
+  and 6/6 clean on warm runs of the same binary. A freshly linked binary on a
+  multi-core box gets genuinely parallel scheduling, which is what makes the
+  interleaving random. Warm runs serialise onto fewer cores and hide it.
+- **Fix**: three barriers pinning phase ORDER while leaving all 75 `consume()`
+  and 50 `refund()` calls racing the same `AtomicUsize`. The contention under
+  test is fully preserved; only the schedule assumption is removed. Exact
+  arithmetic: phase 1 = 5x7 = 35 consumes (35 < 50 cap, all succeed); refunds =
+  5x10 = 50 attempted, 35 land and 15 are no-ops at zero; phase 2 = 5x8 = 40
+  consumes (40 < 50 cap, all succeed). `total_consumed == 75`, `used() == 40`,
+  every run.
+- **My first attempt failed 30/30** and I shipped it anyway in a later report.
+  I had reasoned correctly that refunds must COMPLETE before phase 2, then
+  implemented only two barriers, so refunds still raced the 40 phase-2 consumes
+  and knocked 8 of them back out: `used()` was 32, not 40. Caught only because
+  the failure printed the exact value.
+- **Verified**: lib gate 2016/0, 6 warm runs clean, and the assertion is now
+  exact rather than a `>` threshold, so it has teeth a `>` never had.
+
+### R42-10 — Telegram bot tokens leaked via unredacted `reqwest::Error` Display (FIXED, UNDEPLOYED)
+
+`crates/operant-core/src/gateway/telegram.rs` logged two `reqwest::Error`
+values with `{}`. `reqwest::Error`'s `Display` embeds the full request URL, and
+a Telegram URL is `https://api.telegram.org/bot<TOKEN>/getUpdates` — so the
+polling-error site wrote the bot token into `gateway.log` **30 times**.
+
+The irony worth recording: `redaction.rs:206-212` already carries a Telegram
+regex written *specifically* for this URL shape, with a comment explaining that
+a leading `\b` would fail on real Telegram URLs and that a captured
+non-digit predecessor is required instead. The filter was correct the whole
+time; nothing was ever calling it.
+
+- **Fix**: both sites now render
+  `crate::redaction::redact_sensitive_text_if_enabled(&e.to_string())`.
+- **Two sibling sites deliberately NOT changed**, after checking what each
+  error type actually carries: `message_tx.send` yields a tokio `SendError`
+  ("channel closed") and the allowlist-persist path yields a filesystem error.
+  Neither embeds a URL. Changing them would be cargo-culting the pattern.
+- **Status: written and compile-verified, NOT deployed.** See R42-12.
+
+### R42-11 — second content leak, found by reading rather than testing
+
+`gateway/telegram.rs` logged `"... content: {:.50} ..."` — the first 50
+characters of every message the bot SENDS, at INFO, on the live Telegram path.
+Replaced with `content_len`, which keeps the diagnostic value ("was there
+anything to say") without the text.
+
+The live canary test **could not have caught this**: the canary was an inbound
+prompt, and this leak is on the outbound path, which only contained it because
+the bot had echoed it. This was found by reading the file after the redactor
+sweep, not by any test.
+
+### R42-12 — DEPLOYMENT BLOCKED: another writer is mid-flight in `operant-harness`
+
+The redaction and content fixes (R42-10, R42-11) are written, compile-verified
+and gated in `operant-core` (clippy `-D warnings` 0, lib 2016/0), but **not
+deployed**. A separate agent is actively rewriting `operant-harness` — at
+observed peaks `pool.rs` carried **+1,954 lines** versus HEAD and did not
+compile for extended windows (`E0119` conflicting impls, then `E0308`
+mismatched types, then a stray closing delimiter, each observed in a different
+build). `operant-core` depends on `operant-harness`, so no release build of the
+Telegram binary is possible while that is in flight.
+
+Refusing to build and install a binary that embeds another writer's unfinished
+1,900-line rewrite. The running gateway is the build from before R42-10, so
+**the bot-token leak path is still live in the deployed binary** until a build
+is possible. That is a real, currently-open exposure, recorded here rather than
+smoothed over in a report.
+
+### R42-13 — `EmptyExhausted` sentinel removed (dead, and its doc promised a lie)
+
+`turn_rules.rs` carried `EmptyExhausted` + `EmptyResponseCounter::exhausted()`
+with zero production callers. I had recorded this as blocked: "wiring it breaks
+a test pinned in `loop_recovery_paths.rs`". **That was wrong.** The header of
+`tests/loop_recovery_paths.rs` says the opposite — Test 3 pins the shape that
+actually exists, `Ok(<assistant message with empty body>)` reported as
+`reason=TextResponse ... response_len=0`, and explicitly documents the sentinel
+as never having been wired into `run.rs`.
+
+The doc comment on the sentinel promised "the call site can log + return a
+friendly error instead of silently emitting nothing" — and that behaviour
+already exists one layer up: `gateway_runner.rs` substitutes a user-facing
+"provider returned an empty response after retries ... Reply 'continue'"
+message whenever content is empty. The sentinel was a plausible-looking dead
+branch advertising a capability the system had anyway. Deleted, with a
+replacement comment at the site recording why, so it is not re-added.
+
+Note `StreamRetryBudget::exhausted()` is a DIFFERENT method on a different
+type and is untouched.
+
+### R42-14 — Bot-token leak path FIXED and deployed; historical log scrubbed
+
+The 30 unredacted occurrences from R42-10 are closed on two fronts.
+
+**The path.** `crates/operant-core/src/gateway/telegram.rs` logged a
+`reqwest::Error` with `{}` at two sites — `delete_message` and the polling loop.
+`reqwest::Error`'s `Display` embeds the full request URL, and every Telegram URL
+carries the bot token, so each polling error wrote a live credential to disk. The
+redactor was never the problem: `redaction.rs` has carried a Telegram regex
+written specifically for the `/bot<digits>:<token>/` URL shape all along. Nothing
+called it.
+
+Both sites now go through `redacted_error()`, which calls the **unconditional**
+`redact_sensitive_text`, not `redact_sensitive_text_if_enabled`. That toggle is
+`OPERANT_REDACT_SECRETS` and it decides whether secrets are hidden from the
+MODEL; it has no business deciding whether a credential reaches a log file, and
+coupling them would let a model-privacy setting silently switch credential
+logging back on.
+
+The test lives at the **call site**, not in `redaction.rs`, on purpose: a test of
+the redactor cannot catch a deleted call, which is exactly the bug. Teeth proven
+both ways — with `redacted_error` neutered to a pass-through the token test fails
+and prints the token in its assertion; restored, green.
+
+Deployed: 52,724,464 B, pid 1727468. Verified in the INSTALLED binary, not the
+build dir — the raw-URL string occurs 0 times. Live Telegram suite 5/5 on the new
+build, including the prompt canary.
+
+**The at-rest copy.** Rotation needs BotFather and the caller declined it, so the
+30 historical occurrences were scrubbed from `gateway.log` instead: 30 → 0,
+30 `[REDACTED-TOKEN-scrubbed-2026-09-30]` markers written, all 30 polling-error
+lines still identifiable by timestamp and URL shape. The gateway was **stopped**
+for the edit — `sed -i` renames, and a live fd would have kept writing to an
+orphaned inode, silently losing every subsequent log line. Confirmed afterwards
+by 307 new lines landing in the file. `journalctl --user -u operant-gateway`
+held 0 occurrences, so nothing needed rotating there.
+
+This reduces standing exposure; it does **not** undo the leak. Both tokens remain
+compromised and appear in this session's transcript. Rotation is still the only
+remedy for that, and it is the caller's call.
+
+## Round 43 (2026-09-30) — Wave 1 review: three defects the packet tests missed
+
+All three were found reviewing the Wave 1 surface rather than running it. Each
+now has a regression test that is mutation-proven (goes red when the behavior
+is removed).
+
+### R43-1 — `org sync` validated the operator's reason and then threw it away (FIXED iter-518)
+`EmployeeDb::employee_from_cron_job` hardcoded
+`reason: BACKFILL_REASON.to_string()`, so every employee row carried a
+constant. `org sync` required `--reason`, validated it, and echoed it in the
+summary line — the write was audited in the terminal but **not in the
+registry**, which is the only surface an auditor reads months later. On a
+100+ row bulk mutation this is the exact "logged but read by nobody" failure
+the `--reason` mandate exists to prevent.
+
+`reason` is now a parameter of both `employee_from_cron_job` and
+`backfill_from_cron_jobs`, stored verbatim, and a blank reason is rejected at
+the DB boundary as well as at the CLI (`''` satisfies `NOT NULL` while
+recording nothing). `BACKFILL_REASON` survives as the library-caller
+fallback. Four new tests; two mutants killed.
+
+### R43-2 — CLI notice handlers re-implemented core SQL and had already diverged (FIXED iter-518)
+`cmd_org.rs` hand-wrote its own `INSERT INTO notices` and ack transaction
+even though `operant-core/src/org/notice_db.rs` owns that schema. The copies
+had drifted:
+
+- the post stored `--correlation-id` into **both** `correlation_id` and
+  `thread_id` (reusing parameter `?9` for two columns);
+- the post left `acked_by` / `acked_at` NULL;
+- the ack was **not idempotent** — each repeat appended to `acked_by` *and*
+  inserted another ack notice, so three acks from one employee produced three
+  protocol rows and a duplicated entry;
+- the ack row's `recipients` was `'[]'` rather than addressed back to the
+  requester, and `thread_id` took the correlation id.
+
+Both now go through `NoticeBoard::post` / `NoticeBoard::ack` on the shared
+connection. `--recipients` is parsed through `Recipient::parse`, so a typo
+like `dept:` fails at post time instead of addressing nobody. This is the
+same class of defect as the worklog/kanban DDL duplication removed in iter-517.
+
+### R43-3 — `operant cron` failed on any fresh install (FIXED iter-518)
+`CronDb::init` opened the SQLite file directly and SQLite cannot create a
+missing directory. On a machine where `~/.operant` did not exist yet, **every**
+`operant cron` subcommand failed with `Failed to open cron database: unable to
+open database file` — one of ten `CronDb::init` call sites in `cmd_cron.rs`,
+plus `org sync`. `open_org_db` was creating that same directory for the kanban
+file, which is why `org` worked and `cron` did not.
+
+Fixed in `CronDb::init` rather than at the eleven call sites. Found by the new
+`org sync` end-to-end test, not by the unit suites — the existing cron tests
+all used a temp directory that already existed.
+
+**Note on test hygiene.** `org_reason.rs` needed `MUTATING_SUBCOMMANDS` kept
+in sync by hand, and the first version of the sync-reason assertion was
+guarded by `if body.contains(...)`, which would have passed vacuously if the
+backfill wrote nothing. The guard is removed: the test now fails loudly when no
+employee row appears.

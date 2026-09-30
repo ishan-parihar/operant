@@ -83,7 +83,7 @@ pub enum CronSubcommand {
 /// The runtime scheduler reads/writes this dedicated file; pointing the CLI at
 /// the shared `database_path` made CLI-created jobs invisible to the scheduler
 /// and tripped the shared-PRAGMA migration guard (R39-7).
-fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
+pub fn cron_db_path(config: &AppConfig) -> std::path::PathBuf {
     config
         .database_path
         .parent()

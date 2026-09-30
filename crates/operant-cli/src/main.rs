@@ -29,6 +29,7 @@ mod cmd_mcp;
 mod cmd_memory;
 mod cmd_migrate;
 mod cmd_model;
+mod cmd_org;
 mod cmd_peripheral;
 mod cmd_plugins;
 mod cmd_profile;
@@ -312,6 +313,14 @@ enum Commands {
         /// Output as JSON (for scripting/CI)
         #[arg(long, global = true)]
         json: bool,
+    },
+    /// Manage the org registry, notice board, and worklog (Wave 1)
+    ///
+    /// Every mutating subcommand requires `--reason` (AD-032, and
+    /// WAVE1-DECISIONS §3.5).
+    Org {
+        #[command(subcommand)]
+        cmd: cmd_org::OrgSubcommand,
     },
     /// Manage gateway
     Gateway {
@@ -2801,6 +2810,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Kanban { board, cmd, json }) => {
             cmd_kanban::handle_kanban_command(&loaded.config, board, cmd.clone(), *json).await?;
+        }
+        Some(Commands::Org { cmd }) => {
+            cmd_org::handle_org_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Gateway { cmd, json }) => {
             cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone(), *json).await?;

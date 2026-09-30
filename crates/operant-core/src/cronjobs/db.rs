@@ -105,6 +105,23 @@ impl CronDb {
     }
 
     pub fn init(path: PathBuf) -> Result<Self, Error> {
+        // Create the parent directory first. SQLite cannot create a missing
+        // directory, so on a fresh install — where `~/.operant` does not exist
+        // yet — every `operant cron` subcommand failed with a bare
+        // "unable to open database file". Ten call sites in `cmd_cron.rs` plus
+        // `org sync` all shared that failure, which is exactly why the fix
+        // belongs here rather than at each of them.
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::Agent(format!(
+                    "Failed to create cron database directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
         // Plan 002: tighten cron db perms (may carry cron job payloads with
         // user content + delivery targets) — set 0o600 idempotently before
         // SQLite honours umask on the open call below.

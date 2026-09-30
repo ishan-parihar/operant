@@ -371,14 +371,18 @@ CREATE INDEX IF NOT EXISTS idx_employee_cron_job  ON employee_cron_jobs(cron_job
 Rust model:
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {
-    /// 24h registry TTL. Stays registered across runs.
+    /// A long-lived operational role — infrastructure, monitoring, a service
+    /// that is always on.
     Service,
-    /// 1h TTL. GC'd after the run.
+    /// A role that lives for one working session: research, drafting, a
+    /// scheduled piece of work with a beginning and an end.
     Session,
-    /// 30m TTL. Routed via the error-pattern registry (Wave 4 G10).
+    /// A standing remediation role. A fixer is *hired*, like a janitor or an
+    /// engineer: it has a permanent identity and a persistent seat, and it is
+    /// on call rather than being consumed by the work.
     Fixer,
 }
 ```
@@ -386,6 +390,24 @@ pub enum AgentType {
 `AgentType` has **no `#[default]`** — absence is `Option<AgentType> == None`,
 which is distinct from all three values and preserves "absent keeps today's
 behavior" (Q3).
+
+**Correction (iter-518): there is no TTL in this enum, and there never was.**
+The draft above carried the organism's doc comments — `Service` = "24h registry
+TTL", `Session` = "1h TTL, GC'd after the run", `Fixer` = "30m TTL". Those
+numbers exist **only in a Python comment** in the organism and are enforced
+nowhere: no code reads them, and Operant has no expiry mechanism on employee
+rows. Keeping them in the Rust doc would have been inventing a contract. The
+variants are now described by what the role *is*:
+
+- `Fixer` is a **standing permanent role**, not an expiring contractor. A
+  fixer holds a seat and an identity and is on call.
+- `Service` is a persistent operational role.
+- `Session` describes **bounded work**, not employee expiry.
+
+**No employee will ever be deleted because of age or role type.** Deletion is
+an explicit, reason-bearing operator action (`org employee retire`), and the
+only GC in this surface is `NoticeBoard::retention_gc`, which expires
+*notices* by their own TTL — never identities.
 
 **Required vs optional, explicitly:**
 
@@ -470,10 +492,22 @@ Wave 1. This is a deliberate narrowing of the organism's 5-field contract
 (AXE-AD-012: `employee`, `skills`, `agent_type`, `continuity`,
 `registers_on_spawn`) and is required to make the gate passable against the
 live DB. Measured against the 102 real jobs, that choice is what keeps the
-block set to 6 rather than 40: `skills` is empty on 6 jobs, `agent_type` is
-absent on 2, and `continuity` is absent on 34. Requiring the organism's full
-5-field set would block 34+ jobs on day one. Requiring only these three blocks
-6.
+block set small: `skills` is empty on 4 jobs, `agent_type` is absent on 2, and
+`continuity` is absent on 34. Requiring the organism's full 5-field set would
+block 34+ jobs on day one.
+
+**Correction (iter-518): the block set is 4, not 6.** The original figure read
+`CronJob.skills` (plural) alone. `CronJob` carries **both** `skill` and
+`skills` (`db.rs:49-50`); over the live 102 jobs, 91 set `skill`, 96 set
+`skills`, 89 set both, and 6 have an empty plural. Two of those six were
+false positives — jobs that declare their skill only in the singular field, so
+the plural-first read produced `[]` for a perfectly well-specified job (e.g.
+`210544ad44bd` Web Deploy Health Daily, `skill: website-design`). The
+backfill is now plural-first with a **singular fallback**; a job with neither
+field set still backfills to `[]` and is still reported invalid, because the
+fallback must use the job's own declared skill and never invent one. The four
+genuine blockers are two disabled legacy jobs and two enabled empty-prompt
+placeholders.
 
 **Where the check runs.** Both cron loops, because both can execute jobs:
 
@@ -858,6 +892,55 @@ async fn cmd_unblock(config: &AppConfig, board_slug: &str, id: &str, reason: &st
 table (`kanban/db.rs:215-223`, columns `kind` + `payload`) is where the reason
 belongs; today the reason is smuggled into a comment string with a
 `"Unblocked: "` prefix, which is stringly-typed. Write it to `task_events`.
+
+#### 3.5.1 A validated reason that is not persisted is not a reason (iter-518)
+
+Requiring `--reason` at the clap layer proves the *operator* supplied one. It
+proves nothing about what landed in the row. The first implementation of
+`org sync` passed every check and still violated the mandate: the CLI
+validated and echoed the operator's reason, while
+`EmployeeDb::employee_from_cron_job` stamped a hardcoded `BACKFILL_REASON`
+into every employee row. The audit trail named a party that did not make the
+write.
+
+Two rules follow, and both are now enforced rather than documented:
+
+1. **The validated value is the stored value.** `require_reason` decides
+   emptiness on a trimmed string but returns the *untrimmed* original, so a
+   handler that validates `reason` and separately writes `reason` persists the
+   operator's shell padding. `validated_reason` binds the trimmed value so
+   "what was checked" and "what was written" are the same string by
+   construction.
+2. **The reason is threaded to the store, not summarised.** `reason` is now a
+   parameter of `employee_from_cron_job` and `backfill_from_cron_jobs`,
+   stored verbatim. A blank reason is rejected at the DB boundary too:
+   `''` satisfies the `NOT NULL` constraint while recording nothing, so a
+   library caller that bypassed clap must not be able to write an empty audit
+   trail. `BACKFILL_REASON` survives only as the fallback for callers with no
+   operator in the loop.
+
+#### 3.5.2 One schema, one owner (iter-517, extended iter-518)
+
+The org tables live in `operant_kanban.db`, and **the DDL is owned by
+`operant-core/src/org/`**. An earlier revision carried a second, locally
+transcribed copy in `cmd_org.rs`; the two had already drifted (the CLI's
+`worklog` had 14 columns against core's organism-aligned 20), and because
+both used `CREATE TABLE IF NOT EXISTS` whichever initialised first would make
+the other fail unpredictably. iter-517 removed the CLI copy and routed the
+surface through the core types.
+
+iter-518 closed the same class of leak one layer over: the CLI still
+hand-wrote its own `INSERT INTO notices` and ack transaction even though
+`NoticeBoard` owns that schema, and the copies had already diverged — the post
+duplicated `--correlation-id` into both `correlation_id` and `thread_id`, and
+the ack was **not idempotent**, so three acks by one employee wrote three
+ack rows and a duplicated `acked_by` entry. Both now call `NoticeBoard::post`
+and `NoticeBoard::ack`.
+
+The general rule, since it is the one that keeps recurring: **a store's schema
+is defined once, next to its types, and every writer — CLI included — goes
+through the typed API.** A hand-written `INSERT` against a table another
+module owns is a competing definition waiting to drift.
 
 ---
 
