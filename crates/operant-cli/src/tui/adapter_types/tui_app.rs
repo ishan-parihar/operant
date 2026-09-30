@@ -742,16 +742,28 @@ impl TuiApp {
     /// replaying `keys`. Returns the captured event log, the final `App`
     /// state (for assertions), and the final rendered screen as trimmed
     /// text rows (for screen-content assertions and snapshots).
+    ///
+    /// `frame_capture` arms per-frame text capture inside the run loop: the
+    /// given 0-based painted-frame indices are written to `dir` as
+    /// `frame-<NNNN>.txt` as they are painted, which is the only way to reach
+    /// intermediate states (the loop exits *before* its last paint, so a
+    /// finished buffer can only ever show the final state). The returned
+    /// `Option<(requested, captured)>` reports which indices were actually
+    /// painted so the caller can fail instead of silently writing fewer files
+    /// than asked for.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_headless(
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
         agent_script: Option<Vec<operant_core::agent::AgentEvent>>,
         size: (u16, u16),
         max_frames: Option<u64>,
+        frame_capture: Option<(Vec<u64>, std::path::PathBuf)>,
     ) -> anyhow::Result<(
         Vec<crate::tui::debug::TuiEvent>,
         crate::tui::app::App,
         Vec<String>,
+        Option<(Vec<u64>, Vec<u64>)>,
     )> {
         let (agent_tx, agent_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
@@ -861,6 +873,9 @@ impl TuiApp {
         self.app.simulation_max_frames = max_frames;
         self.app.simulated_keys = keys;
         self.app.debug_hub.event_bus().set_enabled(true);
+        if let Some((frames, dir)) = frame_capture {
+            self.app.debug_hub.arm_frame_capture(frames, dir);
+        }
 
         loop {
             match self.app.run(&mut terminal) {
@@ -923,22 +938,10 @@ impl TuiApp {
 
         // Capture the final rendered screen as trimmed text rows. The
         // TestBackend buffer is row-major; chunk the flat cell slice by width.
-        let screen = {
-            let buf = terminal.backend().buffer();
-            let width = (buf.area.width as usize).max(1);
-            buf.content()
-                .chunks(width)
-                .map(|row| {
-                    row.iter()
-                        .map(|c| c.symbol())
-                        .collect::<String>()
-                        .trim_end()
-                        .to_string()
-                })
-                .collect::<Vec<String>>()
-        };
+        let screen = crate::tui::debug::debug_hub::buffer_rows(terminal.backend().buffer());
         let events = self.app.debug_hub.event_bus().recent(1000);
-        Ok((events, self.app, screen))
+        let capture_status = self.app.debug_hub.frame_capture_status();
+        Ok((events, self.app, screen, capture_status))
     }
 }
 

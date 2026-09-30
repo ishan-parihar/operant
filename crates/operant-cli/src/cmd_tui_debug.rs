@@ -10,9 +10,11 @@
 //!      same load path from the shell and inspecting the raw output.
 //!   3. Script TUI state inspection in CI or automation.
 //!
-//! The subcommand does NOT render anything — it prints plain-text tables
-//! and JSON. For the rendered TUI, use `operant chat` and open the overlay
-//! interactively.
+//! Most subcommands print plain-text tables and JSON — they inspect the TUI's
+//! *data* paths, not its pixels. One does render: `operant tui debug simulate`
+//! drives the real `App::run` loop against a ratatui `TestBackend` and can
+//! assert on, diff against a committed golden screen, and capture per-frame
+//! text. For the interactive TUI itself, use `operant chat`.
 //!
 //! Subcommands mirror the TUI overlays 1:1:
 //!   `operant tui debug skills`        — same as /skills overlay data
@@ -185,6 +187,34 @@ pub enum TuiDebugSubcommand {
         /// Guards against a scenario that never stops streaming.
         #[arg(long)]
         max_frames: Option<u64>,
+
+        /// Path to a committed golden screen. After the run, the rendered
+        /// screen is diffed against this file: match prints a confirmation
+        /// and exits 0, drift prints a unified diff to stderr and exits
+        /// non-zero, and a *missing* file is bootstrapped (created, exit 0).
+        /// Format: one trimmed screen row per line, newline-terminated —
+        /// byte-identical to `--dump-screen`.
+        #[arg(long)]
+        baseline: Option<std::path::PathBuf>,
+
+        /// Rewrite `--baseline` in place from the current render and exit 0.
+        /// Never implicit: a deliberate visual change must be accepted by a
+        /// human running this flag.
+        #[arg(long)]
+        accept_baseline: bool,
+
+        /// Comma-separated frame indices to capture as text, e.g. "0,3,7".
+        /// Indices are 0-based over painted frames (`0` = the first frame
+        /// the run loop draws). Each is written to `--capture-dir` as
+        /// `frame-<NNNN>.txt` as it is painted. Indices past the end of the
+        /// run are reported as an error rather than silently skipped.
+        #[arg(long)]
+        capture_frames: Option<String>,
+
+        /// Output directory for `--capture-frames` files (default
+        /// `tui-frames`). Created if missing.
+        #[arg(long)]
+        capture_dir: Option<std::path::PathBuf>,
     },
 }
 
@@ -225,17 +255,27 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             agent_script,
             size,
             max_frames,
+            baseline,
+            accept_baseline,
+            capture_frames,
+            capture_dir,
         } => {
             debug_simulate(
                 config,
-                keys,
-                output,
-                assert,
-                dump_screen,
-                assert_screen,
-                agent_script,
-                size,
-                max_frames,
+                SimulateArgs {
+                    keys,
+                    output,
+                    assert_str: assert,
+                    dump_screen,
+                    assert_screen,
+                    agent_script,
+                    size,
+                    max_frames,
+                    baseline,
+                    accept_baseline,
+                    capture_frames,
+                    capture_dir,
+                },
             )
             .await
         }
@@ -1279,9 +1319,9 @@ impl MockAgentEvent {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn debug_simulate(
-    config: &AppConfig,
+/// Every `operant tui debug simulate` option, bundled so the handler keeps a
+/// stable signature as the harness grows more capture/diff flags.
+struct SimulateArgs {
     keys: String,
     output: Option<std::path::PathBuf>,
     assert_str: Option<String>,
@@ -1290,16 +1330,22 @@ async fn debug_simulate(
     agent_script: Option<std::path::PathBuf>,
     size: Option<String>,
     max_frames: Option<u64>,
-) -> Result<()> {
+    baseline: Option<std::path::PathBuf>,
+    accept_baseline: bool,
+    capture_frames: Option<String>,
+    capture_dir: Option<std::path::PathBuf>,
+}
+
+async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
     use crate::tui::adapter_types::{LaunchMode, TuiApp};
     use crate::tui::debug::TuiEvent;
 
     println!("Starting headless TUI simulation...");
-    let parsed_keys = parse_key_sequence(&keys);
+    let parsed_keys = parse_key_sequence(&args.keys);
     println!("Parsed {} key events.", parsed_keys.len());
 
     // Parse --size WxH (default 120x40).
-    let dims = match size.as_deref() {
+    let dims = match args.size.as_deref() {
         None => (120u16, 40u16),
         Some(s) => {
             let (w, h) = s.split_once(['x', 'X']).ok_or_else(|| {
@@ -1315,9 +1361,35 @@ async fn debug_simulate(
             )
         }
     };
-    let frame_cap = Some(max_frames.unwrap_or(100_000));
+    let frame_cap = Some(args.max_frames.unwrap_or(100_000));
 
-    let script = if let Some(ref path) = agent_script {
+    // Parse --capture-frames "0,3,7" into 0-based painted-frame indices.
+    let capture_requested: Option<Vec<u64>> = args
+        .capture_frames
+        .as_deref()
+        .map(parse_frame_index_list)
+        .transpose()?;
+    let capture_dir = capture_requested
+        .as_ref()
+        .map(|_| args.capture_dir.clone().unwrap_or_else(default_capture_dir));
+    if let (Some(frames), Some(dir)) = (&capture_requested, &capture_dir)
+        && !frames.is_empty()
+    {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| anyhow::anyhow!("Cannot create capture dir {:?}: {}", dir, e))?;
+        println!(
+            "Capturing {} frame(s) into {:?}: {:?}",
+            frames.len(),
+            dir,
+            frames
+        );
+    }
+    let frame_capture = match (capture_requested.clone(), capture_dir.clone()) {
+        (Some(frames), Some(dir)) if !frames.is_empty() => Some((frames, dir)),
+        _ => None,
+    };
+
+    let script = if let Some(ref path) = args.agent_script {
         let raw = std::fs::read_to_string(path)?;
         let mock: Vec<MockAgentEvent> = serde_json::from_str(&raw)
             .map_err(|e| anyhow::anyhow!("Failed to parse agent script {:?}: {}", path, e))?;
@@ -1332,8 +1404,8 @@ async fn debug_simulate(
     };
 
     let tui_app = TuiApp::enter(config.clone(), None, LaunchMode::Landing, true, false).await?;
-    let (events, app, screen) = tui_app
-        .run_headless(parsed_keys, script, dims, frame_cap)
+    let (events, app, screen, capture_status) = tui_app
+        .run_headless(parsed_keys, script, dims, frame_cap, frame_capture)
         .await?;
 
     println!("Simulation completed. Analyzing events...");
@@ -1348,33 +1420,198 @@ async fn debug_simulate(
         }
     }
 
-    if let Some(ref out_path) = output {
+    if let Some(ref out_path) = args.output {
         let json = serde_json::to_string_pretty(&events)?;
         std::fs::write(out_path, json)?;
         println!("Saved simulation event log to {:?}", out_path);
     }
 
-    if let Some(ref screen_path) = dump_screen {
+    if let Some(ref screen_path) = args.dump_screen {
         std::fs::write(screen_path, screen.join("\n"))?;
         println!("Saved final rendered screen to {:?}", screen_path);
+    }
+
+    // Report per-frame capture outcome. A requested frame the run never
+    // painted is an error: silently shipping fewer files than asked for is
+    // exactly the failure this harness exists to catch.
+    if let (Some((requested, captured)), Some(dir)) = (capture_status, capture_dir.as_deref()) {
+        let missing: Vec<u64> = requested
+            .iter()
+            .copied()
+            .filter(|i| !captured.contains(i))
+            .collect();
+        for index in &captured {
+            println!(
+                "Captured frame {} -> {:?}",
+                index,
+                dir.join(format!("frame-{index:04}.txt"))
+            );
+        }
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "--capture-frames: run ended before frame(s) {:?} were painted ({} frame(s) \
+                 drawn in total). Re-run with an in-range index (0..{}), or raise --max-frames.",
+                missing,
+                app.debug_hub.frame_count(),
+                app.debug_hub.frame_count()
+            );
+        }
     }
 
     if has_errors {
         anyhow::bail!("Simulation failed: Errors detected in TUI event log.");
     }
 
-    if let Some(ref assert_val) = assert_str {
+    if let Some(ref assert_val) = args.assert_str {
         println!("Evaluating state assertions: {}", assert_val);
         evaluate_assertions(&app, assert_val)?;
     }
 
-    if let Some(ref screen_asserts) = assert_screen {
+    if let Some(ref screen_asserts) = args.assert_screen {
         println!("Evaluating screen assertions: {}", screen_asserts);
         evaluate_screen_assertions(&screen, screen_asserts)?;
     }
 
+    if let Some(ref baseline) = args.baseline {
+        check_baseline(baseline, &screen, args.accept_baseline)?;
+    }
+
     println!("Simulation succeeded without errors.");
     Ok(())
+}
+
+/// Default output directory for `--capture-frames` when `--capture-dir` is
+/// omitted. Deliberately repo-local and git-ignorable rather than `/tmp`, so
+/// a committed capture sits next to its scenario.
+fn default_capture_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("tui-frames")
+}
+
+/// Parse a `--capture-frames` list such as `"0,3,7"`. Indices are 0-based
+/// over painted frames, so `0` is the first frame the loop draws.
+fn parse_frame_index_list(list: &str) -> Result<Vec<u64>> {
+    let mut out = Vec::new();
+    for token in list.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let idx = token.parse::<u64>().map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid --capture-frames entry '{}': expected 0-based frame indices",
+                token
+            )
+        })?;
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+    }
+    out.sort_unstable();
+    if out.is_empty() {
+        anyhow::bail!("--capture-frames was given but listed no frame indices");
+    }
+    Ok(out)
+}
+
+/// Canonical on-disk form of a rendered screen: one row per line with
+/// trailing whitespace stripped, newline-terminated. Applied to BOTH sides of
+/// a comparison so an editor that pads lines cannot manufacture a diff.
+///
+/// This is the baseline file format, and it is deliberately byte-identical to
+/// `--dump-screen` output (minus the final newline) so a human can produce
+/// one by hand if they want to.
+fn baseline_text(screen: &[String]) -> String {
+    let mut text = screen
+        .iter()
+        .map(|row| row.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.push('\n');
+    text
+}
+
+/// Compare `screen` against the golden file at `baseline`.
+///
+/// Semantics, in order:
+///   * `--accept-baseline`, or a missing file → write the golden, print a
+///     notice, return `Ok`. A missing baseline bootstraps the first run.
+///   * content matches → print a confirmation, return `Ok`.
+///   * content differs → print a unified diff to **stderr** and return an
+///     error, so the process exits non-zero and CI fails on drift.
+fn check_baseline(baseline: &std::path::Path, screen: &[String], accept: bool) -> Result<()> {
+    let actual = baseline_text(screen);
+
+    if accept {
+        write_baseline(baseline, &actual)?;
+        println!("Accepted baseline {:?} ({} bytes).", baseline, actual.len());
+        return Ok(());
+    }
+
+    if !baseline.exists() {
+        write_baseline(baseline, &actual)?;
+        println!(
+            "Baseline created at {:?} — no golden existed yet. Commit it; the next \
+             run will diff against it and fail on drift.",
+            baseline
+        );
+        return Ok(());
+    }
+
+    let expected = std::fs::read_to_string(baseline)
+        .map_err(|e| anyhow::anyhow!("Cannot read baseline {:?}: {}", baseline, e))?;
+
+    if normalize_baseline(&expected) == actual {
+        println!("  ✓ baseline matches {:?}", baseline);
+        return Ok(());
+    }
+
+    let diff = unified_screen_diff(baseline, &normalize_baseline(&expected), &actual);
+    eprintln!("Screen drift from baseline {:?}:", baseline);
+    eprintln!("{}", diff);
+    eprintln!("\nIf this change is intended, re-run with --accept-baseline to rewrite the golden.");
+    anyhow::bail!("Rendered screen differs from baseline {:?}", baseline);
+}
+
+/// Re-canonicalize a golden file read off disk so its comparison matches
+/// `baseline_text` output: CRLF→LF, trailing whitespace stripped per line,
+/// exactly one trailing newline.
+fn normalize_baseline(raw: &str) -> String {
+    let mut text: String = raw
+        .replace("\r\n", "\n")
+        .lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.push('\n');
+    text
+}
+
+fn write_baseline(baseline: &std::path::Path, text: &str) -> Result<()> {
+    if let Some(parent) = baseline.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("Cannot create {:?}: {}", parent, e))?;
+    }
+    std::fs::write(baseline, text)
+        .map_err(|e| anyhow::anyhow!("Cannot write baseline {:?}: {}", baseline, e))
+}
+
+/// Line-based unified diff of the golden (`expected`) against the current
+/// render (`actual`), rendered like `diff -u`. Reuses the `similar` crate the
+/// diff viewer already depends on rather than hand-rolling an LCS.
+fn unified_screen_diff(baseline: &std::path::Path, expected: &str, actual: &str) -> String {
+    use similar::TextDiff;
+    TextDiff::from_lines(expected, actual)
+        .unified_diff()
+        .context_radius(3)
+        .header(
+            &format!("baseline {}", baseline.display()),
+            "rendered screen",
+        )
+        .to_string()
+        .trim_end()
+        .to_string()
 }
 
 /// Evaluate comma-separated screen-content assertions against the rendered
@@ -1410,4 +1647,139 @@ fn evaluate_screen_assertions(screen: &[String], assertions_str: &str) -> Result
         println!("  ✓ {}", clause);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen(rows: &[&str]) -> Vec<String> {
+        rows.iter().map(|r| r.to_string()).collect()
+    }
+
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("operant-tui-baseline-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn frame_index_list_parses_dedups_and_sorts() {
+        assert_eq!(
+            parse_frame_index_list("7,0,3,3").expect("parse"),
+            vec![0, 3, 7]
+        );
+        assert_eq!(
+            parse_frame_index_list(" 1 , 2 ").expect("parse"),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn frame_index_list_rejects_garbage_and_empty() {
+        assert!(parse_frame_index_list("0,x").is_err());
+        assert!(parse_frame_index_list("").is_err());
+        assert!(parse_frame_index_list(" , ").is_err());
+    }
+
+    #[test]
+    fn baseline_bootstraps_when_missing_then_matches() {
+        let dir = tmpdir("bootstrap");
+        let golden = dir.join("screen.golden");
+        let rows = screen(&["alpha  ", "beta"]);
+
+        // Missing golden → created, no error.
+        check_baseline(&golden, &rows, false).expect("bootstrap succeeds");
+        assert_eq!(
+            std::fs::read_to_string(&golden).expect("read"),
+            "alpha\nbeta\n"
+        );
+
+        // Identical render → still passes.
+        check_baseline(&golden, &screen(&["alpha", "beta"]), false).expect("match succeeds");
+
+        // Trailing whitespace on the rendered side must not count as drift.
+        check_baseline(&golden, &screen(&["alpha", "beta   "]), false).expect("trim is stable");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn baseline_golden_with_crlf_and_padding_matches() {
+        let dir = tmpdir("crlf");
+        let golden = dir.join("screen.golden");
+        // CRLF endings, per-line padding, and a missing final newline must all
+        // canonicalise away rather than read as drift.
+        std::fs::write(&golden, "alpha  \r\nbeta ").expect("seed");
+        check_baseline(&golden, &screen(&["alpha", "beta"]), false).expect("canonicalised match");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn baseline_trailing_blank_row_is_real_drift() {
+        let dir = tmpdir("blank");
+        let golden = dir.join("screen.golden");
+        // A blank screen row is content, not editor padding: it must NOT be
+        // canonicalised away, or a baseline could hide a row that vanished.
+        check_baseline(&golden, &screen(&["alpha", "beta"]), false).expect("bootstrap");
+        assert!(check_baseline(&golden, &screen(&["alpha", "beta", ""]), false).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn baseline_drift_fails_with_diff_and_leaves_golden_intact() {
+        let dir = tmpdir("drift");
+        let golden = dir.join("screen.golden");
+        check_baseline(&golden, &screen(&["alpha", "beta"]), false).expect("bootstrap");
+
+        // One changed character must be enough to fail the gate.
+        let err = check_baseline(&golden, &screen(&["alpha", "bxta"]), false)
+            .expect_err("drift must fail");
+        assert!(
+            err.to_string().contains("differs from baseline"),
+            "unexpected error: {err}"
+        );
+        // The golden is never rewritten by a failing comparison.
+        assert_eq!(
+            std::fs::read_to_string(&golden).expect("read"),
+            "alpha\nbeta\n"
+        );
+
+        // ...and --accept-baseline is the only way to move it.
+        check_baseline(&golden, &screen(&["alpha", "bxta"]), true).expect("accept");
+        assert_eq!(
+            std::fs::read_to_string(&golden).expect("read"),
+            "alpha\nbxta\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unified_diff_has_hunk_header_and_markers() {
+        let diff = unified_screen_diff(
+            std::path::Path::new("screen.golden"),
+            "alpha\nbeta\ngamma\n",
+            "alpha\nbxta\ngamma\n",
+        );
+        assert!(diff.contains("@@"), "missing hunk header: {diff}");
+        assert!(diff.contains("-beta"), "missing removal line: {diff}");
+        assert!(diff.contains("+bxta"), "missing addition line: {diff}");
+        assert!(
+            diff.contains("--- baseline screen.golden"),
+            "bad header: {diff}"
+        );
+    }
+
+    #[test]
+    fn buffer_rows_trims_trailing_whitespace() {
+        let area = ratatui::layout::Rect::new(0, 0, 6, 2);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        buf.set_string(0, 0, "ab  ", ratatui::style::Style::default());
+        buf.set_string(0, 1, "cd", ratatui::style::Style::default());
+        assert_eq!(
+            crate::tui::debug::debug_hub::buffer_rows(&buf),
+            vec!["ab", "cd"]
+        );
+    }
 }

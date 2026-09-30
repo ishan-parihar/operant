@@ -1169,6 +1169,9 @@ impl App {
                 let completed = terminal.draw(|f| render::render_app(f, self))?;
                 let render_ms = draw_start.elapsed().as_secs_f64() * 1000.0;
                 self.debug_hub.record_frame(render_ms);
+                // Headless per-frame capture (armed by
+                // `tui debug simulate --capture-frames`); inert otherwise.
+                self.debug_hub.capture_frame(completed.buffer);
                 crate::osc8::scan_buffer_for_urls(completed.buffer)
             };
 

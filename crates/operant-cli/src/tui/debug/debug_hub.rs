@@ -27,6 +27,17 @@ struct Inner {
     overlay_visible: AtomicBool,
     /// Path to dump the event log on exit (if set via env var).
     event_log_path: Mutex<Option<std::path::PathBuf>>,
+    /// Per-frame text capture, armed by the headless simulator only.
+    frame_capture: Mutex<Option<FrameCapture>>,
+}
+
+/// Requested per-frame captures for one headless run. Disarmed (and free)
+/// unless `arm_frame_capture` is called.
+#[derive(Debug, Clone)]
+pub struct FrameCapture {
+    requested: std::collections::BTreeSet<u64>,
+    dir: std::path::PathBuf,
+    captured: std::collections::BTreeSet<u64>,
 }
 
 impl TuiDebugHub {
@@ -45,6 +56,7 @@ impl TuiDebugHub {
                 last_error: Mutex::new(None),
                 overlay_visible: AtomicBool::new(false),
                 event_log_path: Mutex::new(event_log_path),
+                frame_capture: Mutex::new(None),
             }),
         }
     }
@@ -89,6 +101,70 @@ impl TuiDebugHub {
 
     pub fn last_render_ms(&self) -> u64 {
         self.inner.last_render_ms.load(Ordering::Relaxed)
+    }
+
+    // ── Per-frame capture (headless simulator) ─────────────────────────
+
+    /// Arm per-frame text capture for the given frame indices. Indices are
+    /// 0-based over *painted* frames (`0` = the first frame the run loop
+    /// draws), matching `TuiEvent::FrameRendered::frame - 1`. `dir` must
+    /// already exist; each capture is written to `<dir>/frame-<NNNN>.txt`
+    /// using the same index, 4-digit zero padded so a lexical sort equals a
+    /// numeric sort. A second arm on the same hub is a no-op.
+    pub fn arm_frame_capture(&self, frames: Vec<u64>, dir: std::path::PathBuf) {
+        let mut slot = self.inner.frame_capture.lock();
+        if slot.is_some() {
+            return;
+        }
+        *slot = Some(FrameCapture {
+            requested: frames.into_iter().collect(),
+            dir,
+            captured: std::collections::BTreeSet::new(),
+        });
+    }
+
+    /// Called from the run loop with the *just-rendered* buffer, immediately
+    /// after `record_frame`. Writes the buffer as trimmed text rows when this
+    /// frame was requested, and does nothing otherwise.
+    ///
+    /// This is the only place mid-run frames can be captured: `App::run`
+    /// returns before its final state is ever painted, so a finished buffer
+    /// cannot be rewound. Capturing here (like the OSC 8 scan beside it) keeps
+    /// the production loop untouched — the call is inert unless armed.
+    pub fn capture_frame(&self, buffer: &ratatui::buffer::Buffer) {
+        let mut slot = self.inner.frame_capture.lock();
+        let Some(capture) = slot.as_mut() else {
+            return;
+        };
+        // `record_frame` already bumped the counter, so this is the 1-based
+        // number of the frame just painted.
+        let painted = self.inner.frame_count.load(Ordering::Relaxed);
+        let index = painted.saturating_sub(1);
+        if !capture.requested.contains(&index) {
+            return;
+        }
+        let path = capture.dir.join(format!("frame-{index:04}.txt"));
+        let rows = buffer_rows(buffer);
+        if let Err(e) = std::fs::write(&path, rows.join("\n") + "\n") {
+            eprintln!("[tui-debug] frame capture {index} -> {path:?} failed: {e}");
+            return;
+        }
+        capture.captured.insert(index);
+    }
+
+    /// `(requested, captured)` 0-based frame indices for the armed capture, or
+    /// `None` when capture was never armed. A requested index missing from
+    /// `captured` means the run ended before that frame was painted — the
+    /// caller must report it rather than silently shipping fewer files than
+    /// asked for.
+    pub fn frame_capture_status(&self) -> Option<(Vec<u64>, Vec<u64>)> {
+        let slot = self.inner.frame_capture.lock();
+        slot.as_ref().map(|c| {
+            (
+                c.requested.iter().copied().collect(),
+                c.captured.iter().copied().collect(),
+            )
+        })
     }
 
     pub fn uptime_secs(&self) -> f64 {
@@ -136,6 +212,24 @@ impl TuiDebugHub {
             }
         }
     }
+}
+
+/// Split a ratatui buffer into trimmed text rows, one per terminal line.
+/// Shared by the final-frame capture in `run_headless` and the mid-run
+/// per-frame capture so both produce byte-identical text.
+pub fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    let width = (buffer.area.width as usize).max(1);
+    buffer
+        .content()
+        .chunks(width)
+        .map(|row| {
+            row.iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
 }
 
 #[cfg(test)]
