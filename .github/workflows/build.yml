@@ -143,6 +143,13 @@ jobs:
     # `gh run download` in release.yml fetches whatever artifacts exist, so
     # marking these non-fatal does not break publishing — it just stops them
     # from vetoing it. Failures are still visible on the Build run.
+    #
+    # Known mechanism (v0.2.1 Build log, Linux ARM64 leg): `openssl-sys@0.9.117`
+    # aborts with "Could not find directory of OpenSSL installation" inside
+    # the cross-rs images — no OPENSSL_DIR, no system OpenSSL for the target.
+    # Fixing it means vendored openssl or per-target pre-build sysroot setup,
+    # neither of which is verifiable without quota or cross toolchains, so it
+    # is recorded here rather than shipped unverified.
     continue-on-error: true
     strategy:
       fail-fast: false
