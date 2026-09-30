@@ -73,15 +73,15 @@ image = { workspace = true }
 # Baked-in engines (not subprocess): memory-wire replaces agentmemory.
 # sourcehound_mcp HELD OUT — see below.
 #
-# memory-wire is pinned to the v0.4.0 tag, not a branch. On `branch = "main"`
-# the resolution broke on 2026-09-29 the moment memory-wire published a release
-# requiring a newer `anyhow` than this lockfile held: a floating branch means any
-# upstream release can break this build with no commit here. A tag is
-# reproducible and is what "pin at release time" in
-# docs/FULL-SCALE-IMPLEMENTATION-PLAN.md (P0/P2) asks for.
-#
-# To move it: change the rev, then `cargo update -p memory-wire`.
-memory-wire = { git = "https://github.com/ishan-parihar/memory-wire", rev = "986d1b54945e4b54b8e3a90ad37f8904987a09b6" } # v0.4.0
+# memory-wire tracks `main` — user-ordered persistent-latest. Every dev-loop
+# build (via scripts/check.sh) advances the lock to the branch HEAD when the
+# network allows, so this tree always compiles the newest memory-wire source.
+# The price is stated plainly: a floating branch means an upstream release can
+# break this build with no commit here (it happened 2026-09-29, when a release
+# required a newer `anyhow` than the lock held). That failure is loud, not
+# silent — and the remedy is a pin. At release time, replace `branch =` with
+# the locked `rev =` (see scripts/sync-vendors.sh output) and re-verify.
+memory-wire = { git = "https://github.com/ishan-parihar/memory-wire", branch = "main" }
 # sourcehound_mcp = { package = "sourcehound", git = "https://github.com/ishan-parihar/sourcehound", branch = "master" }
 # HELD (round 2): vendored obscura-render breaks against registry taffy 0.12.2
 # (needs vendored 0.12.1 APIs) + cosmic-text feature-union divergence — 36 errors.

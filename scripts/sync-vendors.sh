@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# scripts/sync-vendors.sh — advance git-vendored engine deps to latest branch HEADs.
+# scripts/sync-vendors.sh — advance the memory-wire branch dep to latest HEAD.
 #
-# Why this exists: operant bakes memory-wire and sourcehound_mcp in-process as
-# cargo git-dependencies tracking their active branches (memory-wire: main,
-# sourcehound: master). Cargo.lock pins exact revs, so a plain build does NOT
-# pick up upstream work — including the separate agent upgrading memory-wire.
-# Run this script to pull the latest commits from both repos into the lock,
-# verify the graph still resolves and compiles, and report the new revs.
-#
-# When to run: before release builds, at iteration start when upstream moved,
-# or whenever `git ls-remote` shows the branches ahead of the lock. Do NOT
-# wire this into build.rs: implicit network at build time breaks offline
-# builds and destroys reproducibility (the lock pin is the build fact).
+# Why this exists: operant bakes memory-wire in-process as a cargo
+# git-dependency tracking `main` (user-ordered persistent-latest). The
+# dev loop (scripts/check.sh) already advances it on a stamp TTL; this script
+# is the explicit form — run it to force-advance now, e.g. right after an
+# upstream fix lands. sourcehound_mcp is NOT covered: it is commented out of
+# the manifest (held: vendored-render divergence), so `cargo update -p
+# sourcehound` would error under `set -euo pipefail` — a second package arg
+# here is how a future re-add breaks this script silently. Do NOT wire this
+# into build.rs: implicit network at build time breaks offline builds.
 #
 # At release time, convert tracking to pins: replace `branch =` with the
 # printed `rev =` in crates/operant-core/Cargo.toml and re-run this script.
@@ -28,13 +26,11 @@ rev_of() { # $1 = package name in Cargo.lock
 
 echo "== revs before =="
 echo "  memory-wire:  $(rev_of memory-wire)"
-echo "  sourcehound:  $(rev_of sourcehound)"
 
-cargo update -p memory-wire -p sourcehound
+cargo update -p memory-wire
 
 echo "== revs after =="
 echo "  memory-wire:  $(rev_of memory-wire)"
-echo "  sourcehound:  $(rev_of sourcehound)"
 
 echo "== verify resolve + compile =="
 ./scripts/check.sh check -p operant-core --lib
