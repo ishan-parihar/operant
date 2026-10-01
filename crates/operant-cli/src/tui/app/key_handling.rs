@@ -40,10 +40,24 @@ impl App {
         }
 
         // Phase 3.3: Priority-based dialog handling.
-        // The existing inline handlers already follow the correct priority order
-        // (context menu > bypass permissions > device auth > ...).
-        // dialog_priority() returns the highest-priority visible dialog;
-        // we assert the current handler matches that priority for debugging.
+        //
+        // `dialog_priority()` is NOT the router, and the inline `if
+        // state.visible` gates below are. The two orders DIVERGE: an empirical
+        // probe (open two dialogs, press the key each should get) disagreed on
+        // 5 of 6 pairs. The previous comment here claimed the inline handlers
+        // "already follow the correct priority order". That was false, and it
+        // is the sentence that would make the next reader trust the chain.
+        //
+        // So, deliberately, this stays a debug assertion. Converting the chain
+        // into the real router, or reordering these gates to match it, are both
+        // behaviour changes with no bug report and no failing test justifying
+        // them. Both were considered and deferred; see
+        // docs/ROADMAP-TUI-FLEET.md section 6.1.
+        //
+        // What WAS fixed: three surfaces were gated here but absent from the
+        // chain entirely (theme_screen, rewind_flow, memory_file_selector), so
+        // the chain did not describe the UI. They are now present, and
+        // `dialog_covers_every_gated_surface` fails if one is ever dropped again.
         let _priority = self.dialog_priority();
 
         if self.global_search.visible {

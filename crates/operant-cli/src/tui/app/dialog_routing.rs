@@ -97,6 +97,22 @@ impl App {
         if self.hooks_config_menu.visible {
             return Some(DialogPriority::HooksConfig);
         }
+        // The next three were gated inline in key_handling.rs but had no
+        // representation here at all, so this chain did not describe the UI.
+        // They are appended rather than woven into their semantic neighbours:
+        // the chain's order already diverges from the inline order (see the
+        // note in key_handling.rs), so claiming a "correct" slot for them would
+        // be false precision. Presence is what matters — `dialog_covers_every_
+        // gated_surface` fails if one is ever dropped again.
+        if self.theme_screen.visible {
+            return Some(DialogPriority::ThemeScreen);
+        }
+        if self.rewind_flow.visible {
+            return Some(DialogPriority::RewindFlow);
+        }
+        if self.memory_file_selector.visible {
+            return Some(DialogPriority::MemoryFileSelector);
+        }
         if self.voice_mode_notice.visible {
             return Some(DialogPriority::VoiceModeNotice);
         }
@@ -236,5 +252,78 @@ impl App {
     pub fn bash_command_allowed_by_prefix(&self, command: &str) -> bool {
         let first_word = command.split_whitespace().next().unwrap_or("");
         !first_word.is_empty() && self.bash_prefix_allowlist.contains(first_word)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Fields gated in THIS file, i.e. the surfaces the chain knows about.
+    fn chained_fields() -> Vec<String> {
+        let mut out: Vec<String> = include_str!("dialog_routing.rs")
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                let r = t.strip_prefix("if self.")?;
+                r.contains(".visible")
+                    .then(|| r.split(['.', '(']).next().map(str::to_string))?
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Variant names of `DialogPriority`, read from its own source so the
+    /// guard cannot go stale when a variant is added.
+    fn priority_variants() -> Vec<String> {
+        include_str!("enums.rs")
+            .lines()
+            .skip_while(|l| !l.contains("pub enum DialogPriority"))
+            .skip(1)
+            .take_while(|l| !l.trim_start().starts_with('}'))
+            .filter_map(|l| {
+                let t = l.trim();
+                let name = t.split(" = ").next()?;
+                let name = name.strip_prefix("///")?.trim().to_string();
+                let looks_like_variant = !name.is_empty()
+                    && name.chars().next()?.is_uppercase()
+                    && name.chars().all(|c| c.is_alphanumeric());
+                looks_like_variant.then_some(name)
+            })
+            .collect()
+    }
+
+    /// Every `DialogPriority` variant except `None` must have a gate here.
+    ///
+    /// Precise by construction: it compares the enum against the gates in the
+    /// same file, so it cannot pick up unrelated `if self.X.is_some()` checks
+    /// that live in `key_handling.rs` for input and scrolling.
+    #[test]
+    fn every_priority_variant_has_a_gate() {
+        let gates = chained_fields();
+        let missing: Vec<String> = priority_variants()
+            .into_iter()
+            .filter(|v| v != "None" && !gates.iter().any(|g| g == v))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "DialogPriority names a surface with no gate in dialog_routing.rs: {missing:?}"
+        );
+    }
+
+    /// The three surfaces that were gated inline but absent from the chain.
+    ///
+    /// This is the regression that motivated the guard: theme_screen,
+    /// rewind_flow and memory_file_selector could each be open and the chain
+    /// would not have known, so the chain did not describe the UI.
+    #[test]
+    fn the_three_recovered_surfaces_are_gated() {
+        let gates = chained_fields();
+        for field in ["theme_screen", "rewind_flow", "memory_file_selector"] {
+            assert!(
+                gates.iter().any(|g| g == field),
+                "{field} is gated in key_handling.rs so it must be gated here too"
+            );
+        }
     }
 }

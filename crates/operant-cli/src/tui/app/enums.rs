@@ -190,6 +190,13 @@ pub enum DialogPriority {
     HooksConfig = 310,
     /// Voice mode notice
     VoiceModeNotice = 320,
+    /// Theme picker. Gated inline in key_handling.rs but absent from
+    /// dialog_priority() until now; see docs/ROADMAP-TUI-FLEET.md 6.1.
+    ThemeScreen = 330,
+    /// Rewind flow (message select + confirm). Same omission as ThemeScreen.
+    RewindFlow = 340,
+    /// Memory file selector. Same omission as ThemeScreen.
+    MemoryFileSelector = 350,
 }
 
 /// Status of an active or completed tool call.
