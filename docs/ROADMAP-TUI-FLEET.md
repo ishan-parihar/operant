@@ -194,29 +194,43 @@ These are why "make it consistent" produced more than cosmetic change.
 
 ---
 
-## 4. Wave 4 — affordances operant lacks entirely
+## 4. Wave 4 — affordances operant lacked entirely — **LANDED (iter-542, iter-543)**
 
-Nothing in Waves 0–3 adds these; they do not exist in operant today. All are
-additive, all are independently shippable, and all are the difference between
-"tidy" and "designed".
+Nothing in Waves 0–3 added these; operant had none of them. All are the
+difference between "tidy" and "designed".
 
-| # | Affordance | jcode reference | Notes |
-|---|---|---|---|
-| 4.1 | **Narrow-terminal collapse** — `MIN_*` floors per surface, graceful collapse instead of crushing | `ui.rs:2835-2851` | `modal_frame` already provides the modal floor; this extends it to side panels and pickers |
-| 4.2 | **Empty states** for every panel and picker, distinguishing "nothing here yet" from "no matches" | `ui_input.rs:157-162` | operant has neither |
-| 4.3 | **Focus indication** — focused pane's border takes the focus role | `chrome.rs:31-36` | operant has a `FocusTarget` enum but no visible focus state |
-| 4.4 | **Overflow labelling** — `↑N` above, `+N more` below | `ui_input.rs:303-314` | never a silent truncation |
-| 4.5 | **One hint line** — priority-ordered, mode-aware, suppressed when an overlay owns the rows | `ui_input.rs:2483-2513` | replaces scattered per-dialog hints |
-| 4.6 | **Actionable errors** — name the recovery command, restore the user's input | `tui_lifecycle.rs:337-351` | operant shows messages without a next action |
-| 4.7 | **Resize preserves reading position** | `app.rs:890-894` | currently teleports to the new bottom |
+| # | Affordance | Status |
+|---|---|---|
+| 4.1 | **Narrow-terminal collapse** — `MIN_*` floors, graceful collapse | **done** — at 40x16 the skills header wrapped onto the border row and body cells wrapped over the vertical border; now truncated to the inner rect, footer back at column 0 |
+| 4.2 | **Empty states**, distinguishing "nothing here yet" / "no matches" / "type to search" | **done** — three-way split; a single generic "no items" would lie about *why* a list is empty |
+| 4.3 | **Focus indication** | **done** — the transcript scrollbar thumb takes the accent role when focused, dim when not (the right-rail pattern, applied to the rail that already exists, so no border was added to a borderless pane) |
+| 4.4 | **Overflow labelling** | **done** — labelled where content is *clipped*, not merely scrolled |
+| 4.5 | **One hint line** | **done** — one priority-ordered hint replaces the scattered per-dialog pills |
+| 4.6 | **Actionable errors** | **partial** — recovery wording landed; **input restoration did not** (it lives in `tui/app/**`, not in the agent's file set). Still open. |
+| 4.7 | **Resize preserves reading position** | **done** — `Event::Resize` was previously unhandled *and* nothing stored the terminal size. Anchor is now `ContentPos { message, line }`, a content address, because a row index cannot survive a rewrap. `None` while following the tail, so a resize cannot unpin auto-follow. |
 
-**Deployment:** 3 parallel agents, disjoint files — (a) focus + overflow, (b)
-empty states, (c) hints + actionable errors. 4.1 and 4.7 are cross-cutting and
-should be **one integrator**, not parallel agents: both touch the render path's
-area computation.
+**Deployment as planned:** three parallel agents on disjoint files (focus +
+overflow, empty states, hints + errors), with the two cross-cutting items
+(4.1 narrow-terminal, 4.7 resize) as integrator work.
 
-Each affordance is a golden-affecting change. Golden regeneration stays
-central (§1.5).
+**Two defects were found in the agents' output and fixed centrally rather
+than accepted:**
+
+1. The unified hint suppressed *itself* via `any_modal_open()`, whose overlay
+   list includes `voice_mode_notice`. Since 4b-c had correctly removed the
+   old scattered `? shortcuts` pills first, the net effect was a footer with
+   **no keyboard discoverability at all** on any host with an audio device.
+   Narrowed to `is_modal_open(app) && !app.voice_mode_notice.visible`.
+2. The `voice-mode-notice` assertion was weakening toward the code. The notice
+   had been made genuinely mode-aware (the old text hardcoded "available" and
+   "start recording" regardless of state, so it lied while recording), and the
+   assertion now pins the label instead. An intermediate edit dropped
+   `contains:Alt+V` without checking that it still renders — verified it does,
+   in both voice states, and restored it.
+
+**One leftover:** 4.6's input restoration. It needs `tui/app/**`, so it was
+deliberately left to a later owner rather than smuggled into a file set that
+did not include it.
 
 ---
 
