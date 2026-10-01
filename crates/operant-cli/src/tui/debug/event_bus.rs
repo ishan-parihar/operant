@@ -93,9 +93,19 @@ pub enum TuiEvent {
         name: String,
         at: f64,
     },
+    /// One painted frame. `reason` is `App::redraw_reason()`'s answer: why
+    /// this frame was not redundant, or `None` when the buffer it painted was
+    /// byte-identical to the one already on screen.
+    ///
+    /// It rides on the frame event rather than its own variant on purpose — a
+    /// reason with no frame to attach to has no frame number, and the whole
+    /// question ("this frame cost 9ms; why?") is only answerable if the two
+    /// sit in the same record. A `&'static str` is `Copy`, so the per-frame
+    /// cost is one 16-byte copy — no allocation, no formatting.
     FrameRendered {
         frame: u64,
         render_ms: f64,
+        reason: Option<&'static str>,
         at: f64,
     },
     Error {
@@ -155,10 +165,17 @@ impl TuiEvent {
             Self::OverlayOpened { name, .. } => format!("OverlayOpen({name})"),
             Self::OverlayClosed { name, .. } => format!("OverlayClose({name})"),
             Self::FrameRendered {
-                frame, render_ms, ..
-            } => {
-                format!("Frame(#{frame}, {render_ms:.1}ms)")
-            }
+                frame,
+                render_ms,
+                reason,
+                ..
+            } => match reason {
+                // An idle frame is the interesting one, so it is named rather
+                // than left blank: `Frame(#9, 1.2ms, idle)` says "this frame
+                // bought nothing", which is the whole point of the predicate.
+                Some(reason) => format!("Frame(#{frame}, {render_ms:.1}ms, {reason})"),
+                None => format!("Frame(#{frame}, {render_ms:.1}ms, idle)"),
+            },
             Self::Error {
                 source, message, ..
             } => format!("Error({source}: {message})"),
@@ -267,6 +284,7 @@ mod tests {
             bus.publish(TuiEvent::FrameRendered {
                 frame: i,
                 render_ms: 1.0,
+                reason: Some("streaming"),
                 at: i as f64,
             });
         }
@@ -285,6 +303,7 @@ mod tests {
         bus.publish(TuiEvent::FrameRendered {
             frame: 1,
             render_ms: 1.0,
+            reason: None,
             at: 1.0,
         });
         assert!(bus.is_empty());
@@ -297,9 +316,55 @@ mod tests {
         bus.publish(TuiEvent::FrameRendered {
             frame: 1,
             render_ms: 1.0,
+            reason: None,
             at: 1.0,
         });
         assert_eq!(bus.len(), 1);
+    }
+
+    #[test]
+    fn frame_summary_names_the_reason_and_says_idle_when_there_is_none() {
+        let bus = TuiEventBus::new(true);
+        bus.publish(TuiEvent::FrameRendered {
+            frame: 9,
+            render_ms: 1.25,
+            reason: Some("stall_spinner"),
+            at: 1.0,
+        });
+        bus.publish(TuiEvent::FrameRendered {
+            frame: 10,
+            render_ms: 0.5,
+            reason: None,
+            at: 2.0,
+        });
+        let recent = bus.recent(2);
+        assert_eq!(recent[0].summary(), "Frame(#9, 1.2ms, stall_spinner)");
+        assert_eq!(recent[1].summary(), "Frame(#10, 0.5ms, idle)");
+    }
+
+    /// The `--output` JSON is the only external contract on this event's
+    /// shape, and nothing in the repo parses `frame_rendered` out of it — but
+    /// pinning the field name and its `Option` encoding means a rename is a
+    /// deliberate edit here rather than a silent one.
+    #[test]
+    fn frame_reason_serialises_under_the_reason_key_and_nulls_when_absent() {
+        let bus = TuiEventBus::new(true);
+        bus.publish(TuiEvent::FrameRendered {
+            frame: 1,
+            render_ms: 1.0,
+            reason: Some("streaming"),
+            at: 1.0,
+        });
+        bus.publish(TuiEvent::FrameRendered {
+            frame: 2,
+            render_ms: 1.0,
+            reason: None,
+            at: 2.0,
+        });
+        let json = bus.snapshot_json();
+        assert!(json.contains(r#""kind": "frame_rendered""#), "{json}");
+        assert!(json.contains(r#""reason": "streaming""#), "{json}");
+        assert!(json.contains(r#""reason": null"#), "{json}");
     }
 
     #[test]

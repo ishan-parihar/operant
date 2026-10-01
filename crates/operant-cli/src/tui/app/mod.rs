@@ -958,6 +958,14 @@ impl App {
                 // private mode, so the only failure worth branching on is the
                 // write itself.
                 let sync = terminal.backend_mut().begin_synchronized_update().is_ok();
+                // Sample WHY this frame is being painted, at paint time, before
+                // the render closure borrows `self`. Every drain above has
+                // already run, so this is the settled state the frame renders
+                // — not the state it started from. `None` is the honest
+                // answer for a redundant frame, and the F12 overlay prints it
+                // as `idle`; the loop still draws unconditionally, so this is
+                // diagnostic, not a gate.
+                let redraw_reason = self.redraw_reason();
                 let draw_start = std::time::Instant::now();
                 let drawn = terminal.draw(|f| render::render_app(f, self));
                 let render_ms = draw_start.elapsed().as_secs_f64() * 1000.0;
@@ -966,7 +974,7 @@ impl App {
                 // needs `&mut` access to it. `map` consumes `drawn`, which ends
                 // that borrow before the line below.
                 let outcome = drawn.map(|completed| {
-                    self.debug_hub.record_frame(render_ms);
+                    self.debug_hub.record_frame(render_ms, redraw_reason);
                     // Headless per-frame capture (armed by
                     // `tui debug simulate --capture-frames`); inert otherwise.
                     self.debug_hub.capture_frame(completed.buffer);

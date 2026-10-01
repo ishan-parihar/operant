@@ -10,6 +10,7 @@
   ],
   "assert_screen": [
     "contains:Debug (F12 to close)",
+    "contains:Redraw:",
     "contains:Recent events"
   ],
   "baseline": "debug-overlay.txt",
@@ -20,5 +21,5 @@
     "varying_region": "Row 26 (0-based), col 13 — the tens digit of the millisecond count in the `Render: <n>ms last` row, in BOTH dumps: the text diff shows `9ms` vs `10ms` and the style diff lands on the same cell with `1` as the symbol in place of `0`.",
     "surface_of_fix": "Have record_frame clamp or skip recording when App::is_simulating is set, or expose a frozen-duration override on TuiDebugHub. Both are production changes made for a test, so the golden is withheld instead."
   },
-  "notes": "The topmost surface in the entire ladder: rendered last, after the selection pass, so nothing can occlude it. Asserted via the new top-level `debug_overlay` key rather than `overlays.debug_overlay` \u2014 it is deliberately NOT an entry in overlay_flags(), because any_modal_open() is derived from that list and folding a key-driven diagnostics panel into it would make unrelated `any_modal_open == false` assertions lie. The prior needle was 'Events'; the render emits ' Recent events (newest first) ' (lowercase e), so the needles are now the bordered title and the log header it actually draws."
+  "notes": "The topmost surface in the entire ladder: rendered last, after the selection pass, so nothing can occlude it. Asserted via the new top-level `debug_overlay` key rather than `overlays.debug_overlay` \u2014 it is deliberately NOT an entry in overlay_flags(), because any_modal_open() is derived from that list and folding a key-driven diagnostics panel into it would make unrelated `any_modal_open == false` assertions lie. The prior needle was 'Events'; the render emits ' Recent events (newest first) ' (lowercase e), so the needles are now the bordered title and the log header it actually draws. The `Redraw:` needle is the ONLY automated guard on this surface, because the golden is withheld for the millisecond-count nondeterminism below \u2014 it pins the LABEL (why this frame was painted, from App::redraw_reason() via TuiDebugHub::record_frame) and not the value, since the value moves with the scenario's live state. The stats chunk is Constraint::Length(5) and now carries exactly five lines, so adding it moved no row of the event log below."
 }

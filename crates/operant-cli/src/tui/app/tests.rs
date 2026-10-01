@@ -1301,10 +1301,13 @@ fn test_debug_hub_records_frames() {
     // Phase 1: record_frame should increment frame count.
     let app = make_app();
     assert_eq!(app.debug_hub.frame_count(), 0);
-    app.debug_hub.record_frame(5.0);
-    app.debug_hub.record_frame(3.0);
+    app.debug_hub.record_frame(5.0, app.redraw_reason());
+    app.debug_hub.record_frame(3.0, app.redraw_reason());
     assert_eq!(app.debug_hub.frame_count(), 2);
     assert_eq!(app.debug_hub.last_render_ms(), 3);
+    // A fresh app has nothing pending, so the reason is the idle case — which
+    // is a value, not a missing record.
+    assert_eq!(app.debug_hub.last_redraw_reason(), None);
 }
 
 #[test]

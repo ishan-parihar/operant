@@ -48,7 +48,9 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
     let inner = block.inner(overlay_area);
     f.render_widget(block, overlay_area);
 
-    // Split into stats (top) + event log (bottom).
+    // Split into stats (top) + event log (bottom). The stats chunk is sized to
+    // the five lines above it exactly, so the event log below keeps its
+    // geometry and rows when a stat is added.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(5), Constraint::Min(1)])
@@ -69,6 +71,14 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
         Line::from(vec![
             Span::styled("Render:    ", Style::default().fg(theme_colors::accent())),
             Span::raw(format!("{}ms last", hub.last_render_ms())),
+        ]),
+        // The reason sits directly under the cost it explains: "9ms" on its own
+        // is just a number, "9ms because streaming" is an answer. `idle` is a
+        // value, not a blank — a frame that repainted an identical buffer is
+        // the answer a busy-looking TUI most needs.
+        Line::from(vec![
+            Span::styled("Redraw:    ", Style::default().fg(theme_colors::accent())),
+            Span::raw(hub.last_redraw_reason().unwrap_or("idle")),
         ]),
         Line::from(vec![
             Span::styled("Last err:  ", Style::default().fg(theme_colors::accent())),

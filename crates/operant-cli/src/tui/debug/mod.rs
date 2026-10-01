@@ -27,7 +27,8 @@
 //!
 //! In `App::run` loop, after `terminal.draw`:
 //! ```ignore
-//! self.debug_hub.record_frame(render_ms);
+//! // `reason` is `App::redraw_reason()`, sampled just before the draw.
+//! self.debug_hub.record_frame(render_ms, redraw_reason);
 //! ```
 //!
 //! In `App::handle_key_event`, at the top:

@@ -23,6 +23,12 @@ struct Inner {
     started_at: Instant,
     frame_count: AtomicU64,
     last_render_ms: AtomicU64,
+    /// `App::redraw_reason()`'s answer for the most recent frame. Kept out of
+    /// the event bus deliberately: the bus is off unless `OPERANT_TUI_DEBUG=1`,
+    /// but the overlay must show the reason in a normal run, the same way
+    /// `frame_count` and `last_render_ms` are unconditional. A `&'static str`
+    /// needs no formatting to store, only a lock to share.
+    last_redraw_reason: Mutex<Option<&'static str>>,
     last_error: Mutex<Option<String>>,
     overlay_visible: AtomicBool,
     /// Path to dump the event log on exit (if set via env var).
@@ -53,6 +59,7 @@ impl TuiDebugHub {
                 started_at: Instant::now(),
                 frame_count: AtomicU64::new(0),
                 last_render_ms: AtomicU64::new(0),
+                last_redraw_reason: Mutex::new(None),
                 last_error: Mutex::new(None),
                 overlay_visible: AtomicBool::new(false),
                 event_log_path: Mutex::new(event_log_path),
@@ -83,14 +90,22 @@ impl TuiDebugHub {
 
     /// Called from the run loop after each `terminal.draw`. Records frame
     /// count, render time, and publishes a FrameRendered event.
-    pub fn record_frame(&self, render_ms: f64) {
+    ///
+    /// `reason` is `App::redraw_reason()`'s answer, sampled at draw time: the
+    /// name of the state that made this frame worth painting, or `None` when
+    /// the buffer was identical to the one already on screen. It is stored
+    /// unconditionally and published with the event, so the F12 overlay can
+    /// show it in a normal run and the event log keeps it for replay.
+    pub fn record_frame(&self, render_ms: f64, reason: Option<&'static str>) {
         let frame = self.inner.frame_count.fetch_add(1, Ordering::Relaxed) + 1;
         self.inner
             .last_render_ms
             .store(render_ms as u64, Ordering::Relaxed);
+        *self.inner.last_redraw_reason.lock() = reason;
         self.inner.event_bus.publish(TuiEvent::FrameRendered {
             frame,
             render_ms,
+            reason,
             at: now_secs(),
         });
     }
@@ -101,6 +116,13 @@ impl TuiDebugHub {
 
     pub fn last_render_ms(&self) -> u64 {
         self.inner.last_render_ms.load(Ordering::Relaxed)
+    }
+
+    /// Why the most recent frame was painted, or `None` when it was redundant.
+    /// `None` is a real answer here, not "not recorded yet" — an idle session
+    /// is exactly the case worth seeing, so the overlay renders it as `idle`.
+    pub fn last_redraw_reason(&self) -> Option<&'static str> {
+        *self.inner.last_redraw_reason.lock()
     }
 
     // ── Per-frame capture (headless simulator) ─────────────────────────
@@ -415,10 +437,38 @@ mod tests {
     fn hub_records_frames() {
         let hub = TuiDebugHub::new(true);
         assert_eq!(hub.frame_count(), 0);
-        hub.record_frame(5.0);
-        hub.record_frame(3.0);
+        hub.record_frame(5.0, Some("streaming"));
+        hub.record_frame(3.0, Some("turn_timer"));
         assert_eq!(hub.frame_count(), 2);
         assert_eq!(hub.last_render_ms(), 3);
+    }
+
+    /// The reason is the whole point of the field: it must survive into the
+    /// event log AND into the unconditional slot the overlay reads, with the
+    /// idle case preserved as a value rather than flattened to a default.
+    #[test]
+    fn record_frame_carries_the_redraw_reason_to_both_readers() {
+        let hub = TuiDebugHub::new(true);
+        hub.record_frame(1.0, Some("notification_ttl"));
+        assert_eq!(hub.last_redraw_reason(), Some("notification_ttl"));
+        let event = hub.event_bus().recent(1).pop().expect("one event");
+        assert!(matches!(
+            event,
+            TuiEvent::FrameRendered {
+                frame: 1,
+                render_ms: 1.0,
+                reason: Some("notification_ttl"),
+                ..
+            }
+        ));
+
+        hub.record_frame(2.0, None);
+        assert_eq!(hub.last_redraw_reason(), None);
+        let event = hub.event_bus().recent(1).pop().expect("one event");
+        assert!(matches!(
+            event,
+            TuiEvent::FrameRendered { reason: None, .. }
+        ));
     }
 
     #[test]
@@ -443,9 +493,13 @@ mod tests {
     fn new_from_env_respects_flag() {
         // Default: not set → disabled.
         let hub = TuiDebugHub::new_from_env();
-        hub.record_frame(1.0);
+        hub.record_frame(1.0, None);
         // Bus is disabled, so no events recorded.
         assert_eq!(hub.event_bus().len(), 0);
+        // The reason slot is NOT bus-gated — the overlay reads it in a normal
+        // run, exactly as it reads frame_count.
+        assert_eq!(hub.frame_count(), 1);
+        assert_eq!(hub.last_redraw_reason(), None);
     }
 
     // ── Style dump encoder ────────────────────────────────────────────

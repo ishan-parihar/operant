@@ -10,10 +10,13 @@
 // whereas `"streaming"` sends you straight to the renderer's footer path.
 //
 // This is deliberately a PURE predicate over `App` state. The natural place to
-// record the answer is the debug hub's event bus (so the F12 overlay could show
-// it), but `tui/debug/` is frozen during the parallel-surface phase, so no
-// `TuiEvent` variant can be added for it. Rather than add a dead field on `App`
-// that nothing renders, the reason is exposed here and pinned by tests.
+// record the answer is the debug hub's frame bookkeeping, so the F12 overlay can
+// show it beside the render cost it explains — the run loop samples it once per
+// frame, just before `terminal.draw`, and hands it to
+// `TuiDebugHub::record_frame`, which stores it in its own slot and rides it on
+// the `FrameRendered` event. The loop still draws unconditionally, so this is
+// diagnostic rather than a gate: "why was this frame painted?" is now a
+// question with an answer, and the answer is on screen.
 //
 // Precedence is first-match-wins and deliberate: the cases that move the most
 // cells per frame come first, so the reported name is the one that explains the
@@ -27,10 +30,10 @@ use super::*;
 /// grepped, matched against render paths, and asserted in tests. A rename here
 /// is a behaviour change to the diagnostic surface.
 ///
-/// Only the tests below read this today. It exists so the reason names are a
-/// checked table rather than free-floating string literals at each branch —
-/// the same reason `DialogPriority::None` carries an `#[allow(dead_code)]`.
-#[cfg_attr(not(test), allow(dead_code))]
+/// The `debug_assert!` in [`App::redraw_reason`] checks every answer against
+/// this table, and the tests below walk it both ways. It exists so the reason
+/// names are a checked table rather than free-floating string literals at each
+/// branch.
 const REDRAW_REASONS: &[&str] = &[
     // The turn is in flight: the transcript grows and the spinner glyph /
     // shimmer sweep are `frame_count`-driven (`render/utils.rs`), so every
@@ -88,14 +91,12 @@ impl App {
     /// the loop's catch-all arm and the size change is picked up by the next
     /// draw from the terminal itself. Adding a size field to answer it would be
     /// state that exists only to be compared with itself.
-    // Not called by the run loop: operant draws every frame unconditionally, so
-    // there is no branch here that could consume the answer without inventing a
-    // skip that the loop does not have. The wiring it is FOR is the debug
-    // hub's event bus, so the F12 overlay shows the reason beside the frame —
-    // and `tui/debug/` is frozen until the surface rebuild lands, so no
-    // `TuiEvent` variant can be added for it. Until then the reason is a
-    // queryable predicate over App state, pinned by the tests below.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // Sampled once per frame by `App::run`, immediately before
+    // `terminal.draw`, and passed to `TuiDebugHub::record_frame`. The F12
+    // overlay prints it as `Redraw:`; the event log carries it on every
+    // `FrameRendered`. It does not gate the draw — operant's loop paints every
+    // iteration and inventing a skip here would need a state field that exists
+    // only to be compared with itself.
     pub(crate) fn redraw_reason(&self) -> Option<&'static str> {
         let reason = if self.is_streaming {
             "streaming"
@@ -142,7 +143,6 @@ impl App {
     /// Both halves matter: the pending flags are set by the key handler and the
     /// spawn happens later in the same frame, so a fetch that is about to be
     /// spawned is exactly as live as one already running.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn background_fetch_pending(&self) -> bool {
         self.model_fetch_rx.is_some()
             || self.model_picker_fetch_pending
@@ -311,5 +311,54 @@ mod tests {
     fn an_idle_app_needs_no_frame() {
         let app = make_app();
         assert_eq!(app.redraw_reason(), None);
+    }
+
+    /// The predicate is only worth having if its answer survives the trip to
+    /// where a human reads it. `App::run` hands `redraw_reason()` to
+    /// `TuiDebugHub::record_frame`, which stores it in a slot the F12 overlay
+    /// reads and rides it on the `FrameRendered` event; this walks that exact
+    /// path. Re-adding the `allow(dead_code)`, or dropping the call from the
+    /// draw site, leaves this green — so it is a wiring pin, not a shape pin.
+    /// The shape is pinned by `TuiDebugHub`'s own test.
+    #[test]
+    fn the_reason_reaches_the_debug_hub_the_overlay_reads() {
+        use crate::tui::debug::TuiEvent;
+
+        let mut app = make_app();
+        // The bus is off by default (`OPERANT_TUI_DEBUG`); the headless
+        // simulator turns it on the same way before it starts drawing.
+        app.debug_hub.event_bus().set_enabled(true);
+        // Stream, so the reason is a name rather than the idle `None`.
+        app.is_streaming = true;
+        let reason = app.redraw_reason();
+        assert_eq!(reason, Some("streaming"));
+        app.debug_hub.record_frame(2.0, reason);
+        assert_eq!(app.debug_hub.last_redraw_reason(), Some("streaming"));
+
+        let events = app.debug_hub.event_bus().recent(1);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                TuiEvent::FrameRendered {
+                    reason: Some("streaming"),
+                    ..
+                }
+            )),
+            "the FrameRendered event must carry the reason, not just the hub slot"
+        );
+
+        // And the idle case is reported rather than silently dropped.
+        app.is_streaming = false;
+        let reason = app.redraw_reason();
+        assert_eq!(reason, None);
+        app.debug_hub.record_frame(1.0, reason);
+        assert_eq!(app.debug_hub.last_redraw_reason(), None);
+        let events = app.debug_hub.event_bus().recent(1);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TuiEvent::FrameRendered { reason: None, .. })),
+            "an idle frame must still record the fact that it was idle"
+        );
     }
 }
