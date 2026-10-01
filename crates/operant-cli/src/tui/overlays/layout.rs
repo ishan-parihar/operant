@@ -429,6 +429,24 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::layout::Margin;
 
+    /// `modal_frame` and `modal_title_line` read the process-global palette
+    /// (`theme_colors::accent/text/muted/panel_bg/overlay_bg`), so any test that
+    /// renders them can observe another test's theme mid-assertion. Every other
+    /// palette-reading test site takes `ACTIVE_LOCK` (`render/mod.rs`,
+    /// `banner.rs`, `rustle.rs`, `app/tests.rs`, `app/commands.rs`); this module
+    /// did not, which made the two Frame-vs-Buffer agreement tests fail
+    /// intermittently in a parallel run with the default theme's
+    /// `muted()` (Rgb 204,155,31) against nord's (Rgb 76,86,106).
+    ///
+    /// Taking the lock for the whole comparison is what makes those two tests
+    /// sound: it guarantees no other test can swap the palette between the
+    /// Frame half and the Buffer half.
+    fn palette_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     const LARGE: Rect = Rect {
         x: 0,
         y: 0,
@@ -583,6 +601,7 @@ mod tests {
     /// `begin_modal_frame` and `begin_modal_buf` are one body, not two.
     #[test]
     fn begin_modal_frame_and_begin_modal_buf_agree() {
+        let _palette = palette_guard();
         for &(area, w, h, hh, fh) in MATRIX {
             if area.width == 0 || area.height == 0 {
                 // A zero-area terminal cannot be drawn into; the Buffer path is
@@ -945,6 +964,7 @@ mod tests {
     /// `Buffer`-only step to `modal_frame`), this fails.
     #[test]
     fn modal_frame_and_modal_frame_buf_paint_identical_cells() {
+        let _palette = palette_guard();
         for &(area, w, h, hh, fh) in MATRIX {
             if area.width == 0 || area.height == 0 {
                 continue; // no zero-area terminal; covered by the geometry tests
@@ -981,6 +1001,7 @@ mod tests {
     /// silently.
     #[test]
     fn modal_title_line_matches_the_frame_renderer() {
+        let _palette = palette_guard();
         let area = Rect {
             x: 4,
             y: 2,
@@ -1025,6 +1046,7 @@ mod tests {
 
     #[test]
     fn title_padding_underflows_to_zero_instead_of_panicking() {
+        let _palette = palette_guard();
         // Title wider than the row: `saturating_sub` must clamp, and the hint is
         // simply pushed off the end.
         let line = modal_title_line(2, "a very long title indeed", "esc");
@@ -1036,6 +1058,7 @@ mod tests {
 
     #[test]
     fn modal_frame_draws_a_rounded_border_and_a_right_aligned_hint() {
+        let _palette = palette_guard();
         let area = LARGE;
         let spec = ModalSpec {
             title: "Plugins",
@@ -1093,6 +1116,7 @@ mod tests {
 
     #[test]
     fn modal_frame_with_a_zero_header_renders_no_title_row() {
+        let _palette = palette_guard();
         let spec = ModalSpec {
             title: "Plugins",
             width: 72,
@@ -1112,12 +1136,14 @@ mod tests {
 
     #[test]
     fn modal_frame_uses_the_canonical_esc_hint_by_default() {
+        let _palette = palette_guard();
         assert_eq!(ModalSpec::default().hint, "Esc to close");
         assert_eq!(ModalSpec::default().hint, HINT_ESC);
     }
 
     #[test]
     fn modal_frame_darkens_the_area_around_the_modal() {
+        let _palette = palette_guard();
         // The overlay is what separates a modal from the surface under it. Pin
         // one cell outside the dialog and one inside.
         let spec = ModalSpec {
