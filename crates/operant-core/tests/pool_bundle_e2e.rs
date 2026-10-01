@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use operant_core::harness_adapters::ToolSeam;
 use operant_core::pool_adapter;
-use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
+use operant_core::tools::{ToolContext, ToolRegistry};
 use operant_harness::{
     Architecture, ArchitectureRow, BuilderWithFactories, Harness, PoolBundleProvider, PoolManifest,
 };

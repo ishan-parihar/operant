@@ -1,5 +1,6 @@
 //! `run` — method-group impl block extracted verbatim from agent/mod.rs.
 
+use self::stream_retry_budget;
 use self::turn_finalizer::{
     PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics,
     TurnExitReason, file_mutation_verifier_footer,
@@ -186,7 +187,13 @@ impl OperantAgent {
         reason = "poisoned lock: panic is the intended recovery"
     )]
     /// Run the agent with a user query
-    #[instrument(skip(self), fields(model = % self.config.model))]
+    // `user_query` MUST be skipped. With only `self` skipped, `#[instrument]`
+    // records the argument as a span field and the default formatter prints
+    // the whole prompt into gateway.log — every user message the bot has ever
+    // handled, in plaintext, on a log that already leaked bot tokens. The span
+    // still carries `model`, and the prompt's length and channel stay
+    // observable from the gateway's own log lines.
+    #[instrument(skip(self, user_query), fields(model = % self.config.model))]
     pub async fn run(&self, user_query: String) -> Result<Message> {
         info!("Starting agent run");
 
@@ -200,8 +207,8 @@ impl OperantAgent {
 
         // Emit AgentStart hook
         if let Some(ref hooks) = self.hook_registry {
-            let ctx = crate::gateway_pipeline::HookContext::new()
-                .with_session(self.persistent_session_id.as_deref().unwrap_or(""));
+            let assigned = self.session_id().unwrap_or_default();
+            let ctx = crate::gateway_pipeline::HookContext::new().with_session(&assigned);
             hooks
                 .emit(crate::gateway_pipeline::HookEvent::AgentStart, ctx)
                 .await;
@@ -310,10 +317,11 @@ impl OperantAgent {
                     );
                 }
                 // Persist evolution counters so the next run() can hydrate.
-                if self.persistent_session_id.is_some() {
-                    for (key, val) in evo.persist_counters() {
-                        let _ = self.database.set_session_metadata(&session_id, key, &val);
-                    }
+                // The turn prologue resolved the id, so it is always
+                // assigned here — write them unconditionally; a
+                // first-turn session just has nothing to read back yet.
+                for (key, val) in evo.persist_counters() {
+                    let _ = self.database.set_session_metadata(&session_id, key, &val);
                 }
                 trigger.should_review_memory
             }
@@ -334,6 +342,11 @@ impl OperantAgent {
         // (9m elapsed...)" against a proxy returning connection errors between
         // successful tool iterations.
         let mut turn_retry_failures: usize = 0;
+        // Wall-clock bound on the mid-stream drop ladder, independent of the
+        // attempt count. Started here — at the first attempt — because the
+        // first attempt is the one that costs the most when the provider is
+        // dead-but-accepting. See `agent/stream_retry_budget.rs` for why 45s.
+        let stream_retry_budget = self::stream_retry_budget::StreamRetryBudget::new();
         // Plan 006: empty-content retry counter is the shared
         // EmptyResponseCounter from agent/turn_rules.rs — same logic the
         // runtime Agent uses (no more silent divergence on max_retries).
@@ -660,7 +673,21 @@ impl OperantAgent {
                             // exhausts its budget.
                             let turn_budget_left =
                                 !retry_state.turn_retry_exhausted(turn_retry_failures);
-                            if retryable && turn_budget_left && retry_state.consume_retry() {
+                            // The retry decision is a named policy, not an
+                            // inline `if`, so the wall-clock bound is
+                            // testable without a live agent and a live
+                            // provider. See `agent/stream_retry_budget.rs`.
+                            let attempts_left = !retry_state.is_exhausted();
+                            let decision = stream_retry_budget::decide_stream_retry(
+                                retryable,
+                                !stream_retry_budget.exhausted(),
+                                attempts_left,
+                                turn_budget_left,
+                                stream_retry_budget.elapsed(),
+                                retry_state.retry_count,
+                            );
+                            if let stream_retry_budget::StreamRetryDecision::Retry = decision {
+                                retry_state.consume_retry();
                                 turn_retry_failures += 1;
                                 self.iteration_budget.refund();
                                 // Aggregation hook: bump the shared retry
@@ -692,7 +719,56 @@ impl OperantAgent {
                                     )
                                     .await?;
                             } else {
-                                return Err(self.annotate_thinking_timeout(e));
+                                // Give up with something the user can act on
+                                // rather than a bare transport error that
+                                // reads like a one-off. The give-up reason is
+                                // carried by `decision` because the reasons
+                                // have different causes and different fixes:
+                                //
+                                //  - wall clock spent: the stream kept dying
+                                //    and the retries themselves became the
+                                //    wait. Report the stream death, because
+                                //    the user needs to know their message was
+                                //    not answered and why.
+                                //  - anything else (non-retryable class,
+                                //    attempts exhausted, turn budget spent):
+                                //    the underlying error is still the most
+                                //    accurate thing to show, so pass it
+                                //    through unchanged.
+                                match decision {
+                                    stream_retry_budget::StreamRetryDecision::GiveUp(
+                                        stream_retry_budget::StreamRetryGiveUp::WallClock {
+                                            elapsed,
+                                        },
+                                    ) => {
+                                        let attempts = retry_state.retry_count;
+                                        let elapsed_secs = elapsed.as_secs();
+                                        let cause = e.to_string();
+                                        // Honest record of which path was
+                                        // taken. The four-attempt ladder that
+                                        // produced the 2026-09-29 incident
+                                        // never reached this line, because
+                                        // there was no line to reach — it
+                                        // simply returned the raw transport
+                                        // error and said nothing.
+                                        warn!(
+                                            error = %cause,
+                                            attempts,
+                                            max = retry_state.max_retries,
+                                            elapsed_secs,
+                                            budget_secs = stream_retry_budget::STREAM_DROP_RETRY_BUDGET.as_secs(),
+                                            "Stream retry budget exhausted on wall clock — giving up with an explanation"
+                                        );
+                                        return Err(Error::StreamDied {
+                                            cause,
+                                            attempts,
+                                            elapsed_secs,
+                                        });
+                                    }
+                                    _ => {
+                                        return Err(self.annotate_thinking_timeout(e));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1643,10 +1719,8 @@ impl OperantAgent {
 
                 // ── Persist evolution counters to session metadata ──
                 // After bumping, persist so the next run() can hydrate.
-                if self.persistent_session_id.is_some() {
-                    for (key, val) in evo.persist_counters() {
-                        let _ = self.database.set_session_metadata(&session_id, key, &val);
-                    }
+                for (key, val) in evo.persist_counters() {
+                    let _ = self.database.set_session_metadata(&session_id, key, &val);
                 }
 
                 trigger.should_review_skills
@@ -1737,8 +1811,10 @@ impl OperantAgent {
 
         // Plan 015 phase 4: continual-harness feed-forward lane. Bounded,
         // empty-safe; renders nothing when the kernel is disabled.
+        // Bound to a local so the `Option<String>` outlives the borrow.
+        let assigned_session = self.session_id();
         if let Some(harness_block) =
-            crate::tools::kernel::injection_block(self.persistent_session_id.as_deref(), 1200).await
+            crate::tools::kernel::injection_block(assigned_session.as_deref(), 1200).await
         {
             volatile_suffix.push_str("\n\n");
             volatile_suffix.push_str(&harness_block);

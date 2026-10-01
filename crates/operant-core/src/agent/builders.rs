@@ -54,6 +54,7 @@ impl OperantAgent {
         let nudge = config.skill_nudge_interval;
         let mem_interval = config.memory_review_interval;
         let persistent_allowlist = approval_allowlist_from_config(&config);
+        let sessions = Arc::new(crate::session::SessionStore::new(Arc::clone(&database)));
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -61,6 +62,7 @@ impl OperantAgent {
             registry,
             harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
+            sessions,
             event_tx: None,
             permission_tx: None,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
@@ -74,7 +76,7 @@ impl OperantAgent {
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
             database,
-            persistent_session_id: None,
+            session_id: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
             tool_guardrails: std::sync::Mutex::new(
@@ -119,6 +121,7 @@ impl OperantAgent {
         let nudge = config.skill_nudge_interval;
         let mem_interval = config.memory_review_interval;
         let persistent_allowlist = approval_allowlist_from_config(&config);
+        let sessions = Arc::new(crate::session::SessionStore::new(Arc::clone(&database)));
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -126,6 +129,7 @@ impl OperantAgent {
             registry,
             harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
+            sessions,
             event_tx: Some(event_tx),
             permission_tx: None,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
@@ -139,7 +143,7 @@ impl OperantAgent {
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             skill_manager: None,
             database,
-            persistent_session_id: None,
+            session_id: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
             tool_guardrails: std::sync::Mutex::new(
@@ -354,8 +358,13 @@ impl OperantAgent {
         self
     }
 
-    pub fn with_persistent_session(mut self, session_id: String) -> Self {
-        self.persistent_session_id = Some(session_id);
+    /// Build-time session assignment, for hosts that construct the agent
+    /// once per session (TUI, WebSocket). Delegates to
+    /// [`Self::set_session_id`] so there is exactly one session slot and
+    /// one reader; a host that serves many sessions from one agent calls
+    /// `set_session_id` per turn instead.
+    pub fn with_persistent_session(self, session_id: String) -> Self {
+        self.set_session_id(session_id);
         self
     }
 

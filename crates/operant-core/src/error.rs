@@ -128,6 +128,36 @@ pub enum Error {
     #[error("Incomplete SSE message")]
     IncompleteSseMessage,
 
+    /// The provider's response stream died mid-body and the turn's retry
+    /// budget ran out before a re-issue succeeded.
+    ///
+    /// Distinct from an empty-but-successful response on purpose. An empty
+    /// response means the provider answered and had nothing to say — the
+    /// nudge ladder retries it and the user is told the provider was
+    /// overloaded. A dropped stream means the provider *failed to deliver*:
+    /// no retry recovered inside the wall-clock budget, and the content the
+    /// user asked for may have been computed upstream and lost. Those are
+    /// different facts about the user's request, and reporting one as the
+    /// other sends people to debug the wrong layer.
+    ///
+    /// Carries the underlying error text so the give-up is actionable rather
+    /// than a bare "failed": the operator needs to know it was a transport
+    /// reset, not a content filter or a bad key.
+    ///
+    /// The field is `cause`, not `source`: `thiserror` reads a field named
+    /// `source` as the chained `std::error::Error`, and a `String` is not
+    /// one. The text is captured deliberately — the caller has already
+    /// rendered it — so there is no error value left to chain.
+    #[error("The model provider's stream died mid-response and did not recover: {cause}")]
+    StreamDied {
+        /// The underlying transport error, verbatim.
+        cause: String,
+        /// How many times the request was re-issued before giving up.
+        attempts: usize,
+        /// Wall-clock seconds spent on the dead stream before giving up.
+        elapsed_secs: u64,
+    },
+
     // ========== Tool Errors ==========
     #[error("Tool not found: {name}")]
     ToolNotFound { name: String },
@@ -249,6 +279,18 @@ impl Error {
             Error::MaxIterationsExceeded { max } => {
                 format!("Maximum iterations ({}) exceeded.", max)
             }
+            Error::StreamDied {
+                cause,
+                attempts,
+                elapsed_secs,
+            } => {
+                format!(
+                    "The model provider's stream died mid-response and did not recover \
+                     after {attempts} retr{} over {elapsed_secs}s ({cause}). \
+                     Your message was not lost — reply 'continue' to retry it.",
+                    if *attempts == 1 { "y" } else { "ies" }
+                )
+            }
             Error::ContextLengthExceeded => {
                 "The conversation has exceeded the maximum context length.".to_string()
             }
@@ -313,6 +355,96 @@ mod tests {
         assert!(
             !err.is_self_healing(),
             "Authentication should not be self-healing"
+        );
+    }
+
+    /// A dead stream is a *decision*, not a transient condition. If this ever
+    /// reports transient, whatever consumes it may start the retry ladder
+    /// again — which is precisely the unbounded wait this variant exists to
+    /// end. The provider may well be healthy on the next turn; the point is
+    /// that this turn has already spent its budget.
+    #[test]
+    fn stream_died_is_not_transient_and_not_self_healing() {
+        let err = Error::StreamDied {
+            cause: "Network error: error decoding response body".to_string(),
+            attempts: 2,
+            elapsed_secs: 120,
+        };
+        assert!(
+            !err.is_transient(),
+            "a spent stream-retry budget must not invite another retry ladder"
+        );
+        assert!(
+            !err.is_self_healing(),
+            "re-prompting the LLM cannot fix a dead transport"
+        );
+    }
+
+    /// The message must name the actual failure and the actual cost, and must
+    /// tell the user their message survived. Silence after four minutes is
+    /// the defect; "something happened" is not a fix.
+    #[test]
+    fn stream_died_user_message_is_actionable() {
+        let msg = Error::StreamDied {
+            cause: "Network error: error decoding response body".to_string(),
+            attempts: 2,
+            elapsed_secs: 120,
+        }
+        .user_message();
+        assert!(msg.contains("stream died"), "got: {msg}");
+        assert!(
+            msg.contains("error decoding response body"),
+            "must carry the underlying cause, got: {msg}"
+        );
+        assert!(msg.contains("120s"), "must state the cost, got: {msg}");
+        assert!(msg.contains("not lost"), "got: {msg}");
+        assert!(msg.contains("continue"), "got: {msg}");
+    }
+
+    #[test]
+    fn stream_died_user_message_agrees_in_singular_and_plural() {
+        let one = Error::StreamDied {
+            cause: "reset".to_string(),
+            attempts: 1,
+            elapsed_secs: 45,
+        }
+        .user_message();
+        assert!(one.contains("1 retry"), "got: {one}");
+        assert!(!one.contains("1 retries"), "got: {one}");
+
+        let many = Error::StreamDied {
+            cause: "reset".to_string(),
+            attempts: 3,
+            elapsed_secs: 200,
+        }
+        .user_message();
+        assert!(many.contains("3 retries"), "got: {many}");
+    }
+
+    /// The distinction the task turns on: a dropped stream and an
+    /// empty-but-successful response are different facts and must never
+    /// produce the same user-facing text. Empty means the provider answered
+    /// with nothing (overload); a dropped stream means it failed to deliver.
+    #[test]
+    fn stream_died_is_not_conflated_with_empty_response() {
+        let died = Error::StreamDied {
+            cause: "Network error: error decoding response body".to_string(),
+            attempts: 2,
+            elapsed_secs: 90,
+        }
+        .user_message();
+
+        // The empty-response wording the gateway already ships for a
+        // successful-but-blank reply (see the CLI's empty-content branch).
+        let empty_wording = "returned an empty response after retries";
+
+        assert!(
+            !died.contains(empty_wording),
+            "a dead stream must not be reported as an empty response: {died}"
+        );
+        assert!(
+            !died.to_lowercase().contains("provider overload"),
+            "overload is an empty-response diagnosis, not a transport one: {died}"
         );
     }
 

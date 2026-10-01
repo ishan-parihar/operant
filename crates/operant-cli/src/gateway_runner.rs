@@ -15,10 +15,11 @@ use operant_core::gateway::{
     WhatsAppAdapter,
 };
 use operant_core::gateway_pipeline::{MessagePipeline, PipelineAction};
+use operant_core::interrupt::InterruptFlag;
 use operant_core::redaction::redact_sensitive_text_if_enabled;
 
 use crate::gateway_commands::{
-    CommandContext, handle_command, resolve_command, telegram_bot_commands,
+    CommandContext, CommandMatch, handle_command, resolve_command, telegram_bot_commands,
 };
 use operant_core::mcp::McpManager;
 use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
@@ -255,8 +256,39 @@ pub static YOLO_CHANNELS: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock
 /// `_redact_discord_error_text` parity: gateway error paths echo upstream
 /// API bodies and reqwest URLs (which embed bot tokens in the path), so
 /// every error-formatted log line must be scrubbed. (T9 channel audit)
-fn redact_err(e: &(impl std::fmt::Display + ?Sized)) -> String {
+pub(crate) fn redact_err(e: &(impl std::fmt::Display + ?Sized)) -> String {
     redact_sensitive_text_if_enabled(&e.to_string())
+}
+
+/// Short, content-free class name for a failed turn.
+///
+/// `operant_core::Error` has no accessor for its discriminant, and its `Display`
+/// is the whole upstream body — too coarse to tell "the provider died" from "a
+/// tool timed out" when reading a log back. The catch-all is deliberate: the
+/// enum lives in `operant-core` and is free to grow variants, so naming a
+/// subset of the classes that actually end turns keeps this file compiling
+/// across those additions instead of breaking on the next one.
+fn error_class(e: &operant_core::Error) -> &'static str {
+    use operant_core::Error as E;
+    match e {
+        E::Network(_) => "network",
+        E::StreamDied { .. } => "stream_died",
+        E::Provider { .. } => "provider",
+        E::RateLimited { .. } => "rate_limited",
+        E::Authentication(_) => "auth",
+        E::ContextLengthExceeded => "context_length",
+        E::MaxIterationsExceeded { .. } => "max_iterations",
+        E::IncompleteSseMessage => "incomplete_sse",
+        E::MissingApiKey => "missing_api_key",
+        E::Config(_) => "config",
+        E::Agent(_) => "agent",
+        E::ToolTimeout { .. } => "tool_timeout",
+        E::ToolCancelled { .. } => "tool_cancelled",
+        E::ToolExecution { .. } => "tool_execution",
+        E::JsonDecode(_) | E::ParseResponse(_) => "decode",
+        E::Io(_) => "io",
+        _ => "other",
+    }
 }
 
 fn yolo_key(platform: &str, channel_id: &str) -> String {
@@ -339,6 +371,52 @@ pub fn pending_permission_exists(channel_id: &str) -> bool {
 fn pid_file_path() -> std::path::PathBuf {
     operant_core::platform::operant_home().join("gateway.pid")
 }
+/// Sticky per-session resume pins, set by the `/resume` command.
+///
+/// The agent's session id is derived from the routing key
+/// (`platform:channel:user[:thread]`), so a chat can only ever continue the one
+/// transcript its key hashes to. `/resume <session-id>` needs to make the next
+/// turn in a chat continue a DIFFERENT transcript, which means overriding that
+/// derivation — and the reload machinery that actually repopulates the agent's
+/// context from the database already exists in
+/// `GatewayMessageHandler::handle`. This map is the missing half: it carries
+/// the override from the command handler to the turn handler.
+///
+/// Sticky rather than one-shot on purpose. A one-shot pin would leave the
+/// second message after a `/resume` silently back on the chat's own transcript,
+/// which is the same class of lie this change exists to remove — the user was
+/// told the session resumed, and then it did not.
+///
+/// A `std` mutex, not a tokio one, because `handle_command` is synchronous: the
+/// critical section is a single map operation and never spans an await, so
+/// there is nothing to be gained by making it async.
+#[derive(Default)]
+pub struct SessionPins {
+    pins: std::sync::Mutex<HashMap<String, String>>,
+}
+
+impl SessionPins {
+    /// Route `session_key` at `session_id` from now on, replacing any previous
+    /// pin. `session_id` is the agent's session id (`gw_<hash>`), the same
+    /// namespace the `messages` table is keyed by.
+    pub fn set(&self, session_key: &str, session_id: &str) {
+        let Ok(mut pins) = self.pins.lock() else {
+            return;
+        };
+        pins.insert(session_key.to_string(), session_id.to_string());
+    }
+
+    /// The pinned session id for `session_key`, if any.
+    pub fn get(&self, session_key: &str) -> Option<String> {
+        self.pins.lock().ok()?.get(session_key).cloned()
+    }
+
+    /// Drop the pin for `session_key`, returning to the id derived from the key.
+    pub fn clear(&self, session_key: &str) -> Option<String> {
+        self.pins.lock().ok()?.remove(session_key)
+    }
+}
+
 /// Message handler that processes incoming gateway messages through the Operant agent.
 ///
 /// Long-term memory is handled by the agent itself: `OperantAgent` now
@@ -361,6 +439,10 @@ struct GatewayMessageHandler {
     /// Sender for bridge connection state updates to the TUI.
     bridge_state_tx:
         tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>,
+    /// Per-session resume overrides set by `/resume`. Shared with the dispatch
+    /// loop's `CommandContext` so the command can pin a session this handler
+    /// then honours.
+    session_pins: Arc<SessionPins>,
 }
 
 #[async_trait::async_trait]
@@ -433,7 +515,33 @@ impl MessageHandler for GatewayMessageHandler {
         // Derive stable session_id from key hash
         let mut hasher = DefaultHasher::new();
         session_key.hash(&mut hasher);
-        let session_id = format!("gw_{:x}", hasher.finish());
+        let derived_session_id = format!("gw_{:x}", hasher.finish());
+
+        // A `/resume` pin overrides the derivation. Everything downstream —
+        // `save_message`, the reload below, the trajectory namespace — is
+        // already keyed on `session_id`, so re-pointing that one value is the
+        // whole of resume. The reload then fires on its own, because
+        // `current_session_id` no longer matches.
+        let (session_id, resumed) = match self.session_pins.get(&session_key) {
+            Some(pinned) => (pinned, true),
+            None => (derived_session_id.clone(), false),
+        };
+        if resumed {
+            tracing::info!(
+                session_key = %session_key,
+                session_id = %session_id,
+                derived_session_id = %derived_session_id,
+                "Gateway turn is continuing a /resume-pinned session"
+            );
+        }
+
+        // Point the agent at THIS session before it runs. Without it the agent
+        // minted a fresh `sess_<uuid>` per turn, so the tool trajectory was
+        // orphaned into an id the reload below never reads — which is why a bare
+        // `continue` after a restart came back to five prompts and no answers.
+        // `set_session_id` takes `&self` and works through `Arc<OperantAgent>`,
+        // the same shape as the `set_model` call further down.
+        self.agent.set_session_id(session_id.clone());
 
         // Ensure session exists in DB
         let now = chrono::Utc::now().to_rfc3339();
@@ -443,28 +551,26 @@ impl MessageHandler for GatewayMessageHandler {
             .save_session(&session_id, None, "gateway", &now, &now);
 
         // Load conversation history only when the session changes.
-        // Previously this called clear_history() + reloaded last 20 messages
-        // on EVERY gateway message — which broke Anthropic prompt prefix
-        // caching (the message array was rebuilt from scratch each turn,
-        // so the cache never hit). Now we track the active session ID and
-        // only reload when switching to a different session.
+        //
+        // This block used to call `clear_history()` and manually re-add the
+        // last 20 messages on EVERY gateway message. That broke Anthropic
+        // prompt prefix caching (the message array was rebuilt from scratch
+        // each turn, so the cache never hit) and, worse, it made two
+        // concurrent gateway chats wipe each other's turns: they share one
+        // agent, so switching sessions destroyed the other chat's context.
+        //
+        // `set_session_id` above now performs the swap itself — the outgoing
+        // session's turns go back to the session store and the incoming
+        // session's transcript is rehydrated in their place — so this block
+        // only tracks which session is active for bridge state. Calling
+        // `clear_history()` here would now be actively wrong: it discards the
+        // addressed session from the store, destroying the transcript
+        // `set_session_id` just rehydrated.
         let needs_reload = {
             let current = self.current_session_id.lock().await;
             *current != Some(session_id.clone())
         };
         if needs_reload {
-            self.agent.clear_history().await;
-            if let Ok(history) = self.agent.db().get_session_messages(&session_id) {
-                let skip = history.len().saturating_sub(20);
-                for msg in history.into_iter().skip(skip) {
-                    let m = match msg.role.as_str() {
-                        "user" => operant_core::client::Message::user(msg.content),
-                        "assistant" => operant_core::client::Message::assistant(msg.content),
-                        _ => continue,
-                    };
-                    self.agent.add_message(m).await;
-                }
-            }
             let mut current = self.current_session_id.lock().await;
             *current = Some(session_id.clone());
             // Update bridge state to Connected with session info
@@ -528,8 +634,27 @@ impl MessageHandler for GatewayMessageHandler {
             }
         }
 
+        // Turn start. `reloaded` is logged because it is the single fact that
+        // explains what the model can see this turn: `true` means the
+        // conversation was rebuilt from the last 20 stored messages of
+        // `session_id` just above, `false` means the agent kept the transcript
+        // it already had in memory.
+        let turn_started = std::time::Instant::now();
+        tracing::info!(
+            session_key = %session_key,
+            session_id = %session_id,
+            agent_session_id = ?self.agent.session_id(),
+            platform = %message.platform,
+            channel = %message.channel_id,
+            thread_id = ?message.thread_id,
+            reloaded = needs_reload,
+            has_media = !message.media_urls.is_empty(),
+            "Gateway turn start"
+        );
+
         match self.agent.run(query).await {
             Ok(response) => {
+                let used_fallback = response.content.trim().is_empty();
                 let content = if response.content.trim().is_empty() {
                     if let Some(ref reasoning) = response.reasoning {
                         if !reasoning.trim().is_empty() {
@@ -567,19 +692,66 @@ impl MessageHandler for GatewayMessageHandler {
                     .db()
                     .save_message(&session_id, "assistant", &content, &now);
 
+                tracing::info!(
+                    session_key = %session_key,
+                    session_id = %session_id,
+                    duration_ms = turn_started.elapsed().as_millis(),
+                    response_len = content.len(),
+                    empty_response_fallback = used_fallback,
+                    "Gateway turn end: answered"
+                );
+
                 Ok(OutgoingMessage::new(message.channel_id, content)
                     .with_thread_id(message.thread_id))
             }
             Err(e) => {
+                // A provider death used to reach the log only as the redacted
+                // `route_message` failure far downstream, by which point the
+                // session key and duration were gone. `error_class` makes the
+                // failure legible as an event; the redacted `Display` is the same
+                // scrubbed path every other error line in this file uses, and
+                // carries no user content.
+                tracing::error!(
+                    session_key = %session_key,
+                    session_id = %session_id,
+                    error_class = error_class(&e),
+                    duration_ms = turn_started.elapsed().as_millis(),
+                    detail = %redact_err(&e),
+                    "Gateway turn end: agent run failed"
+                );
+
                 // Still save the user message on error
                 let _ = self
                     .agent
                     .db()
                     .save_message(&session_id, "user", &user_content, &now);
-                Ok(
-                    OutgoingMessage::new(&message.channel_id, format!("Error: {}", e))
-                        .with_thread_id(message.thread_id),
-                )
+
+                // `user_message()`, not `Display`. `Display` double-prefixed the
+                // text ("Error: Agent error: ...") and, for a provider failure,
+                // surfaced the raw transport string with nothing the user could
+                // act on. `StreamDied`'s own rendering already says the message
+                // was not lost and to reply 'continue' to retry it.
+                let text = e.user_message();
+
+                // Persist the explanation too. Saving only the user row is what
+                // made a failed turn look like a message the bot ignored: the
+                // reloaded session showed prompts and no answers, so the history
+                // actively misrepresented what had happened.
+                let _ = self
+                    .agent
+                    .db()
+                    .save_message(&session_id, "assistant", &text, &now);
+
+                tracing::error!(
+                    session_key = %session_key,
+                    session_id = %session_id,
+                    error_class = error_class(&e),
+                    duration_ms = turn_started.elapsed().as_millis(),
+                    "Gateway turn end: answered with error notice"
+                );
+
+                Ok(OutgoingMessage::new(&message.channel_id, text)
+                    .with_thread_id(message.thread_id))
             }
         }
     }
@@ -924,6 +1096,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         bridge_state_tx,
+        session_pins: Arc::new(SessionPins::default()),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -1877,6 +2050,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     });
 
     let app_config_clone = app_config.clone();
+    let handler_for_stop = handler.clone();
     let stream_delivery_for_dispatch = stream_delivery.clone();
     tokio::spawn(async move {
         // ── Turn dispatch: per-session serialization with live dialogs ────────
@@ -1894,7 +2068,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let stream_delivery_for_turns = stream_delivery_for_dispatch.clone();
         let current_channel_for_turns = current_channel.clone();
         let telegram_token_for_turns = telegram_token.clone();
-        let mut turn_inflight: HashMap<String, ()> = HashMap::new();
+        // A live handle on each running turn's interrupt flag, so `/stop` has
+        // real machinery to signal: the agent's run loop already polls this
+        // exact flag. A `()` here — which is what this used to be — meant there
+        // was nothing to signal at all, and `/stop` reported a cancellation that
+        // never happened.
+        let mut turn_inflight: HashMap<String, InterruptFlag> = HashMap::new();
+        // Same handle the turn handler consults, so `/resume` can re-point this
+        // chat at a stored session before the next turn derives its own id.
+        let session_pins = handler_for_stop.session_pins.clone();
         let mut turn_queue: VecDeque<(String, IncomingMessage)> = VecDeque::new();
         let (turn_done_tx, mut turn_done_rx) = mpsc::unbounded_channel::<String>();
 
@@ -1902,16 +2084,46 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             tokio::select! {
                     maybe_msg = message_rx.recv() => {
                         let Some(mut msg) = maybe_msg else { break };
+                        // Turn observability: the gateway log carried tool
+                        // registration, poll heartbeats and warnings, but no
+                        // inbound-message event at all — a turn was invisible in
+                        // the agent's own telemetry. Identifiers, booleans and
+                        // counts only; `msg.content` is user text and is never
+                        // logged.
                         tracing::info!(
-                            "Gateway received message from {} on {}",
-                            msg.user_id,
-                            msg.platform
+                            user = %msg.user_id,
+                            platform = %msg.platform,
+                            channel = %msg.channel_id,
+                            is_group = msg.is_group_chat,
+                            thread_id = ?msg.thread_id,
+                            media_count = msg.media_urls.len(),
+                            "Gateway inbound message"
                         );
                         let platform = msg.platform.clone();
                         let channel_id = msg.channel_id.clone();
                         // Thread id captured before `msg` is moved into the turn —
                         // stream/dedup markers and session keys are per-topic.
                         let msg_thread = msg.thread_id;
+
+                        // Per-session routing key. Hoisted above both the command
+                        // branch and turn routing: `/stop` needs it to find the
+                        // running turn for THIS session, and it used to be derived
+                        // inside turn routing only. Deriving it in both places
+                        // would let them drift, and a drifted key means `/stop`
+                        // silently never matches.
+                        let session_key = match (msg.is_group_chat, msg.thread_id) {
+                            (true, Some(tid)) => {
+                                format!("{}:{}:thread:{}", msg.platform, msg.channel_id, tid)
+                            }
+                            (true, None) => format!("{}:{}", msg.platform, msg.channel_id),
+                            (false, Some(tid)) => format!(
+                                "{}:{}:{}:thread:{}",
+                                msg.platform, msg.channel_id, msg.user_id, tid
+                            ),
+                            (false, None) => {
+                                format!("{}:{}:{}", msg.platform, msg.channel_id, msg.user_id)
+                            }
+                        };
 
                         // ── 1. Dialog interception (never queued) ────────────────
                         // `true` = handled here (no agent turn); `false` = turn.
@@ -1937,6 +2149,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             );
 
                             // ── 1.5 Command interception ──────────────────────────
+
                             // (Approval button taps are synthesized as `/approve` /
                             // `/deny` commands — see handle_callback_update in
                             // core. The tap also carries an `approval_callback`
@@ -1947,11 +2160,23 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             let approval_was_pending = approval_tap.is_some()
                                 && pending_permission_exists(&msg.channel_id);
                             let is_admin = admins.is_empty() || admins.contains(&msg.user_id);
-                            if let Some((cmd_def, cmd_args)) = resolve_command(&msg.content) {
+                            match resolve_command(&msg.content) {
+                            CommandMatch::Found(cmd_def, cmd_args) => {
+                                // `has_args` is a boolean on purpose: the args
+                                // string carries whatever the user typed after the
+                                // command name (`/title <text>`), so it is
+                                // classified but never logged.
                                 tracing::info!(
-                                    "User {} ran command /{}",
-                                    msg.user_id,
-                                    cmd_def.name
+                                    user = %msg.user_id,
+                                    platform = %platform,
+                                    channel = %channel_id,
+                                    session_key = %session_key,
+                                    command = cmd_def.name,
+                                    category = cmd_def.category,
+                                    admin_only = cmd_def.admin_only,
+                                    is_admin,
+                                    has_args = !cmd_args.is_empty(),
+                                    "Gateway command dispatch"
                                 );
                                 if cmd_def.admin_only && !is_admin {
                                     let response = OutgoingMessage::new(
@@ -1968,7 +2193,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         &msg.user_id,
                                         &platform,
                                         &msg.channel_id,
-                                    );
+                                    )
+                                    .with_stop_flag(turn_inflight.get(&session_key).cloned())
+                                    .with_session_pins(Some(session_pins.clone()))
+                                    .with_session_key(&session_key);
                                     if let Some(response_text) =
                                         handle_command(cmd_def.name, cmd_args, &ctx)
                                     {
@@ -1994,6 +2222,56 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 }
                                 return Ok(true);
                             }
+                            CommandMatch::Unknown { token } => {
+                                // The single most valuable line for the
+                                // mistyped-command class: the token that failed to
+                                // resolve, and the fact that it was REJECTED here
+                                // rather than forwarded to the model. `warn!`
+                                // rather than `info!` because in a log dominated by
+                                // poll heartbeats an unrecognized command is an
+                                // anomaly that must not drown in the noise — and
+                                // before `resolve_command` returned three states,
+                                // exactly this case fell through as prose, the
+                                // model improvised a help reply, and nothing
+                                // recorded that the command surface had been
+                                // missed.
+                                tracing::warn!(
+                                    user = %msg.user_id,
+                                    platform = %platform,
+                                    channel = %channel_id,
+                                    session_key = %session_key,
+                                    token = %token,
+                                    "Gateway command dispatch: unknown token rejected, not sent to model"
+                                );
+                                let response = OutgoingMessage::new(
+                                    &msg.channel_id,
+                                    format!(
+                                        "Unknown command `/{}`.\nUse /help to list the available commands.",
+                                        token
+                                    ),
+                                )
+                                .with_thread_id(msg.thread_id);
+                                gw.send_to_platform(&platform, response).await?;
+                                return Ok(true);
+                            }
+                            // Prose: fall through to the agent turn below.
+                            CommandMatch::NotACommand => {
+                                // Classification companion to the inbound line:
+                                // this is a TURN, not a command. A pending dialog
+                                // below can still intercept it (a clarify reply),
+                                // so this records the classification and not the
+                                // outcome — the authoritative "a turn actually
+                                // started" event is the one in
+                                // `GatewayMessageHandler::handle`.
+                                tracing::info!(
+                                    user = %msg.user_id,
+                                    platform = %platform,
+                                    channel = %channel_id,
+                                    session_key = %session_key,
+                                    "Gateway command dispatch: prose, offered to the agent as a turn"
+                                );
+                            }
+                        }
 
                             // ── 1.6 Clarify choice taps ──────────────────────────
                             // A `choice:` inline-button tap resolves the pending
@@ -2127,19 +2405,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         }
 
                         // ── 2. Turn routing (per-session FIFO queue) ─────────────
-                        let session_key = match (msg.is_group_chat, msg.thread_id) {
-                            (true, Some(tid)) => {
-                                format!("{}:{}:thread:{}", msg.platform, msg.channel_id, tid)
-                            }
-                            (true, None) => format!("{}:{}", msg.platform, msg.channel_id),
-                            (false, Some(tid)) => format!(
-                                "{}:{}:{}:thread:{}",
-                                msg.platform, msg.channel_id, msg.user_id, tid
-                            ),
-                            (false, None) => {
-                                format!("{}:{}:{}", msg.platform, msg.channel_id, msg.user_id)
-                            }
-                        };
                         if turn_inflight.contains_key(&session_key) {
                             tracing::debug!(
                                 session = %session_key,
@@ -2148,7 +2413,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             turn_queue.push_back((session_key, msg));
                             continue;
                         }
-                        turn_inflight.insert(session_key.clone(), ());
+                        // Reset BEFORE inserting. `InterruptFlag` is a latch, and
+                        // a triggered flag that is never cleared makes every later
+                        // turn exit immediately — so a `/stop` that fixed one turn
+                        // would brick the agent for the rest of the session.
+                        let stop_flag = handler_for_stop.agent.interrupt_flag();
+                        stop_flag.reset();
+                        turn_inflight.insert(session_key.clone(), stop_flag);
                         let gw = gw_for_turns.clone();
                         let app_config_clone = app_config_for_turns.clone();
                         let stream_delivery_for_dispatch = stream_delivery_for_turns.clone();

@@ -44,13 +44,13 @@ impl OperantAgent {
         &self,
         mut messages: Vec<Message>,
     ) -> Vec<Message> {
-        let session_id = self.persistent_session_id.as_deref().unwrap_or("default");
+        let session_id = self.session_id().unwrap_or_else(|| "default".to_string());
         // The todo tool defaults to "default" when the model omits sessionId;
         // on gateway paths a persistent session id may be set while the model
         // still writes under the default key — look up both, preferring the
         // one that actually holds active todos.
         let snapshot =
-            crate::tools::todo_tool::todo_injection_for_session(session_id).or_else(|| {
+            crate::tools::todo_tool::todo_injection_for_session(&session_id).or_else(|| {
                 if session_id != "default" {
                     crate::tools::todo_tool::todo_injection_for_session("default")
                 } else {
@@ -87,9 +87,9 @@ impl OperantAgent {
             {
                 let mut guard = compressor.lock().await;
                 if guard.session_id().is_none()
-                    && let Some(session_id) = self.persistent_session_id.as_ref()
+                    && let Some(session_id) = self.session_id()
                 {
-                    guard.bind_persistence(Arc::clone(&self.database), session_id.clone());
+                    guard.bind_persistence(Arc::clone(&self.database), session_id);
                 }
             }
 

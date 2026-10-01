@@ -65,7 +65,6 @@ impl OperantTool for EchoTool {
 }
 
 struct EchoProvider {
-    suffix: &'static str,
     tool: Arc<dyn OperantTool>,
 }
 impl ProviderSpec for EchoProvider {
@@ -100,14 +99,12 @@ async fn same_name_replace_preserves_new_tool() {
     harness.add_seam(Arc::new(ToolSeam::new(registry.clone())));
 
     let first = Arc::new(EchoProvider {
-        suffix: "_v1",
         tool: EchoTool::new("_v1"),
     });
     harness.mount(first).await.expect("mount v1");
 
     // Replace with a new provider behind the same id.
     let second = Arc::new(EchoProvider {
-        suffix: "_v2",
         tool: EchoTool::new("_v2"),
     });
     harness.replace(second).await.expect("replace v2");

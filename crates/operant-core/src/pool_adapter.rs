@@ -91,9 +91,7 @@ impl OperantTool for PoolBundleTool {
 /// Build a `PoolBundleTool` for the given row config. Returns None if
 /// the config is missing required fields.
 pub fn build_pool_bundle_tool(name: &str, config: &Value) -> Option<Arc<dyn OperantTool>> {
-    if config.get("path").and_then(|v| v.as_str()).is_none() {
-        return None;
-    }
+    config.get("path").and_then(|v| v.as_str())?;
     Some(Arc::new(PoolBundleTool::new(name.to_string(), config)))
 }
 

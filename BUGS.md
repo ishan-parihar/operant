@@ -1,5 +1,17 @@
 # BUGS.md — Operant Audit Fixes
 
+## Wave 3 — Org session substrate (2026-10-01)
+
+### W3-1 — One global conversation per agent; concurrent gateway chats wiped each other (FIXED iter-548)
+`OperantAgent` held a single `conversation: Arc<RwLock<Vec<Message>>>` while already carrying a *retargetable* `session_id`. Every persistence site (turn prologue, assistant reply, compressor, memory) resolves its id through `OperantAgent::session_id()`, so a host could already point the agent at a new session mid-process — but the in-memory history could not follow. Two sessions served by one agent shared one `Vec<Message>`.
+
+The gateway compensated by calling `clear_history()` and manually re-adding the last 20 rows on **every session switch** (`gateway_runner.rs`). That is a live correctness bug, not just an inefficiency: gateway chats share one agent, so a message arriving in chat B destroyed chat A's context, and vice versa. (The comment there attributed the wipe to Anthropic prompt-prefix caching; the real cost was cross-session data loss.)
+
+- **Fix**: new `operant-core/src/session` — `SessionStore`, load-on-demand with a bounded warm cache, backed by the existing `Database` message tables (no second persistence path). `set_session_id` now swaps the hot conversation: the outgoing session's turns are handed back to the store under the id they belong to, and the incoming session's transcript is rehydrated in their place. `clear_history` discards only the addressed session. The gateway's wipe-and-reload block was removed; calling `clear_history()` there is now actively wrong because it would discard the transcript `set_session_id` just rehydrated.
+- **Cache bound**: 32, from measurement. A full 128k-token context window is ~500 KB of text, so 32 warm sessions is ~15.6 MB (64 would be ~31 MB).
+- **Mutation-proven**: routing every session through one global key failed 6 of 9 store tests; disabling the agent's swap failed 5 of 8 agent-level tests, including `retarget_carries_no_turns_into_the_next_session`.
+- **Regression**: 2199 core lib tests pass (was 2190); 9 store + 8 agent-level session tests; `org_wave2_shared_file` 9, `org_cli_contract` 7, `org_identity_gate` 8.
+
 ## Round 2 (2026-08-06)
 
 ### R2-1 — LLM context compressor dead-wired (FIXED c394c517)

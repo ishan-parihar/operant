@@ -13,6 +13,23 @@ use tracing::{error, info, warn};
 
 use super::*;
 
+/// Render an error for a log line with credentials removed.
+///
+/// Deliberately calls the UNCONDITIONAL redactor, not
+/// `redact_sensitive_text_if_enabled`. That toggle is
+/// `OPERANT_REDACT_SECRETS`, which exists to decide whether secrets are hidden
+/// from the MODEL. It has nothing to say about whether a bot token is written
+/// to a log file on disk — a credential in a log is leaked whether or not the
+/// model ever sees it. Coupling the two would mean a config aimed at model
+/// privacy could silently switch credential logging back on.
+///
+/// `reqwest::Error`'s `Display` embeds the full request URL, and every
+/// Telegram URL carries the token, so these two call sites wrote the bot token
+/// into `gateway.log` 30 times before this existed (BUGS.md R42-10).
+fn redacted_error(e: &impl std::fmt::Display) -> String {
+    crate::redaction::redact_sensitive_text(&e.to_string())
+}
+
 /// Telegram adapter
 pub struct TelegramAdapter {
     token: Option<String>,
@@ -527,7 +544,10 @@ impl PlatformAdapter for TelegramAdapter {
         let client = self.client.clone();
         tokio::spawn(async move {
             if let Err(e) = client.post(&url).json(&body).send().await {
-                tracing::error!("Telegram delete_message error: {}", e);
+                // `reqwest::Error`'s Display embeds the full request URL, and a
+                // Telegram URL carries the bot token. This leaked 30 times into
+                // gateway.log before the redactor was applied here.
+                tracing::error!("Telegram delete_message error: {}", redacted_error(&e));
             }
         });
         Ok(())
@@ -848,9 +868,14 @@ impl PlatformAdapter for TelegramAdapter {
                                                         msg = msg.with_media_urls(media);
                                                     }
                                                     tracing::info!(
-                                                        "Sent message to gateway handler (chat: {}, content: {:.50}, media: {})",
+                                                        // `content_len`, never the text. The
+                                                        // diagnostic value is "was there
+                                                        // anything to say"; the text itself
+                                                        // is user content and belongs in
+                                                        // neither a log nor a span field.
+                                                        "Sent message to gateway handler (chat: {}, content_len: {}, media: {})",
                                                         msg.channel_id,
-                                                        msg.content,
+                                                        msg.content.len(),
                                                         msg.media_urls.len()
                                                     );
                                                     if let Err(e) = message_tx.send(msg) {
@@ -877,10 +902,16 @@ impl PlatformAdapter for TelegramAdapter {
                                         }
                                     }
                                     Err(e) => {
+                                        // Redacted: `reqwest::Error`'s Display embeds the
+                                        // request URL, so an unredacted render here writes
+                                        // `https://api.telegram.org/bot<TOKEN>/getUpdates`
+                                        // into the log. The redactor's Telegram pattern was
+                                        // written for exactly this URL shape, but it is only
+                                        // ever reached if something calls it.
                                         tracing::error!(
                                             "Telegram polling error (retrying in {}s): {}",
                                             retry_delay,
-                                            e
+                                            redacted_error(&e)
                                         );
                                         tokio::time::sleep(Duration::from_secs(retry_delay)).await;
                                         retry_delay = (retry_delay * 2).min(30);
@@ -1503,4 +1534,58 @@ impl TelegramAdapter {
             .with_thread_id(thread_id),
         ))
     }
+}
+
+#[cfg(test)]
+mod log_redaction_tests {
+    use super::redacted_error;
+
+    /// The exact shape that leaked 30 times into `gateway.log` (BUGS.md
+    /// R42-10): `reqwest`'s `Display` puts the full request URL in the error
+    /// message, and every Telegram URL carries the bot token.
+    ///
+    /// This test exists at the CALL SITE rather than in `redaction.rs` on
+    /// purpose. `redaction.rs` already proves the pattern matches — it has had
+    /// `redacts_telegram_token_in_bot_url` all along. The bug was that nothing
+    /// called it, and a test of the redactor cannot catch a deleted call.
+    #[test]
+    fn telegram_url_error_loses_its_bot_token() {
+        let body = "D".repeat(35);
+        let e = format!(
+            "error sending request for url \
+             (https://api.telegram.org/bot1234567890:{body}/getUpdates)"
+        );
+        let out = redacted_error(&e);
+        assert!(!out.contains(&body), "token survived redaction: {out}");
+        assert!(
+            out.contains("[REDACTED TELEGRAM TOKEN]"),
+            "no redaction marker in: {out}"
+        );
+        // The diagnostic has to survive, or the log line is useless.
+        assert!(
+            out.contains("error sending request"),
+            "redaction destroyed the diagnostic: {out}"
+        );
+    }
+
+    /// The helper must not mangle ordinary errors. `message_tx.send` yields a
+    /// tokio `SendError` and the allowlist path a filesystem error; neither
+    /// carries a credential, and both are logged through paths that should read
+    /// normally.
+    #[test]
+    fn ordinary_errors_pass_through_unchanged() {
+        assert_eq!(redacted_error(&"channel closed"), "channel closed");
+        assert_eq!(
+            redacted_error(&"No such file or directory (os error 2)"),
+            "No such file or directory (os error 2)"
+        );
+    }
+
+    // Deliberately NOT tested here: that redaction is independent of
+    // `OPERANT_REDACT_SECRETS`. That toggle reads a process-wide atomic and an
+    // env var, so asserting on it from a unit test would race every other test
+    // that mutates either — the same contamination class as `MEMORY_WIRE_URL`
+    // in memory-wire. The guarantee is structural instead: `redacted_error`
+    // calls the unconditional `redact_sensitive_text`, not
+    // `redact_sensitive_text_if_enabled`.
 }

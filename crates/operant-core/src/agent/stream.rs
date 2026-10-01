@@ -52,6 +52,17 @@ impl OperantAgent {
         let mut finish_reason: Option<String> = None;
 
         while let Some(chunk_result) = stream.next().await {
+            // `/stop` has to be able to cut a stream that is already flowing.
+            // Without this the SSE loop ran to completion regardless of the flag,
+            // so a stop only took effect between tool calls — which is exactly the
+            // reported symptom that `/stop` did not stop the streaming. Breaking
+            // here falls through to the flush below, which runs on every exit
+            // path, so whatever had already arrived is returned rather than
+            // discarded: the user sees the partial answer instead of silence.
+            if self.interrupt_flag.is_triggered() {
+                tracing::info!("Stream interrupted by user; flushing partial content");
+                break;
+            }
             match chunk_result {
                 Ok(chunk) => {
                     if let Some(u) = chunk.usage {
@@ -848,9 +859,7 @@ impl OperantAgent {
             // Plan 015: kernel tools key kernels/harness by session id.
             let tool_ctx = ToolContext::default().with_metadata(
                 "session_id",
-                self.persistent_session_id
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string()),
+                self.session_id().unwrap_or_else(|| "default".to_string()),
             );
             // Permit is already in hand (single-tool path skips the pool), so
             // re-announce the call: the TUI shows Queued from the first
@@ -906,9 +915,7 @@ impl OperantAgent {
                 let tool_started = std::time::Instant::now();
                 let tool_ctx = ToolContext::default().with_metadata(
                     "session_id",
-                    self.persistent_session_id
-                        .clone()
-                        .unwrap_or_else(|| "default".to_string()),
+                    self.session_id().unwrap_or_else(|| "default".to_string()),
                 );
                 let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
                 let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
@@ -985,9 +992,7 @@ impl OperantAgent {
                         // Plan 015: session-keyed ToolContext for kernel tools.
                         let tool_ctx = ToolContext::default().with_metadata(
                             "session_id",
-                            self.persistent_session_id
-                                .clone()
-                                .unwrap_or_else(|| "default".to_string()),
+                            self.session_id().unwrap_or_else(|| "default".to_string()),
                         );
                         let exec_started = std::time::Instant::now();
                         let exec = registry.execute(&name, &tool_call.id, args, tool_ctx);

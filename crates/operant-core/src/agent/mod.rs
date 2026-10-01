@@ -18,6 +18,7 @@ pub mod provider_registry;
 pub mod runtime_key;
 pub mod skill_bundle;
 pub mod skill_preprocessing;
+pub mod stream_retry_budget;
 pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
 pub mod turn_retry_state;
@@ -342,7 +343,20 @@ pub struct OperantAgent {
     /// `config.harness.enabled = true`; left `None` (the dark-merge
     /// default) to keep the existing `ToolRegistry` path byte-identical.
     harness: Option<Arc<operant_harness::Harness>>,
+    /// The conversation for whichever session is currently addressed by
+    /// [`Self::session_id`].
+    ///
+    /// This is the hot copy: a session being actively worked keeps its turns
+    /// here so a turn does not pay a rehydrate per message. It is scoped to
+    /// one session at a time — when [`Self::set_session_id`] retargets the
+    /// agent, this slot is released back to [`Self::sessions`] (which
+    /// rehydrates it from disk on demand) rather than carried into the next
+    /// session. See [`crate::session`] for why.
     conversation: Arc<RwLock<Vec<Message>>>,
+    /// Durable per-session transcripts, load-on-demand with a bounded warm
+    /// cache. Owns which transcript a given session id sees; the
+    /// [`Database`] owns where it is written.
+    sessions: Arc<crate::session::SessionStore>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,
     /// Session-scoped approvals (hermes `approve_session`): tool names the
@@ -390,10 +404,20 @@ pub struct OperantAgent {
     /// and injects them into the conversation so the model sees the
     /// user's real-time guidance without restarting the turn.
     steer_queue: Arc<tokio::sync::Mutex<Vec<String>>>,
-    /// Stable session ID for DB persistence across multiple `run()` calls.
-    /// When set, all messages are persisted under this ID instead of generating
-    /// a fresh one each call.  Set by the TUI at startup.
-    persistent_session_id: Option<String>,
+    /// The ONE session id this agent persists into, for every
+    /// `run()` and every persistence site (messages, metadata, tool
+    /// context, compression state). Two namespaces used to live here —
+    /// the build-time `with_persistent_session` id and a per-turn
+    /// `sess_<uuid>` minted in the turn prologue — and a host that only
+    /// knew the second (the Telegram gateway) orphaned every turn's
+    /// trajectory under a throwaway id, leaving the reloadable
+    /// `gw_<hash>` session with a text-only skeleton. One slot, one id.
+    ///
+    /// Interior-mutable so a long-lived multi-tenant host (the gateway
+    /// serves many session keys from one agent) can retarget the agent
+    /// between turns via [`Self::set_session_id`] without rebuilding
+    /// it, exactly like [`Self::set_model`] retargets the model.
+    session_id: Arc<std::sync::RwLock<Option<String>>>,
     /// Shared interrupt flag for graceful Ctrl-C cancellation.
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.

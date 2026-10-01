@@ -189,19 +189,57 @@ mod tests {
 
         let budget = Arc::new(IterationBudget::new(50));
         let barrier = Arc::new(Barrier::new(10));
+        let barrier2 = Arc::new(Barrier::new(10));
+        let barrier3 = Arc::new(Barrier::new(10));
         let mut handles = vec![];
 
-        // Spawn 10 threads: 5 consumers (15 each) and 5 refunders (10 each).
-        // After consumers fill the budget, refunders free space.
-        // Barrier forces all threads to start simultaneously.
+        // 10 threads on ONE atomic, in three phases separated by two barriers.
+        //
+        // The barriers pin the ORDER OF PHASES, not the order of operations
+        // inside a phase: all 35 phase-1 `consume()` calls and all 50 `refund()`
+        // calls still race each other on the same `AtomicUsize` through the
+        // compare_exchange loops. That contention is the thing under test and
+        // it is fully preserved.
+        //
+        // The previous version released all 10 threads from ONE barrier and then
+        // asserted `total_consumed > 50`. That assert was a statement about
+        // thread scheduling, not about the budget: if the 5 consumers finished
+        // their 15 attempts before any refunder was scheduled, they consumed
+        // exactly 50, every refund landed at `used == 0` and was a no-op, and the
+        // assert failed. That is a legal interleaving. It reproduced on the first
+        // run after a rebuild (a fresh binary on a multi-core box gets genuinely
+        // parallel scheduling, which is what makes the interleaving random) and
+        // passed on every subsequent run of the same binary.
+        //
+        // The arithmetic below is exact, so the outcome is the same every run:
+        //   phase 1  5 x 7 = 35 consumes, all succeed (35 < 50 cap)   used = 35
+        //   refunds  5 x 10 = 50 attempted; 35 land, 15 no-op at zero  used = 0
+        //   phase 2  5 x 8 = 40 consumes, all succeed (40 < 50 cap)
+        //   total = 35 + 40 = 75
         for i in 0..10 {
             let b = Arc::clone(&budget);
             let bar = Arc::clone(&barrier);
+            let bar2 = Arc::clone(&barrier2);
+            let bar3 = Arc::clone(&barrier3);
             if i % 2 == 0 {
                 handles.push(thread::spawn(move || -> usize {
                     bar.wait();
                     let mut succeeded = 0;
-                    for _ in 0..15 {
+                    for _ in 0..7 {
+                        if b.consume() {
+                            succeeded += 1;
+                        }
+                    }
+                    // barrier2: everyone has left phase 1. refunders go on to
+                    // refund, consumers stop here.
+                    bar2.wait();
+                    // barrier3: refunders only arrive once all 50 of their refunds
+                    // are done, so phase 2 starts from a KNOWN used == 0. Without
+                    // this third barrier the refunds race the phase-2 consumes and
+                    // knock some of the 40 straight back out again, which is the
+                    // `used() == 32` failure this rewrite was written to remove.
+                    bar3.wait();
+                    for _ in 0..8 {
                         if b.consume() {
                             succeeded += 1;
                         }
@@ -211,9 +249,12 @@ mod tests {
             } else {
                 handles.push(thread::spawn(move || -> usize {
                     bar.wait();
+                    bar2.wait(); // consumers have drained phase 1
                     for _ in 0..10 {
                         b.refund();
                     }
+                    // Only now may phase 2 begin.
+                    bar3.wait();
                     0 // refunders return 0
                 }));
             }
@@ -221,15 +262,16 @@ mod tests {
 
         let total_consumed: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
 
-        // Invariants: used never exceeds max_total, never goes negative.
-        // Consumers tried 5 * 15 = 75, but max is 50. Refunders freed
-        // capacity, so total_consumed should be > 50 (proving refunds
-        // actually worked) but <= 75.
-        assert!(budget.used() <= 50);
-        assert!(
-            total_consumed > 50,
-            "refunders should have freed capacity: got {total_consumed}"
+        // Schedule-independent: both consumers and refunders always ran, all 75
+        // consumer attempts are below the 50 cap per phase, and `used` can never
+        // exceed `max_total` nor underflow (refund is a no-op at zero).
+        assert_eq!(total_consumed, 75, "every consumer attempt should succeed");
+        assert_eq!(
+            budget.used(),
+            40,
+            "35 consumed, 35 refunded, 40 re-consumed"
         );
+        assert!(budget.used() <= 50, "used must never exceed max_total");
     }
 
     #[test]

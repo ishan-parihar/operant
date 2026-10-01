@@ -850,10 +850,18 @@ impl Database {
     }
 
     /// Get all messages for a session, ordered by timestamp.
+    ///
+    /// `id ASC` is a required tiebreaker, not decoration: callers that
+    /// write a user row and an assistant row from ONE `now` (the gateway
+    /// reload path does exactly that) give both rows the SAME timestamp,
+    /// and `ORDER BY timestamp` alone leaves their relative order
+    /// undefined — SQLite's sorter is not required to be stable. The
+    /// AUTOINCREMENT rowid makes the tie resolve to insertion order, so a
+    /// reload rehydrates the transcript in the order it was written.
     pub fn get_session_messages(&self, session_id: &str) -> Result<Vec<Message>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
-            .prepare("SELECT role, content, timestamp FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC")
+            .prepare("SELECT role, content, timestamp FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC, id ASC")
             .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
 
         let rows = stmt
@@ -873,7 +881,9 @@ impl Database {
         Ok(messages)
     }
 
-    /// Get all messages for a session with full fields, ordered by timestamp.
+    /// Get all messages for a session with full fields, ordered by timestamp
+    /// then insertion order (`id ASC` tiebreaker — see
+    /// [`Self::get_session_messages`]).
     pub fn get_session_messages_full(&self, session_id: &str) -> Result<Vec<MessageData>> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
@@ -882,7 +892,7 @@ impl Database {
                         timestamp, token_count, finish_reason, reasoning, reasoning_content,
                         reasoning_details, codex_reasoning_items, codex_message_items,
                         platform_message_id, observed, active
-                 FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC",
+                 FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC, id ASC",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare statement: {}", e)))?;
 
@@ -3527,6 +3537,32 @@ mod tests {
         let sessions = db.list_sessions(10).unwrap();
         let s = sessions.iter().find(|s| s.id == "auto-title").unwrap();
         assert_eq!(s.title.as_deref(), Some("Investigate the failing CI job"));
+    }
+
+    /// The gateway reload path writes a turn's user row and assistant row
+    /// from ONE captured `now`, so both land on the SAME timestamp. With
+    /// `ORDER BY timestamp` alone their relative order is undefined
+    /// (SQLite's sorter is not required to be stable), which is what this
+    /// locks: the `id ASC` tiebreaker must resolve ties to insertion
+    /// order, while a genuinely later timestamp still sorts last.
+    #[test]
+    fn get_session_messages_orders_identical_timestamps_by_insertion() {
+        let db = test_db();
+        let id = "tie-order";
+        db.save_session(id, None, "gateway", "t1", "t1").unwrap();
+        let tied = "2026-01-01T00:00:00.000000000+00:00";
+        db.save_message(id, "user", "q1", tied).unwrap();
+        db.save_message(id, "assistant", "a1", tied).unwrap();
+        db.save_message(id, "user", "q2", "2026-01-01T00:00:01+00:00")
+            .unwrap();
+
+        let messages = db.get_session_messages(id).unwrap();
+        let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "user"]);
+
+        let full = db.get_session_messages_full(id).unwrap();
+        let full_contents: Vec<Option<&str>> = full.iter().map(|m| m.content.as_deref()).collect();
+        assert_eq!(full_contents, vec![Some("q1"), Some("a1"), Some("q2")]);
     }
 
     #[test]

@@ -164,8 +164,13 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    /// Clear conversation history and reset per-session state.
-    /// Called on /new, /reset, and session switches.
+    /// Clear the conversation for the **current session** and reset per-session
+    /// state. Called on /new, /reset, and session switches.
+    ///
+    /// This wipes only the session the agent is currently addressing, not a
+    /// global slot. A session that was already handed back to the store on a
+    /// retarget keeps its own transcript, so two sessions can no longer wipe
+    /// each other by sharing one agent.
     pub async fn clear_history(&self) {
         // Notify memory provider of session end before clearing.
         // This fires at actual session boundaries so the graph captures
@@ -193,6 +198,14 @@ impl OperantAgent {
         }
         let mut conv = self.conversation.write().await;
         conv.clear();
+        drop(conv);
+        // Drop the wiped session from the store too. Without this the store
+        // would still hold the pre-wipe transcript and the very next acquire
+        // would rehydrate the history /new was called to discard.
+        if let Some(id) = self.session_id() {
+            let key = crate::session::SessionKey::new(id);
+            self.sessions.discard(&key);
+        }
         // Reset LLM compressor state so the next session starts fresh.
         // Without this, a previous session's summary would bleed into
         // the new session's compression context.
@@ -205,7 +218,7 @@ impl OperantAgent {
         // MemoryManager.on_session_switch() pattern.
         // Use the existing public method for consistency.
         if let Some(provider) = &self.memory_provider {
-            let old_id = self.persistent_session_id.clone().unwrap_or_default();
+            let old_id = self.session_id().unwrap_or_default();
             provider.on_session_switch(&old_id, &old_id, true);
         }
     }
@@ -315,6 +328,97 @@ impl OperantAgent {
             .as_ref()
             .map(|m| m.clone())
             .unwrap_or_else(|| self.config.model.clone())
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// The session every persistence site in this agent writes to, or
+    /// `None` when no host has assigned one.
+    ///
+    /// This is the single reader for the agent's session identity: the
+    /// turn prologue, evolution-metadata hydration, tool context,
+    /// compression persistence and the memory provider all resolve
+    /// through it, so one turn can never write its trajectory to a
+    /// different id than the one a host will reload.
+    pub fn session_id(&self) -> Option<String> {
+        self.session_id
+            .read()
+            .expect("session_id RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// Assign the session this agent persists into.
+    ///
+    /// Takes `&self` (not `&mut self`) so it works through
+    /// `Arc<OperantAgent>`, mirroring [`Self::set_model`]. A host that
+    /// owns session identity — the gateway, which derives a stable
+    /// `gw_<hash>` id per chat and reloads the last 20 rows of THAT id
+    /// on restart — calls this with its own id so the agent's full tool
+    /// trajectory lands in the same namespace the host reloads, instead
+    /// of a fresh `sess_<uuid>` per turn.
+    pub fn set_session_id(&self, session_id: impl Into<String>) {
+        let new_id = session_id.into();
+        tracing::debug!(session_id = %new_id, "Agent session id set at runtime");
+        let previous = self
+            .session_id
+            .read()
+            .expect("session_id RwLock poisoned — programmer error")
+            .clone();
+        // A retarget must not carry one session's turns into the next. The
+        // hot conversation slot follows the session id: the outgoing session's
+        // turns go back to the store (which keeps them durable and warm), and
+        // the incoming session's turns are rehydrated in their place. Without
+        // this swap, retargeting the agent leaks the previous conversation
+        // into the new session — the D2 defect.
+        if previous.as_deref() != Some(new_id.as_str()) {
+            // Load the INCOMING session's transcript. This must key off
+            // `new_id` explicitly, not `self.session_id()` — at this point the
+            // id field still holds the outgoing value, so reading it here
+            // would rehydrate the session we are leaving.
+            let incoming = self.transcript_for(&new_id);
+            let outgoing = std::mem::replace(
+                &mut *self
+                    .conversation
+                    .try_write()
+                    .expect("conversation RwLock poisoned — programmer error"),
+                incoming,
+            );
+            if let Some(prev) = previous {
+                self.sessions
+                    .persist(&crate::session::SessionKey::new(prev), &outgoing);
+            }
+        }
+        *self
+            .session_id
+            .write()
+            .expect("session_id RwLock poisoned — programmer error") = Some(new_id);
+    }
+
+    /// Rehydrate `session_id`'s transcript from disk.
+    ///
+    /// Takes the id as an argument rather than reading it from the agent: the
+    /// only caller is [`Self::set_session_id`]'s swap, and at that moment the
+    /// agent's id field still names the session being left.
+    fn transcript_for(&self, session_id: &str) -> Vec<Message> {
+        let key = crate::session::SessionKey::new(session_id);
+        self.sessions.acquire(&key);
+        self.sessions.peek(&key)
+    }
+
+    /// The durable per-session store backing this agent's transcripts.
+    pub fn session_store(&self) -> &std::sync::Arc<crate::session::SessionStore> {
+        &self.sessions
+    }
+
+    /// Cache statistics for the session substrate.
+    pub fn session_stats(&self) -> crate::session::SessionStoreStats {
+        self.sessions.stats()
     }
 
     /// Get the effective model for API calls. Checks override first.

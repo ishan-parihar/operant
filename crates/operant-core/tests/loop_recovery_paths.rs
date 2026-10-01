@@ -44,8 +44,12 @@
 //!    `CONTEXT_OVERFLOW_PATTERNS`; the bare `ContextLengthExceeded` variant
 //!    falls into the catch-all arm with `should_compress: false`. So the
 //!    script raises a real provider error body.
-//! 2. The empty ladder's `EmptyExhausted` sentinel (turn_rules.rs:101) is
-//!    **not** wired into `run.rs` — only its own unit tests call it. The
+//! 2. The empty ladder has no exhausted-error path. An `EmptyExhausted`
+//!    sentinel once existed in `turn_rules.rs` and was **never** wired into
+//!    `run.rs` — only its own unit tests called it — so it was removed rather
+//!    than left as a plausible-looking dead branch. The user-facing empty
+//!    response is handled one layer up, in `gateway_runner.rs`, which
+//!    substitutes a "reply 'continue'" message when content is empty. The
 //!    exhausted terminal shape is therefore `Ok(<assistant message with an
 //!    empty body>)` and the diagnostic reports `reason=TextResponse …
 //!    response_len=0`, not an error. Test 3 pins the shape that actually

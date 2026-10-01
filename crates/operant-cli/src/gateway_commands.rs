@@ -7,6 +7,7 @@
 use chrono::Utc;
 use operant_core::config::{AppConfig, ToolProgressMode};
 use operant_core::gateway::Gateway;
+use operant_core::interrupt::InterruptFlag;
 
 /// Runtime context passed to command handlers for stateful operations.
 ///
@@ -25,6 +26,22 @@ pub struct CommandContext<'a> {
     pub platform: &'a str,
     /// The channel/chat ID the command came from.
     pub channel_id: &'a str,
+    /// A handle on the live turn's interrupt flag for this session, when the
+    /// caller has a turn in flight. `None` means the caller cannot signal —
+    /// `/stop` must report that honestly rather than claiming it stopped
+    /// something. This is the same `InterruptFlag` the agent's run loop already
+    /// polls, so `/stop` signals existing machinery rather than adding a
+    /// second cancellation mechanism.
+    pub stop: Option<InterruptFlag>,
+    /// Sticky per-session resume overrides. `None` means this context was
+    /// built without a gateway runtime, so `/resume` cannot re-point the next
+    /// turn and must say so rather than printing a hint it cannot honour.
+    pub session_pins: Option<std::sync::Arc<crate::gateway_runner::SessionPins>>,
+    /// The routing key the dispatch loop already derived for this message, or
+    /// `""` when the caller has none. Passed in rather than re-derived here:
+    /// the derivation depends on group/thread shape this context does not carry,
+    /// and a third copy of it is exactly how `/stop` silently stops matching.
+    pub session_key: &'a str,
 }
 
 impl<'a> CommandContext<'a> {
@@ -44,11 +61,44 @@ impl<'a> CommandContext<'a> {
             user_id,
             platform,
             channel_id,
+            stop: None,
+            session_pins: None,
+            session_key: "",
         }
+    }
+
+    /// Attach the live turn's interrupt flag so `/stop` has something to signal.
+    ///
+    /// Takes `Option` deliberately. Defaulting a missing flag to
+    /// `InterruptFlag::new()` would hand `/stop` a *valid, untriggered* flag when
+    /// nothing is running, so it would report a successful cancellation of a turn
+    /// that never existed — the exact defect this replaced.
+    #[must_use]
+    pub fn with_stop_flag(mut self, flag: Option<InterruptFlag>) -> Self {
+        self.stop = flag;
+        self
+    }
+
+    /// Attach the sticky resume pins so `/resume` can re-point the next turn.
+    #[must_use]
+    pub fn with_session_pins(
+        mut self,
+        pins: Option<std::sync::Arc<crate::gateway_runner::SessionPins>>,
+    ) -> Self {
+        self.session_pins = pins;
+        self
+    }
+
+    /// Attach the routing key the dispatch loop derived for this message.
+    #[must_use]
+    pub fn with_session_key(mut self, session_key: &'a str) -> Self {
+        self.session_key = session_key;
+        self
     }
 }
 
 /// Definition of a single Telegram bot command.
+#[derive(Debug)]
 pub struct CommandDef {
     /// Primary command name (e.g. "start", "help").
     pub name: &'static str,
@@ -459,42 +509,81 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     },
 ];
 
-/// Resolve a raw message text into a command definition and its arguments.
+/// The outcome of classifying inbound text as a command.
 ///
-/// Expects text to start with `/`. Extracts the first space-delimited token as
-/// the command name (stripping the leading `/`), matches it case-insensitively
-/// against the registry (including aliases), and returns the matching
-/// [`CommandDef`] along with the remainder of the text as the argument string.
+/// This is deliberately a three-state answer. `resolve_command` used to return a
+/// bare `Option`, which collapsed "this is not a command" and "this is a command
+/// whose name I do not recognise" into the same `None`. The live gateway treated
+/// `None` as "not a command, therefore a prompt for the agent", so a mistyped
+/// `/arop` was forwarded to the model and answered as if the user had asked it
+/// something. The model then improvised a help reply, which read like a working
+/// command handler that happened not to know the word — the opposite of the truth.
+#[derive(Debug, Clone, Copy)]
+pub enum CommandMatch<'a> {
+    /// Ordinary prose, not a command.
+    NotACommand,
+    /// A well-formed command whose name is not in the registry.
+    Unknown { token: &'a str },
+    /// A registry entry matched, with the remainder of the text as its arguments.
+    Found(&'static CommandDef, &'a str),
+}
+
+/// Hand-written because [`CommandDef`] is not `PartialEq`; two `Found` values
+/// match when they name the same command and carry the same arguments.
+impl PartialEq for CommandMatch<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (CommandMatch::NotACommand, CommandMatch::NotACommand) => true,
+            (CommandMatch::Unknown { token: a }, CommandMatch::Unknown { token: b }) => a == b,
+            (CommandMatch::Found(a, x), CommandMatch::Found(b, y)) => a.name == b.name && x == y,
+            _ => false,
+        }
+    }
+}
+
+/// Classify a raw message text as a command, its arguments, or prose.
 ///
-/// Returns `None` when the text does not start with `/` or the command is not
-/// recognised.
-pub fn resolve_command(text: &str) -> Option<(&'static CommandDef, &str)> {
+/// Extracts the first space-delimited token as the command name (stripping the
+/// leading `/`) and matches it case-insensitively against the registry including
+/// aliases. Unlike the previous `Option`-returning form this distinguishes an
+/// unknown command from ordinary text, so the caller can reject the former
+/// instead of leaking it to the agent.
+///
+/// Also accepts the group-chat mention form (`/stop@my_bot`) that Telegram
+/// clients append when a command is sent by tapping the bot's name. The previous
+/// form left the suffix attached, so the registry lookup missed and even
+/// correctly-spelled commands silently failed when invoked that way.
+pub fn resolve_command(text: &str) -> CommandMatch<'_> {
     let trimmed = text.trim();
 
-    if !trimmed.starts_with('/') {
-        return None;
-    }
-
-    let after_slash = trimmed[1..].trim_start();
+    let Some(after_slash) = trimmed.strip_prefix('/') else {
+        return CommandMatch::NotACommand;
+    };
+    let after_slash = after_slash.trim_start();
 
     let (cmd_token, args) = match after_slash.split_once(|c: char| c.is_ascii_whitespace()) {
         Some((cmd, rest)) => (cmd, rest.trim_start()),
         None => (after_slash, ""),
     };
 
+    let cmd_token = cmd_token
+        .split_once('@')
+        .map_or(cmd_token, |(name, _)| name);
+
     if cmd_token.is_empty() {
-        return None;
+        return CommandMatch::NotACommand;
     }
 
-    let found = COMMAND_REGISTRY.iter().find(|def| {
+    match COMMAND_REGISTRY.iter().find(|def| {
         def.name.eq_ignore_ascii_case(cmd_token)
             || def
                 .aliases
                 .iter()
                 .any(|a| a.eq_ignore_ascii_case(cmd_token))
-    })?;
-
-    Some((found, args))
+    }) {
+        Some(def) => CommandMatch::Found(def, args),
+        None => CommandMatch::Unknown { token: cmd_token },
+    }
 }
 
 /// Build a grouped help text from the command registry.
@@ -566,6 +655,37 @@ fn resolve_pending_permission(
     false
 }
 
+/// How many messages of a stored session a resume would put back in context.
+///
+/// The gateway's own reload path replays the last 20 (`gateway_runner.rs`), so
+/// reporting a different number would overstate what the agent can see.
+const RESUME_WINDOW: usize = 20;
+
+/// A session id plus the size of the transcript stored under it.
+struct StoredTranscript {
+    session_id: String,
+    messages: usize,
+}
+
+/// Read how much of `session_id` is actually stored, from the same database the
+/// agent writes its turns to.
+///
+/// The point is the count: `/resume` may only claim a resume when there is
+/// something to continue. Setting an id with nothing behind it would leave the
+/// next turn running against an empty context under a session label that
+/// promises otherwise — a new lie, worse than the hint it replaced.
+fn open_stored_transcript(
+    ctx: &CommandContext<'_>,
+    session_id: &str,
+) -> anyhow::Result<StoredTranscript> {
+    let db = operant_core::database::Database::init(ctx.config.database_path.clone())?;
+    let stored = db.get_session_messages(session_id)?.len();
+    Ok(StoredTranscript {
+        session_id: session_id.to_string(),
+        messages: stored,
+    })
+}
+
 /// Handle a known command and return an optional response string.
 ///
 /// The caller is expected to have already resolved the command name via
@@ -620,6 +740,21 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // ── Session ──────────────────────────────────────────────────
         "new" => {
             let mut msg = String::from("🔄 **Starting a new session.** Previous conversation cleared.");
+            // A resume pin routes this chat at another chat's transcript;
+            // `/new` means "give me a fresh conversation", so the pin has to go
+            // or the next turn would reload the session the user just left.
+            if let Some(pins) = &ctx.session_pins
+                && let Some(cleared) = pins.clear(ctx.session_key)
+            {
+                tracing::info!(
+                    platform = ctx.platform,
+                    channel = ctx.channel_id,
+                    user = ctx.user_id,
+                    cleared_session_id = %cleared,
+                    "Gateway /new: cleared the /resume pin for this chat"
+                );
+                msg.push_str(&format!("\nCleared the `/resume` pin on `{}`.", cleared));
+            }
             if let Some(gateway) = ctx.gateway {
                 let store = gateway.get_session_store();
                 if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
@@ -637,19 +772,56 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         }
 
         "stop" => {
-            let mut msg = String::from("⏹️ **Stopping current agent turn.**");
+            // The agent's run loop already polls an `InterruptFlag`, so this
+            // signals real machinery. What it must not do is claim success it
+            // did not have: the previous version of this arm wrote
+            // `interrupted=true` session metadata — read by nothing anywhere —
+            // and returned "Stopping current agent turn" unconditionally, so a
+            // `/stop` with no turn in flight reported a cancellation that never
+            // happened.
+            let mut msg = match &ctx.stop {
+                Some(flag) if !flag.is_triggered() => {
+                    flag.trigger();
+                    tracing::info!(
+                        platform = ctx.platform,
+                        channel = ctx.channel_id,
+                        user = ctx.user_id,
+                        "Gateway /stop: signalled the running turn"
+                    );
+                    "⏹️ **Stopped the running turn.**".to_string()
+                }
+                Some(_) => {
+                    tracing::info!(
+                        platform = ctx.platform,
+                        channel = ctx.channel_id,
+                        user = ctx.user_id,
+                        "Gateway /stop: already requested, nothing further signalled"
+                    );
+                    "⏹️ A stop was already requested for the running turn; it is winding down."
+                        .to_string()
+                }
+                None => {
+                    tracing::info!(
+                        platform = ctx.platform,
+                        channel = ctx.channel_id,
+                        user = ctx.user_id,
+                        "Gateway /stop: no turn in flight, nothing signalled"
+                    );
+                    "There is no turn in flight for this chat, so there was nothing to stop."
+                        .to_string()
+                }
+            };
             if let Some(gateway) = ctx.gateway {
                 let store = gateway.get_session_store();
                 if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
+                    // Kept as a breadcrumb that the user asked to stop. Not what
+                    // performs the cancellation.
                     store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
                         ("interrupted".to_string(), "true".to_string()),
                     ]);
-                    msg.push_str(&format!("\nSession `{}` marked for interruption.", session.session_id));
-                } else {
-                    msg.push_str("\nNo active session found to interrupt.");
+                    msg.push_str(&format!("\nSession `{}` noted the request.", session.session_id));
                 }
             }
-            msg.push_str("\nSend a new message to start fresh.");
             msg
         }
 
@@ -805,20 +977,66 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         "resume" => {
             let a = _args.trim();
             if a.is_empty() {
-                "Usage: `/resume <session-id>` — resumes a saved session by ID.\nFind session IDs via `/sessions` or CLI `operant sessions list`."
+                "Usage: `/resume <session-id>` — continues a saved session by ID on the next turn.\n\
+                 Find session IDs via `operant sessions list` (or CLI `operant sessions show <id>`)."
                     .into()
-            } else if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                if let Some(session) = store.get_session(a) {
-                    format!(
-                        "✅ Session found: `{}`\n• Platform: {}\n• User: {}\n• Last active: {}\n\nResume via CLI: `operant sessions resume {}`",
-                        session.session_id, session.platform, session.platform_user_id, session.last_active, session.operant_session_id
-                    )
-                } else {
-                    format!("❌ No session found with ID: `{}`. Use `/sessions` to list active sessions.", a)
+            } else if let Some(pins) = ctx.session_pins.as_ref().filter(|_| !ctx.session_key.is_empty())
+            {
+                // Honesty gate: a session is only resumable if the transcript it
+                // would continue actually exists. Without this check the command
+                // would set the id and claim a resume the agent then performs
+                // against an empty context.
+                match open_stored_transcript(ctx, a) {
+                    Ok(stored) if stored.messages == 0 => {
+                        tracing::warn!(
+                            platform = ctx.platform,
+                            channel = ctx.channel_id,
+                            user = ctx.user_id,
+                            requested = a,
+                            "Gateway /resume: no stored transcript for the requested session"
+                        );
+                        format!(
+                            "❌ No stored conversation for session `{}` — nothing to resume.\n\
+                             Session IDs come from `operant sessions list`.",
+                            a
+                        )
+                    }
+                    Ok(stored) => {
+                        pins.set(ctx.session_key, &stored.session_id);
+                        tracing::info!(
+                            platform = ctx.platform,
+                            channel = ctx.channel_id,
+                            user = ctx.user_id,
+                            session_id = %stored.session_id,
+                            messages = stored.messages,
+                            "Gateway /resume: pinned this chat to the requested session"
+                        );
+                        let replayed = stored.messages.min(RESUME_WINDOW);
+                        format!(
+                            "✅ Continuing session `{}` — {} of its {} stored message(s) reloaded into context.\n\
+                             Your next message in this chat continues that conversation.\n\
+                             `/new` returns this chat to its own session.",
+                            stored.session_id, replayed, stored.messages
+                        )
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            platform = ctx.platform,
+                            channel = ctx.channel_id,
+                            user = ctx.user_id,
+                            requested = a,
+                            error = %crate::gateway_runner::redact_err(&e),
+                            "Gateway /resume: transcript lookup failed"
+                        );
+                        format!("❌ Could not read session `{}`: {}", a, e)
+                    }
                 }
             } else {
-                format!("Session resume requested for `{}`. Use CLI `operant sessions resume` to resume sessions.", a)
+                format!(
+                    "Session resume requested for `{}`, but this context has no live agent to re-point.\n\
+                     Resume from the CLI: `operant sessions resume {}`",
+                    a, a
+                )
             }
         }
 
@@ -1927,39 +2145,81 @@ pub fn telegram_bot_commands() -> String {
 mod tests {
     use super::*;
 
+    /// The canonical name and arguments of a command that must resolve.
+    fn found(text: &str) -> (&'static str, &str) {
+        match resolve_command(text) {
+            CommandMatch::Found(def, args) => (def.name, args),
+            other => panic!("expected {text:?} to resolve, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_resolve_slash_command() {
-        let (def, _) = resolve_command("/new").unwrap();
-        assert_eq!(def.name, "new");
+        assert_eq!(found("/new").0, "new");
     }
 
     #[test]
     fn test_resolve_with_args() {
-        let (def, args) = resolve_command("/model gpt-4").unwrap();
-        assert_eq!(def.name, "model");
+        let (name, args) = found("/model gpt-4");
+        assert_eq!(name, "model");
         assert_eq!(args, "gpt-4");
     }
 
     #[test]
     fn test_resolve_alias() {
-        let (def, _) = resolve_command("/reset").unwrap();
-        assert_eq!(def.name, "new");
+        assert_eq!(found("/reset").0, "new");
     }
 
     #[test]
     fn test_resolve_no_slash() {
-        assert!(resolve_command("hello").is_none());
+        assert_eq!(resolve_command("hello"), CommandMatch::NotACommand);
+    }
+
+    /// An unknown command must be distinguishable from prose. It used to return
+    /// the same `None` as ordinary text, which is exactly what let a mistyped
+    /// command reach the model.
+    #[test]
+    fn test_resolve_unknown_is_not_prose() {
+        assert_eq!(
+            resolve_command("/nonexistent"),
+            CommandMatch::Unknown {
+                token: "nonexistent"
+            }
+        );
+        assert_ne!(
+            resolve_command("/nonexistent"),
+            resolve_command("nonexistent"),
+            "an unknown command must not classify the same as prose"
+        );
+    }
+
+    /// `/arop` is the exact text that reached the agent in the reported bug.
+    #[test]
+    fn test_resolve_mistyped_command_is_unknown() {
+        assert_eq!(
+            resolve_command("/arop"),
+            CommandMatch::Unknown { token: "arop" }
+        );
+    }
+
+    /// Telegram appends `@botname` when a command is sent by tapping the bot's
+    /// name in a group. The suffix used to defeat the registry lookup, so even
+    /// correctly-spelled commands failed in that form.
+    #[test]
+    fn test_resolve_group_mention_suffix() {
+        assert_eq!(found("/stop@my_bot").0, "stop");
+        assert_eq!(found("/new@my_bot arg").1, "arg");
     }
 
     #[test]
-    fn test_resolve_unknown() {
-        assert!(resolve_command("/nonexistent").is_none());
+    fn test_resolve_bare_slash_is_prose() {
+        assert_eq!(resolve_command("/"), CommandMatch::NotACommand);
+        assert_eq!(resolve_command("/ "), CommandMatch::NotACommand);
     }
 
     #[test]
     fn test_resolve_case_insensitive() {
-        let (def, _) = resolve_command("/NEW").unwrap();
-        assert_eq!(def.name, "new");
+        assert_eq!(found("/NEW").0, "new");
     }
 
     #[test]
@@ -2101,5 +2361,58 @@ mod tests {
             "chan-c",
             operant_core::agent::ToolPermissionResponse::AllowSession
         ));
+    }
+
+    /// `/stop` with a live turn must actually signal it. It used to write
+    /// session metadata read by nothing anywhere and return "Stopping current
+    /// agent turn" unconditionally, so a stop that cancelled nothing was
+    /// indistinguishable from one that worked.
+    #[test]
+    fn stop_triggers_the_live_turn_and_says_so() {
+        let cfg = AppConfig::default();
+        let flag = InterruptFlag::new();
+        assert!(!flag.is_triggered(), "precondition: a turn is running");
+        let ctx = CommandContext::new(None, &cfg, true, "test", "telegram", "123")
+            .with_stop_flag(Some(flag.clone()));
+
+        let resp = handle_command("stop", "", &ctx).expect("stop must be handled");
+        assert!(flag.is_triggered(), "/stop must signal the running turn");
+        assert!(resp.contains("Stopped the running turn"), "{resp}");
+    }
+
+    /// The inverse, and the part that was actually broken: with nothing in
+    /// flight, `/stop` must NOT report a cancellation. Defaulting a missing flag
+    /// to a fresh untriggered one would hand the command a real flag and
+    /// re-introduce precisely this lie.
+    #[test]
+    fn stop_without_a_running_turn_says_nothing_was_running() {
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "test", "telegram", "123");
+
+        let resp = handle_command("stop", "", &ctx).expect("stop must be handled");
+        assert!(
+            !resp.contains("Stopped the running turn"),
+            "with no turn in flight /stop must not claim one was stopped: {resp}"
+        );
+        assert!(resp.contains("nothing to stop"), "{resp}");
+    }
+
+    /// A second `/stop` must not report a fresh cancellation, and must not clear
+    /// the flag — a stop that un-stopped the turn would be worse than one that
+    /// does nothing.
+    #[test]
+    fn second_stop_reports_already_requested() {
+        let cfg = AppConfig::default();
+        let flag = InterruptFlag::new();
+        flag.trigger();
+        let ctx = CommandContext::new(None, &cfg, true, "test", "telegram", "123")
+            .with_stop_flag(Some(flag.clone()));
+
+        let resp = handle_command("stop", "", &ctx).expect("stop must be handled");
+        assert!(resp.contains("already requested"), "{resp}");
+        assert!(
+            flag.is_triggered(),
+            "a second /stop must not clear the flag"
+        );
     }
 }

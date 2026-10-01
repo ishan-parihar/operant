@@ -380,6 +380,29 @@ impl Gateway {
                 message_id: None,
                 role_authorized: false,
             };
+            // Create-or-touch, discarding the resolved entry on purpose.
+            //
+            // The CREATE is the point. `get_or_create_session` derives a
+            // deterministic key from `source` (build_session_key,
+            // gateway_session.rs:810) and then either inserts a new row
+            // (save_entry -> SQLite, gateway_session.rs:886) or bumps
+            // `updated_at` on the existing one (gateway_session.rs:856-865).
+            // Without this call the chat has no persistent record at all:
+            // `session_count()` (read by `get_stats`) and `list_sessions()`
+            // never see it, and the next message would mint a second,
+            // unrelated session id for the same conversation.
+            //
+            // Discarded: `Result<SessionEntry, Error>` — the created-or-
+            // touched entry on Ok; a store/DB write failure on Err, which
+            // must not abort message routing. Nothing in this function can
+            // consume the id: the turn-lease key computed below is a
+            // different namespace ("{platform}:{user_id}:{channel_id}" vs
+            // the store's "agent:main:{platform}:{chat_type}:…"), and
+            // `MessageHandler::handle` takes only an `IncomingMessage`, so
+            // there is nowhere to pass an id without changing a public
+            // trait. The id is not stable across calls either — reset policy
+            // and suspended sessions rotate it (reset_session_inner,
+            // gateway_session.rs:929).
             let _ = store.get_or_create_session(&source, false);
         }
 

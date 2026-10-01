@@ -103,18 +103,36 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     agent.interrupt_flag.reset();
 
     // ── 2. Session ID resolution ─────────────────────────────────────
-    let session_id = agent
-        .persistent_session_id
-        .clone()
-        .unwrap_or_else(|| format!("sess_{}", uuid::Uuid::new_v4()));
+    // ONE id, resolved once and stored back on the agent.
+    //
+    // A host that owns session identity (TUI/WebSocket via
+    // `with_persistent_session`, the gateway via `set_session_id`)
+    // assigns it before the first turn, and every turn reuses it. Only
+    // an unconfigured one-shot run mints here — and the mint is written
+    // back, so a second turn on the same agent lands in the SAME
+    // session instead of orphaning its trajectory under a fresh uuid.
+    // Before this, every turn minted a new id and the whole tool
+    // trajectory became unreachable: the gateway reloads its own
+    // stable `gw_<hash>` id, which the per-turn `sess_<uuid>` rows never
+    // appeared under.
+    let session_id = match agent.session_id() {
+        Some(id) => id,
+        None => {
+            let id = format!("sess_{}", uuid::Uuid::new_v4());
+            agent.set_session_id(id.clone());
+            id
+        }
+    };
 
     // ── 3. Hydrate evolution state counters from session metadata ────
     // When a session is resumed, the in-memory counters start at 0.
     // Hydrate them from persisted metadata so the review cadence
     // continues where it left off. Matches hermes-agent's
     // _restore_memory_nudge_from_history pattern.
-    if agent.persistent_session_id.is_some()
-        && let Ok(metadata) = agent.database.get_all_session_metadata(&session_id)
+    //
+    // The id is always assigned by now (step 2), so "has prior metadata"
+    // is the only remaining condition — a first-turn session has none.
+    if let Ok(metadata) = agent.database.get_all_session_metadata(&session_id)
         && !metadata.is_empty()
     {
         // In-process evolution_state lock; only held across a synchronous
@@ -257,5 +275,130 @@ mod tests {
         assert_eq!(PREFLIGHT_THRESHOLD_PERCENT, 80);
         assert_eq!(PREFLIGHT_DECAY_H50, 100);
         assert!((PREFLIGHT_DECAY_CONSTANT - 20.0).abs() < f64::EPSILON);
+    }
+
+    // ── Session-namespace regression tests ─────────────────────────
+    //
+    // The live bug: `session_id` was minted per turn
+    // (`unwrap_or_else(|| format!("sess_{}", uuid))`) unless a host had
+    // set `persistent_session_id` at BUILD time. The Telegram gateway
+    // never did — it derives its own stable `gw_<hash>` id, writes only
+    // user/assistant text there, and reloads the last 20 rows of THAT id
+    // on restart. So every turn's full tool trajectory landed in a
+    // throwaway `sess_*` id that no reload would ever read, and a restart
+    // rehydrated a text-only skeleton ("five prompts and no replies").
+    //
+    // These tests assert the post-fix property directly, through the same
+    // `get_session_messages` query the gateway's reload path calls.
+
+    mod session_namespace {
+        use super::*;
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::agent::{AgentConfig, OperantAgent};
+        use crate::client::OpenAIClient;
+        use crate::database::Database;
+        use crate::tools::ToolRegistry;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        fn agent_with_db(db: &Arc<Database>) -> OperantAgent {
+            OperantAgent::new(
+                AgentConfig::default(),
+                Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                    crate::client::ClientConfig::default(),
+                ))),
+                ToolRegistry::new(Duration::from_secs(1)),
+                Arc::clone(db),
+            )
+        }
+
+        /// Two turns on one agent must land in ONE session, and that
+        /// session must be the one the agent reports — so a host that
+        /// reloads by `agent.session_id()` reads the full transcript.
+        ///
+        /// Before the fix this failed at the first assertion: two distinct
+        /// `sess_<uuid>` ids.
+        #[tokio::test]
+        async fn two_turns_share_one_session_id() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Arc::new(Database::init(dir.path().join("t.db")).expect("db init"));
+            let agent = agent_with_db(&db);
+
+            let first = build_turn_context(&agent, "first turn")
+                .await
+                .expect("turn 1");
+            let second = build_turn_context(&agent, "second turn")
+                .await
+                .expect("turn 2");
+
+            assert_eq!(
+                first.session_id, second.session_id,
+                "two turns on one agent must resolve to the SAME session id"
+            );
+            assert_eq!(
+                agent.session_id().as_deref(),
+                Some(first.session_id.as_str()),
+                "the turn must not write to an id the agent does not report"
+            );
+
+            // What a restart reload reads: both turns, in order, under one id.
+            let reloaded = db
+                .get_session_messages(&first.session_id)
+                .expect("reload query");
+            let contents: Vec<&str> = reloaded.iter().map(|m| m.content.as_str()).collect();
+            assert_eq!(contents, vec!["first turn", "second turn"]);
+        }
+
+        /// The gateway seam: a host that owns session identity assigns its
+        /// own stable id at runtime, and the turn's rows land THERE — in
+        /// the namespace its reload query reads.
+        ///
+        /// Before the fix there was no runtime setter at all, and the
+        /// gateway could only reach `with_persistent_session` at agent
+        /// construction, which it never controls per chat.
+        #[tokio::test]
+        async fn host_assigned_session_id_receives_the_turn() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let db = Arc::new(Database::init(dir.path().join("t.db")).expect("db init"));
+            let agent = agent_with_db(&db);
+
+            // The id the gateway derives at gateway_runner.rs:436.
+            let gateway_id = "gw_1a2b3c4d5e6f";
+            db.save_session(
+                gateway_id,
+                None,
+                "gateway",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+            .expect("gateway session");
+            agent.set_session_id(gateway_id);
+
+            let ctx = build_turn_context(&agent, "hello telegram")
+                .await
+                .expect("turn");
+
+            assert_eq!(ctx.session_id, gateway_id, "host-owned id must win");
+            let reloaded = db.get_session_messages(gateway_id).expect("reload query");
+            assert_eq!(reloaded.len(), 1);
+            assert_eq!(reloaded[0].content, "hello telegram");
+
+            // A second turn in the same chat keeps the same namespace.
+            let next = build_turn_context(&agent, "and again")
+                .await
+                .expect("turn 2");
+            assert_eq!(next.session_id, gateway_id);
+            assert_eq!(
+                db.get_session_messages(gateway_id).expect("reload").len(),
+                2
+            );
+
+            // The build-time setter feeds the SAME slot — no second
+            // namespace behind it (the WebSocket/TUI path depends on it).
+            let ws = agent_with_db(&db).with_persistent_session("gw_ws".to_string());
+            assert_eq!(ws.session_id().as_deref(), Some("gw_ws"));
+            let ws_ctx = build_turn_context(&ws, "ws turn").await.expect("ws turn");
+            assert_eq!(ws_ctx.session_id, "gw_ws");
+        }
     }
 }

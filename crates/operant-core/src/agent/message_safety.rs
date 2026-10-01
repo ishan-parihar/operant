@@ -534,7 +534,6 @@ mod tests {
     use super::*;
     use crate::client::{ToolCall, ToolCallFunction};
 
-    #[test]
     /// Model-emitted argument fragments used to reach both the log and the
     /// conversation verbatim. The observed case names a credential:
     ///   Failed to parse tool_call content, content: if [ -n "$TAVILY_API_KEY" ]

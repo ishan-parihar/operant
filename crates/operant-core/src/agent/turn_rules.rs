@@ -83,32 +83,14 @@ impl EmptyResponseCounter {
     }
 }
 
-/// The "give up on retries" sentinel: when an empty turn has been
-/// nudged `max` times already, callers fall through to their normal
-/// end-of-turn path. Returns a structured `Result` so the call site
-/// can log + return a friendly error instead of silently emitting
-/// nothing (R4-1 root cause).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EmptyExhausted {
-    pub attempts: usize,
-    pub max: usize,
-}
-
-impl EmptyResponseCounter {
-    /// Build an `EmptyExhausted` sentinel for the caller to surface.
-    /// Pair with `should_retry` returning `false` — when both fire, the
-    /// turn is empty + retries are gone = time to fail closed.
-    pub fn exhausted(&self) -> Option<EmptyExhausted> {
-        if self.count >= self.max {
-            Some(EmptyExhausted {
-                attempts: self.count,
-                max: self.max,
-            })
-        } else {
-            None
-        }
-    }
-}
+// REMOVED: the `EmptyExhausted` sentinel and `EmptyResponseCounter::exhausted()`.
+// It had zero production callers, and its doc promised a behaviour that already
+// exists one layer up: `gateway_runner.rs` substitutes a user-facing message
+// ("provider returned an empty response after retries ... Reply 'continue'")
+// whenever the agent returns empty content. The exhausted terminal shape is
+// `Ok(<assistant message with empty body>)`, reported as
+// `reason=TextResponse ... response_len=0`. See BUGS.md Round 42 and the module
+// header of `tests/loop_recovery_paths.rs`.
 
 #[cfg(test)]
 mod tests {
@@ -177,7 +159,6 @@ mod tests {
             has_tool_calls: false,
         }));
         assert_eq!(c.count, 2);
-        assert!(c.exhausted().is_some());
     }
 
     #[test]

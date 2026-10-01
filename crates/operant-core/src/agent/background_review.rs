@@ -425,7 +425,7 @@ impl SelfEvolutionState {
     }
 
     // ── Hydration / Persistence (Phase 4) ───────────────────────────
-    // When a session is resumed via persistent_session_id, the in-memory
+    // When a session is resumed (a host assigned its session_id), the in-memory
     // counters start at 0. Hydrate them from session_metadata so the
     // review cadence continues where it left off.
 
