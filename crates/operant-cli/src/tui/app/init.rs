@@ -294,6 +294,8 @@ impl App {
             thinking_row_map: RefCell::new(std::collections::HashMap::new()),
             message_row_map: RefCell::new(std::collections::HashMap::new()),
             last_render_scroll_offset: Cell::new(0),
+            last_render_content_pos: Cell::new(None),
+            last_resolved_scroll: Cell::new(None),
             selection_anchor: None,
             selection_focus: None,
             selection_text: RefCell::new(String::new()),

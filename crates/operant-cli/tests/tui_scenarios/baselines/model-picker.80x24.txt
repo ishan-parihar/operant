@@ -15,10 +15,10 @@
        │ ● claude-sonnet-4-20250514  Anthropic                         │
        │   claude-sonnet-4-5-20250929  Anthropic                       │
        │   claude-sonnet-4-6  Anthropic                                │
- offlin│ enter select  ←/→ effort                                      │ortcuts
+ offlin│ enter select  ←/→ effort                                      │
 ───────╰───────────────────────────────────────────────────Esc to close╯────────
 ❯ ▏
- 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
-                                                               0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

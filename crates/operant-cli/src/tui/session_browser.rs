@@ -224,9 +224,16 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
 
     // --- Session list -----------------------------------------------------
     if state.sessions.is_empty() {
+        // "nothing here yet", not "no matches" — this surface has no filter
+        // field, so there is nothing to type and nothing that failed to match.
+        // A generic "No sessions found." would read as a failed search.
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
-            "  No sessions found.",
+            "  No sessions yet.",
+            Style::default().fg(theme::dim_color()),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Sessions are saved automatically as you chat.",
             Style::default().fg(theme::dim_color()),
         )]));
     } else {

@@ -11,6 +11,10 @@
 //     `scroll_offset` counts rows *from the bottom*: `top_row =
 //     max_scroll - scroll_offset`, so a taller transcript slides the whole
 //     viewport down by the growth even though the offset never changed.
+//   * Resize anchor — the same promise across a terminal resize, which
+//     rewraps every line. A row index cannot survive that (row 12 at width
+//     120 is not row 12 at width 60), so this one names CONTENT instead, and
+//     the render path resolves it against the next frame's geometry.
 //
 // The state lives on `App` as `scroll_memory`. It used to be a `thread_local!`
 // because `App::new` (tui/app/init.rs) was locked by a parallel lane at the
@@ -32,6 +36,36 @@ struct ScrollAnchor {
     applied_offset: usize,
 }
 
+/// A width-independent address for one transcript row.
+///
+/// `message` is the index into `App::messages`, which survives any rewrap;
+/// `line` is which rendered row of that message, which does not. Resolving a
+/// `ContentPos` against a differently-wrapped transcript therefore lands on the
+/// right *message* and on the same line within it when that line still exists —
+/// the same granularity jcode's `ContentPos` gives its resize anchor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct ContentPos {
+    /// Index into `App::messages`.
+    pub message: usize,
+    /// Which rendered row of that message, counted from the message's first.
+    pub line: u16,
+}
+
+/// A resize the run loop has not reconciled yet.
+///
+/// `captured_offset` is what tells our own adopt apart from a reader who moved
+/// after the resize: comparing against it catches every path that writes
+/// `scroll_offset` — keyboard and mouse wheel alike — in one place, the same
+/// trick [`ScrollAnchor::applied_offset`] plays for the reflow anchor.
+#[derive(Clone, Copy)]
+pub(crate) struct PendingResize {
+    /// The reader's content address at the moment of the resize.
+    pub(crate) target: ContentPos,
+    /// The offset in effect then. A different value now means the reader chose a
+    /// new position, which wins over anything we captured.
+    pub(crate) captured_offset: usize,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ScrollMemory {
     /// Ctrl+G target — the `scroll_offset` to jump back to, when one is armed.
@@ -43,6 +77,17 @@ pub(crate) struct ScrollMemory {
     /// it, so the run loop hands it back here; it is what a bookmark restore
     /// clamps against.
     max_scroll: usize,
+    /// A terminal resize rewrapped the transcript, so `anchor.top_row` now names
+    /// a different row than it did. This holds the reader's CONTENT address
+    /// instead, captured at the resize and resolved by the next paint.
+    ///
+    /// `None` whenever the reader is following the tail, which is what keeps a
+    /// resize from unpinning them: auto-follow owns the position and the render
+    /// path paints the tail whatever the geometry.
+    /// `pub(crate)` because `render_messages` reads it: resolving a content address
+    /// against a freshly-wrapped transcript is only possible where the wrapping
+    /// is built. Nothing outside `scroll_anchor.rs` writes it.
+    pub(crate) pending_resize: Option<PendingResize>,
 }
 
 impl App {
@@ -103,6 +148,37 @@ impl App {
         });
     }
 
+    /// A terminal resize is about to rewrap every transcript line. Capture
+    /// where the reader is in content coordinates so the next paint can put
+    /// them back on the same message, rather than at the new bottom of the
+    /// transcript or at row 0.
+    ///
+    /// Needs no size argument on purpose: what matters is not the terminal's
+    /// dimensions but *that* a rewrap is coming, and `Event::Resize` is the only
+    /// thing that says so. The render path publishes the resolution.
+    ///
+    /// While `auto_scroll` is set the reader is following the tail, so there is
+    /// nothing to preserve and any pending anchor is dropped — preserving an
+    /// offset for a follower is exactly the bug this guards against.
+    pub(crate) fn note_resize(&mut self) {
+        if self.auto_scroll {
+            self.scroll_memory.pending_resize = None;
+            return;
+        }
+        // `None` when the top row carried no message identity (an empty
+        // transcript, or a synthetic tool/system line at the very top). The
+        // reconcile then leaves the offset alone and lets the render path's own
+        // clamp keep it in range, which is the honest answer: there is nothing
+        // to name.
+        self.scroll_memory.pending_resize =
+            self.last_render_content_pos
+                .get()
+                .map(|target| PendingResize {
+                    target,
+                    captured_offset: self.scroll_offset,
+                });
+    }
+
     /// Re-anchor the view after a rendered frame. Called from the run loop
     /// immediately after `terminal.draw`.
     ///
@@ -127,6 +203,37 @@ impl App {
         };
         let mem = &mut self.scroll_memory;
         mem.max_scroll = max_scroll;
+
+        // ---- Resize: adopt the row the anchored content now occupies -------
+        //
+        // A width change rewrapped every line, so `anchor.top_row` is stale by
+        // definition and the append-growth correction below would "fix" a drift
+        // that never happened. The render path resolved the captured content
+        // address against THIS frame's geometry (`last_resolved_scroll`), so
+        // adopting it here re-pins the reflow anchor at the row we asked for and
+        // the next append corrects from there instead of treating our own
+        // correction as a user scroll.
+        if let Some(pending) = mem.pending_resize.take() {
+            // Three ways to decline, and declining is always "leave the reader
+            // where they put themselves": following the tail, having scrolled
+            // again since the capture, or having no resolvable row.
+            if !self.auto_scroll
+                && scrolled == pending.captured_offset
+                && let Some(row) = self.last_resolved_scroll.get()
+            {
+                // `scroll_offset` counts rows up from the bottom and the render
+                // path inverts it (`scroll = max_scroll - scroll_offset`), so
+                // landing on `row` means setting the offset to the complement.
+                // `saturating_sub` covers a resolved row past the bottom.
+                let offset = mem.max_scroll.saturating_sub(row);
+                self.scroll_offset = offset;
+                mem.anchor = Some(ScrollAnchor {
+                    top_row: row,
+                    applied_offset: offset,
+                });
+            }
+            return;
+        }
 
         let Some(anchor) = mem.anchor else { return };
 

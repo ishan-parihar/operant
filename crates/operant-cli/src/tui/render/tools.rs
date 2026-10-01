@@ -146,10 +146,13 @@ pub(crate) fn render_tool_block_lines(
             .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        for (i, cmd_line) in command.lines().enumerate() {
-            if i >= 2 {
-                break;
-            }
+        // Two command lines render; the rest of the block belongs to the
+        // output preview, not the command. Say how much of the command is
+        // hidden — `agent_events.rs` has no idea the preview ate it, so
+        // without this a multi-line script reads as a two-line one.
+        let command_lines: Vec<&str> = command.lines().collect();
+        const COMMAND_PREVIEW_LINES: usize = 2;
+        for cmd_line in command_lines.iter().take(COMMAND_PREVIEW_LINES).copied() {
             // Budget in display cells, not chars: a CJK glyph is one char but
             // two columns, so a char budget would overflow the block.
             let display = take_width(cmd_line, 160);
@@ -164,6 +167,20 @@ pub(crate) fn render_tool_block_lines(
                     Style::default().fg(theme_colors::success()),
                 ),
                 Span::styled(display, Style::default().fg(theme_colors::text())),
+            ]));
+        }
+        if command_lines.len() > COMMAND_PREVIEW_LINES {
+            lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled(
+                    format!(
+                        "\u{2026} {} more lines",
+                        command_lines.len() - COMMAND_PREVIEW_LINES
+                    ),
+                    Style::default()
+                        .fg(theme::dim_color())
+                        .add_modifier(Modifier::DIM),
+                ),
             ]));
         }
     }

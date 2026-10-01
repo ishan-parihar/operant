@@ -21,7 +21,7 @@ mod turn_state;
 pub(crate) use event_coalesce::EventOutcome;
 use event_coalesce::MAX_DRAINED_EVENTS_PER_WAKE;
 
-pub(crate) use scroll_anchor::ScrollMemory;
+pub(crate) use scroll_anchor::{ContentPos, ScrollMemory};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -535,6 +535,17 @@ pub struct App {
     pub message_row_map: RefCell<std::collections::HashMap<u16, usize>>,
     /// Scroll offset from the last render frame (used for selection validation).
     pub last_render_scroll_offset: Cell<u16>,
+    /// Content address of the transcript row painted at the TOP of the viewport
+    /// last frame. Width-independent, so unlike `last_render_scroll_offset` it
+    /// survives a resize rewrap — which is what lets the reader be put back on
+    /// the same message. `None` when that row carried no message identity.
+    /// Published by `render_messages`; read by [`App::note_resize`].
+    pub last_render_content_pos: Cell<Option<ContentPos>>,
+    /// The top row a pending resize anchor resolves to against the geometry
+    /// just painted. Cleared and rewritten every frame by `render_messages`, and
+    /// only ever meaningful in the frame that set it — `reconcile_scroll_anchor`
+    /// consumes the anchor in the same breath.
+    pub last_resolved_scroll: Cell<Option<usize>>,
 
     // ---- Text selection state --------------------------------------------
     /// Selection drag anchor (col, row) — set on mouse-down.

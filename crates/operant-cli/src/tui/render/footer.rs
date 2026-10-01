@@ -15,6 +15,10 @@ use super::{
     STATUS_THINKING, STATUS_THINKING_ELLIPSIS, shimmer_spans, spinner_char, spinner_color,
     truncate_middle, truncate_text,
 };
+// `render/mod.rs` is frozen, so this does not go through its re-export block —
+// `utils` is a public sibling module and `unified_hint` is `pub(crate)`, which
+// is all that is needed from in here.
+use super::utils::unified_hint;
 
 pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     // Split: 1-row model/mode status line + remaining rows for the prompt input.
@@ -125,12 +129,12 @@ pub(crate) fn render_input(frame: &mut Frame, app: &App, area: Rect, focused: bo
         };
 
         // `?` opens the shortcuts overlay which already lists Ctrl+A / Ctrl+K
-        // and friends — surfacing them again here is redundant clutter.
-        let right_hint = if app.has_credentials {
-            Line::from(vec![Span::styled("? shortcuts", Style::default().fg(dim))])
-        } else {
-            Line::from(Vec::<Span>::new())
-        };
+        // and friends — surfacing them again here is redundant clutter, and the
+        // *hint* that names `?` now lives in the unified footer line
+        // (`utils::unified_hint`). A hint shown in two places is two hints to
+        // keep true; this one is the only remaining reader, so the footer owns
+        // it.
+        let right_hint = Line::from(Vec::<Span>::new());
 
         let left_padded = Rect {
             x: chunks[0].x + 1,
@@ -418,16 +422,16 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
 
-        // During streaming show "esc to interrupt". The "? shortcuts" hint is
-        // rendered in the top-right status bar (see render_prompt area), so do
-        // not duplicate it here (issue #149 follow-up).
-        if spans.is_empty() && app.is_streaming {
-            spans.push(Span::styled(
-                "esc interrupt",
-                Style::default().fg(theme::dim_color()),
-            ));
-        }
-
+        // The hint is *not* a pill. Everything above this line is state — a mode
+        // the session is in, a count the user might act on — and state belongs on
+        // the left where it is read first. The hint is the one thing here that
+        // describes a *key*, so it goes after the state, in the gap, where it
+        // can breathe instead of competing with a badge for the same glance.
+        //
+        // `esc interrupt` is gone from here because it *was* a hint wearing a
+        // pill's clothes: it only appeared when no other pill had claimed the
+        // row, so the most important key in the app was the one most likely to
+        // be missing. `unified_hint` states it unconditionally while streaming.
         spans
     };
 
@@ -732,20 +736,48 @@ pub(crate) fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         parts
     };
 
-    // Gap fill
+    // The unified hint, sized to what is actually left between the state pills
+    // and the metrics. The budget is computed rather than left to the
+    // `Paragraph` clip: a clipped hint is truncated at the *right*, which is
+    // exactly where its action sits, so the ellipsis would eat the key the line
+    // exists to name. Two cells of the gap are held back so the hint never
+    // touches the metrics.
+    let right_len: usize = right_spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
     let left_len: usize = left_spans
         .iter()
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
-    let right_len: usize = right_spans
+    let hint_budget = (footer_area.width.saturating_sub(2) as usize)
+        .saturating_sub(left_len + right_len)
+        .saturating_sub(2);
+
+    let mut spans = left_spans;
+    if let Some(hint) = unified_hint(app)
+        && hint_budget > 0
+    {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            truncate_text(&hint, hint_budget),
+            Style::default().fg(theme::dim_color()),
+        ));
+        spans.push(Span::raw(" "));
+    }
+
+    // Gap fill — recomputed against the spans actually emitted, so the metrics
+    // stay flush right whatever the hint did to the left.
+    let left_len: usize = spans
         .iter()
         .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
         .sum();
     let gap = (footer_area.width.saturating_sub(2) as usize).saturating_sub(left_len + right_len);
 
-    let mut spans = left_spans;
-    spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right_spans);
+    spans.push(Span::raw(" ".repeat(gap)));
 
     // Add padding: 1 char on each side
     let padded_area = Rect {

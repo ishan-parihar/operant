@@ -85,32 +85,38 @@ pub fn render_voice_mode_notice(state: &VoiceModeNoticeState, area: Rect, buf: &
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" \u{1f3a4} ", Style::default().fg(theme_colors::accent())),
+            // State first, then the way out of it. This is the same shape as the
+            // unified footer hint and jcode's toggle confirmations
+            // (`Inline images: hidden (⌥+Shift+I to show)`): a surface that
+            // reports a mode the user is *not* in owes them the binding that
+            // changes it, and naming the state before the key is what stops the
+            // key from reading as a generic hotkey.
             Span::styled(
-                "Voice mode is available! Use ",
-                Style::default().fg(theme_colors::text()),
+                " Voice mode ",
+                Style::default()
+                    .fg(theme::user_bg())
+                    .bg(theme_colors::accent())
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled("off", Style::default().fg(theme::info_color())),
+            Span::styled(" \u{2014} ", Style::default().fg(theme_colors::muted())),
             Span::styled(
                 "Alt+V",
                 Style::default()
                     .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                " to start recording, or ",
-                Style::default().fg(theme_colors::text()),
-            ),
+            Span::styled(" to record", Style::default().fg(theme_colors::text())),
+            Span::styled(" \u{00b7} ", Style::default().fg(theme_colors::muted())),
             Span::styled(
                 "/voice",
                 Style::default()
                     .fg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                " to configure.  ",
-                Style::default().fg(theme_colors::text()),
-            ),
-            Span::styled("[Esc to dismiss]", Style::default().fg(theme::dim_color())),
+            Span::styled(" to configure", Style::default().fg(theme_colors::text())),
+            Span::styled("  ", Style::default()),
+            Span::styled("[Esc dismiss]", Style::default().fg(theme::dim_color())),
         ]),
         Line::from(""),
     ];

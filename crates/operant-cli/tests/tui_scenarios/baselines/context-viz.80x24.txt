@@ -15,10 +15,10 @@
 
 
 
- off                                                                        uts
+ off
 ────                                                                        ────
 ❯ ▏
- 🎤    enter/esc close                                                       igur
+ Voi  enter/esc close
 
-                                                               0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

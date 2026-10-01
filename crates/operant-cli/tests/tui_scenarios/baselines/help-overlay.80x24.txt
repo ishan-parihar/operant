@@ -15,10 +15,10 @@
    bottom                         │ Context
                                   │  /compress        Compress conversation
     Input                         │context (add 'here [N]' to keep recent N
- o   Enter               Submit   │turns)                                     s
+ o   Enter               Submit   │turns)
 ── message                        │                                           ──
 ❯    Up / Down           Input    │ Diagnostics
- 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
-                                                               0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

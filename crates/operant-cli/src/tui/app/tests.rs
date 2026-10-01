@@ -1922,6 +1922,251 @@ fn user_scroll_should_cancel_the_anchor() {
     assert_eq!(app.scroll_offset, 15, "a user scroll drops the anchor");
 }
 
+// ---- Resize preserves reading position ---------------------------------
+//
+// A resize rewraps every transcript line, so a row index captured before it
+// names a different row after it. These drive the same three steps the run loop
+// does: the render path publishes where the reader is and where that content
+// now lives, `Event::Resize` captures, and `reconcile_scroll_anchor` adopts.
+//
+// The render path is stood in for the same way the reflow tests above stand in
+// for it: the Cells it publishes are set directly, because measuring a real
+// rewrap needs a real `Terminal`. The end-to-end half — that a paint at two
+// widths really does resolve to the same message — is `resize_reflow_keeps_the
+// same_message_in_view` in `render::tests`.
+
+/// Stand in for a painted frame at one width.
+///
+/// `painted_row` is what the render path reports in `last_render_scroll_offset`
+/// — the row the *uncorrected* offset put at the top — and `resolved_row` is
+/// where the anchored content now lives. They are different numbers on purpose:
+/// that gap is the whole bug. `App::run` publishes the first and the render
+/// path resolves the second, then `reconcile_scroll_anchor` decides between them.
+struct ResizeFrame {
+    /// The content address of the row on screen.
+    pos: ContentPos,
+    painted_row: u16,
+    resolved_row: usize,
+}
+
+fn paint_at(app: &mut App, f: ResizeFrame) {
+    app.last_render_content_pos.set(Some(f.pos));
+    app.last_render_scroll_offset.set(f.painted_row);
+    app.last_resolved_scroll.set(Some(f.resolved_row));
+    app.reconcile_scroll_anchor();
+}
+
+fn pos(message: usize, line: u16) -> ContentPos {
+    ContentPos { message, line }
+}
+
+#[test]
+fn resize_preserves_the_row_a_scrolled_up_reader_was_looking_at() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+
+    // 140 transcript rows in a 40-row viewport, so 100 rows of scrollback. The
+    // reader is parked 30 rows up: the top of the viewport is row 70, and that
+    // row is the second rendered line of message 3.
+    app.scroll_offset = 30;
+    paint_at(
+        &mut app,
+        ResizeFrame {
+            pos: pos(3, 1),
+            painted_row: 70,
+            resolved_row: 70,
+        },
+    );
+    assert_eq!(app.scroll_offset, 30, "precondition: parked 30 rows up");
+
+    // The terminal narrows and every line rewraps: 260 transcript rows, so 220
+    // rows of scrollback. Leaving the offset alone would put the top of the
+    // viewport at 220 - 30 = 190 — a completely different part of the
+    // conversation. The anchored content is actually at row 25.
+    app.note_resize();
+    app.scroll_offset = 30;
+    paint_at(
+        &mut app,
+        ResizeFrame {
+            pos: pos(3, 1),
+            painted_row: 190,
+            resolved_row: 25,
+        },
+    );
+
+    assert_eq!(
+        app.scroll_offset, 195,
+        "220 - 25: the reader is put back on the message they were reading"
+    );
+    assert_ne!(
+        app.scroll_offset, 30,
+        "the whole point — leaving the offset alone is what this fixes"
+    );
+    assert!(
+        !app.auto_scroll,
+        "a resize must never re-pin a reader who scrolled up"
+    );
+}
+
+#[test]
+fn resize_leaves_a_follower_pinned_to_the_tail() {
+    let mut app = make_app();
+    app.auto_scroll = true;
+
+    // Auto-follow owns the position: the render path paints the tail whatever
+    // the geometry, so the top row is simply wherever the tail now is. 100 rows
+    // of scrollback, top row 90.
+    app.scroll_offset = 0;
+    paint_at(
+        &mut app,
+        ResizeFrame {
+            pos: pos(7, 0),
+            painted_row: 90,
+            resolved_row: 90,
+        },
+    );
+
+    app.note_resize();
+    assert!(
+        app.scroll_memory.pending_resize.is_none(),
+        "a follower has no reading position to preserve"
+    );
+
+    // Narrowed: 220 rows of scrollback, so the tail is row 220. The stale
+    // resolution (row 12, from before the capture) must not be adopted.
+    app.scroll_offset = 0;
+    paint_at(
+        &mut app,
+        ResizeFrame {
+            pos: pos(7, 0),
+            painted_row: 220,
+            resolved_row: 12,
+        },
+    );
+
+    assert!(
+        app.auto_scroll,
+        "the resize must not unpin a reader who was following live output"
+    );
+    assert_eq!(
+        app.scroll_offset, 0,
+        "a follower stays at the tail — offset 0 — not at the old position"
+    );
+}
+
+#[test]
+fn a_resize_with_no_content_address_leaves_the_offset_to_the_render_clamp() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    app.scroll_offset = 30;
+    app.last_render_content_pos.set(None);
+
+    app.note_resize();
+    assert!(
+        app.scroll_memory.pending_resize.is_none(),
+        "nothing nameable means nothing to preserve"
+    );
+
+    // No resolution published, so the reconcile must leave the offset alone
+    // rather than inventing a correction.
+    app.last_render_scroll_offset.set(190);
+    app.last_resolved_scroll.set(None);
+    app.reconcile_scroll_anchor();
+    assert_eq!(app.scroll_offset, 30, "the offset is left untouched");
+}
+
+#[test]
+fn a_resolve_that_finds_no_row_leaves_the_offset_alone() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    app.scroll_offset = 30;
+    app.last_render_content_pos.set(Some(pos(3, 1)));
+    app.note_resize();
+
+    // The anchored message is gone (`/clear`, `/rewind`): the render path
+    // resolved nothing. The reader keeps their offset rather than being thrown
+    // to row 0 by a resolution that failed.
+    app.last_render_scroll_offset.set(190);
+    app.last_resolved_scroll.set(None);
+    app.reconcile_scroll_anchor();
+    assert_eq!(app.scroll_offset, 30);
+}
+
+#[test]
+fn a_resize_is_not_itself_a_user_scroll_for_the_next_reflow() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    app.scroll_offset = 30;
+    app.last_render_content_pos.set(Some(pos(3, 1)));
+    app.note_resize();
+
+    app.last_render_scroll_offset.set(190);
+    app.last_resolved_scroll.set(Some(25));
+    app.reconcile_scroll_anchor();
+    assert_eq!(app.scroll_offset, 195, "220 - 25");
+
+    // The adopt writes `scroll_offset` itself. If it did not also re-pin the
+    // reflow anchor at the row it asked for, the very next append would compare
+    // the offset against a stale `applied_offset`, read the difference as a user
+    // scroll and void the pin — so the position would survive the resize and be
+    // dropped by the next message.
+    //
+    // One frame later the transcript grew by 5 rows above the reader and painted
+    // row 30.
+    app.last_render_scroll_offset.set(30);
+    app.last_resolved_scroll.set(None);
+    app.reconcile_scroll_anchor();
+    assert_eq!(
+        app.scroll_offset, 200,
+        "the reflow anchor survived the resize, so the append still corrects"
+    );
+}
+
+#[test]
+fn a_user_scroll_during_a_pending_resize_wins() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    app.scroll_offset = 30;
+    app.last_render_content_pos.set(Some(pos(3, 1)));
+    app.note_resize();
+
+    // The reader scrolls again before the next paint — a PageUp, a wheel tick.
+    // `scroll_offset` moves without going through the keyboard handler, which is
+    // why the anchor records the offset it was captured at rather than trusting a
+    // call site to cancel it.
+    app.scroll_offset = 5;
+    app.last_render_scroll_offset.set(215);
+    app.last_resolved_scroll.set(Some(25));
+    app.reconcile_scroll_anchor();
+    assert_eq!(
+        app.scroll_offset, 5,
+        "a scroll made after the resize is a newer position than the captured one"
+    );
+}
+
+#[test]
+fn event_resize_reaches_the_reading_position_state() {
+    let mut app = make_app();
+    app.auto_scroll = false;
+    app.scroll_offset = 30;
+    app.last_render_content_pos.set(Some(pos(4, 2)));
+
+    // `Event::Resize` used to fall through to the match's catch-all, so a
+    // resize was invisible to app state. Drive the real arm.
+    let outcome = app.apply_terminal_event(Event::Resize(40, 16));
+    assert!(matches!(outcome, EventOutcome::Consumed));
+    assert_eq!(
+        app.scroll_memory.pending_resize.map(|p| p.target),
+        Some(pos(4, 2)),
+        "the resize must arm the anchor the run loop reconciles"
+    );
+    assert_eq!(
+        app.scroll_memory.pending_resize.map(|p| p.captured_offset),
+        Some(30),
+        "the capture records the offset in effect, to spot a later user scroll"
+    );
+}
+
 // ---- keybinding registry: /keys and /hotkeys ------------------------
 
 /// Rendered system text of the most recent system annotation.

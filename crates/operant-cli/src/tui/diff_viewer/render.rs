@@ -44,9 +44,19 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
     }
 
     if state.files.is_empty() {
-        let empty = match state.diff_type {
-            DiffType::GitDiff => " No git changes available.",
-            DiffType::TurnDiff => " No changes were captured for this turn.",
+        // "nothing to compare" — distinct from a file that is present but has
+        // no textual delta (see `render_diff_detail`). Each mode gets its own
+        // wording and its own next action, because suggesting /review while a
+        // turn diff is open is what makes the panel look broken.
+        let (empty, hint) = match state.diff_type {
+            DiffType::GitDiff => (
+                " No git changes available.",
+                " Nothing differs from HEAD — stage or commit a change, then reopen /review.",
+            ),
+            DiffType::TurnDiff => (
+                " No changes were captured for this turn.",
+                " Make an edit this turn, then reopen /changes to see the turn diff.",
+            ),
         };
         Paragraph::new(vec![
             Line::from(""),
@@ -58,7 +68,7 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
             )]),
             Line::from(""),
             Line::from(vec![Span::styled(
-                " Use /review for the current git diff, or make an edit and reopen /changes.",
+                hint,
                 Style::default().fg(theme_colors::muted()),
             )]),
         ])
@@ -278,6 +288,28 @@ fn render_diff_detail(state: &DiffViewerState, area: Rect, buf: &mut Buffer) {
 
     // Build lines for rendering
     let lines = build_diff_lines(file, inner.width);
+    if lines.is_empty() {
+        // A file can sit in the list with no hunks at all: git emits a
+        // `diff --git` header for a pure rename or mode change and no `@@`
+        // hunk follows. Without this the pane renders blank, which reads as a
+        // broken dialog rather than "this file has no textual delta".
+        Paragraph::new(vec![
+            Line::from(vec![Span::styled(
+                " No textual changes in this file.",
+                Style::default()
+                    .fg(theme_colors::muted())
+                    .add_modifier(Modifier::ITALIC),
+            )]),
+            Line::from(vec![Span::styled(
+                " Git reported a rename or mode change — no content differs.",
+                Style::default()
+                    .fg(theme_colors::muted())
+                    .add_modifier(Modifier::ITALIC),
+            )]),
+        ])
+        .render(inner, buf);
+        return;
+    }
     let total_lines = lines.len();
     let scroll =
         (state.detail_scroll as usize).min(total_lines.saturating_sub(inner.height as usize));

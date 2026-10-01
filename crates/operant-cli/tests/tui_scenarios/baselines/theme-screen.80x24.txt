@@ -15,10 +15,10 @@
 
                  Nord        Nord — cool blue-grey palette
 
- offl            Dracula     Dracula — purple/pink dark theme              cuts
+ offl            Dracula     Dracula — purple/pink dark theme
 ─────  ↑↓ navigate  ·  enter apply  ·  esc cancel                          ─────
 ❯ ▏
- 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
-                                                               0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

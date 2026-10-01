@@ -144,6 +144,16 @@ impl App {
                 self.handle_focus_event(false);
                 EventOutcome::Consumed
             }
+            // The one arm the match used to drop on the floor. A resize
+            // rewraps every transcript line, so it has to reach the
+            // reading-position state before the next paint reflows it —
+            // otherwise a reader parked mid-transcript is teleported to the
+            // new bottom. `note_resize` is a no-op for a reader who is
+            // following the tail, so following stays following.
+            Event::Resize(_, _) => {
+                self.note_resize();
+                EventOutcome::Consumed
+            }
             _ => EventOutcome::Consumed,
         }
     }

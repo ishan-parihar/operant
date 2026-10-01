@@ -31,10 +31,10 @@
 
 
 
- offline-captu  tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll                                         ? shortcuts
+ offline-captu  tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll
 ──────────────                                                                                            ──────────────
 ❯ ▏
- 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
-                                                                                                       0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

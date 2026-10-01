@@ -109,14 +109,47 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     if content_area.height == 0 {
         return;
     }
-    let col_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(42),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(content_area);
+    // Two columns, each with a floor. The left pane carries a key column and a
+    // description side by side, so below its floor every row wraps and the
+    // shortcuts read as noise; the right pane carries `command + description`,
+    // which needs more still. A floor that cannot be met means the split is not
+    // drawn at all — one full-width pane — rather than both columns crushed to
+    // fit.
+    const MIN_KEYS_W: u16 = 28;
+    const MIN_COMMANDS_W: u16 = 32;
+    const DIVIDER_W: u16 = 1;
+    let max_keys = content_area
+        .width
+        .saturating_sub(MIN_COMMANDS_W)
+        .saturating_sub(DIVIDER_W);
+    let col_chunks = if max_keys >= MIN_KEYS_W {
+        let keys_w = ((content_area.width as u32 * 42) / 100) as u16;
+        // Ratio first, then the floors: never wider than the share, never
+        // narrower than the floor, never so wide the commands pane loses its
+        // floor.
+        let keys_w = keys_w.clamp(MIN_KEYS_W, max_keys);
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(keys_w),
+                Constraint::Length(DIVIDER_W),
+                Constraint::Min(MIN_COMMANDS_W),
+            ])
+            .split(content_area)
+    } else {
+        // Not enough width for two honest columns, so do not split at all: the
+        // keys pane and the divider get zero width and the commands pane — the
+        // one the footer says `↑↓` scrolls — takes the whole width. Keeping
+        // three chunks means every consumer below is unchanged.
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(0),
+                Constraint::Length(0),
+                Constraint::Min(0),
+            ])
+            .split(content_area)
+    };
     // ─── Left column: keyboard shortcuts by category ───────────────────────
     let mut left_lines: Vec<Line<'static>> = Vec::new();
 
@@ -188,15 +221,19 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
     );
 
     // ─── Center divider ────────────────────────────────────────────────────
-    let divider_lines: Vec<Line<'static>> = (0..content_area.height)
-        .map(|_| {
-            Line::from(Span::styled(
-                "\u{2502}",
-                Style::default().fg(theme_colors::muted()),
-            ))
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(divider_lines), col_chunks[1]);
+    // A collapsed split gives the divider zero width; skip it rather than
+    // handing ratatui an empty rect to discover.
+    if col_chunks[1].width > 0 {
+        let divider_lines: Vec<Line<'static>> = (0..content_area.height)
+            .map(|_| {
+                Line::from(Span::styled(
+                    "\u{2502}",
+                    Style::default().fg(theme_colors::muted()),
+                ))
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(divider_lines), col_chunks[1]);
+    }
 
     // ─── Right column: slash commands by category ──────────────────────────
     let filter_lc = overlay.filter.to_lowercase();

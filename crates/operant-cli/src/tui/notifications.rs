@@ -123,6 +123,28 @@ impl NotificationKind {
         }
     }
 
+    /// Ink for the notification *body*, which is a different job from
+    /// [`Self::color`]: the frame colour says "which channel is this", the body
+    /// colour says "how bad is it". A failure therefore has to read as a
+    /// failure from its body alone — at a glance, in peripheral vision, and in
+    /// both themes, since every value here is a role rather than a literal and
+    /// so resolves through the palette in light and dark alike.
+    pub fn body_color(&self) -> Color {
+        match self {
+            NotificationKind::Error => theme::error_color(),
+            NotificationKind::Warning => theme::warning_color(),
+            NotificationKind::Success => theme::success_color(),
+            NotificationKind::Info => theme_colors::text(),
+        }
+    }
+
+    /// Failures are the only kind that shouts. A warning is already a second
+    /// notch down (icon + frame are both amber), so bolding it too would cost
+    /// the error its one remaining signal.
+    pub fn body_is_emphasis(&self) -> bool {
+        matches!(self, NotificationKind::Error)
+    }
+
     pub fn icon(&self) -> &'static str {
         match self {
             NotificationKind::Info => "ℹ",
@@ -133,12 +155,139 @@ impl NotificationKind {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Actionable wording
+// ---------------------------------------------------------------------------
+
+/// Name the keystroke or command that gets the user out of this failure.
+///
+/// A notification that says only *what* went wrong leaves the user to guess the
+/// remedy, which for a provider failure is not guessable: the fix is `/login`
+/// for one class, `/model` for another, `/compact` for a third, and the
+/// message text itself never says which. This is the jcode rule — a failure
+/// states its recovery action — applied at the one place every failure passes
+/// through.
+///
+/// `None` means "there is nothing useful to add": either the notice is not a
+/// failure (`Info` / `Success` need no remedy), or it is a failure with no
+/// user-reachable lever, in which case inventing one would send the user
+/// pressing keys that cannot work.
+pub fn recovery_action(kind: &NotificationKind, message: &str) -> Option<&'static str> {
+    // Only the two severities that imply an unmet need. An informational
+    // notice is not a problem, and a success has nothing to recover from.
+    if !matches!(kind, NotificationKind::Error | NotificationKind::Warning) {
+        return None;
+    }
+
+    // Lowercased once; every probe below is a substring test on it.
+    let m = message.to_ascii_lowercase();
+
+    // Order is by *specificity of the fix*, not by HTTP status. A credential
+    // failure and a permission failure both arrive as 4xx, but their remedies
+    // are different levers (`/login` vs `/model`), so the narrower match has to
+    // win before the broader one can swallow it. Quota is checked before rate
+    // limit because a billing wall is reported as a 429 and re-authenticating
+    // it accomplishes nothing.
+    const CLASSES: &[(&[&str], &str)] = &[
+        // ── credentials: the key is wrong, not the request ──
+        (
+            &[
+                "401",
+                "unauthorized",
+                "invalid api key",
+                "invalid_api_key",
+                "api key",
+                "credential",
+                "no api key",
+            ],
+            "Run /login to re-authenticate, or /model to switch to a working route, then send again.",
+        ),
+        // ── billing: the account is empty, retrying cannot help ──
+        (
+            &["quota", "billing", "insufficient funds", "payment required"],
+            "This account is out of credit — top it up, or /model to switch to a working route.",
+        ),
+        // ── authorization: the route works, this account may not use it ──
+        (
+            &["403", "forbidden", "access denied", "permission denied"],
+            "The provider denied this request — /model switches to a route this account can reach.",
+        ),
+        // ── the named model is gone ──
+        (
+            &[
+                "404",
+                "model not found",
+                "no such model",
+                "unsupported model",
+            ],
+            "Run /model to pick a route this account can reach, then send again.",
+        ),
+        // ── the conversation outgrew the window ──
+        (
+            &[
+                "context length",
+                "maximum context",
+                "context window exceeded",
+                "context window full",
+                "prompt is too long",
+            ],
+            "Run /compact to shrink the conversation, then send again.",
+        ),
+        // ── throttle ──
+        (
+            &["429", "rate limit", "too many requests"],
+            "Rate limited — this retries with backoff; /model switches to a working route now.",
+        ),
+        // ── the provider itself is sick ──
+        (
+            &[
+                "503",
+                "502",
+                "529",
+                "overloaded",
+                "bad gateway",
+                "service unavailable",
+            ],
+            "The provider is degraded — retry in a moment, or /model to switch route.",
+        ),
+        // ── the request outlived its budget ──
+        (
+            &["408", "timeout", "timed out"],
+            "The request timed out — send again to retry, or /model to switch route.",
+        ),
+        // ── we never reached the provider ──
+        (
+            &[
+                "connection refused",
+                "connection reset",
+                "connection closed",
+                "connection error",
+                "connection",
+                "broken pipe",
+                "network",
+                "dns",
+                "unexpected eof",
+            ],
+            "Network unreachable — check connectivity, then send again.",
+        ),
+    ];
+
+    CLASSES
+        .iter()
+        .find(|(needles, _)| needles.iter().any(|n| m.contains(n)))
+        .map(|(_, action)| *action)
+}
+
 /// Render the topmost notification as a floating toast at the top-right of `area`.
 ///
 /// Layout (3 rows):
 ///   row 0: ▐ `icon` `message truncated`          `Esc` ▌
 ///   row 1: ▐ [progress bar for timed notifs]            ▌
-///   row 2: (bottom border row, blank)
+///   row 2: ▐ [`→ recovery action` | blank]                ▌
+///
+/// Row 2 was padding. It is the only row the toast had to spare, and a remedy
+/// is exactly the thing that does not fit on the message line, so it went there
+/// rather than growing the toast.
 pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, area: Rect) {
     let notif = match queue.current() {
         Some(n) => n,
@@ -208,7 +357,14 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
             icon_with_spaces.clone(),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(message, Style::default().fg(theme_colors::text())),
+        Span::styled(
+            message,
+            body_style(&notif.kind).add_modifier(if notif.kind.body_is_emphasis() {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+        ),
     ];
     if true {
         row0_spans.push(Span::styled(
@@ -318,7 +474,17 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
         frame.render_widget(para1, prog_rect);
     }
 
-    // Row 2: blank bottom padding (if space allows)
+    // ── Row 2: the recovery action, or blank ──
+    let recovery = recovery_action(&notif.kind, &notif.message).map(|action| {
+        // `inner_w` already excludes both border columns and one pad each side.
+        crate::tui::render::truncate_text(&format!("\u{2192} {action}"), inner_w)
+    });
+    let row2_line = match &recovery {
+        Some(text) if !text.is_empty() => {
+            Line::from(Span::styled(format!(" {text}"), body_style(&notif.kind)))
+        }
+        _ => Line::from(""),
+    };
     if toast_height > 2 && toast_area.y + 2 < frame.area().height {
         let pad_rect = Rect {
             x: toast_area.x + 1,
@@ -326,8 +492,18 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
             width: toast_width.saturating_sub(2),
             height: 1,
         };
-        frame.render_widget(Paragraph::new("").style(Style::default().bg(bg)), pad_rect);
+        frame.render_widget(
+            Paragraph::new(row2_line).style(Style::default().bg(bg)),
+            pad_rect,
+        );
     }
+}
+
+/// Body style for a notification, resolved through the semantic roles so a
+/// failure reads as a failure in both themes without this file picking a
+/// colour.
+fn body_style(kind: &NotificationKind) -> Style {
+    Style::default().fg(kind.body_color())
 }
 
 #[cfg(test)]
@@ -391,5 +567,111 @@ mod tests {
         q.push(NotificationKind::Success, "persistent".to_string(), None);
         q.tick();
         assert!(!q.is_empty());
+    }
+
+    // ---- recovery actions ------------------------------------------------
+    //
+    // The classifier is pure string matching over a message the caller did not
+    // write here, so the pins below are the only thing holding "a 401 says
+    // /login" and "a 429 says /model" apart. Each case is a real provider error
+    // string from `operant-providers`, not a paraphrase.
+
+    /// Every error a provider can produce has to land on *some* lever, or the
+    /// user is left with the raw status code. `None` is only correct when the
+    /// message carries no failure semantics at all.
+    #[test]
+    fn actionable_errors_cover_the_real_provider_vocabulary() {
+        let cases: &[(&str, &str)] = &[
+            ("API error (401 Unauthorized): invalid api key", "/login"),
+            ("401 unauthorized", "/login"),
+            ("Error: exceeded your current quota", "out of credit"),
+            (
+                "API error (403 Forbidden): access denied",
+                "denied this request",
+            ),
+            ("API error (404 Not Found): model not found", "/model"),
+            (
+                "Error: context length exceeded, reduce the length",
+                "/compact",
+            ),
+            ("429 Too Many Requests: rate limit exceeded", "/model"),
+            ("Error: overloaded_error (529)", "/model"),
+            ("502 Bad Gateway", "/model"),
+            ("408 Request Timeout", "timed out"),
+            ("Claude Code request timed out after 30s", "timed out"),
+            ("connection refused", "Network unreachable"),
+            ("Error: connection reset by peer", "Network unreachable"),
+        ];
+        for (message, expected) in cases {
+            let action = recovery_action(&NotificationKind::Error, message);
+            assert!(
+                action.is_some_and(|a| a.contains(expected)),
+                "error {message:?} named no {expected:?} remedy (got {action:?})"
+            );
+        }
+    }
+
+    /// The narrower match has to win: a credential failure and a permission
+    /// failure are both 4xx but are fixed by different keys, and a billing wall
+    /// arrives as a 429. Mis-attributing any of these sends the user to a lever
+    /// that cannot move.
+    #[test]
+    fn the_specific_class_beats_the_general_one() {
+        // A 401 says "invalid api key" — quota/rate-limit/permission probes must
+        // not swallow it.
+        let auth = recovery_action(
+            &NotificationKind::Error,
+            "API error (401 Unauthorized): invalid api key",
+        );
+        assert!(auth.is_some_and(|a| a.contains("/login")));
+
+        // A billing wall is reported as a rate limit; re-authenticating is
+        // useless, so the quota remedy must win.
+        let quota = recovery_action(&NotificationKind::Error, "429: exceeded your current quota");
+        assert!(quota.is_some_and(|a| a.contains("out of credit")));
+
+        // A 404 must not be read as a bare "not found" belonging to something
+        // else (a missing file has no /model remedy).
+        let model = recovery_action(&NotificationKind::Error, "aft read: file not found");
+        assert!(model.is_none(), "a file-not-found is not a routing failure");
+    }
+
+    /// A notice with nothing to recover from must return `None` rather than an
+    /// invented lever — a key that cannot work is worse than no key.
+    #[test]
+    fn non_failures_and_unclassifiable_failures_name_no_action() {
+        // Non-failures never carry a remedy.
+        for kind in [NotificationKind::Info, NotificationKind::Success] {
+            assert_eq!(
+                recovery_action(&kind, "401 Unauthorized: invalid api key"),
+                None,
+                "{kind:?} is not a failure and must not claim a remedy"
+            );
+        }
+        // A failure with no user-reachable lever stays bare.
+        assert_eq!(
+            recovery_action(&NotificationKind::Error, "the shader failed to link"),
+            None
+        );
+        // The soft context warning already names /compact, so it must not also
+        // grow a remedy line saying the same thing twice.
+        assert_eq!(
+            recovery_action(
+                &NotificationKind::Warning,
+                "Context window 80% full. Consider /compact."
+            ),
+            None
+        );
+    }
+
+    /// A persistent rate-limit warning is the one notice the user must be able
+    /// to act on without waiting, so it has to name the switch.
+    #[test]
+    fn rate_limit_warning_names_the_route_switch() {
+        let action = recovery_action(
+            &NotificationKind::Warning,
+            "Rate limit reached — retry in ~30s",
+        );
+        assert!(action.is_some_and(|a| a.contains("/model")));
     }
 }

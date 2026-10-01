@@ -31,10 +31,10 @@
                     │                                                                              │
                     │                                                                              │
                     │                                                                              │
- offline-capture · l│                                                                              │        ? shortcuts
+ offline-capture · l│                                                                              │
 ────────────────────│                                                                              │────────────────────
 ❯ ▏                 │        ↑↓: navigate | Enter: switch | N: new | D: delete | Esc: close        │
- 🎤  Voice mode is av│                                                                              │
+ Voice mode off — Al│                                                                              │
                     ╰──────────────────────────────────────────────────────────────────Esc to close╯
-                                                                                                       0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

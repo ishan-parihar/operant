@@ -1,7 +1,7 @@
 use crate::tui::adapter_types::types::Role;
 // render/messages.rs — Message pane rendering, turn items, live content.
 
-use crate::tui::app::{App, ToolUseBlock};
+use crate::tui::app::{App, FocusTarget, ToolUseBlock};
 use crate::tui::messages::{
     RenderContext, render_thinking_live_content, render_transcript_assistant_message_tagged,
     render_transcript_assistant_meta, render_transcript_live_text, render_transcript_user_message,
@@ -19,7 +19,60 @@ use super::RenderedLineItem;
 use super::cache::*;
 use super::tools::{render_tool_items_lines, tool_group_ranges};
 use super::{build_tool_names, render_system_annotation_lines, shimmer_spans};
+use crate::tui::app::ContentPos;
 use crate::tui::vendor::style::theme;
+
+/// The content address of the transcript row at `row`.
+///
+/// A blank separator or a turn header carries no message identity, and a reader
+/// parked on one is still reading the message it introduces — so walk forward to
+/// the first row that has one. Without that, roughly every sixth row would
+/// silently disable the resize anchor for whoever happened to be parked there.
+///
+/// `None` only when nothing at or after `row` is nameable (an empty transcript,
+/// or one made entirely of synthetic tool lines). The resize path then leaves the
+/// offset alone and lets the render path's own clamp keep it in range.
+fn content_pos_at_row(lines: &[RenderedLineItem], row: usize) -> Option<ContentPos> {
+    let row = (row..lines.len()).find(|&i| lines[i].message_index.is_some())?;
+    let message = lines[row].message_index?;
+    // The line's ordinal within its message's run, counted back from `row`.
+    let mut ordinal: u16 = 0;
+    for item in lines[..row].iter().rev() {
+        if item.message_index != Some(message) {
+            break;
+        }
+        ordinal = ordinal.saturating_add(1);
+    }
+    Some(ContentPos {
+        message,
+        line: ordinal,
+    })
+}
+
+/// The row `target` now occupies in THIS frame's wrapping.
+///
+/// Two-sided degradation, both of which keep the reader on their content rather
+/// than at the bottom:
+///
+///   * the message exists but has fewer rows than `target.line` asks for — land
+///     on its last row, so the reader still sees the message they were reading;
+///   * the message is gone entirely (cleared, rewound) — `None`, and the caller
+///     leaves the offset alone for the render path's own clamp.
+fn resolve_content_pos(lines: &[RenderedLineItem], target: ContentPos) -> Option<usize> {
+    let mut ordinal: u16 = 0;
+    let mut last: Option<usize> = None;
+    for (i, item) in lines.iter().enumerate() {
+        if item.message_index != Some(target.message) {
+            continue;
+        }
+        last = Some(i);
+        if ordinal == target.line {
+            return Some(i);
+        }
+        ordinal = ordinal.saturating_add(1);
+    }
+    last
+}
 
 pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     let content_area = area; // (iter-143: plugin_hints deleted — Vec was always empty)
@@ -110,6 +163,24 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
     *app.message_row_map.borrow_mut() = visible_rows;
     *app.thinking_row_map.borrow_mut() = thinking_rows;
 
+    // ---- Reading-position bookkeeping (see `app::scroll_anchor`) ----------
+    //
+    // Two publications, both consumed by `reconcile_scroll_anchor` after this
+    // paint. `last_render_content_pos` is where the reader currently IS, in
+    // coordinates a rewrap cannot invalidate; the resolution answers "where does
+    // that content live now", against the wrapping this frame just produced.
+    //
+    // Must run before `lines` is handed to the list. `last_resolved_scroll` is
+    // cleared first so a frame that never reaches the resolve cannot leave a
+    // stale row behind for the reconcile to adopt.
+    app.last_resolved_scroll.set(None);
+    app.last_render_content_pos
+        .set(content_pos_at_row(&lines, scroll));
+    if let Some(pending) = app.scroll_memory.pending_resize {
+        app.last_resolved_scroll
+            .set(resolve_content_pos(&lines, pending.target));
+    }
+
     // No border — messages render directly into the area.
     let mut list = VirtualList::new();
     list.viewport_height = msg_area.height;
@@ -140,12 +211,29 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             .position(scroll.min(max_scroll))
             .viewport_content_length(visible_height as usize);
 
+        // Focus lives on the right rail, not on a border: the message pane is
+        // borderless by design and adding a frame around it would put a box
+        // around the whole transcript. The rail is already the one piece of
+        // chrome that only exists when the pane overflows, so it is the honest
+        // place to say who has the keyboard — the same focused-takes-accent /
+        // unfocused-takes-dim rule jcode applies to its right rail. Costs one
+        // colour lookup per frame; the rail is only built when it is drawn.
+        //
+        // This is focus, not text selection: selection paints
+        // `selection_bg` on individual rows (see `render/selection.rs`) and is
+        // independent of which pane the keyboard is in.
+        let thumb_color = if app.focus == FocusTarget::Transcript {
+            theme::accent_color()
+        } else {
+            theme::dim_color()
+        };
+
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
             .track_symbol(None)
             .thumb_symbol("\u{2590}") // ▐ right half block — thin vertical strip
-            .thumb_style(Style::default().fg(theme::dim_color()));
+            .thumb_style(Style::default().fg(thumb_color));
 
         frame.render_stateful_widget(scrollbar, msg_area, &mut scrollbar_state);
     }

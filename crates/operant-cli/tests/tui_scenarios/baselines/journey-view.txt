@@ -31,10 +31,10 @@
                │└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
                │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory · 125 edges · 6│
                ╰────────────────────────────────────────────────────────────────────────────Esc to close╯
- offline-capture · local                                                                                    ? shortcuts
+ offline-capture · local
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ❯ ▏
- 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
-                                                                                                       0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

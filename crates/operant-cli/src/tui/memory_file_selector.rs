@@ -174,6 +174,18 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
         }
     }
 
+    // The list always has one row per scope, so it is never literally empty —
+    // but on a fresh install none of the three exist, so every row reads as
+    // "(new)" with no explanation of what selecting one does. That is this
+    // surface's real empty state, and it is a "nothing here yet", not a
+    // "no matches": there is no filter to type into.
+    if state.files.iter().all(|f| !f.exists) {
+        lines.push(Line::from(vec![Span::styled(
+            "  None exist yet — picking one creates it.",
+            Style::default().fg(theme_colors::muted()),
+        )]));
+    }
+
     let para = Paragraph::new(lines)
         .style(
             Style::default()

@@ -8,7 +8,7 @@
 
              No changes were captured for this turn.
 
-             Use /review for the current git diff, or make an edit and reopen /changes.
+             Make an edit this turn, then reopen /changes to see the turn diff.
 
 
 
@@ -31,10 +31,10 @@
 
 
 
- offline-ca                                                                                                   shortcuts
+ offline-ca
 ───────────                                                                                                  ───────────
 ❯ ▏
- 🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
-                                                                                                       0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

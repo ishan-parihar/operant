@@ -9,6 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
+use crate::tui::messages::{fold_above_label, fold_below_label, fold_window};
 use crate::tui::overlays::{
     HINT_ESC, begin_modal_buf, cycle_next, cycle_prev, render_modal_title_buf,
 };
@@ -294,24 +295,31 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         .render(modal.footer_area, buf);
 }
 
+/// `(border, title)` styles for a pane, from its focus state.
+///
+/// jcode's `right_rail_border_style` rule, applied per pane: the focused pane
+/// takes the accent role and everything else goes `dim`, so the pane holding
+/// the keyboard is legible at a glance in both themes. `dim` rather than
+/// `border` on purpose — an unfocused pane should recede, and at full border
+/// strength all three panes read as peers, so the border stopped answering
+/// "where is the keyboard?".
+fn pane_focus_styles(focused: bool) -> (Style, Style) {
+    let color = if focused {
+        theme::accent_color()
+    } else {
+        theme::dim_color()
+    };
+    (
+        Style::default().fg(color),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
 fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     let focused = state.active_pane == McpViewPane::ServerList;
-    let border_style = if focused {
-        Style::default().fg(theme_colors::accent())
-    } else {
-        Style::default().fg(theme_colors::border())
-    };
+    let (border_style, title_style) = pane_focus_styles(focused);
     Block::default()
-        .title(Span::styled(
-            " Servers ",
-            Style::default()
-                .fg(if focused {
-                    theme_colors::accent()
-                } else {
-                    theme_colors::muted()
-                })
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(Span::styled(" Servers ", title_style))
         .borders(Borders::ALL)
         .border_style(border_style)
         .style(
@@ -329,28 +337,32 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     };
 
     // Group by transport
-    let stdio: Vec<_> = state
-        .servers
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.transport == "stdio")
-        .collect();
-    let sse: Vec<_> = state
-        .servers
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.transport == "sse")
-        .collect();
-    let http: Vec<_> = state
-        .servers
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.transport == "http")
-        .collect();
+    let groups = server_groups(state);
+
+    // This pane always paints from the first server — there is no scroll
+    // window here — so nothing can be hidden *above* the fold and an `↑N`
+    // marker would always read zero. What can be hidden is the tail.
+    //
+    // The marker needs a row of its own: writing it over the row the walk
+    // would have clipped leaves that row's text sticking out past it, which
+    // reads as a rendering fault rather than a label. So the walk gets one row
+    // less and the marker takes the last one. Two passes, because giving up a
+    // row can drop one more server off the end.
+    let mut content_height = inner.height;
+    let mut shown = server_rows_that_fit(&groups, content_height);
+    if shown < state.servers.len() {
+        content_height = content_height.saturating_sub(1);
+        shown = server_rows_that_fit(&groups, content_height);
+    }
+    let hidden = state.servers.len() - shown;
 
     let mut row = 0u16;
+    let content = Rect {
+        height: content_height,
+        ..inner
+    };
 
-    let render_group = |group: &Vec<(usize, &McpServerView)>,
+    let render_group = |group: &[(usize, &McpServerView)],
                         label: &str,
                         row: &mut u16,
                         area: Rect,
@@ -402,7 +414,7 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 if sel {
                     Style::default()
                         .fg(theme::user_bg())
-                        .bg(theme_colors::accent())
+                        .bg(theme::accent_color())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme_colors::text())
@@ -440,54 +452,91 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         }
     };
 
-    render_group(
-        &stdio,
-        "stdio",
-        &mut row,
-        inner,
-        buf,
-        state.selected_server,
-        focused,
-    );
-    render_group(
-        &sse,
-        "SSE",
-        &mut row,
-        inner,
-        buf,
-        state.selected_server,
-        focused,
-    );
-    render_group(
-        &http,
-        "HTTP",
-        &mut row,
-        inner,
-        buf,
-        state.selected_server,
-        focused,
-    );
+    for (label, group) in &groups {
+        render_group(
+            group,
+            label,
+            &mut row,
+            content,
+            buf,
+            state.selected_server,
+            focused,
+        );
+    }
+
+    // Overflow marker, on the row the list gave up.
+    if hidden > 0 {
+        Paragraph::new(Line::from(vec![Span::raw("  "), fold_below_label(hidden)])).render(
+            Rect {
+                x: inner.x,
+                y: inner.y.saturating_add(content_height),
+                width: inner.width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+}
+
+/// The server list in the order it paints: one entry per non-empty transport
+/// group, in stdio / SSE / HTTP order. The renderer and the fold count share
+/// this so the two can never disagree about what "the rest" means.
+fn server_groups(state: &McpViewState) -> Vec<(&'static str, Vec<(usize, &McpServerView)>)> {
+    let by_transport = |want: &str| {
+        state
+            .servers
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.transport == want)
+            .collect::<Vec<_>>()
+    };
+    [
+        ("stdio", by_transport("stdio")),
+        ("SSE", by_transport("sse")),
+        ("HTTP", by_transport("http")),
+    ]
+    .into_iter()
+    .filter(|(_, group)| !group.is_empty())
+    .collect()
+}
+
+/// How many servers the pane can paint, walking the same row budget the
+/// renderer spends: one row per non-empty group header, one row per server, and
+/// one more for a server that carries an error line.
+fn server_rows_that_fit(
+    groups: &[(&'static str, Vec<(usize, &McpServerView)>)],
+    pane_rows: u16,
+) -> usize {
+    let pane = pane_rows as u32;
+    let mut rows = 0u32;
+    let mut shown = 0usize;
+    for (_, group) in groups {
+        if rows >= pane {
+            break;
+        }
+        rows += 1; // group header
+        for (_, server) in group {
+            if rows >= pane {
+                return shown;
+            }
+            rows += 1;
+            if server.error_message.is_some() {
+                rows += 1;
+            }
+            shown += 1;
+        }
+    }
+    shown
 }
 
 fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
-    let focused =
-        state.active_pane == McpViewPane::ToolList || state.active_pane == McpViewPane::ToolDetail;
-    let border_style = if focused {
-        Style::default().fg(theme_colors::accent())
-    } else {
-        Style::default().fg(theme_colors::border())
-    };
+    // Only the list itself is focused here. `ToolDetail` used to light this
+    // pane's border too, so the tools pane and the detail pane both read as
+    // focused at once — two accents, no answer to "where am I?".
+    let focused = state.active_pane == McpViewPane::ToolList;
+    let (border_style, title_style) = pane_focus_styles(focused);
     Block::default()
-        .title(Span::styled(
-            " Tools ",
-            Style::default()
-                .fg(if focused {
-                    theme_colors::accent()
-                } else {
-                    theme_colors::muted()
-                })
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(Span::styled(" Tools ", title_style))
         .borders(Borders::ALL)
         .border_style(border_style)
         .style(
@@ -506,7 +555,7 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
 
     // Search bar
     let search_line = Line::from(vec![
-        Span::styled("/ ", Style::default().fg(theme_colors::accent())),
+        Span::styled("/ ", Style::default().fg(theme::accent_color())),
         Span::styled(
             if state.tool_search.is_empty() {
                 "filter tools".to_string()
@@ -537,14 +586,34 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         height: inner.height.saturating_sub(1),
     };
     let tools = state.filtered_tools();
-    let max_visible = list_area.height as usize;
-    let start = state.selected_tool.saturating_sub(max_visible / 2);
+    // Selection is the row's accent background (and `selected_tool` is what the
+    // detail pane reads). It is deliberately independent of `focused`: the two
+    // are different things and both stay visible — a pane can be focused with
+    // no row selected, and a row can be selected in an unfocused pane.
+    let fold = fold_window(tools.len(), state.selected_tool, list_area.height);
+    let marker_style = Style::default().fg(theme::dim_color());
 
-    for (i, tool) in tools[start..].iter().enumerate() {
-        if i >= max_visible {
-            break;
-        }
-        let sel = start + i == state.selected_tool;
+    let mut top = 0u16;
+    if fold.hidden_above > 0 {
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            fold_above_label(fold.hidden_above),
+        ]))
+        .style(marker_style)
+        .render(
+            Rect {
+                x: list_area.x,
+                y: list_area.y,
+                width: list_area.width,
+                height: 1,
+            },
+            buf,
+        );
+        top = 1;
+    }
+
+    for (i, tool) in tools[fold.start..][..fold.shown].iter().enumerate() {
+        let sel = fold.start + i == state.selected_tool;
         let avail = list_area.width.saturating_sub(20) as usize;
         let name = format!("{}:{}", tool.server, tool.name);
         let name_short: String = name.chars().take(avail).collect();
@@ -555,7 +624,7 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             if sel {
                 Style::default()
                     .fg(theme::user_bg())
-                    .bg(theme_colors::accent())
+                    .bg(theme::accent_color())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme_colors::text())
@@ -564,7 +633,27 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         Paragraph::new(line).render(
             Rect {
                 x: list_area.x,
-                y: list_area.y + i as u16,
+                y: list_area.y + top + i as u16,
+                width: list_area.width,
+                height: 1,
+            },
+            buf,
+        );
+    }
+
+    if fold.hidden_below > 0 {
+        let y = list_area
+            .y
+            .saturating_add(list_area.height.saturating_sub(1));
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            fold_below_label(fold.hidden_below),
+        ]))
+        .style(marker_style)
+        .render(
+            Rect {
+                x: list_area.x,
+                y,
                 width: list_area.width,
                 height: 1,
             },
@@ -575,11 +664,7 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
 
 fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     let focused = state.active_pane == McpViewPane::ToolDetail;
-    let border_style = if focused {
-        Style::default().fg(theme_colors::accent())
-    } else {
-        Style::default().fg(theme_colors::border())
-    };
+    let (border_style, title_style) = pane_focus_styles(focused);
 
     // If error is expanded, show full error text in this pane
     if state.error_expanded
@@ -618,16 +703,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     }
 
     Block::default()
-        .title(Span::styled(
-            " Tool Detail ",
-            Style::default()
-                .fg(if focused {
-                    theme_colors::accent()
-                } else {
-                    theme_colors::muted()
-                })
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(Span::styled(" Tool Detail ", title_style))
         .borders(Borders::ALL)
         .border_style(border_style)
         .style(
@@ -656,7 +732,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     lines.push(Line::from(vec![Span::styled(
         format!("{}:{}", tool.server, tool.name),
         Style::default()
-            .fg(theme_colors::accent())
+            .fg(theme::accent_color())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::default());
@@ -669,10 +745,26 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             "Input:",
             Style::default().fg(theme::dim_color()),
         )]));
-        for line in schema.lines().take(10) {
+        // Every `take` in this pane is a silent clip. Each one gets a `dim`
+        // marker so the reader knows the block is a sample of the real thing
+        // rather than the whole of it.
+        const SCHEMA_PREVIEW_LINES: usize = 10;
+        let schema_lines: Vec<&str> = schema.lines().collect();
+        for line in schema_lines.iter().take(SCHEMA_PREVIEW_LINES) {
             lines.push(Line::from(vec![Span::styled(
                 format!("  {}", line),
                 Style::default().fg(theme::dim_color()),
+            )]));
+        }
+        if schema_lines.len() > SCHEMA_PREVIEW_LINES {
+            lines.push(Line::from(vec![Span::styled(
+                format!(
+                    "  +{} more lines",
+                    schema_lines.len() - SCHEMA_PREVIEW_LINES
+                ),
+                Style::default()
+                    .fg(theme::dim_color())
+                    .add_modifier(Modifier::DIM),
             )]));
         }
     }
@@ -694,28 +786,46 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             Style::default().fg(server.status.color()),
         )]));
 
+        const RESOURCE_PREVIEW: usize = 3;
         if !server.resources.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Resources:",
                 Style::default().fg(theme_colors::muted()),
             )]));
-            for resource in server.resources.iter().take(3) {
+            for resource in server.resources.iter().take(RESOURCE_PREVIEW) {
                 lines.push(Line::from(vec![Span::styled(
                     format!("  - {}", resource),
                     Style::default().fg(theme_colors::text()),
                 )]));
             }
+            if server.resources.len() > RESOURCE_PREVIEW {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  +{} more", server.resources.len() - RESOURCE_PREVIEW),
+                    Style::default()
+                        .fg(theme::dim_color())
+                        .add_modifier(Modifier::DIM),
+                )]));
+            }
         }
 
+        const PROMPT_PREVIEW: usize = 3;
         if !server.prompts.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "Prompts:",
                 Style::default().fg(theme_colors::muted()),
             )]));
-            for prompt in server.prompts.iter().take(3) {
+            for prompt in server.prompts.iter().take(PROMPT_PREVIEW) {
                 lines.push(Line::from(vec![Span::styled(
                     format!("  - {}", prompt),
                     Style::default().fg(theme_colors::text()),
+                )]));
+            }
+            if server.prompts.len() > PROMPT_PREVIEW {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  +{} more", server.prompts.len() - PROMPT_PREVIEW),
+                    Style::default()
+                        .fg(theme::dim_color())
+                        .add_modifier(Modifier::DIM),
                 )]));
             }
         }

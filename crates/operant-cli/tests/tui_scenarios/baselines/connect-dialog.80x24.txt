@@ -15,10 +15,10 @@
        │ xAI (API key)                                                 │
        │ Mistral (API key)                                             │
        │ Groq (API key)                                                │
- offlin│ DeepSeek (API key)                                            │ortcuts
+ offlin│ DeepSeek (API key)                                            │
 ───────│ NVIDIA NIM (API key)                                          │────────
 ❯ ▏    │ OpenRouter (API key)                                          │
- 🎤  Voi╰───────────────────────────────────────────────────Esc to close╯configur
+ Voice ╰───────────────────────────────────────────────────Esc to close╯
 
-                                                               0k/200k  $0.0000
+ enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
 

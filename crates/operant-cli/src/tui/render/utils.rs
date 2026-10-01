@@ -33,6 +33,127 @@ pub(crate) fn is_modal_open(app: &App) -> bool {
     app.any_modal_open()
 }
 
+// ---------------------------------------------------------------------------
+/// The one hint line
+// ---------------------------------------------------------------------------
+
+/// The single hint the footer shows, or `None` when the frame's owner already
+/// answers the question.
+///
+/// Operant used to answer "what does this key do" from four places at once —
+/// a pill row in the footer, a `? shortcuts` label in the model line, a hint
+/// beside every dialog, and nothing at all on the surfaces where a new user
+/// most needs it. This is the only place that answers it, so the answer can be
+/// *right* rather than merely present: the priority below is the reason.
+///
+/// ## Priority, and why this order
+///
+/// The rule throughout is **the key that changes the user's situation right now
+/// beats the key that would be useful if they kept going**. A user mid-turn
+/// wants `esc` (end this); a user stuck in a non-insert vim mode wants `i`
+/// (start typing); a user in bypass-permissions wants `shift+tab` (stop
+/// running unsandboxed); an idle user wants the three bindings they will
+/// actually press. Reversing any adjacent pair costs more than it saves, so
+/// each boundary is argued below.
+///
+/// 1. **Typeahead owns the rows — suppressed.** The suggestion popup is drawn
+///    over the composer's own rows; a hint behind it is text nobody reads.
+/// 2. **A modal owns the input — suppressed.** Every overlay routes keys
+///    before the composer sees them, so a composer hint is not merely
+///    redundant, it is *wrong*: it advertises keys that the open dialog has
+///    captured. `?` is the sharpest case — it only opens on an empty, idle
+///    prompt, so a modal has taken it away.
+/// 3. **The transcript holds focus.** Keystrokes go to the scrollback, not the
+///    prompt, so "enter to send" would be a lie. This outranks everything below
+///    because it invalidates all of it.
+/// 4. **A turn is in flight.** `esc` is the only key that does anything the
+///    user can feel right now, and the two facts worth pairing with it are that
+///    `esc` interrupts and that only `/steer` / `/queue` get through `enter`
+///    mid-stream (a bare `enter` is a no-op, which is the opposite of what the
+///    idle hint taught one keypress earlier).
+/// 5. **vim Normal / Visual / Command / Search.** In these modes printable
+///    characters are commands, not text, so "enter to send" is not merely less
+///    relevant, it would swallow the keystroke.
+/// 6. **vim Insert.** Typing behaves normally, so the send binding applies —
+///    but the prompt is no longer the plain one, so the hint also names the
+///    binding that turns vim *off*. That inverse is the form jcode uses
+///    (`Inline images: hidden (⌥+Shift+I to show)`): a toggle states the state
+///    and the way out of it in the same breath.
+/// 7. **A non-default permission mode.** `shift+tab` is the one binding whose
+///    absence lets the session keep running in a mode the user may not have
+///    chosen. This outranks the idle hint on purpose: in `bypass`, an
+///    unnoticed tool call is worse than an unmentioned newline.
+/// 8. **No provider configured.** Nothing the user types can do anything, so
+///    the one binding that matters is the one that fixes it.
+/// 9. **Idle default** — the three bindings a new user reaches for, and `?`
+///    for the rest.
+pub(crate) fn unified_hint(app: &App) -> Option<String> {
+    use crate::tui::adapter_types::config::PermissionMode;
+    use crate::tui::app::FocusTarget;
+    use crate::tui::prompt_input::VimMode;
+
+    // 1. The typeahead popup owns the composer's rows.
+    if !app.prompt_input.suggestions.is_empty() {
+        return None;
+    }
+    // 2. A modal owns the input area.
+    //
+    // `any_modal_open()` is too coarse for this: its overlay list includes
+    // `voice_mode_notice`, which is a dismissible one-line notice rather than a
+    // dialog. It takes no keyboard and does not own the composer, so suppressing
+    // the hint for it left the footer with no keyboard discoverability at all
+    // whenever a voice notice happened to be up — which is the default state on a
+    // host with an audio device. Hence: any modal EXCEPT the notice.
+    if is_modal_open(app) && !app.voice_mode_notice.visible {
+        return None;
+    }
+    // 3. Keys are going to the scrollback.
+    if app.focus == FocusTarget::Transcript {
+        return Some("\u{2191}\u{2193} scroll \u{00b7} any key returns to the prompt".to_string());
+    }
+    // 4. A turn is in flight.
+    if app.is_streaming {
+        return Some("esc to interrupt \u{00b7} /steer feeds this turn".to_string());
+    }
+    // 5. vim is in a mode where printable keys are commands.
+    if app.prompt_input.vim_enabled {
+        match app.prompt_input.vim_mode {
+            VimMode::Normal => return Some("i to insert \u{00b7} /vim to turn off".to_string()),
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => {
+                return Some("d delete \u{00b7} y yank \u{00b7} esc to leave".to_string());
+            }
+            VimMode::Command => return Some("enter to run \u{00b7} esc to cancel".to_string()),
+            VimMode::Search => return Some("enter to jump \u{00b7} esc to cancel".to_string()),
+            // 6. Insert behaves like the default composer, so it falls through
+            //    to 7/8/9 — but the hint names the way out of vim.
+            VimMode::Insert => {}
+        }
+        if !matches!(app.settings.permission_mode, PermissionMode::Default) {
+            return Some(
+                "shift+tab to return to default permissions \u{00b7} /vim to turn off".to_string(),
+            );
+        }
+        if !app.has_credentials {
+            return Some(
+                "/model to choose a route before sending \u{00b7} /vim to turn off".to_string(),
+            );
+        }
+        return Some(
+            "enter to send \u{00b7} esc for normal mode \u{00b7} /vim to turn off".to_string(),
+        );
+    }
+    // 7. A non-default permission mode.
+    if !matches!(app.settings.permission_mode, PermissionMode::Default) {
+        return Some("shift+tab to return to default permissions".to_string());
+    }
+    // 8. Nothing can be sent without a route.
+    if !app.has_credentials {
+        return Some("/model to choose a route before sending".to_string());
+    }
+    // 9. Idle.
+    Some("enter to send \u{00b7} shift+enter newline \u{00b7} ? for shortcuts".to_string())
+}
+
 /// Reset every cell in `area` back to the terminal default (symbol `" "`, no
 /// fg/bg, no modifiers), so the frame starts from a known-empty buffer.
 ///
@@ -149,17 +270,63 @@ pub(crate) fn render_error_modal(
     // Chrome: border(1) + header(1) + sep(1) + blank(1) + border(1) = 5 rows
     let body_start_y = modal_area.y + 4;
     let body_height = modal_area.height.saturating_sub(5).max(1);
+    let body_width = modal_area.width.saturating_sub(4);
+
+    // The remedy goes at the *bottom* of the body, not the top: the message is
+    // what the user is reading, and a line that interrupts it costs them the
+    // first sentence of the failure. The message is wrapped to whatever rows
+    // the remedy leaves, so a long error cannot push its own fix off the
+    // screen.
+    let action =
+        crate::tui::notifications::recovery_action(&notification.kind, &notification.message);
+    // The `\u{2192} ` marker is drawn outside the wrap, so the wrap is two cells
+    // narrower than the body to keep the arrow from overflowing the row.
+    let action_lines: Vec<String> = action
+        .map(|a| balanced_wrap(a, body_width.saturating_sub(2).max(8) as usize))
+        .unwrap_or_default();
+    let action_rows = (action_lines.len() as u16).min(body_height.saturating_sub(1));
+
     let body_area = Rect {
         x: modal_area.x + 2,
         y: body_start_y,
-        width: modal_area.width.saturating_sub(4),
-        height: body_height,
+        width: body_width,
+        height: body_height.saturating_sub(action_rows),
     };
 
     let body_para = Paragraph::new(notification.message.as_str())
         .style(Style::default().fg(theme::ai_text()))
         .wrap(Wrap { trim: true });
     frame.render_widget(body_para, body_area);
+
+    // The remedy, in the error role rather than the message's body ink: it must
+    // read as the actionable half of the dialog, and it must be legible in both
+    // themes — which is what going through the role buys over picking a colour.
+    for (i, line) in action_lines.iter().take(action_rows as usize).enumerate() {
+        let row = Rect {
+            x: body_area.x,
+            y: body_area.y + body_area.height + i as u16,
+            width: body_width,
+            height: 1,
+        };
+        // The marker goes on the first row only; the rest hang under it, so a
+        // two-line remedy reads as one item rather than two.
+        let mut spans = Vec::with_capacity(2);
+        if i == 0 {
+            spans.push(Span::styled(
+                "\u{2192} ",
+                Style::default()
+                    .fg(theme::error_color())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            line.clone(),
+            Style::default().fg(theme::error_color()),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), row);
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -454,6 +621,160 @@ pub(crate) fn shimmer_spans(text: &str, frame_count: u64) -> Vec<Span<'static>> 
         spans.push(Span::styled(run, if run_bright { bright } else { base }));
     }
     spans
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::unified_hint;
+    use crate::tui::adapter_types::config::PermissionMode;
+    use crate::tui::app::App;
+    use crate::tui::prompt_input::{TypeaheadSource, VimMode};
+
+    /// `App::new` rewrites the process-global palette, so construction takes
+    /// the same lock the theme-asserting tests hold — otherwise a concurrent
+    /// `App::new` can swap the palette out from under one of their assertions.
+    fn make_app() -> App {
+        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        App::new(
+            operant_core::config::AppConfig::default(),
+            crate::tui::adapter_types::Settings::default(),
+            std::sync::Arc::new(crate::tui::adapter_types::cost::CostTracker::new()),
+            crate::commands::CommandRegistry::new(),
+        )
+    }
+
+    /// Every case starts from the one state all of them agree on: configured,
+    /// idle, prompt focused, default permissions, vim off. Each test then
+    /// changes the single thing it is about, so a failure names the boundary
+    /// that broke rather than a whole scenario.
+    fn baseline() -> App {
+        let mut app = make_app();
+        // `App::new` derives this from the real auth store, which would make the
+        // whole table environment-dependent.
+        app.has_credentials = true;
+        app
+    }
+
+    fn hint(app: &App) -> String {
+        unified_hint(app).unwrap_or_default()
+    }
+
+    /// The last rung: a configured, idle, default-mode composer. Every one of
+    /// its bindings is reachable, which is exactly why they are the ones shown.
+    #[test]
+    fn idle_default_names_the_three_bindings_a_new_user_reaches_for() {
+        let app = baseline();
+        assert_eq!(
+            hint(&app),
+            "enter to send \u{00b7} shift+enter newline \u{00b7} ? for shortcuts"
+        );
+    }
+
+    /// A modal has already taken the keys, so a composer hint is not redundant
+    /// — it is false. Suppression is the whole point of this boundary.
+    #[test]
+    fn a_modal_suppresses_the_hint_entirely() {
+        let mut app = baseline();
+        app.help_overlay.visible = true;
+        assert!(
+            unified_hint(&app).is_none(),
+            "the shortcuts dialog owns the keys the idle hint advertises"
+        );
+    }
+
+    /// The typeahead popup is drawn over the composer's own rows, so the hint
+    /// has nowhere to go even though no dialog has opened.
+    #[test]
+    fn the_typeahead_popup_suppresses_the_hint_entirely() {
+        let mut app = baseline();
+        app.prompt_input.suggestions = vec![crate::tui::prompt_input::TypeaheadSuggestion {
+            text: "/compact".to_string(),
+            description: "shrink the conversation".to_string(),
+            source: TypeaheadSource::SlashCommand,
+        }];
+        assert!(unified_hint(&app).is_none());
+    }
+
+    /// `esc` is the only key with an effect the user can feel mid-turn, so it
+    /// outranks everything — including a permission-mode warning about a
+    /// session that is, right now, mid-turn.
+    #[test]
+    fn streaming_outranks_permission_mode() {
+        let mut app = baseline();
+        app.is_streaming = true;
+        app.settings.permission_mode = PermissionMode::BypassPermissions;
+        assert_eq!(
+            hint(&app),
+            "esc to interrupt \u{00b7} /steer feeds this turn"
+        );
+    }
+
+    /// In bypass the tool calls are not sandboxed, so the binding that stops
+    /// that outranks "enter to send" — the user is already in the composer.
+    #[test]
+    fn a_non_default_permission_mode_outranks_the_idle_hint() {
+        let mut app = baseline();
+        app.settings.permission_mode = PermissionMode::BypassPermissions;
+        assert_eq!(hint(&app), "shift+tab to return to default permissions");
+    }
+
+    /// Without a route, nothing the user types can do anything. The hint has to
+    /// be the one binding that fixes it.
+    #[test]
+    fn no_credentials_outranks_the_idle_hint() {
+        let mut app = baseline();
+        app.has_credentials = false;
+        assert_eq!(hint(&app), "/model to choose a route before sending");
+    }
+
+    /// Keys are going to the scrollback, so "enter to send" would be a lie.
+    #[test]
+    fn transcript_focus_outranks_everything_below_it() {
+        let mut app = baseline();
+        app.focus = crate::tui::app::FocusTarget::Transcript;
+        app.is_streaming = false;
+        app.settings.permission_mode = PermissionMode::Plan;
+        assert_eq!(
+            hint(&app),
+            "\u{2191}\u{2193} scroll \u{00b7} any key returns to the prompt"
+        );
+    }
+
+    /// In a non-insert vim mode printable keys are commands, so the send binding
+    /// would swallow the keystroke instead of sending.
+    #[test]
+    fn vim_normal_mode_outranks_the_idle_hint() {
+        let mut app = baseline();
+        app.prompt_input.vim_enabled = true;
+        app.prompt_input.vim_mode = VimMode::Normal;
+        assert_eq!(hint(&app), "i to insert \u{00b7} /vim to turn off");
+    }
+
+    /// Insert is the one vim mode that types normally, so it keeps the send
+    /// binding — and names the inverse, in jcode's toggle-confirmation shape.
+    #[test]
+    fn vim_insert_keeps_the_send_binding_and_names_the_inverse() {
+        let mut app = baseline();
+        app.prompt_input.vim_enabled = true;
+        app.prompt_input.vim_mode = VimMode::Insert;
+        assert_eq!(
+            hint(&app),
+            "enter to send \u{00b7} esc for normal mode \u{00b7} /vim to turn off"
+        );
+    }
+
+    /// Command and Search are line modes with their own confirm key.
+    #[test]
+    fn vim_line_modes_name_their_own_confirm_key() {
+        let mut app = baseline();
+        app.prompt_input.vim_enabled = true;
+        app.prompt_input.vim_mode = VimMode::Command;
+        assert_eq!(hint(&app), "enter to run \u{00b7} esc to cancel");
+        app.prompt_input.vim_mode = VimMode::Search;
+        assert_eq!(hint(&app), "enter to jump \u{00b7} esc to cancel");
+    }
 }
 
 #[cfg(test)]
