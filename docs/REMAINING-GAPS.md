@@ -237,6 +237,20 @@ first produces a working group feed that is empty forever, which will read as
 
 ## Questions only the owner can answer
 
+> **ANSWERED 2026-10-01.** The owner answered Q1–Q6 in a design session. The
+> full architecture is [`ORG-AUTHORITY-ARCHITECTURE.md`](ORG-AUTHORITY-ARCHITECTURE.md);
+> the answers are §2.1 (Q1), §8.3 (Q2, Q3), §3.1 (Q4), §9.3 (Q5), §10.3 (Q6).
+> The original question text is kept below for auditability.
+>
+> The answers changed three things in this document:
+> - **GAP-2.1** is now implemented as a shared 3-turn DM thread budget (§10),
+>   not a per-employee per-tick interaction cap. The audit's mechanism was the
+>   wrong one; the thread budget is both simpler and defeatable-proof.
+> - **GAP-2.2** now also carries a data requirement: `department` must be
+>   operator-set, and NULL is surfaced rather than tolerated.
+> - **GAP-4.5** is resolved by never using `PRAGMA user_version` for the org
+>   tables — guarded `ALTER TABLE` keyed on `table_info` instead (§12).
+
 **Q1 (blocking, Wave 3 security boundary).** When a department head refactors
 their assignment board: is `reports_to` sufficient authority, or does
 reassigning a role *across* departments need an explicit capability grant? I do
