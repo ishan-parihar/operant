@@ -69,7 +69,7 @@
 //! 3. `org import` writes nothing, by design — see the note at the top.
 
 use anyhow::{Context, Result};
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use operant_core::config::AppConfig;
 use operant_core::org::employee_db::org_db_path;
 use operant_core::org::notice::{PostNotice, Recipient};
@@ -120,6 +120,233 @@ fn validated_reason<'a>(command: &str, reason: &'a str) -> Result<&'a str> {
     require_reason(command, reason).map(|r| r.trim())
 }
 
+/// Department commands. `set` is a partial update: a field you do not name
+/// is preserved rather than blanked, because §3.3 makes `rules` enforced —
+/// an empty array reads as "nothing declared", which would quietly disarm the
+/// department.
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrgDepartmentAction {
+    /// Create or update a department
+    Set(Box<OrgDepartmentSetArgs>),
+
+    /// List departments (read-only)
+    List,
+
+    /// Report staffing findings: vacant seats, unstaffed heads, unfilled
+    /// capabilities. Exits 1 when any finding exists, so CI can gate on it.
+    Findings {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Arguments for `org department set`.
+///
+/// A separate, boxed `Args` struct rather than inline enum fields, for two
+/// reasons. It keeps `OrgDepartmentAction` a reasonable size: this form
+/// carries eight `String`/`Option<String>` fields (~208 bytes) while the other
+/// two variants carry at most a `bool`, so inlining it would make every
+/// `List`/`Findings` match pay for the form's stack frame — hence the `Box`.
+/// And a partial update needs a distinguishable "not mentioned" for every
+/// optional field, which reads far better as one struct than as eight enum
+/// fields.
+#[derive(Debug, Clone, Args)]
+pub struct OrgDepartmentSetArgs {
+    /// Canonical department slug (primary key)
+    pub dept_key: String,
+    /// Human label (defaults to the slug)
+    #[arg(long)]
+    pub display_name: Option<String>,
+    /// What this department exists to do
+    #[arg(long)]
+    pub mandate: Option<String>,
+    /// Working protocols, comma-separated (§3.4 injects these into member prompts)
+    #[arg(long, default_value = "")]
+    pub protocols: String,
+    /// Hard constraints, comma-separated (enforced, not advisory)
+    #[arg(long, default_value = "")]
+    pub rules: String,
+    /// Capabilities the seat set must cover, comma-separated
+    #[arg(long, default_value = "")]
+    pub required_capabilities: String,
+    /// Employee id occupying the head seat (omit to leave it vacant)
+    #[arg(long)]
+    pub head_employee_id: Option<String>,
+    /// Planned size
+    #[arg(long)]
+    pub target_headcount: Option<i64>,
+    /// Why this change is being made (required; stored in departments.reason)
+    #[arg(long, value_name = "REASON")]
+    pub reason: String,
+}
+
+/// Decision commands. A decision is a first-class artifact: dissent is
+/// recorded against it rather than blocking it (§7 makes CEO/head decisions
+/// binding by default while keeping dissent visible).
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrgDecisionAction {
+    /// Propose a decision
+    Propose {
+        /// What is being decided
+        subject: String,
+        /// Authority scope it applies within (own|peers|department|direct_reports|descendants|org)
+        #[arg(long)]
+        scope: String,
+        /// Employee id of the decider
+        #[arg(long, default_value = "user")]
+        decided_by: String,
+        /// Why this is the right call
+        #[arg(long)]
+        rationale: String,
+        /// Record an advisory decision instead of a binding one (§7 makes
+        /// CEO/head decisions binding by default, so pass this to opt out)
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        non_binding: bool,
+        /// Why this decision is being proposed (required)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// Accept a proposed decision
+    Accept {
+        /// Decision id
+        decision_id: String,
+        /// Why it is being accepted (required)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// Reject a proposed decision
+    Reject {
+        /// Decision id
+        decision_id: String,
+        /// Why it is being rejected (required)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// Record a dissent against a decision
+    Dissent {
+        /// Decision id
+        decision_id: String,
+        /// Employee id holding the objection
+        #[arg(long)]
+        employee_id: String,
+        /// What their stance is (support|oppose|abstain|...)
+        #[arg(long)]
+        position: String,
+        /// Why they hold it (required; an objection with no stated reason
+        /// cannot be weighed later)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// List decisions (read-only)
+    List {
+        /// Filter by status (proposed|accepted|rejected|expired)
+        #[arg(long)]
+        status: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Capability grant commands. §2.1: hierarchy is sufficient inside a
+/// department, so a grant is the only way to cross a boundary — and it is
+/// always attributable, reasoned, and optionally expiring.
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrgGrantAction {
+    /// Record a grant
+    Give {
+        /// Capability being granted (e.g. "content.tooling")
+        capability: String,
+        /// Employee id receiving the grant
+        #[arg(long)]
+        grantee: String,
+        /// Employee id making the grant
+        #[arg(long, default_value = "user")]
+        grantor: String,
+        /// Scope being extended (own|peers|department|direct_reports|descendants|org)
+        #[arg(long)]
+        scope: String,
+        /// Restrict the grant to one department
+        #[arg(long)]
+        target_dept: Option<String>,
+        /// RFC3339 expiry; omit for a standing grant (the exception, not the default)
+        #[arg(long)]
+        expires_at: Option<String>,
+        /// Why this grant is being made (required; a grant without one is not attributable)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// Revoke a grant
+    Revoke {
+        /// Grant id
+        grant_id: String,
+        /// Why it is being revoked (required)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// List a grantee's grants (read-only)
+    List {
+        /// Employee id
+        #[arg(long)]
+        grantee: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// DM thread commands. The budget is shared and visible: both participants
+/// see the same counter, and exhausting it closes the thread with a recorded
+/// reason rather than dropping messages (§10.3).
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrgDmAction {
+    /// Open a thread with a shared turn budget
+    Open {
+        /// First participant
+        a: String,
+        /// Second participant
+        b: String,
+        /// Shared turn budget (default 3)
+        #[arg(long)]
+        budget: Option<u32>,
+        /// Anchor the thread to an existing notice correlation_id
+        #[arg(long)]
+        correlation_id: Option<String>,
+    },
+
+    /// Spend one turn; refuses a turn past the budget
+    Spend {
+        /// Thread id
+        thread_id: String,
+    },
+
+    /// Close a thread early
+    Close {
+        /// Thread id
+        thread_id: String,
+        /// Why it is being closed (required)
+        #[arg(long, value_name = "REASON")]
+        reason: String,
+    },
+
+    /// List an employee's open threads (read-only)
+    List {
+        /// Employee id
+        #[arg(long)]
+        employee_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+///
 /// The `org` subcommands, per the §3.5 table.
 ///
 /// Mutating variants carry `#[arg(long, value_name = "REASON")] reason: String`.
@@ -139,6 +366,22 @@ pub enum OrgSubcommand {
     /// Worklog (§3.4)
     #[command(subcommand)]
     Worklog(OrgWorklogAction),
+
+    /// Departments: mandate, protocols, rules, seats (§3.4)
+    #[command(subcommand)]
+    Department(OrgDepartmentAction),
+
+    /// Decisions and their dissent (§7)
+    #[command(subcommand)]
+    Decision(OrgDecisionAction),
+
+    /// Capability grants that cross a department boundary (§2.5)
+    #[command(subcommand)]
+    Grant(OrgGrantAction),
+
+    /// Employee DM threads and their shared turn budget (§10.3)
+    #[command(subcommand)]
+    Dm(OrgDmAction),
 
     /// Backfill employees from the live cron jobs (§3.1.1)
     Sync {
@@ -429,6 +672,19 @@ fn open_org_db(config: &AppConfig) -> Result<OrgConn> {
         .context("Failed to apply worklog schema")?;
     let _ = NoticeBoard::from_shared_connection(conn.clone())
         .context("Failed to apply notices schema")?;
+    // Wave 2-3 stores (iter-539). Same rule as above: each is idempotent and
+    // is the sole definition of its own table, on the same shared handle so
+    // there is still exactly one writer per file.
+    let _ = operant_core::org::department_db::DepartmentDb::from_shared_connection(conn.clone())
+        .context("Failed to apply departments schema")?;
+    let _ = operant_core::org::authority::GrantDb::from_shared_connection(conn.clone())
+        .context("Failed to apply authority grants schema")?;
+    let _ = operant_core::org::dm_thread::DmThreadDb::from_shared_connection(conn.clone())
+        .context("Failed to apply dm thread schema")?;
+    // `decisions` deliberately does NOT come along: it lives in its own
+    // `operant_decisions.db` sibling so it can never claim a PRAGMA
+    // user_version on the kanban family file. It is opened on demand by
+    // `org decision ...` via `DecisionsDb::for_app`.
     Ok(conn)
 }
 
@@ -436,6 +692,20 @@ fn open_org_db(config: &AppConfig) -> Result<OrgConn> {
 /// CLI's raw reads and the core stores' typed writes cannot deadlock against
 /// a second writer on the same file.
 pub type OrgConn = std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>;
+
+/// The live employee roster, read through core's typed store rather than
+/// hand-written SQL.
+///
+/// `staffing_findings` needs `&[Employee]` to answer "is this department's
+/// head seat actually filled", so the rows have to be the real typed values.
+/// Going through `EmployeeDb` also means the CLI cannot drift from core's
+/// column list, which is the same reasoning `open_org_db` applies to DDL.
+fn employee_roster(conn: &OrgConn) -> Result<Vec<operant_core::org::employee::Employee>> {
+    let db = operant_core::org::employee_db::EmployeeDb::from_shared_connection(conn.clone())
+        .context("Failed to open employee store")?;
+    db.list_employees()
+        .context("Failed to read employee roster")
+}
 
 /// Build a worklog row for an operator-run `org worklog append`.
 ///
@@ -477,11 +747,413 @@ pub async fn handle_org_command(config: &AppConfig, cmd: OrgSubcommand) -> Resul
         OrgSubcommand::Employee(action) => handle_employee(config, action).await,
         OrgSubcommand::Notice(action) => handle_notice(config, action).await,
         OrgSubcommand::Worklog(action) => handle_worklog(config, action).await,
+        OrgSubcommand::Department(action) => handle_department(config, action),
+        OrgSubcommand::Decision(action) => handle_decision(config, action),
+        OrgSubcommand::Grant(action) => handle_grant(config, action),
+        OrgSubcommand::Dm(action) => handle_dm(config, action),
         OrgSubcommand::Sync { reason } => cmd_sync(config, &reason),
         OrgSubcommand::Import { path, reason } => cmd_import(config, &path, &reason),
         OrgSubcommand::Check => cmd_check(config),
         OrgSubcommand::List { json } => cmd_employee_list(config, json),
     }
+}
+
+fn handle_department(config: &AppConfig, action: OrgDepartmentAction) -> Result<()> {
+    use operant_core::org::department_db::{Department, DepartmentDb};
+
+    let conn = open_org_db(config)?;
+    let db = DepartmentDb::from_shared_connection(conn.clone())
+        .context("Failed to open department store")?;
+
+    match action {
+        OrgDepartmentAction::Set(args) => {
+            let OrgDepartmentSetArgs {
+                dept_key,
+                display_name,
+                mandate,
+                protocols,
+                rules,
+                required_capabilities,
+                head_employee_id,
+                target_headcount,
+                reason,
+            } = *args;
+            // §3.5 at the write boundary: a reason that is present but empty
+            // is not a reason, and must be refused here rather than stored.
+            let reason = require_reason("org department set", &reason)?;
+            // Preserve `created_at` across an update, and refuse to silently
+            // blank a field the operator did not mention. §3.3 makes `rules`
+            // enforced, so overwriting with an empty default would read as
+            // "nothing declared" — the gate would then have nothing to fail.
+            let existing = db.get(&dept_key)?;
+            let split = |raw: &str| -> Vec<String> {
+                raw.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            };
+            let (created_at, prior_rules) = match &existing {
+                Some(prev) => (prev.created_at.clone(), prev.rules.clone()),
+                None => (chrono::Utc::now().to_rfc3339(), Vec::new()),
+            };
+            if !rules.is_empty() && protocols.is_empty() && !required_capabilities.is_empty() {
+                anyhow::bail!(
+                    "org department set: --rules, --protocols and --required-capabilities are \
+                     all listed but at least one is empty. A department with no rules is not a \
+                     valid end state, so this is refused rather than stored; re-run naming only \
+                     the fields you mean to change."
+                );
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            let dept = Department {
+                dept_key: dept_key.clone(),
+                display_name: display_name.unwrap_or_else(|| {
+                    existing
+                        .as_ref()
+                        .map(|p| p.display_name.clone())
+                        .unwrap_or_else(|| dept_key.clone())
+                }),
+                mandate: mandate.or_else(|| existing.as_ref().and_then(|p| p.mandate.clone())),
+                protocols: if protocols.is_empty() {
+                    existing
+                        .as_ref()
+                        .map(|p| p.protocols.clone())
+                        .unwrap_or_default()
+                } else {
+                    split(&protocols)
+                },
+                rules: if rules.is_empty() {
+                    prior_rules
+                } else {
+                    split(&rules)
+                },
+                required_capabilities: if required_capabilities.is_empty() {
+                    existing
+                        .as_ref()
+                        .map(|p| p.required_capabilities.clone())
+                        .unwrap_or_default()
+                } else {
+                    split(&required_capabilities)
+                },
+                head_employee_id: head_employee_id
+                    .or_else(|| existing.as_ref().and_then(|p| p.head_employee_id.clone())),
+                target_headcount: target_headcount
+                    .or_else(|| existing.as_ref().and_then(|p| p.target_headcount)),
+                reason: reason.to_string(),
+                created_at,
+                updated_at: now,
+            };
+            db.upsert(&dept).context("Failed to write department")?;
+            println!(
+                "department {} set ({} rule(s), {} protocol(s))",
+                dept.dept_key,
+                dept.rules.len(),
+                dept.protocols.len()
+            );
+        }
+        OrgDepartmentAction::List => {
+            for dept in db.list()? {
+                let head = dept
+                    .head_employee_id
+                    .clone()
+                    .unwrap_or_else(|| "VACANT — unstaffed".to_string());
+                println!(
+                    "{:<20} {:<28} head={} rules={} protocol(s)",
+                    dept.dept_key,
+                    dept.display_name,
+                    head,
+                    dept.rules.len()
+                );
+            }
+        }
+        OrgDepartmentAction::Findings { json } => {
+            // §11.4: findings are computed from the live `employees` rows, so
+            // this reads the roster rather than the department row alone.
+            let roster = employee_roster(&conn)?;
+            let findings =
+                operant_core::org::department_db::staffing_findings(&db.list()?, &roster);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&findings)?);
+            } else if findings.is_empty() {
+                println!("no department findings");
+            } else {
+                for f in &findings {
+                    // `StaffingFinding` has no `Display`; `detail` is the
+                    // human sentence core already wrote for this exact
+                    // purpose, and `kind` is the machine-readable tag.
+                    println!("{:<24} {:<22} {}", f.dept_key, f.kind, f.detail);
+                }
+            }
+            // A vacant seat is a real finding, so the exit code reflects it.
+            // §11.4 makes this gate the operator's tripwire.
+            if !findings.is_empty() {
+                std::process::exit(1);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> {
+    use operant_core::org::decisions_db::{DecisionStatus, DecisionsDb, DissentEntry};
+
+    let db = DecisionsDb::for_app(std::path::Path::new(&config.database_path))
+        .context("Failed to open decision store")?;
+
+    match action {
+        OrgDecisionAction::Propose {
+            subject,
+            scope,
+            decided_by,
+            rationale,
+            non_binding,
+            reason,
+        } => {
+            let reason = require_reason("org decision propose", &reason)?;
+            let mut decision = operant_core::org::decisions_db::OrgDecision::new(
+                new_id("d"),
+                subject,
+                scope,
+                decided_by,
+                rationale,
+                reason,
+            );
+            // §7 makes CEO/head decisions binding by default while preserving
+            // visible dissent, so binding is the default and --non-binding is
+            // the explicit opt-out.
+            decision.binding = !non_binding;
+            db.propose(&decision)
+                .context("Failed to propose decision")?;
+            println!(
+                "decision {} proposed: {} (binding={})",
+                decision.decision_id, decision.subject, decision.binding
+            );
+        }
+        OrgDecisionAction::Accept {
+            decision_id,
+            reason,
+        } => {
+            let reason = require_reason("org decision accept", &reason)?;
+            db.accept(&decision_id, reason)
+                .context("Failed to accept decision")?;
+            println!("decision {decision_id} accepted");
+        }
+        OrgDecisionAction::Reject {
+            decision_id,
+            reason,
+        } => {
+            let reason = require_reason("org decision reject", &reason)?;
+            db.reject(&decision_id, reason)
+                .context("Failed to reject decision")?;
+            println!("decision {decision_id} rejected");
+        }
+        OrgDecisionAction::Dissent {
+            decision_id,
+            employee_id,
+            position,
+            reason,
+        } => {
+            let reason = require_reason("org decision dissent", &reason)?;
+            // `DissentEntry::new` is the only constructor and it refuses a
+            // blank employee, position, or reason — an objection nobody holds
+            // is noise, and an objection with no stated reason cannot be
+            // weighed later, which is how dissent gets quietly dropped.
+            let entry =
+                DissentEntry::new(&employee_id, &position, reason).context("Invalid dissent")?;
+            db.record_dissent(&decision_id, entry)
+                .context("Failed to record dissent")?;
+            println!("dissent by {employee_id} recorded on {decision_id}");
+        }
+        OrgDecisionAction::List { status, json } => {
+            let rows = match status.as_deref() {
+                Some(raw) => {
+                    let parsed = DecisionStatus::parse(raw).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "unknown decision status '{raw}' (expected proposed|accepted|rejected|expired)"
+                        )
+                    })?;
+                    db.list_by_status(parsed)?
+                }
+                None => {
+                    let mut all = Vec::new();
+                    for s in [
+                        DecisionStatus::Proposed,
+                        DecisionStatus::Accepted,
+                        DecisionStatus::Rejected,
+                        DecisionStatus::Expired,
+                    ] {
+                        all.extend(db.list_by_status(s)?);
+                    }
+                    all
+                }
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("no decisions");
+            } else {
+                for d in rows {
+                    println!(
+                        "{:<10} {:<40} {}",
+                        d.status.as_str(),
+                        d.subject,
+                        d.decision_id
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_grant(config: &AppConfig, action: OrgGrantAction) -> Result<()> {
+    use operant_core::org::authority::{AuthorityScope, Grant, GrantDb};
+
+    let conn = open_org_db(config)?;
+    let db = GrantDb::from_shared_connection(conn.clone()).context("Failed to open grant store")?;
+
+    match action {
+        OrgGrantAction::Give {
+            capability,
+            grantee,
+            grantor,
+            scope,
+            target_dept,
+            expires_at,
+            reason,
+        } => {
+            let reason = require_reason("org grant give", &reason)?;
+            let scope_parsed: AuthorityScope = scope.parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "unknown authority scope '{scope}' (expected own|peers|department|\
+                     direct_reports|descendants|org)"
+                )
+            })?;
+            let grant = Grant {
+                grant_id: new_id("ag"),
+                grantor: grantor.clone(),
+                grantee: grantee.clone(),
+                capability: capability.clone(),
+                scope: scope_parsed,
+                target_dept: target_dept.clone(),
+                reason: reason.to_string(),
+                granted_at: chrono::Utc::now().to_rfc3339(),
+                expires_at: expires_at.clone(),
+                revoked_at: None,
+                revocation_reason: None,
+            };
+            db.insert(&grant).context("Failed to record grant")?;
+            println!(
+                "granted {} to {} (scope {}, grantor {})",
+                grant.capability,
+                grant.grantee,
+                grant.scope.as_str(),
+                grant.grantor
+            );
+        }
+        OrgGrantAction::Revoke { grant_id, reason } => {
+            let reason = require_reason("org grant revoke", &reason)?;
+            let removed = db
+                .revoke(&grant_id, reason)
+                .context("Failed to revoke grant")?;
+            if removed {
+                println!("grant {grant_id} revoked");
+            } else {
+                println!("grant {grant_id} not found or already revoked");
+            }
+        }
+        OrgGrantAction::List { grantee, json } => {
+            let rows = db.list_for_grantee(&grantee)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("no grants for {grantee}");
+            } else {
+                for g in rows {
+                    let state = if g.is_revoked() {
+                        "REVOKED"
+                    } else if g.is_live_at(&chrono::Utc::now().to_rfc3339()) {
+                        "live"
+                    } else {
+                        "lapsed"
+                    };
+                    println!(
+                        "{:<26} {:<12} {:<10} {}",
+                        g.capability,
+                        g.scope.as_str(),
+                        state,
+                        g.grant_id
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_dm(config: &AppConfig, action: OrgDmAction) -> Result<()> {
+    use operant_core::org::dm_thread::{DEFAULT_TURN_BUDGET, DmThreadDb};
+
+    let conn = open_org_db(config)?;
+    let db = DmThreadDb::from_shared_connection(conn.clone())
+        .context("Failed to open dm thread store")?;
+
+    match action {
+        OrgDmAction::Open {
+            a,
+            b,
+            budget,
+            correlation_id,
+        } => {
+            let budget = budget.unwrap_or(DEFAULT_TURN_BUDGET);
+            let thread = db
+                .open_with_correlation(&a, &b, budget, correlation_id)
+                .context("Failed to open dm thread")?;
+            println!(
+                "thread {} open: {} turns, {} used",
+                thread.thread_id, thread.turn_budget, thread.turns_used
+            );
+        }
+        OrgDmAction::Spend { thread_id } => {
+            let budget = db
+                .spend_turn(&thread_id)
+                .context("Failed to spend dm turn")?;
+            println!(
+                "thread {thread_id}: {}/{} turns used",
+                budget.used, budget.total
+            );
+        }
+        OrgDmAction::Close { thread_id, reason } => {
+            let reason = require_reason("org dm close", &reason)?;
+            let thread = db
+                .close(&thread_id, reason)
+                .context("Failed to close dm thread")?;
+            println!(
+                "thread {} closed ({})",
+                thread.thread_id,
+                thread.state.as_str()
+            );
+        }
+        OrgDmAction::List { employee_id, json } => {
+            let rows = db.open_threads_for(&employee_id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("no open threads for {employee_id}");
+            } else {
+                for t in rows {
+                    println!(
+                        "{:<24} {}/{} turns  {}",
+                        t.thread_id,
+                        t.turns_used,
+                        t.turn_budget,
+                        t.state.as_str()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn handle_employee(config: &AppConfig, action: OrgEmployeeAction) -> Result<()> {

@@ -418,7 +418,7 @@ impl SubjectiveEntry {
 /// `reason`, `created_at`, and `updated_at` are the standard mutation fields:
 /// `reason` records why *this write* happened, `rationale` records why *the
 /// decision* is right. They are different questions and both are required.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OrgDecision {
     /// `'d_' || uuid`.
     pub decision_id: String,
