@@ -12,18 +12,24 @@
 | `iter-517` | Vendored 4 jcode crates (~9.6k LOC) as modules under `tui/vendor/`. 144 vendored tests green, 0 warnings. |
 | `iter-518` | Phase 0 gate: `--baseline` drift detection, `--capture-frames`, `--capture-dir`, `scripts/tui-capture.sh`. Drift failure independently verified. |
 | `iter-519` | Phase 1a/1b: both palettes bridged, `adapt_buffer_for_display` wired as the choke point, base chrome migrated, competing accents retired. Corpus green at 50 scenarios / 67 variant-runs. |
-| `iter-520` | This document updated with landed state and the two sequencing constraints below. |
+| `iter-520` | This document updated with landed state and the sequencing constraints below. |
 | `iter-521` | Phase 1.8: `modal_frame` primitive + `space.rs` ladder. **Zero call sites migrated** — the 22 sizing and 23 title sites stay untouched so goldens stay valid. |
 | `iter-522` | Phase 0.1: `--dump-style` / `--style-baseline` per-cell style gate, the colour-depth divergence fix, and 120 regenerated goldens. `verify` PASSED with 0 drift across 60 gated scenarios. |
 | `iter-523` | `docs/tui-debugging.md`: documented the style goldens and the `deterministic: false` mechanism; corrected a claim that had become false. |
+| `iter-524` | This document's status table brought up to date. |
+| `iter-525` | Phase 2.5: the 46-branch paint-in-z-order ladder became 46 pre-seeded rows in `render/dispatch.rs`; `render_app` 413 → 178 lines. Plus plan deliverable 1.10, the release-mode substitution measurement. 799 tui tests, `verify` PASSED 0 drift. |
+| `iter-526` | Phase 1.9: DEC 2026 synchronized update (local `SynchronizedUpdate` trait, `TestBackend` no-op) + full-frame clear. The clear is **defence-in-depth, not a bug fix** — ratatui's `swap_buffers()` already resets the back buffer each frame and `base_fill` rewrites the whole area, so it is byte-identical. Verified on a real terminal too, because the golden gate renders one frame and cannot see a stale cell surviving frame 2+. |
 
-**Two constraints discovered during implementation — both change how the remaining work must be sequenced.**
+**Three constraints discovered during implementation — all change how the remaining work must be sequenced.**
 
 **(1) The palette bridge has a collision rule that is not optional.**
 `adapt_buffer_for_display` substitutes by *exact RGB match against each role's frozen default*, so seeding all 22 roles means any operant colour that happens to equal some role's default is silently repainted. Two real collisions exist: `dark.success` `(129,199,132)` **is** jcode's `Ai` default, and `dark`/`deuteranopia` `muted` `(120,120,120)` **is** jcode's `Tool` default. Seeding those roles from the semantically obvious fields would have turned every success-green cell red. `theme_colors.rs` now carries a documented collision rule and a table-driven test pinning it across all 8 themes. **Any future role addition must re-run that test** — it is the only thing standing between a palette change and an invisible, TUI-wide colour regression.
 
 **(2) Goldens must be captured against a frozen render, so the primitive is built before the migration.**
 The visual goldens are the regression net for all later surface work. Therefore: land the new primitive (`modal_frame`, spacing scale) with its tests **while changing no rendered output**, commit the goldens against the current stable render, and only then flip call sites — each flip verified by the goldens. Building the primitive first also means a wrong abstraction is caught by unit tests, which goldens cannot do.
+
+**(3) The golden gate proves final-frame CONTENT, not multi-frame BEHAVIOUR.**
+`run_headless` drives the loop and then performs one explicit final draw, so a golden captures exactly one frame. That makes the gate sound for anything that changes pixels — layout, colour, text — and structurally blind to anything about *cadence*: repaint frequency, stale cells surviving from frame 2+, a redraw that never happens, or animation state. iter-526 is the worked example: the full-frame clear is byte-identical under `TestBackend` (so all 120 goldens passed, correctly) yet a stale cell surviving a later frame is invisible there, so the change needed a separate tmux capture to confirm. **When a change is about when or how often frames are painted, the goldens are necessary and not sufficient** — say so explicitly in the commit rather than reporting "0 drift" as if it covered the change.
 
 ---
 
