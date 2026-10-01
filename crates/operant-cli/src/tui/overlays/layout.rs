@@ -14,7 +14,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::space;
@@ -380,13 +380,26 @@ pub fn modal_frame_buf(buf: &mut Buffer, area: Rect, spec: &ModalSpec<'_>) -> Mo
         spec.header_height,
         spec.footer_height,
     );
-    render_dark_overlay_buf(buf, area);
+    // jcode's overlay primitive, ported (jcode `ui_overlays.rs:15-21`): erase the
+    // rect, draw a bordered block, render content into `block.inner()`.
+    //
+    // The erase is `Clear`, which is operant's name for jcode's `clear_area`
+    // (`jcode-tui-render/src/chrome.rs:4-10` -- a full cell `.reset()`, so the
+    // terminal's own background shows through).
+    //
+    // Two things this deliberately does NOT do, because jcode does not do them:
+    //   - no scrim over the surrounding screen (`render_dark_overlay_buf`)
+    //   - no dialog background fill (`render_dialog_bg_buf`)
+    // A tinted dialog body was operant inventing a surface concept that jcode
+    // does not have; jcode has no Surface/elevation/opacity at all, so a panel is
+    // an erased rect plus a border and nothing else. Both helpers remain
+    // available for `settings_screen`, which is not a jcode-shaped surface.
     Clear.render(layout.dialog_area, buf);
-    render_dialog_bg_buf(buf, layout.dialog_area);
 
+    // Square `Borders::ALL`, which is jcode's default (20 of 22 uses; the only
+    // rounded borders in jcode are hand-rolled per-widget in jcode-tui-render).
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(spec.border_fg))
         .title_alignment(Alignment::Right);
     if !spec.hint.is_empty() {
@@ -1057,7 +1070,7 @@ mod tests {
     // --- what the primitive paints ----------------------------------------
 
     #[test]
-    fn modal_frame_draws_a_rounded_border_and_a_right_aligned_hint() {
+    fn modal_frame_draws_a_square_border_and_a_right_aligned_hint() {
         let _palette = palette_guard();
         let area = LARGE;
         let spec = ModalSpec {
@@ -1072,19 +1085,23 @@ mod tests {
         let (buf, layout) = through_buf(area, &spec, (area.width, area.height));
         let d = layout.dialog_area;
 
-        assert_eq!(buf.cell((d.x, d.y)).map(|c| c.symbol()), Some("╭"));
+        // Square corners, not rounded: jcode's modal border is plain
+        // `Borders::ALL` (20 of 22 uses across jcode). The only rounded borders
+        // in jcode are hand-rolled per-widget in `jcode-tui-render`, and this
+        // dialog is not one of them.
+        assert_eq!(buf.cell((d.x, d.y)).map(|c| c.symbol()), Some("┌"));
         assert_eq!(
             buf.cell((d.right() - 1, d.y)).map(|c| c.symbol()),
-            Some("╮")
+            Some("┐")
         );
         assert_eq!(
             buf.cell((d.x, d.bottom() - 1)).map(|c| c.symbol()),
-            Some("╰")
+            Some("└")
         );
         assert_eq!(
             buf.cell((d.right() - 1, d.bottom() - 1))
                 .map(|c| c.symbol()),
-            Some("╯")
+            Some("┘")
         );
 
         // Title on the header row, one leading space, bold. The row starts at
@@ -1104,8 +1121,8 @@ mod tests {
             .iter()
             .map(String::as_str)
             .collect();
-        assert_eq!(cells.first(), Some(&"╰"), "bottom-left corner");
-        assert_eq!(cells.last(), Some(&"╯"), "bottom-right corner");
+        assert_eq!(cells.first(), Some(&"└"), "bottom-left corner");
+        assert_eq!(cells.last(), Some(&"┘"), "bottom-right corner");
         let n = HINT_ESC.len();
         assert_eq!(
             cells[cells.len() - 1 - n..cells.len() - 1].concat(),
@@ -1142,10 +1159,15 @@ mod tests {
     }
 
     #[test]
-    fn modal_frame_darkens_the_area_around_the_modal() {
+    fn modal_frame_leaves_the_surface_under_it_untouched() {
         let _palette = palette_guard();
-        // The overlay is what separates a modal from the surface under it. Pin
-        // one cell outside the dialog and one inside.
+        // jcode has no Surface/elevation concept: a modal is an erased rect plus
+        // a border, with NO scrim over the surrounding screen and NO dialog fill
+        // (jcode `ui_overlays.rs:15-21` -- `clear_area` then `Borders::ALL` then
+        // content into `block.inner()`). So the separation from the surface
+        // under it comes from the erase + the border, not from tinting.
+        //
+        // This is the regression guard for the two things we used to paint here.
         let spec = ModalSpec {
             title: "Plugins",
             width: 40,
@@ -1153,13 +1175,22 @@ mod tests {
             ..Default::default()
         };
         let (buf, layout) = through_buf(LARGE, &spec, (LARGE.width, LARGE.height));
+
         let outside = buf.cell((0, 0)).expect("cell");
-        assert_eq!(outside.bg, theme_colors::overlay_bg());
-        assert_eq!(outside.fg, theme_colors::muted());
+        assert_ne!(
+            outside.bg,
+            theme_colors::overlay_bg(),
+            "no scrim may be painted outside the dialog (jcode parity)"
+        );
+
         let inside = buf
             .cell((layout.dialog_area.x + 2, layout.dialog_area.y + 2))
             .expect("cell");
-        assert_eq!(inside.bg, theme_colors::panel_bg());
+        assert_ne!(
+            inside.bg,
+            theme_colors::panel_bg(),
+            "no dialog background fill may be painted (jcode parity)"
+        );
     }
 
     // --- the spacing scale --------------------------------------------------

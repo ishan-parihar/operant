@@ -602,7 +602,7 @@ mod tests {
         let mut tl = None;
         'outer: for y in 0..buf.area.height {
             for x in 0..buf.area.width {
-                if sym(x, y) == "╭" {
+                if matches!(sym(x, y), "╭" | "┌") {
                     tl = Some((x, y));
                     break 'outer;
                 }
@@ -612,7 +612,7 @@ mod tests {
         let mut br = None;
         'outer2: for y in (0..buf.area.height).rev() {
             for x in (0..buf.area.width).rev() {
-                if sym(x, y) == "╯" {
+                if matches!(sym(x, y), "╯" | "┘") {
                     br = Some((x, y));
                     break 'outer2;
                 }
@@ -747,11 +747,11 @@ mod tests {
                 let left = row.chars().nth(x0 as usize).unwrap_or(' ');
                 let right = row.chars().nth((x1 - 1) as usize).unwrap_or(' ');
                 assert!(
-                    matches!(left, '│' | '╭' | '╰'),
+                    matches!(left, '│' | '╭' | '╰' | '┌' | '└'),
                     "at {w}x{h} the dialog's left border at row {y} is {left:?}, not a border",
                 );
                 assert!(
-                    matches!(right, '│' | '╮' | '╯'),
+                    matches!(right, '│' | '╮' | '╯' | '┐' | '┘'),
                     "at {w}x{h} the dialog's right border at row {y} is {right:?}, not a border",
                 );
             }
