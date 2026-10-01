@@ -69,3 +69,9 @@ pub mod voice_mode_notice;
 
 pub use adapter_types::LaunchMode;
 pub use adapter_types::TuiApp;
+
+// Deliverable 1.10 of docs/PLAN-TUI-OVERHAUL.md: the release-mode
+// characterisation of the per-frame substitution pass. Test-only and
+// `#[ignore]`d inside, so it costs the normal build and test run nothing.
+#[cfg(test)]
+mod substitution_cost;

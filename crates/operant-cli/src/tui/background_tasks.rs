@@ -705,19 +705,34 @@ mod tests {
     /// the module still compiles, still passes every test above, and quietly
     /// shows the user nothing — which is exactly what happened to the
     /// `tasks_overlay` this work replaced. So pin the call site.
+    ///
+    /// Both the render pass and the dispatch table are searched: the call site
+    /// used to be `render_app`'s own body and now lives in the table, and either
+    /// is a legal home for it. What must not happen is neither file calling it.
+    /// A rebuild that moves it again has to move this search too.
     #[test]
     fn render_pass_still_wires_the_registry() {
-        let render = include_str!("render/mod.rs");
+        let sites: [(&str, &str); 2] = [
+            ("render/mod.rs", include_str!("render/mod.rs")),
+            ("render/dispatch.rs", include_str!("render/dispatch.rs")),
+        ];
+        let called_in = |needle: &str| {
+            sites
+                .iter()
+                .find(|(_, src)| src.contains(needle))
+                .map(|(label, _)| *label)
+        };
         assert!(
-            render.contains("background_tasks::render_rows"),
-            "render/mod.rs no longer calls background_tasks::render_rows — the rows \
-             would compile and pass tests while never being shown"
+            called_in("background_tasks::render_rows").is_some(),
+            "neither render/mod.rs nor render/dispatch.rs calls \
+             background_tasks::render_rows — the rows would compile and pass tests \
+             while never being shown"
         );
         assert!(
-            render.contains("background_tasks.refresh()"),
-            "render/mod.rs no longer calls background_tasks::refresh() — the registry \
-             would never re-read the delegation registry, so rows would freeze at \
-             whatever the first frame saw"
+            called_in("background_tasks.refresh()").is_some(),
+            "neither render/mod.rs nor render/dispatch.rs calls \
+             background_tasks::refresh() — the registry would never re-read the \
+             delegation registry, so rows would freeze at whatever the first frame saw"
         );
     }
 

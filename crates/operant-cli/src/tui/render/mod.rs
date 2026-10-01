@@ -8,8 +8,10 @@
 //   welcome   — startup notices, banner block, welcome box
 //   messages  — message pane rendering, turn items, live content
 //   footer    — input pane, status row, footer bar, prompt suggestions
+//   dispatch  — the paint-order registry: which surface paints, and in what order
 
 pub(crate) mod cache;
+pub(crate) mod dispatch;
 pub(crate) mod footer;
 pub(crate) mod messages;
 pub(crate) mod selection;
@@ -36,43 +38,14 @@ pub use utils::{balanced_wrap, display_width, take_width};
 
 // render.rs â€” All ratatui rendering logic.
 
-use crate::tui::agents_view::render_agents_menu;
+// `render_app` itself needs almost nothing: the layout arithmetic, the dispatch
+// table, and the post-draw passes. The surface render functions moved into
+// `dispatch.rs`, which imports each one from the module its surface lives in.
 use crate::tui::app::App;
-use crate::tui::context_viz::render_context_viz;
-use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
-use crate::tui::diff_viewer::render_diff_dialog;
-use crate::tui::export_dialog::render_export_dialog;
-use crate::tui::model_picker::render_model_picker;
-use crate::tui::session_branching::render_session_branching;
-use crate::tui::session_browser::render_session_browser;
-// (iter-211: feedback_survey render import deleted — no telemetry backend)
-use crate::tui::ask_user_dialog::render_ask_user_dialog;
-use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
-use crate::tui::custom_provider_dialog::render_custom_provider_dialog;
-use crate::tui::device_auth_dialog::render_device_auth_dialog;
-use crate::tui::dialog_select::render_dialog_select;
-use crate::tui::hooks_config_menu::render_hooks_config_menu;
-use crate::tui::import_config_dialog::render_import_config_dialog;
-use crate::tui::key_input_dialog::render_key_input_dialog;
-use crate::tui::mcp_view::render_mcp_view;
-use crate::tui::memory_file_selector::render_memory_file_selector;
-use crate::tui::notifications::{NotificationKind, render_notification_banner};
-use crate::tui::overlays::{
-    render_global_search, render_help_overlay, render_history_search_overlay, render_rewind_flow,
-};
 use crate::tui::prompt_input::input_height;
-use crate::tui::settings_screen::render_settings_screen;
-use crate::tui::stats_dialog::render_stats_dialog;
-use crate::tui::theme_colors;
-use crate::tui::theme_screen::render_theme_screen;
-use crate::tui::usage_overlay::{UsageMetrics, render_usage_overlay};
-use crate::tui::vendor::style::theme;
 use crate::tui::vendor::style::theme_mode;
-use crate::tui::voice_mode_notice::render_voice_mode_notice;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::widgets::Block;
+use ratatui::layout::{Constraint, Direction, Layout};
 
 // Spinner frames matching the TypeScript SpinnerGlyph: platform-specific base
 // characters mirrored (forward + reverse) for a smooth pulse effect.
@@ -94,16 +67,9 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
     app.last_selectable_area.set(size);
 
-    // Fill the entire frame with the palette's surface colour so the terminal's
-    // default (blue on Windows) doesn't bleed through cells no widget covers.
-    frame.render_widget(
-        Block::default().style(
-            Style::default()
-                .bg(theme::user_bg())
-                .fg(theme_colors::text()),
-        ),
-        size,
-    );
+    // The whole-frame fill is dispatch row 0 (`base_fill`): it must paint before
+    // anything else so the terminal's default (blue on Windows) does not bleed
+    // through cells no widget covers.
 
     let prompt_focused = app.permission_request.is_none() && !app.history_search_overlay.visible;
     // Suggestions popup tracks whether the prompt accepts input, not whether
@@ -180,274 +146,46 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         ])
         .split(size);
 
-    render_messages(frame, app, chunks[0]);
-
-    // Async-delegation rows, docked to the bottom-left of the messages area.
-    // Drawn immediately after the transcript so they sit above it and below the
-    // overlays; `refresh` re-reads the process-wide delegation registry with a
-    // real clock, so a task that finished or failed drops out on its own.
-    app.background_tasks.refresh();
-    let bg_rows = app.background_tasks.rows();
-    let bg_area = crate::tui::background_tasks::rows_area(chunks[0], bg_rows.len());
-    if !bg_rows.is_empty() {
-        crate::tui::background_tasks::render_rows(
-            frame,
-            bg_area,
-            &bg_rows,
-            crate::tui::background_tasks::now_unix_secs(),
-        );
-    }
-    // chunks[1] is the blank separator — intentionally left empty
-    if status_height > 0 {
-        render_status_row(frame, app, chunks[2]);
-    }
-    render_input(frame, app, chunks[3], prompt_focused);
-    app.last_input_area.set(chunks[3]);
-    if suggestions_height > 0 {
-        render_prompt_suggestions(frame, app, chunks[4]);
-    }
-    render_footer(frame, app, chunks[5]);
-
-    // Persistent usage panel (F8). Drawn above the base chrome but below the
-    // overlay block below, so any modal correctly occludes it.
-    if app.usage_overlay.visible {
-        render_usage_overlay(
-            frame,
-            &app.usage_overlay,
-            size,
-            &UsageMetrics::from_app(app),
-        );
-    }
-
-    // Overlays (rendered on top in Z-order)
-
-    // Permission dialog (highest priority)
-    if let Some(ref pr) = app.permission_request {
-        render_permission_dialog(frame, pr, size);
-    }
-
-    // Rewind flow (takes over screen)
-    if app.rewind_flow.visible {
-        render_rewind_flow(frame, &app.rewind_flow, size);
-    }
-
-    // New help overlay
-    if app.help_overlay.visible {
-        render_help_overlay(frame, &app.help_overlay, size);
-    }
-
-    // History search overlay
-    if app.history_search_overlay.visible {
-        render_history_search_overlay(
-            frame,
-            &app.history_search_overlay,
-            &app.prompt_input.history,
-            size,
-        );
-    }
-    // (iter-156: legacy history_search render deleted — field is always None)
-
-    // Settings screen (highest-priority full-screen overlay)
-    if app.settings_screen.visible {
-        render_settings_screen(frame, &app.settings_screen, size);
-    }
-
-    // Theme picker overlay
-    if app.theme_screen.visible {
-        render_theme_screen(frame, &app.theme_screen, size);
-    }
-
-    if app.stats_dialog.visible {
-        render_stats_dialog(&app.stats_dialog, size, frame.buffer_mut());
-    }
-
-    if app.mcp_view.visible {
-        render_mcp_view(&app.mcp_view, size, frame.buffer_mut());
-    }
-
-    if app.agents_menu.visible {
-        render_agents_menu(&app.agents_menu, size, frame.buffer_mut());
-    }
-
-    if app.diff_viewer.visible {
-        let mut state = app.diff_viewer.clone();
-        render_diff_dialog(&mut state, size, frame.buffer_mut());
-    }
-
-    if app.global_search.visible {
-        render_global_search(&app.global_search, size, frame.buffer_mut());
-    }
-
-    // (iter-211: feedback_survey render block deleted — no telemetry backend)
-
-    if app.memory_file_selector.visible {
-        render_memory_file_selector(&app.memory_file_selector, size, frame.buffer_mut());
-    }
-
-    if app.skills_view.visible {
-        crate::tui::skills_view::render_skills_view(frame, &app.skills_view, size);
-    }
-
-    if app.plugins_hub.visible {
-        crate::tui::plugins_hub::render_plugins_hub(frame, &app.plugins_hub, size);
-    }
-
-    if app.journey_view.visible {
-        crate::tui::journey_view::render_journey_view(frame, &app.journey_view, size);
-    }
-
-    if app.hooks_config_menu.visible {
-        render_hooks_config_menu(&app.hooks_config_menu, size, frame.buffer_mut());
-    }
-
-    // Voice mode availability notice — rendered ABOVE the input box (near
-    // the bottom of the screen), not at the top. Was at y: size.y (top).
-    // (iter-118 — user-reported bug: notification was at top of TUI.)
-    if app.voice_mode_notice.visible {
-        let notice_h = app.voice_mode_notice.height();
-        if size.height > notice_h + 4 {
-            // Place it 2 lines above the bottom (above the footer + input).
-            let notice_y = size.y + size.height.saturating_sub(notice_h + 2);
-            let notice_area = Rect {
-                x: size.x,
-                y: notice_y,
-                width: size.width,
-                height: notice_h,
-            };
-            render_voice_mode_notice(&app.voice_mode_notice, notice_area, frame.buffer_mut());
+    // ---- The dispatch table -------------------------------------------------
+    //
+    // Every visible surface paints, in this order, over the top of the one
+    // before it. `dispatch::DISPATCH` is that order as data: a row's `visible`
+    // guard decides whether it paints this frame and its `paint` body delegates
+    // to the surface's own module. There is no first-match-wins here and there
+    // must not be one — `permission_dialog` at row 8 is commented "highest
+    // priority" yet `bypass_permissions_dialog` at row 26 paints over it, and
+    // `ask_user_dialog` at row 27 paints over that.
+    //
+    // chunks[1] is the blank separator between the transcript and the status
+    // row — it is layout, not a surface, and no row paints into it.
+    let mut ctx = dispatch::FrameCtx {
+        size,
+        // Cloned so the post-draw pass can still read `chunks[0]`; `Rc::clone`
+        // is a refcount bump, and `Layout::split` already handed us a shared
+        // slice.
+        chunks: chunks.clone(),
+        prompt_focused,
+        status_height,
+        suggestions_height,
+        bg_rows: Vec::new(),
+        stop: false,
+    };
+    for entry in dispatch::DISPATCH {
+        if !(entry.visible)(app, &mut ctx) {
+            continue;
+        }
+        (entry.paint)(frame, app, &mut ctx);
+        // The error-modal row set this: it owns the rest of the frame.
+        if ctx.stop {
+            break;
         }
     }
-
-    // Import-config preview dialog
-    if app.import_config_dialog.visible {
-        render_import_config_dialog(frame, &app.import_config_dialog, size);
-    }
-
-    // Bypass-permissions confirmation dialog (topmost — rendered last so it sits above all)
-    if app.bypass_permissions_dialog.visible {
-        render_bypass_permissions_dialog(frame, &app.bypass_permissions_dialog, size);
-    }
-
-    // AskUserQuestion dialog — renders above bypass-permissions so the model's
-    // question is never obscured by the startup confirmation prompt.
-    if app.ask_user_dialog.visible {
-        render_ask_user_dialog(&app.ask_user_dialog, size, frame.buffer_mut());
-    }
-
-    // /effort picker
-    if app.effort_picker.visible {
-        crate::effort_picker::render_effort_picker(frame, &app.effort_picker, size);
-    }
-
-    // Import-config source picker
-    if app.import_config_picker.visible {
-        render_dialog_select(frame, &app.import_config_picker, size);
-    }
-
-    // Connect-a-provider dialog (/connect command)
-    if app.connect_dialog.visible {
-        render_dialog_select(frame, &app.connect_dialog, size);
-    }
-
-    // API key input dialog (opened from /connect for key-based providers)
-    if app.key_input_dialog.visible {
-        render_key_input_dialog(frame, &app.key_input_dialog, size);
-    }
-
-    // Custom provider URL + API key dialog.
-    if app.custom_provider_dialog.visible {
-        render_custom_provider_dialog(frame, &app.custom_provider_dialog, size);
-    }
-
-    // "Free" composite-provider setup dialog (Zen + OpenRouter).
-    if app.free_mode_dialog.visible {
-        crate::free_mode_dialog::render_free_mode_dialog(frame, &app.free_mode_dialog, size);
-    }
-
-    // Device code / browser auth dialog (GitHub Copilot, Anthropic OAuth)
-    if app.device_auth_dialog.visible {
-        render_device_auth_dialog(frame, &app.device_auth_dialog, size);
-    }
-
-    // Ctrl+K command palette
-    if app.command_palette.visible {
-        render_dialog_select(frame, &app.command_palette, size);
-    }
-
-    // Model picker overlay
-    if app.model_picker.visible {
-        render_model_picker(&app.model_picker, size, frame.buffer_mut());
-    }
-
-    // Session browser overlay
-    if app.session_browser.visible {
-        render_session_browser(&app.session_browser, size, frame.buffer_mut());
-    }
-
-    // Session branching overlay
-    if app.session_branching.visible {
-        render_session_branching(&app.session_branching, size, frame.buffer_mut());
-    }
-
-    // Export format picker dialog
-    if app.export_dialog.visible {
-        render_export_dialog(frame, &app.export_dialog, size);
-    }
-
-    // Context visualization overlay
-    if app.context_viz.visible {
-        render_context_viz(
-            frame,
-            &app.context_viz,
-            size,
-            app.context_used_tokens,
-            app.context_window_size,
-            app.rate_limit_5h_pct,
-            app.rate_limit_7day_pct,
-            app.cost_usd,
-        );
-    }
-
-    // MCP approval dialog
-    if app.mcp_approval.visible {
-        render_mcp_approval_dialog(&app.mcp_approval, size, frame.buffer_mut());
-    }
-
-    // Always show error modals on top of everything (highest priority)
-    if let Some(notif) = app.notifications.current()
-        && notif.kind == NotificationKind::Error
-    {
-        let is_welcome_screen = app.messages.is_empty()
-            && app.streaming_text.is_empty()
-            && app.streaming_thinking.is_empty()
-            && app.tool_use_blocks.is_empty();
-        render_error_modal(
-            frame,
-            size,
-            notif,
-            app.error_modal_scroll_offset,
-            app.footer_right_column_area.get(),
-            is_welcome_screen,
-        );
-        // Don't render other overlays/notifications when error modal is showing.
-        // The substitution pass still has to run — see the tail of this fn.
+    if ctx.stop {
+        // The error modal is the frame's one early exit. The substitution pass
+        // still has to run — see the tail of this fn — and nothing else does.
         theme_mode::adapt_buffer_for_display(frame.buffer_mut());
         return;
     }
-    let modal_active = is_modal_open(app);
-
-    // Render non-error notifications as toast banners (unless another modal is open)
-    if !modal_active && app.notifications.current().is_some() {
-        render_notification_banner(frame, &app.notifications, size);
-    }
-
-    // ---- Text selection highlight (topmost post-pass) ---------------------
-    apply_selection_highlight(frame, app);
-    cache_selectable_row_text(frame, app);
-    render_context_menu(frame, app);
-
-    // ---- Debug overlay (F12) — topmost, always last ---------------------
-    crate::tui::debug::overlay::render_debug_overlay(frame, &app.debug_hub, size);
 
     // ---- OSC 8 hyperlink overlay (post-paint pass) ---------------------
     // Scan the rendered buffer for URLs and emit OSC 8 escape sequences so
@@ -512,6 +250,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
 
+    use crate::tui::theme_colors;
     use crate::tui::vendor::style::palette::Role;
 
     fn make_app() -> App {
