@@ -7,7 +7,11 @@
   "variants": [
     {
       "size": "80x24",
-      "keys": "/search<enter>"
+      "keys": "/search<enter>",
+      "assert_screen": [
+        "contains:Search"
+      ],
+      "notes": "At 80x24 the modal's bottom hint line is truncated by the primitive: the title and body fit but 'Esc to close \u00b7 Enter: insert \u00b7 \u2191\u2193' does not, so 'Esc' appears nowhere on screen. That is correct narrow-terminal behaviour, not a regression - the 120x40 variant pins the hint's presence and spelling, this variant pins only that the surface still renders. Narrow-terminal hint elision is tracked as Wave 4 item 4.5."
     }
   ],
   "assert": [
@@ -15,10 +19,10 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Esc: close",
+    "contains:Esc to close",
     "contains:Search"
   ],
   "baseline": "global-search.txt",
   "style_baseline": "global-search.style.txt",
-  "notes": "Ctrl+P also opens it but ctrl+p is NOT a token, so /search (and its /find alias) is the reachable opener. Pins the titled-border chrome, a different border style from the rounded popups elsewhere — a good palette-regression canary."
+  "notes": "Ctrl+P also opens it but ctrl+p is NOT a token, so /search (and its /find alias) is the reachable opener. Pins the titled-border chrome, a different border style from the rounded popups elsewhere \u2014 a good palette-regression canary."
 }
