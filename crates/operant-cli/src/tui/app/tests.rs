@@ -6,7 +6,7 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
 
-fn make_app() -> App {
+pub(crate) fn make_app() -> App {
     // `App::new` calls `set_active_theme_enum`, which writes the process-global
     // palette. Serialise on the same lock the theme-asserting tests hold, or a
     // concurrent `make_app` resets the palette between one of those tests'
