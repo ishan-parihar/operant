@@ -1,6 +1,10 @@
 # Organism authority, memory, and the CEO loop — architecture design
 
-> **Status:** design, not implementation. 2026-10-01.
+> **Status:** design, revised after code review. 2026-10-01.
+> **Revised.** §4 was **wrong about the substrate** and has been rewritten.
+> See [`ORG-AUTHORITY-DESIGN-REVIEW.md`](ORG-AUTHORITY-DESIGN-REVIEW.md) for
+> the four defects the review found; the sequencing in §14 is updated to match.
+> Read the review first — it changes what step 1 is.
 > **Answers:** the six open questions in [`REMAINING-GAPS.md`](REMAINING-GAPS.md),
 > and the owner's design session of 2026-10-01.
 > **Supersedes nothing.** [`CHRONOGRAPH-DESIGN.md`](CHRONOGRAPH-DESIGN.md)
@@ -239,87 +243,116 @@ label: an agent reads its constraints at the top of every run.
 
 ## 4. Persistent sessions — the load-bearing change
 
-### 4.1 The change
+> **REWRITTEN after review.** The original version of this section assumed a
+> per-employee session slot exists. It does not: there is exactly one
+> `OperantAgent` with one `conversation: Arc<RwLock<Vec<Message>>>`, and
+> `run_agent_job` calls `clear_history()` before every cron job. See review
+> defect **D1** and **D2**. The design below is the corrected version, and the
+> session substrate it depends on is now **step 1** of §14.
 
-Today a cron job spawns an agent, it runs, it exits. Everything it learned is
-gone except what was written to a database.
+### 4.1 What actually exists today
 
-**Under this design each employee has at most one live `AgentSession`**, keyed
-by employee id, persisted across runs. Every invocation — cron, DM, CEO
-meeting — loads that session, injects a fresh volatile suffix, runs, and saves
-back.
+Three facts, all verified:
+
+1. **One agent, one conversation.** `gateway_runner.rs:427` and
+   `scheduler.rs:24` both hold `Arc<OperantAgent>` — the same object. Its
+   conversation is a single field (`agent/mod.rs:346`).
+2. **`session_id` is a label, not a slot.** `set_session_id` (`events.rs:352`)
+   sets a string so rows can be filed. `builders.rs:359` says it outright:
+   *"so there is exactly one session slot"*.
+3. **Every cron run wipes context.** `scheduler.rs:277` calls
+   `clear_history()` before `run()`.
+
+Together these mean 102 employees **cannot** hold 102 sessions today — they
+would share one conversation and interleave into each other's context. That is
+a correctness problem, not a scaling one.
+
+### 4.2 The substrate that has to be built first
 
 ```
-  cron fires  ─┐
-  user DMs    ─┼─▶  load session(employee)  ──▶  inject volatile suffix
-  CEO meeting ─┘         │                              │
-                         │                        run(tool loop)
-                         │                              │
-                         │                    ┌─────────┴─────────┐
-                         │                    │  write barrier    │
-                         │                    │  (§7) mandatory   │
-                         │                    └─────────┬─────────┘
-                         │                              │
-                         └──── autocompact ◀────────────┘
-                                    │
-                              save session back
+                    ┌──────────────────────────────────┐
+   cron / DM /      │        EmployeeRegistry          │
+   CEO meeting ────▶│  employee_id → bound agent      │
+                    │  + per-employee lock            │
+                    └───────────────┬──────────────────┘
+                                    │ bind: load conversation from store
+                                    ▼
+                    ┌──────────────────────────────────┐
+                    │  SessionStore (per employee)     │
+                    │   ├ conversation: Vec<Message>   │
+                    │   ├ compressor: LlmCompressor    │  (owns it — compress is &mut self)
+                    │   ├ last_run / turn budget       │
+                    │   └ persona / worklog cursors   │
+                    └───────────────┬──────────────────┘
+                                    │ release: write barrier, autocompact, persist
+                                    ▼
+                              store / database
 ```
 
-Consequences, all of them intended:
+`clear_history()` becomes `session.close_and_persist()` — scoped to one
+employee, not global. The write barrier (§7) and the autocompact (§4.5) both
+attach at that single point.
+
+**Not** a reuse of `operant-infra`'s `SessionStore` (`session_store.rs:15`):
+that is JSONL for *channel* conversations, with a different `ChatMessage` type
+and a `compact()` that only strips corrupt lines. It is proof the shape works
+in this repo, not a component to import.
+
+### 4.3 The change
+
+Every invocation — cron, DM, CEO meeting — binds the addressed employee's
+session, runs, and releases it. Consequences, all intended:
 
 - **A user can DM any employee at any time** and get a response grounded in
-  everything that employee has done. This is the owner's requirement and it is
-  impossible without the session.
+  everything that employee has done.
 - Personality accumulates in *context*, not only in logs.
-- The CEO meeting can be a real conversation, not five cold prompts.
+- The CEO meeting is a real conversation, not a cold prompt.
 
-### 4.2 A new conflict the owner has not raised yet
+### 4.4 Resident vs load-on-demand
 
-A persistent session per employee means **each live employee holds a Tokio task
-and a context window**. With 102 employees all resident, that is 102 resident
-sessions.
+A persistent session per employee means each live employee holds a conversation
+and a compressor. With 102 employees, that is 102 sessions if all resident.
 
-I do not think this should be 102 OS processes, and I do not think it should be
-102 always-on tasks either. The design I propose:
+The design is **load-on-demand with a bounded warm LRU** (default 4):
 
-- **Sessions are persisted and load-on-demand, not resident.** The session row
-  exists; the agent is constructed only when something addresses the employee.
-- A `SessionRegistry` holds a bounded LRU of *warm* sessions (default 4), so
-  concurrent CEO meetings over 6 HODs evict cleanly rather than all at once.
-- The DM path and the cron path share the registry, so a user DM during a cron
-  run **joins** the warm session instead of forking a second copy of it. The
-  per-employee lock is the serialisation point.
+- The session row always exists; the agent is constructed only when addressed.
+- A user DM during a cron run **joins** the warm session rather than forking a
+  second copy. The per-employee lock is the serialisation point.
+- `lru = "0.16"` is already a dependency of `operant-channels` and
+  `operant-runtime`, so this needs no new dep.
 
-This keeps memory flat while preserving the conversation semantics. If the
-owner would rather have true always-resident employees, that is a different
-deployment shape and I would want to build it deliberately rather than
-accidentally.
+If the owner wants true always-resident employees, that is a different
+deployment shape and should be built deliberately.
 
-### 4.3 Autocompact after every cron run
+### 4.5 Autocompact after every cron run
 
 The owner's requirement: each persistent session **must autocompact after its
 cron job runs**.
 
-I am implementing this as **mandatory-with-a-floor**, and I want to be explicit
-about the deviation rather than bury it:
+**The machinery is not attached.** `grep 'pub async fn compact' agent/*.rs`
+returns nothing. `LlmCompressor` exposes `bind_persistence(&mut self, ...)`,
+`should_compress(&self, ...)`, and `compress(&mut self, ...)` — a host
+constructs and binds it; nothing on the agent drives it. So this is new wiring.
+
+Implemented as **mandatory-with-a-floor**, and the deviation is stated rather
+than buried:
 
 - After every scheduled run, the session is compacted. Always.
-- **But** the summarisation step is skipped when the session is below
-  `compact_floor_tokens` (default 4 000, well under any model's window).
+- **But** summarisation is skipped below `compact_floor_tokens` (default
+  4 000, well under any model's window).
 
-Rationale: unconditional compaction of a short session replaces verbatim history
-with a lossy summary for no benefit, and then compounds — the next compaction
-summarises a summary. The *invocation* is mandatory and observable, so "the
-session was compacted after the cron run" remains a true statement about the
-pipeline; only the lossy step is skipped when there is nothing to lose.
+Rationale: compacting a short session replaces verbatim history with a lossy
+summary for no benefit, then compounds — the next compaction summarises a
+summary. The *invocation* is mandatory and observable, so "the session was
+compacted after the cron run" stays true about the pipeline; only the lossy
+step is skipped when there is nothing to lose.
 
 If the owner wants literally unconditional summarisation, that is a one-line
-change to the floor check and I will make it.
+change to the floor check.
 
-Compaction preserves the objective anchors (`llm_compressor.rs` already keeps
-some), and the persona/personality block is re-injected from the persona
-record rather than being carried in the summary — so personality survives
-compaction by construction rather than by luck.
+Personality survives compaction **by construction**: the persona block is
+re-injected from the persona record on every bind, never carried in the
+summary.
 
 ---
 
@@ -678,6 +711,17 @@ That maps cleanly onto existing machinery:
 | CEO articulates trajectory | decision objects + a narrative artifact |
 | Respawn HODs for alignment | second round of threads, **bounded** |
 
+**One caveat the review found.** "That maps cleanly onto existing machinery" was
+too confident. `scheduler.rs` has no `join_all`, no `FuturesUnordered`, and no
+`tokio::spawn` — jobs run **strictly sequentially**. So the fan-out is new work:
+six meetings serialised is minutes, not seconds. It needs `FuturesUnordered`
+over one thread per HOD. Tool execution already does this (8-worker pool,
+iter-56), so it is a new *site*, not a new technique.
+
+This is also why the 3-turn budget (§10) must land *before* the CEO loop: once
+N agents can run concurrently and each may be waiting on a DM reply, a bounded
+budget is what stops a mutual-await deadlock.
+
 ### 11.2 The bound
 
 A second round that can itself trigger a third round is a fork bomb with extra
@@ -755,28 +799,33 @@ operant_cron.db ────── cron_jobs       (unchanged — spawns every e
 
 Each step is independently shippable and leaves the system in a working state.
 
+**Revised after the code review.** The per-employee session substrate moved
+from step 7 to step 1: nothing that follows can address an individual employee
+until it exists, and the original ordering hid that. See
+[`ORG-AUTHORITY-DESIGN-REVIEW.md`](ORG-AUTHORITY-DESIGN-REVIEW.md).
+
 | # | Step | Why here |
 |---|---|---|
-| 1 | Schema versioning helpers (§12) | unblocks every later column add |
-| 2 | Department membership command + NULL surfacing (§3.1) | answers Q4; feeds resolve |
-| 3 | `departments` table + CLI (§3.3) | mandate/protocols/rules exist |
-| 4 | Recipient resolver (§3.2) | makes the board readable — **keystone** |
-| 5 | DM thread + 3-turn budget + turn awareness (§10) | this is the loop guard |
-| 6 | Write barrier (§7) | one row per run, guaranteed |
-| 7 | Persistent sessions + autocompact (§4) | unlocks DMs and personality |
-| 8 | `subjective_log` + `org_decisions` + synthesis (§8, §9) | builds on the barrier |
-| 9 | Persona injection into frozen prefix (§6) | personality becomes visible |
-| 10 | `reports_to` / `peers` / authority scopes (§1, §2) | hierarchy exists |
-| 11 | Authority-filtered tool registry (§2.4) | containment becomes real |
-| 12 | `assignments` board + cross-dept grant check (§5) | first governed mutation |
-| 13 | Authority injection into prompts (§6) | position changes the prompt |
-| 14 | CEO loop + artifacts (§11) | alignment, once 1–13 hold |
+| **1** | **Per-employee session substrate (§4.2)** | one agent + one conversation exists today; everything else assumes per-employee addressability |
+| 2 | Schema versioning helpers (§12) | unblocks every later column add |
+| 3 | Department membership command + NULL surfacing (§3.1) | answers Q4; feeds resolve |
+| 4 | `departments` table + CLI (§3.3) | mandate/protocols/rules exist |
+| 5 | Recipient resolver (§3.2) | makes the board readable — **keystone** |
+| 6 | DM thread + 3-turn budget + turn awareness (§10) | the loop guard; must precede the concurrent CEO loop |
+| 7 | Write barrier (§7) | one row per run, guaranteed; attaches at the §4.2 release point |
+| 8 | `Autocompactor` wiring (§4.5) | needs the per-employee compressor from step 1 |
+| 9 | `subjective_log` + `org_decisions` + synthesis (§8, §9) | builds on the barrier |
+| 10 | Persona injection into frozen prefix (§6) | personality becomes visible |
+| 11 | `reports_to` / `peers` / authority scopes (§1, §2) | hierarchy exists |
+| 12 | Authority-filtered tool registry (§2.4) | containment becomes real |
+| 13 | `assignments` board + cross-dept grant check (§5) | first governed mutation |
+| 14 | CEO loop + artifacts + fan-out (§11) | alignment, once 1–13 hold |
 | 15 | `org check` exit contract (§11.4) | observation for all of the above |
 
-Steps 1–4 are Wave 2. Steps 10–12 are Wave 3. Steps 13–15 are Wave 4.
+Steps 1–6 are Wave 2. Steps 11–13 are Wave 3. Steps 14–15 are Wave 4.
 
 **The gate (GAP-2.3) is deliberately not in this list.** It stays dark until the
-department `rules` array exists (step 3), because a gate that enforces rules
+department `rules` array exists (step 4), because a gate that enforces rules
 which do not exist yet would block on nothing and then be turned off.
 
 ---
@@ -787,10 +836,12 @@ Flagged so they can be overridden cheaply:
 
 1. `binding = true` for `Descendants`/`Org` decisions (§8.3). One field default.
 2. Session registry is **load-on-demand with a 4-entry warm LRU**, not 102
-   always-resident processes (§4.2). Different shape if the owner wants
+   always-resident sessions (§4.4). Different shape if the owner wants
    always-resident.
-3. Autocompact is mandatory-with-floor at 4 000 tokens (§4.3). Deviation from a
-   literal reading of "must autocompact", stated above.
+3. Autocompact is mandatory-with-floor at 4 000 tokens (§4.5). Deviation from a
+   literal reading of "must autocompact", stated above. The machinery itself
+   does not currently exist on the agent, so this is new wiring, not a config
+   flag.
 4. Cross-department grants require the **grantor** to hold `Org` scope. A
    department head can grant within their own subtree but not across.
 5. DM `turn_budget = 3` is the owner's example and is the default; it is a
@@ -809,3 +860,8 @@ Smaller than before, and none of them block step 1:
 - Are promotions (an employee gaining a scope) themselves decisions requiring
   CEO authority, or ordinary mutations with a reason? I default to decisions,
   because authority changes are exactly what the decision log is for.
+- Step 1 replaces a shared-agent design with per-employee bound agents. Does
+  the gateway's single-session behaviour (`gateway_runner.rs`, one session per
+  chat) survive that change, or does it need its own registry keyed by chat? I
+  assume it needs the latter and that the two registries can share a lock
+  implementation.
