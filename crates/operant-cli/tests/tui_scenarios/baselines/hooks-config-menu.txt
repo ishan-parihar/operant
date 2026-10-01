@@ -5,7 +5,7 @@
 
 
 
-                      Hooks — Select Event                                                    esc
+                      Hooks — Select Event                                           Esc to close
                       Review configured hook events and matchers.
 
                        No hooks configured.

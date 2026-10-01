@@ -6,30 +6,30 @@
 
 
 
-
-                    Connect Free (multi-provider — 0/5 keys)                                 esc
-
-                    Stack free tiers behind one endpoint.
-                    TIP More keys = better availability and higher caps.
-
-                    ▸ Groq            console.groq.com
-                        paste your API key here..._
-                      Cerebras        cloud.cerebras.ai
-                        paste your API key here...
-                      Google Gemini   aistudio.google.com
-                        paste your API key here...
-                      Mistral         console.mistral.ai
-                        paste your API key here...
-                      ↓ 1 more
-
-                    ↑/↓ next field    paste at least 1 key — as many as you can add is better
-
-
-
-
-
-
-
+                  ╭──────────────────────────────────────────────────────────────────────────────────╮
+                  │ Connect Free (multi-provider — 0/5 keys)                                         │
+                  │ Stack free tiers behind one endpoint.                                            │
+                  │ TIP More keys = better availability and higher caps.                             │
+                  │                                                                                  │
+                  │ ▸ Groq            console.groq.com                                               │
+                  │     paste your API key here..._                                                  │
+                  │   Cerebras        cloud.cerebras.ai                                              │
+                  │     paste your API key here...                                                   │
+                  │   Google Gemini   aistudio.google.com                                            │
+                  │     paste your API key here...                                                   │
+                  │   Mistral         console.mistral.ai                                             │
+                  │     paste your API key here...                                                   │
+                  │   ↓ 1 more                                                                       │
+                  │                                                                                  │
+                  │ ↑/↓ next field    paste at least 1 key — as many as you can add is better        │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
+                  ╰──────────────────────────────────────────────────────────────────────Esc to close╯
 
  offline-capture · local                                                                                    ? shortcuts
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

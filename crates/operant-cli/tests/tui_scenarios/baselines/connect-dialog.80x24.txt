@@ -1,24 +1,24 @@
 
 
 
-
-         Connect a provider                                     esc
-
-         Search
-
-         Popular
-         Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F
-         Custom OpenAI-Compatible Custom URL + API key
-         OpenAI (API key)
-         Anthropic (API key)
-         Google AI Studio (API key)
-         xAI (API key)
-         Mistral (API key)
-         Groq (API key)
- offlin  DeepSeek (API key)                                             ortcuts
-───────  NVIDIA NIM (API key)                                           ────────
-❯ ▏      OpenRouter (API key)
- 🎤  Voi                                                                 configur
+       ╭───────────────────────────────────────────────────────────────╮
+       │ Connect a provider                                            │
+       │ Search                                                        │
+       │                                                               │
+       │                                                               │
+       │ Popular                                                       │
+       │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
+       │ Custom OpenAI-Compatible Custom URL + API key                 │
+       │ OpenAI (API key)                                              │
+       │ Anthropic (API key)                                           │
+       │ Google AI Studio (API key)                                    │
+       │ xAI (API key)                                                 │
+       │ Mistral (API key)                                             │
+       │ Groq (API key)                                                │
+ offlin│ DeepSeek (API key)                                            │ortcuts
+───────│ NVIDIA NIM (API key)                                          │────────
+❯ ▏    │ OpenRouter (API key)                                          │
+ 🎤  Voi╰───────────────────────────────────────────────────Esc to close╯configur
 
                                                                0k/200k  $0.0000
 

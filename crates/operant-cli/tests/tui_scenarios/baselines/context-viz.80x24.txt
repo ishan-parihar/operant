@@ -1,7 +1,7 @@
 
 
 
-      Context & usage                                                 esc
+      Context & usage                                        Esc to close
       Token window, rate limits, and session cost.
       Context window
       [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)

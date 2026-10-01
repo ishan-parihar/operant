@@ -1,7 +1,7 @@
 
 
 
-               Settings — Operant                                                                Esc close
+               Settings — Operant                                                           Esc to close
                Type to search settings...
 
                  ► Max Tokens                              0

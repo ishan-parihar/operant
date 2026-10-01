@@ -1,23 +1,23 @@
 
 
 
-       MCP — 1 servers · 0 tools                                 Esc close
-      ┌ Servers ─────────────┐┌ Tools ───────────────────────────────────┐
-      │stdio                 ││/ filter tools                            │
-      │› ○ agentmemory  0 too││                                          │
-      │                      ││                                          │
-      │                      ││                                          │
-      │                      ││                                          │
-      │                      ││                                          │
-      │                      │└──────────────────────────────────────────┘
-      │                      │┌ Tool Detail ─────────────────────────────┐
-      │                      ││Select a tool to view details.            │
-      │                      ││                                          │
-      │                      ││                                          │
-      │                      ││                                          │
- off  │                      ││                                          │  uts
-────  └──────────────────────┘└──────────────────────────────────────────┘  ────
-❯ ▏    Tab switch pane   / filter tools   e error detail   a auth   r reco
+      MCP — 1 servers · 0 tools                              Esc to close
+     ┌ Servers ──────────────┐┌ Tools ────────────────────────────────────┐
+     │stdio                  ││/ filter tools                             │
+     │› ○ agentmemory  0 tool││                                           │
+     │                       ││                                           │
+     │                       ││                                           │
+     │                       ││                                           │
+     │                       ││                                           │
+     │                       │└───────────────────────────────────────────┘
+     │                       │┌ Tool Detail ──────────────────────────────┐
+     │                       ││Select a tool to view details.             │
+     │                       ││                                           │
+     │                       ││                                           │
+     │                       ││                                           │
+ off │                       ││                                           │ uts
+──── └───────────────────────┘└───────────────────────────────────────────┘ ────
+❯ ▏   Tab switch pane   / filter tools   e error detail   a auth   r reconn
  🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
 
                                                                0k/200k  $0.0000

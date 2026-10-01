@@ -1,6 +1,7 @@
 
 
-  ┌ Journey — skills + memories ─────────────────────────────────────────────┐
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ Journey — skills + memories                                              │
   │┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
   ││ Name                     Category ││No memories stored yet.            ││
   ││                                   ││                                   ││
@@ -14,10 +15,9 @@
   ││ axi                               ││                                   ││
   ││ baoyu-infographic                 ││                                   ││
   ││ blogwatcher                       ││                                   ││
-  ││ briefing                          ││                                   ││
- o││ calendar                 productiv││                                   ││s
+ o││                                   ││                                   ││s
 ──││                                   ││                                   ││──
-❯ ││                                   ││                                   ││
+❯ │└───────────────────────────────────┘└───────────────────────────────────┘│
  🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configur
 
                                                                0k/200k  $0.0000

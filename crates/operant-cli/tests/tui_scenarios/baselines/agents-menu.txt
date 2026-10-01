@@ -4,7 +4,7 @@
 
 
 
-                Agents                                                                              esc
+                Agents                                                                     Esc to close
                 0 active  ·  0 definitions
                 [+ Create new agent]  Create a reusable workspace agent
 

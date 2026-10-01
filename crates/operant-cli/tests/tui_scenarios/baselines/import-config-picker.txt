@@ -14,14 +14,14 @@
 
 
 
-
-                             Import config                                          esc
-
-                             Search
-                             CLAUDE.md Import ~/.claude/CLAUDE.md
-                             settings.json Import ~/.claude/settings.json
-                             Both Import both CLAUDE.md and settings.json              SAFE
-
+                           ╭───────────────────────────────────────────────────────────────╮
+                           │ Import config                                                 │
+                           │ Search                                                        │
+                           │                                                               │
+                           │ CLAUDE.md Import ~/.claude/CLAUDE.md                          │
+                           │ settings.json Import ~/.claude/settings.json                  │
+                           │ Both Import both CLAUDE.md and settings.json              SAFE│
+                           ╰───────────────────────────────────────────────────Esc to close╯
 
 
 

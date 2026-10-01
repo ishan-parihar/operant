@@ -7,7 +7,8 @@
 
 
 
-                        ┌ WARNING: Bypass Permissions Mode ────────────────────────────────────┐
+                        ╭──────────────────────────────────────────────────────────────────────╮
+                        │ WARNING: Bypass Permissions Mode                                     │
                         │Operant running in Bypass Permissions mode                            │
                         │                                                                      │
                         │In Bypass Permissions mode, Operant will NOT ask for your             │
@@ -27,8 +28,7 @@
                         │                                                                      │
                         │                                                                      │
                         │                                                                      │
-                        │                                                                      │
-                        └──────────────────────────────────────────────────────────────────────┘
+                        ╰──────────────────────────────────────────────────────────Esc to close╯
 
 
  offline-capture · local                                                                                    ? shortcuts

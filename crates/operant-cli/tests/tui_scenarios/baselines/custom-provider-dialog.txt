@@ -11,19 +11,19 @@
 
 
 
-
-                        Connect Custom OpenAI-Compatible                                 esc
-
-                        URL:
-                        https://your-openai-compatible-endpoint/v1_
-
-                        API Key:
-                        paste your API key here...
-
-                        tab switch field   fill URL field
-
-
-
+                      ╭──────────────────────────────────────────────────────────────────────────╮
+                      │ Connect Custom OpenAI-Compatible                                         │
+                      │ URL:                                                                     │
+                      │ https://your-openai-compatible-endpoint/v1_                              │
+                      │                                                                          │
+                      │ API Key:                                                                 │
+                      │ paste your API key here...                                               │
+                      │                                                                          │
+                      │ tab switch field   fill URL field                                        │
+                      │                                                                          │
+                      │                                                                          │
+                      │                                                                          │
+                      ╰──────────────────────────────────────────────────────────────Esc to close╯
 
 
 

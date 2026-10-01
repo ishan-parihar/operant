@@ -13,15 +13,15 @@
 
 
 
-
-                                Connect Anthropic                                esc
-
-                                API Key:
-                                paste your API key here..._
-
-                                enter confirm
-
-
+                              ╭──────────────────────────────────────────────────────────╮
+                              │ Connect Anthropic                                        │
+                              │ API Key:                                                 │
+                              │ paste your API key here..._                              │
+                              │                                                          │
+                              │ enter confirm                                            │
+                              │                                                          │
+                              │                                                          │
+                              ╰──────────────────────────────────────────────Esc to close╯
 
 
 

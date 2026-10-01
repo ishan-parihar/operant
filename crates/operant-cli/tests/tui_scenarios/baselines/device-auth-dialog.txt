@@ -11,20 +11,20 @@
 
 
 
-
-                              Connect OpenAI Codex                                 esc
-
-                              Requesting device code...
-
-
-
-
-
-
-
-
-
-
+                            ╭──────────────────────────────────────────────────────────────╮
+                            │ Connect OpenAI Codex                                         │
+                            │                                                              │
+                            │ Requesting device code...                                    │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            │                                                              │
+                            ╰──────────────────────────────────────────────────Esc to close╯
 
 
 

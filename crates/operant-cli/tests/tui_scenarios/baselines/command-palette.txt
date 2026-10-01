@@ -3,36 +3,36 @@
 
 
 
-
-                             Command Palette                                        esc
-
-                             Search
-
-                             Other
-                             /new Start a new session (fresh session ID + history)
-                             /redraw Force a full UI repaint (recovers from terminal drift)
-
-                             Review & History
-                             /history Show conversation history
-
-                             Other
-                             /save Save the current conversation
-
-                             Review & History
-                             /retry Retry the last message (resend to agent)
-                             /undo Back up N user turns and re-prompt (default 1)
-
-                             Session
-                             /title Set a title for the current session
-
-                             Other
-                             /handoff Hand off this session to a messaging platform (Telegr
-
-                             Session
-                             /branch Branch the current session (explore a different path)
-
- offline-capture · local     Context                                                                        ? shortcuts
-───────────────────────────                                                                 ────────────────────────────
+                           ╭───────────────────────────────────────────────────────────────╮
+                           │ Command Palette                                               │
+                           │ Search                                                        │
+                           │                                                               │
+                           │                                                               │
+                           │ Other                                                         │
+                           │ /new Start a new session (fresh session ID + history)         │
+                           │ /redraw Force a full UI repaint (recovers from terminal drift)│
+                           │                                                               │
+                           │ Review & History                                              │
+                           │ /history Show conversation history                            │
+                           │                                                               │
+                           │ Other                                                         │
+                           │ /save Save the current conversation                           │
+                           │                                                               │
+                           │ Review & History                                              │
+                           │ /retry Retry the last message (resend to agent)               │
+                           │ /undo Back up N user turns and re-prompt (default 1)          │
+                           │                                                               │
+                           │ Session                                                       │
+                           │ /title Set a title for the current session                    │
+                           │                                                               │
+                           │ Other                                                         │
+                           │ /handoff Hand off this session to a messaging platform (Telegr│
+                           │                                                               │
+                           │ Session                                                       │
+                           │ /branch Branch the current session (explore a different path) │
+                           │                                                               │
+ offline-capture · local   │ Context                                                       │                ? shortcuts
+───────────────────────────╰───────────────────────────────────────────────────Esc to close╯────────────────────────────
 ❯ ▏
  🎤  Voice mode is available! Use Alt+V to start recording, or /voice to configure.  [Esc to dismiss]
 
