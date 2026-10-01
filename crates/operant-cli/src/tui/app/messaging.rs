@@ -163,9 +163,82 @@ impl App {
         }
     }
 
+    /// Decide what the composer holds after a failed submission.
+    ///
+    /// Three rules, in order:
+    ///
+    /// 1. **Nothing was submitted** (or only whitespace) → [`ComposerRecovery::Nothing`].
+    /// 2. **The composer already holds text** → [`ComposerRecovery::KeepExisting`].
+    ///    Never clobber and never append: appending would splice a stale
+    ///    fragment onto the failed prompt and produce a prompt the user never
+    ///    wrote, while clobbering would destroy what they just typed. The
+    ///    failed text is not lost either way — `take_input` already pushed it
+    ///    onto in-session and on-disk history, so Up-arrow / Ctrl+R reaches it.
+    /// 3. Otherwise → [`ComposerRecovery::Restore`], the text unchanged.
+    ///
+    /// No length bound is applied. The composer has no cap of its own anywhere
+    /// in this TUI (the only truncation is render-time width clipping in the
+    /// dialogs and the diff viewer), so truncating on the way back in would
+    /// invent a policy the buffer does not have and would hand back a prompt
+    /// that no longer says what the user typed.
+    pub(crate) fn resolve_composer_after_failure(
+        submitted: Option<&str>,
+        current: &str,
+    ) -> ComposerRecovery {
+        let Some(text) = submitted else {
+            return ComposerRecovery::Nothing;
+        };
+        if text.trim().is_empty() {
+            return ComposerRecovery::Nothing;
+        }
+        if !current.trim().is_empty() {
+            return ComposerRecovery::KeepExisting;
+        }
+        ComposerRecovery::Restore(text.to_string())
+    }
+
+    /// Hand the text of a failed submission back to the composer, so a turn
+    /// that dies on a bad model id or a dead endpoint costs the user their
+    /// prompt rather than their prompt *and* the turn.
+    ///
+    /// Restore-once falls out of the `take()`: the same failure can reach this
+    /// through two doors — the agent emits `AgentEvent::Error` itself
+    /// (`agent/run.rs`) and then returns `Err`, which makes
+    /// `drain_run_complete` synthesize a second one — and the first call has
+    /// already emptied the slot, so the second is a no-op instead of a double
+    /// paste.
+    pub(crate) fn restore_failed_input_to_composer(&mut self) {
+        let submitted = self.failed_input_recovery.take();
+        match Self::resolve_composer_after_failure(submitted.as_deref(), &self.prompt_input.text) {
+            ComposerRecovery::Nothing => {}
+            ComposerRecovery::KeepExisting => {
+                self.failed_input_recovery = None;
+            }
+            ComposerRecovery::Restore(text) => {
+                self.prompt_input.replace_text(text);
+                self.refresh_prompt_input();
+                self.status_message =
+                    Some("Prompt restored to the composer — the turn failed.".to_string());
+            }
+        }
+    }
+
+    /// Drop the held submission without restoring it.
+    ///
+    /// Called on every path that consumes a submission without producing a
+    /// turn outcome of its own, so a failure in some *later* turn can never
+    /// resurrect an unrelated prompt from an earlier one.
+    pub(crate) fn clear_failed_input_recovery(&mut self) {
+        self.failed_input_recovery = None;
+    }
+
     /// Take the current input buffer, push it to history, and return it.
     pub fn take_input(&mut self) -> String {
         let input = self.prompt_input.take();
+        // Arm the restore slot for the turn this submission is about to start.
+        // A later submission overwrites it, so the slot can only ever hold the
+        // text of the turn currently in flight.
+        self.failed_input_recovery = (!input.trim().is_empty()).then(|| input.clone());
         if !input.is_empty() {
             self.prompt_input.history.push(input.clone());
             self.prompt_input.history_pos = None;

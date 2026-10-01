@@ -3,7 +3,24 @@
 //! Contains all enum and struct definitions used throughout the app module:
 //! `SystemMessageStyle`, `ContextMenuKind`, `ContextMenuState`, `ContextMenuItem`,
 //! `KeyContext`, `DialogPriority`, `ToolStatus`, `TurnState`, `ToolUseBlock`,
-//! `TurnMetadata`, `FocusTarget`, and `SystemAnnotation`.
+//! `TurnMetadata`, `FocusTarget`, `SystemAnnotation`, and `ComposerRecovery`.
+
+/// What the composer should hold after a submission failed.
+///
+/// The decision itself lives in
+/// [`App::resolve_composer_after_failure`](super::App::resolve_composer_after_failure);
+/// this is its output, split out so the rule can be unit-tested without an
+/// agent, a provider, or a terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ComposerRecovery {
+    /// The submission never produced anything. Nothing to give back.
+    Nothing,
+    /// Put this text back verbatim.
+    Restore(String),
+    /// The user has already started typing a new prompt. Leave the composer
+    /// exactly as it is.
+    KeepExisting,
+}
 
 /// Visual style for inline system messages in the conversation pane.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -140,6 +140,7 @@ impl App {
             rewind_flow: RewindFlowOverlay::new(),
             notifications: NotificationQueue::new(),
             error_modal_scroll_offset: 0,
+            failed_input_recovery: None,
             session_title: None,
             remote_session_url: None,
             bridge_state: crate::tui::bridge_state::BridgeConnectionState::Disconnected,

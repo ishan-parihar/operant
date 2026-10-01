@@ -2385,6 +2385,231 @@ fn input_stash_should_hold_and_restore_contents() {
     );
 }
 
+// ---- Failed-submission recovery: the prompt goes back into the composer ----
+
+/// The pure rule, exercised without an agent or a terminal: a failed
+/// submission into an empty composer is handed back verbatim.
+#[test]
+fn resolve_composer_after_failure_restores_into_an_empty_composer() {
+    assert_eq!(
+        App::resolve_composer_after_failure(Some("audit the browser stack"), ""),
+        ComposerRecovery::Restore("audit the browser stack".to_string())
+    );
+}
+
+/// Restore, never append. Text the user typed *after* the failure is their
+/// newest work; neither clobbering it nor splicing the stale prompt onto it
+/// is right, so the composer is left exactly as it is.
+#[test]
+fn resolve_composer_after_failure_keeps_what_the_user_just_typed() {
+    for current in ["n", "a fresh prompt", "   leading spaces  "] {
+        assert_eq!(
+            App::resolve_composer_after_failure(Some("the failed prompt"), current),
+            ComposerRecovery::KeepExisting,
+            "composer holding {current:?} must be left alone"
+        );
+    }
+}
+
+/// No submission, or a whitespace-only one, is nothing to give back — the
+/// slot must not turn a blank submit into a phantom restore.
+#[test]
+fn resolve_composer_after_failure_has_nothing_to_give_back() {
+    assert_eq!(
+        App::resolve_composer_after_failure(None, ""),
+        ComposerRecovery::Nothing
+    );
+    assert_eq!(
+        App::resolve_composer_after_failure(Some("   \n\t "), ""),
+        ComposerRecovery::Nothing
+    );
+}
+
+/// Bounded by nothing. The composer has no length cap of its own, so a long
+/// paste is handed back at full length rather than silently shortened into a
+/// prompt the user never wrote.
+#[test]
+fn resolve_composer_after_failure_does_not_truncate_a_long_prompt() {
+    let long = "x".repeat(10_000);
+    match App::resolve_composer_after_failure(Some(&long), "") {
+        ComposerRecovery::Restore(restored) => assert_eq!(restored.len(), 10_000),
+        other => panic!("expected Restore, got {other:?}"),
+    }
+}
+
+/// End to end through the real submit-and-fail path: Enter empties the
+/// composer and arms the slot, an `AgentEvent::Error` gives the text back.
+#[test]
+fn a_failed_turn_puts_the_prompt_back_in_the_composer() {
+    let mut app = make_app();
+    app.set_prompt_text("audit the browser stack".to_string());
+
+    let submitted = app.take_input();
+    assert_eq!(submitted, "audit the browser stack");
+    assert!(app.prompt_input.is_empty(), "submit empties the composer");
+    assert_eq!(
+        app.failed_input_recovery.as_deref(),
+        Some("audit the browser stack"),
+        "the submitted text is held for the turn in flight"
+    );
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider overloaded_error (529)".to_string(),
+    });
+
+    assert_eq!(app.prompt_input.text, "audit the browser stack");
+    assert_eq!(app.prompt_input.cursor, 23, "cursor lands after the text");
+    assert!(
+        app.failed_input_recovery.is_none(),
+        "the slot is spent once the text is back"
+    );
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Prompt restored to the composer — the turn failed.")
+    );
+}
+
+/// The same failure can reach the error arm twice — the agent emits
+/// `AgentEvent::Error` and then returns `Err`, which makes
+/// `drain_run_complete` synthesize a second one. The prompt comes back once.
+#[test]
+fn a_failure_surfaced_twice_restores_the_prompt_only_once() {
+    let mut app = make_app();
+    app.set_prompt_text("run the audit twice".to_string());
+    app.take_input();
+
+    for _ in 0..2 {
+        app.handle_agent_event(AgentEvent::Error {
+            error: "provider overloaded_error (529)".to_string(),
+        });
+    }
+
+    assert_eq!(
+        app.prompt_input.text, "run the audit twice",
+        "a second delivery must not paste the prompt onto itself"
+    );
+}
+
+/// Text already in the composer wins: the user typed a new prompt while the
+/// failed turn was dying, and that is the one they keep.
+#[test]
+fn a_failed_turn_does_not_clobber_a_prompt_typed_afterwards() {
+    let mut app = make_app();
+    app.set_prompt_text("the failed prompt".to_string());
+    app.take_input();
+
+    app.set_prompt_text("what I actually want to ask".to_string());
+    app.handle_agent_event(AgentEvent::Error {
+        error: "connection refused".to_string(),
+    });
+
+    assert_eq!(app.prompt_input.text, "what I actually want to ask");
+}
+
+/// A submission that never starts a turn — an intercepted slash command, the
+/// initial query, `/skill` expansion, `/retry` — is disarmed once the
+/// submission has been taken, so a failure in some later turn cannot
+/// resurrect it. The order matters and is the point of the test: `take_input`
+/// arms the slot (the text did leave the composer), and the run loop is what
+/// disarms it again when it learns no turn was started.
+#[test]
+fn a_submission_that_never_started_a_turn_cannot_resurrect_an_older_prompt() {
+    let mut app = make_app();
+    app.set_prompt_text("an older prompt".to_string());
+    app.take_input();
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message {
+            role: operant_core::client::Role::Assistant,
+            content: "ok".to_string(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        },
+    });
+    assert!(
+        app.failed_input_recovery.is_none(),
+        "a turn that succeeds owes nothing back"
+    );
+
+    // Enter on a slash command: the text leaves the composer and the slot is
+    // armed, because at that instant nothing knows yet that this is a command
+    // and not a prompt.
+    app.set_prompt_text("/help".to_string());
+    app.take_input();
+    assert_eq!(
+        app.failed_input_recovery.as_deref(),
+        Some("/help"),
+        "the slot is armed the moment the text leaves the composer"
+    );
+
+    // The run loop then sees the leading slash, finds the command was handled
+    // locally, and disarms — no turn was ever started to fail.
+    app.clear_failed_input_recovery();
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "connection refused".to_string(),
+    });
+
+    assert!(
+        app.prompt_input.is_empty(),
+        "the slash command's text must not come back"
+    );
+}
+
+/// The slot holds the text of the turn in flight, so a second submission
+/// overwrites the first rather than stacking a queue of stale prompts.
+#[test]
+fn the_restore_slot_tracks_the_turn_currently_in_flight() {
+    let mut app = make_app();
+
+    app.set_prompt_text("first".to_string());
+    app.take_input();
+    app.set_prompt_text("second".to_string());
+    app.take_input();
+
+    assert_eq!(app.failed_input_recovery.as_deref(), Some("second"));
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "connection refused".to_string(),
+    });
+    assert_eq!(app.prompt_input.text, "second");
+}
+
+/// A turn that succeeds is spent, not held. Without this, a later error
+/// arriving after an unrelated successful turn would pop a stale prompt into
+/// a composer the user had already moved on from.
+#[test]
+fn a_turn_that_succeeds_leaves_nothing_to_restore() {
+    let mut app = make_app();
+    app.set_prompt_text("a prompt that worked".to_string());
+    app.take_input();
+
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message {
+            role: operant_core::client::Role::Assistant,
+            content: "done".to_string(),
+            reasoning: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra_content: None,
+        },
+    });
+
+    // Something unrelated fails later, with a fresh prompt in the composer.
+    app.set_prompt_text("unrelated follow-up".to_string());
+    app.handle_agent_event(AgentEvent::Error {
+        error: "connection refused".to_string(),
+    });
+
+    assert_eq!(
+        app.prompt_input.text, "unrelated follow-up",
+        "the old prompt must not reappear, and the new one must survive"
+    );
+}
+
 /// A run of keystrokes collapses into one undo step. Twelve keystrokes are
 /// two bursts, so two Ctrl+Z reach the empty composer — not twelve steps.
 #[test]

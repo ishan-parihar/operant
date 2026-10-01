@@ -246,6 +246,16 @@ pub struct App {
     pub notifications: NotificationQueue,
     /// Scroll offset for error modal text (in lines).
     pub error_modal_scroll_offset: usize,
+    /// The text of the most recent composer submission, held only while that
+    /// submission is still in flight, so a failure can hand it back.
+    ///
+    /// Armed by [`App::take_input`] — the single point where text actually
+    /// leaves the composer — and disarmed by the paths that consume a
+    /// submission without starting a turn (`submit_user_message` for the
+    /// initial query / `/skill` expansion / `/retry`, and an intercepted
+    /// slash command). That leaves exactly one window where the slot is
+    /// armed: between Enter and the turn's outcome.
+    pub failed_input_recovery: Option<String>,
     /// Plugin hint banners.
     /// Optional session title shown in the status bar.
     pub session_title: Option<String>,

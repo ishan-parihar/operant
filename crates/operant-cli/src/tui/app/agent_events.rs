@@ -236,6 +236,12 @@ impl App {
                 self.is_streaming = false;
                 self.turn_state = TurnState::Idle;
                 self.spinner_verb = None;
+                // The turn this submission paid for is over and it worked, so
+                // there is nothing to give back. Disarming here is what keeps
+                // the slot's invariant true by construction — armed only while
+                // a turn is in flight — rather than by argument about which
+                // later event might or might not follow.
+                self.clear_failed_input_recovery();
 
                 // Record elapsed time and pick a completion verb
                 let seed = self.frame_count as usize ^ (self.messages.len() * 7);
@@ -304,6 +310,10 @@ impl App {
                 self.streaming_text.clear();
                 self.streaming_thinking.clear();
                 self.invalidate_transcript();
+                // Give the prompt back before the error is surfaced. This is
+                // the arm the error modal is drawn from, so the message and the
+                // recovery land in the same frame.
+                self.restore_failed_input_to_composer();
                 let err_msg = format!("Error: {}", error);
                 self.push_assistant_message(err_msg.clone());
                 self.push_notification(NotificationKind::Error, err_msg, None);

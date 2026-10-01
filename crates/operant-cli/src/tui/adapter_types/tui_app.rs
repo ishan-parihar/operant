@@ -617,6 +617,10 @@ impl TuiApp {
                     if crate::input::is_slash_command(&input) {
                         let (cmd, args) = crate::input::parse_slash_command(&input);
                         if self.app.handle_tui_command(cmd, args) {
+                            // A slash command is a command, not a prompt — no
+                            // turn is started, so there is no failure to
+                            // restore the text from.
+                            self.app.clear_failed_input_recovery();
                             // If the slash command set a pending shell command,
                             // we need to run it on the NEXT iteration — but
                             // app.run() will block waiting for input. To avoid
@@ -691,6 +695,14 @@ impl TuiApp {
                         });
                         self.app.run_complete_rx = Some(rx);
                         self.app.agent_task_handle = Some(handle);
+                    } else {
+                        // No agent — the runtime failed to build, so the
+                        // submission is dropped on the floor with nothing
+                        // running to report an error. That is the one failed
+                        // submission with no event to hang the restore on, so
+                        // it has to be given back here or the text is simply
+                        // gone.
+                        self.app.restore_failed_input_to_composer();
                     }
                 }
                 Ok(None) => break Ok(()),
@@ -720,6 +732,11 @@ impl TuiApp {
         text: String,
     ) {
         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        // The initial query, the `/skill` + `/bundle` expansion and `/retry`
+        // all submit text that never came from the composer, so nothing is
+        // owed back if the turn dies. Disarm: a failure here must not resurrect
+        // whatever the composer last sent.
+        self.app.clear_failed_input_recovery();
         self.app.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(text.clone()),
@@ -955,6 +972,7 @@ impl TuiApp {
                     if crate::input::is_slash_command(&input) {
                         let (cmd, args) = crate::input::parse_slash_command(&input);
                         if self.app.handle_tui_command(cmd, args) {
+                            self.app.clear_failed_input_recovery();
                             continue;
                         }
                     }
@@ -984,6 +1002,8 @@ impl TuiApp {
                         });
                         self.app.run_complete_rx = Some(rx);
                         self.app.agent_task_handle = Some(handle);
+                    } else {
+                        self.app.restore_failed_input_to_composer();
                     }
                 }
                 Ok(None) => break,
