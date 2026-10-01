@@ -133,26 +133,40 @@ variant-runs, 5 assertions-only scenarios (7 variant-runs — two of them carry 
 `.80x24` variant) with measured reasons, plus 3 surfaces in `excluded.json`.
 `verify PASSED: 0 drift` as of iter-528. 803 TUI tests green.
 
-**Wave 3 — 4 agents, 38 files, in flight.** Migrating every surface onto
-`modal_frame` + the role palette. Two-thirds verified: builds clean, 0 warnings,
-fmt clean, 803 tests pass.
+**Wave 3 — LANDED (iter-533 goldens, iter-534 code).** Four agents, 38 files,
+zero file conflicts. 16 sizing formulas and 5 title idioms collapsed into
+`modal_frame`; ~40 colour literals became theme-repainted roles; 4 border-less
+dialogs gained frames. 116 goldens regenerated centrally. `verify PASSED: 0 drift`,
+803 tests, 0 warnings, fmt clean.
 
 ---
 
-## 3. Wave 3 close-out (current)
+## 3. Wave 3 close-out (DONE — kept as the record)
 
-Single integrator, sequential. No further parallel agents.
+Single integrator, sequential. No parallel agents. All five steps completed:
 
-1. ~~Run `prove`~~ — double-render, byte-diff, regenerate goldens, third-render
-   re-verify. Confirms the new baselines are *deterministic*, not just current.
-2. Run `verify` — expect `PASSED: 0 drift`.
-3. Commit the ~57 regenerated goldens **as one commit**, separate from the code
-   commit, so a reviewer can see "38 files changed" and "57 baselines changed"
-   as distinct facts.
-4. Review the golden diff for **attributability**: each agent predicted which
-   surfaces would move. A drift on an unpredicted surface means something
-   unintended changed.
-5. Commit the 38 source files, with per-group attribution in the body.
+1. ~~`prove`~~ — double-render, byte-diff, regenerate, third-render re-verify.
+   **58 proven, 0 unstable on the third run.**
+2. ~~`verify`~~ — `PASSED: 0 drift` across 60 gated scenarios.
+3. ~~Goldens committed separately~~ (iter-533, 91 files) from the code
+   (iter-534, 41 files), so a reviewer sees two distinct facts.
+4. ~~Reviewed for attributability.~~ Every drifted surface was predicted by the
+   agent that owned it. `prove` caught the two exceptions itself — see below.
+5. ~~Code committed~~ with per-group attribution.
+
+### What `prove` caught that nothing else would have
+
+Neither a build nor `cargo test` executes screen assertions — only golden
+regeneration does. That step is **not skippable**, and it earned its place:
+
+- `global-search` @120x40 asserted `contains:Esc: close`. Agent 3C had deliberately
+  decomposed a hint crammed into the title (`Search [Esc: close, Enter: insert, …]`)
+  into a title row plus a real bottom hint. The assertion was **pinning the exact
+  defect the migration exists to remove**.
+- `global-search` @80x24 asserted the same string and **correctly failed**: at that
+  width the primitive truncates the hint and `Esc` appears nowhere. Right
+  narrow-terminal behaviour, so the 80x24 variant now pins only that the surface
+  renders, and hint elision is logged as Wave 4 item 4.5 rather than papered over.
 
 ### What the migration was expected to change (agents' own predictions)
 
