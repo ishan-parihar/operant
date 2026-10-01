@@ -11,9 +11,11 @@ use ratatui::{
 use std::path::{Path, PathBuf};
 
 use crate::tui::overlays::{
-    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
+    HINT_ESC, begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area,
+    render_modal_title_buf,
 };
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -42,7 +44,7 @@ impl AgentStatus {
 
     pub fn color(&self) -> Color {
         match self {
-            Self::Idle => Color::DarkGray,
+            Self::Idle => theme::dim_color(),
             Self::Running => theme_colors::success(),
             Self::WaitingForTool => theme_colors::warning(),
             Self::Complete => theme_colors::accent(),
@@ -547,7 +549,7 @@ pub fn render_agents_menu(state: &AgentsMenuState, area: Rect, buf: &mut Buffer)
             " tab move  ·  ctrl+s save  ·  esc back".to_string(),
         ),
     };
-    render_modal_title_buf(buf, layout.header_area, &title, "esc");
+    render_modal_title_buf(buf, layout.header_area, &title, HINT_ESC);
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         Paragraph::new(Line::from(vec![Span::styled(
             subtitle,

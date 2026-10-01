@@ -8,12 +8,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame, modal_layout};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired width. `modal_layout` clamps it and floors it at `MIN_MODAL_W`.
+const DIALOG_WIDTH: u16 = 64;
+/// Desired height in the non-URL statuses.
+const DIALOG_HEIGHT: u16 = 14;
 
 // ---------------------------------------------------------------------------
 // Status enum
@@ -165,60 +171,49 @@ pub enum DeviceAuthEvent {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Render the device auth dialog overlay — OpenCode-style: dark overlay, no
-/// border, minimal and polished.
+/// Render the device auth dialog overlay: dark overlay, rounded modal frame,
+/// status-dependent body.
 pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogState, area: Rect) {
     if !state.visible {
         return;
     }
 
     let accent = theme_colors::accent();
-    let dim = theme_colors::DIALOG_DIM;
-    let dialog_bg = theme_colors::panel_bg();
-    let green = Color::Rgb(80, 200, 120);
+    let dim = theme::dim_color();
 
-    // ── Darken the entire background ──
-    render_dark_overlay(frame, area);
+    let title_text = format!("Connect {}", state.provider_name);
 
-    // ── Dialog size — taller when showing a browser URL ──
-    let width = 64u16.min(area.width.saturating_sub(4));
-    let height = if matches!(state.status, DeviceAuthStatus::BrowserAuth)
+    // ── Desired size — taller when showing a browser URL ──
+    // The URL wraps against the *clamped* width, so ask `modal_layout` for the
+    // geometry once before counting its rows.
+    let probe = modal_layout(area, DIALOG_WIDTH, DIALOG_HEIGHT, 1, 0);
+    let desired_height = if matches!(state.status, DeviceAuthStatus::BrowserAuth)
         && !state.auth_url.is_empty()
     {
-        let url_lines = (state.auth_url.len() as u16).saturating_add(width.saturating_sub(4) - 1)
-            / width.saturating_sub(4).max(1);
-        (14 + url_lines + 2).min(area.height.saturating_sub(4))
+        let wrap_width = probe.body_area.width.saturating_sub(2).max(1);
+        let url_lines = (state.auth_url.len() as u16).saturating_add(wrap_width - 1) / wrap_width;
+        DIALOG_HEIGHT + url_lines + 2
     } else {
-        14u16
+        DIALOG_HEIGHT
     };
-    let dialog_area = centered_rect(width, height, area);
 
-    // ── Fill dialog background (no border) ──
-    render_dialog_bg(frame, dialog_area);
-
-    let inner = Rect {
-        x: dialog_area.x + 1,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(2),
-        height: dialog_area.height.saturating_sub(2),
-    };
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: &title_text,
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: desired_height,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
+    let inner = layout.body_area;
 
     // ── Build lines ──
     let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Title row: "Connect {provider}" on left, "esc" on right
-    let title_text = format!("Connect {}", state.provider_name);
-    let title_pad = inner.width.saturating_sub(title_text.len() as u16 + 5) as usize;
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {}", title_text),
-            Style::default().fg(accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>width$}", "esc ", width = title_pad),
-            Style::default().fg(dim),
-        ),
-    ]));
 
     // Status-dependent content
     match &state.status {
@@ -238,7 +233,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " Enter this code:",
-                Style::default().fg(theme_colors::DIALOG_MUTED),
+                Style::default().fg(theme::ai_text()),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -273,7 +268,7 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     " If browser didn't open, visit:",
-                    Style::default().fg(theme_colors::DIALOG_MUTED),
+                    Style::default().fg(theme::ai_text()),
                 )));
                 lines.push(Line::from(""));
                 // Wrap URL to dialog width
@@ -308,7 +303,9 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 " \u{2714} Connected successfully!",
-                Style::default().fg(green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::success_color())
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -325,6 +322,8 @@ pub fn render_device_auth_dialog(frame: &mut Frame, state: &DeviceAuthDialogStat
         }
     };
 
-    let para = Paragraph::new(lines).bg(dialog_bg);
-    frame.render_widget(para, inner);
+    frame.render_widget(
+        Paragraph::new(lines).bg(theme_colors::panel_bg()),
+        layout.body_area,
+    );
 }

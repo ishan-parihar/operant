@@ -9,12 +9,18 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired size. `modal_layout` clamps both axes against the area and floors
+/// them at `MIN_MODAL_W` / `MIN_MODAL_H`.
+const DIALOG_WIDTH: u16 = 72;
+const DIALOG_HEIGHT: u16 = 22;
 
 // ---------------------------------------------------------------------------
 // State
@@ -74,24 +80,20 @@ pub fn render_bypass_permissions_dialog(
         return;
     }
 
-    let dialog_width = 72u16.min(area.width.saturating_sub(4));
-    let dialog_height = 22u16.min(area.height.saturating_sub(4));
-    let dialog_area = centered_rect(dialog_width, dialog_height, area);
-
-    frame.render_widget(Clear, dialog_area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Line::from(vec![Span::styled(
-            " WARNING: Bypass Permissions Mode ",
-            Style::default()
-                .fg(theme_colors::error())
-                .add_modifier(Modifier::BOLD),
-        )]))
-        .border_style(Style::default().fg(theme_colors::error()));
-
-    let inner = block.inner(dialog_area);
-    frame.render_widget(block, dialog_area);
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "WARNING: Bypass Permissions Mode",
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: DIALOG_HEIGHT,
+            header_height: 1,
+            footer_height: 0,
+            // The border itself carries the meaning: this is a warning.
+            border_fg: theme::error_color(),
+        },
+    );
 
     // Body text (matches TS dialog copy)
     let mut lines: Vec<Line<'static>> = vec![Line::from(vec![Span::styled(
@@ -112,24 +114,24 @@ pub fn render_bypass_permissions_dialog(
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "This mode should only be used in a sandboxed container or VM",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         "that has restricted internet access and can easily be restored",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         "if damaged.",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "By proceeding, you accept all responsibility for actions taken",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         "while running in Bypass Permissions mode.",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     lines.push(Line::from(""));
     lines.push(Line::from(""));
@@ -151,23 +153,24 @@ pub fn render_bypass_permissions_dialog(
     };
 
     lines.push(Line::from(vec![
-        Span::styled("  [1] ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  [1] ", Style::default().fg(theme::dim_color())),
         Span::styled("No, exit", opt_no_style),
         Span::raw("        "),
-        Span::styled("  [2] ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  [2] ", Style::default().fg(theme::dim_color())),
         Span::styled("Yes, I accept", opt_yes_style),
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "  ↑↓ or 1/2 to select  ·  Enter to confirm",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::ITALIC),
     )]));
 
-    Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .render(inner, frame.buffer_mut());
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        layout.body_area,
+    );
 }
 
 // ---------------------------------------------------------------------------

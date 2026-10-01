@@ -3,14 +3,19 @@
 // Extracted from dialogs.rs. Owns McpApprovalChoice, McpApprovalDialogState,
 // the render_mcp_approval_dialog renderer, and handle_mcp_approval_key.
 
-use super::*;
-use crate::tui::theme_colors;
+use crate::tui::overlays::{HINT_ESC, MIN_MODAL_H, ModalSpec, modal_frame_buf, modal_layout};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
+use ratatui::widgets::{Paragraph, Widget};
+
+use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired width. `modal_layout` clamps it and floors it at `MIN_MODAL_W`.
+const DIALOG_WIDTH: u16 = 54;
 
 // ---------------------------------------------------------------------------
 // MCP Server Approval Dialog
@@ -142,51 +147,50 @@ impl Default for McpApprovalDialogState {
 /// low-level `Buffer`-based variant required by the spec.
 ///
 /// Layout:
-/// ┌─ MCP Server Connection ──────────────────────────┐
-/// │                                                   │
-/// │  Server:  my-server                               │
+/// ╭─ MCP Server Connection ─────────────────── Esc to close ─╮
+/// │                                                  │
+/// │  Server:  my-server                              │
 /// │  URL:     wss://example.com/mcp                   │
-/// │                                                   │
+/// │                                                  │
 /// │  Exposes 3 tools:                                 │
 /// │    • tool_one                                     │
-/// │    • tool_two                                     │
-/// │    • tool_three                                   │
-/// │                                                   │
-/// │  ▶ `1` Allow this session                         │
-/// │    `2` Always allow                               │
-/// │    `3` Deny                                       │
-/// └───────────────────────────────────────────────────┘
+/// │    tool_two                                       │
+/// │    tool_three                                     │
+/// │                                                  │
+/// │  ▶ [1] Allow this session                        │
+/// │    [2] Always allow                               │
+/// │    [3] Deny                                       │
+/// ╰──────────────────────────────────────────────────╯
 pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, buf: &mut Buffer) {
     if !state.visible {
         return;
     }
 
-    let dialog_width = 54u16.min(area.width.saturating_sub(4));
-    let text_width = (dialog_width as usize).saturating_sub(4);
+    let dim = theme::dim_color();
 
-    // Count lines: header rows + tool list + blank lines + 3 option rows + trailing blank.
+    // Truncation is measured against the *clamped* width, which only
+    // `modal_layout` knows; ask once, then let `modal_frame_buf` recompute the
+    // identical layout to paint the chrome.
+    let probe = modal_layout(area, DIALOG_WIDTH, MIN_MODAL_H, 1, 0);
+    let text_width = (probe.dialog_area.width as usize).saturating_sub(4);
+
+    // Count body rows: server row + url/command row + blank + optional tool
+    // block + 3 option rows + trailing blank.
     let tool_display_count = state.tool_names.len().min(5);
     let has_tools = tool_display_count > 0;
     let has_url_or_cmd = state.server_url.is_some() || state.server_command.is_some();
 
-    let content_height: u16 = 1  // blank after border
-        + 1  // "Server: ..."
+    let content_height: u16 = 1 // "Server: ..."
         + if has_url_or_cmd { 1 } else { 0 }
-        + 1  // blank
+        + 1 // blank
         + if has_tools { 1 + tool_display_count as u16 + 1 } else { 0 } // header + items + blank
-        + 3  // 3 option rows
+        + 3 // 3 option rows
         + 1; // trailing blank
 
-    let dialog_height = (content_height + 2).min(area.height.saturating_sub(4));
-    let dialog_area = centered_rect(dialog_width, dialog_height, area);
-
-    // Clear the area behind the dialog.
-    Clear.render(dialog_area, buf);
+    // One title row + the body rows + the two border rows the primitive insets.
+    let desired_height = 1 + content_height + 2;
 
     let mut lines: Vec<Line> = Vec::new();
-
-    // Blank line after the top border.
-    lines.push(Line::from(""));
 
     // Server name.
     let server_label = format!(
@@ -194,7 +198,7 @@ pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, bu
         truncate_str(&state.server_name, text_width.saturating_sub(10))
     );
     lines.push(Line::from(vec![
-        Span::styled("  Server:  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Server:  ", Style::default().fg(dim)),
         Span::styled(
             truncate_str(&state.server_name, text_width.saturating_sub(10)),
             Style::default()
@@ -207,7 +211,7 @@ pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, bu
     // URL or command.
     if let Some(ref url) = state.server_url {
         lines.push(Line::from(vec![
-            Span::styled("  URL:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  URL:     ", Style::default().fg(dim)),
             Span::styled(
                 truncate_str(url, text_width.saturating_sub(10)),
                 Style::default().fg(theme_colors::text()),
@@ -215,7 +219,7 @@ pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, bu
         ]));
     } else if let Some(ref cmd) = state.server_command {
         lines.push(Line::from(vec![
-            Span::styled("  Command: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Command: ", Style::default().fg(dim)),
             Span::styled(
                 truncate_str(cmd, text_width.saturating_sub(10)),
                 Style::default().fg(theme_colors::text()),
@@ -239,11 +243,11 @@ pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, bu
                     String::new()
                 },
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(dim),
         )]));
         for name in state.tool_names.iter().take(5) {
             lines.push(Line::from(vec![
-                Span::styled("    \u{2022} ", Style::default().fg(Color::DarkGray)),
+                Span::styled("    \u{2022} ", Style::default().fg(dim)),
                 Span::styled(
                     truncate_str(name, text_width.saturating_sub(6)),
                     Style::default().fg(theme_colors::text()),
@@ -263,7 +267,7 @@ pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, bu
                 .fg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(dim)
         };
         let label_style = if is_selected {
             Style::default().add_modifier(Modifier::BOLD)
@@ -286,18 +290,21 @@ pub fn render_mcp_approval_dialog(state: &McpApprovalDialogState, area: Rect, bu
         ]));
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            " MCP Server Connection ",
-            Style::default()
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
-        ))
-        .border_style(Style::default().fg(theme_colors::accent()));
+    let layout = modal_frame_buf(
+        buf,
+        area,
+        &ModalSpec {
+            title: "MCP Server Connection",
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: desired_height,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
-    let para = Paragraph::new(lines).block(block);
-    para.render(dialog_area, buf);
+    Paragraph::new(lines).render(layout.body_area, buf);
 }
 
 /// Handle a key event while the MCP approval dialog is open.

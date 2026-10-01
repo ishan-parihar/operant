@@ -5,9 +5,12 @@
 use super::*;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
+
+use crate::tui::overlays::{HINT_ESC, modal_layout, render_modal_title_frame};
+use crate::tui::vendor::style::theme;
 
 pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: Rect) {
     if !screen.visible {
@@ -16,14 +19,13 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
 
     render_dark_overlay(frame, area);
 
-    // 80% width, 90% height, centred
-    let w = (area.width * 4 / 5)
-        .max(60)
-        .min(area.width.saturating_sub(2));
-    let h = (area.height * 9 / 10)
-        .max(20)
-        .min(area.height.saturating_sub(2));
-    let popup = centered_rect(w, h, area);
+    // 80% width, 90% height, centred. `modal_layout` owns the clamp against
+    // the area and the readable floor. This surface is a borderless panel, so
+    // only the dialog rect is taken from it; the content inset below is this
+    // screen's own two-column gutter.
+    let desired_width = (area.width * 4 / 5).max(60);
+    let desired_height = (area.height * 9 / 10).max(20);
+    let popup = modal_layout(area, desired_width, desired_height, 1, 1).dialog_area;
     render_dialog_bg(frame, popup);
 
     // Inset inner area
@@ -57,34 +59,15 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
     let description_area = layout[4];
     let footer_area = layout[5];
 
-    // Header
-    let title = Line::from(vec![
-        Span::styled(
-            " Settings",
-            Style::default()
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" — Operant", Style::default().fg(theme_colors::muted())),
-        Span::styled(
-            format!(
-                "{:>width$}",
-                "Esc close",
-                width = inner.width.saturating_sub(19) as usize
-            ),
-            Style::default().fg(theme_colors::muted()),
-        ),
-    ]);
-    frame.render_widget(
-        Paragraph::new(title).style(Style::default().bg(theme_colors::panel_bg())),
-        header_area,
-    );
+    // Header — the one modal title format, with the canonical dismissal hint
+    // on the right of the same row.
+    render_modal_title_frame(frame, header_area, "Settings — Operant", HINT_ESC);
 
     // Search
     let search_line = modal_search_line(
         &screen.search_query,
         "Type to search settings...",
-        Color::DarkGray,
+        theme::dim_color(),
         theme_colors::accent(),
     );
     frame.render_widget(
@@ -137,7 +120,7 @@ pub fn render_settings_screen(frame: &mut Frame, screen: &SettingsScreen, area: 
         String::new()
     };
     let desc_para = Paragraph::new(desc_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(theme::dim_color()))
         .alignment(Alignment::Left)
         .block(Block::default().padding(ratatui::widgets::Padding::new(1, 0, 1, 0)));
     frame.render_widget(desc_para, description_area);
@@ -210,7 +193,7 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
 
     if filtered.is_empty() {
         let para = Paragraph::new("No settings match your search.")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(theme::dim_color()));
         frame.render_widget(para, area);
         return;
     }
@@ -233,8 +216,13 @@ fn render_settings_list(frame: &mut Frame, screen: &SettingsScreen, area: Rect) 
         };
 
         let row_style = if is_selected {
+            // The selected row is a chip on `accent()`, so its foreground is the
+            // role for text on a selection background. A bare `Color::Black`
+            // here is remapped onto the `user_bg` role per frame, which is a
+            // background role — value-preserving today and wrong the moment
+            // `user_bg` is configured.
             Style::default()
-                .fg(Color::Black)
+                .fg(theme_colors::on_selection())
                 .bg(theme_colors::accent())
                 .add_modifier(Modifier::BOLD)
         } else {

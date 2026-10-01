@@ -53,8 +53,14 @@ const TRUNCATE_USER_PROMPT_TAIL_CHARS: usize = 2_500;
 // than frozen into a `const` here: the accessors are runtime `fn`s (the active
 // palette lives behind a lock), so a `const` would pin every theme to the
 // default theme's amber.
-const TRANSCRIPT_USER_BG: Color = Color::Rgb(23, 23, 31);
-const TRANSCRIPT_CHIP_BG: Color = Color::Rgb(31, 31, 41);
+//
+// `TRANSCRIPT_USER_BG` / `TRANSCRIPT_CHIP_BG` used to sit in this list. Both were
+// read only by `helpers.rs`, so their use sites now name the role directly:
+// `UserBg` for the message panel and `SelectionBg` for the chip raised above it.
+// The remaining five are still read *as values* by `transcript.rs`,
+// `commands.rs` and `tools.rs`; turning a `const` into a role accessor turns it
+// into an `fn` and breaks every one of those call sites, so they migrate with
+// those files rather than ahead of them.
 const TRANSCRIPT_TEXT: Color = Color::Rgb(236, 236, 241);
 const TRANSCRIPT_MUTED: Color = Color::Rgb(139, 139, 153);
 const TRANSCRIPT_SUBTLE: Color = Color::Rgb(112, 112, 126);

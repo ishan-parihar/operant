@@ -10,9 +10,10 @@ use ratatui::{
 };
 
 use crate::tui::overlays::{
-    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
+    HINT_ESC, begin_modal_buf, cycle_next, cycle_prev, render_modal_title_buf,
 };
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Data types (view-level; mirrors cc_mcp types)
@@ -48,7 +49,7 @@ impl McpViewStatus {
         match self {
             Self::Connected => theme_colors::success(),
             Self::Connecting => theme_colors::warning(),
-            Self::Disconnected => Color::DarkGray,
+            Self::Disconnected => theme::dim_color(),
             Self::Error => theme_colors::error(),
         }
     }
@@ -201,69 +202,40 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         return;
     }
 
-    let w = (area.width * 9 / 10).max(50).min(area.width);
-    let h = (area.height * 4 / 5).max(15).min(area.height);
-    let dialog = centered_rect(w, h, area);
-    render_dark_overlay_buf(buf, area);
-    render_dialog_bg_buf(buf, dialog);
+    // Desired size is the panel's natural 90% / 80% of the frame; the modal
+    // primitive owns the clamp, the one-cell margin and the readable floors
+    // (the old `.max(50)` / `.max(15)` duplicated that rule locally).
+    let modal = begin_modal_buf(
+        buf,
+        area,
+        area.width.saturating_mul(9) / 10,
+        area.height.saturating_mul(4) / 5,
+        1,
+        1,
+    );
 
-    let inner = Rect {
-        x: dialog.x + 2,
-        y: dialog.y + 1,
-        width: dialog.width.saturating_sub(4),
-        height: dialog.height.saturating_sub(2),
-    };
-
-    if inner.height < 5 {
+    if modal.body_area.height < 5 {
         return;
     }
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-
-    let title = Line::from(vec![
-        Span::styled(
-            " MCP",
-            Style::default()
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
+    // Title on the header row, with the server/tool counts folded into the one
+    // canonical title composer and the hint right-aligned on the same row.
+    render_modal_title_buf(
+        buf,
+        modal.header_area,
+        &format!(
+            "MCP — {} servers · {} tools",
+            state.servers.len(),
+            state.filtered_tools().len()
         ),
-        Span::styled(
-            format!(
-                " — {} servers · {} tools",
-                state.servers.len(),
-                state.filtered_tools().len()
-            ),
-            Style::default().fg(theme_colors::muted()),
-        ),
-        Span::styled(
-            format!(
-                "{:>width$}",
-                "Esc close",
-                width = inner.width.saturating_sub(26) as usize
-            ),
-            Style::default().fg(theme_colors::muted()),
-        ),
-    ]);
-    Paragraph::new(title)
-        .style(
-            Style::default()
-                .bg(theme_colors::panel_bg())
-                .fg(theme_colors::text()),
-        )
-        .render(layout[0], buf);
+        HINT_ESC,
+    );
 
     // Split: servers (left 35%) | tools (right 65%)
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(layout[1]);
+        .split(modal.body_area);
 
     render_server_list(state, panes[0], buf);
 
@@ -319,7 +291,7 @@ pub fn render_mcp_view(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 .bg(theme_colors::panel_bg())
                 .fg(theme_colors::muted()),
         )
-        .render(layout[2], buf);
+        .render(modal.footer_area, buf);
 }
 
 fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
@@ -394,7 +366,7 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         Paragraph::new(Line::from(vec![Span::styled(
             label.to_string(),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::ITALIC),
         )]))
         .render(
@@ -429,7 +401,7 @@ fn render_server_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
                 row_text,
                 if sel {
                     Style::default()
-                        .fg(Color::Black)
+                        .fg(theme::user_bg())
                         .bg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD)
                 } else {
@@ -582,7 +554,7 @@ fn render_tool_list(state: &McpViewState, area: Rect, buf: &mut Buffer) {
             row,
             if sel {
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme::user_bg())
                     .bg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD)
             } else {
@@ -675,7 +647,7 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
     let tools = state.filtered_tools();
     let Some(tool) = tools.get(state.selected_tool) else {
         Paragraph::new("Select a tool to view details.")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme::dim_color()))
             .render(inner, buf);
         return;
     };
@@ -695,12 +667,12 @@ fn render_tool_detail(state: &McpViewState, area: Rect, buf: &mut Buffer) {
         lines.push(Line::default());
         lines.push(Line::from(vec![Span::styled(
             "Input:",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
         for line in schema.lines().take(10) {
             lines.push(Line::from(vec![Span::styled(
                 format!("  {}", line),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )]));
         }
     }

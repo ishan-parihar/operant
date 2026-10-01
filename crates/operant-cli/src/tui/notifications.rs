@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use unicode_width::UnicodeWidthStr;
 
 /// Severity / visual style of a notification.
@@ -164,7 +165,10 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
     };
 
     let color = notif.kind.color();
-    let bg = Color::Rgb(18, 18, 22); // slightly elevated from terminal bg
+    // A toast raised above the app's `user_bg` base fill. `SelectionBg` is the
+    // palette's only raised-surface role; `vendor/**` is frozen, so a dedicated
+    // toast role is not available here.
+    let bg = theme::selection_bg_color();
 
     // Clear the area so the toast has a distinct background.
     frame.render_widget(Clear, toast_area);

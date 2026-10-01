@@ -7,6 +7,7 @@ use super::*;
 use crate::tui::app::TurnMetadata;
 use crate::tui::render::{display_width, take_width};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
@@ -48,7 +49,7 @@ pub(crate) fn indent_lines(
 }
 
 pub(crate) fn apply_block_style(mut line: Line<'static>, width: u16) -> Line<'static> {
-    let bg = TRANSCRIPT_USER_BG;
+    let bg = theme::user_bg();
     for span in &mut line.spans {
         if span.style.fg.is_none() {
             span.style = span.style.fg(TRANSCRIPT_TEXT);
@@ -77,7 +78,7 @@ pub(crate) fn empty_block_line(width: u16) -> Line<'static> {
     apply_block_style(Line::from(""), width)
 }
 pub(crate) fn render_attachment_chip(kind: &str, label: String) -> Line<'static> {
-    render_attachment_chip_colored(kind, label, theme_colors::accent(), Color::Black)
+    render_attachment_chip_colored(kind, label, theme_colors::accent(), theme::user_bg())
 }
 
 pub(crate) fn render_file_chip(label: String) -> Line<'static> {
@@ -107,7 +108,9 @@ fn render_attachment_chip_colored(
         ),
         Span::styled(
             format!(" {} ", label),
-            Style::default().fg(TRANSCRIPT_MUTED).bg(TRANSCRIPT_CHIP_BG),
+            Style::default()
+                .fg(TRANSCRIPT_MUTED)
+                .bg(theme::selection_bg_color()),
         ),
     ])
 }

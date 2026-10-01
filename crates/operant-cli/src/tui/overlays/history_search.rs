@@ -8,10 +8,12 @@
 use super::*;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
+
+use crate::tui::vendor::style::theme;
 
 // ============================================================================
 // HistorySearchOverlay
@@ -440,14 +442,28 @@ pub fn render_history_search_overlay(
     }
 
     const VISIBLE_MATCHES: usize = 8;
-    let dialog_width = 72u16.min(area.width.saturating_sub(4));
     let match_count = overlay.matches.len().max(1);
     let rows = VISIBLE_MATCHES.min(match_count) as u16;
-    // +2 for blank separator + hint footer line, +2 for block borders
-    let dialog_height = (6 + rows).min(area.height.saturating_sub(4));
-    let dialog_area = centered_rect(dialog_width, dialog_height, area);
-
-    frame.render_widget(Clear, dialog_area);
+    // Content-derived height: the query row, a blank, up to `VISIBLE_MATCHES`
+    // match rows, a blank and the navigation footer — plus the modal's own
+    // chrome (two border rows and the title row). `modal_frame` owns the clamp
+    // and the readable floor, so this states only the desired size.
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "History Search",
+            hint: HINT_ESC,
+            width: 72,
+            height: rows + 7,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
+    // The clamped width: a row truncated to `dialog_width` has to agree with
+    // the frame the primitive just laid out.
+    let dialog_width = layout.dialog_area.width;
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -466,7 +482,7 @@ pub fn render_history_search_overlay(
         Span::styled(
             result_count_str,
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::ITALIC),
         ),
     ]));
@@ -475,7 +491,7 @@ pub fn render_history_search_overlay(
     if overlay.matches.is_empty() {
         lines.push(Line::from(vec![Span::styled(
             "  (no matches)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
     } else {
         let start = overlay
@@ -556,7 +572,7 @@ pub fn render_history_search_overlay(
                 row_spans.push(Span::styled(
                     time_suffix,
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::dim_color())
                         .add_modifier(Modifier::ITALIC),
                 ));
             }
@@ -565,22 +581,17 @@ pub fn render_history_search_overlay(
         }
     }
 
-    // Footer hint bar (below the match list)
+    // Footer hint bar (below the match list). The dismissal hint now lives on
+    // the bottom border as `HINT_ESC`, so this row keeps the navigation prose.
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "  \u{2191}\u{2193} navigate  \u{00b7}  Enter select  \u{00b7}  p pin/unpin  \u{00b7}  Esc cancel",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-        ),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "  \u{2191}\u{2193} navigate  \u{00b7}  Enter select  \u{00b7}  p pin/unpin",
+        Style::default()
+            .fg(theme::dim_color())
+            .add_modifier(Modifier::ITALIC),
+    )]));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" History Search ")
-        .border_style(Style::default().fg(theme_colors::accent()));
-
-    let para = Paragraph::new(lines).block(block);
-    frame.render_widget(para, dialog_area);
+    frame.render_widget(Paragraph::new(lines), layout.body_area);
 }
 
 /// Build a list of `Span`s for `text`, highlighting the bytes at
@@ -636,7 +647,7 @@ fn build_highlighted_spans<'a>(
     if truncated {
         spans.push(Span::styled(
             "…".to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         ));
     }
     spans

@@ -2,14 +2,15 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::overlays::{
-    centered_rect, cycle_next, cycle_prev, render_dark_overlay_buf, render_dialog_bg_buf,
+    HINT_ESC, begin_modal_buf, cycle_next, cycle_prev, render_modal_title_buf,
 };
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,40 +126,17 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
         return;
     }
 
-    // Height: 2 border + 1 blank + N files + 1 blank + 1 footer = N + 5
-    let dialog_height = (state.files.len() as u16 + 6).max(8);
-    let dialog_area = centered_rect(70, dialog_height, area);
-    render_dark_overlay_buf(buf, area);
-    render_dialog_bg_buf(buf, dialog_area);
+    // Height is derived from content (2 border + 1 title + 1 blank + N files
+    // + 1 blank + 1 footer) and handed to the modal primitive unclamped — it
+    // owns the clamp and the readable floors, which this panel previously had
+    // none of (its height could exceed the terminal).
+    let dialog_height = state.files.len() as u16 + 6;
+    let layout = begin_modal_buf(buf, area, 70, dialog_height, 1, 1);
+    let inner = layout.body_area;
 
-    let inner = Rect {
-        x: dialog_area.x + 2,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(4),
-        height: dialog_area.height.saturating_sub(2),
-    };
+    render_modal_title_buf(buf, layout.header_area, "Memory — choose a file", HINT_ESC);
 
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled(
-            " Memory",
-            Style::default()
-                .fg(theme_colors::accent())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " — choose a file",
-            Style::default().fg(theme_colors::muted()),
-        ),
-        Span::styled(
-            format!(
-                "{:>width$}",
-                "Esc close",
-                width = inner.width.saturating_sub(24) as usize
-            ),
-            Style::default().fg(theme_colors::muted()),
-        ),
-    ]));
     lines.push(Line::from(""));
 
     for (i, file) in state.files.iter().enumerate() {
@@ -181,7 +159,7 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
                     inner.width,
                 ),
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme::user_bg())
                     .bg(theme_colors::accent())
                     .add_modifier(Modifier::BOLD),
             )]));
@@ -196,12 +174,6 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        "  \u{2191}\u{2193} navigate  Enter select  Esc close",
-        Style::default().fg(theme_colors::muted()),
-    )]));
-
     let para = Paragraph::new(lines)
         .style(
             Style::default()
@@ -212,6 +184,14 @@ pub fn render_memory_file_selector(state: &MemoryFileSelectorState, area: Rect, 
 
     use ratatui::widgets::Widget;
     para.render(inner, buf);
+
+    Paragraph::new(Line::from(vec![Span::styled(
+        "  \u{2191}\u{2193} navigate  Enter select  Esc close",
+        Style::default().fg(theme_colors::muted()),
+    )]))
+    .style(Style::default().bg(theme_colors::panel_bg()))
+    .alignment(Alignment::Left)
+    .render(layout.footer_area, buf);
 }
 
 fn pad_line(text: &str, width: u16) -> String {

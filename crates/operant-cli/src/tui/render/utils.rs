@@ -3,6 +3,7 @@
 use crate::tui::app::App;
 use crate::tui::notifications::Notification;
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -127,7 +128,7 @@ pub(crate) fn render_error_modal(
         height: 1,
     };
     let header_style = Style::default()
-        .bg(Color::Rgb(60, 15, 15))
+        .bg(theme::user_bg())
         .fg(theme_colors::error());
     let header_para =
         Paragraph::new("  ⚠ Error  ").style(header_style.add_modifier(Modifier::BOLD));
@@ -141,7 +142,7 @@ pub(crate) fn render_error_modal(
     };
     let sep_line = Paragraph::new(Line::from(Span::styled(
         "─".repeat(sep_area.width as usize),
-        Style::default().fg(Color::Rgb(80, 20, 20)),
+        Style::default().fg(theme::border_color()),
     )));
     frame.render_widget(sep_line, sep_area);
 
@@ -156,7 +157,7 @@ pub(crate) fn render_error_modal(
     };
 
     let body_para = Paragraph::new(notification.message.as_str())
-        .style(Style::default().fg(Color::Rgb(220, 220, 220)))
+        .style(Style::default().fg(theme::ai_text()))
         .wrap(Wrap { trim: true });
     frame.render_widget(body_para, body_area);
 }

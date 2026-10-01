@@ -31,14 +31,20 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::tui::adapter_types::{FREE_CATALOG, FreeUpstream};
 
-use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired size. `modal_layout` clamps both axes against the area and floors
+/// them at `MIN_MODAL_W` / `MIN_MODAL_H`.
+const DIALOG_WIDTH: u16 = 84;
+const DIALOG_HEIGHT: u16 = 24;
 
 /// One row in the dialog — one provider's name, URL, and the user's
 /// (possibly empty) typed key.
@@ -209,24 +215,9 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
     }
 
     let accent = theme_colors::accent();
-    let dim = theme_colors::DIALOG_DIM;
-    let muted = theme_colors::DIALOG_MUTED;
-    let tip = Color::Rgb(120, 210, 150);
-    let dialog_bg = theme_colors::panel_bg();
-
-    render_dark_overlay(frame, area);
-
-    let width = 84u16.min(area.width.saturating_sub(4));
-    let height = 24u16.min(area.height.saturating_sub(2));
-    let dialog_area = centered_rect(width, height, area);
-    render_dialog_bg(frame, dialog_area);
-
-    let inner = Rect {
-        x: dialog_area.x + 1,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(2),
-        height: dialog_area.height.saturating_sub(2),
-    };
+    let dim = theme::dim_color();
+    let muted = theme::ai_text();
+    let tip = theme::success_color();
 
     let total = state.fields.len();
     let filled = state.filled_count();
@@ -234,10 +225,6 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
         "Connect Free (multi-provider \u{2014} {}/{} keys)",
         filled, total
     );
-    let title_pad = inner
-        .width
-        .saturating_sub(crate::tui::render::display_width(&title_text) as u16 + 5)
-        as usize;
 
     let confirm_hint = if state.can_submit() {
         format!(
@@ -249,20 +236,21 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
         " paste at least 1 key — as many as you can add is better".to_string()
     };
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: &title_text,
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: DIALOG_HEIGHT,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
-    // Title row
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {}", title_text),
-            Style::default().fg(accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>width$}", "esc ", width = title_pad),
-            Style::default().fg(dim),
-        ),
-    ]));
-    lines.push(Line::from(""));
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Description (one tight line) + tip.
     lines.push(Line::from(vec![Span::styled(
@@ -354,8 +342,10 @@ pub fn render_free_mode_dialog(frame: &mut Frame, state: &FreeModeDialogState, a
         Span::styled(confirm_hint, Style::default().fg(dim)),
     ]));
 
-    let para = Paragraph::new(lines).bg(dialog_bg);
-    frame.render_widget(para, inner);
+    frame.render_widget(
+        Paragraph::new(lines).bg(theme_colors::panel_bg()),
+        layout.body_area,
+    );
 }
 
 #[cfg(test)]

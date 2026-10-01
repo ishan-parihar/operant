@@ -6,7 +6,7 @@
 // input line for a custom answer.
 //
 // Layout:
-//   ┌─ Question ──────────────────────────────────────┐
+//   ╭─ Question ──────────────────────────── Esc to close ─╮
 //   │                                                 │
 //   │  How should the tests be run?                   │
 //   │                                                 │
@@ -17,27 +17,21 @@
 //   │  ❯ _                              (custom)      │
 //   │                                                 │
 //   │  Tab/↑↓: navigate   Enter: confirm   Esc: skip  │
-//   └─────────────────────────────────────────────────┘
+//   ╰─────────────────────────────────────────────────╯
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame_buf, modal_layout};
 use crate::tui::render::balanced_wrap;
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
-const BORDER_FG: Color = Color::Rgb(120, 120, 170);
-const TITLE_FG: Color = Color::Rgb(200, 160, 255);
-const QUESTION_FG: Color = Color::Rgb(230, 230, 230);
-const OPTION_FG: Color = Color::Rgb(190, 190, 210);
-const SELECTED_FG: Color = Color::Rgb(255, 255, 255);
-const SELECTED_BG: Color = Color::Rgb(55, 55, 90);
-const HINT_FG: Color = Color::Rgb(100, 100, 130);
-const INPUT_FG: Color = Color::Rgb(200, 255, 200);
-const NUMBER_FG: Color = Color::Rgb(150, 150, 200);
+/// Desired width. `modal_layout` owns the clamp and the `MIN_MODAL_W` floor.
+const DIALOG_WIDTH: u16 = 58;
 
 /// State for the ask-user question dialog overlay.
 #[derive(Default)]
@@ -206,75 +200,42 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
         .as_ref()
         .map(|v| v.len() as u16 + 1)
         .unwrap_or(0);
-    let height = (5 + question_lines + options_lines + 3).min(area.height.saturating_sub(2));
-    let width = 58u16.min(area.width.saturating_sub(4));
-    let modal_area = centered_rect(width, height, area);
+    // One title row + the content rows + the hint row, plus the two border rows
+    // the primitive insets. `modal_layout` bounds it; nothing clamps here.
+    let desired_height = 1 + 5 + question_lines + options_lines + 3;
 
-    // ---- background ----
-    for y in modal_area.top()..modal_area.bottom() {
-        for x in modal_area.left()..modal_area.right() {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(' ');
-                cell.set_bg(theme_colors::panel_bg());
-            }
-        }
-    }
+    // The wrap width and the option-row budget both depend on the *clamped*
+    // width, which only `modal_layout` knows. Ask it once for the geometry,
+    // then let `modal_frame_buf` recompute the identical layout to paint the
+    // chrome — same inputs, same rects.
+    let probe = modal_layout(area, DIALOG_WIDTH, desired_height, 1, 0);
+    let inner_w = probe.body_area.width as usize;
 
-    // ---- border ----
-    let border_style = Style::default().fg(BORDER_FG).bg(theme_colors::panel_bg());
-    let inner_w = modal_area.width.saturating_sub(2) as usize;
-    for y in modal_area.top()..modal_area.bottom() {
-        let is_top = y == modal_area.top();
-        let is_bot = y == modal_area.bottom() - 1;
-        for x in modal_area.left()..modal_area.right() {
-            let is_left = x == modal_area.left();
-            let is_right = x == modal_area.right() - 1;
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                let ch = match (is_top, is_bot, is_left, is_right) {
-                    (true, _, true, _) => '╭',
-                    (true, _, _, true) => '╮',
-                    (_, true, true, _) => '╰',
-                    (_, true, _, true) => '╯',
-                    (true, _, _, _) | (_, true, _, _) => '─',
-                    (_, _, true, _) | (_, _, _, true) => '│',
-                    _ => continue,
-                };
-                cell.set_char(ch);
-                cell.set_style(border_style);
-            }
-        }
-    }
-
-    // ---- title ----
-    let title = " Question ";
-    let title_x = modal_area.left() + 2;
-    let title_style = Style::default()
-        .fg(TITLE_FG)
-        .bg(theme_colors::panel_bg())
-        .add_modifier(Modifier::BOLD);
-    for (i, ch) in title.chars().enumerate() {
-        let x = title_x + i as u16;
-        if x < modal_area.right() - 1
-            && let Some(cell) = buf.cell_mut((x, modal_area.top()))
-        {
-            cell.set_char(ch);
-            cell.set_style(title_style);
-        }
-    }
+    // ---- frame (overlay, background, rounded border, title, hint) ----
+    let layout = modal_frame_buf(
+        buf,
+        area,
+        &ModalSpec {
+            title: "Question",
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: desired_height,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
     // ---- inner content area ----
-    let inner = Rect {
-        x: modal_area.x + 1,
-        y: modal_area.y + 1,
-        width: modal_area.width.saturating_sub(2),
-        height: modal_area.height.saturating_sub(2),
-    };
-
+    // The title now occupies the row the old top padding used to leave blank,
+    // so the content starts on the body's first row instead of one below it.
+    let inner = layout.body_area;
+    let last_row = inner.y + inner.height;
     let mut row = inner.y;
 
     macro_rules! write_line {
         ($row:expr, $line:expr) => {{
-            if $row < inner.y + inner.height {
+            if $row < last_row {
                 let r = Rect {
                     x: inner.x,
                     y: $row,
@@ -287,19 +248,18 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     }
 
     // Question text
-    row += 1; // top padding
     for wrap_line in balanced_wrap(&state.question, inner_w) {
         write_line!(
             row,
             Line::from(Span::styled(
                 wrap_line,
                 Style::default()
-                    .fg(QUESTION_FG)
+                    .fg(theme::ai_text())
                     .bg(theme_colors::panel_bg())
             ))
         );
         row += 1;
-        if row >= inner.y + inner.height {
+        if row >= last_row {
             return;
         }
     }
@@ -310,7 +270,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     // Option rows
     if let Some(ref opts) = state.options {
         for (i, opt) in opts.iter().enumerate() {
-            if row >= inner.y + inner.height - 2 {
+            if row >= last_row.saturating_sub(2) {
                 break;
             }
             let is_sel = !state.in_custom_input && state.selected_idx == i;
@@ -318,24 +278,30 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             let num_str = format!("{}", i + 1);
             let label = format!(" {}", opt);
             let style_bg = if is_sel {
-                SELECTED_BG
+                theme::selection_bg_color()
             } else {
                 theme_colors::panel_bg()
             };
+            // A selection bar is a filled surface, so its foreground is the
+            // dark surface role rather than a light text role.
+            let sel_fg = theme::user_bg();
             write_line!(
                 row,
                 Line::from(vec![
                     Span::styled(
                         prefix,
                         Style::default()
-                            .fg(if is_sel { SELECTED_FG } else { HINT_FG })
+                            .fg(if is_sel { sel_fg } else { theme::dim_color() })
                             .bg(style_bg)
                     ),
-                    Span::styled(num_str, Style::default().fg(NUMBER_FG).bg(style_bg)),
+                    Span::styled(
+                        num_str,
+                        Style::default().fg(theme::dim_color()).bg(style_bg)
+                    ),
                     Span::styled(
                         label,
                         Style::default()
-                            .fg(if is_sel { SELECTED_FG } else { OPTION_FG })
+                            .fg(if is_sel { sel_fg } else { theme::ai_text() })
                             .bg(style_bg)
                             .add_modifier(if is_sel {
                                 Modifier::BOLD
@@ -351,32 +317,37 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
     }
 
     // Custom input row
-    if row < inner.y + inner.height - 1 {
+    if row < last_row.saturating_sub(1) {
         let is_sel = state.in_custom_input || state.options.is_none();
         let prefix = if is_sel { "❯ " } else { "  " };
         let cursor = if is_sel { "█" } else { "" };
         let style_bg = if is_sel {
-            SELECTED_BG
+            theme::selection_bg_color()
         } else {
             theme_colors::panel_bg()
         };
         let mut spans = vec![Span::styled(
             prefix,
             Style::default()
-                .fg(if is_sel { SELECTED_FG } else { HINT_FG })
+                .fg(if is_sel {
+                    theme::user_bg()
+                } else {
+                    theme::dim_color()
+                })
                 .bg(style_bg),
         )];
         if state.custom_text.is_empty() && !is_sel && state.options.is_some() {
             // Not yet active: show a subtle prompt so user knows they can type
             spans.push(Span::styled(
                 "type to fill custom answer…",
-                Style::default().fg(HINT_FG).bg(style_bg),
+                Style::default().fg(theme::dim_color()).bg(style_bg),
             ));
         } else {
+            // Typed characters are the user's text.
             let display_text = format!("{}{}", state.custom_text, cursor);
             spans.push(Span::styled(
                 display_text,
-                Style::default().fg(INPUT_FG).bg(style_bg),
+                Style::default().fg(theme::user_text()).bg(style_bg),
             ));
         }
         write_line!(row, Line::from(spans));
@@ -385,7 +356,7 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
 
     // Hint row
     row += 1;
-    if row < inner.y + inner.height {
+    if row < last_row {
         let hint = if state.options.is_some() {
             "  type: custom   ↑↓/Tab: options   Enter: confirm   Esc: skip"
         } else {
@@ -395,7 +366,9 @@ pub fn render_ask_user_dialog(state: &AskUserDialogState, area: Rect, buf: &mut 
             row,
             Line::from(Span::styled(
                 hint,
-                Style::default().fg(HINT_FG).bg(theme_colors::panel_bg())
+                Style::default()
+                    .fg(theme::dim_color())
+                    .bg(theme_colors::panel_bg())
             ))
         );
     }

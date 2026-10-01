@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 // ============================================================================
 // RewindFlowOverlay  (multi-step: select → confirm → done)
@@ -106,11 +106,23 @@ pub fn render_rewind_flow(frame: &mut Frame, overlay: &RewindFlowOverlay, area: 
 }
 
 fn render_rewind_confirm(frame: &mut Frame, message_idx: usize, area: Rect) {
-    let dialog_width = 50u16.min(area.width.saturating_sub(4));
-    let dialog_height = 7u16.min(area.height.saturating_sub(4));
-    let dialog_area = centered_rect(dialog_width, dialog_height, area);
-
-    frame.render_widget(Clear, dialog_area);
+    // Five body rows (blank, question, blank, the [y]/[n] row, blank) plus the
+    // modal's own chrome: two border rows and the title row. No `HINT_ESC` —
+    // Esc at this step returns to the selector rather than dismissing the
+    // flow, so the canonical dismissal hint would be false here.
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "Confirm Rewind",
+            hint: "",
+            width: 50,
+            height: 8,
+            header_height: 1,
+            footer_height: 0,
+            border_fg: theme_colors::warning(),
+        },
+    );
 
     let lines = vec![
         Line::from(""),
@@ -145,11 +157,5 @@ fn render_rewind_confirm(frame: &mut Frame, message_idx: usize, area: Rect) {
         Line::from(""),
     ];
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Confirm Rewind ")
-        .border_style(Style::default().fg(theme_colors::warning()));
-
-    let para = Paragraph::new(lines).block(block);
-    frame.render_widget(para, dialog_area);
+    frame.render_widget(Paragraph::new(lines), layout.body_area);
 }

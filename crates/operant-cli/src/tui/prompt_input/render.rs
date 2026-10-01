@@ -109,7 +109,11 @@ pub fn render_prompt_input(
             };
             pills.push(Span::styled(
                 label,
-                Style::default().fg(Color::Black).bg(Color::Cyan),
+                // Dark ink on the cyan pill: the `UserBg`-on-`HeaderIcon` pair
+                // `remap_named_with` already produced for `Black`-on-`Cyan`.
+                Style::default()
+                    .fg(theme::user_bg())
+                    .bg(theme::header_icon_color()),
             ));
             pills.push(Span::raw(" "));
         }
@@ -349,6 +353,12 @@ pub fn render_prompt_input(
                     cell.set_style(Style::default().fg(theme::ai_text()).bg(theme::user_bg()));
                 } else {
                     // Non-empty position — reverse video
+                    // Reverse video. `Black`/`White` are left as named colours:
+                    // `prompt_input/tests.rs` pins this cell to exactly
+                    // `Color::Black`/`Color::White`, and `remap_named_with`
+                    // sends `White` to `AiText` — so a configured `ai_text`
+                    // already tints the cursor background. Worth revisiting, but
+                    // not from a colour migration.
                     cell.set_style(
                         Style::default()
                             .fg(Color::Black)
@@ -440,7 +450,7 @@ pub fn render_prompt_input(
         let x = area.x + area.width.saturating_sub(count_str.len() as u16);
         Paragraph::new(Line::from(vec![Span::styled(
             count_str,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]))
         .render(
             Rect {

@@ -11,6 +11,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::tui::vendor::style::theme;
+
 pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buffer) {
     if !state.visible {
         return;
@@ -507,7 +509,7 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
                 let mut removed_row = vec![
                     Span::styled(
                         format_gutter(diff_line.old_line_no, None),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::dim_color()),
                     ),
                     Span::styled("-  ", Style::default().fg(theme_colors::error())),
                 ];
@@ -517,7 +519,7 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
                 let mut added_row = vec![
                     Span::styled(
                         format_gutter(None, next_line.new_line_no),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::dim_color()),
                     ),
                     Span::styled("+  ", Style::default().fg(theme_colors::success())),
                 ];
@@ -543,7 +545,7 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
                     Style::default().fg(theme_colors::error()),
                 ),
                 DiffLineKind::Context => (
-                    Span::styled("   ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("   ", Style::default().fg(theme::dim_color())),
                     Style::default().fg(theme_colors::text()),
                 ),
             };
@@ -552,7 +554,7 @@ pub(crate) fn build_diff_lines(file: &FileDiffStats, width: u16) -> Vec<Line<'st
             let content: String = diff_line.content.chars().take(avail).collect();
 
             let mut row = vec![
-                Span::styled(ln_str, Style::default().fg(Color::DarkGray)),
+                Span::styled(ln_str, Style::default().fg(theme::dim_color())),
                 marker,
             ];
 

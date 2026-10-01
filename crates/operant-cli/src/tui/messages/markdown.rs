@@ -2,6 +2,7 @@
 
 use crate::tui::figures;
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use pulldown_cmark::{
     Alignment as MdAlignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
@@ -336,7 +337,7 @@ impl MdRenderer {
                     self.cell.push_str(&code);
                 } else {
                     // Matches the pre-parser inline-code colour.
-                    self.push_inline_spanned(&code, Style::default().fg(Color::Yellow));
+                    self.push_inline_spanned(&code, Style::default().fg(theme::warning_color()));
                 }
             }
             Event::SoftBreak => self.push_inline(" "),
@@ -363,7 +364,7 @@ impl MdRenderer {
                 if self.table.is_some() {
                     self.cell.push_str(&html);
                 } else {
-                    self.push_inline_spanned(&html, Style::default().fg(Color::DarkGray));
+                    self.push_inline_spanned(&html, Style::default().fg(theme::dim_color()));
                 }
             }
             // `InlineMath` / `DisplayMath` require Options::ENABLE_MATH, which
@@ -646,7 +647,7 @@ impl MdRenderer {
             .max(MD_MIN_CONTENT);
         Line::from(Span::styled(
             format!("{indent}{}", "\u{2500}".repeat(width)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         ))
     }
 
@@ -680,7 +681,7 @@ impl MdRenderer {
         } else {
             format!(" {lang} ")
         };
-        let border = Style::default().fg(Color::Yellow);
+        let border = Style::default().fg(theme::warning_color());
         // One constant for both caps so the fence is a matched pair and its
         // width stays bounded, instead of the mismatched fixed-length strings
         // this renderer used before.
@@ -756,7 +757,7 @@ impl MdRenderer {
         if !dest.is_empty() && text != dest {
             self.spans.push(Span::styled(
                 format!(" ({dest})"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ));
         }
     }
@@ -767,7 +768,7 @@ impl MdRenderer {
         {
             self.spans.push(Span::styled(
                 format!(" ({dest})"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ));
         }
     }

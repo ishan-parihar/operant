@@ -4,9 +4,10 @@
 // enabled. Appears as a one-time dismissable notice below the welcome header.
 
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget};
 
@@ -109,13 +110,16 @@ pub fn render_voice_mode_notice(state: &VoiceModeNoticeState, area: Rect, buf: &
                 " to configure.  ",
                 Style::default().fg(theme_colors::text()),
             ),
-            Span::styled("[Esc to dismiss]", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Esc to dismiss]", Style::default().fg(theme::dim_color())),
         ]),
         Line::from(""),
     ];
 
     Paragraph::new(lines)
-        .style(Style::default().bg(Color::Rgb(30, 30, 50)))
+        // A notice band raised above the app's `user_bg` base fill. `SelectionBg`
+        // is the palette's only raised-surface role; `vendor/**` is frozen, so a
+        // dedicated notice role is not available here.
+        .style(Style::default().bg(theme::selection_bg_color()))
         .render(notice_area, buf);
 }
 

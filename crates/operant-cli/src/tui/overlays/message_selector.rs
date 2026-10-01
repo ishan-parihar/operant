@@ -5,10 +5,12 @@
 use super::*;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
+
+use crate::tui::vendor::style::theme;
 
 // ============================================================================
 // MessageSelectorOverlay
@@ -100,12 +102,28 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
     }
 
     const VISIBLE_ROWS: usize = 12;
-    let dialog_width = 70u16.min(area.width.saturating_sub(4));
     let rows = VISIBLE_ROWS.min(overlay.messages.len().max(1)) as u16;
-    let dialog_height = (rows + 4).min(area.height.saturating_sub(4));
-    let dialog_area = centered_rect(dialog_width, dialog_height, area);
-
-    frame.render_widget(Clear, dialog_area);
+    // Content-derived height: the prompt row, a blank, the message rows, a
+    // blank and the navigation footer — plus the modal's own chrome (two border
+    // rows and the title row). This used to be `rows + 4`, which left no room
+    // for the title row and silently clipped the last two body lines, the
+    // footer included.
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "Rewind — Select Message",
+            hint: HINT_ESC,
+            width: 70,
+            height: rows + 7,
+            header_height: 1,
+            footer_height: 0,
+            border_fg: theme_colors::warning(),
+        },
+    );
+    // The clamped width: a preview truncated to `dialog_width` has to agree
+    // with the frame the primitive just laid out.
+    let dialog_width = layout.dialog_area.width;
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -120,7 +138,7 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
     if overlay.messages.is_empty() {
         lines.push(Line::from(vec![Span::styled(
             "  (no messages)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
     } else {
         let start = overlay.scroll_offset;
@@ -151,7 +169,7 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
                     .fg(theme_colors::text())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme::dim_color())
             };
 
             lines.push(Line::from(vec![
@@ -172,7 +190,7 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
                     if is_selected {
                         Style::default().fg(theme_colors::text())
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(theme::dim_color())
                     },
                 ),
                 Span::styled(
@@ -183,19 +201,15 @@ pub fn render_message_selector(frame: &mut Frame, overlay: &MessageSelectorOverl
         }
     }
 
+    // Footer prose. The dismissal hint now lives on the bottom border as
+    // `HINT_ESC`, so this row keeps the navigation prose.
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
-        "  ↑↓ navigate  ·  Enter to select  ·  Esc to cancel",
+        "  ↑↓ navigate  ·  Enter to select",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::ITALIC),
     )]));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Rewind — Select Message ")
-        .border_style(Style::default().fg(theme_colors::warning()));
-
-    let para = Paragraph::new(lines).block(block);
-    frame.render_widget(para, dialog_area);
+    frame.render_widget(Paragraph::new(lines), layout.body_area);
 }

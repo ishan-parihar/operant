@@ -13,14 +13,15 @@
 use operant_core::skills::Skill;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 /// What view stage the overlay is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -159,26 +160,23 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
         return;
     }
 
-    // Centered 80×24 modal (or smaller if the terminal is narrow).
-    let w = 80u16.min(area.width.saturating_sub(4));
-    let h = 24u16.min(area.height.saturating_sub(4));
-    let dlg = centered_rect(w, h, area);
-
-    frame.render_widget(Clear, dlg);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme_colors::accent()))
-        .title(Span::styled(
-            " Skills ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-
-    let inner = {
-        let inner = block.inner(dlg);
-        frame.render_widget(block, dlg);
-        inner
-    };
+    // Natural desired size is 80×24; `modal_frame` clamps it against the
+    // terminal and guarantees the readable floors this panel previously had
+    // none of (the old `w.min(area.width - 4)` could collapse to 0 wide).
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "Skills",
+            hint: HINT_ESC,
+            width: 80,
+            height: 24,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
+    let inner = layout.body_area;
 
     if !state.last_error.is_empty() {
         let lines = vec![
@@ -196,7 +194,7 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc to close.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -222,7 +220,7 @@ pub fn render_skills_view(frame: &mut Frame, state: &SkillsViewState, area: Rect
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc to close.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -245,12 +243,12 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
             "#", "Name", "Category", "Version"
         ),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(Span::styled(
         " ".repeat(area.width as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     let viewport = area.height.saturating_sub(6) as usize; // header + footer
@@ -267,9 +265,12 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
         let is_selected = display_idx == state.selected;
         let prefix = if is_selected { "›" } else { " " };
         let row_style = if is_selected {
+            // `Color::Black`/`Color::Cyan` were the palette's *named stand-ins*
+            // for the `user_bg` and `accent` roles, so this is value-preserving
+            // and follows the theme instead of being rewritten by name.
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(theme::user_bg())
+                .bg(theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme_colors::text())
@@ -303,7 +304,7 @@ fn render_list_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
 
     lines.push(Line::from(Span::styled(
         " ↑/↓ navigate · Enter inspect · Esc close ",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
@@ -316,7 +317,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled("Name:        ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Name:        ", Style::default().fg(theme::dim_color())),
         Span::styled(
             skill.name.clone(),
             Style::default()
@@ -325,14 +326,14 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Category:    ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Category:    ", Style::default().fg(theme::dim_color())),
         Span::styled(
             skill.category.clone(),
             Style::default().fg(theme_colors::accent()),
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Version:     ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Version:     ", Style::default().fg(theme::dim_color())),
         Span::styled(
             skill.version.clone(),
             Style::default().fg(theme_colors::warning()),
@@ -340,7 +341,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     ]));
     if !skill.tags.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("Tags:        ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tags:        ", Style::default().fg(theme::dim_color())),
             Span::styled(
                 skill.tags.join(", "),
                 Style::default().fg(theme_colors::text()),
@@ -349,7 +350,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     }
     if !skill.platforms.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("Platforms:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Platforms:   ", Style::default().fg(theme::dim_color())),
             Span::styled(
                 skill.platforms.join(", "),
                 Style::default().fg(theme_colors::text()),
@@ -358,7 +359,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     }
     if !skill.prerequisites_env.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("Env vars:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Env vars:    ", Style::default().fg(theme::dim_color())),
             Span::styled(
                 skill.prerequisites_env.join(", "),
                 Style::default().fg(theme_colors::warning()),
@@ -367,7 +368,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     }
     if !skill.prerequisites_commands.is_empty() {
         lines.push(Line::from(vec![
-            Span::styled("Commands:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Commands:    ", Style::default().fg(theme::dim_color())),
             Span::styled(
                 skill.prerequisites_commands.join(", "),
                 Style::default().fg(theme_colors::warning()),
@@ -382,7 +383,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     // better in a fixed-height modal.
     lines.push(Line::from(Span::styled(
         "─".repeat(area.width.saturating_sub(2) as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
     lines.push(Line::from(""));
 
@@ -402,7 +403,7 @@ fn render_detail_stage(frame: &mut Frame, state: &SkillsViewState, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         " ↑/↓ scroll · Backspace back to list · Esc close ",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);

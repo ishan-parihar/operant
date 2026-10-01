@@ -6,15 +6,21 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use std::cell::{Cell, RefCell};
 
-use crate::tui::overlays::{
-    centered_rect, modal_search_line, render_dark_overlay, render_dialog_bg,
-};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame, modal_layout, modal_search_line};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired width. `modal_layout` clamps it and floors it at `MIN_MODAL_W`.
+const DIALOG_WIDTH: u16 = 65;
+/// Smallest dialog this list will draw, independent of the primitive's floor.
+const MIN_DIALOG_HEIGHT: u16 = 8;
+/// Title row, blank row, search row — the fixed header the body scrolls under.
+const HEADER_HEIGHT: u16 = 3;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -187,24 +193,23 @@ impl DialogSelectState {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Render the DialogSelect overlay — OpenCode-style: dark overlay, no border,
-/// full-width highlight bar on selected item, minimal and polished.
+/// Render the DialogSelect overlay: dark overlay, rounded modal frame, fixed
+/// header with the title and search field, and a full-width highlight bar on the
+/// selected item.
 pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: Rect) {
     if !state.visible {
         return;
     }
 
-    let dim = theme_colors::DIALOG_DIM;
+    let dim = theme::dim_color();
     let dialog_bg = theme_colors::panel_bg();
     let highlight_bg = theme_colors::selection_bg(); // selected-row bar
-    let highlight_fg = Color::White;
+    // A selection bar is a filled surface, so its foreground is the dark surface
+    // role rather than a light text role.
+    let highlight_fg = theme::user_bg();
     let category_fg = theme_colors::accent(); // category headers
 
-    // ── Darken the entire background ──
-    render_dark_overlay(frame, area);
-
-    // ── Dialog size: 65 wide, fit content ──
-    let width = 65u16.min(area.width.saturating_sub(6));
+    // ── Dialog size: fit content, bounded by the primitive ──
     let max_height = (area.height as f32 * 0.75) as u16;
     // Count visible lines: header(2) + items + category gaps + footer(0)
     let item_lines: u16 = state.filtered_indices.len() as u16;
@@ -223,54 +228,36 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         0
     };
     let content_height = 3 + item_lines + category_count * 2; // search + blank + items + cat headers + gaps
-    let height = content_height.min(max_height).max(8);
-    let dialog_area = centered_rect(width, height, area);
+    let desired_height = content_height.min(max_height).max(MIN_DIALOG_HEIGHT);
 
-    state.last_render_area.set(dialog_area);
+    state
+        .last_render_area
+        .set(modal_layout(area, DIALOG_WIDTH, desired_height, HEADER_HEIGHT, 0).dialog_area);
 
-    // ── Fill dialog background (no border) ──
-    render_dialog_bg(frame, dialog_area);
+    // ── Frame (overlay, background, rounded border, title, hint) ──
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: &state.title,
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: desired_height,
+            header_height: HEADER_HEIGHT,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
-    let inner = Rect {
-        x: dialog_area.x + 1,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(2),
-        height: dialog_area.height.saturating_sub(2),
+    let body_area = layout.body_area;
+
+    // ── Fixed header: the blank row + the search field ──
+    // The title itself is painted by `modal_frame` on header row 0.
+    let search_area = Rect {
+        height: HEADER_HEIGHT.saturating_sub(1),
+        ..layout.header_area
     };
-
-    let header_height = 3u16.min(inner.height);
-    let header_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: header_height,
-    };
-    let body_area = Rect {
-        x: inner.x,
-        y: inner.y.saturating_add(header_height),
-        width: inner.width,
-        height: inner.height.saturating_sub(header_height),
-    };
-
-    // ── Fixed header ──
     let mut header_lines: Vec<Line<'static>> = Vec::new();
-
-    // Title row: "Connect a provider" on left, "esc" on right
-    let title_pad = inner.width.saturating_sub(state.title.len() as u16 + 4) as usize;
-    header_lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {}", state.title),
-            Style::default()
-                .fg(theme_colors::text())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>width$}", "esc ", width = title_pad),
-            Style::default().fg(dim),
-        ),
-    ]));
-
-    // Search field
     header_lines.push(Line::from(""));
     header_lines.push(modal_search_line(
         &state.filter,
@@ -279,7 +266,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         theme_colors::text(),
     ));
 
-    frame.render_widget(Paragraph::new(header_lines).bg(dialog_bg), header_area);
+    frame.render_widget(Paragraph::new(header_lines).bg(dialog_bg), search_area);
 
     if body_area.height == 0 {
         return;
@@ -313,7 +300,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         let (item_fg, item_bg) = if is_selected {
             (highlight_fg, highlight_bg)
         } else {
-            (Color::White, dialog_bg)
+            (theme::ai_text(), dialog_bg)
         };
 
         let mut spans = vec![Span::styled(
@@ -326,11 +313,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
             spans.push(Span::styled(
                 format!(" {}", item.description),
                 Style::default()
-                    .fg(if is_selected {
-                        theme_colors::DIALOG_TEXT_BRIGHT
-                    } else {
-                        dim
-                    })
+                    .fg(if is_selected { highlight_fg } else { dim })
                     .bg(item_bg),
             ));
         }
@@ -342,7 +325,7 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         } else {
             badge_text.len() + 1
         };
-        let pad = inner
+        let pad = body_area
             .width
             .saturating_sub(text_len as u16 + badge_len as u16) as usize;
         if pad > 0 {

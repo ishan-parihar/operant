@@ -5,10 +5,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame_buf};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -200,25 +201,25 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
         return;
     }
 
-    const MODAL_W: u16 = 70;
-    const MODAL_H: u16 = 20;
-
-    let dialog_area = centered_rect(
-        MODAL_W.min(area.width.saturating_sub(2)),
-        MODAL_H.min(area.height.saturating_sub(2)),
+    // Natural desired size is 70×20. The old formula used a `-2` margin, which is
+    // the same fact `space::M` states; the primitive now owns it and adds the
+    // readable floors the old `.min(w - 2)` could not guarantee.
+    let layout = modal_frame_buf(
+        buf,
         area,
+        &ModalSpec {
+            title: "Sessions",
+            hint: HINT_ESC,
+            width: 70,
+            height: 20,
+            header_height: 1,
+            footer_height: 0,
+            border_fg: theme_colors::accent(),
+        },
     );
+    let inner = layout.body_area;
 
-    // --- Clear background -------------------------------------------------
-    for y in dialog_area.y..dialog_area.y + dialog_area.height {
-        for x in dialog_area.x..dialog_area.x + dialog_area.width {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.reset();
-            }
-        }
-    }
-
-    let inner_w = dialog_area.width.saturating_sub(2) as usize;
+    let inner_w = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
 
     // --- Session list -----------------------------------------------------
@@ -226,7 +227,7 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "  No sessions found.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
     } else {
         // Column widths (approximate):
@@ -251,7 +252,7 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                 cost_w = cost_w
             ),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::UNDERLINED),
         )]));
         lines.push(Line::from(""));
@@ -265,7 +266,7 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
             let cost_cell = format!("{:>cost_w$}", fmt_cost(session.cost_usd), cost_w = cost_w);
 
             let row_bg = if is_selected {
-                Color::Rgb(40, 60, 80)
+                theme::selection_bg_color()
             } else {
                 // transparent — ratatui uses reset/default for "no background"
                 Color::Reset
@@ -281,9 +282,9 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
             };
 
             let meta_style = if is_selected {
-                Style::default().fg(Color::Rgb(180, 200, 220)).bg(row_bg)
+                Style::default().fg(theme::header_name_color()).bg(row_bg)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme::dim_color())
             };
 
             let prefix_style = Style::default().bg(row_bg);
@@ -320,28 +321,28 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                         .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" navigate  ", Style::default().fg(theme::dim_color())),
                 Span::styled(
                     "Enter",
                     Style::default()
                         .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("=resume  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("=resume  ", Style::default().fg(theme::dim_color())),
                 Span::styled(
                     "r",
                     Style::default()
                         .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("=rename  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("=rename  ", Style::default().fg(theme::dim_color())),
                 Span::styled(
                     "Esc",
                     Style::default()
                         .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("=close", Style::default().fg(Color::DarkGray)),
+                Span::styled("=close", Style::default().fg(theme::dim_color())),
             ]));
         }
         SessionBrowserMode::Rename => {
@@ -371,31 +372,25 @@ pub fn render_session_browser(state: &SessionBrowserState, area: Rect, buf: &mut
                         .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("=confirm  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("=confirm  ", Style::default().fg(theme::dim_color())),
                 Span::styled(
                     "Esc",
                     Style::default()
                         .fg(theme_colors::accent())
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("=cancel", Style::default().fg(Color::DarkGray)),
+                Span::styled("=cancel", Style::default().fg(theme::dim_color())),
             ]));
         }
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Sessions ")
-        .title_alignment(Alignment::Center)
-        .border_style(Style::default().fg(theme_colors::accent()));
-
     let para = Paragraph::new(lines)
-        .block(block)
         .alignment(Alignment::Left)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(theme_colors::panel_bg()));
 
     use ratatui::widgets::Widget;
-    para.render(dialog_area, buf);
+    para.render(inner, buf);
 }
 
 // ---------------------------------------------------------------------------

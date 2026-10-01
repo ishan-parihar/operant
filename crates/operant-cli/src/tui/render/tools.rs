@@ -2,7 +2,7 @@
 
 use crate::tui::app::{SystemAnnotation, SystemMessageStyle, ToolStatus, ToolUseBlock};
 use crate::tui::figures;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::{display_width, shimmer_spans, take_width};
@@ -36,12 +36,12 @@ pub(crate) fn render_system_annotation_lines(
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {} ", figures::TEARDROP_ASTERISK),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             ),
             Span::styled(
                 ann.text.clone(),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme::dim_color())
                     .add_modifier(Modifier::DIM),
             ),
         ]));
@@ -50,8 +50,8 @@ pub(crate) fn render_system_annotation_lines(
     }
 
     let (text_color, border_color) = match ann.style {
-        SystemMessageStyle::Info => (Color::DarkGray, Color::DarkGray),
-        SystemMessageStyle::Compact => (Color::DarkGray, Color::DarkGray),
+        SystemMessageStyle::Info => (theme::dim_color(), theme::dim_color()),
+        SystemMessageStyle::Compact => (theme::dim_color(), theme::dim_color()),
     };
 
     // Centred, padded rule: "â”€â”€â”€ text â”€â”€â”€"
@@ -109,13 +109,13 @@ pub(crate) fn render_tool_block_lines(
         header_spans.push(Span::styled(
             title,
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::DIM),
         ));
         header_spans.push(Span::styled(
             "  queued".to_string(),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::DIM | Modifier::ITALIC),
         ));
     } else if in_flight {
@@ -137,7 +137,7 @@ pub(crate) fn render_tool_block_lines(
     if !summary.is_empty() {
         lines.push(Line::from(vec![
             Span::raw("     "),
-            Span::styled(summary, Style::default().fg(Color::DarkGray)),
+            Span::styled(summary, Style::default().fg(theme::dim_color())),
         ]));
     }
 
@@ -172,7 +172,7 @@ pub(crate) fn render_tool_block_lines(
     if let Some(ref preview) = block.output_preview {
         let preview_style = match block.status {
             ToolStatus::Error => Style::default().fg(theme_colors::TOOL_ERROR),
-            _ => Style::default().fg(Color::DarkGray),
+            _ => Style::default().fg(theme::dim_color()),
         };
         for line_text in preview.lines() {
             if line_text.starts_with('\u{2026}') {
@@ -181,7 +181,7 @@ pub(crate) fn render_tool_block_lines(
                     Span::styled(
                         line_text.to_string(),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(theme::dim_color())
                             .add_modifier(Modifier::DIM),
                     ),
                 ]));
@@ -373,7 +373,7 @@ pub(crate) fn render_tool_group_lines(
     ));
     header.push(Span::styled(
         format!("  {done}/{total} done"),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     ));
     if errored > 0 {
         header.push(Span::styled(
@@ -394,7 +394,7 @@ pub(crate) fn render_tool_group_lines(
         header.push(Span::styled(
             format!("  · {label}: {}", tool_block_label(block)),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::DIM),
         ));
         let in_flight_total = running.len() + queued.len();
@@ -402,7 +402,7 @@ pub(crate) fn render_tool_group_lines(
             header.push(Span::styled(
                 format!(" +{} more", in_flight_total - 1),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme::dim_color())
                     .add_modifier(Modifier::DIM | Modifier::ITALIC),
             ));
         }
@@ -411,7 +411,7 @@ pub(crate) fn render_tool_group_lines(
         header.push(Span::styled(
             format!("  · last done: {}", tool_block_label(block)),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme::dim_color())
                 .add_modifier(Modifier::DIM),
         ));
     }
@@ -432,35 +432,35 @@ pub(crate) fn render_tool_group_lines(
                 spans.push(Span::styled(
                     "\u{2026} ",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::dim_color())
                         .add_modifier(Modifier::DIM),
                 ));
                 spans.push(Span::styled(
                     label,
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::dim_color())
                         .add_modifier(Modifier::DIM),
                 ));
                 spans.push(Span::styled(
                     "  queued".to_string(),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme::dim_color())
                         .add_modifier(Modifier::DIM | Modifier::ITALIC),
                 ));
             }
             ToolStatus::Running => {
                 spans.push(Span::styled(
                     "\u{2026} ".to_string(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::dim_color()),
                 ));
                 spans.extend(shimmer_spans(&label, frame_count));
             }
             ToolStatus::Done => {
                 spans.push(Span::styled(
                     format!("{} ", figures::black_circle()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::dim_color()),
                 ));
-                spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(label, Style::default().fg(theme::dim_color())));
             }
             ToolStatus::Error => {
                 spans.push(Span::styled(

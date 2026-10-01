@@ -10,8 +10,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired size. The height was previously an unclamped `13`; `modal_layout`
+/// now bounds it against the area and floors it at `MIN_MODAL_H`.
+const DIALOG_WIDTH: u16 = 76;
+const DIALOG_HEIGHT: u16 = 13;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomProviderField {
@@ -115,26 +121,24 @@ pub fn render_custom_provider_dialog(
     }
 
     let accent = theme_colors::accent();
-    let dim = theme_colors::DIALOG_DIM;
-    let muted = theme_colors::DIALOG_MUTED;
-    let dialog_bg = theme_colors::panel_bg();
-
-    render_dark_overlay(frame, area);
-
-    let width = 76u16.min(area.width.saturating_sub(4));
-    let height = 13u16;
-    let dialog_area = centered_rect(width, height, area);
-    render_dialog_bg(frame, dialog_area);
-
-    let inner = Rect {
-        x: dialog_area.x + 1,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(2),
-        height: dialog_area.height.saturating_sub(2),
-    };
+    let dim = theme::dim_color();
+    let muted = theme::ai_text();
 
     let title_text = format!("Connect {}", state.provider_name);
-    let title_pad = inner.width.saturating_sub(title_text.len() as u16 + 5) as usize;
+
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: &title_text,
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: DIALOG_HEIGHT,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
     let url_style = if state.active_field == CustomProviderField::Url {
         Style::default()
@@ -176,17 +180,6 @@ pub fn render_custom_provider_dialog(
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {}", title_text),
-            Style::default().fg(accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>width$}", "esc ", width = title_pad),
-            Style::default().fg(dim),
-        ),
-    ]));
-    lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         " URL:",
         Style::default().fg(muted),
@@ -225,6 +218,8 @@ pub fn render_custom_provider_dialog(
         Span::styled(confirm_hint, Style::default().fg(dim)),
     ]));
 
-    let para = Paragraph::new(lines).bg(dialog_bg);
-    frame.render_widget(para, inner);
+    frame.render_widget(
+        Paragraph::new(lines).bg(theme_colors::panel_bg()),
+        layout.body_area,
+    );
 }

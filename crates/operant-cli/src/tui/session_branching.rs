@@ -3,12 +3,13 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Widget, Wrap};
+use ratatui::widgets::{List, ListItem, Paragraph, Widget, Wrap};
 
-use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame_buf};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -189,23 +190,30 @@ pub fn render_session_branching(state: &SessionBranchingState, area: Rect, buf: 
         return;
     }
 
-    let popup_area = centered_rect(80, 70, area);
-    let title = "Session Branches";
-
+    // Natural desired size is 80×70; the primitive now clamps it with a
+    // `space::M` margin instead of letting `centered_rect` silently shrink it
+    // to the whole terminal.
     let border_color = match state.mode {
         BranchBrowserMode::Browse => theme_colors::accent(),
         BranchBrowserMode::CreateNew => theme_colors::warning(),
         BranchBrowserMode::ConfirmDelete => theme_colors::error(),
     };
 
-    let block = Block::default()
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let inner = block.inner(popup_area);
-    block.render(popup_area, buf);
+    let layout = modal_frame_buf(
+        buf,
+        area,
+        &ModalSpec {
+            title: "Session Branches",
+            hint: HINT_ESC,
+            width: 80,
+            height: 70,
+            header_height: 1,
+            footer_height: 0,
+            // The border encodes the mode, which is what `border_fg` is for.
+            border_fg: border_color,
+        },
+    );
+    let inner = layout.body_area;
 
     match state.mode {
         BranchBrowserMode::Browse => {
@@ -259,7 +267,7 @@ fn render_branch_list(state: &SessionBranchingState, area: Rect, buf: &mut Buffe
         .collect();
 
     let selected_style = Style::default()
-        .bg(Color::DarkGray)
+        .bg(theme::selection_bg_color())
         .fg(theme_colors::text())
         .add_modifier(Modifier::BOLD);
 
@@ -281,7 +289,7 @@ fn render_branch_list(state: &SessionBranchingState, area: Rect, buf: &mut Buffe
 
     let help_text = "↑↓: navigate | Enter: switch | N: new | D: delete | Esc: close";
     let help_para = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(theme::dim_color()))
         .alignment(Alignment::Center);
     help_para.render(help_area, buf);
 }
@@ -322,7 +330,7 @@ fn render_confirm_delete(state: &SessionBranchingState, area: Rect, buf: &mut Bu
         Line::from(""),
         Line::from(Span::styled(
             "This will remove the branch but keep all other branches intact.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )),
         Line::from(""),
         Line::from(vec![

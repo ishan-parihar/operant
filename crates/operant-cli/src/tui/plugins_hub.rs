@@ -16,13 +16,14 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use std::path::{Path, PathBuf};
 
-use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 /// One row in the plugins list.
 #[derive(Debug, Clone)]
@@ -153,25 +154,23 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
         return;
     }
 
-    let w = 72u16.min(area.width.saturating_sub(4));
-    let h = 20u16.min(area.height.saturating_sub(4));
-    let dlg = centered_rect(w, h, area);
-
-    frame.render_widget(Clear, dlg);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme_colors::success()))
-        .title(Span::styled(
-            " Plugins ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-
-    let inner = {
-        let inner = block.inner(dlg);
-        frame.render_widget(block, dlg);
-        inner
-    };
+    // Natural desired size is 72×20; `modal_frame` clamps it to the terminal.
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "Plugins",
+            hint: HINT_ESC,
+            width: 72,
+            height: 20,
+            header_height: 1,
+            footer_height: 0,
+            // The border carries meaning here (it was `success()` before), which
+            // is what `ModalSpec::border_fg` exists for.
+            border_fg: theme_colors::success(),
+        },
+    );
+    let inner = layout.body_area;
 
     if !state.last_error.is_empty() {
         let lines = vec![
@@ -189,7 +188,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc to close.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -215,7 +214,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc to close.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -231,12 +230,12 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
             "#", "Status", "Name", "Size"
         ),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(Span::styled(
         " ".repeat(inner.width as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     let viewport = inner.height.saturating_sub(6) as usize;
@@ -263,7 +262,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
                 .fg(theme_colors::success())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::dim_color())
         };
         let name = truncate(&entry.name, 24);
         let size = truncate(&entry.size, 8);
@@ -296,7 +295,7 @@ pub fn render_plugins_hub(frame: &mut Frame, state: &PluginsHubState, area: Rect
 
     lines.push(Line::from(Span::styled(
         " ↑/↓ navigate · Enter/t toggle · Esc close ",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )));
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);

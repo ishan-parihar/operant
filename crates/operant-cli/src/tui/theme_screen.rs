@@ -154,7 +154,11 @@ pub fn render_theme_screen(frame: &mut Frame, screen: &ThemeScreen, area: Rect) 
         return;
     }
 
-    let rows = (screen.themes.len() as u16 + 2).min(area.height.saturating_sub(6));
+    // `begin_modal_frame` routes through `modal_layout`, which already clamps to
+    // `area.height - space::M` and floors at `MIN_MODAL_H`. This used to restate
+    // a caller-side `.min(area.height.saturating_sub(6))` on the way in; the
+    // two clamps bound the same result, so dropping the outer one is a no-op.
+    let rows = screen.themes.len() as u16 + 2;
     let layout = begin_modal_frame(frame, area, 70, rows + 6, 2, 1);
     render_modal_title_frame(frame, layout.header_area, "Choose a theme", "esc");
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {

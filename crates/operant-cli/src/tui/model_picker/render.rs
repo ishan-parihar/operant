@@ -5,9 +5,11 @@
 use super::*;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame_buf};
 
 pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffer) {
     if !state.visible {
@@ -21,91 +23,47 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
     let highlight_bg = theme_colors::selection_bg();
     let highlight_fg = theme_colors::text();
 
-    // ── Dark overlay ──
-    for y in area.y..area.y + area.height {
-        for x in area.x..area.x + area.width {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_bg(Color::Rgb(10, 10, 14));
-                cell.set_fg(Color::Rgb(40, 40, 45));
-            }
-        }
-    }
-
     // ── Dialog size ──
-    let width = 65u16.min(area.width.saturating_sub(6));
-    let max_height = (area.height as f32 * 0.75) as u16;
+    // The window is sized from the filtered-model count, and from that count
+    // alone, *before* any row is built — so on a short terminal the dialog is
+    // still bounded to what fits and the selected model stays visible. The
+    // filter is resolved once here and reused by the rows below.
     let filtered = state.filtered_models();
-    let content_h = (filtered.len() as u16 + 6).min(max_height).max(8);
-    let dialog_area = centered_rect(width, content_h, area);
+    let desired_height = ((filtered.len() as u16).saturating_add(6))
+        .min((area.height as f32 * 0.75) as u16)
+        .max(8);
 
-    // ── Fill dialog bg (no border) ──
-    for y in dialog_area.y..dialog_area.y + dialog_area.height {
-        for x in dialog_area.x..dialog_area.x + dialog_area.width {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(' ');
-                cell.set_bg(dialog_bg);
-                cell.set_fg(theme_colors::text());
-            }
-        }
-    }
+    // ── Frame (overlay, background, rounded border, title, hint) ──
+    // +6 above is this dialog's own chrome: two border rows, a three-row header
+    // (title, blank, search) and a one-row footer.
+    let layout = modal_frame_buf(
+        buf,
+        area,
+        &ModalSpec {
+            title: &state.title,
+            hint: HINT_ESC,
+            width: 65,
+            height: desired_height,
+            header_height: 3,
+            footer_height: 1,
+            ..Default::default()
+        },
+    );
 
-    let inner = Rect {
-        x: dialog_area.x + 1,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(2),
-        height: dialog_area.height.saturating_sub(2),
+    // ── Fixed header: the blank row + the search field ──
+    // The title itself is painted by `modal_frame_buf` on header row 0.
+    let search_area = Rect {
+        height: 2,
+        ..layout.header_area
     };
+    let header_para = Paragraph::new(vec![
+        Line::from(""),
+        modal_search_line(&state.filter, "Search", dim, theme_colors::text()),
+    ])
+    .bg(dialog_bg);
+    header_para.render(search_area, buf);
 
-    let footer_height = 1u16.min(inner.height);
-    let header_height = 3u16.min(inner.height.saturating_sub(footer_height));
-    let header_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: header_height,
-    };
-    let body_area = Rect {
-        x: inner.x,
-        y: inner.y.saturating_add(header_height),
-        width: inner.width,
-        height: inner.height.saturating_sub(header_height + footer_height),
-    };
-    let footer_area = Rect {
-        x: inner.x,
-        y: inner.y + inner.height.saturating_sub(footer_height),
-        width: inner.width,
-        height: footer_height,
-    };
-
-    // ── Fixed header ──
-    let mut header_lines: Vec<Line> = Vec::new();
-
-    // Title row: "Select model" left, "esc" right
-    let title_pad = inner.width.saturating_sub(state.title.len() as u16 + 5) as usize;
-    header_lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {}", state.title),
-            Style::default()
-                .fg(theme_colors::text())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>w$}", "esc ", w = title_pad),
-            Style::default().fg(dim),
-        ),
-    ]));
-
-    // Search field
-    header_lines.push(Line::from(""));
-    header_lines.push(modal_search_line(
-        &state.filter,
-        "Search",
-        dim,
-        theme_colors::text(),
-    ));
-
-    let header_para = Paragraph::new(header_lines).bg(dialog_bg);
-    header_para.render(header_area, buf);
+    let body_area = layout.body_area;
 
     if body_area.height == 0 {
         return;
@@ -187,7 +145,10 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
                         state.effort_level.symbol(),
                         state.effort_level.label()
                     ),
-                    Style::default().fg(Color::Rgb(200, 255, 200)).bg(bg),
+                    // The effort chip sits on the selected row's background, so its
+                    // foreground is the role for text on a selection background.
+                    // A pale literal here measures ~1.9:1 on `selection_bg`.
+                    Style::default().fg(theme_colors::on_selection()).bg(bg),
                 ));
             }
 
@@ -207,7 +168,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
             // Pad for full-width highlight
             if is_selected {
                 let text_len: usize = spans.iter().map(|s| s.content.len()).sum();
-                let pad = inner.width.saturating_sub(text_len as u16) as usize;
+                let pad = body_area.width.saturating_sub(text_len as u16) as usize;
                 if pad > 0 {
                     spans.push(Span::styled(
                         " ".repeat(pad),
@@ -235,6 +196,8 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
 
     para.render(body_area, buf);
 
+    // The dismissal hint now lives on the bottom border as `HINT_ESC`, so this
+    // row keeps the action prose only.
     let mut footer_spans = vec![
         Span::styled(" enter", Style::default().fg(dim)),
         Span::styled(" select", Style::default().fg(dim)),
@@ -246,10 +209,7 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
         footer_spans.push(Span::styled("\u{2190}/\u{2192}", Style::default().fg(dim)));
         footer_spans.push(Span::styled(" effort", Style::default().fg(dim)));
     }
-    footer_spans.push(Span::raw("  "));
-    footer_spans.push(Span::styled("Esc", Style::default().fg(dim)));
-    footer_spans.push(Span::styled(" close", Style::default().fg(dim)));
     Paragraph::new(Line::from(footer_spans))
         .bg(dialog_bg)
-        .render(footer_area, buf);
+        .render(layout.footer_area, buf);
 }

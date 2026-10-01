@@ -54,7 +54,11 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
                                     span.content,
                                     span.style
                                         .bg(theme_colors::SEARCH_MATCH_BG)
-                                        .fg(Color::Yellow),
+                                        // `Warning` is the role
+                                        // `remap_named_with` already gave a bare
+                                        // `Color::Yellow` here; naming it keeps the
+                                        // default frame honest about the pairing.
+                                        .fg(theme::warning_color()),
                                 )
                             } else {
                                 span
@@ -141,7 +145,7 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
             .end_symbol(None)
             .track_symbol(None)
             .thumb_symbol("\u{2590}") // ▐ right half block — thin vertical strip
-            .thumb_style(Style::default().fg(Color::Rgb(110, 110, 130)));
+            .thumb_style(Style::default().fg(theme::dim_color()));
 
         frame.render_stateful_widget(scrollbar, msg_area, &mut scrollbar_state);
     }
@@ -170,8 +174,11 @@ pub(crate) fn render_messages(frame: &mut Frame, app: &App, area: Rect) {
         };
         let ind_line = Line::from(vec![Span::styled(
             indicator,
+            // Dark ink on the accent pill — the same `UserBg`-on-accent pairing
+            // the dialog list rows use. `Color::Black` resolved to `UserBg`
+            // under `remap_named_with` anyway, so this only pins the default.
             Style::default()
-                .fg(Color::Black)
+                .fg(theme::user_bg())
                 .bg(theme::accent_color())
                 .add_modifier(Modifier::BOLD),
         )]);

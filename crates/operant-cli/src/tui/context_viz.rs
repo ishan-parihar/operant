@@ -7,7 +7,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
-use crate::tui::overlays::{begin_modal_frame, modal_header_line_area, render_modal_title_frame};
+use crate::tui::overlays::{
+    HINT_ESC, begin_modal_frame, modal_header_line_area, render_modal_title_frame,
+};
 use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------
@@ -53,7 +55,7 @@ pub fn render_context_viz(
     }
 
     let layout = begin_modal_frame(frame, area, 72, 20, 2, 1);
-    render_modal_title_frame(frame, layout.header_area, "Context & usage", "esc");
+    render_modal_title_frame(frame, layout.header_area, "Context & usage", HINT_ESC);
     if let Some(subtitle_area) = modal_header_line_area(layout.header_area, 1) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(

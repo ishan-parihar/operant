@@ -2,7 +2,7 @@
 //! Mirrors src/components/ModelPicker.tsx — including effort levels and
 //! fast-mode notice.
 
-use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev, modal_search_line};
+use crate::tui::overlays::{cycle_next, cycle_prev, modal_search_line};
 use crate::tui::theme_colors;
 
 // ---------------------------------------------------------------------------

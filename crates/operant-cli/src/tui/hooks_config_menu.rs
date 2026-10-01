@@ -11,14 +11,16 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::tui::overlays::{
-    begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area, render_modal_title_buf,
+    HINT_ESC, begin_modal_buf, cycle_next, cycle_prev, modal_header_line_area,
+    render_modal_title_buf,
 };
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -378,7 +380,7 @@ pub fn render_hooks_config_menu(state: &HooksConfigMenuState, area: Rect, buf: &
         HooksMenuMode::SelectHook => render_hook_list(state),
         HooksMenuMode::ViewHook => render_hook_detail(state),
     };
-    render_modal_title_buf(buf, layout.header_area, title.trim(), "esc");
+    render_modal_title_buf(buf, layout.header_area, title.trim(), HINT_ESC);
     let breadcrumb = match state.mode {
         HooksMenuMode::SelectEvent => " Review configured hook events and matchers.".to_string(),
         HooksMenuMode::SelectMatcher => {
@@ -432,11 +434,11 @@ fn render_event_list(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'s
     if state.events.is_empty() {
         lines.push(Line::from(vec![Span::styled(
             "  No hooks configured.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "  Edit ~/.operant/settings.json to add hooks.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
     } else {
         for (i, event) in state.events.iter().enumerate() {
@@ -462,7 +464,7 @@ fn render_matcher_list(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("  Event: ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Event: ", Style::default().fg(theme::dim_color())),
         Span::styled(
             event.to_string(),
             Style::default()
@@ -501,7 +503,7 @@ fn render_hook_list(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'st
             event.to_string(),
             Style::default().fg(theme_colors::accent()),
         ),
-        Span::styled(" / ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" / ", Style::default().fg(theme::dim_color())),
         Span::styled(
             matcher.to_string(),
             Style::default()
@@ -544,7 +546,7 @@ fn render_hook_detail(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'
     lines.push(Line::from(""));
     lines.push(Line::from(vec![Span::styled(
         "  Target:",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     // Wrap long target strings across multiple lines
     for chunk in hook.target.chars().collect::<Vec<_>>().chunks(60) {
@@ -558,7 +560,7 @@ fn render_hook_detail(state: &HooksConfigMenuState) -> (&'static str, Vec<Line<'
     lines.push(Line::from(vec![Span::styled(
         "  Edit ~/.operant/settings.json to modify hooks.",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::ITALIC),
     )]));
     (" Hook Detail ", lines)
@@ -596,7 +598,7 @@ fn push_detail_row(lines: &mut Vec<Line<'static>>, key: &str, value: &str) {
     lines.push(Line::from(vec![
         Span::styled(
             format!("  {key:<10}  "),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         ),
         Span::styled(value.to_string(), Style::default().fg(theme_colors::text())),
     ]));

@@ -576,10 +576,14 @@ pub fn disabled() -> Color {
 // chrome is the one surface whose colour `/theme` must visibly repaint.
 
 /// The dimmest text tier used by the dialogs. Was `Rgb(90, 90, 90)`.
+///
+/// `DIALOG_MUTED` and `DIALOG_TEXT_BRIGHT` used to sit beside this as fixed
+/// neutral greys outside the palette. They had no role, so `/theme` could not
+/// repaint them — the exact defect that gap inventory item 2 described. The
+/// Wave 3 migration replaced every call site with the matching
+/// `vendor::style::theme` role and removed both constants; a fixed grey with no
+/// role is a palette leak, not a design token.
 pub const DIALOG_DIM: Color = Color::Rgb(90, 90, 90);
-
-/// The mid-strength text tier used by the dialogs. Was `Rgb(180, 180, 180)`.
-pub const DIALOG_MUTED: Color = Color::Rgb(180, 180, 180);
 
 /// The brightest of the dialog text tiers: a SELECTED item's description line,
 /// and the "press Enter to use custom model" hint.

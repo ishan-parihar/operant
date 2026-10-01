@@ -9,6 +9,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::tui::vendor::style::theme;
+
 pub fn render_stats_dialog(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
     if !state.visible {
         return;
@@ -83,7 +85,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
     let mut lines = Vec::new();
 
     lines.push(Line::from(vec![
-        Span::styled("Total tokens: ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Total tokens: ", Style::default().fg(theme::dim_color())),
         Span::styled(
             format_tokens(total_tokens),
             Style::default()
@@ -92,16 +94,16 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("  Input:    ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Input:    ", Style::default().fg(theme::dim_color())),
         Span::raw(format_tokens(data.total_input_tokens)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("  Output:   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Output:   ", Style::default().fg(theme::dim_color())),
         Span::raw(format_tokens(data.total_output_tokens)),
     ]));
     lines.push(Line::default());
     lines.push(Line::from(vec![
-        Span::styled("Total cost: ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Total cost: ", Style::default().fg(theme::dim_color())),
         Span::styled(
             format!("${:.2}", data.total_cost_cents / 100.0),
             Style::default()
@@ -127,10 +129,10 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
                 longest,
                 if longest == 1 { "" } else { "s" }
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         );
         lines.push(Line::from(vec![
-            Span::styled("Streak: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Streak: ", Style::default().fg(theme::dim_color())),
             streak_value,
             streak_longest,
         ]));
@@ -139,7 +141,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
     if let Some(peak) = &data.peak_day {
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::styled("Peak day: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Peak day: ", Style::default().fg(theme::dim_color())),
             Span::styled(
                 format!("{} ({} tokens)", peak, format_tokens(data.peak_day_tokens)),
                 Style::default().fg(theme_colors::warning()),
@@ -151,7 +153,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
         lines.push(Line::default());
         lines.push(Line::from(vec![Span::styled(
             "By model:",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]));
         let mut models: Vec<_> = data.by_model.iter().collect();
         models.sort_by(|a, b| {
@@ -175,7 +177,7 @@ fn render_overview(data: &AggregatedStats, state: &StatsDialogState, area: Rect,
                 ),
                 Span::styled(
                     format!("  ${:.2}", stats.cost_cents / 100.0),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme::dim_color()),
                 ),
             ]));
         }
@@ -205,7 +207,7 @@ fn render_daily_tokens(data: &AggregatedStats, range_days: u32, area: Rect, buf:
 
     if filtered.is_empty() {
         Paragraph::new("No data yet.")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme::dim_color()))
             .render(area, buf);
         return;
     }
@@ -217,7 +219,7 @@ fn render_daily_tokens(data: &AggregatedStats, range_days: u32, area: Rect, buf:
     };
     let label_line = Line::from(vec![Span::styled(
         format!("Range: {} [r: cycle]", range_label),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]);
     Paragraph::new(label_line).render(
         Rect {
@@ -277,7 +279,7 @@ fn render_daily_tokens(data: &AggregatedStats, range_days: u32, area: Rect, buf:
             let cell = buf.cell_mut((x + j as u16, y));
             if let Some(c) = cell {
                 c.set_symbol(&ch.to_string());
-                c.set_style(Style::default().fg(Color::DarkGray));
+                c.set_style(Style::default().fg(theme::dim_color()));
             }
         }
     }
@@ -290,7 +292,7 @@ fn render_daily_tokens(data: &AggregatedStats, range_days: u32, area: Rect, buf:
 fn render_cost_heatmap(data: &AggregatedStats, area: Rect, buf: &mut Buffer) {
     if data.daily_costs.is_empty() {
         Paragraph::new("No cost data yet.")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme::dim_color()))
             .render(area, buf);
         return;
     }
@@ -306,14 +308,14 @@ fn render_cost_heatmap(data: &AggregatedStats, area: Rect, buf: &mut Buffer) {
     Paragraph::new(Line::from(vec![
         Span::styled(
             "Cost Heatmap (last 12 weeks)   no activity ",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         ),
         Span::styled("\u{25a0}", Style::default().fg(Color::Rgb(30, 30, 30))),
-        Span::styled(" low ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" low ", Style::default().fg(theme::dim_color())),
         Span::styled("\u{25a0}", Style::default().fg(Color::Rgb(0, 100, 0))),
-        Span::styled(" med ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" med ", Style::default().fg(theme::dim_color())),
         Span::styled("\u{25a0}", Style::default().fg(Color::Rgb(0, 200, 0))),
-        Span::styled(" high ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" high ", Style::default().fg(theme::dim_color())),
         Span::styled("\u{25a0}", Style::default().fg(Color::Rgb(0, 255, 0))),
     ]))
     .render(
@@ -342,7 +344,7 @@ fn render_cost_heatmap(data: &AggregatedStats, area: Rect, buf: &mut Buffer) {
         }
         Paragraph::new(Line::from(vec![Span::styled(
             label.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         )]))
         .render(
             Rect {
@@ -411,7 +413,7 @@ pub(crate) fn heatmap_color(intensity: f64) -> Color {
 fn render_models(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
     if state.model_breakdown.is_empty() {
         Paragraph::new("No model usage data yet.")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme::dim_color()))
             .render(area, buf);
         return;
     }
@@ -425,13 +427,13 @@ fn render_models(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
             "Model", "Input", "Output", "Cost"
         ),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::BOLD),
     )]));
     // Separator
     lines.push(Line::from(vec![Span::styled(
         "\u{2500}".repeat(area.width.saturating_sub(2) as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
 
     let mut total_input: u64 = 0;
@@ -473,7 +475,7 @@ fn render_models(state: &StatsDialogState, area: Rect, buf: &mut Buffer) {
     // Grand total separator + row
     lines.push(Line::from(vec![Span::styled(
         "\u{2500}".repeat(area.width.saturating_sub(2) as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]));
     lines.push(Line::from(vec![
         Span::styled(

@@ -7,10 +7,10 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::tui::model_picker::EffortLevel;
-use crate::tui::overlays::{centered_rect, cycle_next, cycle_prev};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, cycle_next, cycle_prev, modal_frame};
 use crate::tui::vendor::style::theme;
 
 #[derive(Debug, Default, Clone)]
@@ -61,19 +61,21 @@ pub fn render_effort_picker(frame: &mut Frame, state: &EffortPickerState, area: 
         return;
     }
 
-    let w = 44u16.min(area.width.saturating_sub(4));
-    let h = 11u16.min(area.height.saturating_sub(4));
-    let dlg = centered_rect(w, h, area);
-
-    frame.render_widget(Clear, dlg);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::accent_color()))
-        .title(Span::styled(
-            " Effort level ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+    // Natural desired size is 44×11; `modal_frame` clamps it to the terminal.
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "Effort level",
+            hint: HINT_ESC,
+            width: 44,
+            height: 11,
+            header_height: 1,
+            footer_height: 0,
+            // Same accent role `journey_view` uses for a panel border.
+            border_fg: theme::accent_color(),
+        },
+    );
 
     let mut lines: Vec<Line> = Vec::new();
     let options: [(EffortLevel, &str); 4] = [
@@ -104,5 +106,5 @@ pub fn render_effort_picker(frame: &mut Frame, state: &EffortPickerState, area: 
         Style::default().fg(theme::dim_color()),
     )));
 
-    frame.render_widget(Paragraph::new(lines).block(block), dlg);
+    frame.render_widget(Paragraph::new(lines), layout.body_area);
 }

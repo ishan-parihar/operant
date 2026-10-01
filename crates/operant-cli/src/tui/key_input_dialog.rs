@@ -6,12 +6,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::tui::overlays::{centered_rect, render_dark_overlay, render_dialog_bg};
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// Desired size. The height was previously an unclamped `9`; `modal_layout` now
+/// bounds it against the area and floors it at `MIN_MODAL_H`.
+const DIALOG_WIDTH: u16 = 60;
+const DIALOG_HEIGHT: u16 = 9;
 
 // ---------------------------------------------------------------------------
 // State
@@ -85,59 +91,39 @@ impl KeyInputDialogState {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// Render the key input dialog overlay — OpenCode-style: dark overlay, no
-/// border, minimal and polished.
+/// Render the key input dialog overlay: dark overlay, rounded modal frame,
+/// masked key row.
 pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, area: Rect) {
     if !state.visible {
         return;
     }
 
     let accent = theme_colors::accent();
-    let dim = theme_colors::DIALOG_DIM;
-    let dialog_bg = theme_colors::panel_bg();
+    let dim = theme::dim_color();
 
-    // ── Darken the entire background ──
-    render_dark_overlay(frame, area);
+    let title_text = format!("Connect {}", state.provider_name);
 
-    // ── Dialog size ──
-    let width = 60u16.min(area.width.saturating_sub(4));
-    let height = 9u16;
-    let dialog_area = centered_rect(width, height, area);
-
-    // ── Fill dialog background (no border) ──
-    render_dialog_bg(frame, dialog_area);
-
-    let inner = Rect {
-        x: dialog_area.x + 1,
-        y: dialog_area.y + 1,
-        width: dialog_area.width.saturating_sub(2),
-        height: dialog_area.height.saturating_sub(2),
-    };
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: &title_text,
+            hint: HINT_ESC,
+            width: DIALOG_WIDTH,
+            height: DIALOG_HEIGHT,
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
     // ── Build lines ──
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Title row: "Connect {provider}" on left, "esc" on right
-    let title_text = format!("Connect {}", state.provider_name);
-    let title_pad = inner.width.saturating_sub(title_text.len() as u16 + 5) as usize;
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {}", title_text),
-            Style::default().fg(accent).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:>width$}", "esc ", width = title_pad),
-            Style::default().fg(dim),
-        ),
-    ]));
-
-    // Blank line
-    lines.push(Line::from(""));
-
     // "API Key:" label
     lines.push(Line::from(vec![Span::styled(
         " API Key:",
-        Style::default().fg(theme_colors::DIALOG_MUTED),
+        Style::default().fg(theme::ai_text()),
     )]));
 
     // Masked key display (show last 4 chars, mask the rest)
@@ -172,6 +158,8 @@ pub fn render_key_input_dialog(frame: &mut Frame, state: &KeyInputDialogState, a
         Span::styled(" confirm", Style::default().fg(dim)),
     ]));
 
-    let para = Paragraph::new(lines).bg(dialog_bg);
-    frame.render_widget(para, inner);
+    frame.render_widget(
+        Paragraph::new(lines).bg(theme_colors::panel_bg()),
+        layout.body_area,
+    );
 }

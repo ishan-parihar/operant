@@ -22,12 +22,12 @@ use operant_core::memory::{MemoryBlock, MemoryStore};
 use operant_core::skills::Skill;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::path::PathBuf;
 
-use crate::tui::overlays::centered_rect;
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame};
 use crate::tui::theme_colors;
 use crate::tui::vendor::style::theme;
 
@@ -184,25 +184,24 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
         return;
     }
 
-    let w = 90u16.min(area.width.saturating_sub(4));
-    let h = 26u16.min(area.height.saturating_sub(4));
-    let dlg = centered_rect(w, h, area);
-
-    frame.render_widget(Clear, dlg);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::accent_color()))
-        .title(Span::styled(
-            " Journey — skills + memories ",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-
-    let inner = {
-        let inner = block.inner(dlg);
-        frame.render_widget(block, dlg);
-        inner
-    };
+    // Natural desired size is 90×26; the modal primitive clamps it to the
+    // terminal with a `space::M` margin and guarantees the readable floors.
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: "Journey — skills + memories",
+            hint: HINT_ESC,
+            width: 90,
+            height: 26,
+            // One header row for the title, one footer row for the pane hint
+            // (previously carved out of the bottom of the block's inner area).
+            header_height: 1,
+            footer_height: 1,
+            border_fg: theme::accent_color(),
+        },
+    );
+    let inner = layout.body_area;
 
     if !state.last_error.is_empty() && state.skills.is_empty() && state.memories.is_empty() {
         let lines = vec![
@@ -220,7 +219,7 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
             Line::from(""),
             Line::from(Span::styled(
                 "Press Esc to close.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -247,12 +246,7 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
     render_memories_pane(frame, state, right_area);
 
     // Footer: graph stats + key hints (carved out of the bottom of inner).
-    let footer = Rect {
-        x: inner.x,
-        y: inner.y + inner.height.saturating_sub(1),
-        width: inner.width,
-        height: 1,
-    };
+    let footer = layout.footer_area;
     let pane_hint = match state.active_pane {
         JourneyPane::Skills => "[Skills]",
         JourneyPane::Memories => "[Memories]",
@@ -273,7 +267,7 @@ pub fn render_journey_view(frame: &mut Frame, state: &JourneyViewState, area: Re
     frame.render_widget(
         Paragraph::new(vec![Line::from(Span::styled(
             hint,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::dim_color()),
         ))]),
         footer,
     );
@@ -284,14 +278,14 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     let border_color = if is_active {
         theme_colors::accent()
     } else {
-        Color::DarkGray
+        theme::dim_color()
     };
     let title_style = if is_active {
         Style::default()
             .fg(theme_colors::accent())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme::dim_color())
     };
 
     let block = Block::default()
@@ -316,7 +310,7 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
             Line::from(""),
             Line::from(Span::styled(
                 "  operant skills install <path>",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines), inner);
@@ -327,7 +321,7 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
     lines.push(Line::from(vec![Span::styled(
         format!(" {:<24} {:<14} {:<6}", "Name", "Category", "Ver"),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
@@ -344,8 +338,8 @@ fn render_skills_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect) {
         let prefix = if is_sel { "›" } else { " " };
         let row_style = if is_sel {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(theme::user_bg())
+                .bg(theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme_colors::text())
@@ -369,14 +363,14 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
     let border_color = if is_active {
         theme_colors::warning()
     } else {
-        Color::DarkGray
+        theme::dim_color()
     };
     let title_style = if is_active {
         Style::default()
             .fg(theme_colors::warning())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme::dim_color())
     };
 
     let block = Block::default()
@@ -401,11 +395,11 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
             Line::from(""),
             Line::from(Span::styled(
                 "Memories accumulate as you use operant.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
             Line::from(Span::styled(
                 "Use /memory to manage MEMORY.md directly.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme::dim_color()),
             )),
         ];
         frame.render_widget(Paragraph::new(lines), inner);
@@ -416,7 +410,7 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
     lines.push(Line::from(vec![Span::styled(
         format!(" {:<10} {:<3} {:<14} {}", "Type", "Imp", "ID", "Content"),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme::dim_color())
             .add_modifier(Modifier::BOLD),
     )]));
     lines.push(Line::from(""));
@@ -435,8 +429,8 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
         let prefix = if is_sel { "›" } else { " " };
         let row_style = if is_sel {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(theme::user_bg())
+                .bg(theme::warning_color())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme_colors::text())
@@ -448,7 +442,7 @@ fn render_memories_pane(frame: &mut Frame, state: &JourneyViewState, area: Rect)
         } else if mem.importance >= 40 {
             Style::default().fg(theme_colors::warning())
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::dim_color())
         };
         let mtype = truncate(&mem.block_type, 10);
         let id = truncate(&mem.id, 14);

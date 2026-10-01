@@ -6,13 +6,22 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::tui::overlays::{HINT_ESC, MIN_MODAL_H, ModalSpec, modal_frame, modal_layout};
 use crate::tui::render::{balanced_wrap, display_width};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
+
+/// The dialog's preferred width band. `modal_layout` owns the clamp and the
+/// `MIN_MODAL_W` floor; this only states the desired size.
+const DIALOG_WIDTH_MIN: u16 = 40;
+const DIALOG_WIDTH_MAX: u16 = 80;
+/// The margin the desired width leaves on each side of the terminal.
+const DIALOG_WIDTH_MARGIN: u16 = 8;
 
 /// Distinguishes what kind of action the permission dialog is for.
 /// This drives how many options are shown and what the command block looks like.
@@ -335,18 +344,6 @@ fn command_reason_body(reason: String, command: &str) -> String {
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
-/// Compute a centred `Rect` of the given `width` × `height` inside `area`.
-pub(crate) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    }
-}
-
 /// Wrap `text` to fit within `width` display columns, preferring whitespace
 /// breaks but falling back to a hard character break when a single token is
 /// longer than `width`. Without the hard-break fallback, long unbreakable
@@ -434,7 +431,7 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
 /// Render a permission-request dialog as a centred overlay.
 ///
 /// Layout (top → bottom):
-///   ┌─ Permission Required ─────────────────────────┐
+///   ╭─ Permission Required ────────────── Esc to close ─╮
 ///   │                                                │
 ///   │  Tool: Bash                                    │
 ///   │                                                │
@@ -443,29 +440,29 @@ pub(crate) fn word_wrap(text: &str, width: usize) -> Vec<String> {
 ///   │  This will execute a shell command.             │
 ///   │  This may modify system-wide security policy.   │
 ///   │                                                │
-///   │  `1` Yes, allow once                           │
-///   │  `2` Yes, allow this session                   │
-///   │▶ `3` Yes, always allow (persistent)            │
-///   │  `4` No, deny                                  │
-///   └────────────────────────────────────────────────┘
+///   │  [y] Yes, allow once                           │
+///   │  [Y] Yes, allow this session                   │
+///   │▶ [p] Yes, always allow (persistent)            │
+///   │  [n] No, deny                                  │
+///   ╰────────────────────────────────────────────────╯
 ///
 /// For `Bash` with a `suggested_prefix`, a 5th option is shown:
-///   │  `5` Allow commands matching git*              │
+///   │  [g] Allow commands matching git*              │
 ///
 /// For `FileRead`, only 3 options (once / session / deny).
 /// For `FileWrite`, 4 options (once / session / project / deny).
 pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area: Rect) {
-    // Scale dialog width with the terminal: minimum 40 cols for narrow screens,
-    // maximum 80 cols on wide ones, otherwise leave a 4-col margin on each side.
-    // Without this the dialog was pinned at 62 cols, which made long commands
-    // (Windows paths, multi-segment shell pipelines) overflow even when the
-    // terminal had plenty of room.
-    let dialog_width = area
+    // The wrap width depends on the *clamped* dialog width, which only
+    // `modal_layout` knows, so ask it once for the geometry up front; the
+    // height it later computes from the content is the second half of the same
+    // answer.
+    let desired_width = area
         .width
-        .saturating_sub(8)
-        .clamp(40, 80)
-        .min(area.width.saturating_sub(4));
-    let text_width = (dialog_width as usize).saturating_sub(4); // 2 border + 2 padding
+        .saturating_sub(DIALOG_WIDTH_MARGIN)
+        .clamp(DIALOG_WIDTH_MIN, DIALOG_WIDTH_MAX);
+    let geometry = modal_layout(area, desired_width, MIN_MODAL_H, 1, 0);
+    // 2 border cells + 2 padding cells.
+    let text_width = (geometry.dialog_area.width as usize).saturating_sub(4);
 
     // Build a command block for Bash / PowerShell dialogs to prominently display the command.
     // The chevron-prefix is only painted on the FIRST wrapped line; continuation
@@ -545,12 +542,9 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
         + pr.options.len() as u16
         + 1; // trailing blank
 
-    let dialog_height = (content_lines + 2) // +2 for top/bottom border
-        .min(area.height.saturating_sub(4));
-
-    let dialog_area = centered_rect(dialog_width, dialog_height, area);
-
-    frame.render_widget(Clear, dialog_area);
+    let desired_height = 1 // title row
+        + content_lines
+        + 2; // +2 for top/bottom border
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -629,7 +623,7 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
                 .fg(theme_colors::success())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::dim_color())
         };
         let label_style = if is_selected {
             Style::default().add_modifier(Modifier::BOLD)
@@ -646,31 +640,34 @@ pub fn render_permission_dialog(frame: &mut Frame, pr: &PermissionRequest, area:
 
     let (border_color, title_text) = match &pr.kind {
         PermissionDialogKind::Bash { .. } | PermissionDialogKind::PowerShell { .. } => {
-            (theme_colors::warning(), " Permission Required ")
+            (theme::warning_color(), "Permission Required")
         }
-        PermissionDialogKind::FileRead { .. } => (theme_colors::accent(), " File Read Permission "),
-        PermissionDialogKind::FileWrite { .. } => {
-            (theme_colors::warning(), " File Write Permission ")
-        }
-        PermissionDialogKind::Generic => (theme_colors::warning(), " Permission Required "),
+        PermissionDialogKind::FileRead { .. } => (theme_colors::accent(), "File Read Permission"),
+        PermissionDialogKind::FileWrite { .. } => (theme::warning_color(), "File Write Permission"),
+        PermissionDialogKind::Generic => (theme::warning_color(), "Permission Required"),
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            title_text,
-            Style::default()
-                .fg(border_color)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .border_style(Style::default().fg(border_color));
+    let layout = modal_frame(
+        frame,
+        area,
+        &ModalSpec {
+            title: title_text,
+            hint: HINT_ESC,
+            width: desired_width,
+            height: desired_height,
+            header_height: 1,
+            footer_height: 0,
+            // The border itself carries the meaning for a permission prompt.
+            border_fg: border_color,
+        },
+    );
 
     // `Wrap { trim: false }` is a defensive safety net: word_wrap already
     // breaks every span to fit, but if a future change introduces an
     // un-wrapped line (e.g. a tool-emitted preview), ratatui will still wrap
     // it at the dialog border instead of letting it bleed past the right edge.
-    let para = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(para, dialog_area);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        layout.body_area,
+    );
 }

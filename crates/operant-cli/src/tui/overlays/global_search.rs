@@ -2,7 +2,9 @@
 //
 // Extracted from the overlays.rs monolith.
 
+use crate::tui::overlays::{HINT_ESC, ModalSpec, modal_frame_buf};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 
 // ---------------------------------------------------------------------------
 // Global Search Dialog (T2-7)
@@ -136,9 +138,9 @@ pub fn render_global_search(
 ) {
     use ratatui::{
         layout::Rect,
-        style::{Color, Modifier, Style},
+        style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, Borders, Clear, Paragraph, Widget},
+        widgets::{Paragraph, Widget},
     };
     use std::path::Path;
 
@@ -146,30 +148,29 @@ pub fn render_global_search(
         return;
     }
 
-    let w = (area.width * 4 / 5).max(40).min(area.width);
-    let h = (area.height * 3 / 4).max(10).min(area.height);
-    let x = area.x + (area.width - w) / 2;
-    let y = area.y + (area.height - h) / 4;
-    let dialog = Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    };
+    // The title used to carry its key hints inline
+    // (" Search [Esc: close, Enter: insert, ↑↓: navigate] "). They belong on
+    // the bottom border, with the dismissal spelled the one canonical way, so
+    // the hint is composed from `HINT_ESC` plus the two action hints in the
+    // order the old inline title used.
+    let hint = format!("{HINT_ESC}  \u{00b7}  Enter: insert  \u{00b7}  \u{2191}\u{2193}: navigate");
+    let layout = modal_frame_buf(
+        buf,
+        area,
+        &ModalSpec {
+            title: "Search",
+            hint: &hint,
+            // 80% width, 75% height. `modal_layout` owns the clamp against the
+            // area and the readable floor.
+            width: (area.width * 4 / 5).max(40),
+            height: (area.height * 3 / 4).max(10),
+            header_height: 1,
+            footer_height: 0,
+            ..Default::default()
+        },
+    );
 
-    Clear.render(dialog, buf);
-    Block::default()
-        .title(" Search [Esc: close, Enter: insert, \u{2191}\u{2193}: navigate] ")
-        .borders(Borders::ALL)
-        .style(Style::default().fg(theme_colors::accent()))
-        .render(dialog, buf);
-
-    let inner = Rect {
-        x: dialog.x + 1,
-        y: dialog.y + 1,
-        width: dialog.width.saturating_sub(2),
-        height: dialog.height.saturating_sub(2),
-    };
+    let inner = layout.body_area;
 
     // Query input bar (first row)
     let query_line = Line::from(vec![
@@ -193,7 +194,7 @@ pub fn render_global_search(
     // Separator
     let sep = Line::from(Span::styled(
         "\u{2500}".repeat(inner.width as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     ));
     Paragraph::new(sep).render(
         Rect {
@@ -310,7 +311,7 @@ pub fn render_global_search(
                         .add_modifier(Modifier::BOLD)
                         .fg(theme_colors::text())
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(theme::dim_color())
                 };
 
                 // Highlight query match in text
@@ -349,7 +350,10 @@ pub fn render_global_search(
 
                 let mut spans = vec![
                     Span::styled(prefix.to_string(), style),
-                    Span::styled(format!("{:>4}  ", result.line), style.fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{:>4}  ", result.line),
+                        style.fg(theme::dim_color()),
+                    ),
                 ];
                 spans.extend(text_spans);
 
@@ -388,7 +392,7 @@ pub fn render_global_search(
     let status_y = inner.y + inner.height.saturating_sub(1);
     Paragraph::new(Line::from(vec![Span::styled(
         status,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme::dim_color()),
     )]))
     .render(
         Rect {
