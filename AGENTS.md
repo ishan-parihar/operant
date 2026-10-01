@@ -54,8 +54,9 @@ git add <specific files>
 # 4. Commit with a structured message: <type>(iter-N): <subject>
 #    - type: feat | fix | refactor | docs | chore | test | perf | security
 #    - iter-N: monotonically increasing iteration number
-#              (look at `git log --oneline | grep iter- | head -1`
-#               to find the last one, then +1)
+#              (look it up on origin/main AFTER a `git fetch origin`,
+#               then +1 — see "Iteration Numbering" below. Local history
+#               is stale and reading it races concurrent agents)
 git commit -m "feat(iter-70): short imperative subject" \
            -m "Body: what changed and why. Reference files and line numbers."
 
@@ -82,11 +83,70 @@ operant --version   # confirm the deployed binary matches
 
 ### Iteration Numbering
 
-- Find the current iteration number: `git log --oneline | rg 'iter-[0-9]+' | head -1`
+- Find the current iteration number from **`origin/main`, never local history**:
+
+  ```bash
+  git fetch origin
+  git log origin/main --oneline | rg -o 'iter-[0-9]+' | head -1
+  ```
+
+  Local history is stale the moment a concurrent agent pushes, and deriving the
+  number from it is a **read-then-write race**: two agents run the lookup at the
+  same moment, read the same "last" number, and both compute the same "next".
+  This has produced three duplicate labels (iter-516, iter-518, iter-529).
+  `origin/main` is the only numbering authority.
+
 - Use the **next** number. Never reuse, never skip.
 - Documentation-only iterations still count (e.g. `docs(iter-71): ...`).
 - If you do multiple unrelated changes in one session, each is its own iteration
   with its own commit and its own push.
+
+#### Before you push: check nobody took your number
+
+```bash
+git fetch origin
+git rev-list --left-right --count origin/main...HEAD   # behind=? ahead=?
+```
+
+If `ahead` is not exactly 1, or a peer advanced `origin/main` past your base,
+or your number is already taken: **`git commit --amend`** with the next free
+number, then push.
+
+Run this check **before every push**. Amending an *unpushed* commit is local-only
+and safe; amending after a push would require a force-push, which is forbidden —
+which is precisely why the check has to happen first.
+
+#### If a duplicate label reaches `origin/main`, do not rewrite history
+
+Two commits sharing a label is a **cosmetic defect, not an incident**. Renumbering
+published history is strictly worse than the duplicate: git history is
+append-only by design, and an audit that can be rewritten is not an audit. Leave
+both commits, note the collision in the next commit body, and carry on.
+
+Force-pushing to "clean up" a number is never the fix.
+
+### Concurrent Agents
+
+The iteration race above is the *only* collision mode seen so far. Zero file-level
+conflicts occurred across four parallel agents. The rules that produced that:
+
+- **Exhaustive, exclusive file lists.** Every agent brief ends with a fenced block
+  of exactly the files it may edit, plus "need a change elsewhere? STOP and report
+  it instead" — report, do not widen scope.
+- **Name the frozen set explicitly**, including files a reader would reasonably
+  assume are editable (a shared dispatch table, a shared layout module, the palette).
+- **One serialisation point per generated artefact.** When several agents can
+  rewrite the same generated files, forbid *all* of them to and have the
+  integrator do it once centrally at the end. An agent regenerating a baseline
+  while another rebuilds the shared binary can capture the wrong artefact and
+  commit it as truth.
+- **Quote the expected baseline** — the exact test count, the exact gate output —
+  so "done" is checkable rather than asserted.
+- **Serialise refactors that share a referee.** Two concurrent refactors verified
+  against the same gate make a failure ambiguous and expensive to diagnose.
+- **Measure; believe the probe over the comment.** Several load-bearing defects
+  here were found by running something and contradicted a plausible code comment.
+  If a probe disagrees with a comment, the probe is right.
 
 ### What Counts as an Iteration
 
@@ -943,8 +1003,9 @@ model = "gpt-4"       # Default model (override in user config)
 ## TL;DR for New Agents
 
 1. **Read this file first.** Then `git pull --ff-only`.
-2. **Every change is one iteration.** Find the next iteration number with
-   `git log --oneline | rg 'iter-[0-9]+' | head -1`.
+2. **Every change is one iteration.** Find the next iteration number from
+   `origin/main` AFTER a `git fetch origin` — never from local history, which is
+   stale and races concurrent agents. See "Iteration Numbering".
 3. **Source `scripts/dev-env.sh`** before any cargo command.
 4. **Compile scoped** (`-p operant-core --lib`), never `--workspace` mid-iteration.
 5. **Verify locally**: `cargo fmt`, `cargo check -p <crate>`, `cargo test -p <crate>`,
