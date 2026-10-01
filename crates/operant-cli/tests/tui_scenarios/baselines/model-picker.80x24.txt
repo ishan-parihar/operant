@@ -3,7 +3,7 @@
 
 
 
-       ╭───────────────────────────────────────────────────────────────╮
+       ┌───────────────────────────────────────────────────────────────┐
        │ Select model                                                  │
        │ Search                                                        │
        │                                                               │
@@ -16,7 +16,7 @@
        │   claude-sonnet-4-5-20250929  Anthropic                       │
        │   claude-sonnet-4-6  Anthropic                                │
  offlin│ enter select  ←/→ effort                                      │
-───────╰───────────────────────────────────────────────────Esc to close╯────────
+───────└───────────────────────────────────────────────────Esc to close┘────────
 ❯ ▏
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
