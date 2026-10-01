@@ -125,29 +125,6 @@ both commits, note the collision in the next commit body, and carry on.
 
 Force-pushing to "clean up" a number is never the fix.
 
-### Concurrent Agents
-
-The iteration race above is the *only* collision mode seen so far. Zero file-level
-conflicts occurred across four parallel agents. The rules that produced that:
-
-- **Exhaustive, exclusive file lists.** Every agent brief ends with a fenced block
-  of exactly the files it may edit, plus "need a change elsewhere? STOP and report
-  it instead" — report, do not widen scope.
-- **Name the frozen set explicitly**, including files a reader would reasonably
-  assume are editable (a shared dispatch table, a shared layout module, the palette).
-- **One serialisation point per generated artefact.** When several agents can
-  rewrite the same generated files, forbid *all* of them to and have the
-  integrator do it once centrally at the end. An agent regenerating a baseline
-  while another rebuilds the shared binary can capture the wrong artefact and
-  commit it as truth.
-- **Quote the expected baseline** — the exact test count, the exact gate output —
-  so "done" is checkable rather than asserted.
-- **Serialise refactors that share a referee.** Two concurrent refactors verified
-  against the same gate make a failure ambiguous and expensive to diagnose.
-- **Measure; believe the probe over the comment.** Several load-bearing defects
-  here were found by running something and contradicted a plausible code comment.
-  If a probe disagrees with a comment, the probe is right.
-
 ### What Counts as an Iteration
 
 - A bug fix → one iteration.
