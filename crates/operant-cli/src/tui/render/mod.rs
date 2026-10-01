@@ -30,8 +30,8 @@ pub(crate) use selection::{
 };
 pub(crate) use tools::{build_tool_names, render_system_annotation_lines};
 pub(crate) use utils::{
-    is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color, truncate_end,
-    truncate_middle, truncate_text,
+    clear_area, is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color,
+    truncate_end, truncate_middle, truncate_text,
 };
 // The width seam, re-exported at `pub` so sibling modules can `pub use` it.
 pub use utils::{balanced_wrap, display_width, take_width};
@@ -66,6 +66,15 @@ const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
 pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
     app.last_selectable_area.set(size);
+
+    // Clear the frame before painting. A cell can only survive from the previous
+    // frame if the terminal's real state has diverged from the buffer ratatui
+    // diffs against; a per-cell reset removes buffer divergence as a candidate.
+    // See `utils::clear_area` for why this is defence-in-depth today rather than
+    // a fix for an observed defect. The out-of-grid writers (pinned graphics, the
+    // OSC 8 overlay) are the remaining divergence source and are handled by
+    // their own passes, not by this one.
+    clear_area(frame, size);
 
     // The whole-frame fill is dispatch row 0 (`base_fill`): it must paint before
     // anything else so the terminal's default (blue on Windows) does not bleed

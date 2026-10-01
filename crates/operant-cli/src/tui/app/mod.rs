@@ -580,6 +580,46 @@ pub struct App {
 // (iter-143b already deleted the speech_mode system; caveman_prompt/rocky_prompt
 // leaf functions were left behind as orphans and are now removed too.)
 
+/// A backend that can bracket a frame in a DEC private synchronized update
+/// (DEC 2026: `CSI ? 2026 h` / `CSI ? 2026 l`).
+///
+/// ratatui's `Backend` trait exposes no way to write a raw escape sequence and
+/// `App::run` is generic over it, so the two backends this TUI is actually
+/// driven with are named here. The real one emits the sequences; `TestBackend` —
+/// the headless scenario and unit-test path — is a no-op, because it renders to
+/// memory and has no terminal to synchronise.
+pub(crate) trait SynchronizedUpdate {
+    /// Enter synchronized-update mode. Failure is not fatal: a terminal that
+    /// does not implement DEC 2026 ignores the unknown private mode, so the
+    /// frame is simply drawn unsynchronised.
+    fn begin_synchronized_update(&mut self) -> std::io::Result<()>;
+
+    /// Leave synchronized-update mode. Must be attempted on every path out of
+    /// the bracketed region, a failed draw included, or the terminal keeps
+    /// withholding output waiting for an end sequence that never arrives.
+    fn end_synchronized_update(&mut self) -> std::io::Result<()>;
+}
+
+impl<W: std::io::Write> SynchronizedUpdate for ratatui::backend::CrosstermBackend<W> {
+    fn begin_synchronized_update(&mut self) -> std::io::Result<()> {
+        crossterm::execute!(self, crossterm::terminal::BeginSynchronizedUpdate)
+    }
+
+    fn end_synchronized_update(&mut self) -> std::io::Result<()> {
+        crossterm::execute!(self, crossterm::terminal::EndSynchronizedUpdate)
+    }
+}
+
+impl SynchronizedUpdate for ratatui::backend::TestBackend {
+    fn begin_synchronized_update(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn end_synchronized_update(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl App {
     // -------------------------------------------------------------------
     // Main run loop
@@ -773,7 +813,7 @@ impl App {
             .release_all(crate::tui::background_tasks::now_unix_secs());
     }
 
-    pub fn run<B: ratatui::backend::Backend>(
+    pub fn run<B: ratatui::backend::Backend + SynchronizedUpdate>(
         &mut self,
         terminal: &mut Terminal<B>,
     ) -> anyhow::Result<Option<String>>
@@ -1165,14 +1205,43 @@ impl App {
             // `terminal.current_buffer_mut()` points at the empty next-frame
             // slot. `CompletedFrame.buffer` is the one we actually want.
             let osc8_hits = {
+                // Wrap the frame in a DEC private synchronized update (DEC 2026,
+                // `CSI ? 2026 h` / `l`) so the terminal applies every cell
+                // change atomically. ratatui's crossterm backend otherwise
+                // streams cells one at a time, and eagerly-repainting terminals
+                // — plus slow, remote, or multiplexed (tmux/screen) sessions —
+                // show that as visible tearing and flicker.
+                //
+                // `sync` records whether the begin sequence was accepted. An
+                // emulator that does not implement DEC 2026 ignores the unknown
+                // private mode, so the only failure worth branching on is the
+                // write itself.
+                let sync = terminal.backend_mut().begin_synchronized_update().is_ok();
                 let draw_start = std::time::Instant::now();
-                let completed = terminal.draw(|f| render::render_app(f, self))?;
+                let drawn = terminal.draw(|f| render::render_app(f, self));
                 let render_ms = draw_start.elapsed().as_secs_f64() * 1000.0;
-                self.debug_hub.record_frame(render_ms);
-                // Headless per-frame capture (armed by
-                // `tui debug simulate --capture-frames`); inert otherwise.
-                self.debug_hub.capture_frame(completed.buffer);
-                crate::osc8::scan_buffer_for_urls(completed.buffer)
+                // The buffer work stays INSIDE the bracket, because
+                // `CompletedFrame` borrows the terminal and the end sequence
+                // needs `&mut` access to it. `map` consumes `drawn`, which ends
+                // that borrow before the line below.
+                let outcome = drawn.map(|completed| {
+                    self.debug_hub.record_frame(render_ms);
+                    // Headless per-frame capture (armed by
+                    // `tui debug simulate --capture-frames`); inert otherwise.
+                    self.debug_hub.capture_frame(completed.buffer);
+                    crate::osc8::scan_buffer_for_urls(completed.buffer)
+                });
+                // Close the synchronized update BEFORE propagating a draw
+                // error. Leaving the terminal inside DEC 2026 mode would make it
+                // hold back every subsequent frame waiting for an end sequence
+                // that never arrives, so the screen freezes on the way out. The
+                // `?` below still surfaces the draw error unchanged; only this
+                // best-effort restore is swallowed, because a failure to write
+                // the end sequence must not mask the real failure.
+                if sync {
+                    let _ = terminal.backend_mut().end_synchronized_update();
+                }
+                outcome?
             };
 
             // Reflow bookkeeping. The just-painted row is only known now that

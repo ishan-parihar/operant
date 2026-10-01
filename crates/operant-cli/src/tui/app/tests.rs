@@ -1433,8 +1433,10 @@ fn test_focus_gained_resets_activity_timer() {
 // dialog-unification refactor (Phase B): every listed overlay must open
 // via its slash command and close on Esc.
 
-fn drive_keys<B: ratatui::backend::Backend>(app: &mut App, terminal: &mut ratatui::Terminal<B>)
-where
+fn drive_keys<B: ratatui::backend::Backend + super::SynchronizedUpdate>(
+    app: &mut App,
+    terminal: &mut ratatui::Terminal<B>,
+) where
     B::Error: Send + Sync + 'static,
 {
     let mut guard = 0;

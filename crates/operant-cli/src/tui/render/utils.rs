@@ -32,6 +32,43 @@ pub(crate) fn is_modal_open(app: &App) -> bool {
     app.any_modal_open()
 }
 
+/// Reset every cell in `area` back to the terminal default (symbol `" "`, no
+/// fg/bg, no modifiers), so the frame starts from a known-empty buffer.
+///
+/// ## Why this is here even though `base_fill` already covers the frame
+///
+/// The two independent things that make stale cells impossible today are:
+///
+/// 1. ratatui's `Terminal::swap_buffers` calls `Buffer::reset()` on the buffer
+///    the *next* frame renders into, so every frame already starts blank; and
+/// 2. dispatch row 0 (`base_fill`) writes `user_bg`/`text` over the whole
+///    `frame.area()` on every frame.
+///
+/// Given both, the buffer this produces is byte-identical to the buffer
+/// without the clear, so the emitted diff is identical too — **today this is
+/// defence-in-depth, not a bug fix.** It is kept because the invariant it
+/// relies on is a property of a *data table* (`DISPATCH[0]`) and of a
+/// dependency's internals, neither of which is enforced at this call site. A
+/// future surface that reorders the dispatch, gives `base_fill` a `visible`
+/// guard, or lands under a `ctx.stop` raised by an earlier row would silently
+/// reintroduce exactly the stale-cell class jcode hit on macOS, and 40-odd
+/// agents are about to add surfaces to that table.
+///
+/// `Color::Reset` rather than the themed background: the point of a clear is to
+/// return cells to whatever the *terminal* considers default, so native text
+/// selection still works in every emulator.
+pub(crate) fn clear_area(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    for x in area.left()..area.right() {
+        for y in area.top()..area.bottom() {
+            buf[(x, y)].reset();
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 /// Render an error modal dialog with wrapped content.
 pub(crate) fn render_error_modal(
