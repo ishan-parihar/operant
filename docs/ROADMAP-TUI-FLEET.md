@@ -259,12 +259,51 @@ is why it is parked in `excluded.json`). So it is a loaded gun, not a firing
 one: it arms itself the moment someone wires that dialog up, and nothing will
 fail loudly at that moment.
 
-**Options:** (a) leave as-is and document; (b) make `dialog_priority()` the real
-router in its own commit, accepting the behaviour change and regenerating
-goldens; (c) reconcile the two orders toward `dialog_priority()` and add the
-three missing entries, keeping the inline shape.
+**RESOLVED — recommended resolution, and why the obvious answer is wrong.**
 
-I did **not** do this in iter-528: converting the router is a behaviour change
+These are two problems wearing one coat, and they deserve different answers.
+
+**Problem 1 — the three missing entries are an unambiguous bug.** `dialog_priority()` is
+supposed to describe the UI's dialog set. It omits three real, reachable dialogs
+(`memory_file_selector`, `theme_screen`, `rewind_flow`). That is wrong regardless of
+any ordering question, and it is the part that becomes a live bug the instant anyone
+calls the chain as a router — those three dialogs would go unreachable. Fix it:
+add the three entries. **Zero behaviour change today** (nothing calls the chain),
+and it makes the chain a faithful description of the UI.
+
+**Problem 2 — the five diverging pairs cannot be fixed for free.** My earlier
+framing listed option (c) as "no behaviour change at 120x40, goldens stay valid."
+**That was wrong**, and it matters: converting the router (b) *and* reordering the
+gates to match the chain (c) are **both** behaviour changes. Reordering the inline
+gates would flip which dialog receives the key for BypassPermissions/GlobalSearch,
+Help/HistorySearch, SessionBrowser/SessionBranching and Settings/Export — and all
+four of those pairs are reachable today. There is no zero-risk way to *enforce*
+agreement.
+
+So the only zero-risk action is to stop asserting an equivalence that does not
+exist, and make the next divergence fail loudly instead of silently:
+
+1. Add the three missing entries (Problem 1).
+2. Add a **drift guard test**: every inline-gated dialog must appear in the chain.
+   Divergence becomes a test failure rather than a latent routing bug.
+3. Correct the comment at `key_handling.rs:43-45`. It currently claims the inline
+   handlers "already follow the correct priority order". They do not, and that
+   sentence is what would make the next agent trust the chain.
+4. **Do not** convert the router and **do not** reorder the gates. Both are
+   behaviour changes with no bug report, no user-visible symptom, and no failing
+   test justifying them. Enforcing an ordering nobody has complained about would be
+   changing shipped behaviour on a hunch.
+
+Revisit only when something concrete arrives: a routing bug report, or
+`mcp_approval` finally getting its call site — at which point the priority-3-vs-inline-19
+inversion stops being latent and this becomes a real, reproducible bug worth an
+iteration of its own.
+
+**Note on ordering intent:** neither chain encodes recency. Both are static
+priorities. "Most recently opened wins" is arguably the correct model and neither
+implements it — but that is a redesign, not a fix, and out of scope here.
+
+I did **not** do any of this in iter-528: converting the router is a behaviour change
 disguised as a refactor, and it belongs in its own iteration where the intent
 can be judged.
 
