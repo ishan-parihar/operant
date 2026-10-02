@@ -18,6 +18,23 @@ pub mod banner;
 pub mod bypass_permissions_dialog;
 pub mod clipboard;
 pub mod context_viz;
+// Copy-target detection for the copy-badge feature. Detection lands before its
+// badge consumer, so nothing calls in yet and the whole module would be dead
+// code; `expect` rather than `allow` so it fails loudly and gets removed the
+// moment the badge renders.
+//
+// `cfg_attr`, not a bare `#[expect]`: the module's own 27 tests DO read its
+// items, so under `--all-targets` the expectation is unfulfilled and warns.
+// The dead-ness is real in the bin build and false in the test build, and
+// `#[expect]` can only be honest about one of them.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "copy-target detection lands before its badge consumer"
+    )
+)]
+pub mod copy_targets;
 pub mod custom_provider_dialog;
 pub mod device_auth_dialog;
 pub mod dialog_select;

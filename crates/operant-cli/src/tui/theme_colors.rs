@@ -529,6 +529,18 @@ pub fn selection_bg() -> Color {
 }
 
 /// Background of a mouse-drag text selection.
+///
+/// `cfg_attr`, not a bare `#[expect]`: the accessor is superseded in the bin
+/// build, but `color_depth.rs`'s quantization tests still read it, so under
+/// `--all-targets` the expectation is unfulfilled and warns.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "superseded by the accent-blend selection highlight in render/selection.rs; \
+                  the palette field itself is still read by color_depth.rs quantization"
+    )
+)]
 pub fn text_selection_bg() -> Color {
     with_active(|p| p.text_selection_bg)
 }
