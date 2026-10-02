@@ -1069,7 +1069,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         app_config,
         &app_config.agent,
         None,
-        event_tx,
+        event_tx.clone(),
         &mcp_manager,
         &app_config.skills.root_dir,
         None, // gateway has no status bar; the agent keeps its internal registry
@@ -1078,8 +1078,64 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // Wire the permission channel so the agent can request approval for
     // dangerous tools (bash, file_write, file_edit). Without this, the
     // agent runs tools silently. (Bug #1 from iter-98 audit.)
+    // Clone before the gateway agent consumes the sender. Cron gets the same
+    // channel so its permission posture is UNCHANGED by this commit (see below).
+    let cron_permission_tx = permission_tx.clone();
     let agent = Arc::new(agent.with_permissions(permission_tx));
-    let cron_agent = agent.clone();
+
+    // Cron gets its OWN agent, not a clone of the gateway's.
+    //
+    // They used to share one `Arc<OperantAgent>`, which is BUGS.md D-1 and
+    // D-1b: `run_agent_job` called `clear_history()` on the shared agent, which
+    // clears the hot conversation AND discards the persisted transcript from the
+    // SessionStore, so a cron tick destroyed a live user's context
+    // irrecoverably. Worse, a cron tool call that needed approval fell into the
+    // gateway's no-active-channel branch (gateway_runner.rs:1938-1944), which
+    // sends `AllowSession` — mutating the SHARED session_allowlist and granting
+    // the human user's own bash/file_write without ever prompting them.
+    //
+    // The fresh `McpManager` is required, not cosmetic (BUGS.md D-3a):
+    // `McpManager` is `Clone` over `Arc` and `sync_tools_to_registry` unregisters
+    // every name in its shared `registered_tool_names` list from WHICHEVER
+    // registry it is handed. Sharing it would mean cron's build unregistering
+    // the gateway's live MCP tools out of the gateway's registry. A fresh
+    // manager has no servers and its own empty list, so cron gets MCP management
+    // tools only and cannot displace anything.
+    //
+    // PERMISSION POSTURE: cron is wrapped with the SAME permission channel the
+    // gateway uses, and deliberately so. Before this change `cron_agent` was
+    // `agent.clone()` of the ALREADY-WRAPPED agent, so `permission_tx` was
+    // `Some` and the dangerous-tool guard at `agent/stream.rs:737` ran for cron
+    // calls too. Omitting `with_permissions` here would set the Option to `None`
+    // (default, `agent/builders.rs:67`), skip that guard entirely, and quietly
+    // REMOVE a human veto: with a chat active, someone could previously be
+    // prompted and refuse a cron's dangerous tool call. That is an
+    // authorisation change disguised as a refactor, so this commit preserves the
+    // existing posture instead.
+    //
+    // This closes D-1b regardless, because `session_allowlist` is per-agent
+    // (`agent/builders.rs:68`): a cron `AllowSession` now inserts into CRON's
+    // set, never the user's.
+    //
+    // Whether unattended cron *should* be granted dangerous tools is still open,
+    // and is the owner's decision - see BUGS.md D-2. Note it is NOT solved by
+    // handing cron a channel nobody drains: `stream.rs:788-791` sleeps 120s per
+    // dangerous call before denying, so that stalls every job instead of failing
+    // closed. A real fail-closed path needs deny-without-prompting (new code).
+    let cron_mcp_manager = operant_core::mcp::McpManager::new();
+    let cron_agent = Arc::new(
+        crate::create_runtime_agent(
+            app_config,
+            &app_config.agent,
+            None,
+            event_tx.clone(),
+            &cron_mcp_manager,
+            &app_config.skills.root_dir,
+            None,
+        )
+        .await?
+        .with_permissions(cron_permission_tx),
+    );
 
     // Long-term memory is handled by the agent (attached in
     // create_runtime_agent above) — no separate provider instance here.

@@ -274,7 +274,22 @@ impl CronScheduler {
     async fn run_agent_job(&self, job: &CronJob) -> (bool, String, String, Option<String>) {
         debug!("Running agent job {}: {}", job.id, job.name);
 
-        self.agent.clear_history().await;
+        // Point the agent at THIS job's session before running.
+        //
+        // This used to call `clear_history()`, which cleared the hot
+        // conversation and then DISCARDED it from the SessionStore — destroying
+        // whatever session was live. When cron shared the gateway's agent that
+        // meant a scheduled job wiped a user's in-flight conversation
+        // irrecoverably (BUGS.md D-1). `set_session_id` is the correct primitive:
+        // it hands the outgoing transcript back to the store under its own id and
+        // rehydrates the incoming one, so nothing is deleted and each job gets a
+        // stable, per-employee session.
+        //
+        // The id is derived with the same §3.1.1 rule the org gate uses, so the
+        // session and the employee are the same identity.
+        self.agent
+            .set_session_id(crate::org::employee::derive_employee_id(&job.id));
+
         match self.agent.run(job.prompt.clone()).await {
             Ok(message) => (true, "Agent run completed".into(), message.content, None),
             Err(e) => {

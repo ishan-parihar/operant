@@ -393,11 +393,48 @@ impl OperantAgent {
                 self.sessions
                     .persist(&crate::session::SessionKey::new(prev), &outgoing);
             }
+            // Reset the LLM compressor alongside the conversation swap. Its
+            // summary state is per-session, so carrying it across a retarget
+            // would let one session's summary bleed into the next session's
+            // compression context. This used to live only in `clear_history`,
+            // which meant a host that retargeted via `set_session_id` silently
+            // kept the old summary — the cron path now uses exactly that, so the
+            // reset has to follow the id change rather than the clear.
+            self.reset_compressor_for_retarget();
+
+            // `clear_history` keeps its own reset: it can fire on an UNCHANGED
+            // session id, which this guard deliberately does not cover.
         }
         *self
             .session_id
             .write()
             .expect("session_id RwLock poisoned — programmer error") = Some(new_id);
+    }
+
+    /// Drop the LLM compressor's summary state on a session retarget.
+    ///
+    /// A non-blocking companion to `clear_history`'s reset, for the retarget
+    /// path in `set_session_id`. That path is a **synchronous** `pub fn`
+    /// (it takes `&self` so hosts can call it through `Arc<OperantAgent>`), so
+    /// it cannot `await` the compressor mutex. Making it async is not an option:
+    /// `set_session_id` is called from async contexts that already hold session
+    /// locks, and an awaited mutex there risks blocking the scheduler.
+    ///
+    /// So this uses `try_lock`, the same shape `notify_memory_write` uses for
+    /// the same reason (`events.rs:247`). On contention the reset is DROPPED,
+    /// which is the safe direction: a stale summary degrades compression quality
+    /// for one session, whereas waiting would stall every cron tick behind
+    /// whatever compression is in flight.
+    fn reset_compressor_for_retarget(&self) {
+        let Some(compressor) = self.llm_compressor.as_ref() else {
+            return;
+        };
+        match compressor.try_lock() {
+            Ok(mut guard) => guard.reset(),
+            Err(_) => {
+                debug!("llm_compressor lock contended on session retarget — reset dropped");
+            }
+        }
     }
 
     /// Rehydrate `session_id`'s transcript from disk.
