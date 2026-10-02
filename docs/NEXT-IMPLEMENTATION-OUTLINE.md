@@ -99,6 +99,46 @@ this outline supersedes its status column, not its findings.
 
 This was not in the previous revision. It should have been.
 
+### Blocker first: cron and the gateway share one agent
+
+Before any of the plumbing below, a constraint this revision originally hid.
+The scheduler does not own its agent. It is handed one:
+
+```
+scheduler.rs:24           agent: Arc<OperantAgent>
+gateway_runner.rs:1082    let cron_agent = agent.clone();
+gateway_runner.rs:1068    agent = create_runtime_agent(...)
+gateway_runner.rs:1081    let agent = Arc::new(agent.with_permissions(permission_tx))
+gateway_runner.rs:427     GatewayMessageHandler { agent: Arc<OperantAgent>, ... }
+```
+
+`cron_agent` is a clone of the **same `Arc`** that `GatewayMessageHandler` chats
+on, and the handler already calls `set_session_id` at `:544` and `run()` at
+`:655`.
+
+So A′ as originally written — "call `set_session_id` in `run_agent_job`" — would
+retarget an agent out from under a live user. A cron job ticking mid-conversation
+would swap the hot conversation slot and rehydrate from disk
+(`events.rs:379-397`), destroying the user's in-flight context. This is the D2
+defect's cousin: not leakage between cron jobs, but **cron and the gateway
+fighting over one session pointer**.
+
+**Constraint: A′ must not call `set_session_id` on the shared agent.** Two ways
+out, and this is the owner's call:
+
+1. **Give cron its own `OperantAgent`.** Clean, and removes the whole class of
+   problem. Cost: a second agent means a second model client, tool registry and
+   memory provider at construction (`create_runtime_agent` is the only builder).
+2. **Prove the paths do not overlap at runtime** — that the gateway is not
+   serving traffic while the scheduler ticks. That is an operational assumption,
+   not a property of the code, and a busy Telegram gateway almost certainly
+   violates it.
+
+Recommendation: (1). Until one is chosen, A′ is not implementable, and the
+stable-id / compressor-reset decisions below stand but have no mount point.
+
+### The plumbing, once that is settled
+
 `run_agent_job` has no session identity at all: it calls
 `self.agent.clear_history().await` at `:277` and then `self.agent.run(...)`. The
 defect is **the absence of per-job identity, not cross-job leakage** — the wipe
@@ -194,9 +234,14 @@ boundaries, that is a different event with a different name, not this one.
 per cron job per tick — roughly 102 events per tick across ~133 employees.
 After iter-554 it receives none from cron. That is a deliberate change to the
 memory graph's shape, not a silent deletion. Open question for whoever tunes
-memory: does anything downstream read run-level boundaries as signal? Nothing
-in this repo does today, which is why the decision is safe, but it is the
-question to ask before adding a replacement event.
+memory: does anything downstream read run-level boundaries as signal? **Open question, now checked.** Does anything downstream read run-level
+boundaries as signal? Searched: the only `on_session_end` implementations are
+the no-op trait default and `BuiltinProvider`'s debug log
+(`memory_provider.rs:298,379`), and the `on_session_end` in
+`runtime/hooks/traits.rs:35` is an unrelated channel-hook trait that this path
+never calls. No consumer reads the boundaries, which is why dropping cron's is
+safe — but the claim is scoped to those implementations, not asserted for the
+whole codebase.
 
 **Why first:** B′ must attach the barrier to a session, and the barrier writes a
 worklog row keyed by session. Without a per-job session key there is nothing to
@@ -421,14 +466,22 @@ Nothing in this program touches `tools::kernel`; it is a separate fix.
 
 ## 10. Suggested first concrete task
 
-Two code increments, plus this docs commit which takes iter-555.
+Two code increments, plus this docs commit which takes iter-558.
 
-**iter-554 is A′; iter-556 is B′.** The numbering is not monotonic against the
-commit log because this documentation commit spends iter-555 ahead of the code
-work it describes. Read `origin/main` for the authoritative next free label
-before starting.
+**iter-554 is A′; iter-557 is B′.** iter-556 is spent: `b8259e50` published
+`docs(iter-556)` for a documentation change, so §10's original reservation of
+556 for B′ collided with it on mainline. Not amendable — that commit is pushed
+and force-pushing `main` is forbidden — so B′ moves to 557.
+
+Read §10's reserved labels **before** choosing one, not after. This is the
+fourth numbering collision of this session and the third caused by treating
+"highest committed label" as "next free label"; it is not free.
 
 ### iter-554 — A′: stable per-job session, and the compressor reset
+
+**Blocked until the shared-agent constraint in §2 is resolved.** Give cron its
+own `OperantAgent`, or establish the paths do not overlap. Everything below
+assumes that is settled.
 
 Reuse `derive_employee_id(&job.id)` — the org gate already calls it at `:117` —
 and pass a **stable** per-job id (not a fresh uuid) to
@@ -438,6 +491,10 @@ and pass a **stable** per-job id (not a fresh uuid) to
 
 Acceptance — each needs a **negative control**, because a test that cannot fail
 proves nothing:
+
+- a cron job ticking while a gateway conversation is in flight does **not**
+  disturb that conversation's turns. Control: the assertion must fail if cron
+  and the gateway share one agent — which is the state today.
 
 - two scheduled jobs run back to back through the real scheduler on one agent,
   and neither sees the other's turns. Control: the test must also fail when the
@@ -455,7 +512,7 @@ proves nothing:
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
 
-### iter-556 — B′: mount `WriteBarrier::apply` in `run_agent_job`
+### iter-557 — B′: mount `WriteBarrier::apply` in `run_agent_job`
 
 Acceptance:
 
