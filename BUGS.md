@@ -144,6 +144,58 @@ side effects that must be decided deliberately, not inherited by accident.
 - **Decision owed by the owner**: what permissions an unattended cron agent
   gets. The safe default is an explicit decision, not the `None` fallback.
 
+### D-3 — A second `create_runtime_agent` displaces the gateway agent's live MCP tools and memory manager (OPEN, blocks D-1's fix, P1)
+
+Found while verifying D-1's fix. `create_runtime_agent` is *mostly* per-call, but
+it mutates two process-wide singletons that the **already-running gateway
+agent** depends on. Calling it a second time to give cron its own agent therefore
+breaks the gateway in two new ways. Verified link by link.
+
+**3a. MCP tools are unregistered from the gateway's live registry.** Gated on
+`config.mcp.autoload` (`main.rs:1235`), so invisible in any test or config
+without an MCP server.
+
+- `McpManager` is `Clone` over `Arc` (`mcp.rs:1657-1662`) and
+  `start_gateway` passes `&mcp_manager` into the agent build
+  (`gateway_runner.rs:1073`) — so **both agents share one manager**.
+- `registered_tool_names: Arc<RwLock<Vec<String>>>` (`mcp.rs:1662`) lives on that
+  *shared* manager, not per-registry.
+- `sync_tools_to_registry` (`mcp.rs:1818-1824`) opens by unregistering every
+  name in that shared list **from whichever registry it is handed**:
+  ```rust
+  let mut prev_names = self.registered_tool_names.write().await;
+  for name in prev_names.iter() {
+      registry.unregister(name).await;
+  }
+  prev_names.clear();
+  ```
+- A second agent build calls it again with cron's **fresh** registry. Result: the
+  gateway's live MCP tools are unregistered from the *gateway's* registry and
+  re-registered into *cron's*. A gateway agent mid-flight loses its tools.
+
+**3b. The memory-manager global is replaced.** `build_agent_core` calls
+`load_repo_memory_manager` (`main.rs:1362`), which calls
+`set_active_memory_manager` (`main.rs:2136`), overwriting the process-wide
+`ACTIVE_MEMORY_MANAGER` (`memory_tools.rs:33`). The memory tools read that
+global (`memory_tools.rs:115`, `:198`, `:308`). A second build silently repoints them
+from the gateway's manager to cron's.
+
+**Also additive, not destructive** (cost, not breakage): a second detached MCP
+watchdog (`main.rs:1265-1270`), a second `Database::init` pool
+(`main.rs:1351`), a second Ctrl-C handler (already vetted — tokio broadcasts).
+
+- **Fix**: build cron's agent against `McpManager::new()` — a fresh manager with
+  no servers and its own empty `registered_tool_names` — so it gets management
+  tools only, shares no synced-name list, and cannot unregister anything from
+  the gateway. `mcp.rs:1676` provides the constructor. 3b still needs an explicit
+  decision (see below).
+- **3b decision owed**: either accept that the memory global is last-writer-wins,
+  or have cron share the gateway's `MemoryManager` instance explicitly rather
+  than replacing it.
+- **Test gap that hid this**: no test config enables `mcp.autoload`, so the MCP
+  half of this defect is invisible to the suite. A regression test that does not
+  enable autoload cannot catch it.
+
 ## OPEN — Unowned debt on mainline (2026-10-03)
 
 ### K-1 — `tools::kernel` roundtrip tests fail on `origin/main` (OPEN, unowned)
