@@ -95,7 +95,7 @@ this outline supersedes its status column, not its findings.
 
 ---
 
-## 2. Step A′ — give cron a per-job session *(iter-554)*
+## 2. Step A′ — give cron a per-job session *(iter-559)*
 
 This was not in the previous revision. It should have been.
 
@@ -232,16 +232,29 @@ boundaries, that is a different event with a different name, not this one.
 
 **Record the graph-structure consequence.** Today memory receives one boundary
 per cron job per tick — roughly 102 events per tick across ~133 employees.
-After iter-554 it receives none from cron. That is a deliberate change to the
-memory graph's shape, not a silent deletion. Open question for whoever tunes
-memory: does anything downstream read run-level boundaries as signal? **Open question, now checked.** Does anything downstream read run-level
-boundaries as signal? Searched: the only `on_session_end` implementations are
-the no-op trait default and `BuiltinProvider`'s debug log
-(`memory_provider.rs:298,379`), and the `on_session_end` in
-`runtime/hooks/traits.rs:35` is an unrelated channel-hook trait that this path
-never calls. No consumer reads the boundaries, which is why dropping cron's is
-safe — but the claim is scoped to those implementations, not asserted for the
-whole codebase.
+After A′ lands it receives none from cron. That is a deliberate change to the
+memory graph's shape, not a silent deletion.
+
+**Does anything downstream read run-level boundaries as signal? Checked 2026-10-03.**
+Enumerated every `MemoryProvider` implementation rather than sampling one:
+
+- `BuiltinProvider` (`memory_provider.rs:379`) — overrides it with a debug log
+  only.
+- `PluginMemoryProvider` (`plugin_memory.rs:107`) — does **not** override it, so
+  it inherits the no-op trait default (`:298`).
+- `MemoryWireProvider` — the **default** provider per AGENTS.md. It does not
+  override it either. Its own crate
+  (`~/.cargo/git/checkouts/memory-wire-*/src/`) has no `on_session_end` method at
+  all; the single textual hit is a plugin-manifest test listing supported hook
+  *names*, not an implementation.
+- `runtime/hooks/traits.rs:35` — an unrelated channel-hook trait this path never
+  calls.
+
+So the boundary event reaches no logic on any provider today. That is the basis
+for dropping cron's, and it was worth checking properly: an earlier revision of
+this document generalised from `BuiltinProvider`, which is the *fallback*, not
+the default, which would have made the safety argument about the wrong
+implementation.
 
 **Why first:** B′ must attach the barrier to a session, and the barrier writes a
 worklog row keyed by session. Without a per-job session key there is nothing to
@@ -355,7 +368,7 @@ is no second persistence path. `set_session_id` persists the outgoing transcript
 and rehydrates from disk (`events.rs:379-397`), so every run's turns stay
 durable.
 
-That means **after iter-554 and before C′, the message tables grow without
+That means **after A′ and before C′, the message tables grow without
 bound by design.** Nothing trims a cron session in between: the only compaction
 that exists is the autocompactor C′ has yet to wire. Survivable for an iteration
 or two, and it is the price of employee continuity — but it is a real
@@ -466,20 +479,27 @@ Nothing in this program touches `tools::kernel`; it is a separate fix.
 
 ## 10. Suggested first concrete task
 
-Two code increments, plus this docs commit which takes iter-558.
+Two code increments, plus this docs commit which takes iter-559.
 
-**iter-554 is A′; iter-557 is B′.** iter-556 is spent: `b8259e50` published
-`docs(iter-556)` for a documentation change, so §10's original reservation of
-556 for B′ collided with it on mainline. Not amendable — that commit is pushed
-and force-pushing `main` is forbidden — so B′ moves to 557.
+**iter-559 is A′; iter-560 is B′.**
 
-Read §10's reserved labels **before** choosing one, not after. This is the
-fourth numbering collision of this session and the third caused by treating
-"highest committed label" as "next free label"; it is not free.
+**Label discipline, because five collisions have already happened this session.**
+Labels 554, 555, 556, 557 and 558 are each SPENT on documentation commits
+(`22b1562d`, `a20d19a3`, `b8259e50`, `558eafed`, `7ae069bf`). The correct
+procedure, which the earlier revisions here did not follow:
 
-### iter-554 — A′: stable per-job session, and the compressor reset
+1. Read §10's reservations **first**.
+2. Then read the committed labels — not just the highest one, but the whole
+   list, because the lookup returns the HIGHEST COMMITTED label and reading that
+   as "next free" is what caused every collision.
+3. Take a label that appears in neither list.
 
-**Blocked until the shared-agent constraint in §2 is resolved.** Give cron its
+Read from `origin/main` after `git fetch`, immediately before committing. Never
+amend a pushed commit to fix a label; renumber the plan forward instead.
+
+### iter-559 — A′: stable per-job session, and the compressor reset
+
+**A′ is not implementable until the shared-agent constraint above is resolved.** Give cron its
 own `OperantAgent`, or establish the paths do not overlap. Everything below
 assumes that is settled.
 
@@ -512,7 +532,7 @@ proves nothing:
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
 
-### iter-557 — B′: mount `WriteBarrier::apply` in `run_agent_job`
+### iter-560 — B′: mount `WriteBarrier::apply` in `run_agent_job`
 
 Acceptance:
 
