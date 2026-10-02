@@ -126,9 +126,37 @@ The shape:
 
 ```
 1. reuse derive_employee_id(&job.id)  (already called at :117 for the gate)
-2. agent.set_session_id(<per-job session id>) before run
+2. agent.set_session_id(<STABLE per-job session id>) before run
 3. delete the clear_history() at :277
+4. reset the LLM compressor inside set_session_id, on session change
 ```
+
+### The coupled decision: stable-per-job id, and the compressor reset
+
+Steps 2 and 4 are one decision. Leaving the id as a bare `<per-job session id>`
+placeholder would let an implementer silently settle three things at once.
+
+**Stable per job, not fresh per run.** The session id must be a function of the
+job (or employee), not a uuid minted per invocation, so the employee's
+transcript accumulates across its runs. Fresh-per-run would start every run
+empty and:
+
+- destroy employee continuity — the whole point of iter-548;
+- make C′ dead code, because a session that starts empty never reaches the
+  4,000-token floor (§4).
+
+**The compressor reset must move into `set_session_id`.** `clear_history` resets
+the compressor for a stated reason (`events.rs:208-213`): "Without this, a
+previous session's summary would bleed into the new session's compression
+context." Dropping `:277` without moving that reset reintroduces exactly the
+bleed A′ exists to prevent — job A's summary leaking into job B's compression.
+`set_session_id` swaps the conversation and persists the outgoing transcript
+but **never touches the compressor** (verified: no compressor or memory call in
+`events.rs:365-405`).
+
+So the reset belongs where the session actually changes, which is
+`set_session_id`, guarded by the same `previous != new_id` condition that
+already gates the conversation swap.
 
 ### Deciding the memory session-boundary event
 
@@ -139,23 +167,19 @@ notification**: `submit_session_end` when the sync executor is available, else
 `provider.on_session_end(&snapshot)`. It then resets the LLM compressor and
 calls `provider.on_session_switch(&old_id, &old_id, true)` at `:220`.
 
-Deleting the `:277` call therefore removes that notification from all 102 cron
-jobs. That is a real behaviour change beyond isolation, so it is a decision,
-not a side effect:
+An earlier revision of this document claimed the gateway "still fires it via
+`set_session_id`". **That was wrong.** `set_session_id` contains no memory call
+at all, and `gateway_runner.rs` has no `on_session_end` / `submit_session_end` /
+`on_session_switch` — its three `clear_history` mentions are comments recording
+that the call was removed there. `clear_history` has exactly two live callers,
+`main.rs:2447` (`/new`) and `scheduler.rs:277`, so **deleting `:277` removes the
+memory boundary from the cron path specifically, and from nowhere else.**
 
-**Decision: do not preserve it on the cron path.** One `on_session_end` per
-scheduled job is noise — every job would close a "session" that the organ
-never opened, and memory would accumulate a boundary event per job per run.
-The gateway's own session switches still fire it via `set_session_id`, which is
-where a real boundary exists. If memory later wants run boundaries, that is a
+**Decision: do not preserve it on cron.** One `on_session_end` per scheduled
+job is noise — each job would close a session the organ never opened, and memory
+would accumulate a boundary per job per run. `/new` keeps it, which is where a
+genuine boundary exists. If memory later wants run boundaries, that is a
 different event with a different name, not this one.
-
-What replaces the wipe: `set_session_id` is a strict superset of the
-isolation behaviour. It rehydrates the **incoming** session's transcript and
-persists the outgoing one back to the store (`events.rs:379-397`), so the
-durable transcript survives — which `clear_history` explicitly did *not* do.
-The compressor reset is the one thing A′ must re-check: `clear_history` reset
-it, and `set_session_id` does not.
 
 **Why first:** B′ must attach the barrier to a session, and the barrier writes a
 worklog row keyed by session. Without a per-job session key there is nothing to
@@ -226,7 +250,7 @@ This is the same `run_agent_job` seam as B′, and the order matters: **compact
 after the barrier has read what the run produced**, or the barrier is
 compacting against a transcript it is about to write a row about.
 
-### A′ changes what C′ means — the floor is a token floor, not a shape floor
+### C′'s viability depends on A′'s id choice
 
 `preflight` gates on exactly one thing (`autocompact.rs:501`):
 
@@ -235,26 +259,30 @@ if tokens_before <= self.config.floor_tokens { return SkippedByFloor }
 ```
 
 There is no structural precondition — no message count, no run count, nothing.
-Before A′, every scheduled job ran against one shared slot that
-`clear_history()` emptied, so the slot was whatever the last run left. After A′
-each job gets its **own** session that starts empty and holds only that run's
-turns. A single scheduled run is very unlikely to exceed 4,000 tokens, so
-**C′ mounted on the cron path may be close to inert**: every job will skip.
+The floor guards per-session **tokens**, not session **shape**.
 
-That is not a bug in the autocompactor — it is doing exactly what its floor was
-specified to do. It does mean "compact after scheduled execution" needs a
-decision before it is wired:
+So C′ is viable or inert depending entirely on §2's id decision:
 
-- **Compact the employee's session across runs**, not the per-run session. That
-  requires the per-job session id to be stable across runs (an employee-scoped
-  key, not a per-run uuid), which is a change to what A′ builds.
-- **Compact on the gateway path**, where sessions are genuinely long-lived, and
-  leave cron uncompacted.
-- **Lower the floor for cron**, accepting summary-of-summary on short sessions —
-  the thing §4.5 explicitly wants to avoid.
+- **stable per-job id** (what A′ now specifies): the session accumulates across
+  runs and eventually exceeds 4,000 tokens. C′ fires, and periodically, which is
+  the intent.
+- **fresh per run**: every session starts empty and never grows toward the
+  floor. C′ is **dead code** on the cron path — a subsystem that compiles,
+  tests, and never fires once.
 
-Do not wire C′ at all until this is decided. The current wording of this
-section would produce a subsystem that compiles, tests, and never fires.
+This is why §2 pins the id rather than leaving it a placeholder. It is also why
+the floor must not be lowered to make cron compact: the floor exists so short
+sessions are not reduced to a summary-of-summary (§4.5).
+
+Two settings remain a decision when C′ is wired, and neither is urgent:
+
+- compact the employee's session across runs (needs the stable key A′ provides)
+  vs. compact on the gateway path, where sessions are genuinely long-lived;
+- `compact` (`:429`) writes a marker, `compact_summarising` (`:448`) summarises
+  the middle through an LLM and falls back to the marker if the summary fails.
+
+Do not wire C′ before the id question is answered — but §2 has now answered it,
+so the remaining choice is only *where* compaction runs, not whether it can.
 
 Note `compress_context_overflow` (`agent/compress.rs`) is a *different*
 mechanism and the two must not be conflated.
@@ -364,11 +392,13 @@ commit log because this documentation commit spends iter-555 ahead of the code
 work it describes. Read `origin/main` for the authoritative next free label
 before starting.
 
-### iter-554 — A′: thread the existing employee id into `set_session_id`
+### iter-554 — A′: stable per-job session, and the compressor reset
 
 Reuse `derive_employee_id(&job.id)` — the org gate already calls it at `:117` —
-and pass it to `agent.set_session_id(...)` before `run()`. Delete the
-`clear_history()` at `:277`. No schema change, no new derivation.
+and pass a **stable** per-job id (not a fresh uuid) to
+`agent.set_session_id(...)` before `run()`. Delete the `clear_history()` at
+`:277`. Move the compressor reset into `set_session_id`, gated on
+`previous != new_id`. No schema change, no new derivation.
 
 Acceptance — each needs a **negative control**, because a test that cannot fail
 proves nothing:
@@ -378,10 +408,14 @@ proves nothing:
   same job id is used twice with `set_session_id` removed, or when the harness
   hands each run its own agent. An isolation test that passes because each run
   got a fresh agent measures nothing.
+- a second run of the **same** job sees the first run's history — proving the id
+  is stable, not per-invocation. Control: assert this fails under a fresh-uuid
+  scheme.
+- the compressor is reset on session change: job A's summary does not appear in
+  job B's compression context. Control: confirm the assertion fails with the
+  reset removed.
 - `clear_history()` is gone from the cron path. Control: confirm the grep
   pattern finds it at `:277` *before* the deletion and returns nothing after.
-- the compressor-state question above is answered, since `clear_history` reset
-  the LLM compressor and `set_session_id` does not;
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
 
