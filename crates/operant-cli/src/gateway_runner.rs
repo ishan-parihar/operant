@@ -1124,7 +1124,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // closed. A real fail-closed path needs deny-without-prompting (new code).
     let cron_mcp_manager = operant_core::mcp::McpManager::new();
     let cron_agent = Arc::new(
-        crate::create_runtime_agent(
+        crate::create_runtime_agent_with(
             app_config,
             &app_config.agent,
             None,
@@ -1132,6 +1132,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             &cron_mcp_manager,
             &app_config.skills.root_dir,
             None,
+            // `false`: the gateway agent above already spawned this process's
+            // LCM maintenance workers (rollups + assertion extraction, each with
+            // its own OpenAIClient). Passing `true` here would start a SECOND
+            // pair over the same context engine - duplicated LLM spend on every
+            // rollup tick and racing rollups. See create_runtime_agent_with.
+            false,
         )
         .await?
         .with_permissions(cron_permission_tx),

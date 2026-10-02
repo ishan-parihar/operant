@@ -1716,6 +1716,10 @@ fn spawn_wasm_watcher(config: &AppConfig, harness: std::sync::Arc<operant_harnes
     });
 }
 
+/// Build the runtime agent for a long-lived host (TUI / chat / gateway).
+///
+/// Thin wrapper over [`create_runtime_agent_with`] so existing single-agent
+/// callers keep their shape and keep their background LCM maintenance workers.
 pub(crate) async fn create_runtime_agent(
     config: &AppConfig,
     behavior: &BehaviorSettings,
@@ -1724,6 +1728,39 @@ pub(crate) async fn create_runtime_agent(
     mcp_manager: &McpManager,
     skills_dir: &Path,
     metrics: Option<std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>>,
+) -> Result<OperantAgent> {
+    create_runtime_agent_with(
+        config,
+        behavior,
+        system_prompt,
+        event_tx,
+        mcp_manager,
+        skills_dir,
+        metrics,
+        true,
+    )
+    .await
+}
+
+/// Build the runtime agent used by long-lived hosts (TUI / chat / gateway).
+///
+/// `spawn_long_lived_maintenance` distinguishes hosts that keep running from
+/// one-shot invocations. It is `true` for long-lived hosts, where background
+/// LCM workers (rollups + assertion extraction, each with its own
+/// `OpenAIClient`) are wanted, and MUST be `false` for any SECOND agent built in
+/// the same process — otherwise that agent starts a duplicate set of rollup
+/// loops over the same context engine: duplicated LLM spend on every tick and
+/// racing rollups. `build_context_engine` already takes this flag
+/// (`main.rs:1917`); pass it straight through.
+pub(crate) async fn create_runtime_agent_with(
+    config: &AppConfig,
+    behavior: &BehaviorSettings,
+    system_prompt: Option<&str>,
+    event_tx: mpsc::Sender<AgentEvent>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+    metrics: Option<std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>>,
+    spawn_long_lived_maintenance: bool,
 ) -> Result<OperantAgent> {
     let core = build_agent_core(
         config,
@@ -1788,7 +1825,7 @@ pub(crate) async fn create_runtime_agent(
         // lossless DAG + fresh-tail engine instead of lossy eviction.
         // Long-lived process (TUI / chat / gateway) → spawn background
         // maintenance workers (rollups + assertion extraction).
-        if let Some(engine) = build_context_engine(config, true) {
+        if let Some(engine) = build_context_engine(config, spawn_long_lived_maintenance) {
             agent = agent.with_context_engine(engine);
         }
         // Share the external runtime-metrics registry (created by the TUI)

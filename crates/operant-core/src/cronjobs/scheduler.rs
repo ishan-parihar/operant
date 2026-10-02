@@ -287,8 +287,18 @@ impl CronScheduler {
         //
         // The id is derived with the same §3.1.1 rule the org gate uses, so the
         // session and the employee are the same identity.
-        self.agent
-            .set_session_id(crate::org::employee::derive_employee_id(&job.id));
+        let session_id = crate::org::employee::derive_employee_id(&job.id);
+        self.agent.set_session_id(session_id);
+
+        // NOTE: the memory-graph session boundary that `clear_history` fired
+        // (events.rs:193-197, `submit_session_end` / `on_session_end`) is NOT
+        // reproduced here, because no provider implements it usefully:
+        // `MemoryProvider::on_session_switch` (memory_provider.rs:302) is an
+        // empty trait default, `BuiltinProvider` (`:383`) only logs at debug, and
+        // MemoryWire does not override it at all. Calling a no-op would only
+        // LOOK like preservation. The drop is recorded in BUGS.md (D-5b) rather
+        // than papered over. `notify_session_switch` therefore still has zero
+        // callers.
 
         match self.agent.run(job.prompt.clone()).await {
             Ok(message) => (true, "Agent run completed".into(), message.content, None),

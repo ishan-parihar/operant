@@ -75,9 +75,17 @@ Chain, every link verified against current `origin/main`:
 
 1. A cron job's prompt causes a tool call that needs approval, on the shared
    agent — which carries the gateway's `permission_tx` (`gateway_runner.rs:1081`).
-2. `stream.rs:788` awaits a response. Nobody is answering, because the person
-   this prompt would be shown to is in some *other* chat, or asleep, or the
-   prompt was routed to a thread nobody is watching.
+2. `stream.rs:788` awaits a response, and the request is answered by **someone** —
+   the escalation is that the answer is attributed to the wrong actor in BOTH
+   branches, which is the strong form of this bug (an earlier draft of this entry
+   said "nobody is answering", which wrongly implied the idle case is the only
+   dangerous one):
+   - **Chat ACTIVE** (`gateway_runner.rs:1851-1912`): the request is routed to a
+     human's chat and they are prompted. The prompt gives no indication it came
+     from a 03:00 scheduled job, so it is answered reflexively — and the cron job
+     then acts on that answer. Cron hijacks a human's conversation.
+   - **Chat INACTIVE** (`gateway_runner.rs:1938-1944`): nobody is prompted and
+     `AllowSession` is sent automatically.
 3. The gateway's permission handler reaches its no-active-channel branch at
    `gateway_runner.rs:1938-1944`:
    ```rust
@@ -111,6 +119,14 @@ was consumed by a job they do not know ran.
   `session_allowlist` (a second `Arc`, from a second builder call), which stops
   the *bleed into the user's session*. It does not decide what cron's own
   permission posture should be — see D-2.
+- **Status: closed by construction, with a caveat.** Because the cron agent is a
+  separate `OperantAgent` built by its own constructor call, its
+  `session_allowlist` is a distinct `Arc` (D-1 fix, iter-570): a cron
+  `AllowSession` can no longer reach the interactive user's set, and a cron
+  dangerous call can no longer land in a human's chat as an unattributed prompt.
+  The **active-channel hijack** is therefore gone by construction too. What
+  remains open is cron's own posture — D-2 — plus D-6, where cron's `clarify`
+  calls still route to the user's chat via the global `USER_QUESTION_TX`.
 
 ### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (OPEN, blocks D-1's fix)
 
@@ -151,13 +167,14 @@ it mutates two process-wide singletons that the **already-running gateway
 agent** depends on. Calling it a second time to give cron its own agent therefore
 breaks the gateway in two new ways. Verified link by link.
 
-**3a. MCP tools are unregistered from the gateway's live registry.** Gated on
-`config.mcp.autoload` (`main.rs:1235`), so invisible in any test or config
-without an MCP server.
+**3a. Shared MCP synced-name list bleeds across agents, on a DELAY.** Gated on
+`config.mcp.autoload` (`main.rs:1235`) *and* at least one enabled stdio server
+*and* a non-zero `watchdog_interval_secs`, so invisible in any test or default
+config.
 
 - `McpManager` is `Clone` over `Arc` (`mcp.rs:1657-1662`) and
   `start_gateway` passes `&mcp_manager` into the agent build
-  (`gateway_runner.rs:1073`) — so **both agents share one manager**.
+  (`gateway_runner.rs:1073`) — so **both agents would share one manager**.
 - `registered_tool_names: Arc<RwLock<Vec<String>>>` (`mcp.rs:1662`) lives on that
   *shared* manager, not per-registry.
 - `sync_tools_to_registry` (`mcp.rs:1818-1824`) opens by unregistering every
@@ -169,9 +186,32 @@ without an MCP server.
   }
   prev_names.clear();
   ```
-- A second agent build calls it again with cron's **fresh** registry. Result: the
-  gateway's live MCP tools are unregistered from the *gateway's* registry and
-  re-registered into *cron's*. A gateway agent mid-flight loses its tools.
+
+- **Correction (2026-10-03).** An earlier revision of this entry claimed a
+  *second* call would immediately strip the gateway's live MCP tools. That was
+  wrong: the unregister targets the **passed-in** registry, so cron's call
+  no-ops against cron's own fresh registry and the gateway's registry keeps its
+  tools. The registry is passed **by value**, and `build_agent_core` builds a
+  fresh `ToolRegistry` per call (`main.rs:1352`), so the two never alias.
+
+- **The real residue is delayed.** Cron appends its names to the *shared*
+  `registered_tool_names`. The gateway's watchdog task closes over the
+  **gateway's** registry (`mcp.rs:1871`) and re-syncs on every stdio restart:
+  ```rust
+  let restarted = manager.sweep_stdio_servers().await;
+  if restarted > 0 {
+      let synced = manager.sync_tools_to_registry(&registry).await;
+  ```
+  That call unregisters the shared name list — now containing **cron's** names —
+  from the gateway's registry. The bleed lands on the first stdio MCP crash after
+  startup, not at startup. A test that only checks tool presence at boot cannot
+  catch it; the regression must configure a **stdio** server with a non-zero
+  watchdog interval.
+
+- **Also true, but harmless for correctness**: `spawn_watchdog` takes the
+  registry by value and spawns detached (`mcp.rs:1858-1879`) with no dedup, so a
+  second build yields a second sweeper over the same `servers` map, and
+  `sweep_stdio_servers` can fire concurrently twice on one crash.
 
 **3b. The memory-manager global is replaced.** `build_agent_core` calls
 `load_repo_memory_manager` (`main.rs:1362`), which calls
@@ -195,6 +235,103 @@ watchdog (`main.rs:1265-1270`), a second `Database::init` pool
 - **Test gap that hid this**: no test config enables `mcp.autoload`, so the MCP
   half of this defect is invisible to the suite. A regression test that does not
   enable autoload cannot catch it.
+
+### D-4 — A second agent build starts a duplicate set of LCM maintenance workers (OPEN, P1)
+
+`create_runtime_agent` calls `build_context_engine(config, true)`
+(`main.rs:1791`) — the `true` is `spawn_maintenance`
+(`main.rs:1954`), which under `agent.context_engine = "lcm"` calls
+`spawn_lcm_maintenance_if_configured` (`main.rs:1963`), starting rollup and
+assertion-extraction schedulers, **each with its own `OpenAIClient`**.
+
+So building a second agent in the same process starts a SECOND pair of rollup
+loops over the same context engine. Consequences: duplicated LLM billing on every
+rollup tick, and two schedulers racing to roll up the same DAG.
+
+- **Not a library-level constraint**: the flag already exists and
+  `create_agent_without_events` already passes `false` (`main.rs:1868`) for
+  one-shot agents. The long-lived wrapper was simply hardcoded.
+- **Fix applied**: `create_runtime_agent_with(.., spawn_long_lived_maintenance)`
+  passes the flag through; `create_runtime_agent` remains as a `true`-passing
+  wrapper so existing callers are untouched; the cron agent passes `false`.
+
+### D-5 — Two `MemoryManager`s over one MEMORY.md clobber each other (OPEN, P1)
+
+`MemoryStore::write_memories` (`memory.rs:287-291`) is a bare whole-file write:
+```rust
+std::fs::write(self.memory_path(), content)
+```
+No lock, no read-modify-write, no merge. `build_agent_core` calls
+`load_repo_memory_manager()` per invocation (`main.rs:1362`), so two agent builds
+construct two `MemoryManager`s over the same `operant_home()` MEMORY.md, and
+interleaved `sync_turn` retains silently lose one side's write.
+
+- **Not covered by the iter-55x `with_exclusive_file_lock` work** — that wrapped
+  the skills `.usage.json` and the curator tracker, never MEMORY.md.
+- **Sharper than "last-writer-wins" on the global**: `load_memory_manager`
+  (`main.rs:2161`, building the provider at `:2200`) calls `build_memory_provider` **per invocation** and
+  returns a *fresh* `Arc<dyn MemoryProvider>`. So the second build gives cron a
+  different provider instance (a second memory_wire service over the same
+  sqlite) AND repoints `ACTIVE_MEMORY_MANAGER` (`main.rs:2136`) — which the
+  gateway's already-attached memory tools read — away from the gateway's
+  provider. The gateway's `sync_turn` and its `memory_store` tool would then
+  diverge onto two backends.
+- **Fix (preferred)**: hoist the manager construction to the caller and pass the
+  SAME `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` to both agents. Needs
+  a `build_agent_core` overload, since it loads internally today. One change
+  settles this, D-3b, and the duplicate provider init.
+- **Interim**: do not enable cron jobs that retain memories until this is fixed.
+
+### D-6 — Cron shares process-global sub-agent limits with the gateway (OPEN, P2)
+
+`sub_agent_tool`'s limits are process-global statics (`sub_agent_tool.rs:158-175`):
+`MAX_SPAWN_DEPTH`, `ORCHESTRATOR_ENABLED`, `MAX_CONCURRENT_CHILDREN`,
+`MAX_GLOBAL_WORKERS`, `LIVE_WORKERS`, `SUBAGENT_SEQ`. `LIVE_WORKERS` is counted
+across the whole process, so a cron agent's delegated children consume the
+**same** budget as the interactive user's. A scheduled job spawning a fleet can
+exhaust the gateway's concurrency, and `register_sub_agent_tools` re-runs per
+build against the same statics.
+
+This bounds what the D-1 fix buys: separating the agents gives each its own
+**session and conversation slot** and its own `session_allowlist`, but NOT its
+own process-wide budgets. Record that limit rather than claiming the separation
+is total.
+
+- **Related**: `USER_QUESTION_TX` (`user_question.rs:39`) is likewise global and
+  `start_gateway` sets it once (`gateway_runner.rs:1066`). A cron agent calling
+  `clarify`/AskUser therefore routes into a **human's** chat. A cron agent that
+  cannot ask a question should fail fast, not block on a channel nobody drains.
+
+### D-5b — Cron no longer emits a memory session-boundary signal (OPEN, P2, accepted-for-now)
+
+The D-1 fix replaced `clear_history()` with `set_session_id()`. That also dropped
+the memory-graph boundary cron used to fire (`events.rs:193-197`,
+`submit_session_end` / `provider.on_session_end(&snapshot)`).
+
+The obvious replacement, `OperantAgent::notify_session_switch`
+(`events.rs:229`), was tried and then removed: it is a **no-op in every
+implementation**.
+
+- `MemoryProvider::on_session_switch` (`memory_provider.rs:302`) is an empty
+  trait default.
+- `BuiltinProvider` (`memory_provider.rs:383`) logs at debug only.
+- The harness stub (`harness_seams_r3.rs:271-277`) overrides name /
+  is_available / initialize only.
+- **MemoryWire — the default provider per AGENTS.md — does not override it at
+  all**, and its crate defines no `on_session_switch`.
+
+So there was never a working boundary to preserve; cron was calling a hook
+nobody implemented. Calling it would only *look* like preservation, which is why
+it is recorded here rather than reintroduced. `notify_session_switch` therefore
+still has zero callers.
+
+- **Net effect on behaviour today: none.** The memory graph gains nothing from
+  cron's boundary either way.
+- **If a real boundary is ever wanted**, it needs an implementation that carries
+  a payload — `on_session_end(&[Message])` is the only hook that does, and it
+  must be called with the JOB's own transcript, not whatever is hot. Reusing
+  `on_session_end` blindly is what leaked one org's turns under another org's
+  boundary pre-fix.
 
 ## OPEN — Unowned debt on mainline (2026-10-03)
 
