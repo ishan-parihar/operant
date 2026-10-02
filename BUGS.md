@@ -1,5 +1,102 @@
 # BUGS.md — Operant Audit Fixes
 
+## OPEN — Live data loss on mainline (2026-10-03)
+
+### D-1 — A cron agent job destroys a gateway user's live conversation (OPEN, unowned, P1)
+
+**This is a present-tense data-loss defect on `origin/main`, not a planned one.**
+Any host running a gateway adapter alongside at least one enabled agent cron job
+loses the user's in-flight conversation context. It outranks every Organism OS
+item: Steps B-F are unwired features nobody can hit, while this is reachable
+today by ordinary configuration.
+
+**Mechanism, all verified against current `origin/main`:**
+
+```
+gateway_runner.rs:1068   agent = create_runtime_agent(...)
+gateway_runner.rs:1081   let agent = Arc::new(agent.with_permissions(permission_tx))
+gateway_runner.rs:1082   let cron_agent = agent.clone();       // same Arc
+gateway_runner.rs:1094   GatewayMessageHandler { agent, .. }  // chats on it
+gateway_runner.rs:2727   CronScheduler::new(cron_db, cron_agent.clone())
+scheduler.rs:24          agent: Arc<OperantAgent>             // same Arc
+scheduler.rs:277         self.agent.clear_history().await      // <-- the defect
+```
+
+`clear_history` (`agent/events.rs:174-220`) does three destructive things to
+whatever session the agent is *currently addressing*:
+
+1. `:199-200` — `conversation.write().await; conv.clear()`. Drops the live
+   in-memory transcript, including turns the gateway had not yet persisted.
+2. `:205-206` — `SessionStore::discard(&key)` on the **current** session id.
+   This deletes the persisted copy too, so the loss is **not recoverable** by
+   switching away and back — the rows are gone from the store.
+3. `:208-213` — `compressor.reset()`, discarding the LLM compressor's summary
+   state for that session.
+
+The gateway does **not** rehydrate afterwards. The block at
+`gateway_runner.rs:569-583` is the only remaining reload path and it does not
+read messages: `needs_reload` is compared, then only `current_session_id` and
+the bridge state are updated. The real rehydration lives inside
+`set_session_id` (`events.rs:365-401`), and that call is **conditional on the id
+changing** (`events.rs:379`, `if previous.as_deref() != Some(new_id.as_str())`).
+The gateway calls `set_session_id` on every message but with the same id it
+already set, so the swap is a no-op and nothing re-reads the store.
+
+The two consumers run on independent tasks with **no mutual exclusion** —
+verified clean negative: no mutex, semaphore, in-flight guard or busy flag
+serialises the scheduler against the gateway handler. The scheduler ticks every
+60s on its own task (`scheduler.rs:66`, `:2729`), so the two interleave freely.
+
+**Impact**: user sends a message to a gateway chat; a cron job fires while the
+agent is mid-run or immediately before the next message; the user's context is
+gone and cannot be recovered.
+
+- **Interaction with iter-548**: that work gave every session its own slot and
+  made `clear_history` session-scoped rather than global, which was correct and
+  is what makes this survivable at all. But cron was never migrated to the new
+  substrate, and it still calls the *global* `clear_history` rather than
+  `set_session_id`. Step A′ of `docs/NEXT-IMPLEMENTATION-OUTLINE.md` is the fix;
+  this entry exists so the defect is ranked above the rest of the programme.
+- **Suggested fix**: give cron its own `OperantAgent` and replace
+  `scheduler.rs:277` with `set_session_id(derive_employee_id(&job.id))`. See
+  D-2 for the two costs that make that not a trivial change.
+- **Verification owed**: a test that fails when `scheduler.rs:277` is present and
+  passes when it is replaced. As of this entry **no test covers this** — the
+  existing `tests/agent_session_isolation.rs` tests the substrate, not this
+  crosstalk.
+
+### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (OPEN, blocks D-1's fix)
+
+Calling `create_runtime_agent` a second time to give cron its own agent has two
+side effects that must be decided deliberately, not inherited by accident.
+
+1. **Fail-OPEN permissions, not fail-closed.** `permission_tx` is
+   `Option<mpsc::Sender<ToolPermissionRequest>>` (`agent/mod.rs:361`) and
+   defaults to `None` in both builders (`builders.rs:67`, `:134`);
+   `with_permissions` (`builders.rs:356-359`) is the only setter. The guard at
+   `agent/stream.rs:737` is written `if let Some(ref permission_tx) =
+   self.permission_tx` — an Option test. When it is `None` the entire block is
+   skipped and control falls through to `pending.push(...)` at `stream.rs:838`,
+   the queue for actual execution. **There is no fail-closed default anywhere in
+   that path.** A cron agent built without an explicit `with_permissions` call
+   therefore runs unattended with no approval gate. The "smart" approval mode
+   (`approval.rs:608`, default per `mod.rs:177`) does not save it: its
+   dangerous-pattern verdict only logs `warn!("... will prompt user")` at
+   `stream.rs:730` and then falls through without prompting anyone.
+
+2. **A second Ctrl-C handler.** `create_runtime_agent` spawns an unconditional
+   `tokio::signal::ctrl_c()` handler at `main.rs:1754-1761` (no config gate, no
+   feature flag; the `JoinHandle` is dropped, so it is fire-and-forget).
+   Verified nuance: this is a **broadcast**, not a contested single-slot
+   handler — tokio's `signal_hook_registry` fans SIGINT out to every registered
+   listener, so the blast radius was already "every listener" before this
+   change. The gateway already registers further process-level listeners
+   (`cmd_gateway.rs:392-396`). So a second agent does not *widen* Ctrl-C's
+   reach; it is a cost to note, not a new hazard.
+
+- **Decision owed by the owner**: what permissions an unattended cron agent
+  gets. The safe default is an explicit decision, not the `None` fallback.
+
 ## OPEN — Unowned debt on mainline (2026-10-03)
 
 ### K-1 — `tools::kernel` roundtrip tests fail on `origin/main` (OPEN, unowned)

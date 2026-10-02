@@ -68,6 +68,32 @@ Plus 8 `agent_session_isolation`, 6 `org_authority_tools` and 15
 
 "Built" here means *compiled and tested*. It does **not** mean *on a run path*.
 
+### 1.0 Read this first — the top item is a live defect, not a planned one
+
+**A cron agent job destroys a gateway user's live conversation on `origin/main`
+today.** This is filed as `BUGS.md` **D-1 (P1, unowned)** and it outranks every
+step below. The distinction matters: steps B-F are unwired subsystems that only
+matter once someone wires them, whereas D-1 is reachable by ordinary
+configuration — run a gateway adapter with at least one enabled agent cron job.
+
+The mechanism, in one line: `scheduler.rs:277` calls `clear_history()` on the
+**same `Arc<OperantAgent>`** the gateway chats on
+(`gateway_runner.rs:1082` → `:1094`), and `clear_history` clears the hot
+conversation (`events.rs:200`) **and** discards the persisted transcript from the
+`SessionStore` (`events.rs:205-206`). The gateway does not rehydrate: the block at
+`gateway_runner.rs:569-583` only tracks state, and the real rehydration lives
+inside `set_session_id`, whose swap is conditional on the id changing
+(`events.rs:379`).
+
+Two consequences that shape the rest of this outline:
+
+- **It is unrecoverable.** `sessions.discard` deletes the rows, so switching the
+  conversation away and back does not restore it. Full transcript loss.
+- **Step A′ is the fix, not merely the prerequisite.** This re-ranks A′ from
+  "first of six planned steps" to "P1 remediation".
+
+### 1.1 The planned work
+
 | Step | Built | On a run path | Note |
 |---|---|---|---|
 | A per-employee session substrate | ✅ iter-548 | ⚠️ **gateway only** | 8 isolation tests |
@@ -136,6 +162,48 @@ out, and this is the owner's call:
 
 Recommendation: (1). Until one is chosen, A′ is not implementable, and the
 stable-id / compressor-reset decisions below stand but have no mount point.
+
+### Option (1) is NOT the cheap fix — two side effects need an explicit decision
+
+The cost note above is incomplete, and both omissions change what option (1)
+means. Verified against current `origin/main`; filed as `BUGS.md` D-2.
+
+**1a. Permissions fail OPEN, not closed.** This is the sharp one. `permission_tx`
+is `Option<mpsc::Sender<ToolPermissionRequest>>` (`agent/mod.rs:361`) and
+defaults to `None` in both builders (`builders.rs:67`, `:134`);
+`with_permissions` (`builders.rs:356-359`) is the only setter. The guard at
+`agent/stream.rs:737` is literally `if let Some(ref permission_tx) =
+self.permission_tx` — an Option test, not a call. With it `None` the whole block
+is skipped and control falls through to `pending.push(...)` at `stream.rs:838`,
+the queue for actual execution. **There is no fail-closed default anywhere in
+that path.** A cron agent built without an explicit `with_permissions` runs
+unattended with no approval gate at all.
+
+The "smart" approval mode (`approval.rs:608`, default per `mod.rs:177`) does not
+rescue it. Its dangerous-pattern verdict only logs
+`warn!(tool = %name, "Tool call flagged — will prompt user")` at
+`stream.rs:730` and then falls through — it prompts nobody, because in an
+unattended job there is nobody to prompt. So the "obvious" implementation
+(don't wrap it, matching the gateway's interactive UX) silently gives unattended
+cron jobs `bash` and `file_write` with no approval.
+
+**Decision owed**: what permissions an unattended cron agent gets. This must be
+an explicit call, not the `None` fallback. The fail-closed option is to wrap cron
+in a permission channel that has no responder and deny on timeout — but note that
+deny-on-timeout changes cron job behaviour, and the owner should own that choice
+rather than inherit it.
+
+**1b. A second Ctrl-C handler.** `create_runtime_agent` spawns an unconditional
+`tokio::signal::ctrl_c()` handler at `main.rs:1754-1761` — no config gate, no
+feature flag, and the `JoinHandle` is dropped, so it is fire-and-forget. A second
+call registers a second listener.
+
+Verified nuance, because the raw claim overstates it: this is a **broadcast**,
+not a contested single-slot handler. tokio's `signal_hook_registry` fans SIGINT
+out to every registered listener, so the blast radius was already "every
+listener" before A′ existed, and the gateway already registers further
+process-level listeners (`cmd_gateway.rs:392-396`). A second agent therefore does
+not *widen* Ctrl-C's reach. Record it as a cost, not a new hazard.
 
 ### The plumbing, once that is settled
 
