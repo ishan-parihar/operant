@@ -20,12 +20,11 @@ future bisect will land here.
   `docs/NEXT-IMPLEMENTATION-OUTLINE.md`'s Steps A-F touches `tools::kernel`, and
   no file under that path is modified by any of it.
 - **Unowned**: no iteration has claimed this. It deserves its own, rather than
-  being absorbed into an org change where it would be misattributed.
-- **Cause: UNDIAGNOSED.** This entry records only what was measured. Nobody has
-  read `kernel/mod.rs` to establish *why* the roundtrip asserts false, and no
-  root cause should be inferred from the signature above — the failing assertion
-  is a symptom, not a diagnosis. Do not go looking for a recorded cause; there
-  isn't one.
+  being absorbed into an org change where it would be misattributed. **Cause:
+  UNDIAGNOSED** — this entry records only what was measured. Nobody has read
+  `kernel/mod.rs` to establish *why* the roundtrip asserts false, so no root
+  cause should be inferred from the signature above; a failing assertion is a
+  symptom, not a diagnosis.
 - **Next step**: read `kernel/mod.rs` around `:285` and establish why the
   roundtrip asserts false. The isolated failure is the cheap lead.
 
