@@ -2,13 +2,21 @@
 
 **Date**: 2026-10-03
 **Baseline**: `origin/main` @ `1cb88511` (iter-551)
-**Predecessor**: [`NEXT-IMPLEMENTATION-OUTLINE.md`](NEXT-IMPLEMENTATION-OUTLINE.md)
-(written 2026-10-01 at iter-541, now superseded — its "Step A is the blocker"
-premise was resolved by iter-548)
+**Supersedes**: the 2026-10-01 revision of this same file, written at iter-541.
+That revision opened with "Step A is the blocker - not started"; iter-548
+resolved it. Its "Predecessor" line pointed at this file, which is a
+self-reference and is what this revision removes.
 
 Every claim below was re-verified against the code at `1cb88511` on 2026-10-03,
 not carried over. Where the predecessor said a thing was unbuilt and it now
 exists, that is recorded rather than silently renumbered.
+
+**Corrections in this revision** (the iter-552 text shipped three errors):
+
+1. Step A is **not** on a run path. Only the gateway adopted iter-548.
+2. `WriteBarrier::apply` is **synchronous**; the iter-552 text wrote
+   `await WriteBarrier::apply(...)`, which does not compile.
+3. This file's predecessor line self-referenced.
 
 ---
 
@@ -40,10 +48,19 @@ iter-551 then repaired forward a defect iter-550 introduced: it committed
 imports, publishing a test target that could not compile. Force-pushing `main`
 is forbidden, so it was fixed in a following commit rather than amended.
 
-**Current measured state:** 2235 lib tests pass, 2 pre-existing
-`tools::kernel` failures that are present at iter-549 and unrelated (no
-`kernel.rs` file exists; neither commit touches `tools::kernel`), plus
-8 `agent_session_isolation`, 6 `org_authority_tools`, 15 `session_autocompact`.
+**Current measured state:** 2235 lib tests pass and **2 fail** —
+`tools::kernel::{ping_roundtrip, harness_apply_and_rollback_roundtrip}`. Those
+two are **pre-existing debt at iter-549**, unrelated to this work: the same two
+fail in a clean worktree at `origin/main` (measured 2197 passed / 2 failed), no
+`tools::kernel.rs` file exists, and neither iter-550 nor iter-551 touches
+`tools::kernel`. They deserve their own iteration; they are not absorbed here.
+
+Do not read the working tree's 2237/0 as a repair. That run had the
+unstaged `Cargo.toml` `[profile.dev]` change applied, which alters the build;
+the committed tree measures 2235/2.
+
+Plus 8 `agent_session_isolation`, 6 `org_authority_tools` and 15
+`session_autocompact`, all green in a clean worktree at the pushed commit.
 
 ---
 
@@ -53,28 +70,62 @@ is forbidden, so it was fixed in a following commit rather than amended.
 
 | Step | Built | On a run path | Note |
 |---|---|---|---|
-| A per-employee session substrate | ✅ iter-548 | ✅ | 8 isolation tests |
+| A per-employee session substrate | ✅ iter-548 | ⚠️ **gateway only** | 8 isolation tests |
 | B write barrier | ✅ iter-550 | ❌ **no caller** | 38 inline tests |
 | C autocompaction | ✅ iter-550 | ❌ **no caller** | 15 tests |
 | D hierarchy + §2.4 tool authority | ✅ iter-550/551 | ❌ **no caller** | 6 + inline tests |
 | E assignment boards | ❌ | ❌ | absent |
 | F concurrent CEO loop | ❌ | ❌ | absent |
 
-The single most important line in this document: **Steps B, C and D are three
-finished subsystems that nothing calls.** The organ can currently record a
-worklog, compact a session and filter tools by authority — provided something
-invokes them. No run does.
+**Four subsystems are built and unwired, not three.** The gateway calls
+`set_session_id` (`gateway_runner.rs:544`), so iter-548 is live there. **Cron
+never adopted it.** `run_agent_job` (`cronjobs/scheduler.rs:274-285`) calls only
+`self.agent.clear_history().await` then `self.agent.run(...)` — grep for
+`set_session_id|SessionKey|SessionStore` in `scheduler.rs` returns nothing. Every
+scheduled employee run therefore still starts blind against one agent slot,
+and that is where the org's ~133 employees actually run.
 
-Verified absent: `operant-cli/src` contains no reference to `write_barrier` or
-`autocompact`; `with_turn_end_bus` (`agent/builders.rs:280`) has no caller.
+This is the largest remaining gap and it gates the others: B′ needs a session
+key to attach to, and the plan's previous revision asserted one was in hand at
+the mount point. It is not.
 
-This is the same class of defect `REMAINING-GAPS.md` calls `DARK` — built, not
+The same class of defect `REMAINING-GAPS.md` calls `DARK` — built, not
 reachable. The gap ledger predates all of this and its Wave 2-4 rows are stale;
 this outline supersedes its status column, not its findings.
 
 ---
 
-## 2. Step B′ — mount the write barrier *(the next iteration)*
+## 2. Step A′ — give cron a per-job session *(the next iteration, revised)*
+
+This was not in the previous revision. It should have been.
+
+`run_agent_job` has no session identity at all. It calls
+`self.agent.clear_history().await` at `:277` and then `self.agent.run(...)`, so
+every scheduled job starts from the same slot regardless of which employee it
+belongs to. iter-548 built the substrate to prevent exactly this and cron never
+adopted it.
+
+The job id is already the employee identity in this codebase:
+`derive_employee_id(&job.id)` is used by the org gate at
+`scheduler.rs:117`. So the session key is derivable at the mount point without a
+schema change — this is plumbing, not design.
+
+The shape:
+
+```
+1. derive the employee id from job.id (already done for the gate at :117)
+2. set_session_id(<per-job session id>) before run
+3. clear_history() no longer means "wipe the org" — it releases one slot
+```
+
+**Why first:** B′ must attach the barrier to a session, and the barrier writes a
+worklog row keyed by session. Without a per-job session key there is nothing to
+key it to, and the previous revision's claim that the mount point already held
+"the run outcome and the session key" was wrong on the second half.
+
+---
+
+## 3. Step B′ — mount the write barrier
 
 The barrier has two entry points, deliberately distinct
 (`write_barrier.rs:743`):
@@ -85,26 +136,30 @@ The barrier has two entry points, deliberately distinct
   a run; records to a `BarrierFailureLog`.
 
 A `TurnEndBus` subscriber cannot make a run fail — that is why these are two
-functions. So the postcondition has to be awaited by the run path itself, not
+functions. So the postcondition has to be called by the run path itself, not
 merely observed.
 
 **Mount point:** `run_agent_job` (`cronjobs/scheduler.rs:274`). It already has
 the run's outcome in hand as `(success, output, final_response, error_msg)`.
 
+`apply` is **synchronous** — `pub fn apply(&self, request: &WriteBarrierRequest)
+-> Result<BarrierReport, Error>` at `:636`. The previous revision wrote
+`await WriteBarrier::apply(...)`, which does not compile. Only
+`Autocompactor::compact_summarising` (`:448`) is async.
+
 The shape is roughly:
 
 ```
 1. build WriteBarrier::for_app(&db_path)
-2. await WriteBarrier::apply(&request)  after self.agent.run(...) returns
+2. WriteBarrier::apply(&request)  after self.agent.run(...) returns   [no await]
 3. on Err: the run is a failure regardless of `success`
 ```
 
 Constraint from the design that must be honoured: the barrier writes the
 **objective** worklog row, **subjective** reasoning, and **decision** objects.
-`run_agent_job` currently calls `clear_history()` at `:277` before every run.
-Under the iter-548 session substrate that now means "release this session's
-slot", so the turn data the barrier needs must be captured before or across
-that call, not after.
+Under iter-548 `clear_history()` means "release this session's slot", so the
+turn data the barrier needs must be captured before or across that call, not
+after. A′ is what makes that coherent.
 
 **Why this before C or E:** the design's own sequencing says B before D,
 otherwise the first governed action in the system is also the first
@@ -117,7 +172,7 @@ and must not be recorded as successful.
 
 ---
 
-## 3. Step C′ — autocompact after scheduled execution
+## 4. Step C′ — autocompact after scheduled execution
 
 `Autocompactor::compact(&key)` (`session/autocompact.rs:429`) and the
 summarising variant `:448`. It takes an `Arc<SessionStore>` and an
@@ -137,7 +192,7 @@ mechanism and the two must not be conflated.
 
 ---
 
-## 4. Step D′ — hierarchy and §2.4 enforcement, on a real agent
+## 5. Step D′ — hierarchy and §2.4 enforcement, on a real agent
 
 `hierarchy.rs` models the reporting line as explicit edges over
 `HierarchyEntry` rather than as a field on `Employee`. That was forced:
@@ -163,7 +218,7 @@ sequencing detail.**
 
 ---
 
-## 5. Step E — assignment boards
+## 6. Step E — assignment boards
 
 Not started. First genuinely *governed* mutation: the cross-department grant
 check gates it, and it is the first place the authority lattice is exercised by
@@ -174,7 +229,7 @@ against. E before D would be a board nobody can enforce.
 
 ---
 
-## 6. Step F — concurrent CEO loop
+## 7. Step F — concurrent CEO loop
 
 Not started. Fan out to HODs, collect report artifacts, synthesize a
 trajectory, optionally reconvene once for a bounded alignment round.
@@ -191,21 +246,24 @@ are unexamined.
 
 ---
 
-## 7. Sequencing constraints
+## 8. Sequencing constraints
 
-1. **B′ before D′.** The barrier is what makes an unauthorized mutation
+1. **A′ before everything.** B′, C′ and D′ all key off a per-job session.
+   Without it there is one shared slot, and every scheduled employee run starts
+   blind — which is the pre-iter-548 defect, still live on the cron path.
+2. **B′ before D′.** The barrier is what makes an unauthorized mutation
    attributable.
-2. **B′ before C′**, same seam: the barrier reads the run's artifacts.
-3. **D′ before E.** A governed mutation needs something to enforce against.
-4. **E before F.** The CEO loop reads boards.
-5. **The identity gate stays dark.** `with_org_gate` exists
+3. **B′ before C′**, same seam: the barrier reads the run's artifacts.
+4. **D′ before E.** A governed mutation needs something to enforce against.
+5. **E before F.** The CEO loop reads boards.
+6. **The identity gate stays dark.** `with_org_gate` exists
    (`scheduler.rs:60`) but activation is an owner policy decision, not a step.
    The department `rules` array it waits on now exists, so it is *possible* —
    still opt-in.
 
 ---
 
-## 8. What is deliberately out of scope
+## 9. What is deliberately out of scope
 
 - Importing organism cron jobs, prompts, ventures, or business data. Port the
   architecture, not the business.
@@ -215,21 +273,24 @@ are unexamined.
 
 ---
 
-## 9. Suggested first concrete task
+## 10. Suggested first concrete task
 
-**iter-552: mount the write barrier in `run_agent_job`.**
+**iter-553: give cron a per-job session id in `run_agent_job`.**
 
-Smallest change that converts a finished subsystem into a reachable one, on a
-seam that already exists and already has both the run's outcome and the session
-key in hand. `WriteBarrier::apply` is synchronous and already fully tested, so
-the risk is in the plumbing — which is exactly what should come next after
-three packets landed unwired.
+The previous revision proposed mounting the write barrier here and called this
+"small". It is not, for a specific reason: the barrier writes a worklog row
+keyed by session, and `run_agent_job` has no session. Fixing A′ first is
+smaller, is pure plumbing, and is what makes B′ possible.
+
+`derive_employee_id(&job.id)` is already used by the org gate at
+`scheduler.rs:117`, so the identity is derivable at the mount point with no
+schema change. The risk is in the plumbing — which is exactly what should come
+next after four packets landed unwired.
 
 Acceptance:
 
-- a completed scheduled run leaves exactly one worklog row;
-- a barrier write failure makes the run report failure, not success;
-- `cargo test -p operant-core --lib` green apart from the 2 pre-existing
-  `tools::kernel` failures;
+- two interleaved scheduled runs do not see each other's turns;
+- `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
+  `tools::kernel` failures, unchanged;
 - **verified in a clean worktree at the pushed commit, not the working tree** —
   the iter-550 defect shipped precisely because the working tree masked it.
