@@ -65,6 +65,53 @@ gone and cannot be recovered.
   existing `tests/agent_session_isolation.rs` tests the substrate, not this
   crosstalk.
 
+### D-1b — Cron tool calls permanently allowlist dangerous tools for the interactive user (OPEN, unowned, P1)
+
+**A privilege-escalation path from an unattended job into a human's chat
+session**, sharing D-1's root cause. Filed separately because the fix is
+different and the symptom is not obvious from the data-loss report.
+
+Chain, every link verified against current `origin/main`:
+
+1. A cron job's prompt causes a tool call that needs approval, on the shared
+   agent — which carries the gateway's `permission_tx` (`gateway_runner.rs:1081`).
+2. `stream.rs:788` awaits a response. Nobody is answering, because the person
+   this prompt would be shown to is in some *other* chat, or asleep, or the
+   prompt was routed to a thread nobody is watching.
+3. The gateway's permission handler reaches its no-active-channel branch at
+   `gateway_runner.rs:1938-1944`:
+   ```rust
+   } else {
+       // No active channel — auto-approve (can't prompt)
+       tracing::warn!("No active channel for permission prompt — auto-approving");
+       let _ = req.response_tx.send(operant_core::agent::ToolPermissionResponse::AllowSession);
+   }
+   ```
+4. `AllowSession` is not a one-shot allow. It **mutates the agent's session
+   allowlist** at `stream.rs:794-801`:
+   ```rust
+   ToolPermissionResponse::AllowSession => {
+       self.session_allowlist.write()...insert(name.clone());
+   }
+   ```
+5. That allowlist is `Arc<RwLock<HashSet<String>>>` on the **shared** agent
+   (`builders.rs:68`). The next interactive request for the same tool short-
+   circuits the entire permission guard via `tool_allowed_by_allowlist` at
+   `stream.rs:744-746`, which is checked *before* the dangerous-tool list.
+
+**Consequence**: an unattended cron job can permanently — for the remainder of
+the process's interactive session — grant itself approval for `bash` /
+`file_write`, and that grant then applies to the human user, silently, with no
+prompt ever shown to them. The user never sees the approval because the prompt
+was consumed by a job they do not know ran.
+
+- **Severity note**: this is worse than D-1. D-1 loses data; D-1b removes the
+  user's ability to notice a dangerous action and hands it to a job.
+- **Not fully fixed by the D-1 fix**: separating the agents gives cron its own
+  `session_allowlist` (a second `Arc`, from a second builder call), which stops
+  the *bleed into the user's session*. It does not decide what cron's own
+  permission posture should be — see D-2.
+
 ### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (OPEN, blocks D-1's fix)
 
 Calling `create_runtime_agent` a second time to give cron its own agent has two

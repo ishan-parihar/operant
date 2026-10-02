@@ -188,10 +188,25 @@ unattended job there is nobody to prompt. So the "obvious" implementation
 cron jobs `bash` and `file_write` with no approval.
 
 **Decision owed**: what permissions an unattended cron agent gets. This must be
-an explicit call, not the `None` fallback. The fail-closed option is to wrap cron
-in a permission channel that has no responder and deny on timeout — but note that
-deny-on-timeout changes cron job behaviour, and the owner should own that choice
-rather than inherit it.
+an explicit call, not the `None` fallback.
+
+> **Correction — the obvious "fail-closed" fix does not work.** An earlier
+> revision of this file recommended wrapping cron in a permission channel with no
+> responder and relying on deny-on-timeout. Read the code and that recommendation
+> is wrong: the timeout is real and long. `stream.rs:788-791` is
+> ```rust
+> let response = tokio::select! {
+>     r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
+>     _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
+> };
+> ```
+> A channel nobody drains therefore does not fail closed promptly — it **stalls
+> 120 wall-clock seconds per dangerous tool call and then denies**. On a cron
+> job that is a silent two-minute stall per tool, for every job, forever. The
+> fail-closed options are therefore "deny without prompting at all" (needs a new
+> code path, not a channel) or "accept the stall" — and neither is a free
+> choice. **This is an owner decision with real cost on both sides, not a
+> detail.**
 
 **1b. A second Ctrl-C handler.** `create_runtime_agent` spawns an unconditional
 `tokio::signal::ctrl_c()` handler at `main.rs:1754-1761` — no config gate, no
