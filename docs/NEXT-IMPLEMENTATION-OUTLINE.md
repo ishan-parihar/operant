@@ -158,6 +158,15 @@ So the reset belongs where the session actually changes, which is
 `set_session_id`, guarded by the same `previous != new_id` condition that
 already gates the conversation swap.
 
+**The reset is not a no-op on cron — verified, not assumed.** The compressor is
+`Option<Mutex<LlmCompressor>>` (`agent/mod.rs:475`), so the reset only fires if
+one is attached. The construction path: the scheduler receives
+`Arc<OperantAgent>` (`scheduler.rs:24`); the only caller passes a clone of the
+gateway's agent (`gateway_runner.rs:1082`, from `cron_agent = agent.clone()`);
+and that agent is built by `create_runtime_agent` (`main.rs:1719`), which
+attaches a compressor at `main.rs:1775`. So the cron agent **does** carry one,
+and dropping the reset would be a real regression rather than dead code.
+
 ### Deciding the memory session-boundary event
 
 Step 3 is not a pure deletion, and the implementer should know that before
@@ -177,9 +186,17 @@ memory boundary from the cron path specifically, and from nowhere else.**
 
 **Decision: do not preserve it on cron.** One `on_session_end` per scheduled
 job is noise — each job would close a session the organ never opened, and memory
-would accumulate a boundary per job per run. `/new` keeps it, which is where a
-genuine boundary exists. If memory later wants run boundaries, that is a
-different event with a different name, not this one.
+would accumulate a boundary per job per run. `/new` (`main.rs:2447`) keeps it,
+which is where a genuine boundary exists. If memory later wants run
+boundaries, that is a different event with a different name, not this one.
+
+**Record the graph-structure consequence.** Today memory receives one boundary
+per cron job per tick — roughly 102 events per tick across ~133 employees.
+After iter-554 it receives none from cron. That is a deliberate change to the
+memory graph's shape, not a silent deletion. Open question for whoever tunes
+memory: does anything downstream read run-level boundaries as signal? Nothing
+in this repo does today, which is why the decision is safe, but it is the
+question to ask before adding a replacement event.
 
 **Why first:** B′ must attach the barrier to a session, and the barrier writes a
 worklog row keyed by session. Without a per-job session key there is nothing to
@@ -283,6 +300,25 @@ Two settings remain a decision when C′ is wired, and neither is urgent:
 
 Do not wire C′ before the id question is answered — but §2 has now answered it,
 so the remaining choice is only *where* compaction runs, not whether it can.
+
+### The cost of stable ids before C′ lands
+
+This cuts against the "not urgent" framing above, so state it plainly. A′ gives
+each of the ~102 cron jobs a **stable** session that accumulates across runs,
+and iter-548's store is backed by the existing `Database` message tables — there
+is no second persistence path. `set_session_id` persists the outgoing transcript
+and rehydrates from disk (`events.rs:379-397`), so every run's turns stay
+durable.
+
+That means **after iter-554 and before C′, the message tables grow without
+bound by design.** Nothing trims a cron session in between: the only compaction
+that exists is the autocompactor C′ has yet to wire. Survivable for an iteration
+or two, and it is the price of employee continuity — but it is a real
+consequence of §2's choice, not a free win.
+
+If unbounded growth bites before C′ is wired, the interim lever is session
+discard (`SessionStore::discard`, which `clear_history` already calls at
+`:206`) on an explicit retention rule — not lowering the compaction floor.
 
 Note `compress_context_overflow` (`agent/compress.rs`) is a *different*
 mechanism and the two must not be conflated.
