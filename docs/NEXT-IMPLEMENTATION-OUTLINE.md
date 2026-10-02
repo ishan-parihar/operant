@@ -130,6 +130,33 @@ The shape:
 3. delete the clear_history() at :277
 ```
 
+### Deciding the memory session-boundary event
+
+Step 3 is not a pure deletion, and the implementer should know that before
+making it. `clear_history()` is not only a wipe. At `events.rs:175-198` it
+snapshots the conversation and fires a **memory session-boundary
+notification**: `submit_session_end` when the sync executor is available, else
+`provider.on_session_end(&snapshot)`. It then resets the LLM compressor and
+calls `provider.on_session_switch(&old_id, &old_id, true)` at `:220`.
+
+Deleting the `:277` call therefore removes that notification from all 102 cron
+jobs. That is a real behaviour change beyond isolation, so it is a decision,
+not a side effect:
+
+**Decision: do not preserve it on the cron path.** One `on_session_end` per
+scheduled job is noise — every job would close a "session" that the organ
+never opened, and memory would accumulate a boundary event per job per run.
+The gateway's own session switches still fire it via `set_session_id`, which is
+where a real boundary exists. If memory later wants run boundaries, that is a
+different event with a different name, not this one.
+
+What replaces the wipe: `set_session_id` is a strict superset of the
+isolation behaviour. It rehydrates the **incoming** session's transcript and
+persists the outgoing one back to the store (`events.rs:379-397`), so the
+durable transcript survives — which `clear_history` explicitly did *not* do.
+The compressor reset is the one thing A′ must re-check: `clear_history` reset
+it, and `set_session_id` does not.
+
 **Why first:** B′ must attach the barrier to a session, and the barrier writes a
 worklog row keyed by session. Without a per-job session key there is nothing to
 key it to, and the previous revision's claim that the mount point already held
@@ -198,6 +225,36 @@ summary-of-summary. That floor is implemented: `COMPACTION_FLOOR_TOKENS = 4_000`
 This is the same `run_agent_job` seam as B′, and the order matters: **compact
 after the barrier has read what the run produced**, or the barrier is
 compacting against a transcript it is about to write a row about.
+
+### A′ changes what C′ means — the floor is a token floor, not a shape floor
+
+`preflight` gates on exactly one thing (`autocompact.rs:501`):
+
+```
+if tokens_before <= self.config.floor_tokens { return SkippedByFloor }
+```
+
+There is no structural precondition — no message count, no run count, nothing.
+Before A′, every scheduled job ran against one shared slot that
+`clear_history()` emptied, so the slot was whatever the last run left. After A′
+each job gets its **own** session that starts empty and holds only that run's
+turns. A single scheduled run is very unlikely to exceed 4,000 tokens, so
+**C′ mounted on the cron path may be close to inert**: every job will skip.
+
+That is not a bug in the autocompactor — it is doing exactly what its floor was
+specified to do. It does mean "compact after scheduled execution" needs a
+decision before it is wired:
+
+- **Compact the employee's session across runs**, not the per-run session. That
+  requires the per-job session id to be stable across runs (an employee-scoped
+  key, not a per-run uuid), which is a change to what A′ builds.
+- **Compact on the gateway path**, where sessions are genuinely long-lived, and
+  leave cron uncompacted.
+- **Lower the floor for cron**, accepting summary-of-summary on short sessions —
+  the thing §4.5 explicitly wants to avoid.
+
+Do not wire C′ at all until this is decided. The current wording of this
+section would produce a subsystem that compiles, tests, and never fires.
 
 Note `compress_context_overflow` (`agent/compress.rs`) is a *different*
 mechanism and the two must not be conflated.
@@ -300,7 +357,12 @@ Nothing in this program touches `tools::kernel`; it is a separate fix.
 
 ## 10. Suggested first concrete task
 
-Two increments. **iter-554 is A′; iter-555 is B′.**
+Two code increments, plus this docs commit which takes iter-555.
+
+**iter-554 is A′; iter-556 is B′.** The numbering is not monotonic against the
+commit log because this documentation commit spends iter-555 ahead of the code
+work it describes. Read `origin/main` for the authoritative next free label
+before starting.
 
 ### iter-554 — A′: thread the existing employee id into `set_session_id`
 
@@ -308,16 +370,22 @@ Reuse `derive_employee_id(&job.id)` — the org gate already calls it at `:117` 
 and pass it to `agent.set_session_id(...)` before `run()`. Delete the
 `clear_history()` at `:277`. No schema change, no new derivation.
 
-Acceptance:
+Acceptance — each needs a **negative control**, because a test that cannot fail
+proves nothing:
 
 - two scheduled jobs run back to back through the real scheduler on one agent,
-  and neither sees the other's turns — checked through the scheduler, not a
-  synthetic fixture;
-- `clear_history()` is no longer called on the cron path;
+  and neither sees the other's turns. Control: the test must also fail when the
+  same job id is used twice with `set_session_id` removed, or when the harness
+  hands each run its own agent. An isolation test that passes because each run
+  got a fresh agent measures nothing.
+- `clear_history()` is gone from the cron path. Control: confirm the grep
+  pattern finds it at `:277` *before* the deletion and returns nothing after.
+- the compressor-state question above is answered, since `clear_history` reset
+  the LLM compressor and `set_session_id` does not;
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
 
-### iter-555 — B′: mount `WriteBarrier::apply` in `run_agent_job`
+### iter-556 — B′: mount `WriteBarrier::apply` in `run_agent_job`
 
 Acceptance:
 
