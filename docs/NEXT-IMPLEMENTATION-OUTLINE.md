@@ -1,235 +1,235 @@
-# Next implementation outline — after iter-541
+# Organism OS — next implementation outline
 
-**Date**: 2026-10-01
-**Baseline**: `origin/main` @ `df2cf23d` (iter-541)
-**Predecessor docs**: [`ORG-AUTHORITY-ARCHITECTURE.md`](ORG-AUTHORITY-ARCHITECTURE.md) §14,
-[`ORG-AUTHORITY-DESIGN-REVIEW.md`](ORG-AUTHORITY-DESIGN-REVIEW.md) "Revised sequencing",
-[`REMAINING-GAPS.md`](REMAINING-GAPS.md)
+**Date**: 2026-10-03
+**Baseline**: `origin/main` @ `1cb88511` (iter-551)
+**Predecessor**: [`NEXT-IMPLEMENTATION-OUTLINE.md`](NEXT-IMPLEMENTATION-OUTLINE.md)
+(written 2026-10-01 at iter-541, now superseded — its "Step A is the blocker"
+premise was resolved by iter-548)
 
-This is a plan, not an implementation. Every claim below was re-verified against
-the code at `df2cf23d` rather than carried over from the docs, because two of the
-three source documents predate iter-539/541 and describe a system that no longer
-exists in that form.
-
----
-
-## 0. Where the last two iterations actually left the system
-
-Worth stating precisely, because the source docs are stale here and the next
-agent should not trust them on this point.
-
-iter-539 landed five stores (`department_db`, `authority`, `decisions_db`,
-`dm_thread`, `resolver`) plus an idempotent `schema.rs`. iter-541 wired three of
-them into `open_org_db` and gave the CLI four reachable subcommand groups
-(`org department`, `org decision`, `org grant`, `org dm`).
-
-**What that means for the plan**: the original §14 sequence listed "departments
-table + CLI" at step 4 and "recipient resolver" at step 5 and "DM thread + 3-turn
-budget" at step 6. Those three are **done**. The gaps ledger's `GAP-2.1` (loop
-guard), `GAP-2.2` (resolver), and the department/DM rows are also closed. Do not
-re-plan them.
-
-The corrected §14 sequence in the design review is still the right spine, but its
-first six steps are now partly consumed and the numbering has to be re-derived.
+Every claim below was re-verified against the code at `1cb88511` on 2026-10-03,
+not carried over. Where the predecessor said a thing was unbuilt and it now
+exists, that is recorded rather than silently renumbered.
 
 ---
 
-## 1. The corrected starting point
+## 0. What iter-550 and iter-551 actually changed
 
-Steps 2, 4, 5, and 6 of the design review's revised sequence are landed. What
-remains, in dependency order:
+Both packets had been sitting as **untracked files** — never committed, and one
+of them never even compiled.
 
-| Was | Step | Status @ `df2cf23d` |
-|---|---|---|
-| 1 | Per-employee session substrate | **not started** — the blocker |
-| 2 | Schema versioning helpers | **done** (iter-539, `schema.rs`) |
-| 3 | Department membership + NULL surfacing | **done** (iter-541, `unstaffed_employees`) |
-| 4 | `departments` table + CLI | **done** (iter-539 + 541) |
-| 5 | Recipient resolver | **done** (iter-539) |
-| 6 | DM thread + 3-turn budget | **done** (iter-539 + 541) |
-| 7 | Write barrier | **not started** |
-| 8 | `Autocompactor` wiring | **not started** |
-| 9 | `subjective_log` + `org_decisions` | **store done** (iter-539); **not fed** |
-| 10 | Persona synthesis + frozen-prefix injection | **not started** |
-| 11 | `reports_to` / peers / authority scopes | **store done**; **hierarchy absent** |
-| 12 | Authority-filtered tool registry | **not started** |
-| 13 | `assignments` board + grant check | **not started** |
-| 14 | CEO loop + artifacts + fan-out | **not started** |
-| 15 | `org check` exit contract | **partly done** (`org department findings` exits 1; the umbrella gate does not) |
+`session/autocompact.rs` was an orphan: `lib.rs:110` declares `pub mod session`,
+but `session/mod.rs` never declared `mod autocompact`, so the file was outside
+the module tree. `cargo check --lib` passed *because it never saw it*.
+`tests/session_autocompact.rs` failed `E0432`. iter-550 added the declaration;
+the 766 lines type-checked for the first time and 15 tests now run.
 
----
+`write_barrier.rs` shipped two failing tests, both test-side:
 
-## 2. Why step 1 is still the blocker
+- `a_run_that_changed_the_organisation_writes_its_decision_objects` — the
+  `authorless_decision` helper passed its meeting note into the 6th argument of
+  `OrgDecision::new(id, subject, scope, decided_by, rationale, reason)`, i.e.
+  the `reason` slot. It was therefore non-blank and the substitution at
+  `write_barrier.rs:701` correctly declined to fire. Fixed the helper.
+- `the_barrier_leaves_the_kanban_user_version_untouched` — dropped the fixture,
+  and with it the `TempDir`, before reopening, so it asserted on a
+  `SqliteFailure` rather than on `user_version`. Removed the drop; a second
+  `Connection::open` on a live file is valid SQLite.
 
-Re-verified at `df2cf23d`, not quoted from the review:
+iter-551 then repaired forward a defect iter-550 introduced: it committed
+`tests/org_authority_tools.rs` but not the `tools.rs` implementation the test
+imports, publishing a test target that could not compile. Force-pushing `main`
+is forbidden, so it was fixed in a following commit rather than amended.
 
-- `OperantAgent` holds **one** `conversation: Arc<RwLock<Vec<Message>>>`
-  (`agent/mod.rs:346`). There is no session store and no per-employee key.
-- `clear_history()` is still called before each cron job
-  (`cronjobs/scheduler.rs:277`) and on session change in the gateway
-  (`gateway_runner.rs:564`). Every scheduled run therefore starts blind.
-- Cron executes `for job in due_jobs` (`cronjobs/scheduler.rs:95`) — strictly
-  sequential. The CEO fan-out in §11 is genuinely new concurrency work.
-- No `Autocompactor` symbol exists anywhere in `operant-core`. The
-  context-overflow path (`agent/compress.rs`) is a *different* mechanism from the
-  per-run compaction §4.5 asks for.
-- `Employee.persona` is a nullable JSON column (`org/employee.rs:105`) that
-  nothing reads. Persona injection is entirely unwired.
-- No `assignments` table exists (`ls org/` confirms 13 modules, none is one).
-- `tools/builtin.rs` contains **zero** references to `authority`, so nothing
-  constrains tool availability by scope.
-
-Everything from step 7 onward attaches to a per-employee session boundary. Doing
-them before step 1 means building on a single global conversation slot that
-cannot address an individual employee.
+**Current measured state:** 2235 lib tests pass, 2 pre-existing
+`tools::kernel` failures that are present at iter-549 and unrelated (no
+`kernel.rs` file exists; neither commit touches `tools::kernel`), plus
+8 `agent_session_isolation`, 6 `org_authority_tools`, 15 `session_autocompact`.
 
 ---
 
-## 3. Proposed order for the next stretch
+## 1. The honest status table
 
-Six steps. Each is independently shippable and leaves the system working.
+"Built" here means *compiled and tested*. It does **not** mean *on a run path*.
 
-### Step A — Per-employee session substrate *(the big one)*
+| Step | Built | On a run path | Note |
+|---|---|---|---|
+| A per-employee session substrate | ✅ iter-548 | ✅ | 8 isolation tests |
+| B write barrier | ✅ iter-550 | ❌ **no caller** | 38 inline tests |
+| C autocompaction | ✅ iter-550 | ❌ **no caller** | 15 tests |
+| D hierarchy + §2.4 tool authority | ✅ iter-550/551 | ❌ **no caller** | 6 + inline tests |
+| E assignment boards | ❌ | ❌ | absent |
+| F concurrent CEO loop | ❌ | ❌ | absent |
 
-Replace the single conversation slot with a session-keyed store plus a
-per-employee lock. `clear_history()` stops being the session boundary.
+The single most important line in this document: **Steps B, C and D are three
+finished subsystems that nothing calls.** The organ can currently record a
+worklog, compact a session and filter tools by authority — provided something
+invokes them. No run does.
 
-Design constraints that are already decided and must not be re-litigated:
+Verified absent: `operant-cli/src` contains no reference to `write_barrier` or
+`autocompact`; `with_turn_end_bus` (`agent/builders.rs:280`) has no caller.
 
-- **Load-on-demand with a bounded warm cache**, not 102 resident processes. The
-  owner's instruction and the review agree.
-- The key is `(employee_id, session_key)`. A fresh employee run must see its own
-  history and nobody else's.
-- The store must be swappable per agent instance so the TUI and gateway paths
-  keep working with a single implicit session.
-- `clear_history()` is retained but redefined as *release this session's slot*,
-  not *wipe the global history*.
-
-Risk: this is the one step that touches the agent core. It is first precisely so
-it can be de-risked while there is still room to back it out.
-
-Verification that matters: two interleaved employee runs must not see each
-other's turns, and a released session must not leak its history into the next
-run under the same employee.
-
-### Step B — Write barrier
-
-Every employee run must pass a write barrier before completion:
-
-- one objective **worklog** row
-- **subjective** reasoning entries
-- **decision** objects for organizational changes
-
-The seam already exists and is nearly free: `OperantAgent.turn_end_bus`
-(`agent/mod.rs:377`) is an `Option`, is `None` by default, and the emit sites
-(`run.rs:1271`, `stream.rs:888/926/1012`) already check it with a documented
-zero-subscriber cost. **Nothing in the CLI ever calls `with_turn_end_bus`** —
-so the barrier has a mount point but no subscriber.
-
-That makes Step B smaller than it looks: attach a subscriber that writes the
-three artifact kinds, and make the run *fail* if the write fails. The design
-calls this a precondition of completion, so a silent write failure is the
-failure mode to guard.
-
-### Step C — Autocompaction wiring
-
-Per §4.5, sessions compact after scheduled execution, with a **compaction floor**
-so short sessions are not reduced to a lossy summary-of-summary.
-
-Blocked on Step A: the compressor needs a per-employee conversation to compact.
-Note the existing `compress_context_overflow` is a different mechanism and should
-not be conflated with this.
-
-### Step D — Hierarchy fields + authority-filtered tools
-
-`reports_to` / peers, then make authority actually constrain the **tool
-registry**, not merely board mutations — this is an explicit owner requirement
-and is the single most load-bearing remaining correctness property. §2.4: a
-non-crossing scope is offered its own department's tool surface with no grant
-recorded; a crossing scope requires an explicit, attributable, expiring grant.
-
-`GrantDb` and the scope lattice already exist; what is missing is the hierarchy
-they read from and the enforcement point in tool resolution.
-
-### Step E — Assignment boards
-
-First genuinely *governed* mutation: the cross-department grant check gates it.
-This is also the first place the authority lattice is exercised by something
-other than a test.
-
-### Step F — Concurrent CEO meeting loop
-
-Fan out to HODs, collect report artifacts, synthesize a trajectory, optionally
-reconvene once for a bounded alignment round. Carries the D3 concurrency work.
-
-Finish by widening the `org check` exit contract from `org department findings`
-to the umbrella §11.4 gate.
+This is the same class of defect `REMAINING-GAPS.md` calls `DARK` — built, not
+reachable. The gap ledger predates all of this and its Wave 2-4 rows are stale;
+this outline supersedes its status column, not its findings.
 
 ---
 
-## 4. Sequencing constraints worth respecting
+## 2. Step B′ — mount the write barrier *(the next iteration)*
 
-1. **A before everything.** B through F all attach to a per-employee session
-   boundary. Skipping A means building on an unaddressable global slot.
-2. **B before D.** The barrier is what makes an unauthorized mutation
-   attributable. Adding authority-filtered tools before every run is guaranteed
-   to leave a worklog means the first governed action in the system is also the
-   first unauditable one.
-3. **D before E.** A governed mutation needs something to check against. E before
-   D would be a board nobody can enforce.
-4. **C is genuinely blocked by A** and by nothing else.
+The barrier has two entry points, deliberately distinct
+(`write_barrier.rs:743`):
 
----
+- `WriteBarrier::apply(&request)` — the **postcondition**. Returns `Err`, and
+  the caller fails the run. This is the one §11 wants.
+- `WriteBarrier::attach_subscriber(...)` — the **passive observer**. Cannot fail
+  a run; records to a `BarrierFailureLog`.
 
-## 5. What is deliberately not in this outline
+A `TurnEndBus` subscriber cannot make a run fail — that is why these are two
+functions. So the postcondition has to be awaited by the run path itself, not
+merely observed.
 
-- **Importing organism cron jobs, prompts, ventures, or business data.** Port the
-  general architecture only.
-- **The identity gate activation.** The design keeps it dark until the
-  department `rules` array exists — that array now exists, so this becomes
-  *possible*, but it is an opt-in policy decision for the owner, not a
-  sequenced step. Flagged, not scheduled.
-- **`retention_gc` wiring** (`GAP-2.6`) and the **`CHANGELOG` entry** for the
-  Wave 1 breaking CLI change (`GAP-X.1`). Both real, both small, both
-  housekeeping. `GAP-X.1` in particular is a documentation debt that grows
-  every iteration.
-- **A second `Autocompactor` design pass.** One exists in the design; do not
-  write a competing one.
+**Mount point:** `run_agent_job` (`cronjobs/scheduler.rs:274`). It already has
+the run's outcome in hand as `(success, output, final_response, error_msg)`.
 
----
+The shape is roughly:
 
-## 6. Open questions the owner may want to answer before Step A
+```
+1. build WriteBarrier::for_app(&db_path)
+2. await WriteBarrier::apply(&request)  after self.agent.run(...) returns
+3. on Err: the run is a failure regardless of `success`
+```
 
-These are the ones that would change the design, not merely tune it. None blocks
-starting Step A.
+Constraint from the design that must be honoured: the barrier writes the
+**objective** worklog row, **subjective** reasoning, and **decision** objects.
+`run_agent_job` currently calls `clear_history()` at `:277` before every run.
+Under the iter-548 session substrate that now means "release this session's
+slot", so the turn data the barrier needs must be captured before or across
+that call, not after.
 
-1. **Session key shape.** Is a run's identity `(employee_id, cron_job_id)`, or
-   should one employee have a single continuous session across all its jobs?
-   The answer determines whether a per-employee lock is even the right
-   primitive.
-2. **Warm cache bound.** What is the ceiling on resident warm sessions before an
-   LRU eviction? Needs a number, since "bounded" is currently unquantified.
-3. **Barrier failure semantics.** If the worklog write fails, does the run fail,
-   or does it complete and raise a finding for `org check` to report? The design
-   says "precondition of completion", which implies the former — but that is a
-   availability-vs-auditability tradeoff the owner should own.
-4. **Barricade against fabricated seats.** The owner rule is to never fabricate
-   capabilities for vacant or invalid seats. Confirm whether a grant to a seat
-   that is currently vacant should be *refused* or *accepted but inert*. These
-   have very different audit implications.
+**Why this before C or E:** the design's own sequencing says B before D,
+otherwise the first governed action in the system is also the first
+*unauditable* one. D's enforcement point is built and waiting; B is what makes
+a governed action attributable.
+
+**Verification that matters:** a scheduled run that completes must leave
+exactly one worklog row; a run whose barrier write fails must report failure
+and must not be recorded as successful.
 
 ---
 
-## 7. Suggested first concrete task
+## 3. Step C′ — autocompact after scheduled execution
 
-**Step A, first slice: the session store in isolation.**
+`Autocompactor::compact(&key)` (`session/autocompact.rs:429`) and the
+summarising variant `:448`. It takes an `Arc<SessionStore>` and an
+`Arc<Database>` — both already exist after iter-548.
 
-- New `operant-core/src/session/` module: `SessionKey`, `SessionStore`, a bounded
-  LRU of warm sessions, and a `release` operation.
-- No agent-core changes yet. `OperantAgent` keeps its single slot; the store is
-  proven by its own tests (create, load, release, evict, per-key isolation).
-- Land it as an independent iteration.
+The design wants compaction **after scheduled execution**, with a
+**compaction floor** so short sessions are not reduced to a
+summary-of-summary. That floor is implemented: `COMPACTION_FLOOR_TOKENS = 4_000`,
+`KEEP_HEAD_MESSAGES = 3`, `KEEP_TAIL_TOKENS = 8_000`.
 
-Why this slice: it is the riskiest step in the plan, it has no dependency on any
-concurrent work, and shipping it separately means the agent-core wiring becomes a
-reviewable second iteration rather than one large risky change.
+This is the same `run_agent_job` seam as B′, and the order matters: **compact
+after the barrier has read what the run produced**, or the barrier is
+compacting against a transcript it is about to write a row about.
+
+Note `compress_context_overflow` (`agent/compress.rs`) is a *different*
+mechanism and the two must not be conflated.
+
+---
+
+## 4. Step D′ — hierarchy and §2.4 enforcement, on a real agent
+
+`hierarchy.rs` models the reporting line as explicit edges over
+`HierarchyEntry` rather than as a field on `Employee`. That was forced:
+`Employee` is constructed from struct literals in eight files, none using
+`..Default::default()`, so adding a field breaks the crate. When a later packet
+adds the column, `HierarchyEntry` is what reads it.
+
+Two things remain for D to be real:
+
+1. **The edges have to come from somewhere.** `hierarchy.rs` is a pure query
+   surface over a set of edges. Nothing populates that set from the employee
+   table, because the column does not exist yet. Until it does, the tree is
+   empty and every hierarchy answer is trivially "no relation".
+2. **The registry has to be consulted at agent construction.** `ToolRegistry`
+   now carries `tool_authority` and the filtering methods exist, but
+   `OperantAgent::new` at `cmd_acp.rs:156` and `main.rs:1844` construct a
+   registry with no actor attached, so every lookup is unrestricted.
+
+Decide explicitly whether to (a) add `reports_to` to `Employee` and fix the
+eight construction sites, or (b) populate edges from a separate table. (a) is
+the design's stated intent; (b) is cheaper. **This is an owner decision, not a
+sequencing detail.**
+
+---
+
+## 5. Step E — assignment boards
+
+Not started. First genuinely *governed* mutation: the cross-department grant
+check gates it, and it is the first place the authority lattice is exercised by
+something other than a test.
+
+Requires D′ to be live first — a governed mutation needs something to check
+against. E before D would be a board nobody can enforce.
+
+---
+
+## 6. Step F — concurrent CEO loop
+
+Not started. Fan out to HODs, collect report artifacts, synthesize a
+trajectory, optionally reconvene once for a bounded alignment round.
+
+Carries the D3 concurrency design and the largest open design risk in the
+program. `scheduler.rs:95` is still `for job in due_jobs` — strictly
+sequential — so nothing about fan-out exists yet. This also widens the `org
+check` exit contract from `org department findings` to the umbrella §11.4 gate.
+
+**Concurrency safety note:** iter-548 gave every session its own slot, which
+removed the reason fan-out was unsafe. It did not make fan-out *correct* —
+shared SQLite writes and the barrier's write ordering across N concurrent runs
+are unexamined.
+
+---
+
+## 7. Sequencing constraints
+
+1. **B′ before D′.** The barrier is what makes an unauthorized mutation
+   attributable.
+2. **B′ before C′**, same seam: the barrier reads the run's artifacts.
+3. **D′ before E.** A governed mutation needs something to enforce against.
+4. **E before F.** The CEO loop reads boards.
+5. **The identity gate stays dark.** `with_org_gate` exists
+   (`scheduler.rs:60`) but activation is an owner policy decision, not a step.
+   The department `rules` array it waits on now exists, so it is *possible* —
+   still opt-in.
+
+---
+
+## 8. What is deliberately out of scope
+
+- Importing organism cron jobs, prompts, ventures, or business data. Port the
+  architecture, not the business.
+- `retention_gc` wiring (GAP-2.6) and the CHANGELOG entry for the Wave 1
+  breaking CLI change (GAP-X.1). Both real, both housekeeping.
+- `GAP-4.4` AD/RG lifecycle — a separate packet.
+
+---
+
+## 9. Suggested first concrete task
+
+**iter-552: mount the write barrier in `run_agent_job`.**
+
+Smallest change that converts a finished subsystem into a reachable one, on a
+seam that already exists and already has both the run's outcome and the session
+key in hand. `WriteBarrier::apply` is synchronous and already fully tested, so
+the risk is in the plumbing — which is exactly what should come next after
+three packets landed unwired.
+
+Acceptance:
+
+- a completed scheduled run leaves exactly one worklog row;
+- a barrier write failure makes the run report failure, not success;
+- `cargo test -p operant-core --lib` green apart from the 2 pre-existing
+  `tools::kernel` failures;
+- **verified in a clean worktree at the pushed commit, not the working tree** —
+  the iter-550 defect shipped precisely because the working tree masked it.
