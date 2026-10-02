@@ -14,11 +14,18 @@ future bisect will land here.
   order dependence under parallelism.
 - **Signature**: `kernel/mod.rs:285` — `assertion left == right failed`,
   `left: Bool(false)`, `right: Bool(true)`.
-- **Pre-existing**: present before the organism-OS work began. Nothing in
+- **Pre-existing**: present before the organism-OS work began. The tests live in
+  `crates/operant-core/src/tools/kernel/mod.rs` — the module is a directory, so
+  there is no `tools/kernel.rs`. Nothing in
   `docs/NEXT-IMPLEMENTATION-OUTLINE.md`'s Steps A-F touches `tools::kernel`, and
-  no `tools/kernel.rs` path is modified by any of it.
+  no file under that path is modified by any of it.
 - **Unowned**: no iteration has claimed this. It deserves its own, rather than
   being absorbed into an org change where it would be misattributed.
+- **Cause: UNDIAGNOSED.** This entry records only what was measured. Nobody has
+  read `kernel/mod.rs` to establish *why* the roundtrip asserts false, and no
+  root cause should be inferred from the signature above — the failing assertion
+  is a symptom, not a diagnosis. Do not go looking for a recorded cause; there
+  isn't one.
 - **Next step**: read `kernel/mod.rs` around `:285` and establish why the
   roundtrip asserts false. The isolated failure is the cheap lead.
 
