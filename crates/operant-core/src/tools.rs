@@ -135,6 +135,8 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::error::{Error, Result};
+use crate::org::authority::{AuthorityScope, Grant, GrantDb, ScopeCheck};
+use crate::org::employee::Employee;
 use crate::schema::ToolSchema;
 
 /// Result of tool execution
@@ -353,6 +355,11 @@ pub struct ToolRegistry {
     tools: Arc<RwLock<HashMap<String, Arc<dyn OperantTool>>>>,
     disabled_names: Arc<RwLock<HashSet<String>>>,
     disabled_toolsets: Arc<RwLock<HashSet<String>>>,
+    /// §2.4 authority bindings, keyed by tool name. Absent = global.
+    ///
+    /// Additive state: a registry that declares nothing has an empty map and
+    /// every method below that predates this field behaves exactly as it did.
+    tool_authority: Arc<RwLock<HashMap<String, ToolAuthority>>>,
     executor: ToolExecutor,
 }
 
@@ -362,6 +369,7 @@ impl Clone for ToolRegistry {
             tools: Arc::clone(&self.tools),
             disabled_names: Arc::clone(&self.disabled_names),
             disabled_toolsets: Arc::clone(&self.disabled_toolsets),
+            tool_authority: Arc::clone(&self.tool_authority),
             executor: ToolExecutor {
                 timeout: self.executor.timeout,
                 overrides: Arc::clone(&self.executor.overrides),
@@ -376,6 +384,7 @@ impl ToolRegistry {
             tools: Arc::new(RwLock::new(HashMap::new())),
             disabled_names: Arc::new(RwLock::new(HashSet::new())),
             disabled_toolsets: Arc::new(RwLock::new(HashSet::new())),
+            tool_authority: Arc::new(RwLock::new(HashMap::new())),
             executor: ToolExecutor::new(timeout),
         }
     }
@@ -623,6 +632,555 @@ impl ToolRegistry {
         }
     }
 }
+
+// =====================================================================
+// Authority-filtered tool availability — §2.4
+// =====================================================================
+
+/// The authority binding declared for one tool.
+///
+/// §2.4: *"the tool registry is filtered by authority at agent construction. A
+/// `Department`-scoped agent is offered the department's tool surface. Reaching
+/// a sibling department's tooling requires the capability grant, which is
+/// individually recorded and individually revocable."*
+///
+/// ## `department: None` means a global tool
+///
+/// A tool with no department binding acts on no department's system —
+/// `datetime`, `web_search`, `file_read` on the agent's own workspace — so
+/// there is nothing for authority to gate and it is offered to every actor.
+/// A tool with a department binding belongs to that department's *surface*, and
+/// reaching it from outside requires a grant.
+///
+/// This is what keeps the change **additive**: the ~100 tools that predate the
+/// org layer carry no binding and keep exactly the availability they have
+/// today. Narrowing a tool is a declaration the mounting code makes at
+/// construction time, never something the model can influence.
+///
+/// ## Failing closed on a half-declared binding
+///
+/// A binding that names a department but **no** capability cannot be admitted
+/// across a boundary by any grant, because there is no capability string for a
+/// grantor to name. That is deliberate. A tool that declared a department and
+/// then silently became globally reachable when a grant's spelling drifted
+/// would be worse than one that refuses every cross-department request.
+///
+/// §2.3's four enforcement sites are board-side; this is the fifth, and the
+/// only one that changes what the model is *shown*.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolAuthority {
+    /// The department whose surface this tool belongs to. `None` = global.
+    pub department: Option<String>,
+    /// The capability a cross-department grant must name to admit this tool.
+    ///
+    /// Must be present whenever `department` is `Some` for the tool to be
+    /// reachable from another department at all.
+    pub capability: Option<String>,
+    /// The lattice rung the actor's own scope must contain, in every case.
+    pub required_scope: AuthorityScope,
+}
+
+impl Default for ToolAuthority {
+    /// Hand-written rather than derived because [`AuthorityScope`] has no
+    /// `Default` — deliberately, since a lattice rung that defaulted to the
+    /// *widest* value would silently widen every undeclared binding. `Own` is
+    /// the only safe default: the narrowest rung.
+    fn default() -> Self {
+        Self::global()
+    }
+}
+
+impl ToolAuthority {
+    /// A global tool every actor may see. The default binding.
+    pub const fn global() -> Self {
+        Self {
+            department: None,
+            capability: None,
+            required_scope: AuthorityScope::Own,
+        }
+    }
+
+    /// A global tool that still demands a lattice rung (e.g. an org-wide
+    /// admin action that no `Peers`-scoped employee may run).
+    pub const fn global_requiring(required_scope: AuthorityScope) -> Self {
+        Self {
+            department: None,
+            capability: None,
+            required_scope,
+        }
+    }
+
+    /// A tool on `department`'s own surface, admitting
+    /// `required_scope` holders from that department and grant-holders from
+    /// elsewhere.
+    ///
+    /// `capability` is the string a grant's `capability` column must equal for
+    /// this tool to be reachable across the boundary — the `platform_infra.
+    /// tooling` / `content.read` shape §2.5's table names.
+    pub fn in_department(
+        department: impl Into<String>,
+        capability: impl Into<String>,
+        required_scope: AuthorityScope,
+    ) -> Self {
+        Self {
+            department: Some(department.into()),
+            capability: Some(capability.into()),
+            required_scope,
+        }
+    }
+}
+
+/// The actor a registry is being asked about: who they are, which department
+/// they sit in, the hierarchy scope that resolves from their seat, and the
+/// grants held.
+///
+/// `grants` is passed in rather than read from a store here so the expiry
+/// comparison happens in exactly one place and is visible in the code — see
+/// [`tool_authority_check`]. A caller that reads through
+/// [`GrantDb::list_for_grantee`] is already filtering lapsed rows; a caller
+/// that hands the full history is filtered here instead. Both are safe; only
+/// one of them makes the rule legible.
+#[derive(Debug, Clone)]
+pub struct AuthorityActor {
+    pub employee_id: String,
+    /// `None` = no department. An actor with no department is treated as
+    /// outside every department's surface, so a departmental tool is a
+    /// crossing request and needs a grant. Fail-closed on absence, because the
+    /// alternative — treating "unknown department" as "in every department" —
+    /// would make an unbackfilled row the widest seat in the org.
+    pub department: Option<String>,
+    /// The hierarchy-resolved scope (`resolve_scope`). Hierarchy is the PRIMARY
+    /// grant; this is it.
+    pub scope: AuthorityScope,
+    /// Every grant naming this actor, live and lapsed alike.
+    pub grants: Vec<Grant>,
+}
+
+impl AuthorityActor {
+    /// Build an actor directly.
+    pub fn new(
+        employee_id: impl Into<String>,
+        department: Option<String>,
+        scope: AuthorityScope,
+        grants: Vec<Grant>,
+    ) -> Self {
+        Self {
+            employee_id: employee_id.into(),
+            department,
+            scope,
+            grants,
+        }
+    }
+
+    /// Build an actor from a registry row plus its resolved scope.
+    pub fn from_employee(employee: &Employee, scope: AuthorityScope, grants: Vec<Grant>) -> Self {
+        Self {
+            employee_id: employee.employee_id.clone(),
+            department: employee.department.clone(),
+            scope,
+            grants,
+        }
+    }
+
+    /// Resolve an actor against the real stores.
+    ///
+    /// **Fails closed on an unknown seat.** `None` from the directory becomes
+    /// an `Err`, not a scopeless actor: a caller that reached this function
+    /// with an id nobody holds has not established *who is asking*, and the
+    /// honest answer to "what may they use" is no answer.
+    pub fn resolve(
+        employee_id: &str,
+        scope: AuthorityScope,
+        seats: &dyn SeatDirectory,
+        grants: &GrantDb,
+    ) -> Result<Self> {
+        let employee = seats.employee(employee_id).ok_or_else(|| {
+            Error::Agent(format!(
+                "authority: no employee record for seat '{employee_id}'; \
+                 refusing to resolve an actor nobody holds"
+            ))
+        })?;
+        // Fails closed on an INVALID seat, not merely an absent one. This is the
+        // same predicate `issue_grant` applies before recording authority, and
+        // it has to be applied here too: an empty `department` or a missing
+        // required field is a row that cannot act, and an actor built over one
+        // would inherit a department (or the lack of a department) that no
+        // legitimate work is entitled to. Refusing at construction means no
+        // caller can hold an actor for a seat the identity gate would reject.
+        if !employee.is_valid() {
+            return Err(Error::Agent(format!(
+                "authority: seat '{employee_id}' is invalid (missing {}); refusing to \
+                 resolve an actor for an identity that cannot act",
+                employee.missing_required_fields().join(", ")
+            )));
+        }
+        Ok(Self::from_employee(
+            &employee,
+            scope,
+            grants.list_for_grantee(employee_id).map_err(|e| {
+                Error::Agent(format!("authority: read grants for {employee_id}: {e}"))
+            })?,
+        ))
+    }
+}
+
+/// Looks up a seat. `None` means the seat is **vacant** — nobody holds it.
+///
+/// A trait rather than a direct `EmployeeDb` call for the same reason
+/// [`crate::org::identity_gate::EmployeeLookup`] is one: this module owns the
+/// *decision*, and the store is somebody else's. Implement it over `EmployeeDb`
+/// at the wiring site.
+pub trait SeatDirectory {
+    fn employee(&self, employee_id: &str) -> Option<Employee>;
+}
+
+/// The verdict on one tool for one actor, as a [`ScopeCheck`] so every
+/// enforcement site in §2.3 speaks the same type — and so a denial always
+/// carries the sentence an operator reads to learn which grant to issue.
+///
+/// # The rules, in the order they fire
+///
+/// 1. **Undeclared tool** → allowed. A tool with no [`ToolAuthority`] is
+///    global; this is what keeps the feature additive.
+/// 2. **The actor's hierarchy scope must contain the tool's rung.** This is
+///    the primary grant (owner rule 1) and it applies to global tools too.
+/// 3. **Global tool** (no department binding) → allowed.
+/// 4. **Own department** → allowed. **No grant is consulted, and none is
+///    written.** Hierarchy already answered the question inside a department;
+///    recording a row here would attribute the authority to whoever last ran
+///    `issue_grant` rather than to the org chart (owner rules 1 and 5).
+/// 5. **Crossing** → requires a grant that is *simultaneously* capability-matched,
+///    department-covering, scope-sufficient, unrevoked, **and unexpired as of
+///    `now`**. Anything less is a denial. Authority is never inferred from a
+///    grant that does not exist (owner rule 2).
+///
+/// `now` must come from [`crate::org::notice::rfc3339`] — fixed millisecond
+/// width is what makes [`Grant::is_lapsed_at`]'s lexicographic `<` a
+/// chronological one. §2.5: "grants expire by default"; this comparison is
+/// where that becomes true for tool access.
+pub fn tool_authority_check(
+    binding: Option<&ToolAuthority>,
+    actor: &AuthorityActor,
+    tool_name: &str,
+    now: &str,
+) -> ScopeCheck {
+    // RULE 1 — no binding: a global tool, visible to everyone.
+    let Some(binding) = binding else {
+        return ScopeCheck::allow(
+            format!(
+                "tool {tool_name} carries no department binding, so it is a global tool \
+                 available to every actor"
+            ),
+            AuthorityScope::Own,
+        );
+    };
+
+    // RULE 2 — the PRIMARY grant: hierarchy. Every actor must hold the rung
+    // the tool demands, including for global tools.
+    if !actor.scope.contains(binding.required_scope) {
+        return ScopeCheck::deny(
+            format!(
+                "actor {} holds scope {} which does not contain the {} scope tool {tool_name} \
+                 requires; hierarchy is the primary grant and it does not reach this far",
+                actor.employee_id, actor.scope, binding.required_scope
+            ),
+            binding.required_scope,
+        );
+    }
+
+    // RULE 3 — a global tool clears on hierarchy alone.
+    let Some(tool_dept) = binding.department.as_deref() else {
+        return ScopeCheck::allow(
+            format!(
+                "tool {tool_name} is a global tool and actor {} holds scope {}",
+                actor.employee_id, actor.scope
+            ),
+            binding.required_scope,
+        );
+    };
+
+    let actor_dept = actor.department.as_deref().unwrap_or("(undept)");
+
+    // RULE 4 — own department. Hierarchy is sufficient and no grant row is
+    // recorded. The absence of any `grants` read on this path is the proof.
+    if actor.department.as_deref() == Some(tool_dept) {
+        return ScopeCheck::allow(
+            format!(
+                "department tier: tool {tool_name} is on dept:{tool_dept}'s own surface and \
+                 actor {} sits in it; §2.1 makes hierarchy the primary grant here, so no \
+                 capability grant is required or recorded",
+                actor.employee_id
+            ),
+            binding.required_scope,
+        );
+    }
+
+    // RULE 5 — crossing a department boundary. Everything below is the
+    // "grant required" path, and it stays visually distinct from the
+    // "no grant needed" path above.
+    let Some(capability) = binding.capability.as_deref() else {
+        return ScopeCheck::deny(
+            format!(
+                "tool {tool_name} sits on dept:{tool_dept}'s surface, actor {} is in {actor_dept}, \
+                 and the tool declares no capability — no grant can name it, so the crossing \
+                 request is refused rather than inferred",
+                actor.employee_id
+            ),
+            AuthorityScope::Org,
+        );
+    };
+
+    let matched = actor.grants.iter().find(|g| {
+        g.capability == capability
+            && g.covers_department(tool_dept)
+            // The grant extends a scope; it must extend far enough to cover the
+            // rung this tool demands.
+            && g.scope.contains(binding.required_scope)
+            && !g.is_revoked()
+            // §2.5 expiry, compared HERE and explicitly rather than assumed to
+            // have been filtered upstream.
+            && !g.is_lapsed_at(now)
+    });
+
+    match matched {
+        Some(g) => ScopeCheck::allow(
+            format!(
+                "tool {tool_name} is on dept:{tool_dept}'s surface and actor {} sits in \
+                 {actor_dept}; crossing is covered by grant {} (capability {capability}, \
+                 scope {}, granted by {}, reason: {})",
+                actor.employee_id, g.grant_id, g.scope, g.grantor, g.reason
+            ),
+            binding.required_scope,
+        ),
+        None => {
+            // Name the lapsed grant when that is the reason: "you had one" and
+            // "you never had one" are different operator actions.
+            let candidate = actor.grants.iter().find(|g| {
+                g.capability == capability && g.covers_department(tool_dept) && !g.is_revoked()
+            });
+            let reason = match candidate {
+                Some(g) if g.is_lapsed_at(now) => format!(
+                    "the only grant covering capability {capability} in dept:{tool_dept} \
+                     ({}) lapsed at {}; §2.5 expires grants, so the crossing request is \
+                     refused until a new grant is recorded",
+                    g.grant_id,
+                    g.expires_at.as_deref().unwrap_or("(unset)")
+                ),
+                Some(g) => format!(
+                    "grant {} names capability {capability} for dept:{tool_dept} but extends \
+                     only scope {}, which does not contain the {} the tool requires",
+                    g.grant_id, g.scope, binding.required_scope
+                ),
+                None => format!(
+                    "no grant covers capability {capability} in dept:{tool_dept}; §2.1 \
+                     requires an explicit, attributable grant to cross a department boundary \
+                     and authority is never inferred from a grant that does not exist"
+                ),
+            };
+            ScopeCheck::deny(reason, AuthorityScope::Org)
+        }
+    }
+}
+
+/// Issue one cross-department grant: validate first, persist second.
+///
+/// # The ordering is the feature
+///
+/// Every refusal path returns **before** `insert`, so a rejected grant leaves
+/// the table byte-identical. There is no code path that writes a row and then
+/// reports failure, and no sweeper that has to reconcile "grants we stored but
+/// then rejected" — the failure mode owner rule 4 names (inert fabricated
+/// authority sitting in the table for a seat nobody fills) cannot be
+/// represented in this store.
+///
+/// # The checks
+///
+/// 1. the grantee's seat is **filled** — §1's vacant-seat rule. A grant naming
+///    an unstaffed seat is a grant to nobody;
+/// 2. the grantee's row is **valid** ([`Employee::is_valid`]) — the same
+///    fail-closed predicate the identity gate blocks on;
+/// 3. the grantor's seat is filled, and
+/// 4. the grantor **holds at least** the scope being granted. This is strictly
+///    stronger than §2.5's "must hold `Org` to grant an `Org`-touching scope",
+///    and it is the rule that makes delegation non-amplifying: a department
+///    head cannot mint an org-wide grant.
+pub fn issue_grant(
+    grant: &Grant,
+    grantor_scope: AuthorityScope,
+    seats: &dyn SeatDirectory,
+    grants: &GrantDb,
+) -> Result<String> {
+    let grantee = seats.employee(&grant.grantee).ok_or_else(|| {
+        Error::Agent(format!(
+            "authority: refusing grant {} — seat '{}' is vacant; a grant to nobody is inert \
+             authority, not authority",
+            grant.grant_id, grant.grantee
+        ))
+    })?;
+    if !grantee.is_valid() {
+        return Err(Error::Agent(format!(
+            "authority: refusing grant {} — seat '{}' is invalid (missing {}); refusing to \
+             record authority against an identity that cannot act",
+            grant.grant_id,
+            grant.grantee,
+            grantee.missing_required_fields().join(", ")
+        )));
+    }
+
+    let _grantor = seats.employee(&grant.grantor).ok_or_else(|| {
+        Error::Agent(format!(
+            "authority: refusing grant {} — grantor seat '{}' is vacant; §2.5 requires the \
+             grant to be attributable to a real seat",
+            grant.grant_id, grant.grantor
+        ))
+    })?;
+
+    if !grantor_scope.contains(grant.scope) {
+        return Err(Error::Agent(format!(
+            "authority: refusing grant {} — grantor {} holds {} which does not contain the \
+             {} scope being granted; delegation may not amplify authority",
+            grant.grant_id, grant.grantor, grantor_scope, grant.scope
+        )));
+    }
+
+    grants
+        .insert(grant)
+        .map_err(|e| Error::Agent(format!("authority: grant {}: {e}", grant.grant_id)))?;
+    Ok(grant.grant_id.clone())
+}
+
+impl ToolRegistry {
+    /// Declare a tool's authority binding.
+    ///
+    /// Returns `false` when no tool of that name is registered — the binding is
+    /// still recorded, but a silent typo here would read later as "that tool
+    /// is global" rather than as "that tool does not exist", so it is worth
+    /// surfacing at the call site.
+    pub async fn set_tool_authority(&self, name: &str, authority: ToolAuthority) -> bool {
+        let registered = self.contains(name).await;
+        self.tool_authority
+            .write()
+            .await
+            .insert(name.to_string(), authority);
+        registered
+    }
+
+    /// The binding declared for a tool, or `None` for a global tool.
+    pub async fn tool_authority(&self, name: &str) -> Option<ToolAuthority> {
+        self.tool_authority.read().await.get(name).cloned()
+    }
+
+    /// §2.4 — the tool list this actor is **offered**.
+    ///
+    /// This is the advertised list: what the caller puts in the request's
+    /// `tools` array. A tool the actor may not use is *absent from it*, not
+    /// present and rejected on call. Owner rule 4 is explicit that the second
+    /// is insufficient — a tool the model can see but cannot call burns a turn
+    /// of confusion and a retry every single time it is reached for.
+    ///
+    /// Additive: [`Self::get_schemas`] is untouched and still returns the
+    /// unfiltered list for every caller that has no actor.
+    pub async fn advertise_for(&self, actor: &AuthorityActor, now: &str) -> Vec<ToolSchema> {
+        let visible = self.visible_now().await;
+        let bindings = self.tool_authority.read().await;
+        visible
+            .into_iter()
+            .filter(|t| {
+                tool_authority_check(bindings.get(t.name()), actor, t.name(), now).is_allowed()
+            })
+            .map(|t| t.schema())
+            .collect()
+    }
+
+    /// The names of the tools this actor may call. Same verdict as
+    /// [`Self::advertise_for`]; useful for a log line or a prompt footer.
+    pub async fn tools_for(&self, actor: &AuthorityActor, now: &str) -> Vec<String> {
+        let visible = self.visible_now().await;
+        let bindings = self.tool_authority.read().await;
+        visible
+            .into_iter()
+            .filter(|t| {
+                tool_authority_check(bindings.get(t.name()), actor, t.name(), now).is_allowed()
+            })
+            .map(|t| t.name().to_string())
+            .collect()
+    }
+
+    /// Whether this actor may call this tool right now.
+    pub async fn is_available_for(
+        &self,
+        actor: &AuthorityActor,
+        tool_name: &str,
+        now: &str,
+    ) -> bool {
+        if !self.is_available(tool_name).await {
+            return false;
+        }
+        let bindings = self.tool_authority.read().await;
+        tool_authority_check(bindings.get(tool_name), actor, tool_name, now).is_allowed()
+    }
+
+    /// Execute under the same authority filter that shaped the advertised
+    /// list — the second half of owner rule 3.
+    ///
+    /// Defence in depth: `advertise_for` already removed the tool, so a model
+    /// cannot normally name it. It still can — a hallucinated name, a stale
+    /// request replayed against a lapsed grant, a caller that skipped the
+    /// advertise step — and this is where that is caught. An advertisement
+    /// filter with no execution check is one refactor away from decoration.
+    pub async fn execute_for(
+        &self,
+        actor: &AuthorityActor,
+        tool_name: &str,
+        tool_call_id: &str,
+        args: Value,
+        context: ToolContext,
+        now: &str,
+    ) -> Result<ToolResult> {
+        if !self.is_available_for(actor, tool_name, now).await {
+            let detail = {
+                let bindings = self.tool_authority.read().await;
+                match bindings.get(tool_name) {
+                    Some(_) => {
+                        tool_authority_check(bindings.get(tool_name), actor, tool_name, now).reason
+                    }
+                    None => "it is not registered, or it is disabled".to_string(),
+                }
+            };
+            return Err(Error::Agent(format!(
+                "authority: tool {tool_name} is not available to {}: {detail}",
+                actor.employee_id
+            )));
+        }
+        self.execute(tool_name, tool_call_id, args, context).await
+    }
+
+    /// The tools that are registered, available, and not disabled by name or
+    /// toolset.
+    ///
+    /// The availability predicate [`Self::get_schemas`] applies, factored out
+    /// so the advertised list and the execution-time check cannot drift apart.
+    async fn visible_now(&self) -> Vec<Arc<dyn OperantTool>> {
+        let tools = self.tools.read().await;
+        let disabled_names = self.disabled_names.read().await;
+        let disabled_toolsets = self.disabled_toolsets.read().await;
+        tools
+            .values()
+            .filter(|t| {
+                if t.is_available() {
+                    !disabled_names.contains(t.name()) && !disabled_toolsets.contains(t.toolset())
+                } else {
+                    false
+                }
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+// =====================================================================
+// End of the authority-filtered tool availability section (§2.4)
+// =====================================================================
 
 #[cfg(test)]
 mod tests {
