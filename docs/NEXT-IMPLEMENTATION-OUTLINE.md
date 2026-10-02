@@ -95,7 +95,7 @@ this outline supersedes its status column, not its findings.
 
 ---
 
-## 2. Step A′ — give cron a per-job session *(iter-559)*
+## 2. Step A′ — give cron a per-job session *(iter-561)*
 
 This was not in the previous revision. It should have been.
 
@@ -479,25 +479,28 @@ Nothing in this program touches `tools::kernel`; it is a separate fix.
 
 ## 10. Suggested first concrete task
 
-Two code increments, plus this docs commit which takes iter-559.
+Two code increments.
 
-**iter-559 is A′; iter-560 is B′.**
+**iter-561 is A′; iter-562 is B′.** Both sit above every label committed to
+`origin/main`. This document deliberately does **not** name the label it took
+itself — naming the current commit inside the same reservation list guarantees a
+collision, which is exactly what happened through iter-559.
 
-**Label discipline, because five collisions have already happened this session.**
-Labels 554, 555, 556, 557 and 558 are each SPENT on documentation commits
-(`22b1562d`, `a20d19a3`, `b8259e50`, `558eafed`, `7ae069bf`). The correct
-procedure, which the earlier revisions here did not follow:
+**Label discipline, because six collisions have happened this session.**
+Labels 550 through 559 are each SPENT on committed work (code and docs). The
+correct procedure, which the earlier revisions here did not follow:
 
 1. Read §10's reservations **first**.
 2. Then read the committed labels — not just the highest one, but the whole
    list, because the lookup returns the HIGHEST COMMITTED label and reading that
    as "next free" is what caused every collision.
-3. Take a label that appears in neither list.
+3. Take a label that appears in neither list, and do **not** write the current
+   commit's own label anywhere in this file.
 
 Read from `origin/main` after `git fetch`, immediately before committing. Never
 amend a pushed commit to fix a label; renumber the plan forward instead.
 
-### iter-559 — A′: stable per-job session, and the compressor reset
+### iter-561 — A′: stable per-job session, and the compressor reset
 
 **A′ is not implementable until the shared-agent constraint above is resolved.** Give cron its
 own `OperantAgent`, or establish the paths do not overlap. Everything below
@@ -532,7 +535,7 @@ proves nothing:
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
 
-### iter-560 — B′: mount `WriteBarrier::apply` in `run_agent_job`
+### iter-562 — B′: mount `WriteBarrier::apply` in `run_agent_job`
 
 Acceptance:
 
