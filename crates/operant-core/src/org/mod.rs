@@ -73,6 +73,7 @@ pub mod resolver;
 pub mod schema;
 pub mod worklog;
 pub mod worklog_db;
+pub mod write_barrier;
 
 pub use employee::{
     AgentType, EMPLOYEE_ID_HEX_LEN, EMPLOYEE_ID_PREFIX, Employee, EmployeeCronJob,
@@ -117,3 +118,4 @@ pub use worklog::{
     UsageAccumulator, WORKLOG_DB_FILE, WorkflowKind, WorklogEntry, WorklogRecord,
 };
 pub use worklog_db::{WorklogDb, WorklogQuery, worklog_db_path};
+pub mod hierarchy;

@@ -57,6 +57,14 @@ use serde::{Deserialize, Serialize};
 use crate::client::{Message, Role};
 use crate::database::{Database, MessageData};
 
+/// Scheduled-run autocompaction and its compaction floor (§4.5).
+///
+/// Declared here so the file is in the module tree at all: it was written but
+/// never added, which meant nothing in it had ever been type-checked and
+/// `tests/session_autocompact.rs` failed with E0432 on
+/// `operant_core::session::autocompact`.
+pub mod autocompact;
+
 /// Default number of sessions held resident in memory.
 ///
 /// Measured: a full 128k-token window is ~500 KB of text, so 32 sessions is
