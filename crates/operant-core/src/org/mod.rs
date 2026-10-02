@@ -71,6 +71,7 @@ pub mod notice_db;
 // macro was used without its `use` import; see worklog_db.rs:49).
 pub mod resolver;
 pub mod schema;
+pub mod seat_policy;
 pub mod worklog;
 pub mod worklog_db;
 pub mod write_barrier;

@@ -96,6 +96,14 @@ control. Numbering follows the convention in `docs/NEXT-IMPLEMENTATION-OUTLINE.m
 §10 — no absolute labels reserved here; take the next free label at commit time.
 
 ### P0 — Seat policy model
+
+**Status: engine landed** — `org/seat_policy.rs` ships `SeatMode`,
+`SeatPolicy`, and `decide()` with the full §4 precedence, namespace-glob
+patterns via the LCM matcher (`lcm.rs:49`), and 10 adversarial tests
+(fault-injection red→green proven, restore verified by sha256).
+Storage wiring is the remaining piece; the engine is storage-agnostic by
+construction, so Q1's answer changes one adapter, not the core.
+
 New `seat_policies` persistence (§6 Q1 decides table vs. config), mode +
 allow/deny lists, and the precedence engine from §4 as a pure function —
 `decide(policy, actor, tool, grants, now) -> Run | Escalate | Deny` — with unit
@@ -193,3 +201,49 @@ I have a recommendation for each; confirm or redirect and I execute.
 - **`derive_employee_id` collision ceiling** — 28 effective bits (7 of 8 hex
   chars): fine at ~100 jobs, ~18% at 10k. Pin injectivity in a test, fix only
   if the org grows.
+
+## 8. Escalation delivery model — when does a senior see a request?
+
+The two timelines are deliberately separate: **delivery** (push) and
+**resolution** (the grant). Nothing about the tool call executes at request
+time.
+
+1. **At request time** — the request is persisted to a durable
+   `pending_requests` queue *and* pushed to the approver's channel if they
+   are connected at that moment. The employee's run either waits, bounded
+   (interactive), or records the denial and proceeds (cron). A 3am cron
+   escalation is never lost to a sleeping HoD: the queue survives.
+2. **When the senior looks** — three surfaces, in latency order: the live
+   push above; a `/pending` pull at any time; a session-start digest
+   ("3 requests pending in your subtree") at next connect. So the answer to
+   "when would the HoD check" is: *at request time if connected, otherwise
+   at their next interaction — the request is durable either way.*
+3. **At resolution** — approval mints a TTL'd grant via `issue_grant`; the
+   waiting run (or the next cron run) consults the ledger and runs without
+   re-asking. Denial denies. **TTL expiry denies that attempt only** — the
+   request row stays in the queue for audit, and re-escalation references it
+   ("still pending since…") rather than duplicating it.
+
+So: requests are *delivered* the moment they are made, but the *tool* runs
+only when a grant stands — never at request time.
+
+## 9. Scalability & topology invariants (audited 2026-10-03, code-verified)
+
+The power topology was audited against the substrate before extending it.
+Every row cites code that was read this session:
+
+| Invariant | Evidence | Why it scales |
+|---|---|---|
+| Escalation chains terminate | `hierarchy.rs:255` `MalformedKind::{Cycle, SelfManaged, DanglingManager}` — malformed graphs reported, never walked infinitely | any org shape, including bad imports, is safe to route over |
+| Authority cannot amplify | `issue_grant` (`tools.rs:1007`) refuses grants exceeding the grantor's scope | delegation scales with no central validator; the check is local |
+| Grant lookups indexed | `idx_authority_grants_grantee` (`authority.rs:575`) | O(log n) per consult at any org size |
+| Manager hops O(1) | `manager_of` is a HashMap get (`hierarchy.rs:379`) | routing cost is linear in chain length, not org size |
+| **Any number of systems** | policy patterns are LCM globs; `Grant.capability` is a free-form dotted namespace | a future subsystem is governed by one row (`jcode.*` bars or opens it wholesale) — proven by the `namespace_glob_governs_future_subsystems` test governing a tool that does not exist yet |
+| New tools default-open until bound | `tool_authority_check` Rule 1 (`tools.rs:861`) | adding a subsystem imposes zero registration burden to stay ungoverned |
+| Decision core is pure | `decide()` (`org/seat_policy.rs`) — no I/O, no clock | every future surface (gateway, cron, new subsystems, multi-tenant) composes one function; no forks |
+| Unpolicied seats byte-identical | `no_policy_is_byte_identical_to_mainline` test | governance is opt-in per seat; adopting never redeploys behaviour on seats that did not ask |
+| Denial absolute | `deny_list_beats_grant_allow_and_yolo` test | no grant — a CEO's included — can override a negation; no privilege path around policy |
+
+Deliberately out of scope: the process-global sub-agent budget (D-6).
+Escalation grants *authority*, never *capacity* — a budget genome is a
+separate substrate.
