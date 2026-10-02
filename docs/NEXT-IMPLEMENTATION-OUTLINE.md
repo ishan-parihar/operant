@@ -95,7 +95,7 @@ this outline supersedes its status column, not its findings.
 
 ---
 
-## 2. Step A′ — give cron a per-job session *(iter-562)*
+## 2. Step A′ — give cron a per-job session
 
 This was not in the previous revision. It should have been.
 
@@ -479,30 +479,24 @@ Nothing in this program touches `tools::kernel`; it is a separate fix.
 
 ## 10. Suggested first concrete task
 
-Two code increments.
+Two code increments, in this order: **A′ then B′**.
 
-**iter-562 is A′; iter-563 is B′.** Both sit above every label committed to
-`origin/main` at the time of writing — true as of then, not durably. Re-check
-before starting, using the procedure below. This document deliberately does
-**not** name the label it took itself; naming the current commit inside the
-same reservation list guarantees a collision, which is exactly what happened
-through iter-559.
+**They carry no fixed numbers.** A reservation written as an absolute label has
+a lifetime of exactly one commit, because the next commit consumes a label and
+the reservation silently expires. So: *take the next two free labels above the
+highest committed on `origin/main`, in order, at the time you read this.* That
+survives arbitrarily many intervening commits. The `iter-56x` numbers that
+appeared here previously are removed on purpose — they were a standing assertion
+about a moving target, and six of the seven collisions this session came from
+exactly that.
 
-**Label discipline, because six collisions have happened this session.**
-Labels 550 through 559 are each SPENT on committed work (code and docs). The
-correct procedure, which the earlier revisions here did not follow:
-
-1. Read §10's reservations **first**.
-2. Then read the committed labels — not just the highest one, but the whole
-   list, because the lookup returns the HIGHEST COMMITTED label and reading that
-   as "next free" is what caused every collision.
-3. Take a label that appears in neither list, and do **not** write the current
-   commit's own label anywhere in this file.
+**Label discipline, because seven collisions have happened this session.**
+Every label already committed to `origin/main` is SPENT (code and docs).
 
 Read from `origin/main` after `git fetch`, immediately before committing. Never
 amend a pushed commit to fix a label; renumber the plan forward instead.
 
-### iter-562 — A′: stable per-job session, and the compressor reset
+### A′ — stable per-job session, and the compressor reset
 
 **A′ is not implementable until the shared-agent constraint above is resolved.** Give cron its
 own `OperantAgent`, or establish the paths do not overlap. Everything below
@@ -537,7 +531,7 @@ proves nothing:
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
 
-### iter-563 — B′: mount `WriteBarrier::apply` in `run_agent_job`
+### B′ — mount `WriteBarrier::apply` in `run_agent_job`
 
 Acceptance:
 
