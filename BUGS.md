@@ -1,5 +1,27 @@
 # BUGS.md — Operant Audit Fixes
 
+## OPEN — Unowned debt on mainline (2026-10-03)
+
+### K-1 — `tools::kernel` roundtrip tests fail on `origin/main` (OPEN, unowned)
+
+`tools::kernel::tests::ping_roundtrip` and
+`tools::kernel::tests::harness_apply_and_rollback_roundtrip` fail on a clean
+checkout of `origin/main`. These are the **only red tests on mainline**, so any
+future bisect will land here.
+
+- **Measured**: 2235 passed / 2 failed in a clean worktree at iter-549 and still
+  at the tip. `ping_roundtrip` fails **standalone**, so this is a real bug, not
+  order dependence under parallelism.
+- **Signature**: `kernel/mod.rs:285` — `assertion left == right failed`,
+  `left: Bool(false)`, `right: Bool(true)`.
+- **Pre-existing**: present before the organism-OS work began. Nothing in
+  `docs/NEXT-IMPLEMENTATION-OUTLINE.md`'s Steps A-F touches `tools::kernel`, and
+  no `tools/kernel.rs` path is modified by any of it.
+- **Unowned**: no iteration has claimed this. It deserves its own, rather than
+  being absorbed into an org change where it would be misattributed.
+- **Next step**: read `kernel/mod.rs` around `:285` and establish why the
+  roundtrip asserts false. The isolated failure is the cheap lead.
+
 ## Wave 3 — Org session substrate (2026-10-01)
 
 ### W3-1 — One global conversation per agent; concurrent gateway chats wiped each other (FIXED iter-548)
