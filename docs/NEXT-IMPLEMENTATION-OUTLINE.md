@@ -95,27 +95,39 @@ this outline supersedes its status column, not its findings.
 
 ---
 
-## 2. Step A′ — give cron a per-job session *(the next iteration, revised)*
+## 2. Step A′ — give cron a per-job session *(iter-554)*
 
 This was not in the previous revision. It should have been.
 
-`run_agent_job` has no session identity at all. It calls
-`self.agent.clear_history().await` at `:277` and then `self.agent.run(...)`, so
-every scheduled job starts from the same slot regardless of which employee it
-belongs to. iter-548 built the substrate to prevent exactly this and cron never
-adopted it.
+`run_agent_job` has no session identity at all: it calls
+`self.agent.clear_history().await` at `:277` and then `self.agent.run(...)`. The
+defect is **the absence of per-job identity, not cross-job leakage** — the wipe
+at `:277` means no job inherits another's turns today, so all 102 scheduled
+jobs share one slot but none contaminates another. That wipe is also the only
+reason the bug is invisible, and it exists *only* because the slot is global.
+
+The consequence is that `clear_history()` at `:277` should be **deleted** once
+A′ lands, not preserved. Under iter-548 it is scoped to the addressed session
+and drops it from the store; the gateway's wipe-and-reload was removed for
+exactly this reason. Keeping the line after A′ would leave the implementer
+guessing whether it still means "start the org from nothing".
+
+iter-548 built the substrate to give every run its own session and cron never
+adopted it — `set_session_id` is called only by the gateway
+(`gateway_runner.rs:544`).
 
 The job id is already the employee identity in this codebase:
-`derive_employee_id(&job.id)` is used by the org gate at
-`scheduler.rs:117`. So the session key is derivable at the mount point without a
-schema change — this is plumbing, not design.
+`derive_employee_id(&job.id)` is used by the org gate at `scheduler.rs:117`.
+So the whole of A′ is threading that existing value into
+`agent.set_session_id(...)` before `run()` and deleting `:277`. **No schema
+change, no new derivation — plumbing, not design.**
 
 The shape:
 
 ```
-1. derive the employee id from job.id (already done for the gate at :117)
-2. set_session_id(<per-job session id>) before run
-3. clear_history() no longer means "wipe the org" — it releases one slot
+1. reuse derive_employee_id(&job.id)  (already called at :117 for the gate)
+2. agent.set_session_id(<per-job session id>) before run
+3. delete the clear_history() at :277
 ```
 
 **Why first:** B′ must attach the barrier to a session, and the barrier writes a
@@ -157,9 +169,9 @@ The shape is roughly:
 
 Constraint from the design that must be honoured: the barrier writes the
 **objective** worklog row, **subjective** reasoning, and **decision** objects.
-Under iter-548 `clear_history()` means "release this session's slot", so the
-turn data the barrier needs must be captured before or across that call, not
-after. A′ is what makes that coherent.
+A′ removes the `clear_history()` at `:277`, so by the time B′ runs the barrier
+reads a session holding exactly this run's turns. The two steps are one change
+in sequence, not two independent wires.
 
 **Why this before C or E:** the design's own sequencing says B before D,
 otherwise the first governed action in the system is also the first
@@ -261,6 +273,19 @@ are unexamined.
    The department `rules` array it waits on now exists, so it is *possible* —
    still opt-in.
 
+### Unscheduled but red on mainline
+
+`tools::kernel::{ping_roundtrip, harness_apply_and_rollback_roundtrip}` fail on
+`origin/main`. Pre-existing since iter-549, unowned, and the only red tests on
+mainline. They deserve their own iteration rather than being folded into an org
+change.
+
+**Answered 2026-10-03:** `ping_roundtrip` **fails standalone** in a clean
+worktree at `origin/main` — `kernel/mod.rs:285`, `left: Bool(false), right:
+Bool(true)`. So this is a real standalone bug, not order dependence under
+parallelism, and the open question this paragraph previously carried is closed.
+Nothing in this program touches `tools::kernel`; it is a separate fix.
+
 ---
 
 ## 9. What is deliberately out of scope
@@ -275,22 +300,31 @@ are unexamined.
 
 ## 10. Suggested first concrete task
 
-**iter-553: give cron a per-job session id in `run_agent_job`.**
+Two increments. **iter-554 is A′; iter-555 is B′.**
 
-The previous revision proposed mounting the write barrier here and called this
-"small". It is not, for a specific reason: the barrier writes a worklog row
-keyed by session, and `run_agent_job` has no session. Fixing A′ first is
-smaller, is pure plumbing, and is what makes B′ possible.
+### iter-554 — A′: thread the existing employee id into `set_session_id`
 
-`derive_employee_id(&job.id)` is already used by the org gate at
-`scheduler.rs:117`, so the identity is derivable at the mount point with no
-schema change. The risk is in the plumbing — which is exactly what should come
-next after four packets landed unwired.
+Reuse `derive_employee_id(&job.id)` — the org gate already calls it at `:117` —
+and pass it to `agent.set_session_id(...)` before `run()`. Delete the
+`clear_history()` at `:277`. No schema change, no new derivation.
 
 Acceptance:
 
-- two interleaved scheduled runs do not see each other's turns;
+- two scheduled jobs run back to back through the real scheduler on one agent,
+  and neither sees the other's turns — checked through the scheduler, not a
+  synthetic fixture;
+- `clear_history()` is no longer called on the cron path;
 - `cargo test -p operant-core --lib` at 2235 passed / 2 pre-existing
   `tools::kernel` failures, unchanged;
+
+### iter-555 — B′: mount `WriteBarrier::apply` in `run_agent_job`
+
+Acceptance:
+
+- a completed scheduled run leaves exactly one worklog row;
+- a barrier write failure makes the run report failure, not success;
+
+### Both increments
+
 - **verified in a clean worktree at the pushed commit, not the working tree** —
   the iter-550 defect shipped precisely because the working tree masked it.
