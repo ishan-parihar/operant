@@ -1,52 +1,46 @@
-//! Vendored TUI subsystems from jcode (MIT, Copyright (c) 2025 Jeremy Huang).
+//! Vendored TUI subsystem from jcode (MIT, Copyright (c) 2025 Jeremy Huang).
 //!
-//! These modules were copied from `parent-projects/jcode/crates/` so that operant's TUI can adopt
+//! This module was copied from `parent-projects/jcode/crates/` so that operant's TUI can adopt
 //! jcode's visual design system without adopting jcode's application core, which is welded to
 //! ~289k LOC of `jcode-app-core` + `jcode-base` and could not be lifted.
 //!
-//! Per-crate provenance, adaptations, and licence detail live in each directory's `VENDOR.md`.
+//! Per-crate provenance, adaptations, and licence detail live in `style/VENDOR.md`.
 //!
 //! | module | upstream crate | LOC | purpose |
 //! |---|---|---|---|
 //! | [`style`] | `jcode-tui-style` | ~2.7k | 22 semantic colour roles, frozen default palette, buffer-level substitution |
-//! | [`render_core`] | `jcode-render-core` | ~4.6k | markdown prep/parse, wrapping, LaTeX math — ratatui-free |
-//! | [`workspace`] | `jcode-tui-workspace` | ~1.2k | workspace-map ratatui widget (a capability operant lacked) |
-//! | [`anim`] | `jcode-tui-anim` | ~1.1k | dependency-free 3D samplers for the idle animation |
 //!
 //! # Why modules and not workspace crates
 //!
-//! The repository root `Cargo.toml` carries uncommitted work from another agent, so adding
-//! `[workspace] members` entries here would have meant staging a line inside someone else's diff.
-//! Every crate `operant-cli` already depends on (`ratatui` 0.30.2, `serde`, `serde_json`, `chrono`,
-//! `crossterm`, `anyhow`, `dirs`, `pulldown-cmark`, `unicode-width`) is present, so the crates
-//! resolve as internal modules with no manifest change. Promoting any of them to a standalone
+//! The repository root `Cargo.toml` carries uncommitted work from another agent, so adding a
+//! `[workspace] members` entry here would have meant staging a line inside someone else's diff.
+//! Every crate `operant-cli` already depends on (`ratatui` 0.30.2, `serde`, `serde_json`,
+//! `chrono`, `crossterm`, `anyhow`, `dirs`, `pulldown-cmark`, `unicode-width`) is present, so the
+//! crate resolves as an internal module with no manifest change. Promoting it to a standalone
 //! crate later is a mechanical move.
 //!
 //! # Integration status
 //!
-//! As of the vendoring pass these modules compile but are **not yet called by the render path**.
+//! As of the vendoring pass this module compiles but is **not yet called by the render path**.
 //! The next step wires [`style::theme_mode::adapt_buffer_for_display`] into
 //! `render::render_app` as the single per-frame substitution choke point, which is what makes
 //! `/theme` repaint every surface. Until that lands, `style`'s roles are inert and operant still
 //! reads its own `theme_colors`.
-//!
-//! See `docs/PLAN-TUI-OVERHAUL.md` §1 (lift manifest) and §2 (what was deliberately not lifted).
 
-// Upstream these are four independent *library* crates, so every `pub` item is part of a public API
-// and never dead. Vendored as modules of a binary crate, the whole surface is unreachable until the
-// render path calls it — which produced 129 `dead_code` and 6 `unused_imports` (all `pub use`
-// re-exports in `render_core`) the moment the tree was wired in.
+// Upstream this is an independent *library* crate, so every `pub` item is part of a public API
+// and never dead. Vendored as a module of a binary crate, the public surface is unreachable
+// until the render path calls it — which produced `dead_code` warnings the moment the tree was
+// wired in. (The vendoring pass originally saw 129 `dead_code` + 6 `unused_imports`; the Wave 0
+// purge removed the three zero-consumer modules that owned the great majority of those —
+// including all 6 re-export `unused_imports`.)
 //
-// Both lints have the same single root cause and the same single fix, so they are suppressed once
-// here instead of being allowlisted individually (135 allowlist entries for four files' worth of
-// not-yet-wired code) or annotated in seven places.
+// The lint has a single root cause and a single fix, so it is suppressed once here instead of
+// being allowlisted item-by-item or annotated at every definition.
 //
-// REMOVE OR NARROW THIS once `style` is wired into `render::render_app` — the `unused_imports`
-// half can go as soon as `render_core` has a consumer, and the `dead_code` half as each surface
-// adopts the vendored widgets. Tracked in docs/PLAN-TUI-OVERHAUL.md §3, tasks 1.6 and 2.5.
+// REMOVE THIS once `style` is wired into `render::render_app` and every role has a consumer —
+// at that point no `pub` item in `style` should be dead, so the suppressor and this comment go
+// away together. Tracked in docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md §2 and
+// docs/PLAN-TUI-OVERHAUL.md §3, tasks 1.6 and 2.5.
 #![allow(dead_code, unused_imports)]
 
-pub mod anim;
-pub mod render_core;
 pub mod style;
-pub mod workspace;

@@ -57,7 +57,10 @@ const MATH_LABEL: &str = "math";
 /// jcode recovers the real placeholder through
 /// `mermaid::parse_inline_image_placeholder`; operant has no such parser, so the
 /// prefix is matched directly. It is the shape operant's own emitters already
-/// produce - see `image_paste.rs` and `vendor/render_core/markdown.rs`.
+/// produce - see `image_paste.rs`. The W2 markdown port of `jcode-tui-markdown`
+/// (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md §2) is the future renderer
+/// whose rasterised-formula output must keep this `[image` prefix for this
+/// constant to keep matching.
 const IMAGE_PLACEHOLDER: &str = "[image";
 /// The label a code frame carries when the fence declared no language. jcode
 /// maps it to "no language" rather than to a language literally named `code`.
