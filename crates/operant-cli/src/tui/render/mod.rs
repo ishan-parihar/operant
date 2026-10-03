@@ -283,7 +283,6 @@ mod tests {
         let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        crate::tui::vendor::style::color::pin_truecolor_for_tests();
         f()
     }
 

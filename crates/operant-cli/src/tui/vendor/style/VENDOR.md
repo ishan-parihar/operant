@@ -76,8 +76,19 @@ formatting.
   dependency from the style module)".
 - `pin_truecolor_for_tests` doc no longer mentions harmony scoring or
   `role_for_rendered` (both dropped).
-- **No code changes.** In particular the `JCODE_GLYPH_SAFE_MODE` environment
-  variable name is **kept verbatim** (see "Known jcode residue").
+- **Code change (Wave 0 of docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md,
+  item 3): the vendored depth detector is deleted.** `ColorCapability`,
+  `color_capability`, `detect_color_capability`, `detect_raw_color_capability`,
+  `fragile_glyph_cache_terminal`, `has_truecolor`, `pin_truecolor_for_tests`,
+  the `CAPABILITY` / `CAPABILITY_OVERRIDE` statics, the `JCODE_GLYPH_SAFE_MODE`
+  env var (the upstream issue-#330 glyph-safe override is gone with it), and
+  the xterm-256 quantization branch of `rgb()` are all removed. `rgb()` now
+  always returns `Color::Rgb`: one palette, no depth negotiation. The process
+  has exactly one depth answer — `crate::tui::color_depth::detect` — and the
+  quantization it implies runs once, on the operant theme palette inside
+  `set_active_theme`, never inside this vendored layer. `indexed_to_rgb`
+  survives because `theme_mode::color_rgb` maps indexed/named terminal
+  colours through it.
 
 ### 3. `palette.rs`
 
@@ -162,7 +173,6 @@ Consequences for operant:
 
 | Where | What | Why left |
 |---|---|---|
-| `color.rs:65` (read) and the tests at `:510,521,533,540,587,594,601`; doc at `:62` | `JCODE_GLYPH_SAFE_MODE` env var | The brief scoped the jcode-name strip to two *doc comments* and forbade code-semantics changes. Renaming the var would change behaviour (an operant user setting `OPERANT_GLYPH_SAFE_MODE` would get a different answer). Harmless today: no operant user sets a jcode-namespaced var, so the override is simply inert. Rename to `OPERANT_GLYPH_SAFE_MODE` when operant wants a user-facing glyph-safety knob. |
 | file headers (all 6) | "Vendored from jcode … MIT … Jeremy Huang" | Mandatory attribution. `palette.rs:6` and `mod.rs:2-4` additionally name the jcode symbol/path they replaced, which is why a grep for `.jcode` still hits two header comments — there is no jcode path in any *code* line. |
 | `theme.rs:96-99` | comment referencing "the TUI run loop" spinner's `STATUS_SPINNER_ONLY_INTERVAL` | Describes an operant-side constant that does not exist yet; harmless as a note for whoever wires the spinner fast path. |
 

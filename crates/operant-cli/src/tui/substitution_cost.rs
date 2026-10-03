@@ -20,7 +20,6 @@
 // mid-edit by another agent (see the report for that run).
 
 use super::vendor::style::STYLE_TEST_LOCK;
-use super::vendor::style::color::pin_truecolor_for_tests;
 use super::vendor::style::palette::{ALL_ROLES, Palette, Role, set_palette};
 use super::vendor::style::theme_mode::{ThemeMode, adapt_buffer_for_display, set_theme_mode};
 use ratatui::buffer::Buffer;
@@ -407,10 +406,6 @@ fn measure_adapt_buffer_for_display_cost() {
     // The palette and theme mode are process-global. Serialise against the
     // other style tests, and always restore, so a failure cannot leak.
     let _lock = STYLE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // `color::rgb` quantises to Indexed on a 256-colour terminal, which would
-    // change both the substitution result and the work done. Pin truecolor so
-    // the numbers are the same on a CI runner as on a workstation.
-    pin_truecolor_for_tests();
 
     struct Restore;
     impl Drop for Restore {

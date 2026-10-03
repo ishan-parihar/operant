@@ -512,8 +512,9 @@ mod buffer_tests {
         }
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _restore = Restore;
-        // The assertions compare exact truecolor output; never depend on the runner's COLORTERM.
-        super::super::color::pin_truecolor_for_tests();
+        // The assertions compare exact `Color::Rgb` output; the vendored
+        // `color::rgb` no longer consults the terminal environment at all, so
+        // there is nothing here that can drift with the runner's COLORTERM.
         set_palette(palette);
         body();
     }

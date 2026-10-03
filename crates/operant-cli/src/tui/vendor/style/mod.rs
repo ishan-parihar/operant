@@ -24,7 +24,8 @@
 //   * `theme`   — one accessor per role, plus the animation helpers.
 //   * `theme_mode` — `adapt_buffer_for_display`, the per-frame substitution
 //     choke point every widget's colors flow through.
-//   * `color`   — capability detection and the xterm-256 quantizer.
+//   * `color`   — plain RGB color construction and the indexed-colour
+//     introspection `theme_mode` needs.
 
 pub mod color;
 pub mod palette;
@@ -32,7 +33,7 @@ pub mod theme;
 pub mod theme_mode;
 
 #[allow(unused_imports)]
-pub use color::{ColorCapability, clear_buf, color_capability, has_truecolor, indexed_to_rgb, rgb};
+pub use color::{clear_buf, indexed_to_rgb, rgb};
 #[allow(unused_imports)]
 pub use palette::{ALL_ROLES, Palette, Role, palette, role_color, set_palette};
 #[allow(unused_imports)]
