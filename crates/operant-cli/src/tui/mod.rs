@@ -56,6 +56,14 @@ pub mod input_history;
 // the expectation is cfg-gated off in test builds (same as copy_targets).
 #[cfg_attr(
     not(test),
+    expect(
+        dead_code,
+        reason = "lands before its W3 transcript-renderer consumers"
+    )
+)]
+pub mod jcode_markdown;
+#[cfg_attr(
+    not(test),
     expect(dead_code, reason = "lands before its W3 renderer consumers")
 )]
 pub mod jcode_model;
@@ -64,6 +72,14 @@ pub mod jcode_model;
     expect(dead_code, reason = "lands before its W3/W5 renderer consumers")
 )]
 pub mod jcode_render;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "lands before its W3 transcript-renderer consumers"
+    )
+)]
+pub mod jcode_render_core;
 pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;
