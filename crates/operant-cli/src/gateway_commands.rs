@@ -8,6 +8,7 @@ use chrono::Utc;
 use operant_core::config::{AppConfig, ToolProgressMode};
 use operant_core::gateway::Gateway;
 use operant_core::interrupt::InterruptFlag;
+use std::str::FromStr;
 
 /// Runtime context passed to command handlers for stateful operations.
 ///
@@ -505,6 +506,31 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         aliases: &["no", "n"],
         category: "Admin",
         args_hint: "",
+        admin_only: true,
+    },
+    // ── Org genome (P3) ─────────────────────────────────────────────────
+    CommandDef {
+        name: "permissions",
+        description: "Show a seat's policy, standing grants and pending escalations",
+        aliases: &[],
+        category: "Admin",
+        args_hint: "[seat]",
+        admin_only: false,
+    },
+    CommandDef {
+        name: "grant",
+        description: "Grant a seat a capability (mints a TTL'd grant; seats an ungoverned seat)",
+        aliases: &[],
+        category: "Admin",
+        args_hint: "<seat> <tool> [--days N]",
+        admin_only: true,
+    },
+    CommandDef {
+        name: "revoke",
+        description: "Revoke a grant by id — the next run escalates again",
+        aliases: &[],
+        category: "Admin",
+        args_hint: "<grant_id>",
         admin_only: true,
     },
 ];
@@ -2098,6 +2124,215 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             msg
         }
 
+        // ── Org genome (P3) ─────────────────────────────────────────────
+        "permissions" => {
+            // `/permissions [seat]` — a seat's effective posture. No arg =
+            // the invoking chat's own seat, derived EXACTLY as the turn
+            // dispatcher derives it, so what is shown is what the run guard
+            // consults. Naming another seat is operator-only (§6 Q5); a
+            // non-operator reads only their own seat.
+            let target = match args.trim() {
+                "" => {
+                    if ctx.session_key.is_empty() {
+                        return Some(
+                            "This command context has no routing key — name a seat explicitly: `/permissions <seat>`.".into(),
+                        );
+                    }
+                    crate::gateway_runner::derived_gateway_session_id(ctx.session_key)
+                }
+                seat => {
+                    if !ctx.is_admin {
+                        return Some(
+                            "Only the operator can inspect another seat. Your own: `/permissions`."
+                                .into(),
+                        );
+                    }
+                    seat.to_string()
+                }
+            };
+            let Some(approver) = crate::gateway_runner::seat_approver() else {
+                return Some(
+                    "The genome is not wired in this process — start the gateway first.".into(),
+                );
+            };
+            let mut msg = format!("**Seat `{target}`**\n");
+            // Policy row — `None` is the documented ungoverned default, not
+            // an error.
+            let policy_row = crate::gateway_runner::seat_policy_db()
+                .and_then(|db| db.get(&target).ok())
+                .flatten();
+            match policy_row {
+                Some(policy) => {
+                    let mode = policy.mode.as_str();
+                    msg.push_str(&format!("Policy: `{mode}`"));
+                    if !policy.allow.is_empty() {
+                        msg.push_str(&format!(" · allow: {}", policy.allow.join(", ")));
+                    }
+                    if !policy.deny.is_empty() {
+                        msg.push_str(&format!(" · deny: {}", policy.deny.join(", ")));
+                    }
+                    msg.push('\n');
+                }
+                None => msg.push_str("Policy: none — ungoverned (today's behaviour)\n"),
+            }
+            match approver.grants_for(&target) {
+                Ok(grants) if grants.is_empty() => msg.push_str("Grants: none\n"),
+                Ok(grants) => {
+                    msg.push_str(&format!("Grants ({} live):\n", grants.len()));
+                    for g in grants {
+                        let expiry = match g.expires_at.as_deref() {
+                            None => "standing".to_string(),
+                            Some(at) => format!("expires {at}"),
+                        };
+                        msg.push_str(&format!(
+                            "  `{}` · {} · {} · {} · by {}\n",
+                            g.grant_id,
+                            g.capability,
+                            g.scope.as_str(),
+                            expiry,
+                            g.grantor
+                        ));
+                    }
+                }
+                Err(e) => msg.push_str(&format!("Grants: unreadable — {e}\n")),
+            }
+            match approver.pending_for(&target) {
+                Ok(pending) if pending.is_empty() => {
+                    msg.push_str("Pending escalations: none\n");
+                }
+                Ok(pending) => {
+                    msg.push_str(&format!("Pending escalations ({}):\n", pending.len()));
+                    for r in pending {
+                        msg.push_str(&format!(
+                            "  `{}` · {} — {}\n",
+                            r.request_id, r.tool, r.requester_note
+                        ));
+                    }
+                }
+                Err(e) => msg.push_str(&format!("Pending: unreadable — {e}\n")),
+            }
+            msg
+        }
+
+        "grant" => {
+            // `/grant <seat> <tool> [--days N]` (operator-only, §6 Q5). The
+            // mint speaks with the authority of the seat's approver-of-record
+            // — the same seat `/approve` names — so `/grant` confers nothing
+            // `/approve` could not, through the same `issue_grant` checks:
+            // an unmanaged seat fails closed here too. When the seat has no
+            // policy row, one is seated at `[genome].unrestricted_default`
+            // (the knob's designed P3 consumer) so the mint actually takes
+            // effect on the next consult.
+        // Gated by the CommandDef (`admin_only: true`, enforced in
+        // `handle_command` before any arm runs — same as /approve /deny).
+        let tokens: Vec<&str> = args.split_whitespace().collect();
+            let (Some(seat), Some(tool)) = (tokens.first().copied(), tokens.get(1).copied()) else {
+                return Some("Usage: `/grant <seat> <tool> [--days N]`.".into());
+            };
+            let mut days: Option<i64> = None;
+            let mut i = 2;
+            while i < tokens.len() {
+                if tokens[i] == "--days" {
+                    let Some(n) = tokens.get(i + 1) else {
+                        return Some("`--days` needs a number: `--days 3` or `--days=3`.".into());
+                    };
+                    match n.parse::<i64>() {
+                        Ok(v) => days = Some(v),
+                        Err(_) => {
+                            return Some(format!("`--days` takes a number, not `{n}`."));
+                        }
+                    }
+                    i += 2;
+                } else if let Some(n) = tokens[i].strip_prefix("--days=") {
+                    match n.parse::<i64>() {
+                        Ok(v) => days = Some(v),
+                        Err(_) => {
+                            return Some(format!("`--days` takes a number, not `{n}`."));
+                        }
+                    }
+                    i += 1;
+                } else {
+                    return Some(format!(
+                        "Unexpected argument `{}` — Usage: `/grant <seat> <tool> [--days N]`.",
+                        tokens[i]
+                    ));
+                }
+            }
+            let (Some(approver), Some(policy_db)) = (
+                crate::gateway_runner::seat_approver(),
+                crate::gateway_runner::seat_policy_db(),
+            ) else {
+                return Some(
+                    "The genome is not wired in this process — start the gateway first.".into(),
+                );
+            };
+            // Seat an ungoverned seat at the configured creation default.
+            let mut seated_note = String::new();
+            let has_row = policy_db.get(seat).ok().flatten().is_some();
+            if !has_row {
+                let mode =
+                    match operant_core::org::seat_policy::SeatMode::from_str(
+                        &ctx.config.genome.unrestricted_default,
+                    ) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            return Some(format!(
+                                "`[genome].unrestricted_default` is invalid ({e}) — fix the config before seating rows."
+                            ));
+                        }
+                    };
+                if let Err(e) = policy_db.upsert(
+                    seat,
+                    &operant_core::org::seat_policy::SeatPolicy {
+                        mode,
+                        allow: Vec::new(),
+                        deny: Vec::new(),
+                    },
+                ) {
+                    return Some(format!("seating the policy row failed: {e}"));
+                }
+                seated_note = format!(
+                    "\nSeated `{seat}` at mode `{}` (`[genome].unrestricted_default`).",
+                    mode.as_str()
+                );
+            }
+            let why = format!("operator /grant by {}", ctx.user_id);
+            match approver.grant_direct(seat, tool, days, &why) {
+                Ok(grant_id) => format!(
+                    "✅ Grant `{grant_id}` minted for `{seat}` → `{tool}`.{seated_note}\nA revoked or lapsed grant escalates again on the next consult."
+                ),
+                Err(e) => format!("❌ Grant refused: {e}.{seated_note}"),
+            }
+        }
+
+        "revoke" => {
+            // `/revoke <grant_id>` (operator-only). A revoked grant stops
+            // consulting immediately (the live filter excludes it), so the
+            // next run that relied on it escalates again — the P3
+            // acceptance.
+        // Gated by the CommandDef (`admin_only: true`), like /grant.
+        let Some(grant_id) = args.split_whitespace().next() else {
+                return Some(
+                    "Usage: `/revoke <grant_id>` — ids are listed by `/permissions <seat>`.".into(),
+                );
+            };
+            let Some(approver) = crate::gateway_runner::seat_approver() else {
+                return Some(
+                    "The genome is not wired in this process — start the gateway first.".into(),
+                );
+            };
+            let reason = format!("operator /revoke by {}", ctx.user_id);
+            match approver.revoke_grant(grant_id, &reason) {
+                Ok(true) => {
+                    format!("✅ Grant `{grant_id}` revoked — the next run escalates again.")
+                }
+                Ok(false) => format!(
+                    "No such grant `{grant_id}`. Live ids are listed by `/permissions <seat>`."
+                ),
+                Err(e) => format!("❌ Revoke failed: {e}"),
+            }
+        }
+
         _ => format!(
             "Unknown command: `{}`. Use /help to see available commands.",
             def.name
@@ -2433,5 +2668,353 @@ mod tests {
             flag.is_triggered(),
             "a second /stop must not clear the flag"
         );
+    }
+
+    // ── P3: /permissions /grant /revoke ─────────────────────────────
+    //
+    // These globals (SEAT_APPROVERS / SEAT_POLICY_DBS) are process-wide;
+    // every test in this family takes one lock and seeds fresh temp-dir
+    // stores, mirroring `permissions_test_guard` in gateway_runner.rs.
+
+    static GENOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn genome_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        GENOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Fresh genome stores over one temp sqlite, installed into the
+    /// command globals. Returns the handles the assertions read directly.
+    struct P3Stores {
+        _dir: tempfile::TempDir,
+        conn: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+        policies: std::sync::Arc<operant_core::org::seat_policy_db::SeatPolicyDb>,
+        grants: std::sync::Arc<operant_core::org::authority::GrantDb>,
+        _employees: std::sync::Arc<operant_core::org::employee_db::EmployeeDb>,
+        edges: std::sync::Arc<operant_core::org::hierarchy_edges::HierarchyEdgesDb>,
+    }
+
+    fn seed_p3() -> P3Stores {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("org.sqlite");
+        let conn = std::sync::Arc::new(std::sync::Mutex::new(
+            rusqlite::Connection::open(&path).expect("open org sqlite"),
+        ));
+        let policies = std::sync::Arc::new(
+            operant_core::org::seat_policy_db::SeatPolicyDb::from_shared_connection(
+                std::sync::Arc::clone(&conn),
+            )
+            .expect("policies"),
+        );
+        let grants = std::sync::Arc::new(
+            operant_core::org::authority::GrantDb::from_shared_connection(std::sync::Arc::clone(
+                &conn,
+            ))
+            .expect("grants"),
+        );
+        let requests = std::sync::Arc::new(
+            operant_core::org::pending_requests::PendingRequestDb::from_shared_connection(
+                std::sync::Arc::clone(&conn),
+            )
+            .expect("requests"),
+        );
+        let employees = std::sync::Arc::new(
+            operant_core::org::employee_db::EmployeeDb::from_shared_connection(
+                std::sync::Arc::clone(&conn),
+            )
+            .expect("employees"),
+        );
+        // Edges takes its OWN connection (no from_shared_connection) — the
+        // same two-connection shape the core suite uses over one sqlite file.
+        let edges = std::sync::Arc::new(
+            operant_core::org::hierarchy_edges::HierarchyEdgesDb::from_connection(
+                rusqlite::Connection::open(&path).expect("edges conn"),
+            )
+            .expect("edges"),
+        );
+        let approver = std::sync::Arc::new(operant_core::org::seat_authority::SeatApprover::new(
+            std::sync::Arc::clone(&grants),
+            requests,
+            std::sync::Arc::clone(&employees),
+            std::sync::Arc::clone(&edges),
+            7, // [genome] grant_ttl_days default
+        ));
+        crate::gateway_runner::store_seat_approver(approver);
+        crate::gateway_runner::store_seat_policy_db(std::sync::Arc::clone(&policies));
+        P3Stores {
+            _dir: dir,
+            conn,
+            policies,
+            grants,
+            _employees: employees,
+            edges,
+        }
+    }
+
+    fn p3_seed_employee(s: &P3Stores, id: &str, dept: Option<&str>) {
+        s.conn
+            .lock()
+            .expect("conn")
+            .execute(
+                "INSERT OR REPLACE INTO employees (
+                     employee_id, name, role, department, skills, agent_type,
+                     persona, status, reason, created_at, updated_at
+                 ) VALUES (?1, ?1, 'tester', ?2, '[\"probe\"]', NULL, NULL,
+                           'active', 'p3 seed', ?3, ?3)",
+                rusqlite::params![
+                    id,
+                    dept,
+                    operant_core::org::notice::rfc3339(chrono::Utc::now())
+                ],
+            )
+            .expect("seed employee");
+    }
+
+    #[test]
+    fn grant_is_operator_only() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        p3_seed_employee(&s, "emp-worker", Some("platform"));
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, false, "intruder", "telegram", "chan-1");
+        let resp = handle_command("grant", "emp-worker bash", &ctx).expect("resp");
+        assert!(
+            resp.contains("only available to admins"),
+            "the def-level gate must refuse non-operators, got: {resp}"
+        );
+        assert_eq!(
+            s.grants.count().expect("count"),
+            0,
+            "a refused /grant must mint nothing"
+        );
+        drop(s);
+    }
+
+    #[test]
+    fn grant_seats_ungoverned_seat_and_mints_ttl_grant() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        // Three employees, ONE department: worker→manager→ceo. The manager
+        // is the HoD tier — a same-dept report WITH a manager above — so the
+        // mint is department-pinned and TTL'd, never standing.
+        for id in ["emp-worker", "emp-manager", "emp-ceo"] {
+            p3_seed_employee(&s, id, Some("platform"));
+        }
+        s.edges
+            .upsert_edge("emp-worker", "emp-manager", "p3 test")
+            .expect("edge");
+        s.edges
+            .upsert_edge("emp-manager", "emp-ceo", "p3 test")
+            .expect("edge");
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("grant", "emp-worker bash", &ctx).expect("resp");
+        assert!(
+            resp.contains("Seated `emp-worker` at mode `yolo`"),
+            "got: {resp}"
+        );
+        assert!(
+            resp.contains("ag_"),
+            "reply must name the minted grant id: {resp}"
+        );
+        let policy = s.policies.get("emp-worker").expect("policy read");
+        assert_eq!(
+            policy.map(|p| p.mode.as_str()),
+            Some("yolo"),
+            "the ungoverned seat must be seated at [genome].unrestricted_default"
+        );
+        let grants = s.grants.list_for_grantee("emp-worker").expect("grants");
+        assert_eq!(grants.len(), 1, "exactly one grant minted");
+        assert_eq!(grants[0].capability, "bash");
+        assert!(
+            grants[0].expires_at.is_some(),
+            "an HoD-shaped mint must be TTL'd, never standing"
+        );
+        assert_eq!(grants[0].grantor, "emp-manager");
+        drop(s);
+    }
+
+    #[test]
+    fn grant_days_override_beats_the_config_ttl() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        // The same HoD triple as the seating test — the manager must be a
+        // head with a manager above, else the mint goes standing and
+        // `--days` has nothing to override.
+        for id in ["emp-worker", "emp-manager", "emp-ceo"] {
+            p3_seed_employee(&s, id, Some("platform"));
+        }
+        s.edges
+            .upsert_edge("emp-worker", "emp-manager", "p3 test")
+            .expect("edge");
+        s.edges
+            .upsert_edge("emp-manager", "emp-ceo", "p3 test")
+            .expect("edge");
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        // Both spellings must parse; the regression here was `--days 3`
+        // erroring before ever reading the number.
+        for args in ["emp-worker bash --days 3", "emp-worker bash --days=3"] {
+            let resp = handle_command("grant", args, &ctx).expect("resp");
+            assert!(resp.contains("ag_"), "`{args}` must mint: {resp}");
+            let grants = s.grants.list_for_grantee("emp-worker").expect("grants");
+            let g = grants.last().expect("the new mint");
+            let granted =
+                chrono::DateTime::parse_from_rfc3339(&g.granted_at).expect("granted_at parses");
+            let expires =
+                chrono::DateTime::parse_from_rfc3339(g.expires_at.as_deref().expect("ttl'd"))
+                    .expect("expires_at parses");
+            let days = (expires - granted).num_hours() as f64 / 24.0;
+            assert!(
+                (2.9..=3.1).contains(&days),
+                "`--days 3` must mint a ~3-day grant, got {days} days"
+            );
+        }
+        drop(s);
+    }
+
+    #[test]
+    fn grant_to_unmanaged_seat_fails_closed() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        // An employee with NO hierarchy edge: approver_of falls back to the
+        // 'operator' literal, who holds no scope — issue_grant must refuse.
+        // This is the authority containment check at command level; the
+        // invoker-identity scoping (HR read-only, cross-dept HoD) has no
+        // user_id→seat mapping yet and is deferred with the mapping.
+        p3_seed_employee(&s, "emp-orphan", Some("platform"));
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("grant", "emp-orphan bash", &ctx).expect("resp");
+        assert!(
+            resp.starts_with("❌ Grant refused"),
+            "an unmanaged seat must fail closed, got: {resp}"
+        );
+        assert_eq!(
+            s.grants.count().expect("count"),
+            0,
+            "the refusal must mint nothing"
+        );
+        drop(s);
+    }
+
+    #[test]
+    fn grant_standing_only_when_approver_is_org_lead() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        // Org-lead tier: the ceo is a head (same-dept report) with NO
+        // manager — one department, edge worker→ceo only.
+        p3_seed_employee(&s, "emp-worker", Some("platform"));
+        p3_seed_employee(&s, "emp-ceo", Some("platform"));
+        s.edges
+            .upsert_edge("emp-worker", "emp-ceo", "p3 test")
+            .expect("edge");
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("grant", "emp-worker bash", &ctx).expect("resp");
+        assert!(resp.contains("ag_"), "got: {resp}");
+        let grants = s.grants.list_for_grantee("emp-worker").expect("grants");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].grantor, "emp-ceo");
+        assert!(
+            grants[0].expires_at.is_none(),
+            "a CEO (org-lead) approval mints standing authority"
+        );
+        drop(s);
+    }
+
+    #[test]
+    fn grant_days_override_cannot_defeat_the_standing_rule() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        // The org-lead tier: a `--days` override on a CEO-managed seat must
+        // NOT mint a TTL'd grant — §11 Q3's standing rule outranks the
+        // operator's convenience knob. This is the guard on the one line
+        // where `ttl_days_override` could have silently weakened Q3.
+        p3_seed_employee(&s, "emp-worker", Some("platform"));
+        p3_seed_employee(&s, "emp-ceo", Some("platform"));
+        s.edges
+            .upsert_edge("emp-worker", "emp-ceo", "p3 test")
+            .expect("edge");
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let resp = handle_command("grant", "emp-worker bash --days 3", &ctx).expect("resp");
+        assert!(resp.contains("ag_"), "got: {resp}");
+        let grants = s.grants.list_for_grantee("emp-worker").expect("grants");
+        assert_eq!(grants.len(), 1);
+        assert!(
+            grants[0].expires_at.is_none(),
+            "an org-lead approval is standing even with --days; the override must not defeat Q3"
+        );
+        drop(s);
+    }
+
+    #[test]
+    fn revoke_stops_the_grant_and_a_second_revoke_is_not_found() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        p3_seed_employee(&s, "emp-worker", Some("platform"));
+        p3_seed_employee(&s, "emp-manager", Some("platform"));
+        s.edges
+            .upsert_edge("emp-worker", "emp-manager", "p3 test")
+            .expect("edge");
+        let cfg = AppConfig::default();
+        let ctx = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let minted = handle_command("grant", "emp-worker bash", &ctx).expect("mint");
+        let grant_id = minted
+            .split('`')
+            .nth(1)
+            .expect("the reply backticks the grant id");
+        assert!(grant_id.starts_with("ag_"));
+        let revoked = handle_command("revoke", grant_id, &ctx).expect("revoke");
+        assert!(revoked.contains("revoked"), "got: {revoked}");
+        assert!(
+            s.grants
+                .list_for_grantee("emp-worker")
+                .expect("grants")
+                .is_empty(),
+            "a revoked grant must stop consulting immediately"
+        );
+        let second = handle_command("revoke", grant_id, &ctx).expect("second revoke");
+        assert!(
+            second.contains("No such grant"),
+            "revoking a revoked grant must report not-found, got: {second}"
+        );
+        drop(s);
+    }
+
+    #[test]
+    fn permissions_shows_posture_and_gates_other_seats() {
+        let _serialised = genome_test_guard();
+        let s = seed_p3();
+        p3_seed_employee(&s, "emp-worker", Some("platform"));
+        p3_seed_employee(&s, "emp-manager", Some("platform"));
+        s.edges
+            .upsert_edge("emp-worker", "emp-manager", "p3 test")
+            .expect("edge");
+        let cfg = AppConfig::default();
+        let admin = CommandContext::new(None, &cfg, true, "op-1", "telegram", "chan-1");
+        let minted = handle_command("grant", "emp-worker bash", &admin).expect("mint");
+        let grant_id = minted.split('`').nth(1).expect("backticked id");
+        let view = handle_command("permissions", "emp-worker", &admin).expect("view");
+        assert!(view.contains("`yolo`"), "policy mode must show: {view}");
+        assert!(view.contains(grant_id), "live grant must show: {view}");
+        assert!(view.contains("bash"), "capability must show: {view}");
+        assert!(view.contains("emp-manager"), "grantor must show: {view}");
+
+        // A non-operator may read their OWN seat but not name another's.
+        let cfg = AppConfig::default();
+        let plain = CommandContext::new(None, &cfg, false, "u-9", "telegram", "chan-1")
+            .with_session_key("telegram:chan-1:u-9");
+        let denied = handle_command("permissions", "emp-worker", &plain).expect("denied");
+        assert!(
+            denied.contains("Only the operator"),
+            "cross-seat reads are operator-only, got: {denied}"
+        );
+        let own = handle_command("permissions", "", &plain).expect("own view");
+        assert!(
+            own.contains("ungoverned"),
+            "the chat's own seat has no policy row: {own}"
+        );
+        drop(s);
     }
 }

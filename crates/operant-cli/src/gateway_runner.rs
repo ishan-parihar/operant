@@ -266,6 +266,44 @@ pub(crate) fn seat_approver() -> Option<Arc<operant_core::org::seat_authority::S
     guard.clone()
 }
 
+/// P3: the concrete policy store the `/grant` family reads and seats rows
+/// through. Same shape as [`SEAT_APPROVERS`] for the same reason —
+/// `gateway_commands` is sync and has no handle back into `start_gateway`'s
+/// locals, and the agents carry the policy source as `Arc<dyn
+/// SeatPolicySource>`, which cannot seat rows. `None` until the gateway
+/// starts — commands then say so instead of guessing.
+pub static SEAT_POLICY_DBS: OnceLock<
+    std::sync::Mutex<Option<Arc<operant_core::org::seat_policy_db::SeatPolicyDb>>>,
+> = OnceLock::new();
+
+/// Install the gateway's concrete seat-policy store (P3). Overwrite-once
+/// at gateway start, mirroring [`store_seat_approver`].
+pub fn store_seat_policy_db(db: Arc<operant_core::org::seat_policy_db::SeatPolicyDb>) {
+    let cell = SEAT_POLICY_DBS.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(db);
+    }
+}
+
+/// The installed policy store, if the gateway started one.
+pub(crate) fn seat_policy_db() -> Option<Arc<operant_core::org::seat_policy_db::SeatPolicyDb>> {
+    let cell = SEAT_POLICY_DBS.get_or_init(|| std::sync::Mutex::new(None));
+    let guard = cell.lock().ok()?;
+    guard.clone()
+}
+
+/// Derive the gateway agent's stable session id (and therefore the chat's
+/// SEAT under the genome) from a routing key. Extracted from the turn
+/// dispatcher so `/permissions` computes the SAME seat the running agent
+/// actually consults — a third copy of this derivation is exactly the
+/// class of drift the `/stop` command's comment warns about.
+pub(crate) fn derived_gateway_session_id(session_key: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    session_key.hash(&mut hasher);
+    format!("gw_{:x}", hasher.finish())
+}
+
 /// Record a dispatcher-side DENIAL of a seat-policy escalation (the YOLO
 /// arm): the approver's verdict on the queued row, best-effort — the run
 /// hears `Deny` from the arm either way, so a resolution failure only
@@ -529,9 +567,6 @@ struct GatewayMessageHandler {
 #[async_trait::async_trait]
 impl MessageHandler for GatewayMessageHandler {
     async fn handle(&self, message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         // (iter-161: Check for pending user-question reply before routing
         // to the agent. If there's a pending clarify() question for this
         // channel, route the user's message as the reply instead.)
@@ -593,10 +628,9 @@ impl MessageHandler for GatewayMessageHandler {
             ),
         };
 
-        // Derive stable session_id from key hash
-        let mut hasher = DefaultHasher::new();
-        session_key.hash(&mut hasher);
-        let derived_session_id = format!("gw_{:x}", hasher.finish());
+        // Derive stable session_id from key hash — the shared helper, so
+        // `/permissions` computes the same seat the agent actually runs as.
+        let derived_session_id = derived_gateway_session_id(&session_key);
 
         // A `/resume` pin overrides the derivation. Everything downstream —
         // `save_message`, the reload below, the trajectory namespace — is
@@ -1175,9 +1209,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // hierarchy edges feed the SeatApprover the dispatcher resolves
     // approvals through.
     let org_db = operant_core::platform::operant_home().join("database.db");
-    let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> = Arc::new(
-        operant_core::org::seat_policy_db::SeatPolicyDb::init(org_db.clone())?,
-    );
+    let seat_policy_store = Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
+        org_db.clone(),
+    )?);
+    // P3: the concrete store is what `/grant` seats policy rows through;
+    // the agents carry the `Arc<dyn SeatPolicySource>` view below.
+    store_seat_policy_db(Arc::clone(&seat_policy_store));
+    let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> =
+        seat_policy_store;
     let grant_ledger = Arc::new(operant_core::org::authority::GrantDb::init(org_db.clone())?);
     let request_queue = Arc::new(operant_core::org::pending_requests::PendingRequestDb::init(
         org_db.clone(),

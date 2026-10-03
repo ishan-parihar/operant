@@ -145,17 +145,22 @@ employee's seat policy, enforced on the run path —
   `unrestricted_default` is a P3 policy-creation default, not a runtime
   posture knob — see the residual below).
 
-**What is still open:** the *default value* of that decision. An UNGOVERNED
-seat — no policy row — keeps the pre-genome posture byte-identically,
-which for an unattended run means the dispatcher's no-active-channel arm
-still auto-approves a dangerous tool with `AllowSession` (that arm is now
-gated to ungoverned requests only, but the ungoverned default is the
-legacy fail-open). The remedy is **a per-seat policy row** — `standard`
-or `lockdown` on the cron seat — which is data, not a code change.
-Note `[genome].unrestricted_default` is NOT this knob: it only feeds
-P3's `/grant`-family commands as the mode for a newly-created policy
-row (`config.rs:125-128`); the runtime posture of a seat with no row is
-ungoverned regardless of its value. If the owner wants an org-wide
+**What is still open:** owner *ratification* of the documented default.
+The ungoverned posture is now an explicit, documented choice, not inherited —
+`config.rs:125-129` and `operant.example.toml:500-503` state the seatless
+default is deliberately byte-identical to mainline (citing
+`org/seat_policy.rs` rule 2), so no default is unselected. What remains is
+the owner saying yes to it — or writing policy rows instead. One nuance the
+config docs understate, named plainly here: "dangerous tools still prompt"
+is attended-only phrasing. For an unattended run the dispatcher's
+no-active-channel arm auto-answers that prompt with `AllowSession` (that
+arm is gated to ungoverned requests only, but the effective ungoverned
+unattended posture is still fail-open). The remedy for a specific cron
+seat is **a per-seat policy row** — `standard` or `lockdown` — which is
+data, not code. Note `[genome].unrestricted_default` is NOT this knob: it
+only feeds P3's `/grant`-family commands as the mode for a newly-created
+policy row (`config.rs:125-128`); the runtime posture of a seat with no
+row is ungoverned regardless of its value. If the owner wants an org-wide
 fail-closed default for unattended runs, that is a deliberate code change
 — no config value expresses it today.
 

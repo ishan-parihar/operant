@@ -33,7 +33,7 @@ use crate::org::employee_db::EmployeeDb;
 use crate::org::hierarchy::Hierarchy;
 use crate::org::hierarchy_edges::HierarchyEdgesDb;
 use crate::org::notice::rfc3339;
-use crate::org::pending_requests::{PendingRequestDb, Resolution};
+use crate::org::pending_requests::{PendingRequest, PendingRequestDb, Resolution, Status};
 use crate::org::seat_policy::{SeatDecision, SeatPolicySource, decide};
 use crate::tools::{SeatDirectory, issue_grant};
 
@@ -333,9 +333,73 @@ impl SeatApprover {
             .map_err(|e| format!("expire {request}: {e}", request = ask.request_id))
     }
 
+    /// P3's proactive mint: the operator grants a capability to a seat
+    /// WITHOUT a queued escalation, speaking with the authority of that
+    /// seat's approver-of-record — the same seat [`Self::approve`] names
+    /// as the resolver, so `/grant` and `/approve` confer identical
+    /// authority through identical checks. An unmanaged seat (approver
+    /// falls back to the `'operator'` literal, who holds no scope) fails
+    /// closed here, exactly as it does at [`Self::approve`]: the remedy is
+    /// a hierarchy edge or a policy allow-row, never a widened mint.
+    /// `ttl_days` overrides `[genome] grant_ttl_days` for this mint only
+    /// (the org-lead standing rule is untouched by the override).
+    pub fn grant_direct(
+        &self,
+        seat: &str,
+        tool: &str,
+        ttl_days: Option<i64>,
+        why: &str,
+    ) -> Result<String, String> {
+        let approver = self.approver_of(seat);
+        self.mint_for(seat, tool, why, &approver, ttl_days)
+    }
+
+    /// The seat's live grants (not revoked, not lapsed) — `/permissions`
+    /// reads this. The audit view including lapsed/revoked rows is
+    /// [`GrantDb::history_for_grantee`].
+    pub fn grants_for(&self, seat: &str) -> Result<Vec<Grant>, String> {
+        self.grants
+            .list_for_grantee(seat)
+            .map_err(|e| format!("the grant ledger is unreadable: {e}"))
+    }
+
+    /// The seat's still-pending escalations — `/permissions` reads this.
+    pub fn pending_for(&self, seat: &str) -> Result<Vec<PendingRequest>, String> {
+        let rows = self
+            .requests
+            .list_for_employee(seat)
+            .map_err(|e| format!("the escalation queue is unreadable: {e}"))?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| r.status == Status::Pending)
+            .collect())
+    }
+
+    /// Revoke a grant by id (P3 `/revoke`). `Ok(false)` = no such grant;
+    /// a revoked grant stops consulting immediately because
+    /// [`GrantDb::list_for_grantee`]'s live filter excludes it.
+    pub fn revoke_grant(&self, grant_id: &str, reason: &str) -> Result<bool, String> {
+        self.grants
+            .revoke(grant_id, reason)
+            .map_err(|e| format!("the grant ledger is unreadable: {e}"))
+    }
+
     /// Mint the grant an approval confers. All refusal paths return before
     /// any write, exactly as [`issue_grant`] promises.
     fn mint(&self, ask: &SeatEscalation, approver: &str) -> Result<String, String> {
+        self.mint_for(&ask.employee_id, &ask.tool, &ask.why, approver, None)
+    }
+
+    /// The mint body shared by queued approvals and P3's direct grants.
+    /// `ttl_days_override` falls back to `[genome] grant_ttl_days`.
+    fn mint_for(
+        &self,
+        seat: &str,
+        tool: &str,
+        why: &str,
+        approver: &str,
+        ttl_days_override: Option<i64>,
+    ) -> Result<String, String> {
         let employees = self
             .employees
             .list_employees()
@@ -356,18 +420,17 @@ impl SeatApprover {
         } else {
             (
                 AuthorityScope::Department,
-                hierarchy
-                    .department_of(&ask.employee_id)
-                    .map(str::to_string),
+                hierarchy.department_of(seat).map(str::to_string),
             )
         };
 
+        let ttl_days = ttl_days_override.unwrap_or(self.grant_ttl_days);
         let expires_at = if org_lead {
             // Standing grants are CEO+ only (§11 Q3).
             None
-        } else if self.grant_ttl_days > 0 {
+        } else if ttl_days > 0 {
             Some(rfc3339(
-                chrono::Utc::now() + chrono::Duration::days(self.grant_ttl_days),
+                chrono::Utc::now() + chrono::Duration::days(ttl_days),
             ))
         } else {
             // 0/negative TTL: never-standing for non-CEO approvals — the
@@ -376,15 +439,7 @@ impl SeatApprover {
             Some(rfc3339(chrono::Utc::now()))
         };
 
-        let grant = Grant::new(
-            approver,
-            &ask.employee_id,
-            &ask.tool,
-            scope,
-            target_dept,
-            &ask.why,
-            expires_at,
-        );
+        let grant = Grant::new(approver, seat, tool, scope, target_dept, why, expires_at);
         issue_grant(&grant, grantor_scope, self.employees.as_ref(), &self.grants)
             .map_err(|e| format!("{e}"))
     }
