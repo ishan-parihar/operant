@@ -61,11 +61,25 @@ impl OperantAgent {
             .get_schemas_for_request(&self.config.tool_search, self.config.context_window)
             .await;
         let catalog = self.registry.get_schemas().await;
-        crate::tools::tool_search::deferred::materialise(
+        let schemas = crate::tools::tool_search::deferred::materialise(
             &last_user_turn(messages),
             visible,
             &catalog,
-        )
+        );
+        // ── S2 mask (last step, after deferred materialisation) ──────
+        // A tool masked by the timeout breaker this turn stays masked even
+        // when the current user turn would re-materialise it as deferred.
+        let masked = self
+            .masked_tools
+            .lock()
+            .expect("masked_tools lock poisoned")
+            .clone();
+        if masked.is_empty() {
+            return schemas;
+        }
+        let mut schemas = schemas;
+        schemas.retain(|s| !masked.contains(&s.name));
+        schemas
     }
 
     /// Attempt a "grace call" — a toolless summary request to the model.
@@ -266,6 +280,20 @@ impl OperantAgent {
             .lock()
             .expect("tool_guardrails lock poisoned")
             .reset();
+
+        // ── S2 timeout-breaker reset ─────────────────────────────────
+        // The per-tool consecutive-timeout breaker is TURN-LOCAL: a tool
+        // that burned a previous turn gets a clean slate here. Fresh maps
+        // per run() means the registry itself never learns about masks —
+        // other sessions and later turns are unaffected.
+        self.timeout_streaks
+            .lock()
+            .expect("timeout_streaks lock poisoned")
+            .clear();
+        self.masked_tools
+            .lock()
+            .expect("masked_tools lock poisoned")
+            .clear();
 
         // ── Iteration budget reset (hermes parity) ─────────────────────
         // Each user turn gets a fresh per-turn budget.  Without this,
@@ -1412,6 +1440,77 @@ impl OperantAgent {
 
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
+
+                    // ── S2 per-tool consecutive-timeout breaker ──────────
+                    // A timeout used to be an ordinary retryable error, so
+                    // one wedged tool could burn the whole turn (measured:
+                    // 11 `aft_bash` timeouts in a single turn). Streak per
+                    // tool name: 2nd consecutive timeout → system nudge;
+                    // 3rd → masked for the rest of this turn (hidden from
+                    // the schema list, refused at dispatch). Only a SUCCESS
+                    // resets the streak — a non-timeout failure must not
+                    // reward the tool with a clean slate (it also must not
+                    // advance the streak; only `timed_out` does).
+                    for r in &tool_results {
+                        if r.name.is_empty() {
+                            continue;
+                        }
+                        if r.timed_out {
+                            // Decide under the lock, act after it drops — a
+                            // std MutexGuard must not live across the
+                            // `add_message` await below.
+                            let tripped = {
+                                let mut streaks = self
+                                    .timeout_streaks
+                                    .lock()
+                                    .expect("timeout_streaks lock poisoned");
+                                let streak = streaks.entry(r.name.clone()).or_insert(0);
+                                *streak += 1;
+                                if *streak == 2 {
+                                    Some(2)
+                                } else if *streak >= 3 {
+                                    Some(*streak)
+                                } else {
+                                    None
+                                }
+                            };
+                            if tripped == Some(2) {
+                                warn!(
+                                    tool = %r.name,
+                                    "Tool timed out twice in a row — nudging model"
+                                );
+                                let nudge = Message::system(format!(
+                                    "{} timed out twice in a row — it is disabled for \
+                                     the rest of this turn; take a different approach",
+                                    r.name
+                                ));
+                                messages.push(nudge.clone());
+                                self.add_message(nudge).await;
+                            } else if let Some(count) = tripped.filter(|s| *s >= 3) {
+                                let newly_masked = self
+                                    .masked_tools
+                                    .lock()
+                                    .expect("masked_tools lock poisoned")
+                                    .insert(r.name.clone());
+                                if newly_masked {
+                                    warn!(
+                                        tool = %r.name,
+                                        streak = count,
+                                        "Tool timed out 3× consecutively — masked for the \
+                                         rest of this turn"
+                                    );
+                                }
+                            }
+                        } else if r.success
+                            && let Some(streak) = self
+                                .timeout_streaks
+                                .lock()
+                                .expect("timeout_streaks lock poisoned")
+                                .get_mut(&r.name)
+                        {
+                            *streak = 0;
+                        }
+                    }
 
                     // ── Degenerate-loop circuit breaker ────────────────
                     // When EVERY tool call in several consecutive iterations

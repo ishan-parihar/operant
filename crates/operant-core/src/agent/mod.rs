@@ -464,6 +464,20 @@ pub struct OperantAgent {
     /// model calls the same tool with identical args repeatedly. Reset at
     /// the start of each user turn.
     tool_guardrails: std::sync::Mutex<crate::tool_guardrails::ToolGuardrailTracker>,
+    /// S2: per-tool consecutive-timeout breaker — TURN-LOCAL state, reset
+    /// at the top of every `run()` (same discipline as `tool_guardrails`).
+    /// `timeout_streaks` counts consecutive `ToolResult::timed_out`
+    /// results per tool name; on the 2nd the run loop nudges the model, on
+    /// the 3rd the tool lands in `masked_tools` for the rest of the turn:
+    /// hidden from the request's schema list (`tools_for_turn`) and
+    /// refused at dispatch (`execute_tools` preflight). The registry
+    /// itself is untouched — other sessions and later turns are
+    /// unaffected. Measured pathology: 11 `aft_bash` timeouts in one
+    /// turn, each retried as an ordinary error (2026-10-03 §1 S2).
+    timeout_streaks: std::sync::Mutex<std::collections::HashMap<String, u32>>,
+    /// Tools masked for the rest of the current turn by the S2 breaker
+    /// (see `timeout_streaks`).
+    masked_tools: std::sync::Mutex<std::collections::HashSet<String>>,
     /// R6: monotonic-clock timestamp (seconds) of the last durable session
     /// activity heartbeat write, per session id. Throttles the heartbeat to
     /// a ≥60s cadence so the SessionDB write path is never hammered

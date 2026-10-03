@@ -191,6 +191,7 @@ impl OperantTool for OkTool {
             success: true,
             content: "ok".to_string(),
             error: None,
+            timed_out: false,
         }
     }
 }

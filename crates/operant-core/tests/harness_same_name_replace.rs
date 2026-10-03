@@ -60,6 +60,7 @@ impl OperantTool for EchoTool {
             success: true,
             content: format!("echo{}", self.suffix),
             error: None,
+            timed_out: false,
         }
     }
 }

@@ -3948,3 +3948,50 @@ partial is kept and labelled, the reasoning and provider-overload
 fallbacks pass through unchanged, and a normal answer is byte-identical
 (extraction proven behavior-preserving). Suite gate: 2280 passed / 2
 failed, identical to the pre-existing `tools::kernel` K-1 pair.
+
+### S2 — Tool timeout was an ordinary retryable error; no per-tool breaker; 11 `aft_bash` timeouts in one turn (FIXED iter-601)
+
+The 2026-10-03 specimen: a single wedged tool (`aft_bash`) timed out 11
+times inside one turn, every timeout surfacing as a plain
+"Tool timed out after 30s" error the model was free to retry immediately —
+so the turn burned its whole budget re-waiting on a tool that would never
+answer. Both timeout layers (`tools.rs` `execute_with_timeout` and the
+three stream-dispatch wrapper arms in `agent/stream.rs`) constructed the
+result with `error_with_name`/`error` — nothing distinguished a timeout
+from any other failure, so no loop-level rule could key on it.
+
+`ToolResult` now carries `timed_out: bool` (`serde(default)`, so older
+persisted results deserialize as "not a timeout"), set ONLY by the new
+`ToolResult::timeout(name, id, duration)` constructor — the one writer —
+used by `execute_with_timeout`'s Err arm and all three stream-dispatch
+timeout arms (previously those arms also left the tool name empty, which
+would have made any name-keyed rule group every stream-level timeout under
+`""`). The breaker itself is turn-local state on the agent
+(`timeout_streaks` + `masked_tools`, std Mutex like `tool_guardrails`,
+cleared at the top of every `run()`): per tool name, the 2nd consecutive
+timeout pushes one system nudge ("{tool} timed out twice in a row — it is
+disabled for the rest of this turn; take a different approach"), the 3rd
+masks the tool for the rest of the turn — `tools_for_turn` filters it from
+the request's schema list (after deferred materialisation, so a re-injected
+deferred tool stays masked) and `execute_tools`' preflight refuses any
+further call with a named "disabled for the rest of this turn after
+repeated timeouts" error WITHOUT executing, so there is no fourth timeout
+burn. Only the tool's OWN success resets its streak; non-timeout failures
+neither advance nor reset it. The registry is untouched — masks never leak
+across sessions or later turns.
+
+Verification: `tests/timeout_breaker.rs` scripts the specimen — 3 timeouts
+→ tool absent from the 4th request's schema list, one nudge visible to the
+model, a 4th call attempt answered by the named disabled-error with the
+fixture's execution counter pinned at exactly 3 (refusal is
+pre-execution), and the turn still completes on the model's own text.
+Controls: the flaky-tool reset case (timeout, timeout, success, timeout,
+timeout → second nudge fires, streak re-reaches 2, never masked — remove
+the reset and the 4th timeout masks instead), a single-timeout turn that
+must not mask anything and completes verbatim, two non-timeout failures
+between timeouts that must leave the streak at 2 (if failures counted,
+the mask fires), and the stream-level-timeout case (registry timeout
+generous, 10ms wrapper) proving the flag survives whichever layer fires
+first. Suite gate: 2280 passed / 2 failed, identical to the pre-existing
+`tools::kernel` K-1 pair; clippy error set identical to pristine HEAD
+(10 pre-existing sites, zero new).

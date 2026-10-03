@@ -1417,6 +1417,7 @@ impl MockAgentEvent {
                     success: true,
                     content: output,
                     error: None,
+                    timed_out: false,
                 },
             },
             MockAgentEvent::ToolError { id, name, error } => AE::ToolError {

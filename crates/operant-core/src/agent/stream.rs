@@ -514,6 +514,35 @@ impl OperantAgent {
                 continue;
             }
 
+            // ── S2 timeout-breaker mask ────────────────────────────────
+            // A tool that timed out 3× consecutively this turn is refused
+            // here WITHOUT executing — no fourth timeout burn — and the
+            // model gets a named error it can act on. The schema list also
+            // omits it (`tools_for_turn`), so a well-behaved model never
+            // reaches this arm; this is the backstop for one that calls it
+            // anyway.
+            if self
+                .masked_tools
+                .lock()
+                .expect("masked_tools lock poisoned")
+                .contains(&tool_call.function.name)
+            {
+                warn!(
+                    tool = %tool_call.function.name,
+                    "Tool masked by the timeout breaker — refusing call without executing"
+                );
+                early_results[idx] = Some(ToolResult::error_with_name(
+                    &tool_call.function.name,
+                    &tool_call.id,
+                    format!(
+                        "Tool '{}' is disabled for the rest of this turn after repeated \
+                          timeouts — take a different approach.",
+                        tool_call.function.name
+                    ),
+                ));
+                continue;
+            }
+
             let mut name = tool_call.function.name.clone();
             let raw_args = tool_call.function.arguments.clone();
             let trimmed = raw_args.trim();
@@ -985,21 +1014,24 @@ impl OperantAgent {
             // receiver resolves dialogs on their own (120s timeout reply),
             // and the child timeout governs delegation — the wrapper is only
             // a backstop against a wedged receiver/child.
-            let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
-                timeout(LONG_RUNNING_TOOL_TIMEOUT, tool_future).await
+            let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                LONG_RUNNING_TOOL_TIMEOUT
             } else {
-                timeout(self.config.tool_timeout, tool_future).await
+                self.config.tool_timeout
             };
+            let result = timeout(limit, tool_future).await;
             if let Some(ref bus) = self.turn_end_bus {
                 bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
             }
             early_results[idx] = Some(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                Err(_) => ToolResult::error(
-                    &tool_call.id,
-                    format!("Tool timed out after {:?}", self.config.tool_timeout),
-                ),
+                // S2: the flag is what the per-tool breaker keys on — a
+                // timeout result built here without it would slip past the
+                // breaker when the outer wrapper fires before the
+                // registry's own (e.g. a per-tool override extends the
+                // inner deadline past this one).
+                Err(_) => ToolResult::timeout(&name, &tool_call.id, limit),
             });
         } else if !batch_allows_parallel_execution(
             pending.iter().map(|(_, tc, _)| tc.function.name.as_str()),
@@ -1023,21 +1055,20 @@ impl OperantAgent {
                     self.session_id().unwrap_or_else(|| "default".to_string()),
                 );
                 let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
-                let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
-                    timeout(LONG_RUNNING_TOOL_TIMEOUT, exec).await
+                let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                    LONG_RUNNING_TOOL_TIMEOUT
                 } else {
-                    timeout(self.config.tool_timeout, exec).await
+                    self.config.tool_timeout
                 };
+                let result = timeout(limit, exec).await;
                 if let Some(ref bus) = self.turn_end_bus {
                     bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
                 }
                 early_results[idx] = Some(match result {
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                    Err(_) => ToolResult::error(
-                        &tool_call.id,
-                        format!("Tool timed out after {:?}", self.config.tool_timeout),
-                    ),
+                    // S2: mark the flag (see single-tool branch above).
+                    Err(_) => ToolResult::timeout(&name, &tool_call.id, limit),
                 });
             }
         } else {
@@ -1108,11 +1139,12 @@ impl OperantAgent {
                         // user-question receiver resolves dialogs on their
                         // own 120s timeout and the child timeout governs
                         // delegation.
-                        let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
-                            timeout(LONG_RUNNING_TOOL_TIMEOUT, exec).await
+                        let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                            LONG_RUNNING_TOOL_TIMEOUT
                         } else {
-                            timeout(tool_timeout, exec).await
+                            tool_timeout
                         };
+                        let result = timeout(limit, exec).await;
 
                         if let Some(ref bus) = self.turn_end_bus {
                             bus.record_tool_duration(exec_started.elapsed().as_millis() as u64);
@@ -1123,10 +1155,8 @@ impl OperantAgent {
                             match result {
                                 Ok(Ok(r)) => r,
                                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                                Err(_) => ToolResult::error(
-                                    &tool_call.id,
-                                    format!("Tool timed out after {:?}", tool_timeout),
-                                ),
+                                // S2: mark the flag (see single-tool branch).
+                                Err(_) => ToolResult::timeout(&name, &tool_call.id, limit),
                             },
                         )
                     }
