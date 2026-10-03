@@ -83,6 +83,17 @@ impl EmptyResponseCounter {
     }
 }
 
+/// True for output that must not be surfaced as a turn's final answer:
+/// empty per `AssistantTurn::is_empty`, or a short whitespace-free
+/// artifact (the observed class: `]<]\u{200b}minimax[>[`, 13 chars —
+/// reasoning-leak markers, not prose). Deliberate ceiling: a genuine
+/// sub-80-char single-word summary is sacrificed; the operator gets the
+/// named-reason stopped notice instead, which is strictly more honest.
+pub fn is_degenerate_final_text(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || (t.len() < 80 && !t.chars().any(char::is_whitespace))
+}
+
 // REMOVED: the `EmptyExhausted` sentinel and `EmptyResponseCounter::exhausted()`.
 // It had zero production callers, and its doc promised a behaviour that already
 // exists one layer up: `gateway_runner.rs` substitutes a user-facing message
@@ -166,5 +177,36 @@ mod tests {
         // Caller asked for 99 — should be capped to 3.
         let c = EmptyResponseCounter::new(99);
         assert_eq!(c.max, EMPTY_RESPONSE_MAX_RETRIES);
+    }
+
+    #[test]
+    fn empty_text_is_degenerate() {
+        assert!(is_degenerate_final_text(""));
+        // Whitespace-only trims to empty — same degenerate class.
+        assert!(is_degenerate_final_text("   \n\t "));
+    }
+
+    #[test]
+    fn reasoning_leak_artifact_is_degenerate() {
+        // The observed production class: 13 chars, no whitespace. U+200B
+        // (zero-width space) is NOT whitespace and is not trimmed, so it
+        // must not save the artifact from the gate.
+        assert!(is_degenerate_final_text("]<]\u{200b}minimax[>["));
+    }
+
+    #[test]
+    fn long_summary_survives_the_gate() {
+        // A realistic 942-char report must pass — the gate is for
+        // artifacts, and length alone clears the ceiling.
+        let summary = format!("Progress report: {}.", "x".repeat(924));
+        assert_eq!(summary.len(), 942);
+        assert!(!is_degenerate_final_text(&summary));
+    }
+
+    #[test]
+    fn short_multiword_answer_survives_the_gate() {
+        // A genuine short answer with real prose structure: sub-80 chars,
+        // but it contains whitespace, so it is NOT the artifact class.
+        assert!(!is_degenerate_final_text("Done. Two files changed."));
     }
 }

@@ -5,7 +5,7 @@ use self::turn_finalizer::{
     PREFLIGHT_DECAY_CONSTANT, PREFLIGHT_DECAY_H50, PREFLIGHT_THRESHOLD_PERCENT, TurnDiagnostics,
     TurnExitReason, file_mutation_verifier_footer,
 };
-use self::turn_rules::{AssistantTurn, EmptyResponseCounter};
+use self::turn_rules::{AssistantTurn, EmptyResponseCounter, is_degenerate_final_text};
 use crate::client::{Message, Role};
 use crate::error::{Error, Result};
 use crate::observer::{Observer, ObserverEvent, ObserverMetric};
@@ -75,7 +75,11 @@ impl OperantAgent {
     /// tools, giving the user a partial answer instead of a hard error.
     ///
     /// Returns `Ok(Message)` on success, or `Err(MaxIterationsExceeded)`
-    /// if the grace call also fails.
+    /// if the grace call also fails. A degenerate grace output (empty, or a
+    /// short whitespace-free reasoning-leak artifact per
+    /// `turn_rules::is_degenerate_final_text`) returns the EMPTY assistant
+    /// message instead — the gateway substitutes the user-facing stopped
+    /// notice for empty content (`gateway_runner.rs:738-762`).
     pub(crate) async fn attempt_grace_call(
         &self,
         messages: &[Message],
@@ -101,7 +105,15 @@ impl OperantAgent {
 
         match grace_result {
             Ok((text, _reasoning)) => {
-                let result = Message::assistant(&text);
+                // S1 quality gate: degenerate grace output (reasoning-leak
+                // garbage, not a summary) must not count as the turn's answer.
+                // Surface the empty message and let the gateway's existing
+                // empty-content fallback speak to the operator.
+                let result = if is_degenerate_final_text(&text) {
+                    Message::assistant(String::new())
+                } else {
+                    Message::assistant(&text)
+                };
                 if self.record_trajectories {
                     self.save_trajectory(
                         session_id,

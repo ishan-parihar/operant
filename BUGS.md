@@ -3856,3 +3856,48 @@ in sync by hand, and the first version of the sync-reason assertion was
 guarded by `if body.contains(...)`, which would have passed vacuously if the
 backfill wrote nothing. The guard is removed: the test now fails loudly when no
 employee row appears.
+
+## Round 44 (2026-10-03) — Agent-loop repair programme (docs/AGENT-LOOP-FIX-EXECUTION-PLAN.md)
+
+The five measured agent-loop defects from the iter-587 evidence dump, fixed one
+slice per landing, each with a fault-injected acceptance test.
+
+### S1 — Grace-call output returned unvalidated; reasoning-leak garbage counted as "answered" (FIXED iter-595)
+
+When the iteration budget ran out, `attempt_grace_call` (`agent/run.rs`) made
+one final toolless request and returned the model's text verbatim. A real
+turn was observed ending on `]<]\u{200b}minimax[>[` — 13 chars of a
+provider's leaked reasoning markers, not prose — and that string was relayed
+to the operator as the agent's answer. The loop's own empty-content rules
+(`AssistantTurn::is_empty`) intentionally do not count this shape as empty,
+so nothing downstream ever questioned it.
+
+`turn_rules.rs` now carries the shared predicate
+`is_degenerate_final_text`: empty after trimming, or under 80 chars with no
+whitespace character. The grace arm returns an EMPTY assistant message when
+it fires, which is precisely the shape `gateway_runner.rs:738-762` already
+substitutes the user-facing stopped notice for — zero new gateway wiring,
+and the TUI's empty-`Done` handling is already correct for it. Deliberate
+ceiling, kept in the doc comment: a genuine sub-80-char single-word summary
+is sacrificed, because the named-reason notice is strictly more honest than
+sounding out garbage. The trajectory save, eager LCM ingest, `Done` emit,
+and observer/hook events in the grace arm are untouched — only the surfaced
+text changes; all three exhaustion sites (`:389-391`, `:408-410`, `:472-474`)
+route through `attempt_grace_call` and need no edits.
+
+Verification: four unit tests pin the predicate (empty/whitespace-only →
+true; the `]<]\u{200b}minimax[>[` artifact → true; a 942-char summary →
+false; "Done. Two files changed." → false — the len-with-whitespace
+discriminator), and `tests/grace_output_gate.rs` drives scripted
+budget-exhaustion turns: garbage grace → the returned `Message` is empty;
+valid grace → the text passes verbatim (positive control — a gate that
+blocks everything also passes half its assertions). Mutation-proven: with
+the gate removed, `degenerate_grace_output_returns_empty_message` fails on
+the exact-empty-content assertion while the positive control still passes.
+Suite gate: 2280 passed / 2 failed, identical to the pre-existing
+`tools::kernel` K-1 pair.
+
+One consumer-adaptation checked and dismissed: `tests/nested_agent_run.rs`'s
+child grace body is `"{CHILD_ANSWER_MARKER}: one iteration, then out of
+budget"` — real prose with spaces, not the artifact class — so the nested
+delegation shape is unaffected.
