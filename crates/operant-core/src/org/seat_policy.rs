@@ -221,6 +221,13 @@ pub fn decide(
     }
 }
 
+/// Storage seam for the run path (wave-2 slice E consults this).
+/// Sync because the stores are `Arc<Mutex<Connection>>` like `GrantDb`,
+/// and the decision point must not await.
+pub trait SeatPolicySource: Send + Sync {
+    fn policy_for(&self, employee_id: &str) -> Option<SeatPolicy>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

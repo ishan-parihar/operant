@@ -72,6 +72,7 @@ pub mod notice_db;
 pub mod resolver;
 pub mod schema;
 pub mod seat_policy;
+pub mod seat_policy_db;
 pub mod worklog;
 pub mod worklog_db;
 pub mod write_barrier;
