@@ -59,6 +59,11 @@ pub mod input_history;
     expect(dead_code, reason = "lands before its W3 renderer consumers")
 )]
 pub mod jcode_model;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "lands before its W3/W5 renderer consumers")
+)]
+pub mod jcode_render;
 pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;
