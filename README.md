@@ -97,6 +97,7 @@ operant
 | **MCP** | Native client (stdio + HTTP, deferred loading) **and** server; reconnect materializes tools mid-session |
 | **Channels** | Telegram · Discord · Slack · WhatsApp · email · webhooks via the gateway |
 | **Autonomy** | `operant autonomous` — a self-directed dev loop over `TODO.md` with test-command guardrails |
+| **Org governance** | Per-employee permission scoping — seat policies (`yolo`/`standard`/`scoped`/`lockdown`) with deny/allow globs, a TTL'd grant ledger, durable escalation queue (unattended cron runs ask-and-deny; a senior's `/approve` mints a grant), reporting lines, and one attributable worklog row per scheduled run |
 | **Plugins** | WASM plugin tools + hermes-agent hook parity (before/after tool, turn, memory hooks) |
 | **Interface** | ratatui TUI · interactive chat · scriptable `run` · one-shot `test` |
 
@@ -217,6 +218,9 @@ provider = "sourcehound"      # or lightpanda | camofox | browserbase | browser-
 
 [skills]
 autoload = true
+
+[genome]              # per-employee permission scoping (the org's genome)
+grant_ttl_days = 7    # HoD-approved escalation grants expire after a week
 ```
 
 See [`operant.example.toml`](operant.example.toml) for the full reference — every section is annotated.
