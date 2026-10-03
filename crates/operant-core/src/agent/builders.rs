@@ -65,6 +65,7 @@ impl OperantAgent {
             sessions,
             event_tx: None,
             permission_tx: None,
+            seat_policy_source: None,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -132,6 +133,7 @@ impl OperantAgent {
             sessions,
             event_tx: Some(event_tx),
             permission_tx: None,
+            seat_policy_source: None,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -355,6 +357,18 @@ impl OperantAgent {
 
     pub fn with_permissions(mut self, permission_tx: mpsc::Sender<ToolPermissionRequest>) -> Self {
         self.permission_tx = Some(permission_tx);
+        self
+    }
+
+    /// Attach the seat-policy source the tool-execution guard consults
+    /// (permission-genome P1, slice E). The employee id is the agent's
+    /// current session id. `None` keeps the run path byte-identical: no
+    /// decide() call at all.
+    pub fn with_seat_policy_source(
+        mut self,
+        source: Option<Arc<dyn crate::org::seat_policy::SeatPolicySource>>,
+    ) -> Self {
+        self.seat_policy_source = source;
         self
     }
 

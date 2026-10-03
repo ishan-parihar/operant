@@ -3,6 +3,7 @@
 use crate::client::{ChatResponse, Message, ToolCall, Usage};
 use crate::error::{Error, Result};
 use crate::observer::{Observer, ObserverEvent};
+use crate::org::seat_policy::{SeatDecision, decide};
 use crate::parser::{ToolCallParser, ToolCallStreamParser};
 use crate::tools::{ToolContext, ToolResult};
 use futures::StreamExt;
@@ -735,100 +736,149 @@ impl OperantAgent {
 
             // Permission guard for dangerous tools (interactive — sequential)
             if let Some(ref permission_tx) = self.permission_tx {
-                // hermes parity: a tool covered by the session or permanent
-                // allowlist (`command_allowlist` / `always`) never prompts —
-                // it runs immediately. Checked before the hardcoded
-                // dangerous-tool list so allowlisted tools bypass the gate
-                // (hermes `_command_matches_permanent_allowlist` fires before
-                // detection, with only the hardline floor above it).
-                if self.tool_allowed_by_allowlist(&name) {
-                    // allowed by allowlist — no prompt
-                } else {
-                    let needs_permission = matches!(
-                        name.as_str(),
-                        "bash"
-                            | "terminal"
-                            | "execute_command"
-                            | "code_execution"
-                            | "file_read"
-                            | "file_write"
-                            | "file_edit"
-                            | "patch"
-                            | "process"
-                            | "browser"
-                    );
-                    if needs_permission {
-                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let description = format!("Execute {} tool", name);
-                        let danger = match name.as_str() {
-                            "bash" | "terminal" | "execute_command" => {
-                                "This runs a shell command on your system".to_string()
-                            }
-                            "code_execution" => {
-                                "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
-                            }
-                            "file_read" => "This reads a file from your system".to_string(),
-                            "file_write" => "This writes content to a file".to_string(),
-                            "file_edit" | "patch" => "This modifies an existing file".to_string(),
-                            "process" => "This manages background processes".to_string(),
-                            "browser" => "This opens and interacts with a browser".to_string(),
-                            _ => "This tool may modify your system".to_string(),
-                        };
-                        let input_preview = Some(args_str.clone());
-                        let _ = permission_tx
-                            .send(ToolPermissionRequest {
-                                tool_name: name.clone(),
-                                tool_id: tool_call.id.clone(),
-                                description,
-                                danger_explanation: danger,
-                                input_preview,
-                                response_tx: resp_tx,
+                // ── P1 seat policy (permission-genome wave-2 slice E) ──────
+                // With a source attached AND a session id (the employee id),
+                // `decide()` owns the verdict for this seat: `Run` skips the
+                // prompt outright (a yolo mode or seat allow entry must
+                // actually skip it), `Escalate` enters the channel below with
+                // the policy's `why` as the danger explanation, and `Deny` is
+                // returned shaped like a declined permission. Everything
+                // sits behind the Option: no source, no session id, or no
+                // policy row for this seat → `None` → the branches below are
+                // today's allowlist-then-hardcoded-list logic, unchanged.
+                //
+                // `blocked` is `false` because the smart approval gate above
+                // already denied blocked tools — the hardline floor fires
+                // before any seat mode can see (let alone widen) a blocked
+                // call. `dangerous` reuses `is_permission_gated_tool`, the
+                // same list the prompt below has always keyed on (one list so
+                // the gate and the predicate cannot drift apart).
+                //
+                // `has_grant` is `false` in P1: the run path does not consult
+                // the grant ledger yet (approvals minting grants and grant
+                // lookup are slice F2), so a lockdown seat escalates every
+                // call until F2 lands. Honest phasing.
+                let seat: Option<SeatDecision> =
+                    match (self.seat_policy_source.as_ref(), self.session_id()) {
+                        (Some(source), Some(session_id)) => {
+                            let policy = source.policy_for(&session_id);
+                            policy.as_ref().map(|p| {
+                                decide(
+                                    Some(p),
+                                    &name,
+                                    false,
+                                    is_permission_gated_tool(&name),
+                                    false,
+                                )
                             })
-                            .await;
-                        let response = tokio::select! {
-                            r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
-                            _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
-                        };
-                        match response {
-                            ToolPermissionResponse::AllowOnce => {}
-                            ToolPermissionResponse::AllowSession => {
-                                // hermes `approve_session`: remember the tool
-                                // for the rest of this agent instance so it
-                                // never prompts again this session.
-                                self.session_allowlist
+                        }
+                        _ => None,
+                    };
+                // Whether this call prompts, and with what danger sentence.
+                // The ungoverned arm is today's logic, lifted unchanged:
+                // hermes parity — a tool covered by the session or permanent
+                // allowlist (`command_allowlist` / `always`) never prompts,
+                // checked before the hardcoded dangerous-tool list so
+                // allowlisted tools bypass the gate
+                // (`_command_matches_permanent_allowlist` fires before
+                // detection, with only the hardline floor above it).
+                let (needs_prompt, danger): (bool, String) = if let Some(decision) = seat {
+                    match decision {
+                        SeatDecision::Run(_) => (false, String::new()),
+                        SeatDecision::Escalate(why) => (true, why),
+                        SeatDecision::Deny(why) => {
+                            warn!(tool = %name, "Tool call denied by seat policy");
+                            early_results[idx] = Some(ToolResult::error(
+                                &tool_call.id,
+                                format!("Permission denied by seat policy: {why}"),
+                            ));
+                            continue;
+                        }
+                    }
+                } else if self.tool_allowed_by_allowlist(&name) {
+                    // allowed by allowlist — no prompt
+                    (false, String::new())
+                } else {
+                    let needs_permission = is_permission_gated_tool(&name);
+                    if needs_permission {
+                        (
+                            true,
+                            match name.as_str() {
+                                "bash" | "terminal" | "execute_command" => {
+                                    "This runs a shell command on your system".to_string()
+                                }
+                                "code_execution" => {
+                                    "This runs code on your system with the operant process's permissions (not sandboxed)".to_string()
+                                }
+                                "file_read" => "This reads a file from your system".to_string(),
+                                "file_write" => "This writes content to a file".to_string(),
+                                "file_edit" | "patch" => "This modifies an existing file".to_string(),
+                                "process" => "This manages background processes".to_string(),
+                                "browser" => "This opens and interacts with a browser".to_string(),
+                                _ => "This tool may modify your system".to_string(),
+                            },
+                        )
+                    } else {
+                        (false, String::new())
+                    }
+                };
+                if needs_prompt {
+                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                    let description = format!("Execute {} tool", name);
+                    let input_preview = Some(args_str.clone());
+                    let _ = permission_tx
+                        .send(ToolPermissionRequest {
+                            tool_name: name.clone(),
+                            tool_id: tool_call.id.clone(),
+                            description,
+                            danger_explanation: danger,
+                            input_preview,
+                            response_tx: resp_tx,
+                        })
+                        .await;
+                    let response = tokio::select! {
+                        r = resp_rx => r.unwrap_or(ToolPermissionResponse::Deny),
+                        _ = tokio::time::sleep(Duration::from_secs(120)) => ToolPermissionResponse::Deny,
+                    };
+                    match response {
+                        ToolPermissionResponse::AllowOnce => {}
+                        ToolPermissionResponse::AllowSession => {
+                            // hermes `approve_session`: remember the tool
+                            // for the rest of this agent instance so it
+                            // never prompts again this session.
+                            self.session_allowlist
+                                .write()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(name.clone());
+                        }
+                        ToolPermissionResponse::AllowAlways => {
+                            // hermes `approve_permanent` +
+                            // `save_permanent_allowlist`: remember forever
+                            // and persist to disk so later sessions honor
+                            // the choice too.
+                            self.session_allowlist
+                                .write()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(name.clone());
+                            let patterns = {
+                                let mut guard = self
+                                    .persistent_allowlist
                                     .write()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .insert(name.clone());
-                            }
-                            ToolPermissionResponse::AllowAlways => {
-                                // hermes `approve_permanent` +
-                                // `save_permanent_allowlist`: remember forever
-                                // and persist to disk so later sessions honor
-                                // the choice too.
-                                self.session_allowlist
-                                    .write()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .insert(name.clone());
-                                let patterns = {
-                                    let mut guard = self
-                                        .persistent_allowlist
-                                        .write()
-                                        .unwrap_or_else(|e| e.into_inner());
-                                    guard.insert(name.clone());
-                                    guard.clone()
-                                };
-                                persist_approval_allowlist(
-                                    self.config.approval_allowlist_path.as_deref(),
-                                    &patterns,
-                                );
-                            }
-                            ToolPermissionResponse::Deny => {
-                                early_results[idx] = Some(ToolResult::error(
-                                    &tool_call.id,
-                                    "Permission denied by user".to_string(),
-                                ));
-                                continue;
-                            }
+                                    .unwrap_or_else(|e| e.into_inner());
+                                guard.insert(name.clone());
+                                guard.clone()
+                            };
+                            persist_approval_allowlist(
+                                self.config.approval_allowlist_path.as_deref(),
+                                &patterns,
+                            );
+                        }
+                        ToolPermissionResponse::Deny => {
+                            early_results[idx] = Some(ToolResult::error(
+                                &tool_call.id,
+                                "Permission denied by user".to_string(),
+                            ));
+                            continue;
                         }
                     }
                 }

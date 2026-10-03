@@ -1074,6 +1074,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // already-attached memory tools read, and cron getting a second
     // provider instance over the same store.
     let memory = crate::load_repo_memory_manager().await?;
+    // P1 seat policies (permission-genome wave-2 slice E): ONE SeatPolicyDb
+    // over the shared org app db (the same `database.db` derivation the
+    // PersistentSessionStore above uses; the `seat_policies` table is
+    // created idempotently inside it), threaded into BOTH agent builds
+    // below — the gateway agent consults it keyed by the chat session id,
+    // cron by its derived employee id (`set_session_id(derive_employee_id(
+    // &job.id))` in the scheduler). A seat with no row stays ungoverned
+    // (today's behavior), so wiring the source alone changes nothing until
+    // a policy row is written. `?` (not a soft skip): a store that fails to
+    // open must fail loudly — silently running ungoverned is the widening
+    // the genome exists to make impossible.
+    let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> =
+        Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
+            operant_core::platform::operant_home().join("database.db"),
+        )?);
     let agent = crate::create_runtime_agent_with(
         app_config,
         &app_config.agent,
@@ -1095,7 +1110,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // Clone before the gateway agent consumes the sender. Cron gets the same
     // channel so its permission posture is UNCHANGED by this commit (see below).
     let cron_permission_tx = permission_tx.clone();
-    let agent = Arc::new(agent.with_permissions(permission_tx));
+    let agent = Arc::new(
+        agent
+            .with_permissions(permission_tx)
+            .with_seat_policy_source(Some(Arc::clone(&seat_policies))),
+    );
 
     // Cron gets its OWN agent, not a clone of the gateway's.
     //
@@ -1158,7 +1177,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             Some(memory),
         )
         .await?
-        .with_permissions(cron_permission_tx),
+        .with_permissions(cron_permission_tx)
+        .with_seat_policy_source(Some(Arc::clone(&seat_policies))),
     );
 
     // Long-term memory is handled by the hoisted pair above: BOTH agents

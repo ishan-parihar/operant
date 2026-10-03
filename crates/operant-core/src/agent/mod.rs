@@ -359,6 +359,14 @@ pub struct OperantAgent {
     sessions: Arc<crate::session::SessionStore>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,
+    /// P1 seat-policy source (permission-genome wave-2 slice E). When `Some`
+    /// AND the agent has a session id (the employee id), the tool-execution
+    /// guard in `agent/stream.rs` consults [`crate::org::seat_policy::decide`]
+    /// before the permission channel: the seat's verdict can run a tool with
+    /// no prompt, escalate with the policy's own explanation, or deny
+    /// outright. `None` (the default) keeps the run path byte-identical —
+    /// no decide() call at all.
+    seat_policy_source: Option<Arc<dyn crate::org::seat_policy::SeatPolicySource>>,
     /// Session-scoped approvals (hermes `approve_session`): tool names the
     /// user allowed for the rest of this agent instance's lifetime. Never
     /// persisted.
