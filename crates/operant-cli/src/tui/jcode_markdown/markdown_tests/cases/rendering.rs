@@ -247,7 +247,6 @@ fn test_table_render_basic() {
     assert!(rendered.iter().any(|l| l.contains('─') && l.contains('┼')));
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_table_columns_follow_the_declared_alignment() {
     // The delimiter row is the author saying how to read each column, and it is
@@ -269,7 +268,6 @@ fn test_table_columns_follow_the_declared_alignment() {
     );
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_lazy_renderer_also_follows_table_alignment() {
     // The lazy renderer is what a long streamed reply goes through, so it has
@@ -453,7 +451,6 @@ fn test_mermaid_block_detection() {
     );
 }
 
-#[cfg(any())] // [port-decision] upstream gates this on the mermaid-renderer feature; W9 cut (engine not ported), so it never compiles here
 #[test]
 fn lazy_mermaid_without_native_protocol_also_renders_source() {
     let md = "```mermaid\nflowchart TD\n    Start --> Finish\n```";
@@ -491,15 +488,27 @@ fn streaming_mermaid_without_native_protocol_keeps_source_visible() {
     }));
 }
 
-#[cfg(any())] // [port-decision] upstream gates this on the mermaid-renderer feature; W9 cut (engine not ported), so it never compiles here
 #[test]
 fn mermaid_gate_accepts_native_protocol_and_rejects_halfblock_fallback() {
     with_mermaid_rendering_override(Some(true), || {
         mermaid::with_image_protocol_override(Some(false), || {
             assert!(!should_render_mermaid_block(Some("mermaid")));
         });
-        mermaid::with_image_protocol_override(Some(true), || {
-            assert!(should_render_mermaid_block(Some("mermaid")));
+        // [port-decision] upstream's second arm asserts the ENGINE honors the
+        // protocol override (Some(true) -> render). Under the W9 cut the
+        // fallback's native_image_protocol_available() is unconditionally
+        // false and with_image_protocol_override is a no-op passthrough, so
+        // that arm cannot pass by design. It moved to the cfg'd-out sibling
+        // below; recover it together with the mermaid engine (W9).
+    });
+}
+
+#[cfg(any())] // [port-decision] engine arm of the test above; W9 cut
+#[test]
+fn mermaid_gate_accepts_native_protocol_engine_arm() {
+    with_mermaid_rendering_override(Some(true), || {
+        crate::tui::jcode_markdown::mermaid::with_image_protocol_override(Some(true), || {
+            assert!(crate::tui::jcode_markdown::should_render_mermaid_block(Some("mermaid")));
         });
     });
 }
@@ -517,7 +526,6 @@ fn test_mixed_code_and_mermaid() {
     );
 }
 
-#[cfg(any())] // [port-decision] upstream gates this on the mermaid-renderer feature; W9 cut (engine not ported), so it never compiles here
 #[test]
 fn test_mermaid_renders_inline_even_in_pinned_diagram_mode() {
     // Regression: pinned/margin diagram modes must not replace the inline
@@ -620,7 +628,6 @@ fn test_blockquote_footnote_and_definition_list_render() {
     assert!(rendered.contains("definition text"));
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_plain_paragraph_alignment_remains_unset() {
     let lines = render_markdown("plain paragraph");
@@ -778,7 +785,6 @@ fn test_wrapped_text_code_block_with_long_token_keeps_gutter_on_continuations() 
     );
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_centered_mode_keeps_list_markers_flush_left() {
     let md = concat!(
@@ -866,7 +872,6 @@ fn test_centered_mode_centers_other_structured_blocks_as_blocks() {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_centered_mode_still_centers_framed_code_blocks() {
     let saved = center_code_blocks();
@@ -894,7 +899,6 @@ fn test_rule_and_inline_html_render() {
     assert!(rendered.contains("</span>"));
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_centered_mode_centers_rules_as_blocks() {
     let saved = center_code_blocks();
@@ -1127,7 +1131,6 @@ fn test_multiline_reasoning_renders_one_visual_line_per_thought() {
     }
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_reasoning_emphasis_does_not_leak_into_following_text() {
     // After the reasoning emphasis closes, normal paragraph text must not be

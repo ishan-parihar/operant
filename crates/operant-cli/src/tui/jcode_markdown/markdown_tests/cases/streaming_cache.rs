@@ -3,7 +3,6 @@
 // no changes (cfg(feature = "mermaid-renderer") tests kept; feature absent in
 // operant, so those compile out). See jcode_markdown/mod.rs for scope.
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_centered_mode_right_aligns_ordered_markers_within_list_block() {
     let saved = center_code_blocks();
@@ -35,7 +34,6 @@ fn test_centered_mode_right_aligns_ordered_markers_within_list_block() {
     );
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_wrapped_centered_ordered_list_keeps_shared_content_column() {
     let saved = center_code_blocks();
@@ -201,7 +199,6 @@ fn test_compact_spacing_separates_code_block_from_following_heading_without_trai
     );
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_document_spacing_keeps_table_single_spaced_between_blocks() {
     let md = "Before\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\nAfter";
@@ -342,7 +339,7 @@ fn test_incremental_renderer_streams_fenced_block_before_close() {
     );
 }
 
-#[cfg(any())] // [port-decision] upstream gates this on the mermaid-renderer feature; W9 cut (engine not ported), so it never compiles here
+#[cfg(any())] // [port-decision] stays gated: body calls engine-only test helpers (jcode_tui_mermaid::clear_cache, debug_bump_deferred_render_epoch_for_tests) absent from the ported fallback; recover when W9 un-cuts
 #[test]
 fn test_incremental_renderer_defers_mermaid_render_until_background_ready() {
     jcode_tui_mermaid::clear_cache().ok();
@@ -407,7 +404,7 @@ fn test_pending_placeholder_line_detection() {
 /// changing the streamed text. The incremental renderer must not serve its
 /// identical-text fast path in that case, or the transcript placeholder
 /// ("rendering mermaid diagram...") never resolves into the diagram.
-#[cfg(any())] // [port-decision] upstream gates this on the mermaid-renderer feature; W9 cut (engine not ported), so it never compiles here
+#[cfg(any())] // [port-decision] stays gated: body calls engine-only test helpers (jcode_tui_mermaid::clear_cache, debug_bump_deferred_render_epoch_for_tests) absent from the ported fallback; recover when W9 un-cuts
 #[test]
 fn test_incremental_renderer_rerenders_pending_mermaid_after_epoch_bump() {
     let mut renderer = IncrementalMarkdownRenderer::new(Some(80));

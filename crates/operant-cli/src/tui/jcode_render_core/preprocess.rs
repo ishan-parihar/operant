@@ -62,7 +62,7 @@ pub fn normalize_latex_math(text: &str) -> String {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "ported verbatim from jcode @ 0a9dc7805 (MIT); upstream unwrap behavior preserved deliberately"
 )]
 /// A single-dollar or `\(`/`\)` pair placed on lines by itself is visibly a
 /// block construct even though its delimiter spelling is inline. pulldown-cmark
@@ -425,7 +425,7 @@ fn is_math_fence_info(info: &str) -> bool {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "ported verbatim from jcode @ 0a9dc7805 (MIT); upstream unwrap behavior preserved deliberately"
 )]
 fn normalize_latex_delimiters_and_environments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());

@@ -595,7 +595,7 @@ impl<'a> Parser<'a> {
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "ported verbatim from jcode @ 0a9dc7805 (MIT); upstream unwrap behavior preserved deliberately"
 )]
 fn collapse_sequence(mut items: Vec<Expr>) -> Expr {
     if items.len() == 1 {
@@ -669,7 +669,7 @@ fn strip_leading_braced_group(source: &str) -> Option<&str> {
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "ported verbatim from jcode @ 0a9dc7805 (MIT); upstream unwrap behavior preserved deliberately"
 )]
 fn split_matrix(source: &str) -> Vec<Vec<&str>> {
     let mut rows = vec![Vec::new()];

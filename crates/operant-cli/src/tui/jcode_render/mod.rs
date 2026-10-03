@@ -6,9 +6,9 @@
 
 pub mod chrome;
 pub mod layout;
-// [port-excision] swarm/memory surface, out of port scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2)
-// [port-excision] swarm/memory surface, out of port scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2)
-// [port-excision] swarm/memory surface, out of port scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2)
+// [port-excision] swarm_gallery.rs (3,099) / swarm_tiles.rs (611) / memory_tiles.rs
+// (587): out of port scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2;
+// 4,297 LOC of unwired swarm/memory surface)
 
 use ratatui::prelude::{Line, Span, Style};
 

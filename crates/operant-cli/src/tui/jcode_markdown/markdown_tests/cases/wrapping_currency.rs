@@ -168,7 +168,6 @@ fn test_line_oriented_tool_transcript_softbreaks_are_preserved() {
     );
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_line_oriented_tool_transcript_followed_by_prose_gets_blank_line() {
     let md = concat!(
@@ -202,7 +201,6 @@ fn test_line_oriented_tool_transcript_followed_by_prose_gets_blank_line() {
     );
 }
 
-    #[expect(clippy::expect_used, reason = "invariant guaranteed by surrounding validation")]
 #[test]
 fn test_prose_before_line_oriented_tool_transcript_gets_blank_line() {
     let md = concat!(

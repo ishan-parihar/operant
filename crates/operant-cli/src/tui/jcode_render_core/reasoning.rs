@@ -20,7 +20,7 @@ const REASONING_ESCAPES: &str = "\\*_`[]<>&~|$";
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "ported verbatim from jcode @ 0a9dc7805 (MIT); upstream unwrap behavior preserved deliberately"
 )]
 /// Recover the original Markdown from a line produced by
 /// [`reasoning_line_markup`] or [`reasoning_partial_markup`]. Native frontends
