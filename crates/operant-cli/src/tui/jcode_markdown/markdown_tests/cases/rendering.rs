@@ -507,8 +507,8 @@ fn mermaid_gate_accepts_native_protocol_and_rejects_halfblock_fallback() {
 #[test]
 fn mermaid_gate_accepts_native_protocol_engine_arm() {
     with_mermaid_rendering_override(Some(true), || {
-        crate::tui::jcode_markdown::mermaid::with_image_protocol_override(Some(true), || {
-            assert!(crate::tui::jcode_markdown::should_render_mermaid_block(Some("mermaid")));
+        mermaid::with_image_protocol_override(Some(true), || {
+            assert!(should_render_mermaid_block(Some("mermaid")));
         });
     });
 }
