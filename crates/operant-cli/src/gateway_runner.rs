@@ -2805,8 +2805,32 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let (cron_tx, mut cron_rx) =
             tokio::sync::mpsc::unbounded_channel::<operant_core::cronjobs::CronDelivery>();
 
-        let scheduler = operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
-            .with_delivery(cron_tx);
+        // B′ (NEXT-IMPLEMENTATION-OUTLINE §3): the scheduled-run write
+        // barrier, over the same app database the session store uses (:1027
+        // derives it the same way). Every completed scheduled run now leaves
+        // exactly one worklog row, attributable via the stable per-job
+        // session id; a barrier write failure flips the run to failure
+        // instead of silently succeeding unattributed.
+        //
+        // Fail-open with a warn: if the org stores cannot even be opened
+        // (disk error, not the normal idempotent-init path), the org's
+        // heartbeat keeps running — attribution is the audit layer, and
+        // killing scheduled work because the worklog is unavailable is the
+        // worse failure.
+        let scheduler = match operant_core::org::write_barrier::WriteBarrier::for_app(
+            &operant_core::platform::operant_home().join("database.db"),
+        ) {
+            Ok(barrier) => operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+                .with_write_barrier(barrier)
+                .with_delivery(cron_tx),
+            Err(e) => {
+                tracing::warn!(
+                    "org write barrier unavailable — cron runs will not write worklog rows: {e}"
+                );
+                operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+                    .with_delivery(cron_tx)
+            }
+        };
         tokio::spawn(async move { scheduler.start().await });
 
         // Delivery receiver — sends cron results to platforms

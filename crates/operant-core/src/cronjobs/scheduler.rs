@@ -10,7 +10,11 @@ use tracing::{debug, error, info, warn};
 use crate::agent::OperantAgent;
 use crate::cronjobs::db::{CronDb, CronJob};
 use crate::error::Error;
+use crate::org::decisions_db::RunKind;
 use crate::org::identity_gate::{GateBlock, GateDecision, IdentityGate};
+use crate::org::worklog::OutcomeSignals;
+use crate::org::write_barrier::{WriteBarrier, WriteBarrierRequest};
+use crate::turn_end::{RESULT_SUMMARY_LIMIT, TurnEnd};
 
 /// Message sent from the cron scheduler to the gateway for delivery.
 pub struct CronDelivery {
@@ -33,6 +37,15 @@ pub struct CronScheduler {
     /// until an operator installs the gate. See
     /// `docs/WAVE1-DECISIONS.md` §3.2.
     org_gate: Option<Arc<IdentityGate>>,
+    /// The §7.1 write barrier, mounted as the postcondition of every
+    /// scheduled agent run (wave-1 slice D, outline §3 "B′").
+    ///
+    /// `None` — the default — is the **barrier-off**, dark-mergeable state:
+    /// the tick path is byte-identical to the pre-B′ code, so upgrading
+    /// operant cannot fail a job until a [`WriteBarrier`] is constructed and
+    /// installed via [`CronScheduler::with_write_barrier`] — the same merge
+    /// discipline as [`Self::org_gate`] above.
+    write_barrier: Option<WriteBarrier>,
 }
 
 impl CronScheduler {
@@ -42,6 +55,7 @@ impl CronScheduler {
             agent,
             delivery_tx: None,
             org_gate: None,
+            write_barrier: None,
         }
     }
 
@@ -59,6 +73,17 @@ impl CronScheduler {
     /// tick.
     pub fn with_org_gate(mut self, gate: Arc<IdentityGate>) -> Self {
         self.org_gate = Some(gate);
+        self
+    }
+
+    /// Install the §7.1 write barrier as the scheduled-run postcondition
+    /// (outline §3, B′). Once installed, a completed run must land its three
+    /// artifact rows, and a **barrier write failure fails the run** —
+    /// `last_status = "error"` — even though the agent itself answered.
+    /// §10's B′ acceptance. No default boot path installs it, which keeps
+    /// the mount dark-mergeable exactly like [`Self::with_org_gate`].
+    pub fn with_write_barrier(mut self, barrier: WriteBarrier) -> Self {
+        self.write_barrier = Some(barrier);
         self
     }
 
@@ -288,7 +313,7 @@ impl CronScheduler {
         // The id is derived with the same §3.1.1 rule the org gate uses, so the
         // session and the employee are the same identity.
         let session_id = crate::org::employee::derive_employee_id(&job.id);
-        self.agent.set_session_id(session_id);
+        self.agent.set_session_id(session_id.clone());
 
         // NOTE: the memory-graph session boundary that `clear_history` fired
         // (events.rs:193-197, `submit_session_end` / `on_session_end`) is NOT
@@ -301,12 +326,93 @@ impl CronScheduler {
         // callers.
 
         match self.agent.run(job.prompt.clone()).await {
-            Ok(message) => (true, "Agent run completed".into(), message.content, None),
+            Ok(message) => {
+                // ── Wave 1 write barrier, outline §3 step B′ ──────────────
+                // The §7.1 postcondition: a completed scheduled run must
+                // leave its three artifact rows, and a barrier write failure
+                // fails the run regardless of the agent's answer. Only a
+                // completed run reaches the barrier — the `Err` arm below
+                // never completed a turn, so there is nothing to record
+                // there and the run is already a failure.
+                if let Err(e) = self.apply_write_barrier(job, &session_id, &message.content) {
+                    let err_msg = e.to_string();
+                    error!("Write barrier failed for job {}: {}", job.id, err_msg);
+                    (false, String::new(), err_msg.clone(), Some(err_msg))
+                } else {
+                    (true, "Agent run completed".into(), message.content, None)
+                }
+            }
             Err(e) => {
                 let err_msg = format!("Agent run failed: {}", e);
                 (false, String::new(), err_msg.clone(), Some(err_msg))
             }
         }
+    }
+
+    /// Build and run the §7.1 barrier request for one completed scheduled
+    /// run (outline §3, B′). No-op when no barrier is installed.
+    ///
+    /// The request is shaped from what the run actually produced: the
+    /// per-job session id A′ derives (`derive_employee_id` — session and
+    /// employee are one identity, §3.1.1), the job's own id, and the
+    /// assistant's final reply. The `TurnEnd` is built here the same honest
+    /// way `cmd_org.rs`'s `operator_entry` established for framework-level
+    /// runs: construct the event the seam would have emitted and let the
+    /// sealed constructor run, so no second mint point for a worklog row
+    /// is created.
+    ///
+    /// The counters are this seam's honest observation, not the model
+    /// loop's: `run_agent_job` does not see per-tool durations or model
+    /// round-trips (that is the `TurnEndBus`'s job, §3.4), so the row
+    /// records one completed turn with no tools — the same shape
+    /// `operator_entry` records for a CLI run.
+    ///
+    /// `apply` is synchronous (§3): every store it writes through is
+    /// blocking `rusqlite`, so there is nothing to await.
+    fn apply_write_barrier(
+        &self,
+        job: &CronJob,
+        session_id: &str,
+        result: &str,
+    ) -> Result<(), Error> {
+        let Some(barrier) = self.write_barrier.as_ref() else {
+            return Ok(());
+        };
+
+        // `turn_end.rs::summarize` is private, so its cap is inlined here —
+        // `safe_truncate_str` cuts on a UTF-8 char boundary exactly like the
+        // bus path does.
+        let result_truncated = result.len() > RESULT_SUMMARY_LIMIT;
+        let result_summary =
+            crate::agent::safe_truncate_str(result, RESULT_SUMMARY_LIMIT).to_string();
+        let request = WriteBarrierRequest::from_turn_end(TurnEnd {
+            // No bus minted this event; a per-bus monotonic id is meaningless
+            // at this seam, and `0` matches the `operator_entry` precedent.
+            turn_id: 0,
+            session_id: session_id.to_string(),
+            iterations: 1,
+            tool_calls: 0,
+            tool_durations_ms: Vec::new(),
+            result_summary,
+            result_truncated,
+        })
+        // §3.4 outcome signals, as observed at this seam: the run returned
+        // `Ok`, which the loop reaches only after emitting `AgentEvent::Done`
+        // (`agent/run.rs:1210`), so `done_emitted` is fact; `turn_errored`
+        // is fact; and `last_status_clean` is `true` because operant has no
+        // `last_status` signal at all — the documented honest default
+        // (`OutcomeSignals::last_status_clean`). Without these the row
+        // would derive `partial` for a cleanly completed run.
+        .with_signals(OutcomeSignals {
+            done_emitted: true,
+            turn_errored: false,
+            last_status_clean: true,
+        })
+        .with_employee(session_id)
+        .with_run_kind(RunKind::Cron)
+        .with_job_id(Some(job.id.clone()));
+
+        barrier.apply(&request).map(|_| ())
     }
 
     async fn deliver_result(&self, job: &CronJob, content: &str) -> Result<(), Error> {

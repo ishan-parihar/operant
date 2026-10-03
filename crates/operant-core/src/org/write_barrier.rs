@@ -502,6 +502,15 @@ impl WriteBarrierRequest {
         self
     }
 
+    /// The cron job this run belongs to. Lands in `worklog.job_id` — the
+    /// column exists for exactly one caller, the scheduled-run mount in
+    /// `cronjobs/scheduler.rs::run_agent_job`, per
+    /// [`TurnObservation::with_job_id`]. `None` for an interactive turn.
+    pub fn with_job_id(mut self, job_id: Option<String>) -> Self {
+        self.observation = self.observation.with_job_id(job_id);
+        self
+    }
+
     /// The `employee_id` the run claims. `None` when it claims none.
     pub fn claimed_employee(&self) -> Option<&str> {
         self.claimed_employee.as_deref()

@@ -28,10 +28,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use operant_core::agent::{AgentConfig, OperantAgent};
-use operant_core::client::{ClientConfig, Message, OpenAIClient};
+use operant_core::agent::{AgentConfig, OperantAgent, StreamChunk};
+use operant_core::client::{
+    ChatResponse, Choice, ClientConfig, Message, MessageDelta, OpenAIClient, Role, Usage,
+};
 use operant_core::cronjobs::{CreateJobParams, CronDb, scheduler::CronScheduler};
 use operant_core::database::Database;
+use operant_core::org::write_barrier::WriteBarrier;
+use operant_core::org::{WorklogDb, WorklogQuery};
 use operant_core::tools::ToolRegistry;
 
 /// A gateway agent and a scheduler over it, sharing one database the way the
@@ -267,5 +271,223 @@ fn distinct_jobs_derive_distinct_and_stable_session_ids() {
         a.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
         "derived id {a:?} lands in a SessionKey and a DB column; keep it safe"
+    );
+}
+
+// ── Wave 1 slice D / outline §3 "B′": the §7.1 write barrier mount ─────────
+//
+// `run_agent_job` now runs `WriteBarrier::apply` after every COMPLETED
+// scheduled run, and a barrier write failure fails the run. The two tests
+// below are §10's B′ acceptance, and they drive the same real
+// `tick → run_job → run_agent_job` path as the D-1 tests above.
+//
+// The `World` fixture above cannot exercise this: its OpenAI client has no
+// endpoint, so its runs always fail at the transport and the barrier's
+// postcondition (which only fires on a COMPLETED run) is never reached.
+// These tests therefore use a scripted `ModelClient` that always answers —
+// the same real-agent/fake-transport harness as `tests/circuit_breaker_abort.rs`
+// and `tests/stream_interrupt.rs`.
+
+/// What the scripted client answers with. Asserted in the worklog row, so a
+/// row from some OTHER run cannot satisfy the test.
+const BARRIER_REPLY: &str = "scheduled hello from the scripted client";
+
+/// A model client whose every run completes with one plain text reply. Both
+/// transports are served, so the tests hold whichever branch
+/// `AgentConfig::default()` routes through.
+struct BarrierScriptClient;
+
+#[async_trait::async_trait]
+impl operant_core::agent::ModelClient for BarrierScriptClient {
+    fn provider_name(&self) -> &str {
+        "barrier-script"
+    }
+
+    async fn chat(
+        &self,
+        _request: operant_core::agent::ChatRequest,
+    ) -> operant_core::error::Result<operant_core::client::ChatResponse> {
+        Ok(barrier_chat_response())
+    }
+
+    async fn chat_streaming(
+        &self,
+        _request: operant_core::agent::ChatRequest,
+    ) -> operant_core::error::Result<
+        futures::stream::BoxStream<'static, operant_core::error::Result<StreamChunk>>,
+    > {
+        Ok(Box::pin(futures::stream::iter(vec![Ok(StreamChunk::new(
+            Some(BARRIER_REPLY.to_string()),
+            None,
+            None,
+        ))])))
+    }
+}
+
+/// One plain assistant reply, the shape `tests/circuit_breaker_abort.rs`'s
+/// `text_response` established: no tool calls, finish "stop".
+fn barrier_chat_response() -> ChatResponse {
+    ChatResponse {
+        id: "resp_barrier".into(),
+        object: "chat.completion".into(),
+        created: 0,
+        model: "barrier-script".into(),
+        choices: vec![Choice {
+            index: 0,
+            message: MessageDelta {
+                role: Some(Role::Assistant),
+                content: Some(BARRIER_REPLY.into()),
+                reasoning_content: None,
+                tool_calls: None,
+            },
+            finish_reason: Some("stop".into()),
+        }],
+        usage: Usage {
+            prompt_tokens: 3,
+            completion_tokens: 4,
+            total_tokens: 7,
+        },
+    }
+}
+
+/// A world whose scheduled runs COMPLETE (scripted client) and whose
+/// scheduler has the §7.1 barrier installed over tempdir org stores.
+///
+/// `main_db` is the path `WriteBarrier::for_app` derived every org store
+/// from, so the test can reopen the worklog and read back what the run
+/// wrote.
+struct BarrierWorld {
+    _dir: tempfile::TempDir,
+    scheduler: CronScheduler,
+    cron_db: Arc<CronDb>,
+    main_db: std::path::PathBuf,
+}
+
+fn barrier_world() -> BarrierWorld {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = Arc::new(Database::init(dir.path().join("agent.sqlite")).expect("Database::init"));
+    let cron = Arc::new(OperantAgent::new(
+        AgentConfig::default(),
+        Box::new(BarrierScriptClient),
+        ToolRegistry::new(Duration::from_secs(1)),
+        Arc::clone(&db),
+    ));
+    let cron_db = Arc::new(CronDb::init(dir.path().join("cron.sqlite")).expect("CronDb::init"));
+
+    let main_db = dir.path().join("main.sqlite");
+    let barrier = WriteBarrier::for_app(&main_db).expect("WriteBarrier::for_app over the tempdir");
+    let scheduler =
+        CronScheduler::new(Arc::clone(&cron_db), Arc::clone(&cron)).with_write_barrier(barrier);
+
+    BarrierWorld {
+        _dir: dir,
+        scheduler,
+        cron_db,
+        main_db,
+    }
+}
+
+/// §10 B′ acceptance 1: a completed scheduled run leaves exactly one worklog
+/// row — keyed to the job's own per-employee session and to the job itself.
+///
+/// Fails on zero rows (mount skipped — this is the negative control shape
+/// for the whole mount) and on more than one (a row per iteration would
+/// make the worklog a transcript, not a log).
+#[tokio::test]
+async fn a_completed_scheduled_run_leaves_exactly_one_worklog_row() {
+    let w = barrier_world();
+    let job = add_due_job(&w.cron_db, "say hello");
+    w.scheduler.tick().await.expect("tick");
+    assert_dispatched(&w.cron_db, &job);
+
+    // Reopen the worklog the barrier wrote to and prove the row.
+    let worklog = WorklogDb::init(&w.main_db).expect("reopen worklog store");
+    assert_eq!(
+        worklog.count().expect("worklog count"),
+        1,
+        "B′-1: a completed scheduled run must leave exactly one worklog row. \
+         Zero rows means the mount is not wired; more than one means the \
+         barrier wrote per-iteration instead of per-run."
+    );
+
+    let session = operant_core::org::employee::derive_employee_id(&job);
+    let rows = worklog
+        .list(&WorklogQuery {
+            session_id: Some(session.clone()),
+            job_id: Some(job.clone()),
+            ..WorklogQuery::default()
+        })
+        .expect("list worklog rows for this session");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the row must be keyed to THIS job's session {session:?} and job id"
+    );
+    assert_eq!(rows[0].outcome, "success", "the run completed cleanly");
+    assert!(
+        rows[0].what_done.contains(BARRIER_REPLY),
+        "the row must record THIS run's reply, not a placeholder: {:?}",
+        rows[0].what_done
+    );
+
+    // The barrier must not have broken the run it recorded.
+    let updated = w
+        .cron_db
+        .get_job(&job)
+        .expect("get_job")
+        .expect("job exists");
+    assert_eq!(
+        updated.last_status.as_deref(),
+        Some("ok"),
+        "a run whose barrier write succeeded must report success"
+    );
+}
+
+/// §10 B′ acceptance 2 (negative control for the mount): a barrier WRITE
+/// FAILURE makes the run report failure, not success.
+///
+/// The fault is real, not a mock: the worklog table is dropped out from
+/// under the barrier after the stores opened, so the §7.1 step-1 append
+/// fails on a genuine `INSERT` against a missing table. The agent still
+/// answers (scripted client), so `last_status = \"error\"` can ONLY come
+/// from the barrier — with the apply skipped this test fails, which is
+/// what keeps it from passing vacuously.
+#[tokio::test]
+async fn a_barrier_write_failure_makes_the_run_report_failure() {
+    let w = barrier_world();
+
+    // Fault injection through the store's public connection: drop the table
+    // the first §7.1 write targets. `resolve_employee` still succeeds (the
+    // employees store is a different table), so the failure provably comes
+    // from the worklog write.
+    let saboteur = WorklogDb::init(&w.main_db).expect("open worklog for sabotage");
+    saboteur
+        .conn()
+        .lock()
+        .expect("worklog conn")
+        .execute_batch("DROP TABLE worklog;")
+        .expect("drop worklog table for the fault injection");
+    drop(saboteur);
+
+    let job = add_due_job(&w.cron_db, "say hello");
+    w.scheduler.tick().await.expect("tick");
+    assert_dispatched(&w.cron_db, &job);
+
+    let updated = w
+        .cron_db
+        .get_job(&job)
+        .expect("get_job")
+        .expect("job exists");
+    assert_eq!(
+        updated.last_status.as_deref(),
+        Some("error"),
+        "B′-2: the scripted client answers, so the only thing that can fail \
+         this run is the barrier write. last_status=ok here means the mount \
+         is skipped and a failed barrier is being recorded as success."
+    );
+    let last_error = updated.last_error.unwrap_or_default();
+    assert!(
+        last_error.contains("write barrier"),
+        "the failure must name the barrier, not the agent: {last_error:?}"
     );
 }
