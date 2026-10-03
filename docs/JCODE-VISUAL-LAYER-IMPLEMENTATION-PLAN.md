@@ -57,12 +57,19 @@ or write into a buffer, excluding `app/tests/`, `ui_tests/`, `*tests.rs`, and
 | `jcode-tui-tool-display` | **257** | name canonicalization, middle truncation, failure detection |
 | **W1 total** | **1,721** | plus the one operant→`DisplayMessage` adapter — **landed as `tui/jcode_model/` (2,402 LOC incl. adapter + 3 leaf types), 33 ported tests green** |
 
-### W2 — Primitives (blocks all rendering)
+### W2 — Primitives (blocks all rendering) — **DONE, iters 591–592; corrected totals below**
 | Source | LOC | Contents |
 |---|---|---|
-| `jcode-tui-render` generic (`chrome.rs` 91, `layout.rs` 64, `lib.rs` 202) | **357** | `clear_area` (have), `render_rounded_box`, both truncate fns, `line_plain_text` (have, in copy_targets) |
-| `jcode-tui-markdown` in-scope (`lib` 1,161, `render_full` 1,069, `render_lazy` 962, `wrap` 557, `support` 516, `text_preprocess` 197, `context` 162, `render_core_adapter` 211, `types` 74, `mermaid_fallback` 122) | **5,031** | code fence `┌─ lang`/`│ `/`└─`, tables, blockquote gutters, `Compact` spacing |
-| **W2 total** | **5,388** | |
+| `jcode-tui-render` generic (`chrome.rs` 91, `layout.rs` 64, `lib.rs` 202) | **357** | `clear_area`, `render_rounded_box`, truncate fns — landed iter-591, zero import re-roots |
+| `jcode-tui-markdown` in-scope (16 files, incl. the plan's 10 + `markdown_tests/` mod/cases 2,205 + `markdown_incremental.rs` 311 — see correction 2) | **7,463** | code fence `┌─ lang`/`│ `/`└─`, tables, blockquote gutters, `Compact` spacing — landed iter-592 |
+| `jcode-render-core` (whole crate, 8 files) — **was NOT in W2's budget; see correction 1** | **3,868** | math/markdown/model/reasoning/wrap/preprocess — landed iter-592 |
+| **W2 total as landed** | **11,688** | (plan said 5,388; the +6,300 is corrections 1+2 + the test files the plan did not count) |
+
+**Corrections forced by compile evidence (do not re-make the iter-581 mistake):**
+1. **jcode-render-core is a live dependency, not dead weight.** The AUTHORITATIVE legacy renderer calls into it (`normalize_latex_math`, `Alignment`, `render_inline_latex`, `render_display_latex`, the reasoning-markup family). The vendored copy deleted at iter-581 was a stale lift with zero consumers because the legacy renderer was never ported; with W2 it has live ones, so the real crate ports (iter-592). `render_core_adapter.rs` + `render_core_adapter_tests.rs` (795) stay skipped — upstream's own docs call the adapter a non-authoritative switchover experiment with no other callers.
+2. **`markdown_incremental.rs` (311) ports, not skips.** Three in-scope test files construct `IncrementalMarkdownRenderer`, and jcode's TUI app/lifecycle use it for streaming transcripts — W3 will need it.
+3. **Degradations, deliberate and marked at site:** mermaid = upstream's own cfg-off fallback (W9 cut, zero divergence); latex image → unicode `math_display_lines` (mdwright-latex absent; operant's live TUI renders display math as text today). Restore paths recorded in `[port-decision]` comments.
+4. **Fence shape is mutation-proven:** `│ `→`││` at render_full:494 fails exactly 5 tests incl. the copy-target test `copy_targets.rs` depends on. W3's `ui_messages` is now unblocked.
 
 ### W3 — Content renderers (sequential; the transcript)
 | Source | LOC | Delivers |
