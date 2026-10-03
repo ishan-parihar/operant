@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `[genome].queued_cron_jobs_resolve_grants` — declared in wave 2 but the
+  scheduler sweep it described never gained a consumer (iter-600). Pending
+  escalations resolve by a human verdict or the 60s interactive lapse only.
+  Breaking for configs that set it (the key shipped commented; if you
+  uncommented it, delete the line): `[genome]` keeps `deny_unknown_fields`
+  because a silence-tolerant typo on a security knob failing open to the
+  `yolo` seating default is the worse failure mode.
+
 The permission genome — per-employee authority for the organism (iters
 573–586, wave fleet execution). A seat's policy is data (`seat_policies`:
 mode yolo/standard/scoped/lockdown + allow/deny globs), the precedence is a

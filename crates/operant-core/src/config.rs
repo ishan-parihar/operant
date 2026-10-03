@@ -113,9 +113,8 @@ impl Default for AppConfig {
 /// `[genome]` — the permission-genome knobs (wave-2 slice F2,
 /// `docs/PERMISSION-SCOPING-PLAN.md` §5 P2 + §11's owner defaults).
 ///
-/// One knob is live in F2, two are declared surface with their consumer
-/// named — the repo's `lifeos` rule forbids keys that gate nothing, so each
-/// field below states exactly which slice reads it:
+/// Both knobs are live — the repo's `lifeos` rule forbids keys that
+/// gate nothing, so each field below states exactly which slice reads it.
 ///
 /// - `grant_ttl_days` — LIVE (F2): the TTL in days a department-head
 ///   approval mints (`SeatApprover::mint`). `0`/negative = never-standing
@@ -128,13 +127,6 @@ impl Default for AppConfig {
 ///   policy row stays ungoverned (byte-identical to mainline — which is
 ///   NOT `yolo`: dangerous tools still prompt), per
 ///   `org/seat_policy.rs` rule 2.
-/// - `queued_cron_jobs_resolve_grants` — a DECLARED, NOT-YET-WIRED switch
-///   (iter-598 landed P3 without the sweep): when a consumer is wired it
-///   will make the scheduler mark still-pending requests whose grant
-///   already stands as approved at tick time. No consumer reads it today;
-///   the queue is resolved only by a human verdict or the 60s interactive
-///   lapse (the run itself consults the ledger every tick regardless, so
-///   the flag would change audit bookkeeping, not enforcement).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GenomeSettings {
@@ -144,8 +136,6 @@ pub struct GenomeSettings {
     /// Days a department-head approval's grant stands. 0/negative =
     /// never-standing for non-CEO approvals (see the struct docs).
     pub grant_ttl_days: i64,
-    /// P3 queue-sweep switch (see the struct docs).
-    pub queued_cron_jobs_resolve_grants: bool,
 }
 
 impl Default for GenomeSettings {
@@ -153,7 +143,6 @@ impl Default for GenomeSettings {
         Self {
             unrestricted_default: "yolo".to_string(),
             grant_ttl_days: 7,
-            queued_cron_jobs_resolve_grants: false,
         }
     }
 }
@@ -2178,11 +2167,20 @@ wonderful_unknown_key = 42
     /// vacuously, which is exactly what the values below rule out).
     #[test]
     fn genome_block_parses_into_fields() {
-        let raw = "[genome]\nunrestricted_default = \"standard\"\ngrant_ttl_days = 3\nqueued_cron_jobs_resolve_grants = true\n";
+        let raw = "[genome]\nunrestricted_default = \"standard\"\ngrant_ttl_days = 3\n";
         let config = parse_config_str(raw, Path::new("memory://genome-probe")).unwrap();
         assert_eq!(config.genome.unrestricted_default, "standard");
         assert_eq!(config.genome.grant_ttl_days, 3);
-        assert!(config.genome.queued_cron_jobs_resolve_grants);
+        // A removed [genome] key MUST fail loudly (deny_unknown_fields):
+        // a typo'd security knob silently falling back to defaults is the
+        // worse failure mode, so the schema stays strict and removal is a
+        // documented break.
+        let stale = "[genome]\nqueued_cron_jobs_resolve_grants = true\n";
+        let err = parse_config_str(stale, Path::new("memory://genome-stale"));
+        assert!(
+            err.is_err(),
+            "removed genome key must hard-fail config load"
+        );
         // And the shipped example carries the live default TTL of 7 days,
         // uncommented, where the gateway reads it.
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

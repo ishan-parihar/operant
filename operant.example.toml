@@ -509,10 +509,8 @@ unrestricted_default = "yolo"
 # recorded already-lapsed, so the approval stays auditable while conferring
 # nothing. CEO+ (org-lead) approvals mint standing grants regardless.
 grant_ttl_days = 7
-# P3 queue-sweep switch — DECLARED, NOT YET WIRED (iter-598 landed P3
-# without the sweep): when a consumer is wired, `true` will make the
-# scheduler mark still-pending requests whose grant already stands as
-# approved at tick time. No consumer reads it today; the queue resolves
-# by a human verdict or the 60s interactive lapse only. (The run consults
-# the grant ledger every tick regardless.)
-# queued_cron_jobs_resolve_grants = false
+# The P3 queue-sweep switch (queued_cron_jobs_resolve_grants) was removed in
+# iter-600 without ever gaining a consumer — pending escalations resolve
+# only by a human verdict or the 60s interactive lapse. [genome] rejects
+# unknown keys, so if you uncommented it, delete that line from your config.
+# (The run consults the grant ledger every tick regardless.)
