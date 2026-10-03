@@ -237,6 +237,87 @@ type PendingUserQuestions =
 /// Global store of pending permission requests, keyed by channel_id.
 pub static PENDING_PERMISSIONS: OnceLock<PendingPermissions> = OnceLock::new();
 
+/// F2: the seat approver the gateway's `/approve` / `/deny` commands and the
+/// permission receiver's arms resolve queued seat escalations through
+/// (mint via `issue_grant`, resolve the `pending_requests` row). Same
+/// OnceLock-over-Mutex<Option<..>> shape as [`PENDING_PERMISSIONS`]
+/// because it solves the same problem: gateway_commands is sync and has no
+/// handle back into `start_gateway`'s locals. `None` until the gateway
+/// starts — commands then skip minting, the same graceful degradation the
+/// pending-permissions store has.
+pub static SEAT_APPROVERS: OnceLock<
+    std::sync::Mutex<Option<Arc<operant_core::org::seat_authority::SeatApprover>>>,
+> = OnceLock::new();
+
+/// Install the gateway's seat approver (F2). Mirrors
+/// [`store_pending_permissions`]: overwrite-once at gateway start.
+pub fn store_seat_approver(approver: Arc<operant_core::org::seat_authority::SeatApprover>) {
+    let cell = SEAT_APPROVERS.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(approver);
+    }
+}
+
+/// The installed seat approver, if the gateway started one. Clones the `Arc`;
+/// never blocks longer than a mutex grab.
+pub(crate) fn seat_approver() -> Option<Arc<operant_core::org::seat_authority::SeatApprover>> {
+    let cell = SEAT_APPROVERS.get_or_init(|| std::sync::Mutex::new(None));
+    let guard = cell.lock().ok()?;
+    guard.clone()
+}
+
+/// Record a dispatcher-side DENIAL of a seat-policy escalation (the YOLO
+/// arm): the approver's verdict on the queued row, best-effort — the run
+/// hears `Deny` from the arm either way, so a resolution failure only
+/// costs audit, never enforcement. Ungoverned requests carry no escalation
+/// and are a no-op.
+fn resolve_seat_escalation_on_deny(req: &operant_core::agent::ToolPermissionRequest) {
+    let Some(ask) = req.seat_escalation.as_ref() else {
+        return;
+    };
+    let Some(approver) = seat_approver() else {
+        tracing::warn!(request = %ask.request_id, "no seat approver installed — the denial is not recorded");
+        return;
+    };
+    if let Err(e) = approver.deny(ask) {
+        tracing::warn!(request = %ask.request_id, error = %e, "recording the denial failed");
+    }
+}
+
+/// Record the 60s interactive lapse of a seat-policy escalation as an
+/// expiry (§8.3): the row survives for audit, the resolver is the operator
+/// literal. Best-effort, for the same reason as
+/// [`resolve_seat_escalation_on_deny`].
+fn resolve_seat_escalation_on_expire(req: &operant_core::agent::ToolPermissionRequest) {
+    let Some(ask) = req.seat_escalation.as_ref() else {
+        return;
+    };
+    let Some(approver) = seat_approver() else {
+        tracing::warn!(request = %ask.request_id, "no seat approver installed — the lapse is not recorded");
+        return;
+    };
+    if let Err(e) = approver.expire(ask) {
+        tracing::warn!(request = %ask.request_id, error = %e, "recording the lapse failed");
+    }
+}
+
+/// F2 approval: mint the grant a queued seat escalation confers and resolve
+/// its row. `Ok(grant_id)` — the caller tells the waiting run `AllowSession`
+/// (or `AllowAlways`). `Err(refusal)` — `issue_grant` refused (the
+/// approver's scope does not cover the grant, a seat is vacant, …): the row
+/// is ALREADY recorded `Denied` by the approver, the refusal text is
+/// returned so the caller surfaces it, and the waiting run must hear
+/// `Deny`. Never bypass: the refusal IS the resolution.
+/// `None` — not a seat escalation (ungoverned prompt): no minting, today's
+/// behaviour exactly.
+pub(crate) fn approve_seat_escalation(
+    req: &operant_core::agent::ToolPermissionRequest,
+) -> Option<Result<String, String>> {
+    let ask = req.seat_escalation.as_ref()?;
+    let approver = seat_approver()?;
+    Some(approver.approve(ask))
+}
+
 /// Global store of pending user-question replies, keyed by channel_id.
 /// When the clarify tool asks a question, we store the reply_tx here.
 /// The next incoming message from that channel is routed as the reply
@@ -1074,21 +1155,55 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // already-attached memory tools read, and cron getting a second
     // provider instance over the same store.
     let memory = crate::load_repo_memory_manager().await?;
-    // P1 seat policies (permission-genome wave-2 slice E): ONE SeatPolicyDb
-    // over the shared org app db (the same `database.db` derivation the
-    // PersistentSessionStore above uses; the `seat_policies` table is
+    // P1/P2 seat authority (permission-genome wave-2 slices E + F2): the
+    // genome's three stores over the shared org app db (the same
+    // `database.db` derivation the PersistentSessionStore above uses; the
+    // `seat_policies`, `authority_grants` and `pending_requests` tables are
     // created idempotently inside it), threaded into BOTH agent builds
     // below — the gateway agent consults it keyed by the chat session id,
     // cron by its derived employee id (`set_session_id(derive_employee_id(
     // &job.id))` in the scheduler). A seat with no row stays ungoverned
-    // (today's behavior), so wiring the source alone changes nothing until
-    // a policy row is written. `?` (not a soft skip): a store that fails to
-    // open must fail loudly — silently running ungoverned is the widening
-    // the genome exists to make impossible.
-    let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> =
-        Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
-            operant_core::platform::operant_home().join("database.db"),
-        )?);
+    // (today's behavior), so wiring the authority alone changes nothing
+    // until a policy row is written. `?` (not a soft skip): a store that
+    // fails to open must fail loudly — silently running ungoverned is the
+    // widening the genome exists to make impossible.
+    //
+    // F2 widens E's seam: the authority carries the grant ledger and the
+    // escalation queue alongside the policy source, so the run-path consult
+    // reads real grants (`has_grant`, plan §4 rule 6) and an escalation is
+    // durably queued the moment it happens. The employee registry and the
+    // hierarchy edges feed the SeatApprover the dispatcher resolves
+    // approvals through.
+    let org_db = operant_core::platform::operant_home().join("database.db");
+    let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> = Arc::new(
+        operant_core::org::seat_policy_db::SeatPolicyDb::init(org_db.clone())?,
+    );
+    let grant_ledger = Arc::new(operant_core::org::authority::GrantDb::init(org_db.clone())?);
+    let request_queue = Arc::new(operant_core::org::pending_requests::PendingRequestDb::init(
+        org_db.clone(),
+    )?);
+    let employee_registry = Arc::new(operant_core::org::employee_db::EmployeeDb::init(
+        org_db.clone(),
+    )?);
+    let hierarchy_edges = Arc::new(operant_core::org::hierarchy_edges::HierarchyEdgesDb::init(
+        &org_db,
+    )?);
+    let seat_authority = Arc::new(operant_core::org::seat_authority::SeatAuthority::new(
+        Arc::clone(&seat_policies),
+        Arc::clone(&grant_ledger),
+        Arc::clone(&request_queue),
+    ));
+    // The approver the dispatcher's `/approve` / `/deny` and the 60s timeout
+    // resolve queued asks through. TTL comes from `[genome] grant_ttl_days`
+    // (7-day HoD default; standing grants are CEO+ only).
+    let seat_approver = Arc::new(operant_core::org::seat_authority::SeatApprover::new(
+        Arc::clone(&grant_ledger),
+        Arc::clone(&request_queue),
+        Arc::clone(&employee_registry),
+        Arc::clone(&hierarchy_edges),
+        app_config.genome.grant_ttl_days,
+    ));
+    store_seat_approver(seat_approver);
     let agent = crate::create_runtime_agent_with(
         app_config,
         &app_config.agent,
@@ -1113,7 +1228,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let agent = Arc::new(
         agent
             .with_permissions(permission_tx)
-            .with_seat_policy_source(Some(Arc::clone(&seat_policies))),
+            .with_seat_authority(Some(Arc::clone(&seat_authority))),
     );
 
     // Cron gets its OWN agent, not a clone of the gateway's.
@@ -1178,7 +1293,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         )
         .await?
         .with_permissions(cron_permission_tx)
-        .with_seat_policy_source(Some(Arc::clone(&seat_policies))),
+        .with_seat_authority(Some(Arc::clone(&seat_authority)))
+        // F2: cron is the unattended build — a governed Escalate is queued
+        // and denied THIS run (`agent/stream.rs`), never parked on the
+        // interactive 120s stall; the next tick consults the grant the
+        // approver minted between ticks. The ungoverned path ignores the
+        // flag and keeps the channel posture this block preserves.
+        .with_unattended(true),
     );
 
     // Long-term memory is handled by the hoisted pair above: BOTH agents
@@ -1955,6 +2076,24 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // nothing read — the receiver now honors the live set, mirroring
                 // the TUI's PermissionMode::BypassPermissions.)
                 if yolo_enabled(platform, channel_id) {
+                    // F2: a channel's YOLO toggle is the operator's wish to
+                    // skip PROMPTS — it is not authority over a governed
+                    // seat's policy. A seat-policy escalation is refused
+                    // here (its queue row already stands; the approver
+                    // resolves it), while ungoverned prompts keep the
+                    // auto-approve byte-for-byte.
+                    if req.seat_escalation.is_some() {
+                        tracing::warn!(
+                            channel = %channel_id,
+                            tool = %req.tool_name,
+                            "YOLO mode cannot approve a seat-policy escalation — denying; the ask stays queued"
+                        );
+                        resolve_seat_escalation_on_deny(&req);
+                        let _ = req
+                            .response_tx
+                            .send(operant_core::agent::ToolPermissionResponse::Deny);
+                        continue;
+                    }
                     tracing::info!(
                         channel = %channel_id,
                         "YOLO mode — auto-approving tool permission"
@@ -2016,6 +2155,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             channel = %timeout_channel,
                             "Permission request timed out — auto-denying"
                         );
+                        // F2: a lapsed seat escalation is recorded as expired
+                        // (§8.3 — the attempt is denied, the row survives
+                        // for audit; nobody answered, so the resolver is the
+                        // operator literal).
+                        resolve_seat_escalation_on_expire(&req);
                         let _ = req
                             .response_tx
                             .send(operant_core::agent::ToolPermissionResponse::Deny);
@@ -2038,7 +2182,22 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     }
                 });
             } else {
-                // No active channel — auto-approve (can't prompt)
+                // No active channel — auto-approve (can't prompt). UNGOVERNED
+                // requests only: this arm is exactly the pre-F2 behaviour and
+                // stays byte-identical for them. A seat-policy escalation has
+                // no interactive approver to fall back on — its queue row
+                // already stands (§8.1), so this attempt is denied and the
+                // next run consults the grant the approver mints.
+                if req.seat_escalation.is_some() {
+                    tracing::warn!(
+                        tool = %req.tool_name,
+                        "No active channel for a seat-policy escalation — denying; the ask stays queued"
+                    );
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::Deny);
+                    continue;
+                }
                 tracing::warn!("No active channel for permission prompt — auto-approving");
                 let _ = req
                     .response_tx
@@ -3688,6 +3847,7 @@ mod pending_permissions_tests {
             description: "Execute code".into(),
             danger_explanation: "Runs arbitrary code".into(),
             input_preview: None,
+            seat_escalation: None,
             response_tx: tx,
         }
     }
@@ -3786,6 +3946,7 @@ mod pending_permissions_tests {
             description: "Run a process".into(),
             danger_explanation: "Spawns a process".into(),
             input_preview: None,
+            seat_escalation: None,
             response_tx: tx,
         };
         let store: Arc<Mutex<HashMap<String, ToolPermissionRequest>>> =

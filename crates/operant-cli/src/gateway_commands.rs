@@ -617,9 +617,11 @@ fn build_help_text() -> String {
     text
 }
 
-/// Resolve a pending permission request for `channel_id` by sending
-/// `response` and removing it from the shared store. Returns true when a
-/// request was actually waiting.
+/// Take the pending permission request for `channel_id` out of the shared
+/// store WITHOUT answering it, so the caller can decide the response first
+/// (F2: a seat-policy escalation must mint its grant before the waiting run
+/// is told anything, and a refused mint must reach the run as `Deny`).
+/// `None` when no request is waiting.
 ///
 /// Borrows the store's Arc (never `.take()`s the `Option`) so repeated
 /// `/approve` / `/deny` commands keep working for the lifetime of the
@@ -628,31 +630,24 @@ fn build_help_text() -> String {
 /// denial — every later button tap reported "No pending permission request
 /// found" (while the timeout path, holding its own Arc clone, still found
 /// the entry).
-fn resolve_pending_permission(
+fn take_pending_permission(
     store: &crate::gateway_runner::PendingPermissions,
     channel_id: &str,
-    response: operant_core::agent::ToolPermissionResponse,
-) -> bool {
+) -> Option<operant_core::agent::ToolPermissionRequest> {
     let Ok(guard) = store.lock() else {
-        return false;
+        return None;
     };
-    let Some(pending) = guard.as_ref() else {
-        return false;
-    };
+    let pending = guard.as_ref()?;
     // Bounded retry: the permission receiver holds the inner tokio mutex
     // only for the brief insert window — yield instead of failing on a
     // transient collision with an in-flight insert.
     for _ in 0..50 {
         if let Ok(mut map) = pending.try_lock() {
-            if let Some(req) = map.remove(channel_id) {
-                let _ = req.response_tx.send(response);
-                return true;
-            }
-            return false;
+            return map.remove(channel_id);
         }
         std::thread::yield_now();
     }
-    false
+    None
 }
 
 /// How many messages of a stored session a resume would put back in context.
@@ -2014,27 +2009,66 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             // hermes parity: `/approve always` grants the tool permanently
             // (persisted allowlist, `approve_permanent`), `/approve` grants
             // it for the rest of the session (`approve_session`).
+            //
+            // F2: a seat-policy escalation mints its grant FIRST — a
+            // refused mint (issue_grant biting) already resolved the row
+            // Denied and the waiting run hears Deny; authority is never
+            // widened around the check. Ungoverned prompts mint nothing and
+            // behave exactly as before.
             let always = args.trim().eq_ignore_ascii_case("always");
             let mut msg = if always {
                 String::from("✅✅ **Action approved — always allow.**")
             } else {
                 String::from("✅ **Action approved.**")
             };
-            let response = if always {
-                operant_core::agent::ToolPermissionResponse::AllowAlways
-            } else {
-                operant_core::agent::ToolPermissionResponse::AllowSession
-            };
-            let resolved = crate::gateway_runner::PENDING_PERMISSIONS
+            let req = crate::gateway_runner::PENDING_PERMISSIONS
                 .get()
-                .map(|store| resolve_pending_permission(store, ctx.channel_id, response))
-                .unwrap_or(false);
-            if resolved {
-                msg.push_str(if always {
-                    "\nTool execution resumed; the tool is now in the permanent allowlist."
-                } else {
-                    "\nTool execution resumed."
-                });
+                .and_then(|store| take_pending_permission(store, ctx.channel_id));
+            if let Some(req) = req {
+                match crate::gateway_runner::approve_seat_escalation(&req) {
+                    // Not a seat escalation — today's response, unchanged.
+                    None => {
+                        let response = if always {
+                            operant_core::agent::ToolPermissionResponse::AllowAlways
+                        } else {
+                            operant_core::agent::ToolPermissionResponse::AllowSession
+                        };
+                        let _ = req.response_tx.send(response);
+                        msg.push_str(if always {
+                            "\nTool execution resumed; the tool is now in the permanent allowlist."
+                        } else {
+                            "\nTool execution resumed."
+                        });
+                    }
+                    Some(Ok(grant_id)) => {
+                        // The grant mints session-and-beyond authority for the
+                        // seat; the run's own verdict still obeys the
+                        // operator's always/session choice for THIS waiting
+                        // call.
+                        let response = if always {
+                            operant_core::agent::ToolPermissionResponse::AllowAlways
+                        } else {
+                            operant_core::agent::ToolPermissionResponse::AllowSession
+                        };
+                        let _ = req.response_tx.send(response);
+                        msg.push_str(&format!(
+                            "\nSeat-policy approval recorded: grant `{grant_id}` minted and the \
+                             queued request resolved. The seat's next run consults the grant."
+                        ));
+                    }
+                    Some(Err(refusal)) => {
+                        // issue_grant refused — the row is already recorded
+                        // Denied; the refusal text is surfaced and the run is
+                        // told Deny. Never bypass.
+                        let _ = req
+                            .response_tx
+                            .send(operant_core::agent::ToolPermissionResponse::Deny);
+                        msg.push_str(&format!(
+                            "\n⚠️ **Approval could not be recorded — the grant was refused.** \
+                             The request is resolved as denied:\n{refusal}"
+                        ));
+                    }
+                }
             } else {
                 msg.push_str("\n(No pending permission request found.)");
             }
@@ -2043,17 +2077,20 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         "deny" => {
             // (iter-160: resolve pending permission request)
             let mut msg = String::from("❌ **Action denied.**");
-            let resolved = crate::gateway_runner::PENDING_PERMISSIONS
+            let req = crate::gateway_runner::PENDING_PERMISSIONS
                 .get()
-                .map(|store| {
-                    resolve_pending_permission(
-                        store,
-                        ctx.channel_id,
-                        operant_core::agent::ToolPermissionResponse::Deny,
-                    )
-                })
-                .unwrap_or(false);
-            if resolved {
+                .and_then(|store| take_pending_permission(store, ctx.channel_id));
+            if let Some(req) = req {
+                // F2: a denied seat escalation resolves its queue row too.
+                if let Some(ask) = req.seat_escalation.as_ref()
+                    && let Some(approver) = crate::gateway_runner::seat_approver()
+                    && let Err(e) = approver.deny(ask)
+                {
+                    tracing::warn!(request = %ask.request_id, error = %e, "recording the denial failed");
+                }
+                let _ = req
+                    .response_tx
+                    .send(operant_core::agent::ToolPermissionResponse::Deny);
                 msg.push_str("\nThe pending action has been cancelled.");
             } else {
                 msg.push_str("\n(No pending permission request found.)");
@@ -2296,6 +2333,7 @@ mod tests {
                         description: String::new(),
                         danger_explanation: String::new(),
                         input_preview: None,
+                        seat_escalation: None,
                         response_tx: tx,
                     },
                 );
@@ -2305,28 +2343,16 @@ mod tests {
         let store: crate::gateway_runner::PendingPermissions =
             std::sync::Mutex::new(Some(Arc::new(tokio::sync::Mutex::new(map))));
 
-        // First /approve resolves chan-a.
-        assert!(resolve_pending_permission(
-            &store,
-            "chan-a",
-            operant_core::agent::ToolPermissionResponse::AllowSession
-        ));
-        // The store must STILL be usable — resolving one channel must not
+        // First /approve takes chan-a.
+        assert!(take_pending_permission(&store, "chan-a").is_some());
+        // The store must STILL be usable — taking one channel must not
         // drain the Option out of the shared static. (Regression: guard.take()
         // permanently blinded PENDING_PERMISSIONS after the first /approve or
         // /deny, so every later tap reported "No pending permission request
         // found".)
-        assert!(resolve_pending_permission(
-            &store,
-            "chan-b",
-            operant_core::agent::ToolPermissionResponse::AllowAlways
-        ));
-        // Already-resolved channel now reports nothing pending.
-        assert!(!resolve_pending_permission(
-            &store,
-            "chan-a",
-            operant_core::agent::ToolPermissionResponse::Deny
-        ));
+        assert!(take_pending_permission(&store, "chan-b").is_some());
+        // Already-taken channel now reports nothing pending.
+        assert!(take_pending_permission(&store, "chan-a").is_none());
     }
 
     #[test]
@@ -2344,23 +2370,16 @@ mod tests {
                 description: String::new(),
                 danger_explanation: String::new(),
                 input_preview: None,
+                seat_escalation: None,
                 response_tx: tx,
             },
         );
         let store: crate::gateway_runner::PendingPermissions =
             std::sync::Mutex::new(Some(Arc::new(tokio::sync::Mutex::new(m))));
 
-        // Deny resolves the request; the store stays alive for the next one.
-        assert!(resolve_pending_permission(
-            &store,
-            "chan-c",
-            operant_core::agent::ToolPermissionResponse::Deny
-        ));
-        assert!(!resolve_pending_permission(
-            &store,
-            "chan-c",
-            operant_core::agent::ToolPermissionResponse::AllowSession
-        ));
+        // Deny takes the request; the store stays alive for the next one.
+        assert!(take_pending_permission(&store, "chan-c").is_some());
+        assert!(take_pending_permission(&store, "chan-c").is_none());
     }
 
     /// `/stop` with a live turn must actually signal it. It used to write

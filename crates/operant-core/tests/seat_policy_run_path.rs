@@ -36,6 +36,9 @@ use operant_core::client::{
 };
 use operant_core::database::Database;
 use operant_core::error::{Error, Result};
+use operant_core::org::authority::GrantDb;
+use operant_core::org::pending_requests::PendingRequestDb;
+use operant_core::org::seat_authority::SeatAuthority;
 use operant_core::org::seat_policy::{SeatMode, SeatPolicy, SeatPolicySource};
 use operant_core::org::seat_policy_db::SeatPolicyDb;
 use operant_core::schema::ToolSchema;
@@ -282,7 +285,18 @@ async fn world(responses: Vec<ChatResponse>, seat: Option<(&str, SeatPolicy)>) -
             .upsert(session_id, &policy)
             .expect("upsert seat policy");
         let source: Arc<dyn SeatPolicySource> = Arc::new(store);
-        agent = agent.with_seat_policy_source(Some(source));
+        // F2 widened the seam: the policy source rides inside a
+        // SeatAuthority with the grant ledger and the escalation queue
+        // (over the same tempdir, the way the gateway shares one db file).
+        let authority = Arc::new(SeatAuthority::new(
+            source,
+            Arc::new(GrantDb::init(dir.path().join("org.sqlite")).expect("GrantDb::init")),
+            Arc::new(
+                PendingRequestDb::init(dir.path().join("org.sqlite"))
+                    .expect("PendingRequestDb::init"),
+            ),
+        ));
+        agent = agent.with_seat_authority(Some(authority));
         let agent = Arc::new(agent);
         agent.set_session_id(session_id);
         return World {

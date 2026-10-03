@@ -65,6 +65,12 @@ pub struct AppConfig {
     /// restarts.
     #[serde(default)]
     pub command_allowlist: Vec<String>,
+    /// Permission-genome knobs (`[genome]`, wave-2 slice F2). `grant_ttl_days`
+    /// is LIVE: the TTL an approval mints for a non-CEO approver
+    /// (`SeatApprover`). The other two are declared surface for the named
+    /// later slices — see `GenomeSettings` for exactly which.
+    #[serde(default)]
+    pub genome: GenomeSettings,
 }
 
 impl Default for AppConfig {
@@ -93,12 +99,60 @@ impl Default for AppConfig {
             terminal_backend: TerminalBackend::Local,
             checkpoints: CheckpointsSettings::default(),
             harness: HarnessSettings::default(),
+            genome: GenomeSettings::default(),
             pk: PkSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
             database_path,
             providers: operant_config::providers::ProvidersConfig::default(),
             command_allowlist: Vec::new(),
+        }
+    }
+}
+
+/// `[genome]` — the permission-genome knobs (wave-2 slice F2,
+/// `docs/PERMISSION-SCOPING-PLAN.md` §5 P2 + §11's owner defaults).
+///
+/// One knob is live in F2, two are declared surface with their consumer
+/// named — the repo's `lifeos` rule forbids keys that gate nothing, so each
+/// field below states exactly which slice reads it:
+///
+/// - `grant_ttl_days` — LIVE (F2): the TTL in days a department-head
+///   approval mints (`SeatApprover::mint`). `0`/negative = never-standing
+///   for non-CEO approvals: the grant is recorded already-lapsed, so the
+///   approval is auditable while conferring nothing. CEO+ (org-lead)
+///   approvals mint standing grants (`expires_at = None`) regardless.
+/// - `unrestricted_default` — consumed by P3's `/grant`-family commands as
+///   the mode a newly-seated policy row carries when the operator does not
+///   name one. Recorded now so the value is overridable before that lands;
+///   the RUNTIME default for a seat without a policy row stays ungoverned
+///   (byte-identical to mainline — which is NOT `yolo`: dangerous tools
+///   still prompt), per `org/seat_policy.rs` rule 2.
+/// - `queued_cron_jobs_resolve_grants` — consumed by P3's queue sweep: when
+///   `true`, the scheduler marks still-pending requests whose grant already
+///   stands as approved at tick time (today the queue is resolved only by a
+///   human verdict or the 60s interactive lapse; the run itself consults the
+///   ledger every tick regardless, so the flag changes audit bookkeeping,
+///   not enforcement).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GenomeSettings {
+    /// Default seat mode for operator-seated policy rows that do not name
+    /// one (P3 consumer; see the struct docs).
+    pub unrestricted_default: String,
+    /// Days a department-head approval's grant stands. 0/negative =
+    /// never-standing for non-CEO approvals (see the struct docs).
+    pub grant_ttl_days: i64,
+    /// P3 queue-sweep switch (see the struct docs).
+    pub queued_cron_jobs_resolve_grants: bool,
+}
+
+impl Default for GenomeSettings {
+    fn default() -> Self {
+        Self {
+            unrestricted_default: "yolo".to_string(),
+            grant_ttl_days: 7,
+            queued_cron_jobs_resolve_grants: false,
         }
     }
 }
@@ -2114,6 +2168,32 @@ wonderful_unknown_key = 42
         assert_eq!(
             config.autonomous.status_path,
             PathBuf::from("autonomous-status.toml")
+        );
+    }
+
+    /// The `[genome]` block (wave-2 slice F2) maps onto the real fields —
+    /// pinned with NON-default values so the test fails if the keys stop
+    /// binding (a commented-out block parses as defaults and would pass
+    /// vacuously, which is exactly what the values below rule out).
+    #[test]
+    fn genome_block_parses_into_fields() {
+        let raw = "[genome]\nunrestricted_default = \"standard\"\ngrant_ttl_days = 3\nqueued_cron_jobs_resolve_grants = true\n";
+        let config = parse_config_str(raw, Path::new("memory://genome-probe")).unwrap();
+        assert_eq!(config.genome.unrestricted_default, "standard");
+        assert_eq!(config.genome.grant_ttl_days, 3);
+        assert!(config.genome.queued_cron_jobs_resolve_grants);
+        // And the shipped example carries the live default TTL of 7 days,
+        // uncommented, where the gateway reads it.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("operant.example.toml");
+        let example = std::fs::read_to_string(&root).unwrap();
+        assert!(
+            example.contains("grant_ttl_days = 7"),
+            "the example must ship the HoD 7-day default, uncommented"
         );
     }
 

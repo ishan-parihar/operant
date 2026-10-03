@@ -3,7 +3,7 @@
 use crate::client::{ChatResponse, Message, ToolCall, Usage};
 use crate::error::{Error, Result};
 use crate::observer::{Observer, ObserverEvent};
-use crate::org::seat_policy::{SeatDecision, decide};
+use crate::org::seat_policy::SeatDecision;
 use crate::parser::{ToolCallParser, ToolCallStreamParser};
 use crate::tools::{ToolContext, ToolResult};
 use futures::StreamExt;
@@ -734,46 +734,88 @@ impl OperantAgent {
                 }
             }
 
+            // ── P1/P2 seat policy (permission-genome slices E + F2) ──────
+            // With a seat authority attached AND a session id (the employee
+            // id), `decide()` owns the verdict for this seat: `Run` skips the
+            // prompt outright (a yolo mode, a seat allow entry, or — since
+            // F2 — a standing grant in the ledger), `Escalate` persists the
+            // ask to the `pending_requests` queue (deduplicated: a second
+            // ask for the same (seat, tool) references the first row, never
+            // duplicates it) and then enters the channel below with the
+            // policy's `why` as the danger explanation, and `Deny` is
+            // returned shaped like a declined permission. Everything sits
+            // behind the Option: no authority, no session id, or no policy
+            // row for this seat → `None` → the branches below are today's
+            // allowlist-then-hardcoded-list logic, unchanged.
+            //
+            // The consult is hoisted ABOVE the permission-channel block so
+            // unattended agents (which may still carry a channel nobody
+            // drains — see `with_unattended`) consult the genome too.
+            //
+            // `blocked` is `false` because the smart approval gate above
+            // already denied blocked tools — the hardline floor fires before
+            // any seat mode can see (let alone widen) a blocked call.
+            // `dangerous` reuses `is_permission_gated_tool`, the same list
+            // the prompt below has always keyed on (one list so the gate and
+            // the predicate cannot drift apart).
+            //
+            // `has_grant` is REAL since F2 (plan §4 rule 6 completed): the
+            // ledger's unexpired, unrevoked grant naming THIS tool exactly.
+            let seat: Option<SeatDecision> = match (self.seat_authority.as_ref(), self.session_id())
+            {
+                (Some(authority), Some(session_id)) => {
+                    authority.consult(&session_id, &name, is_permission_gated_tool(&name))
+                }
+                _ => None,
+            };
+
+            // ── F2 unattended semantics ─────────────────────────────────
+            // An unattended run (cron) never waits on an interactive
+            // approver: a governed Escalate is queued (once) and denied THIS
+            // run; the next run consults the grant the senior minted between
+            // ticks (§8's two timelines). The UNGOVERDED path is not here at
+            // all — `seat == None` keeps today's channel behaviour
+            // byte-for-byte, including the dispatcher's no-active-channel
+            // auto-AllowSession arm.
+            if let Some(SeatDecision::Escalate(why)) = &seat
+                && self.unattended
+            {
+                warn!(tool = %name, "Tool call escalated by seat policy — unattended run: queue + deny");
+                let session_id = self.session_id().unwrap_or_default();
+                let queued = self
+                    .seat_authority
+                    .as_ref()
+                    .map(|authority| authority.escalate(&session_id, &name, why))
+                    .unwrap_or_else(|| crate::org::seat_authority::QueuedAsk {
+                        escalation: None,
+                        note: String::from("could not be persisted (no seat authority attached)"),
+                    });
+                let reference = if queued.note.is_empty() {
+                    format!(
+                        "was queued as {}",
+                        queued
+                            .escalation
+                            .as_ref()
+                            .map(|e| e.request_id.as_str())
+                            .unwrap_or("(unrecorded)")
+                    )
+                } else {
+                    queued.note.clone()
+                };
+                early_results[idx] = Some(ToolResult::error(
+                    &tool_call.id,
+                    format!(
+                        "Permission denied by seat policy: {why}. No interactive \
+                         approver is attached to this unattended run, so this \
+                         attempt is denied; the ask {reference} and the next \
+                         run consults the grant the approver mints"
+                    ),
+                ));
+                continue;
+            }
+
             // Permission guard for dangerous tools (interactive — sequential)
-            if let Some(ref permission_tx) = self.permission_tx {
-                // ── P1 seat policy (permission-genome wave-2 slice E) ──────
-                // With a source attached AND a session id (the employee id),
-                // `decide()` owns the verdict for this seat: `Run` skips the
-                // prompt outright (a yolo mode or seat allow entry must
-                // actually skip it), `Escalate` enters the channel below with
-                // the policy's `why` as the danger explanation, and `Deny` is
-                // returned shaped like a declined permission. Everything
-                // sits behind the Option: no source, no session id, or no
-                // policy row for this seat → `None` → the branches below are
-                // today's allowlist-then-hardcoded-list logic, unchanged.
-                //
-                // `blocked` is `false` because the smart approval gate above
-                // already denied blocked tools — the hardline floor fires
-                // before any seat mode can see (let alone widen) a blocked
-                // call. `dangerous` reuses `is_permission_gated_tool`, the
-                // same list the prompt below has always keyed on (one list so
-                // the gate and the predicate cannot drift apart).
-                //
-                // `has_grant` is `false` in P1: the run path does not consult
-                // the grant ledger yet (approvals minting grants and grant
-                // lookup are slice F2), so a lockdown seat escalates every
-                // call until F2 lands. Honest phasing.
-                let seat: Option<SeatDecision> =
-                    match (self.seat_policy_source.as_ref(), self.session_id()) {
-                        (Some(source), Some(session_id)) => {
-                            let policy = source.policy_for(&session_id);
-                            policy.as_ref().map(|p| {
-                                decide(
-                                    Some(p),
-                                    &name,
-                                    false,
-                                    is_permission_gated_tool(&name),
-                                    false,
-                                )
-                            })
-                        }
-                        _ => None,
-                    };
+            if let Some(permission_tx) = &self.permission_tx {
                 // Whether this call prompts, and with what danger sentence.
                 // The ungoverned arm is today's logic, lifted unchanged:
                 // hermes parity — a tool covered by the session or permanent
@@ -782,10 +824,22 @@ impl OperantAgent {
                 // allowlisted tools bypass the gate
                 // (`_command_matches_permanent_allowlist` fires before
                 // detection, with only the hardline floor above it).
+                //
+                // F2: a governed Escalate persists its ask to the queue
+                // BEFORE the prompt leaves (§8.1 push-then-queue) — the row
+                // below is what the approver's /approve mints a grant
+                // against and resolves.
+                let mut seat_escalation: Option<crate::org::seat_authority::SeatEscalation> = None;
                 let (needs_prompt, danger): (bool, String) = if let Some(decision) = seat {
                     match decision {
                         SeatDecision::Run(_) => (false, String::new()),
-                        SeatDecision::Escalate(why) => (true, why),
+                        SeatDecision::Escalate(why) => {
+                            let session_id = self.session_id().unwrap_or_default();
+                            seat_escalation = self.seat_authority.as_ref().and_then(|authority| {
+                                authority.escalate(&session_id, &name, &why).escalation
+                            });
+                            (true, why)
+                        }
                         SeatDecision::Deny(why) => {
                             warn!(tool = %name, "Tool call denied by seat policy");
                             early_results[idx] = Some(ToolResult::error(
@@ -832,6 +886,7 @@ impl OperantAgent {
                             tool_id: tool_call.id.clone(),
                             description,
                             danger_explanation: danger,
+                            seat_escalation,
                             input_preview,
                             response_tx: resp_tx,
                         })

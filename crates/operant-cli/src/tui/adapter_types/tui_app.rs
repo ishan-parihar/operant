@@ -843,6 +843,7 @@ impl TuiApp {
                                 description,
                                 danger_explanation: String::new(),
                                 input_preview: None,
+                                seat_escalation: None,
                                 response_tx: tx,
                             });
                     }

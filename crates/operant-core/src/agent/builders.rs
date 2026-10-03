@@ -65,7 +65,8 @@ impl OperantAgent {
             sessions,
             event_tx: None,
             permission_tx: None,
-            seat_policy_source: None,
+            seat_authority: None,
+            unattended: false,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -133,7 +134,8 @@ impl OperantAgent {
             sessions,
             event_tx: Some(event_tx),
             permission_tx: None,
-            seat_policy_source: None,
+            seat_authority: None,
+            unattended: false,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -360,15 +362,24 @@ impl OperantAgent {
         self
     }
 
-    /// Attach the seat-policy source the tool-execution guard consults
-    /// (permission-genome P1, slice E). The employee id is the agent's
-    /// current session id. `None` keeps the run path byte-identical: no
-    /// decide() call at all.
-    pub fn with_seat_policy_source(
+    /// Attach the seat authority the tool-execution guard consults
+    /// (permission-genome P1/P2, slices E + F2): the policy source, the grant
+    /// ledger, and the escalation queue in one handle. The employee id is
+    /// the agent's current session id. `None` keeps the run path
+    /// byte-identical: no decide() call at all.
+    pub fn with_seat_authority(
         mut self,
-        source: Option<Arc<dyn crate::org::seat_policy::SeatPolicySource>>,
+        authority: Option<Arc<crate::org::seat_authority::SeatAuthority>>,
     ) -> Self {
-        self.seat_policy_source = source;
+        self.seat_authority = authority;
+        self
+    }
+
+    /// Mark this agent unattended (no interactive user behind it — cron).
+    /// A governed `Escalate` verdict is clamped to a same-run Deny once the
+    /// ask is queued; the ungoverned path ignores the flag.
+    pub fn with_unattended(mut self, unattended: bool) -> Self {
+        self.unattended = unattended;
         self
     }
 

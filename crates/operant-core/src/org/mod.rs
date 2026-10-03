@@ -72,6 +72,7 @@ pub mod pending_requests;
 // macro was used without its `use` import; see worklog_db.rs:49).
 pub mod resolver;
 pub mod schema;
+pub mod seat_authority;
 pub mod seat_policy;
 pub mod seat_policy_db;
 pub mod worklog;

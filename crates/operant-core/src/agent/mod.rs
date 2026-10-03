@@ -359,14 +359,26 @@ pub struct OperantAgent {
     sessions: Arc<crate::session::SessionStore>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,
-    /// P1 seat-policy source (permission-genome wave-2 slice E). When `Some`
-    /// AND the agent has a session id (the employee id), the tool-execution
-    /// guard in `agent/stream.rs` consults [`crate::org::seat_policy::decide`]
-    /// before the permission channel: the seat's verdict can run a tool with
-    /// no prompt, escalate with the policy's own explanation, or deny
-    /// outright. `None` (the default) keeps the run path byte-identical —
-    /// no decide() call at all.
-    seat_policy_source: Option<Arc<dyn crate::org::seat_policy::SeatPolicySource>>,
+    /// P1/P2 seat authority (permission-genome wave-2 slices E + F2). When
+    /// `Some` AND the agent has a session id (the employee id), the
+    /// tool-execution guard in `agent/stream.rs` consults
+    /// [`crate::org::seat_authority::SeatAuthority::consult`] before the
+    /// permission channel: the seat's verdict can run a tool with no prompt
+    /// (allow entry, yolo mode, or a STANDING GRANT — the ledger is real
+    /// since F2), escalate with the policy's own explanation (persisted to
+    /// the `pending_requests` queue, deduplicated), or deny outright.
+    /// `None` (the default) keeps the run path byte-identical — no decide()
+    /// call at all.
+    seat_authority: Option<Arc<crate::org::seat_authority::SeatAuthority>>,
+    /// F2 unattended semantics: this agent runs without an interactive user
+    /// (cron). A governed `Escalate` verdict is clamped to a same-run Deny
+    /// after the ask is queued — an unattended run never waits on a prompt
+    /// channel nobody drains, and the next run consults the grant the
+    /// approver minted between ticks. The UNGOVERNED path (no policy row)
+    /// ignores this flag entirely: it keeps today's channel behaviour
+    /// byte-for-byte, including the dispatcher's no-active-channel
+    /// auto-AllowSession arm.
+    unattended: bool,
     /// Session-scoped approvals (hermes `approve_session`): tool names the
     /// user allowed for the rest of this agent instance's lifetime. Never
     /// persisted.
@@ -557,6 +569,11 @@ pub struct ToolPermissionRequest {
     pub description: String,
     pub danger_explanation: String,
     pub input_preview: Option<String>,
+    /// F2: when this prompt is a seat-policy escalation, the queued ask it
+    /// resolves — an approval mints the grant and resolves this row; a
+    /// denial/timeout resolves it too. `None` is today's ungoverned prompt:
+    /// nothing is minted or resolved, byte-identical to mainline.
+    pub seat_escalation: Option<crate::org::seat_authority::SeatEscalation>,
     pub response_tx: tokio::sync::oneshot::Sender<ToolPermissionResponse>,
 }
 
