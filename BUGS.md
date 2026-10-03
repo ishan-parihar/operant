@@ -128,7 +128,24 @@ was consumed by a job they do not know ran.
   remains open is cron's own posture — D-2 — plus D-6, where cron's `clarify`
   calls still route to the user's chat via the global `USER_QUESTION_TX`.
 
-### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (OPEN, blocks D-1's fix)
+### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (RESOLVED 2026-10-03 — the decision exists and is enforced)
+
+**RESOLVED BY THE PERMISSION GENOME (iters 570/580/585).** The owner's
+full-scale-execution directive adopted the plan §6 defaults: what an
+unattended cron agent gets is **its employee's seat policy** — and that is
+now enforced, not assumed:
+
+- iter-570 preserved the posture mechanically: cron's agent is wrapped with
+  its own `permission_tx.clone()`, so no human veto was silently dropped;
+- iter-580 attached `SeatPolicyDb` to both agents — an ungoverned seat keeps
+  today's posture byte-identically, governance is opt-in per seat;
+- iter-585 closed the unattended hole this entry warned about: a governed
+  escalation from an unattended run is **enqueued and DENIED this run** (never
+  the 120s stall, never the no-active-channel `AllowSession` auto-allow);
+  YOLO cannot approve a seat escalation; a senior's approval mints a TTL'd
+  grant the next tick consults.
+
+The original finding, for the record:
 
 Calling `create_runtime_agent` a second time to give cron its own agent has two
 side effects that must be decided deliberately, not inherited by accident.
@@ -160,7 +177,19 @@ side effects that must be decided deliberately, not inherited by accident.
 - **Decision owed by the owner**: what permissions an unattended cron agent
   gets. The safe default is an explicit decision, not the `None` fallback.
 
-### D-3 — A second `create_runtime_agent` displaces the gateway agent's live MCP tools and memory manager (OPEN, blocks D-1's fix, P1)
+### D-3 — A second `create_runtime_agent` displaces the gateway agent's live MCP tools and memory manager (RESOLVED — 3a iter-570/571, 3b iter-577)
+
+**RESOLVED.** 3a: cron's agent is built against its own `McpManager::new()`
+(iter-570), so no synced-name list is shared and nothing the gateway
+registered can be unregistered by cron's watchdog; the mechanism was
+corrected to DELAYED (first stdio crash, `mcp.rs:1871`) in iter-571. 3b:
+`start_gateway` now constructs the `(MemoryManager, provider)` pair ONCE and
+threads the SAME pair into both agent builds (iter-577, `build_agent_core_
+with_memory`); a second build no longer repoints `ACTIVE_MEMORY_MANAGER`,
+proven by the `hoisted_memory_pair_is_shared_across_two_core_builds` ptr_eq
+invariant test.
+
+The original finding, for the record:
 
 Found while verifying D-1's fix. `create_runtime_agent` is *mostly* per-call, but
 it mutates two process-wide singletons that the **already-running gateway

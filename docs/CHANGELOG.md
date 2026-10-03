@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The permission genome — per-employee authority for the organism (iters
+573–586, wave fleet execution). A seat's policy is data (`seat_policies`:
+mode yolo/standard/scoped/lockdown + allow/deny globs), the precedence is a
+pure function (`decide()`: blocklist absolute, seat-deny absolute, allow,
+yolo, standing grant, then mode defaults), and the run path consults it
+behind an Option so ungoverned seats are byte-identical to before.
+Escalations persist to a durable `pending_requests` queue; unattended
+(cron) runs enqueue and deny the same run, and a senior's approval mints a
+TTL'd grant via the existing grant ledger so the next tick runs without
+re-asking. Reporting lines are data (`hierarchy_edges`). The scheduled-run
+write barrier is live: every completed cron run leaves exactly one
+attributable worklog row, and a barrier write failure fails the run.
+`[genome]` config block lands with `grant_ttl_days = 7` default.
+Also in this wave: BUGS.md D-5 (two MemoryManagers over one MEMORY.md)
+fixed by hoisting one `(MemoryManager, provider)` pair for both agents;
+D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
+`loop_request_timeout` pair).
+
+### Added
+
+- `org/seat_policy.rs` + `org/seat_policy_db.rs` — seat modes, the
+  precedence engine, the sqlite store, and the `SeatPolicySource` seam.
+- `org/hierarchy_edges.rs` — reporting lines as an edges table feeding
+  `Hierarchy::new`; cycle/dangling defects are reported, not repaired.
+- `org/pending_requests.rs` — durable escalation queue with atomic
+  pending→resolved transitions and an `expired_as_of` TTL sweep.
+- `org/seat_authority.rs` — `SeatAuthority` (policy + grants + requests
+  in one consult) and `SeatApprover` (approve→`issue_grant` with TTL tiers,
+  deny, expire; `approver_of` routing with operator-literal fail-closed).
+- Agent builders: `with_seat_authority`, `with_unattended`.
+- `[genome]` config block: `unrestricted_default`, `grant_ttl_days`,
+  `queued_cron_jobs_resolve_grants`.
+- `tests/governance_escalation.rs` (4 end-to-end),
+  `tests/seat_policy_run_path.rs` (5), 6+8+8 unit tests across the new
+  stores, 2 new `cron_session_isolation` barrier tests.
+
+### Changed
+
+- `run_agent_job` mounts `WriteBarrier::apply` (opt-in via
+  `with_write_barrier`; the gateway constructs it over the app db, so it is
+  live in production) — one worklog row per completed run, failure
+  propagates to the run's status.
+- `start_gateway` builds the memory pair once and threads it to both
+  agents (D-5).
+- The permission dispatcher: policy-escalated requests deny under YOLO and
+  no-active-channel (ungoverned requests keep auto-`AllowSession`);
+  60s timeout records `Expired`.
+- `/approve` mints first, then answers; `/deny` resolves the queue row.
+
 ## [0.2.1] - 2026-09-30
 
 Foundation for post-turn features (reflection / advisor / dreaming).

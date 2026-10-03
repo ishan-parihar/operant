@@ -649,6 +649,20 @@ State at canonicalization:
 - **B′, D-5, seat-policy storage, hierarchy edges** — not started; these are
   wave 1.
 
+**EXECUTED 2026-10-03 (fleet):** wave 1 landed as iters 575–578 (B→575,
+A→576, C→577 with BUGS.md D-5 FIXED, D→578 including the gateway wiring
+that makes B′ live in production); wave 2 landed as F1→579
+(`pending_requests`), E→580 (P1 enforcement — `decide()` at the stream
+guards, byte-identical ungoverned), F2→585 (P2 escalation core — real
+grant consultation, unattended enqueue+deny, mint-first `/approve`,
+`[genome]` config block, 4 end-to-end governance tests), and the fold-in
+chore →586 (fmt, clippy nits, K-2 filed). BUGS.md D-2 and D-3 are
+RESOLVED by this arc (see their entries). P3 (audit/management commands:
+`/permissions`, `/grant`, `/revoke`) is the remaining genome slice.
+Every slice shipped with a negative control and a sha256 restore proof;
+integrations were verified in fresh worktrees at the tip, staging only
+owned files.
+
 ### Wave 1 — four parallel slices, file-disjoint
 
 | Slice | Deliverable | Owns (nothing else) | Pattern to mirror |
