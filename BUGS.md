@@ -4050,3 +4050,64 @@ repair tests migrated to `RepairOutcome` asserts;
 2283 passed / 2 failed, identical to the pre-existing `tools::kernel`
 K-1 pair; clippy error set identical to pristine HEAD (10
 pre-existing sites, zero new).
+
+### S3 — Background review fired up to 4× inside one long turn, mid-loop, and read-only review daemons looped to their cap (FIXED iter-603)
+
+The 2026-10-03 05:10 specimen: one 21-minute turn spawned 4 background
+skill reviews, each between iterations — each racing the live turn for
+provider slots, each reviewing a PARTIAL transcript (a transcript that
+kept growing under it), and each concluding nothing. The review daemon
+had its own second failure mode: once spawned, a review whose rounds
+only READ (`memory_search`/`memory_recall`/`skill_view`, the
+`{"count":0}` specimen) kept looping to its 5-round iteration cap,
+burning provider calls to re-decide "nothing to save".
+
+The trigger side stays honest: `turn_finalizer::advance_skill_trigger`
+still bumps and persists the per-iteration cadence counter every
+completed iteration (`evo_iters_since_skill` semantics across
+sessions/turns unchanged; the `set_session_metadata` persist block is
+untouched). What changed is the SPAWN: `run()` holds a run-local
+`review_fired: bool`; the in-loop trigger block now only ARMS it (first
+trigger this turn), and the actual `spawn_background_review` happens on
+the turn's way OUT — the TextResponse exit, the GraceCall exit
+(`attempt_grace_call` gained a trailing `review_fired: bool` parameter,
+fired after the `Done` event), and both CircuitBreaker abort exits,
+always with the COMPLETE transcript in view. Interrupt/Error exits skip
+it — the operator already knows why the turn stopped, and there is no
+final answer worth reviewing. Ceiling recorded: a 90-iteration turn gets
+at most ONE skill review — deliberate (the old pathology was 4 in 21
+minutes; the new worst case is 1 post-turn).
+
+The daemon side: `background_review.rs` gains the pure decision helpers
+— `is_review_write_tool` (`memory_store`/`skill_manage` are writes; the
+whitelist's search/recall/view are reads), `stop_after_no_write_rounds`
+(true at 2), and `REVIEW_NO_WRITE_ROUND_LIMIT = 2` — with the daemon's
+round loop (in `spawn_background_review`'s spawned task) tracking
+`round_wrote`: any successful write resets the consecutive no-write
+streak; two consecutive write-less rounds log one INFO early-exit line
+and break BEFORE the 5-round cap. The cap stays the outer bound — a
+review that writes every round runs to it unchanged.
+
+Verification: `tests/review_discipline.rs` scripts the specimen and the
+controls through a shared scripted client — a 30-iteration turn at
+interval 10 yields exactly ONE review request, at recorded index 31
+(after the turn's 31st and final request, never interleaved), carrying
+the turn's final answer in its transcript; below-interval turns spawn
+nothing; a turn that arms at iteration 10 and then dies on a chat error
+spawns nothing. Daemon side: a read-only review consumes exactly 2 of 5
+scripted rounds; a write on round 1 resets the streak so read-only
+rounds 2-3 end it at round 3, not before; a write on every round still
+consumes all 5 (no over-blocking). Fault-injection honesty: restoring
+the mid-loop spawn, disabling the early exit, and ignoring writes each
+flip at least one of these tests to FAILED (verified by mutation, then
+reverted). Suite gate: 2283 passed / 2 failed (the pre-existing
+`tools::kernel` K-1 pair, unchanged); clippy error set identical to
+pristine HEAD. (Deviation from plan §3: the plan sites the daemon's
+iteration loop in `background_review.rs`; at HEAD the loop lives in
+`prompting.rs` inside `spawn_background_review` — the wiring is there,
+the pure helpers and their unit tests in `background_review.rs` per
+file ownership. Test-fixture note, a separate defect NOT fixed here:
+`models_dev.rs`'s cold-cache path never persists its fetch, so every
+LLM response re-fetches the catalog over HTTPS — the tests prime the
+on-disk cache in a temp `HOME` to stay hermetic and fast; the
+production cost of that miss is Main's to ticket.)

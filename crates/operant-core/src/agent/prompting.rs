@@ -336,6 +336,13 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 // hermes-agent's forked AIAgent.run_conversation() pattern.
                 const MAX_REVIEW_ITERATIONS: usize = 5;
                 let mut actions_taken: Vec<String> = Vec::new();
+                // S3 no-op early exit: consecutive rounds whose successful
+                // tool calls wrote NOTHING (reads only — memory_search /
+                // memory_recall / skill_view) count toward an early stop;
+                // any successful write resets the streak. The cap above
+                // stays the outer bound — a daemon that writes every round
+                // runs to it unchanged.
+                let mut no_write_rounds = 0usize;
 
                 for review_iter in 0..MAX_REVIEW_ITERATIONS {
                     debug!(
@@ -419,6 +426,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                     // ── Execute whitelisted tools ─────────────────────────
                     // Only execute tools that are in our whitelist. This matches
                     // hermes-agent's set_thread_tool_whitelist pattern.
+                    let mut round_wrote = false;
                     for tool_call_delta in &tool_calls_deltas {
                         // Extract function info from the delta
                         let function = match &tool_call_delta.function {
@@ -471,6 +479,9 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
 
                                 // Track actions taken for summary
                                 if result.success {
+                                    if background_review::is_review_write_tool(tool_name) {
+                                        round_wrote = true;
+                                    }
                                     let action_summary = format!(
                                         "{}: {}",
                                         tool_name,
@@ -495,6 +506,28 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                                     .push(Message::tool(tool_id, error_result.to_string()));
                             }
                         }
+                    }
+
+                    // ── S3 no-op early exit ────────────────────────────
+                    // A round with zero successful WRITES counts toward the
+                    // early stop; any write resets the streak. Two
+                    // consecutive read-only rounds means the daemon found
+                    // nothing to act on — stop before the iteration cap
+                    // instead of burning another provider call (the
+                    // `{"count":0}` specimen).
+                    if round_wrote {
+                        no_write_rounds = 0;
+                    } else {
+                        no_write_rounds += 1;
+                    }
+                    if background_review::stop_after_no_write_rounds(no_write_rounds) {
+                        info!(
+                            session_id = %session_id,
+                            iteration = review_iter + 1,
+                            no_write_rounds,
+                            "Background review exiting early — consecutive rounds with no writes"
+                        );
+                        break;
                     }
                 }
 

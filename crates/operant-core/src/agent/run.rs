@@ -95,6 +95,11 @@ impl OperantAgent {
     /// message instead — the gateway substitutes the user-facing
     /// stopped-early notice keyed on the `GraceCall` exit reason carried by
     /// the `Done` event (`gateway_runner.rs` turn-end block).
+    ///
+    /// `review_fired`: S3 deferral — when the skill-review cadence triggered
+    /// during the turn, the spawn was deferred to turn exit; the grace path
+    /// is one of those exits, so it fires the one review after emitting
+    /// `Done` (Interrupt/Error paths pass `false`).
     pub(crate) async fn attempt_grace_call(
         &self,
         messages: &[Message],
@@ -102,6 +107,7 @@ impl OperantAgent {
         iterations: usize,
         tool_calls: usize,
         final_response: Option<&Message>,
+        review_fired: bool,
     ) -> Result<Message> {
         let grace_request = ChatRequest::new(self.effective_model(), messages.to_vec())
             .with_stream(self.config.stream);
@@ -197,6 +203,13 @@ impl OperantAgent {
                         )
                         .await;
                 }
+                // S3: deferred skill review — review the complete transcript
+                // AFTER the turn's final answer is committed/emitted, so the
+                // review never competes with the turn for provider slots.
+                if review_fired {
+                    self.spawn_background_review(messages, session_id, true, false)
+                        .await;
+                }
                 Ok(result)
             }
             Err(e) => {
@@ -270,6 +283,16 @@ impl OperantAgent {
         // building. Matches hermes-agent's build_turn_context() pattern.
         let turn_ctx = turn_context::build_turn_context(self, &user_query).await?;
         let session_id = turn_ctx.session_id;
+
+        // ── S3 review discipline ─────────────────────────────────────
+        // A background review spawns at most ONCE per turn, and only on the
+        // way OUT: the in-loop trigger below sets this flag (cadence still
+        // per-iteration), and the TextResponse / GraceCall / CircuitBreaker
+        // exit paths spawn it as the last act before returning, so the review
+        // sees the complete transcript instead of racing the turn for
+        // provider slots mid-loop. Interrupt/Error exits skip it — the
+        // operator already knows why the turn stopped.
+        let mut review_fired = false;
 
         // ── Tool-call guardrail reset (R4) ────────────────────────────
         // Identical-call repeat detection is per-USER-TURN, not per-iteration:
@@ -450,7 +473,14 @@ impl OperantAgent {
                     "Iteration budget exhausted — attempting grace call"
                 );
                 return self
-                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
+                    .attempt_grace_call(
+                        &messages,
+                        &session_id,
+                        iteration,
+                        total_tool_calls,
+                        None,
+                        review_fired,
+                    )
                     .await;
             }
 
@@ -469,7 +499,14 @@ impl OperantAgent {
                     "Turn wall-clock limit reached — attempting grace call"
                 );
                 return self
-                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
+                    .attempt_grace_call(
+                        &messages,
+                        &session_id,
+                        iteration,
+                        total_tool_calls,
+                        None,
+                        review_fired,
+                    )
                     .await;
             }
 
@@ -533,7 +570,14 @@ impl OperantAgent {
                 // to summarize what it has so far. This gives the user a
                 // partial answer instead of a hard error.
                 return self
-                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
+                    .attempt_grace_call(
+                        &messages,
+                        &session_id,
+                        iteration,
+                        total_tool_calls,
+                        None,
+                        review_fired,
+                    )
                     .await;
             }
 
@@ -1276,6 +1320,13 @@ impl OperantAgent {
                         })
                         .await;
 
+                        // S3: deferred skill review — fires AFTER the turn's
+                        // final answer, reviewing the complete transcript.
+                        if review_fired {
+                            self.spawn_background_review(&messages, &session_id, true, false)
+                                .await
+                        }
+
                         // R6 — durable session activity heartbeat (hermes
                         // session_activity.py parity): stamp the session as
                         // active so gateway/session liveness views see work
@@ -1573,6 +1624,12 @@ impl OperantAgent {
                             }
                             .log_message()
                         );
+                        // S3: deferred skill review — a breaker exit still
+                        // produced a (partial) transcript worth one review.
+                        if review_fired {
+                            self.spawn_background_review(&messages, &session_id, true, false)
+                                .await;
+                        }
                         return Ok(abort_msg);
                     }
                     if identical_streak == 4 {
@@ -1636,6 +1693,12 @@ impl OperantAgent {
                             }
                             .log_message()
                         );
+                        // S3: deferred skill review — a breaker exit still
+                        // produced a (partial) transcript worth one review.
+                        if review_fired {
+                            self.spawn_background_review(&messages, &session_id, true, false)
+                                .await;
+                        }
                         return Ok(abort_msg);
                     }
 
@@ -1906,9 +1969,15 @@ impl OperantAgent {
 
                 trigger.should_review_skills
             }; // MutexGuard dropped here — safe to .await
-            if should_review_skills {
-                self.spawn_background_review(&messages, &session_id, true, false)
-                    .await;
+            // S3 review discipline: the SPAWN is deferred to the turn's exit
+            // path and happens at most once per turn — the measured pathology
+            // was 4 reviews in one 21-minute turn, all no-op, each racing the
+            // turn for provider slots. The cadence counter above stays
+            // per-iteration (bump + persist unchanged); only the within-turn
+            // repetition is capped. The actual `spawn_background_review` is
+            // invoked by the TextResponse / GraceCall / CircuitBreaker exits.
+            if should_review_skills && !review_fired {
+                review_fired = true;
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
