@@ -31,8 +31,15 @@ mod anchor;
 mod cache;
 mod message;
 mod prepared;
-mod tool_display;
-mod vendor_types;
+#[path = "swarm_collapse.rs"]
+pub mod swarm_collapse;
+#[allow(unused_imports)]
+pub use swarm_collapse::{
+    CollapsibleSwarmContent, encode_collapsible_swarm_content, parse_collapsible_swarm_content,
+    toggle_collapsible_swarm_content,
+};
+pub(crate) mod tool_display;
+pub(crate) mod vendor_types;
 mod wrapped_line_map;
 
 #[allow(unused_imports)]

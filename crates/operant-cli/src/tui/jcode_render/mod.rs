@@ -6,9 +6,12 @@
 
 pub mod chrome;
 pub mod layout;
-// [port-excision] swarm_gallery.rs (3,099) / swarm_tiles.rs (611) / memory_tiles.rs
-// (587): out of port scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2;
-// 4,297 LOC of unwired swarm/memory surface)
+// [port-excision] swarm_gallery.rs (3,099) / swarm_tiles.rs (611): out of port
+// scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2; 3,710 LOC of
+// unwired swarm surface). memory_tiles.rs (587) was excised with them at
+// iter-591 as zero-consumer, then RE-PORTED at batch-3 when ui_prepare's live
+// call (parse_memory_display_entries) inverted that call — declaration below.
+pub mod memory_tiles;
 
 use ratatui::prelude::{Line, Span, Style};
 

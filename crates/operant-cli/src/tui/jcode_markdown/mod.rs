@@ -134,7 +134,7 @@ mod render_full;
 #[path = "markdown_render_lazy.rs"]
 mod render_lazy;
 #[path = "markdown_render_support.rs"]
-mod render_support;
+pub mod render_support;
 
 // [port-excision] render_core_adapter.rs + render_core_adapter_tests.rs skipped:
 // upstream's NON-authoritative switchover experiment (its own doc comment says
