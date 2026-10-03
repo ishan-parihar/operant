@@ -96,28 +96,29 @@ Two consequences that shape the rest of this outline:
 
 | Step | Built | On a run path | Note |
 |---|---|---|---|
-| A per-employee session substrate | ✅ iter-548 | ⚠️ **gateway only** | 8 isolation tests |
-| B write barrier | ✅ iter-550 | ❌ **no caller** | 38 inline tests |
+| A per-employee session substrate | ✅ iter-548/570 | ✅ **gateway + cron** | 8 isolation + 4 cron tests |
+| B write barrier | ✅ iter-550 | ❌ **no caller** (wave-1 slice D) | 38 inline tests |
 | C autocompaction | ✅ iter-550 | ❌ **no caller** | 15 tests |
-| D hierarchy + §2.4 tool authority | ✅ iter-550/551 | ❌ **no caller** | 6 + inline tests |
+| D hierarchy + §2.4 tool authority | ✅ iter-550/551 | ❌ **no caller** (wave-2 slice E) | 6 + inline tests |
+| G permission genome — `decide()` engine | ✅ iter-573 | ❌ **no caller** (wave-2 slice E) | 10 adversarial tests |
 | E assignment boards | ❌ | ❌ | absent |
 | F concurrent CEO loop | ❌ | ❌ | absent |
 
-**Four subsystems are built and unwired, not three.** The gateway calls
-`set_session_id` (`gateway_runner.rs:544`), so iter-548 is live there. **Cron
-never adopted it.** `run_agent_job` (`cronjobs/scheduler.rs:274-285`) calls only
-`self.agent.clear_history().await` then `self.agent.run(...)` — grep for
-`set_session_id|SessionKey|SessionStore` in `scheduler.rs` returns nothing. Every
-scheduled employee run therefore still starts blind against one agent slot,
-and that is where the org's ~133 employees actually run.
+**A′ is landed** (iters 570–571): cron runs its own `OperantAgent`
+(`gateway_runner.rs:1126`, built via `create_runtime_agent_with(.., false)` so it
+does not spawn a duplicate LCM maintenance pair), targets a stable per-job
+session via `set_session_id(derive_employee_id(&job.id))` at
+`scheduler.rs:290-291`, and the compressor reset lives in `set_session_id`'s
+retarget guard. Four cron-isolation regression tests drive the real
+`tick → run_job → run_agent_job` path
+(`tests/cron_session_isolation.rs`). The previously-shared-agent constraint
+this outline carried is resolved.
 
-This is the largest remaining gap and it gates the others: B′ needs a session
-key to attach to, and the plan's previous revision asserted one was in hand at
-the mount point. It is not.
-
-The same class of defect `REMAINING-GAPS.md` calls `DARK` — built, not
-reachable. The gap ledger predates all of this and its Wave 2-4 rows are stale;
-this outline supersedes its status column, not its findings.
+What remains unwired is now: the barrier mount (B′, wave-1 slice D), the
+permission genome's run-path caller (wave-2 slice E), and the hierarchy
+consumer (wave-2 slice F). The gap ledger predates all of this and its Wave
+2-4 rows are stale; this outline supersedes its status column, not its
+findings.
 
 ---
 
@@ -562,6 +563,9 @@ Nothing in this program touches `tools::kernel`; it is a separate fix.
 
 ## 10. Suggested first concrete task
 
+**STATUS 2026-10-03: A′ landed (iters 570–571). B′ is in flight as wave-1
+slice D of §11. This section stands as the acceptance record for both.**
+
 Two code increments, in this order: **A′ then B′**.
 
 **They carry no fixed numbers.** A reservation written as an absolute label has
@@ -625,3 +629,73 @@ Acceptance:
 
 - **verified in a clean worktree at the pushed commit, not the working tree** —
   the iter-550 defect shipped precisely because the working tree masked it.
+## 11. Canonical fleet execution plan (2026-10-03)
+
+This section is the canonical sequencing for the in-flight work. It supersedes
+§10's ordering for anything not yet landed, and it is what the 2026-10-03
+sub-agent fleet executes against. The eight alignment questions in
+`docs/PERMISSION-SCOPING-PLAN.md` §6 are **resolved for execution** by the
+owner's full-scale-execution directive: each recommended default applies,
+implemented so that a later answer changes a *value or adapter*, never an
+architecture. Q6 (edge table) ships in wave 1 so P2 is not blocked.
+
+State at canonicalization:
+
+- **A′** landed — iters 570–571 (per-job stable session, cron's own agent,
+  compressor retarget guard, `spawn_long_lived_maintenance=false` for cron).
+- **Genome P0 engine** landed — iter-573 (`org/seat_policy.rs`: `SeatMode`,
+  `SeatPolicy`, `decide()`, namespace globs, 10 adversarial tests,
+  fault-injection-proven).
+- **B′, D-5, seat-policy storage, hierarchy edges** — not started; these are
+  wave 1.
+
+### Wave 1 — four parallel slices, file-disjoint
+
+| Slice | Deliverable | Owns (nothing else) | Pattern to mirror |
+|---|---|---|---|
+| A | `SeatPolicyDb` sqlite store + `SeatPolicySource` trait | `org/seat_policy.rs` (trait only), `org/seat_policy_db.rs` (new), `org/mod.rs` (one `pub mod` line) | `GrantDb` (`org/authority.rs:551`): DDL const, idempotent init, `Arc<Mutex<Connection>>` |
+| B | `hierarchy_edges` table → `Vec<HierarchyEntry>` adapter feeding `Hierarchy::new` | `org/hierarchy_edges.rs` (new), `org/mod.rs` (one line) | `employee_db` store style |
+| C | D-5 fix: hoist `(MemoryManager, Option<Arc<dyn MemoryProvider>>)`; thread the same pair into both agent builds | `operant-cli/src/main.rs`, `gateway_runner.rs` (build seam only), `BUGS.md` (D-5 entry) | BUGS.md D-5 names the preferred fix |
+| D | B′: mount `WriteBarrier::apply` in `run_agent_job` per §3 acceptance | `cronjobs/scheduler.rs`, `org/write_barrier.rs` (only if a helper is missing), `tests/` (extend `cron_session_isolation.rs` or new) | §3 of this outline is the spec |
+
+Fleet rules:
+
+1. Each slice works in its **own git worktree off `origin/main`** tip —
+   per-worktree `target/` means no cargo lock contention. Source
+   `scripts/dev-env.sh` before any cargo command. Scoped tests only
+   (`-p operant-core --lib -- <filter>`; slice C: `-p operant-cli --bin operant`).
+2. **No slice commits or pushes.** The integration owner applies each diff to
+   the working tree, stages ONLY the slice's files (never `git add -A` — the
+   tree carries a concurrent agent's WIP in `Cargo.toml`, `Cargo.lock`,
+   `tui/*`), runs the combined suite once, and lands each slice as its own
+   iteration — label taken from `origin/main` immediately before each commit.
+3. Evidence rules unchanged: every green carries a negative control; restores
+   proven by sha256; every cited `file:line` read back before commit; no
+   `.unwrap()`/`.expect()` in lib code; no explicit `ref` in patterns.
+4. The working-tree lib-suite baseline is **2235 passed / 2 failed** (the 2 =
+   `tools::kernel` K-1, unowned, standalone-failing — not a wave-1 concern).
+
+### Wave 2 — after wave-1 integration
+
+| Slice | Deliverable | Depends on |
+|---|---|---|
+| E | P1 enforcement: `AuthorityActor` per running employee (cron: `derive_employee_id`; gateway: the chat's seat), `decide()` consulted before the guards at `stream.rs:709/737` | A (source trait), C (agent-build seam) |
+| F | P2 escalation: `pending_requests` store, `manager_of` routing, approval → `issue_grant` with TTL, cron deny-after-TTL (not the 120s interactive stall) | B (edges), E (decision seam) |
+
+Wave-2 acceptance criteria live in `docs/PERMISSION-SCOPING-PLAN.md` §5
+(P1: same tool call succeeds under `yolo` and escalates under `lockdown`;
+P2: lockdown cron denied → request surfaces → approval mints grant row →
+re-run executes without re-asking).
+
+### Owner-decision defaults now in force (overridable by value, not architecture)
+
+| Question | Default in force |
+|---|---|
+| Q1 policy storage | sqlite `seat_policies` table (wave-1 slice A) |
+| Q2 unattended TTL | deny-after-TTL, configurable; HoD default 46 min |
+| Q3 approval → grant | yes; `expires_at` required; 7-day HoD default; standing only CEO+ |
+| Q4 precedence | plan §4 as implemented in `decide()` (iter-573) |
+| Q5 terminal authority | the human operator; HR on-chain only when named |
+| Q6 hierarchy edges | separate edges table (wave-1 slice B) |
+| Q7 scoped + dangerous-unlisted | escalate (missing ≠ denied) |
+| Q8 granting topology | HoD own department, CEO anywhere, HR read-only |
