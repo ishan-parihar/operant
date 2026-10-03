@@ -1065,7 +1065,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         mpsc::unbounded_channel::<operant_core::user_question::UserQuestionRequest>();
     let _ = operant_core::user_question::set_user_question_sender(uq_tx);
 
-    let agent = crate::create_runtime_agent(
+    // BUGS.md D-5 — build the memory pair ONCE for the whole gateway
+    // process and thread the SAME pair into BOTH agent builds below (the
+    // gateway agent and cron's). Every `build_agent_core` invocation used
+    // to load a fresh pair: two `MemoryManager`s whole-file-writing one
+    // MEMORY.md (bare `fs::write`, memory.rs), the second build repointing
+    // the global `ACTIVE_MEMORY_MANAGER` that the first agent's
+    // already-attached memory tools read, and cron getting a second
+    // provider instance over the same store.
+    let memory = crate::load_repo_memory_manager().await?;
+    let agent = crate::create_runtime_agent_with(
         app_config,
         &app_config.agent,
         None,
@@ -1073,6 +1082,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         &mcp_manager,
         &app_config.skills.root_dir,
         None, // gateway has no status bar; the agent keeps its internal registry
+        // `true`: this is the process's long-lived agent, so its LCM
+        // maintenance workers must spawn (cron below passes `false`).
+        true,
+        // BUGS.md D-5 — the hoisted pair; see the comment above.
+        Some(memory.clone()),
     )
     .await?;
     // Wire the permission channel so the agent can request approval for
@@ -1138,13 +1152,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             // pair over the same context engine - duplicated LLM spend on every
             // rollup tick and racing rollups. See create_runtime_agent_with.
             false,
+            // BUGS.md D-5 — the SAME hoisted pair the gateway agent was built
+            // with; constructing a fresh one here is what clobbered the
+            // gateway's memory backend.
+            Some(memory),
         )
         .await?
         .with_permissions(cron_permission_tx),
     );
 
-    // Long-term memory is handled by the agent (attached in
-    // create_runtime_agent above) — no separate provider instance here.
+    // Long-term memory is handled by the hoisted pair above: BOTH agents
+    // attach the SAME MemoryManager + provider (BUGS.md D-5) — cron never
+    // constructs its own memory backend.
 
     // Create bridge state channel for TUI status updates
     let (bridge_state_tx, _bridge_state_rx) =

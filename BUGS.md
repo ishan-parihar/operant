@@ -255,7 +255,7 @@ rollup tick, and two schedulers racing to roll up the same DAG.
   passes the flag through; `create_runtime_agent` remains as a `true`-passing
   wrapper so existing callers are untouched; the cron agent passes `false`.
 
-### D-5 — Two `MemoryManager`s over one MEMORY.md clobber each other (OPEN, P1)
+### D-5 — Two `MemoryManager`s over one MEMORY.md clobber each other (FIXED, P1)
 
 `MemoryStore::write_memories` (`memory.rs:287-291`) is a bare whole-file write:
 ```rust
@@ -276,11 +276,33 @@ interleaved `sync_turn` retains silently lose one side's write.
   gateway's already-attached memory tools read — away from the gateway's
   provider. The gateway's `sync_turn` and its `memory_store` tool would then
   diverge onto two backends.
-- **Fix (preferred)**: hoist the manager construction to the caller and pass the
-  SAME `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` to both agents. Needs
-  a `build_agent_core` overload, since it loads internally today. One change
-  settles this, D-3b, and the duplicate provider init.
-- **Interim**: do not enable cron jobs that retain memories until this is fixed.
+- **Fix applied (2026-10-03, wave-1 slice C) — construction hoisting, as preferred
+  above**: `build_agent_core` is now a thin wrapper that loads the pair and
+  delegates to a new `build_agent_core_with_memory` overload accepting the
+  `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` pair as parameters
+  (`main.rs`). `create_runtime_agent_with` gained a trailing `memory`
+  parameter (`None` = load internally, the single-agent default, so
+  `create_runtime_agent`, `create_agent_without_events`, TUI and chat builds
+  are behaviour-identical). `start_gateway` (`gateway_runner.rs`) constructs
+  the pair ONCE and threads the SAME pair into BOTH builds: the gateway
+  agent (`create_runtime_agent_with(.., true, Some(memory.clone()))`) and
+  cron's agent (`.., false, Some(memory)`). Consequences: one provider init
+  spawn per process, `ACTIVE_MEMORY_MANAGER` is set once before either agent
+  exists, and both agents' `sync_turn` and memory tools share one backend.
+  `memory.rs` / `memory_tools.rs` untouched.
+- **Invariant test**: `hoisted_memory_pair_is_shared_across_two_core_builds`
+  (`operant-cli/src/main.rs` test module) — two `build_agent_core_with_memory`
+  calls over ONE hoisted pair must yield `Arc::ptr_eq` providers, must use
+  the caller-supplied provider (not a fresh construction), and must share
+  ONE `MemoryManager` state (what one core stores, the other sees —
+  `MemoryManager` is all `Arc<RwLock>` inside, so a clone IS the shared
+  state). Negative control proven: re-injecting the per-call
+  `load_repo_memory_manager()` reload (the exact pre-fix behaviour) inside
+  the overload turns the test red (`0 passed; 1 failed`, the ptr_eq
+  assertion fires); restore verified by sha256
+  (`52bf2955304ca12c70c21af14e0559a2ac25dc885b38e6794f9372ebcfab5a13`),
+  green again (4/4 memory-filtered bin tests). The interim caution — do not
+  enable cron jobs that retain memories — is lifted.
 
 ### D-6 — Cron shares process-global sub-agent limits with the gateway (OPEN, P2)
 

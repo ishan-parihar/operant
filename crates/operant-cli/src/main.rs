@@ -1338,6 +1338,13 @@ struct AgentCore {
 }
 
 /// Build the shared core components needed by both agent constructors.
+///
+/// Single-agent default: the repo memory pair (fresh `MemoryManager` +
+/// provider) is loaded internally per invocation. Hosts that build a SECOND
+/// agent in the same process (gateway + cron) must NOT use this directly —
+/// construct the pair once and thread it through
+/// [`build_agent_core_with_memory`] so both agents share one memory
+/// backend (BUGS.md D-5).
 async fn build_agent_core(
     config: &AppConfig,
     system_prompt: Option<&str>,
@@ -1346,6 +1353,41 @@ async fn build_agent_core(
     model_name: &str,
     behavior: &BehaviorSettings,
     event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
+) -> Result<AgentCore> {
+    let (memory_manager, memory_provider) = load_repo_memory_manager().await?;
+    build_agent_core_with_memory(
+        config,
+        system_prompt,
+        mcp_manager,
+        skills_dir,
+        model_name,
+        behavior,
+        event_tx,
+        memory_manager,
+        memory_provider,
+    )
+    .await
+}
+
+/// BUGS.md D-5: build the agent core with a CALLER-SUPPLIED memory pair.
+///
+/// Loading per invocation (what `build_agent_core` does) gave a two-agent
+/// process two `MemoryManager`s whole-file-writing one MEMORY.md, a second
+/// build repointing the global `ACTIVE_MEMORY_MANAGER` that the first
+/// agent's already-attached memory tools read, and a second provider
+/// instance over the same store. The fix is hoisting: the host constructs
+/// the `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` pair ONCE and
+/// threads the SAME pair through this overload for every agent it builds.
+async fn build_agent_core_with_memory(
+    config: &AppConfig,
+    system_prompt: Option<&str>,
+    mcp_manager: &McpManager,
+    skills_dir: &Path,
+    model_name: &str,
+    behavior: &BehaviorSettings,
+    event_tx: Option<tokio::sync::mpsc::Sender<operant_core::agent::AgentEvent>>,
+    memory_manager: MemoryManager,
+    memory_provider: Option<Arc<dyn MemoryProvider>>,
 ) -> Result<AgentCore> {
     let raw_client = OpenAIClient::new(client_config(config));
     let database = Arc::new(Database::init(config.database_path.clone())?);
@@ -1359,7 +1401,6 @@ async fn build_agent_core(
     )
     .await?;
     let agent_config = agent_config(config, behavior, system_prompt);
-    let (memory_manager, memory_provider) = load_repo_memory_manager().await?;
 
     // Hermes-plugin parity: register the memory provider's own tool schemas
     // (memory_smart_search, memory_save, ...) directly in the registry. The
@@ -1738,6 +1779,9 @@ pub(crate) async fn create_runtime_agent(
         skills_dir,
         metrics,
         true,
+        // Single-agent default: the memory pair is loaded inside
+        // build_agent_core (BUGS.md D-5 hoisting is for multi-agent hosts).
+        None,
     )
     .await
 }
@@ -1752,6 +1796,14 @@ pub(crate) async fn create_runtime_agent(
 /// loops over the same context engine: duplicated LLM spend on every tick and
 /// racing rollups. `build_context_engine` already takes this flag
 /// (`main.rs:1917`); pass it straight through.
+/// `build_context_engine` already takes this flag
+/// (`main.rs:1917`); pass it straight through.
+///
+/// `memory` is the BUGS.md D-5 seam: `None` keeps the single-agent default
+/// (the pair is loaded inside `build_agent_core`); multi-agent hosts pass
+/// ONE `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` pair constructed
+/// at their entry point so every agent built in the process shares the
+/// same memory backend.
 pub(crate) async fn create_runtime_agent_with(
     config: &AppConfig,
     behavior: &BehaviorSettings,
@@ -1761,17 +1813,36 @@ pub(crate) async fn create_runtime_agent_with(
     skills_dir: &Path,
     metrics: Option<std::sync::Arc<operant_core::runtime_metrics::RuntimeMetrics>>,
     spawn_long_lived_maintenance: bool,
+    memory: Option<(MemoryManager, Option<Arc<dyn MemoryProvider>>)>,
 ) -> Result<OperantAgent> {
-    let core = build_agent_core(
-        config,
-        system_prompt,
-        mcp_manager,
-        skills_dir,
-        &behavior.model,
-        behavior,
-        Some(event_tx.clone()),
-    )
-    .await?;
+    let core = match memory {
+        Some((memory_manager, memory_provider)) => {
+            build_agent_core_with_memory(
+                config,
+                system_prompt,
+                mcp_manager,
+                skills_dir,
+                &behavior.model,
+                behavior,
+                Some(event_tx.clone()),
+                memory_manager,
+                memory_provider,
+            )
+            .await?
+        }
+        None => {
+            build_agent_core(
+                config,
+                system_prompt,
+                mcp_manager,
+                skills_dir,
+                &behavior.model,
+                behavior,
+                Some(event_tx.clone()),
+            )
+            .await?
+        }
+    };
 
     let provider = crate::tui::provider::infer_provider_from_model(&behavior.model)
         .unwrap_or_else(|| "openai".to_string());
@@ -3109,6 +3180,87 @@ mod tests {
         assert!(provider.is_none() || provider.unwrap().name() == "memory_wire");
 
         assert_eq!(loaded.search("Loaded memory").await.len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// BUGS.md D-5 — the hoisted memory pair must be the pair the agent
+    /// core is built with. Two `build_agent_core_with_memory` calls given
+    /// ONE pair must yield `Arc::ptr_eq` providers (the SAME backend), not
+    /// a second construction. The gateway relies on exactly this when it
+    /// threads one `load_repo_memory_manager()` pair into the gateway
+    /// agent AND the cron agent; red here means a build silently reloaded
+    /// and the two agents are clobbering each other's MEMORY.md again.
+    #[tokio::test]
+    async fn hoisted_memory_pair_is_shared_across_two_core_builds() {
+        let dir =
+            std::env::temp_dir().join(format!("operant_cli_memory_hoist_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut config = AppConfig::default();
+        config.database_path = dir.join("database.db");
+        config.skills.root_dir = dir.join("skills");
+        config.skills.memory_dir = dir.join("memory");
+        std::fs::create_dir_all(&config.skills.root_dir).unwrap();
+
+        // The hoisted pair, exactly as the gateway constructs it once: one
+        // manager + one provider over the same store.
+        let memory_manager = MemoryManager::with_storage_dir(dir.clone());
+        let memory_provider: Arc<dyn MemoryProvider> =
+            operant_core::memory_provider::build_memory_provider("builtin", dir.clone());
+
+        let mcp_manager = McpManager::new();
+        let build_core = || async {
+            build_agent_core_with_memory(
+                &config,
+                None,
+                &mcp_manager,
+                &config.skills.root_dir,
+                &config.agent.model,
+                &config.agent,
+                None,
+                memory_manager.clone(),
+                Some(memory_provider.clone()),
+            )
+            .await
+            .unwrap()
+        };
+
+        let core_one = build_core().await;
+        let core_two = build_core().await;
+
+        let first = core_one.memory_provider.as_ref().unwrap();
+        let second = core_two.memory_provider.as_ref().unwrap();
+        assert!(
+            Arc::ptr_eq(first, second),
+            "D-5: two agent-core builds over one hoisted pair must share the SAME provider instance"
+        );
+        assert!(
+            Arc::ptr_eq(first, &memory_provider),
+            "D-5: the core must use the caller-supplied provider, not a freshly constructed one"
+        );
+
+        // The manager half must be shared state too (MemoryManager is all
+        // Arc<RwLock> inside, so a clone is the SAME state): what one build
+        // stores, the other must see. Two independent managers over one
+        // MEMORY.md is the clobber in the bug title.
+        core_one
+            .memory_manager
+            .store(
+                operant_core::memory::MemoryBlock::new("d5_probe", "fact", "hoisted pair probe")
+                    .importance(50),
+            )
+            .await;
+        assert_eq!(
+            core_two
+                .memory_manager
+                .search("hoisted pair probe")
+                .await
+                .len(),
+            1,
+            "D-5: the two cores must share ONE MemoryManager state; a fresh manager would see nothing"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
