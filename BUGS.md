@@ -141,19 +141,23 @@ employee's seat policy, enforced on the run path —
 - iter-580 attached `SeatPolicyDb` to both agents — a governed seat is
   fully closed (lockdown/scoped deny-and-ask; unattended clamp from 585).
 - iter-585 closed the unattended escalation hole for GOVERNED seats and
-  added the `[genome]` config block, whose `unrestricted_default` knob is
-  precisely the instrument for the decision this entry asks for.
+  added the `[genome]` config block (`grant_ttl_days` is live;
+  `unrestricted_default` is a P3 policy-creation default, not a runtime
+  posture knob — see the residual below).
 
 **What is still open:** the *default value* of that decision. An UNGOVERNED
 seat — no policy row — keeps the pre-genome posture byte-identically,
 which for an unattended run means the dispatcher's no-active-channel arm
 still auto-approves a dangerous tool with `AllowSession` (that arm is now
 gated to ungoverned requests only, but the ungoverned default is the
-legacy fail-open). D-2's own standard — "the safe default is an explicit
-decision, not the `None` fallback" — is met on mechanism, not yet on
-default: whether `unrestricted_default` ships as `yolo` (status quo) or
-something stricter for unattended runs is an owner decision, now a
-config value away.
+legacy fail-open). The remedy is **a per-seat policy row** — `standard`
+or `lockdown` on the cron seat — which is data, not a code change.
+Note `[genome].unrestricted_default` is NOT this knob: it only feeds
+P3's `/grant`-family commands as the mode for a newly-created policy
+row (`config.rs:125-128`); the runtime posture of a seat with no row is
+ungoverned regardless of its value. If the owner wants an org-wide
+fail-closed default for unattended runs, that is a deliberate code change
+— no config value expresses it today.
 
 The original finding, for the record:
 
