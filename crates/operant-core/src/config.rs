@@ -122,18 +122,19 @@ impl Default for AppConfig {
 ///   for non-CEO approvals: the grant is recorded already-lapsed, so the
 ///   approval is auditable while conferring nothing. CEO+ (org-lead)
 ///   approvals mint standing grants (`expires_at = None`) regardless.
-/// - `unrestricted_default` — consumed by P3's `/grant`-family commands as
-///   the mode a newly-seated policy row carries when the operator does not
-///   name one. Recorded now so the value is overridable before that lands;
-///   the RUNTIME default for a seat without a policy row stays ungoverned
-///   (byte-identical to mainline — which is NOT `yolo`: dangerous tools
-///   still prompt), per `org/seat_policy.rs` rule 2.
-/// - `queued_cron_jobs_resolve_grants` — consumed by P3's queue sweep: when
-///   `true`, the scheduler marks still-pending requests whose grant already
-///   stands as approved at tick time (today the queue is resolved only by a
-///   human verdict or the 60s interactive lapse; the run itself consults the
-///   ledger every tick regardless, so the flag changes audit bookkeeping,
-///   not enforcement).
+/// - `unrestricted_default` — consumed by the `/grant` command (P3, live
+///   since iter-598) as the mode a newly-seated policy row carries when the
+///   operator does not name one. The RUNTIME default for a seat without a
+///   policy row stays ungoverned (byte-identical to mainline — which is
+///   NOT `yolo`: dangerous tools still prompt), per
+///   `org/seat_policy.rs` rule 2.
+/// - `queued_cron_jobs_resolve_grants` — a DECLARED, NOT-YET-WIRED switch
+///   (iter-598 landed P3 without the sweep): when a consumer is wired it
+///   will make the scheduler mark still-pending requests whose grant
+///   already stands as approved at tick time. No consumer reads it today;
+///   the queue is resolved only by a human verdict or the 60s interactive
+///   lapse (the run itself consults the ledger every tick regardless, so
+///   the flag would change audit bookkeeping, not enforcement).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GenomeSettings {

@@ -158,7 +158,7 @@ arm is gated to ungoverned requests only, but the effective ungoverned
 unattended posture is still fail-open). The remedy for a specific cron
 seat is **a per-seat policy row** — `standard` or `lockdown` — which is
 data, not code. Note `[genome].unrestricted_default` is NOT this knob: it
-only feeds P3's `/grant`-family commands as the mode for a newly-created
+only feeds the `/grant` command (P3, live since iter-598) as the mode for a newly-created
 policy row (`config.rs:125-128`); the runtime posture of a seat with no
 row is ungoverned regardless of its value. If the owner wants an org-wide
 fail-closed default for unattended runs, that is a deliberate code change
