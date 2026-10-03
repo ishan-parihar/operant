@@ -47,6 +47,18 @@ pub mod image_paste;
 pub mod image_render;
 pub mod input;
 pub mod input_history;
+// W1 seam of docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md: jcode's message
+// data model (`DisplayMessage`, prepared chat frames, viewport anchors,
+// tool-name display helpers), ported verbatim from jcode @ 0a9dc7805. It
+// lands before its W3 renderer consumers, so the module is dead until the
+// transcript renderers arrive; `expect` rather than `allow` so it fails
+// loudly the moment W3 wires in. The module's own tests read its items, so
+// the expectation is cfg-gated off in test builds (same as copy_targets).
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "lands before its W3 renderer consumers")
+)]
+pub mod jcode_model;
 pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;
