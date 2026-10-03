@@ -48,30 +48,6 @@ pub fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Pins the Wave-0 invariant. The deleted second detector used to
-    /// rewrite `rgb()` to `Color::Indexed` on a 256-colour terminal, which
-    /// let one frame carry two encodings of the same colour (the exact
-    /// defect `align_vendored_detector` used to paper over). If this test
-    /// fails, someone reintroduced a depth negotiation into the vendored
-    /// layer - fix that, not the assertion.
-    ///
-    /// No env manipulation: `rgb` is a one-line function that reads no
-    /// environment at all, and mutating process-global env from a test that
-    /// shares a process with other style tests would be contamination, not
-    /// proof. The literals below are the checked values.
-    #[test]
-    fn rgb_is_never_quantized_regardless_of_terminal() {
-        // Pinned to literals, not derived from the code under test.
-        assert_eq!(rgb(204, 155, 31), Color::Rgb(204, 155, 31));
-        assert_eq!(rgb(0, 0, 0), Color::Rgb(0, 0, 0));
-        assert_eq!(rgb(255, 87, 51), Color::Rgb(255, 87, 51));
-    }
-}
-
 pub fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
     if idx >= 232 {
         let v = 8 + (idx - 232) * 10;
@@ -105,5 +81,29 @@ pub fn indexed_to_rgb(idx: u8) -> (u8, u8, u8) {
             14 => (255, 255, 255),
             _ => (255, 255, 255),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the Wave-0 invariant. The deleted second detector used to
+    /// rewrite `rgb()` to `Color::Indexed` on a 256-colour terminal, which
+    /// let one frame carry two encodings of the same colour (the exact
+    /// defect `align_vendored_detector` used to paper over). If this test
+    /// fails, someone reintroduced a depth negotiation into the vendored
+    /// layer - fix that, not the assertion.
+    ///
+    /// No env manipulation: `rgb` is a one-line function that reads no
+    /// environment at all, and mutating process-global env from a test that
+    /// shares a process with other style tests would be contamination, not
+    /// proof. The literals below are the checked values.
+    #[test]
+    fn rgb_is_never_quantized_regardless_of_terminal() {
+        // Pinned to literals, not derived from the code under test.
+        assert_eq!(rgb(204, 155, 31), Color::Rgb(204, 155, 31));
+        assert_eq!(rgb(0, 0, 0), Color::Rgb(0, 0, 0));
+        assert_eq!(rgb(255, 87, 51), Color::Rgb(255, 87, 51));
     }
 }
