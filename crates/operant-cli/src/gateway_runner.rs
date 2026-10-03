@@ -44,6 +44,14 @@ type ThreadKey = (String, String, Option<i64>);
 /// not sent a second time.
 type StreamDeliveryMap = Arc<Mutex<HashMap<ThreadKey, String>>>;
 
+/// (platform, channel_id, thread_id) -> exit reason of the turn that just
+/// completed (BUGS.md S5). The event receiver writes it on
+/// `AgentEvent::Done`; the handler's turn-end block reads it so a
+/// grace-call or circuit-breaker exit surfaces as an operator-visible
+/// "stopped early" notice instead of looking like a full answer (the
+/// 25-day silence-after-degenerate-warning class).
+type ExitReasonMap = Arc<Mutex<HashMap<ThreadKey, operant_core::agent::TurnExitReason>>>;
+
 /// (platform, channel_id, thread_id) -> (message_id, tool_lines) for the
 /// per-segment tool-progress timeline. Each TOOL GROUP (a run of tool calls
 /// with no intervening text) owns one message; the group is closed when a
@@ -536,6 +544,82 @@ impl SessionPins {
     }
 }
 
+/// Compact human-readable duration for the stopped-early operator notice
+/// (BUGS.md S5): "4m 37s" above a minute, "42s" below it.
+fn format_turn_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// BUGS.md S5 — the operator-visible content for a completed turn.
+///
+/// Extracted from `GatewayMessageHandler::handle`'s turn-end block so the
+/// operator-facing wording is unit-testable without a handler harness
+/// (none exists in this crate). Semantics are verbatim from the former
+/// inline cascade:
+/// - empty content + early stop → stopped-early status line (A1's grace
+///   gate returns the empty message for degenerate grace output, so this
+///   is the operator-visible form of the reasoning-leak artifact class);
+/// - empty + reasoning fallback and the provider-overload wording keep
+///   their pre-S5 meaning so hermes-parity expectations keep passing;
+/// - non-empty + early stop → the partial answer, labelled with elapsed
+///   time and the real exit reason;
+/// - a normal `TextResponse` turn (`early_stop: None`) passes through
+///   unmodified.
+fn turn_end_content(
+    content: &str,
+    reasoning: Option<&str>,
+    early_stop: Option<operant_core::agent::TurnExitReason>,
+    elapsed: std::time::Duration,
+) -> String {
+    if content.trim().is_empty() {
+        if let Some(reason) = early_stop {
+            // Early-stop exit with nothing (or only degenerate text) to
+            // show: one-line status + resume hint.
+            format!(
+                "⚠️ I stopped early after {} — {}: no summary could be produced. \
+                 Reply 'continue' to resume the task.",
+                format_turn_elapsed(elapsed),
+                reason,
+            )
+        } else if let Some(r) = reasoning {
+            if !r.trim().is_empty() {
+                tracing::info!(
+                    "Content empty but reasoning available, using as fallback (len={})",
+                    r.len()
+                );
+                r.to_string()
+            } else {
+                tracing::warn!("Agent returned empty response, no reasoning available");
+                "⚠️ My model provider returned an empty response after retries \
+                 (provider overload). Reply 'continue' to resume the task."
+                    .to_string()
+            }
+        } else {
+            tracing::warn!("Agent returned empty response, no reasoning available");
+            "⚠️ My model provider returned an empty response after retries \
+             (provider overload). Reply 'continue' to resume the task."
+                .to_string()
+        }
+    } else if let Some(reason) = early_stop {
+        // Early-stop exit with a non-degenerate partial answer: keep the
+        // partial but label it as one, with the elapsed time and the real
+        // reason.
+        format!(
+            "⚠️ I stopped early after {} — {}: {}",
+            format_turn_elapsed(elapsed),
+            reason,
+            content
+        )
+    } else {
+        content.to_string()
+    }
+}
+
 /// Message handler that processes incoming gateway messages through the Operant agent.
 ///
 /// Long-term memory is handled by the agent itself: `OperantAgent` now
@@ -562,6 +646,11 @@ struct GatewayMessageHandler {
     /// loop's `CommandContext` so the command can pin a session this handler
     /// then honours.
     session_pins: Arc<SessionPins>,
+    /// Per-thread exit reason of the most recent turn, written by the event
+    /// receiver on `AgentEvent::Done` (S5). Read by the turn-end block so a
+    /// non-`TextResponse` exit becomes an operator-visible stopped-early
+    /// notice.
+    exit_reasons: ExitReasonMap,
 }
 
 #[async_trait::async_trait]
@@ -770,29 +859,39 @@ impl MessageHandler for GatewayMessageHandler {
         match self.agent.run(query).await {
             Ok(response) => {
                 let used_fallback = response.content.trim().is_empty();
-                let content = if response.content.trim().is_empty() {
-                    if let Some(ref reasoning) = response.reasoning {
-                        if !reasoning.trim().is_empty() {
-                            tracing::info!(
-                                "Content empty but reasoning available, using as fallback (len={})",
-                                reasoning.len()
-                            );
-                            reasoning.clone()
-                        } else {
-                            tracing::warn!("Agent returned empty response, no reasoning available");
-                            "⚠️ My model provider returned an empty response after retries \
-                             (provider overload). Reply 'continue' to resume the task."
-                                .to_string()
-                        }
-                    } else {
-                        tracing::warn!("Agent returned empty response, no reasoning available");
-                        "⚠️ My model provider returned an empty response after retries \
-                         (provider overload). Reply 'continue' to resume the task."
-                            .to_string()
-                    }
-                } else {
-                    response.content
+                // S5 (BUGS.md) — the exit reason stashed by the event
+                // receiver's Done handler says whether this was a real
+                // answer (`TextResponse`) or an early stop (`GraceCall` /
+                // `CircuitBreaker`). An early stop must read as one to the
+                // operator: before this, a degenerate grace summary arrived
+                // looking like the final answer and the agent then fell
+                // silent (the 25-day-silence specimen).
+                //
+                // `remove` consumes the entry so the reason cannot leak into
+                // the next turn on this thread.
+                let exit_reason = {
+                    let mut map = self.exit_reasons.lock().await;
+                    map.remove(&(
+                        message.platform.clone(),
+                        message.channel_id.clone(),
+                        message.thread_id,
+                    ))
                 };
+                let early_stop =
+                    exit_reason.filter(|r| *r != operant_core::agent::TurnExitReason::TextResponse);
+                if let Some(reason) = early_stop {
+                    tracing::warn!(
+                        %reason,
+                        session_key = %session_key,
+                        "Turn ended early — substituting stopped-early notice for the operator"
+                    );
+                }
+                let content = turn_end_content(
+                    &response.content,
+                    response.reasoning.as_deref(),
+                    early_stop,
+                    turn_started.elapsed(),
+                );
 
                 // Turn persistence to long-term memory happens inside
                 // agent.run() via the agent's memory provider (sync_turn).
@@ -1164,6 +1263,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // never collide on each other's stream/dedup markers (hermes session
     // isolation parity).
     let stream_delivery: StreamDeliveryMap = Arc::new(Mutex::new(HashMap::new()));
+    let exit_reasons: ExitReasonMap = Arc::new(Mutex::new(HashMap::new()));
 
     // Create permission channel for tool-approval flow (Bug #1 from iter-98
     // audit — gateway never called with_permissions, so bash/file_write ran
@@ -1358,6 +1458,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         gateway: tokio::sync::Mutex::new(None),
         bridge_state_tx,
         session_pins: Arc::new(SessionPins::default()),
+        exit_reasons: exit_reasons.clone(),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -1746,6 +1847,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let gw_for_events = gw.clone();
     let current_channel_for_events = current_channel.clone();
     let stream_delivery_for_events = stream_delivery.clone();
+    let exit_reasons_for_events = exit_reasons.clone();
     tokio::spawn(async move {
         // Per-segment tool-progress messages (closed on text boundaries).
         let mut progress_tracker = ToolProgressTracker::new();
@@ -1955,7 +2057,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         "Reasoning/thinking token received (not surfaced in gateway mode)"
                     );
                 }
-                AgentEvent::Done { .. } => {
+                AgentEvent::Done { reason, .. } => {
+                    // S5: stash the turn's exit reason for the handler's
+                    // turn-end block — a grace/circuit-breaker exit must
+                    // surface as a stopped-early notice, not read as a full
+                    // answer.
+                    {
+                        let mut map = exit_reasons_for_events.lock().await;
+                        map.insert((platform.clone(), channel_id.clone(), thread_id), reason);
+                    }
                     // Final message — do a final edit with the complete text
                     // of the last writing block. If the last block never got
                     // a message (debounce race: content arrived, then Done
@@ -3349,6 +3459,90 @@ fn enrich_document(raw: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use operant_core::config::GatewaySettings;
+
+    #[test]
+    fn format_turn_elapsed_boundaries() {
+        assert_eq!(format_turn_elapsed(std::time::Duration::from_secs(0)), "0s");
+        assert_eq!(
+            format_turn_elapsed(std::time::Duration::from_secs(59)),
+            "59s"
+        );
+        assert_eq!(
+            format_turn_elapsed(std::time::Duration::from_secs(60)),
+            "1m 0s"
+        );
+        assert_eq!(
+            format_turn_elapsed(std::time::Duration::from_secs(1207)),
+            "20m 7s"
+        );
+    }
+
+    #[test]
+    fn grace_call_with_empty_partial_marks_stopped() {
+        // The 2026-10-03 specimen shape: A1's gate emptied a degenerate
+        // grace summary — the operator must read stopped + elapsed + reason,
+        // never silence. (Before S5 this fell through to the generic
+        // provider-overload wording.)
+        let out = turn_end_content(
+            "",
+            None,
+            Some(operant_core::agent::TurnExitReason::GraceCall),
+            std::time::Duration::from_secs(1207),
+        );
+        assert!(out.contains("stopped early"), "{out}");
+        assert!(out.contains("20m 7s"), "{out}");
+        assert!(out.contains("grace_call"), "{out}");
+        assert!(out.contains("continue"), "{out}");
+        assert!(!out.contains("provider overload"), "{out}");
+    }
+
+    #[test]
+    fn circuit_breaker_with_partial_keeps_and_labels_it() {
+        let out = turn_end_content(
+            "Found three of five records.",
+            None,
+            Some(operant_core::agent::TurnExitReason::CircuitBreaker),
+            std::time::Duration::from_secs(45),
+        );
+        assert!(out.contains("stopped early"), "{out}");
+        assert!(out.contains("45s"), "{out}");
+        assert!(out.contains("circuit_breaker"), "{out}");
+        assert!(out.contains("Found three of five records."), "{out}");
+    }
+
+    #[test]
+    fn empty_with_reasoning_keeps_reasoning_fallback_wording() {
+        // Positive control for the pre-existing parity path: a TextResponse
+        // turn with empty content + a reasoning trace still surfaces the
+        // reasoning verbatim (R32).
+        let out = turn_end_content(
+            "",
+            Some("thinking trace"),
+            None,
+            std::time::Duration::from_secs(3),
+        );
+        assert_eq!(out, "thinking trace");
+    }
+
+    #[test]
+    fn empty_without_reasoning_keeps_provider_fallback_wording() {
+        let out = turn_end_content("", None, None, std::time::Duration::from_secs(3));
+        assert!(out.contains("empty response after retries"), "{out}");
+        assert!(!out.contains("stopped early"), "{out}");
+    }
+
+    #[test]
+    fn normal_answer_passes_through_unmodified() {
+        // The positive control for the whole cascade: a normal turn is
+        // byte-identical before and after the extraction.
+        let out = turn_end_content(
+            "Full answer.",
+            None,
+            None,
+            std::time::Duration::from_secs(3),
+        );
+        assert_eq!(out, "Full answer.");
+    }
 
     #[test]
     fn build_adapters_wires_whatsapp_phone_number_id() {

@@ -1435,7 +1435,12 @@ impl MockAgentEvent {
             MockAgentEvent::Done { text, reasoning } => {
                 let mut msg = operant_core::client::Message::assistant(text);
                 msg.reasoning = reasoning;
-                AE::Done { message: msg }
+                // The debug simulator scripts finish cleanly — the mock
+                // always reports a normal text-response exit (S5 field).
+                AE::Done {
+                    message: msg,
+                    reason: operant_core::agent::TurnExitReason::TextResponse,
+                }
             }
             MockAgentEvent::Error { error } => AE::Error { error },
         })

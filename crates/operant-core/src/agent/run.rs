@@ -78,8 +78,9 @@ impl OperantAgent {
     /// if the grace call also fails. A degenerate grace output (empty, or a
     /// short whitespace-free reasoning-leak artifact per
     /// `turn_rules::is_degenerate_final_text`) returns the EMPTY assistant
-    /// message instead — the gateway substitutes the user-facing stopped
-    /// notice for empty content (`gateway_runner.rs:738-762`).
+    /// message instead — the gateway substitutes the user-facing
+    /// stopped-early notice keyed on the `GraceCall` exit reason carried by
+    /// the `Done` event (`gateway_runner.rs` turn-end block).
     pub(crate) async fn attempt_grace_call(
         &self,
         messages: &[Message],
@@ -140,8 +141,30 @@ impl OperantAgent {
                 }
                 self.emit(AgentEvent::Done {
                     message: result.clone(),
+                    // S5: the grace path must not report `text_response` —
+                    // the summary is a best-effort partial.
+                    reason: TurnExitReason::GraceCall,
                 })
                 .await;
+                // ── Turn diagnostics (grace exit) ─────────────────────────
+                // S5: honesty — the log must say `grace_call` here, never
+                // `budget_exhausted` (pre-call diagnostic, kept) or
+                // `text_response`.
+                warn!(
+                    "{}",
+                    TurnDiagnostics {
+                        exit_reason: TurnExitReason::GraceCall,
+                        model: self.model(),
+                        api_calls: iterations,
+                        max_iterations: self.config.max_iterations,
+                        budget_used: self.iteration_budget.used(),
+                        budget_max: self.iteration_budget.max_total(),
+                        tool_turns: tool_calls,
+                        response_len: result.content.len(),
+                        session_id: session_id.to_string(),
+                    }
+                    .log_message()
+                );
                 if let Some(ref obs) = self.observer {
                     let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
                     obs.record_event(&ObserverEvent::AgentEnd {
@@ -1221,6 +1244,7 @@ impl OperantAgent {
 
                         self.emit(AgentEvent::Done {
                             message: assistant_msg,
+                            reason: TurnExitReason::TextResponse,
                         })
                         .await;
 
@@ -1427,6 +1451,29 @@ impl OperantAgent {
                             identical_streak
                         ));
                         self.add_message(abort_msg.clone()).await;
+                        // S5: stamp the real exit reason — the operator must
+                        // see that the turn was broken off, not answered.
+                        self.emit(AgentEvent::Done {
+                            message: abort_msg.clone(),
+                            reason: TurnExitReason::CircuitBreaker,
+                        })
+                        .await;
+                        // ── Turn diagnostics (circuit-breaker abort) ──────
+                        warn!(
+                            "{}",
+                            TurnDiagnostics {
+                                exit_reason: TurnExitReason::CircuitBreaker,
+                                model: self.model(),
+                                api_calls: iteration,
+                                max_iterations: self.config.max_iterations,
+                                budget_used: self.iteration_budget.used(),
+                                budget_max: self.iteration_budget.max_total(),
+                                tool_turns: total_tool_calls,
+                                response_len: abort_msg.content.len(),
+                                session_id: session_id.clone(),
+                            }
+                            .log_message()
+                        );
                         return Ok(abort_msg);
                     }
                     if identical_streak == 4 {
@@ -1467,6 +1514,29 @@ impl OperantAgent {
                             consecutive_failed_iters
                         ));
                         self.add_message(abort_msg.clone()).await;
+                        // S5: stamp the real exit reason — the operator must
+                        // see that the turn was broken off, not answered.
+                        self.emit(AgentEvent::Done {
+                            message: abort_msg.clone(),
+                            reason: TurnExitReason::CircuitBreaker,
+                        })
+                        .await;
+                        // ── Turn diagnostics (circuit-breaker abort) ──────
+                        warn!(
+                            "{}",
+                            TurnDiagnostics {
+                                exit_reason: TurnExitReason::CircuitBreaker,
+                                model: self.model(),
+                                api_calls: iteration,
+                                max_iterations: self.config.max_iterations,
+                                budget_used: self.iteration_budget.used(),
+                                budget_max: self.iteration_budget.max_total(),
+                                tool_turns: total_tool_calls,
+                                response_len: abort_msg.content.len(),
+                                session_id: session_id.clone(),
+                            }
+                            .log_message()
+                        );
                         return Ok(abort_msg);
                     }
 

@@ -3906,3 +3906,45 @@ One consumer-adaptation checked and dismissed: `tests/nested_agent_run.rs`'s
 child grace body is `"{CHILD_ANSWER_MARKER}: one iteration, then out of
 budget"` — real prose with spaces, not the artifact class — so the nested
 delegation shape is unaffected.
+
+### S5 — Non-`TextResponse` exits were invisible; in-band aborts masqueraded as `TextResponse` (FIXED iter-600)
+
+The log's single longest silence (25 days, 2026-08-31) begins immediately
+after a `Degenerate tool-call loop` warning — the process died mid-failure
+and no terminal state ever reached the operator. In the 2026-10-03 05:10
+specimen, a 21-minute turn ended on a 13-char reasoning-leak string and the
+gateway reported `Gateway turn end: answered ... empty_response_fallback:
+false`. Structurally, `TurnExitReason` (`agent/turn_finalizer.rs`) had four
+variants, but the two in-band circuit-breaker aborts (`identical_streak >=
+6`, `consecutive_failed_iters >= 6`) returned an assistant `abort_msg`
+through the normal `Done` path — so every consumer read a broken-off turn
+as a normal completion, and the grace-call exits (`run.rs:389/:408/:472`)
+likewise surfaced as `text_response`.
+
+`TurnExitReason` now carries `GraceCall` and `CircuitBreaker` (Display:
+`grace_call` / `circuit_breaker`), `AgentEvent::Done` carries the reason
+alongside the message (every match/constructor updated in one clean cut:
+`gateway_runner.rs`, `tui/app/agent_events.rs`, `cmd_tui_debug.rs`, core
+tests), and `TurnDiagnostics` for grace/breaker exits logs the real
+reason. On the gateway, the event consumer stashes the per-thread reason
+on `Done`; the turn-end block consumes it once and, for a non-`TextResponse`
+exit, substitutes the operator notice — "⚠️ I stopped early after {elapsed}
+— {reason}: {partial}" — so the operator reads a bounded failure with a
+name, not silence or a masqueraded answer. The wording cascade (reasoning
+fallback, provider-overload message) is preserved verbatim for
+`TextResponse` turns so the R32/hermes-parity expectations keep passing;
+the cascade is extracted as pure `turn_end_content(content, reasoning,
+early_stop, elapsed)` so the operator-facing wording is unit-testable
+without a handler harness (none exists in this crate).
+
+Verification: `tests/exit_reason_truth.rs` drives scripted turns —
+degenerate grace reports `reason=grace_call` (not `text_response`), the
+all-fail breaker path reports `reason=circuit_breaker`, and the positive
+control proves a normal turn still reports `text_response` with the message
+unmodified. Gateway-side, `turn_end_content` tests pin every branch:
+empty-partial + `GraceCall` after 1207s reads "stopped early / 20m 7s /
+grace_call / continue" (the specimen shape, now named), a `CircuitBreaker`
+partial is kept and labelled, the reasoning and provider-overload
+fallbacks pass through unchanged, and a normal answer is byte-identical
+(extraction proven behavior-preserving). Suite gate: 2280 passed / 2
+failed, identical to the pre-existing `tools::kernel` K-1 pair.

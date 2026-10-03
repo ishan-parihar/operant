@@ -21,6 +21,7 @@ pub mod skill_preprocessing;
 pub mod stream_retry_budget;
 pub(crate) mod turn_context;
 pub(crate) mod turn_finalizer;
+pub use turn_finalizer::TurnExitReason;
 pub mod turn_retry_state;
 pub mod turn_rules;
 
@@ -209,8 +210,19 @@ pub enum AgentEvent {
     },
     /// Response content received
     Content { text: String },
-    /// Agent finished with final response
-    Done { message: Message },
+    /// Agent finished with final response.
+    ///
+    /// `reason` is why the turn actually ended (BUGS.md S5): only
+    /// [`TurnExitReason::TextResponse`] is a normal completion — a
+    /// `GraceCall` or `CircuitBreaker` reason means the agent stopped early
+    /// and `message` is a best-effort partial (possibly empty after the S1
+    /// grace quality gate). Consumers that surface the message to an
+    /// operator MUST check the reason (`gateway_runner` substitutes the
+    /// stopped-early notice).
+    Done {
+        message: Message,
+        reason: TurnExitReason,
+    },
     /// Agent iteration completed
     IterationComplete { iteration: usize },
     /// Agent error

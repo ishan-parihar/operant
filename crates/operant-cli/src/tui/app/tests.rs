@@ -1046,7 +1046,10 @@ fn test_done_message_used_when_no_streaming() {
         tool_calls: None,
         extra_content: None,
     };
-    app.handle_agent_event(AgentEvent::Done { message: done_msg });
+    app.handle_agent_event(AgentEvent::Done {
+        message: done_msg,
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
     assert_eq!(app.messages.len(), 1, "Done should produce 1 message");
     assert!(
         app.messages[0].text_content().contains("Hello from Done"),
@@ -1072,7 +1075,10 @@ fn test_done_with_streaming_uses_streamed_text() {
         tool_calls: None,
         extra_content: None,
     };
-    app.handle_agent_event(AgentEvent::Done { message: done_msg });
+    app.handle_agent_event(AgentEvent::Done {
+        message: done_msg,
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
     assert_eq!(app.messages.len(), 1);
     assert!(
         app.messages[0].text_content().contains("Streamed content"),
@@ -1562,6 +1568,7 @@ fn test_streaming_agent_events_commit_message() {
     });
     app.handle_agent_event(AgentEvent::Done {
         message: operant_core::client::Message::assistant("Hello world"),
+        reason: operant_core::agent::TurnExitReason::TextResponse,
     });
 
     let snap = app.debug_snapshot();
@@ -2527,6 +2534,7 @@ fn a_submission_that_never_started_a_turn_cannot_resurrect_an_older_prompt() {
             tool_calls: None,
             extra_content: None,
         },
+        reason: operant_core::agent::TurnExitReason::TextResponse,
     });
     assert!(
         app.failed_input_recovery.is_none(),
@@ -2596,6 +2604,7 @@ fn a_turn_that_succeeds_leaves_nothing_to_restore() {
             tool_calls: None,
             extra_content: None,
         },
+        reason: operant_core::agent::TurnExitReason::TextResponse,
     });
 
     // Something unrelated fails later, with a fresh prompt in the composer.
