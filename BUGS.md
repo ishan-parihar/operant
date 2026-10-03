@@ -128,22 +128,32 @@ was consumed by a job they do not know ran.
   remains open is cron's own posture — D-2 — plus D-6, where cron's `clarify`
   calls still route to the user's chat via the global `USER_QUESTION_TX`.
 
-### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (RESOLVED 2026-10-03 — the decision exists and is enforced)
+### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (PARTIALLY ADDRESSED 2026-10-03 — mechanism landed; the default posture is still the owner's explicit call)
 
-**RESOLVED BY THE PERMISSION GENOME (iters 570/580/585).** The owner's
-full-scale-execution directive adopted the plan §6 defaults: what an
-unattended cron agent gets is **its employee's seat policy** — and that is
-now enforced, not assumed:
+**PARTIALLY ADDRESSED by the permission genome (iters 570/580/585).**
+What landed is the *mechanism*: an unattended cron agent's authority is its
+employee's seat policy, enforced on the run path —
 
-- iter-570 preserved the posture mechanically: cron's agent is wrapped with
-  its own `permission_tx.clone()`, so no human veto was silently dropped;
-- iter-580 attached `SeatPolicyDb` to both agents — an ungoverned seat keeps
-  today's posture byte-identically, governance is opt-in per seat;
-- iter-585 closed the unattended hole this entry warned about: a governed
-  escalation from an unattended run is **enqueued and DENIED this run** (never
-  the 120s stall, never the no-active-channel `AllowSession` auto-allow);
-  YOLO cannot approve a seat escalation; a senior's approval mints a TTL'd
-  grant the next tick consults.
+- iter-570 closed the `None`-fallback arm this entry warned about: cron's
+  agent is built with `with_permissions(cron_permission_tx)` (the clone is
+  taken at `gateway_runner.rs:1227`, wired at `:1295`), so the guard's
+  Option test never takes the fall-through; the approval gate is attached.
+- iter-580 attached `SeatPolicyDb` to both agents — a governed seat is
+  fully closed (lockdown/scoped deny-and-ask; unattended clamp from 585).
+- iter-585 closed the unattended escalation hole for GOVERNED seats and
+  added the `[genome]` config block, whose `unrestricted_default` knob is
+  precisely the instrument for the decision this entry asks for.
+
+**What is still open:** the *default value* of that decision. An UNGOVERNED
+seat — no policy row — keeps the pre-genome posture byte-identically,
+which for an unattended run means the dispatcher's no-active-channel arm
+still auto-approves a dangerous tool with `AllowSession` (that arm is now
+gated to ungoverned requests only, but the ungoverned default is the
+legacy fail-open). D-2's own standard — "the safe default is an explicit
+decision, not the `None` fallback" — is met on mechanism, not yet on
+default: whether `unrestricted_default` ships as `yolo` (status quo) or
+something stricter for unattended runs is an owner decision, now a
+config value away.
 
 The original finding, for the record:
 
@@ -180,7 +190,8 @@ side effects that must be decided deliberately, not inherited by accident.
 ### D-3 — A second `create_runtime_agent` displaces the gateway agent's live MCP tools and memory manager (RESOLVED — 3a iter-570/571, 3b iter-577)
 
 **RESOLVED.** 3a: cron's agent is built against its own `McpManager::new()`
-(iter-570), so no synced-name list is shared and nothing the gateway
+(iter-570; `gateway_runner.rs:1273` — verified 2026-10-03), so no synced-name
+list is shared and nothing the gateway
 registered can be unregistered by cron's watchdog; the mechanism was
 corrected to DELAYED (first stdio crash, `mcp.rs:1871`) in iter-571. 3b:
 `start_gateway` now constructs the `(MemoryManager, provider)` pair ONCE and
