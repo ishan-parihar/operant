@@ -432,7 +432,7 @@ mod tests {
     /// writes that one column directly).
     struct Stores {
         _dir: tempfile::TempDir,
-        path: PathBuf,
+        _path: PathBuf,
         conn: Arc<std::sync::Mutex<Connection>>,
         policies: Arc<SeatPolicyDb>,
         grants: Arc<GrantDb>,
@@ -463,7 +463,7 @@ mod tests {
                     .expect("edges"),
             ),
             _dir: dir,
-            path,
+            _path: path,
             conn,
         }
     }

@@ -512,7 +512,6 @@ fn require_non_blank(field: &str, value: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     /// A real temp-dir-backed store: every test opens the file `init`
     /// creates, so the DDL and parent-directory creation are exercised on

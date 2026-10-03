@@ -171,9 +171,7 @@ pub fn decide(
     // RULE 4 — the allow list runs regardless of mode (an allow row inside
     // lockdown is the point of lockdown's allow list).
     if listed(&policy.allow, tool) {
-        return SeatDecision::Run(format!(
-            "tool {tool} matches the seat's allow list"
-        ));
+        return SeatDecision::Run(format!("tool {tool} matches the seat's allow list"));
     }
 
     // RULE 5 — YOLO opens everything the deny list leaves.

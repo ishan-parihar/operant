@@ -383,6 +383,26 @@ future bisect will land here.
 - **Next step**: read `kernel/mod.rs` around `:285` and establish why the
   roundtrip asserts false. The isolated failure is the cheap lead.
 
+### K-2 — `loop_request_timeout` budget tests fail order-dependently under the broad `config` battery (OPEN, unowned)
+
+`agent::tests::loop_request_timeout_uses_configured_budget` and
+`agent::tests::loop_request_timeout_never_lowers_configured_budget` (both names
+contain "configured", so they join the broad battery) each **pass** under a
+narrow filter (`--lib -- loop_request_timeout` → 3/3 green) but **fail inside
+the ~43-test `--lib -- config` battery** — sibling contamination by ordering
+or parallelism.
+
+- **Measured**: broad battery red 3/3 at pre-wave `6c7c1f69` (iter-571, before
+  any permission-genome commit) AND 3/3 at `8bb32bb4` (iter-580 tip). So this
+  is a wave-independent pre-existing flake, attributed by bisect — NOT caused
+  by iters 573–585.
+- **Likely mechanism** [INFERENCE]: `test_agent_with_request_timeout` builds
+  `AgentConfig { request_timeout, ..Default::default() }` and the battery
+  includes config tests believed to mutate process env; if defaults consult
+  the environment, a sibling's mutation moves the asserted budget mid-battery.
+  Untraced — no sibling identified.
+- **Unowned**: same posture as K-1 — own iteration, do not fold into org work.
+
 ## Wave 3 — Org session substrate (2026-10-01)
 
 ### W3-1 — One global conversation per agent; concurrent gateway chats wiped each other (FIXED iter-548)
