@@ -50,12 +50,12 @@ pixel.** Measured by counting files that construct `Line`/`Span`/`Style`/`Color`
 or write into a buffer, excluding `app/tests/`, `ui_tests/`, `*tests.rs`, and
 `*loading.rs` (2 pixel hits — flow logic).
 
-### W1 — The seam (blocks everything)
+### W1 — The seam (blocks everything) — **DONE, iter-583**
 | Source | LOC | Contents |
 |---|---|---|
 | `jcode-tui-messages` (− `swarm_collapse.rs`) | **1,464** | `message.rs` `DisplayMessage`, `prepared.rs` pre-wrapped lines, `anchor.rs`, `cache.rs`, `wrapped_line_map.rs` |
 | `jcode-tui-tool-display` | **257** | name canonicalization, middle truncation, failure detection |
-| **W1 total** | **1,721** | plus the one operant→`DisplayMessage` adapter (D1a's single crossing point) |
+| **W1 total** | **1,721** | plus the one operant→`DisplayMessage` adapter — **landed as `tui/jcode_model/` (2,402 LOC incl. adapter + 3 leaf types), 33 ported tests green** |
 
 ### W2 — Primitives (blocks all rendering)
 | Source | LOC | Contents |
@@ -140,21 +140,15 @@ Against ~3.5k already landed.
 
 ---
 
-## 2. Wave 0 — Purge (no jcode source needed; start today)
+## 2. Wave 0 — Purge (no jcode source needed; start today) — **EXECUTED, iters 581–582; results below**
 
-1. Delete `vendor/render_core/` (4,608) and `vendor/workspace/` (1,246).
-   **Zero consumers** outside `vendor/` — the sole mention is a doc comment at
-   `copy_targets.rs:60`. 92 tests covering dead code go with them. The real
-   markdown renderer arrives in W2 and replaces what render_core *was for*.
-2. Delete `vendor/anim/` (940) — zero consumers. Re-port from source at W5 if the
-   donut band ships. Cheaper than carrying dead code through five waves.
-3. Remove the bridge that exists only because we adapted instead of ported:
-   `pin_truecolor_for_tests` (7 sites), `color_depth::detect` ↔
-   `color::color_capability` (18 sites). jcode has one palette, no depth
-   negotiation, no Surface model.
-4. Palette conformance: the **84** production literals across 17 files behind
-   `theme_colors` roles (re-measured; the ~300 figure counted definitions and
-   tests). `messages/` and `stats_dialog/` first; `debug/` last or never.
+1. Delete `vendor/render_core/` (4,608) and `vendor/workspace/` (1,246). **Zero consumers** outside `vendor/` — the sole mention is a doc comment at `copy_targets.rs:60`. 92 tests covering dead code go with them. The real markdown renderer arrives in W2 and replaces what render_core *was for*.
+   → **Done, iter-581** (with `vendor/anim/`, 940, also deleted — re-port from source if the W5 donut band wants it).
+2. ~~Delete `vendor/anim/`~~ → **Done, iter-581**. Measured test count was 3, not 0 as this plan claimed; total deleted `#[test]` sites across the three trees was 95.
+3. Remove the bridge: `pin_truecolor_for_tests` (7 sites), `color_depth::detect` ↔ `color::color_capability` (18 sites). jcode has one palette, no depth negotiation, no Surface model.
+   → **Done, iter-582.** `vendor/style/color.rs` 147→50 lines; `rgb()` always returns `Color::Rgb`, pinned by `rgb_is_never_quantized_regardless_of_terminal`. The corpus pins depth via the scenario runner, not the deleted pin — verify stayed 0-drift.
+4. Palette conformance: the **84** production literals across 17 files behind `theme_colors` roles.
+   → **EXECUTED and VOID as specified.** The fleet agent verified all 31 sites in the 8 surviving files per-site: **25 have no value-equal accessor at all** (e.g. `Color::Green` ≠ `success()`, which is `Rgb(76,175,80)`), and the 6 value-equal candidates carry in-repo do-not-route decisions with measured WCAG ratios (`bridge_state.rs:37-44`: routing the badge backgrounds through roles drops 2 of 8 themes below AA; as-written every badge passes at 15.54/8.11/5.48/5.32). These sites are the documented residue of the iter-414/468/Wave-3 conformance passes, **deliberately retained, not oversights**. Do not re-litigate them. Retiring them means introducing new palette roles plus a deliberate golden rebaseline — real theme work, not mechanics — and belongs with the W5 frame port where the chrome is rebuilt anyway. The `messages/**` sites (25) are moot: those files are deleted by the W2/W3 port.
 
 ---
 
