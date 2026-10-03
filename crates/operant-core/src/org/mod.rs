@@ -120,3 +120,4 @@ pub use worklog::{
 };
 pub use worklog_db::{WorklogDb, WorklogQuery, worklog_db_path};
 pub mod hierarchy;
+pub mod hierarchy_edges;
