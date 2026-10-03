@@ -2,7 +2,17 @@
 
 ## OPEN — Live data loss on mainline (2026-10-03)
 
-### D-1 — A cron agent job destroys a gateway user's live conversation (OPEN, unowned, P1)
+### D-1 — A cron agent job destroys a gateway user's live conversation (FIXED iter-570/571 — headers below left as the original audit; see the correction note)
+
+> **Correction (2026-10-03, verified on `origin/main`)**: the mechanism
+> below was the state at the 2026-10-03 audit baseline, before iters
+> 570–571 landed A′. `scheduler.rs` no longer calls `clear_history()` — it
+> calls `set_session_id(crate::org::employee::derive_employee_id(&job.id))`
+> (`crates/operant-core/src/cronjobs/scheduler.rs:316`), cron runs its own
+> agent build, and the gateway swap semantics are documented at
+> `gateway_runner.rs:511-649`. This header read "OPEN, unowned, P1" until
+> 2026-10-03; stale headers had already sent one agent re-planning a
+> fixed bug.
 
 **This is a present-tense data-loss defect on `origin/main`, not a planned one.**
 Any host running a gateway adapter alongside at least one enabled agent cron job
@@ -65,7 +75,13 @@ gone and cannot be recovered.
   existing `tests/agent_session_isolation.rs` tests the substrate, not this
   crosstalk.
 
-### D-1b — Cron tool calls permanently allowlist dangerous tools for the interactive user (OPEN, unowned, P1)
+### D-1b — Cron tool calls permanently allowlist dangerous tools for the interactive user (FIXED iter-571 — see correction note under D-1)
+
+> **Correction (2026-10-03, verified on `origin/main`)**: same root cause as
+> D-1, same fix wave. Cron's agent build no longer carries the gateway's
+> `permission_tx` (`gateway_runner.rs:1160` region); the per-job session and
+> the permission genome (wave-2 slices E/F2) govern cron approvals
+> independently. The mechanism text below is the pre-fix audit state.
 
 **A privilege-escalation path from an unattended job into a human's chat
 session**, sharing D-1's root cause. Filed separately because the fix is
