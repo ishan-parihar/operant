@@ -3995,3 +3995,58 @@ generous, 10ms wrapper) proving the flag survives whichever layer fires
 first. Suite gate: 2280 passed / 2 failed, identical to the pre-existing
 `tools::kernel` K-1 pair; clippy error set identical to pristine HEAD
 (10 pre-existing sites, zero new).
+
+### S4 — Unrepairable tool-call args were silently substituted with `"{}"` and executed anyway (FIXED iter-602)
+
+The 2026-10-03 specimen: one window produced 7,676 log lines built from
+1,938 argument substitutions and 522 schema-validation failures with
+dedupe skips — models (GLM-5.1 via Ollama) emitting destroyed args, the
+Python-literal `None` token among them. `repair_tool_call_arguments`'s
+last resort (and its separate `None` special case) returned the literal
+`"{}"` "so the request doesn't crash" — but `"{}"` parses, so the call
+EXECUTED on empty arguments, failed schema validation ("Missing
+required field …"), and the model retried the same garbage, feeding the
+cascade. The streaming-path pre-filter that was supposed to drop
+irreparable calls (iter-261's retain in `process_stream`) could never
+fire — repair always returned parseable JSON, `"{}"` worst case — so the
+defect was invisible at every layer.
+
+`repair_tool_call_arguments` now returns `RepairOutcome`:
+`Fixed(String)` — parseable by construction — or `Unrepairable`. Only
+the empty/whitespace fast path still yields `Fixed("{}")` (a model that
+legitimately sends no args is not the defect); the `None` special-case
+arm is deleted (the token now falls to the last resort like any other
+garbage) and the last resort returns `Unrepairable`, its dishonest
+"replaced with empty object" warn deleted with it — the result itself
+carries the refusal. In `execute_tools`' argument-parse Err arm,
+`Unrepairable` (and a `Fixed` payload that somehow fails to parse — the
+belt-and-braces net) never reaches phase 2: the call is answered with
+ONE `ToolResult::error_with_name(name, id, "Arguments could not be
+parsed and were NOT executed. Reply with corrected arguments on the
+next turn if the user still wants this.")` — `success: false`,
+`timed_out: false` — and the log carries lengths only, never raw model
+output (raw args can reference credentials the redactor does not cover;
+the old arms echoed 80–120-char previews). The now-provably-no-op
+retain in `process_stream` is deleted outright: post-fix every branch
+kept the call, so the only thing it ever dropped was the exact call the
+model needed answered. The refusal is per-CALL, not per-tool — the tool
+stays in every later request's schema list, so a corrected retry
+executes normally on the next iteration. (Deviation from plan §2 B2:
+the refusal message carries no raw-args preview — the executing brief
+pinned the fixed corrective text and forbade echoing raw model output;
+the plan's 80-char preview would have re-opened the leak the redactor
+doesn't cover.)
+
+Verification: `tests/unrepairable_args.rs` drives scripted turns — the
+`None` call yields exactly one named not-executed error in the
+transcript, the probe never executes, the turn ends in text after
+exactly two model requests (the cascade has nothing left to feed), and
+the corrected retry on the next iteration executes normally with the
+refusal visible ahead of it; parseable and trailing-comma (repairable)
+calls execute through the same path as the over-block controls. In-file
+repair tests migrated to `RepairOutcome` asserts;
+`test_repair_tool_call_arguments_none` renamed to
+`…_none_is_unrepairable` to record the behavior change. Suite gate:
+2283 passed / 2 failed, identical to the pre-existing `tools::kernel`
+K-1 pair; clippy error set identical to pristine HEAD (10
+pre-existing sites, zero new).

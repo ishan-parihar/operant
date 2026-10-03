@@ -307,44 +307,10 @@ impl OperantAgent {
             merge_stream_tool_call(&mut tool_calls, tc);
         }
 
-        // ── Validate tool call arguments before returning (iter-261) ──
-        // Truncated streaming can leave tool_calls with incomplete JSON
-        // arguments (e.g. `{"query": "te` from a cut-off SSE stream).
-        // Repair what we can; discard tool calls whose arguments are
-        // irreparably broken so execute_tools doesn't surface a raw
-        // "Invalid JSON" error to the user.
-        tool_calls.retain(|tc| {
-            let args = tc.function.arguments.trim();
-            if args.is_empty() || args == "{}" {
-                return true; // Empty args are valid (tool uses defaults)
-            }
-            match serde_json::from_str::<serde_json::Value>(args) {
-                Ok(_) => true,
-                Err(_) => {
-                    let repaired =
-                        message_safety::repair_tool_call_arguments(args, &tc.function.name);
-                    match serde_json::from_str::<serde_json::Value>(&repaired) {
-                        Ok(_) => {
-                            debug!(
-                                tool = %tc.function.name,
-                                original_len = args.len(),
-                                "Tool arguments auto-repaired in process_stream"
-                            );
-                            true // repaired — keep it (repair happens again in execute_tools)
-                        }
-                        Err(e) => {
-                            warn!(
-                                tool = %tc.function.name,
-                                error = %e,
-                                args_preview = %safe_truncate_str(args, 80),
-                                "Discarding tool call with irreparable arguments"
-                            );
-                            false // irreparable — drop this tool call
-                        }
-                    }
-                }
-            }
-        });
+        // (iter-261 pre-validated arguments here and dropped irreparable
+        // calls; B2/iter-602 removed that retain — unrepairable args must
+        // reach `execute_tools`, which answers them with a named
+        // not-executed error instead of silently dropping the call.)
 
         if let Some(err) = stream_error {
             // Surface the ORIGINAL stream error (e.g. reqwest's "error
@@ -584,34 +550,51 @@ impl OperantAgent {
             // caused by streaming tool-call argument fragmentation.)
             let mut args: serde_json::Value = match serde_json::from_str(&args_str) {
                 Ok(a) => a,
-                Err(e) => {
+                Err(_) => {
                     // Try to repair common truncation issues:
                     // 1. Missing closing brace — append }
                     // 2. Missing closing bracket — append ]
                     // 3. Truncated string value — append "
+                    //
+                    // S4 (iter-602): when no repair succeeds, do NOT
+                    // execute on dummied-up `{}` — the pre-B2 last resort
+                    // did exactly that, and the resulting
+                    // schema-validation failure was retried into a
+                    // 1,938-substitution cascade in the measured window.
+                    // Answer the call with a named not-executed error the
+                    // model can correct from in one round trip; it never
+                    // reaches phase 2. Log lengths only — raw model
+                    // output does not go into logs.
                     let repaired = message_safety::repair_tool_call_arguments(&args_str, &name);
-                    if let Ok(a) = serde_json::from_str(&repaired) {
-                        debug!(tool = %name, "Tool arguments auto-repaired");
-                        a
-                    } else {
-                        let preview = safe_truncate_str(&args_str, 120);
-                        warn!(
-                            tool = %name,
-                            error = %e,
-                            args_preview = %preview,
-                            args_len = args_str.len(),
-                            "Failed to parse tool arguments (truncated by provider?)"
-                        );
-                        early_results[idx] = Some(ToolResult::error(
-                            &tool_call.id,
-                            format!(
-                                "Tool '{}' received truncated arguments from the model (length {}). \
-                                 The model's response was likely cut off — please retry your request.",
-                                name,
-                                args_str.len()
-                            ),
-                        ));
-                        continue;
+                    let repaired_value = match &repaired {
+                        // Fixed is parseable by construction (the repair
+                        // only returns strings it validated); the second
+                        // from_str routes an invariant break to the same
+                        // honest refusal instead of executing garbage.
+                        message_safety::RepairOutcome::Fixed(fixed) => {
+                            serde_json::from_str(fixed).ok()
+                        }
+                        message_safety::RepairOutcome::Unrepairable => None,
+                    };
+                    match repaired_value {
+                        Some(a) => {
+                            debug!(tool = %name, "Tool arguments auto-repaired");
+                            a
+                        }
+                        None => {
+                            warn!(
+                                tool = %name,
+                                args_len = args_str.len(),
+                                "Unrepairable tool arguments — call not executed, error returned to the model"
+                            );
+                            early_results[idx] = Some(ToolResult::error_with_name(
+                                &name,
+                                &tool_call.id,
+                                "Arguments could not be parsed and were NOT executed. \
+                                 Reply with corrected arguments on the next turn if the user still wants this.",
+                            ));
+                            continue;
+                        }
                     }
                 }
             };
