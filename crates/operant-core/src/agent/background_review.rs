@@ -469,35 +469,6 @@ impl SelfEvolutionState {
 }
 
 // ---------------------------------------------------------------------------
-// S3 no-op early exit
-// ---------------------------------------------------------------------------
-
-/// Consecutive review rounds with zero memory/skill WRITES after which the
-/// review daemon stops before its iteration cap (`MAX_REVIEW_ITERATIONS`,
-/// which stays the outer bound). The measured pathology (2026-10-03 §1 S3):
-/// review daemons looping read-only rounds — the `{"count":0}` specimen —
-/// burning provider calls to conclude nothing. Two consecutive read-only
-/// rounds is the deliberate ceiling: one no-write round can be legitimate
-/// exploration (search before storing); two in a row means the daemon found
-/// nothing to act on. A review that writes every round still runs to the
-/// iteration cap unchanged.
-pub const REVIEW_NO_WRITE_ROUND_LIMIT: usize = 2;
-
-/// True when the review tool call is a WRITE — the only outcomes that
-/// justify another review round. The review whitelist is memory_store,
-/// memory_search, memory_recall, skill_manage, skill_view (`prompting.rs`);
-/// of those, memory_search / memory_recall / skill_view are reads.
-pub fn is_review_write_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "memory_store" | "skill_manage")
-}
-
-/// True when the daemon must stop: `consecutive` rounds with no write tool
-/// reaching a successful result have hit the limit.
-pub fn stop_after_no_write_rounds(consecutive: usize) -> bool {
-    consecutive >= REVIEW_NO_WRITE_ROUND_LIMIT
-}
-
-// ---------------------------------------------------------------------------
 // Digest history for routed models
 // ---------------------------------------------------------------------------
 
@@ -1033,36 +1004,6 @@ mod tests {
         let prior = vec![r#"{"role":"tool","tool_call_id":"tc1"}"#.to_string()];
         let summary = summarize_review_actions(&review, &prior, NotificationMode::On);
         assert!(summary.actions.is_empty());
-    }
-
-    #[test]
-    fn test_stop_after_no_write_rounds() {
-        // S3: below the limit the daemon keeps going (one read-only round is
-        // legitimate exploration); AT the limit it must stop — this is the
-        // behavior the no-op specimen (endless `{"count":0}` rounds) needs.
-        assert!(!stop_after_no_write_rounds(0));
-        assert!(!stop_after_no_write_rounds(1));
-        assert!(stop_after_no_write_rounds(2));
-        assert!(stop_after_no_write_rounds(3));
-        // Limit is 2, not 1 and not the outer iteration cap (5): relax it
-        // to 3 and the `2` assert fails; tighten to 1 and the `1` assert
-        // fails.
-        assert_eq!(REVIEW_NO_WRITE_ROUND_LIMIT, 2);
-        // Far past the limit still stops (no wraparound surprise).
-        assert!(stop_after_no_write_rounds(usize::MAX));
-    }
-
-    #[test]
-    fn test_is_review_write_tool() {
-        // Writes justify another round; reads never do.
-        assert!(is_review_write_tool("memory_store"));
-        assert!(is_review_write_tool("skill_manage"));
-        assert!(!is_review_write_tool("memory_search"));
-        assert!(!is_review_write_tool("memory_recall"));
-        assert!(!is_review_write_tool("skill_view"));
-        // Unknown names are NOT writes — a new read tool must not silently
-        // keep the daemon alive.
-        assert!(!is_review_write_tool("aft_bash"));
     }
 
     #[test]

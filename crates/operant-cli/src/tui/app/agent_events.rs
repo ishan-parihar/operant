@@ -225,7 +225,7 @@ impl App {
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
 
-            AgentEvent::Done { message, .. } => {
+            AgentEvent::Done { message } => {
                 // Turn complete — the agent finished.
                 // (iter-210: fix BACKEND_TUI_AUDIT.md §3 bug #2 — Done.message
                 // was previously discarded with `message: _`. If the agent

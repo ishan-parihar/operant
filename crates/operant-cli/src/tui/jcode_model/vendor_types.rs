@@ -98,6 +98,46 @@ pub enum DiffDisplayMode {
     File,
 }
 
+// [port-decision] DiffDisplayMode impl block: ported verbatim from
+// jcode-config-types/src/lib.rs:88 (the enum's only upstream impl). Appended at
+// batch-3 because the batch-3 consumers actually call is_inline/is_full_inline/
+// is_file/as_str; leaving the impl off was W1's intentional minimal port.
+impl DiffDisplayMode {
+    pub fn is_inline(&self) -> bool {
+        matches!(self, Self::Inline | Self::FullInline)
+    }
+
+    pub fn is_full_inline(&self) -> bool {
+        matches!(self, Self::FullInline)
+    }
+
+    pub fn is_file(&self) -> bool {
+        matches!(self, Self::File)
+    }
+
+    pub fn has_side_pane(&self) -> bool {
+        matches!(self, Self::File)
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Off => Self::Inline,
+            Self::Inline => Self::FullInline,
+            Self::FullInline => Self::File,
+            Self::File => Self::Off,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::Inline => "Inline",
+            Self::FullInline => "Inline Full",
+            Self::File => "File",
+        }
+    }
+}
+
 /// How to display mermaid diagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

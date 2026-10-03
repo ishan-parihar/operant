@@ -61,25 +61,11 @@ impl OperantAgent {
             .get_schemas_for_request(&self.config.tool_search, self.config.context_window)
             .await;
         let catalog = self.registry.get_schemas().await;
-        let schemas = crate::tools::tool_search::deferred::materialise(
+        crate::tools::tool_search::deferred::materialise(
             &last_user_turn(messages),
             visible,
             &catalog,
-        );
-        // ── S2 mask (last step, after deferred materialisation) ──────
-        // A tool masked by the timeout breaker this turn stays masked even
-        // when the current user turn would re-materialise it as deferred.
-        let masked = self
-            .masked_tools
-            .lock()
-            .expect("masked_tools lock poisoned")
-            .clone();
-        if masked.is_empty() {
-            return schemas;
-        }
-        let mut schemas = schemas;
-        schemas.retain(|s| !masked.contains(&s.name));
-        schemas
+        )
     }
 
     /// Attempt a "grace call" — a toolless summary request to the model.
@@ -92,14 +78,8 @@ impl OperantAgent {
     /// if the grace call also fails. A degenerate grace output (empty, or a
     /// short whitespace-free reasoning-leak artifact per
     /// `turn_rules::is_degenerate_final_text`) returns the EMPTY assistant
-    /// message instead — the gateway substitutes the user-facing
-    /// stopped-early notice keyed on the `GraceCall` exit reason carried by
-    /// the `Done` event (`gateway_runner.rs` turn-end block).
-    ///
-    /// `review_fired`: S3 deferral — when the skill-review cadence triggered
-    /// during the turn, the spawn was deferred to turn exit; the grace path
-    /// is one of those exits, so it fires the one review after emitting
-    /// `Done` (Interrupt/Error paths pass `false`).
+    /// message instead — the gateway substitutes the user-facing stopped
+    /// notice for empty content (`gateway_runner.rs:738-762`).
     pub(crate) async fn attempt_grace_call(
         &self,
         messages: &[Message],
@@ -107,7 +87,6 @@ impl OperantAgent {
         iterations: usize,
         tool_calls: usize,
         final_response: Option<&Message>,
-        review_fired: bool,
     ) -> Result<Message> {
         let grace_request = ChatRequest::new(self.effective_model(), messages.to_vec())
             .with_stream(self.config.stream);
@@ -161,30 +140,8 @@ impl OperantAgent {
                 }
                 self.emit(AgentEvent::Done {
                     message: result.clone(),
-                    // S5: the grace path must not report `text_response` —
-                    // the summary is a best-effort partial.
-                    reason: TurnExitReason::GraceCall,
                 })
                 .await;
-                // ── Turn diagnostics (grace exit) ─────────────────────────
-                // S5: honesty — the log must say `grace_call` here, never
-                // `budget_exhausted` (pre-call diagnostic, kept) or
-                // `text_response`.
-                warn!(
-                    "{}",
-                    TurnDiagnostics {
-                        exit_reason: TurnExitReason::GraceCall,
-                        model: self.model(),
-                        api_calls: iterations,
-                        max_iterations: self.config.max_iterations,
-                        budget_used: self.iteration_budget.used(),
-                        budget_max: self.iteration_budget.max_total(),
-                        tool_turns: tool_calls,
-                        response_len: result.content.len(),
-                        session_id: session_id.to_string(),
-                    }
-                    .log_message()
-                );
                 if let Some(ref obs) = self.observer {
                     let cost = self.session_cost_usd.read().map(|c| *c).unwrap_or(0.0);
                     obs.record_event(&ObserverEvent::AgentEnd {
@@ -201,13 +158,6 @@ impl OperantAgent {
                             crate::gateway_pipeline::HookEvent::AgentEnd,
                             crate::gateway_pipeline::HookContext::new().with_session(session_id),
                         )
-                        .await;
-                }
-                // S3: deferred skill review — review the complete transcript
-                // AFTER the turn's final answer is committed/emitted, so the
-                // review never competes with the turn for provider slots.
-                if review_fired {
-                    self.spawn_background_review(messages, session_id, true, false)
                         .await;
                 }
                 Ok(result)
@@ -284,16 +234,6 @@ impl OperantAgent {
         let turn_ctx = turn_context::build_turn_context(self, &user_query).await?;
         let session_id = turn_ctx.session_id;
 
-        // ── S3 review discipline ─────────────────────────────────────
-        // A background review spawns at most ONCE per turn, and only on the
-        // way OUT: the in-loop trigger below sets this flag (cadence still
-        // per-iteration), and the TextResponse / GraceCall / CircuitBreaker
-        // exit paths spawn it as the last act before returning, so the review
-        // sees the complete transcript instead of racing the turn for
-        // provider slots mid-loop. Interrupt/Error exits skip it — the
-        // operator already knows why the turn stopped.
-        let mut review_fired = false;
-
         // ── Tool-call guardrail reset (R4) ────────────────────────────
         // Identical-call repeat detection is per-USER-TURN, not per-iteration:
         // the model may legitimately call the same tool across iterations of
@@ -303,20 +243,6 @@ impl OperantAgent {
             .lock()
             .expect("tool_guardrails lock poisoned")
             .reset();
-
-        // ── S2 timeout-breaker reset ─────────────────────────────────
-        // The per-tool consecutive-timeout breaker is TURN-LOCAL: a tool
-        // that burned a previous turn gets a clean slate here. Fresh maps
-        // per run() means the registry itself never learns about masks —
-        // other sessions and later turns are unaffected.
-        self.timeout_streaks
-            .lock()
-            .expect("timeout_streaks lock poisoned")
-            .clear();
-        self.masked_tools
-            .lock()
-            .expect("masked_tools lock poisoned")
-            .clear();
 
         // ── Iteration budget reset (hermes parity) ─────────────────────
         // Each user turn gets a fresh per-turn budget.  Without this,
@@ -473,14 +399,7 @@ impl OperantAgent {
                     "Iteration budget exhausted — attempting grace call"
                 );
                 return self
-                    .attempt_grace_call(
-                        &messages,
-                        &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
-                        review_fired,
-                    )
+                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
                     .await;
             }
 
@@ -499,14 +418,7 @@ impl OperantAgent {
                     "Turn wall-clock limit reached — attempting grace call"
                 );
                 return self
-                    .attempt_grace_call(
-                        &messages,
-                        &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
-                        review_fired,
-                    )
+                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
                     .await;
             }
 
@@ -570,14 +482,7 @@ impl OperantAgent {
                 // to summarize what it has so far. This gives the user a
                 // partial answer instead of a hard error.
                 return self
-                    .attempt_grace_call(
-                        &messages,
-                        &session_id,
-                        iteration,
-                        total_tool_calls,
-                        None,
-                        review_fired,
-                    )
+                    .attempt_grace_call(&messages, &session_id, iteration, total_tool_calls, None)
                     .await;
             }
 
@@ -1316,16 +1221,8 @@ impl OperantAgent {
 
                         self.emit(AgentEvent::Done {
                             message: assistant_msg,
-                            reason: TurnExitReason::TextResponse,
                         })
                         .await;
-
-                        // S3: deferred skill review — fires AFTER the turn's
-                        // final answer, reviewing the complete transcript.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await
-                        }
 
                         // R6 — durable session activity heartbeat (hermes
                         // session_activity.py parity): stamp the session as
@@ -1492,77 +1389,6 @@ impl OperantAgent {
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
-                    // ── S2 per-tool consecutive-timeout breaker ──────────
-                    // A timeout used to be an ordinary retryable error, so
-                    // one wedged tool could burn the whole turn (measured:
-                    // 11 `aft_bash` timeouts in a single turn). Streak per
-                    // tool name: 2nd consecutive timeout → system nudge;
-                    // 3rd → masked for the rest of this turn (hidden from
-                    // the schema list, refused at dispatch). Only a SUCCESS
-                    // resets the streak — a non-timeout failure must not
-                    // reward the tool with a clean slate (it also must not
-                    // advance the streak; only `timed_out` does).
-                    for r in &tool_results {
-                        if r.name.is_empty() {
-                            continue;
-                        }
-                        if r.timed_out {
-                            // Decide under the lock, act after it drops — a
-                            // std MutexGuard must not live across the
-                            // `add_message` await below.
-                            let tripped = {
-                                let mut streaks = self
-                                    .timeout_streaks
-                                    .lock()
-                                    .expect("timeout_streaks lock poisoned");
-                                let streak = streaks.entry(r.name.clone()).or_insert(0);
-                                *streak += 1;
-                                if *streak == 2 {
-                                    Some(2)
-                                } else if *streak >= 3 {
-                                    Some(*streak)
-                                } else {
-                                    None
-                                }
-                            };
-                            if tripped == Some(2) {
-                                warn!(
-                                    tool = %r.name,
-                                    "Tool timed out twice in a row — nudging model"
-                                );
-                                let nudge = Message::system(format!(
-                                    "{} timed out twice in a row — it is disabled for \
-                                     the rest of this turn; take a different approach",
-                                    r.name
-                                ));
-                                messages.push(nudge.clone());
-                                self.add_message(nudge).await;
-                            } else if let Some(count) = tripped.filter(|s| *s >= 3) {
-                                let newly_masked = self
-                                    .masked_tools
-                                    .lock()
-                                    .expect("masked_tools lock poisoned")
-                                    .insert(r.name.clone());
-                                if newly_masked {
-                                    warn!(
-                                        tool = %r.name,
-                                        streak = count,
-                                        "Tool timed out 3× consecutively — masked for the \
-                                         rest of this turn"
-                                    );
-                                }
-                            }
-                        } else if r.success
-                            && let Some(streak) = self
-                                .timeout_streaks
-                                .lock()
-                                .expect("timeout_streaks lock poisoned")
-                                .get_mut(&r.name)
-                        {
-                            *streak = 0;
-                        }
-                    }
-
                     // ── Degenerate-loop circuit breaker ────────────────
                     // When EVERY tool call in several consecutive iterations
                     // fails (guardrail skip / malformed args / execution
@@ -1601,35 +1427,6 @@ impl OperantAgent {
                             identical_streak
                         ));
                         self.add_message(abort_msg.clone()).await;
-                        // S5: stamp the real exit reason — the operator must
-                        // see that the turn was broken off, not answered.
-                        self.emit(AgentEvent::Done {
-                            message: abort_msg.clone(),
-                            reason: TurnExitReason::CircuitBreaker,
-                        })
-                        .await;
-                        // ── Turn diagnostics (circuit-breaker abort) ──────
-                        warn!(
-                            "{}",
-                            TurnDiagnostics {
-                                exit_reason: TurnExitReason::CircuitBreaker,
-                                model: self.model(),
-                                api_calls: iteration,
-                                max_iterations: self.config.max_iterations,
-                                budget_used: self.iteration_budget.used(),
-                                budget_max: self.iteration_budget.max_total(),
-                                tool_turns: total_tool_calls,
-                                response_len: abort_msg.content.len(),
-                                session_id: session_id.clone(),
-                            }
-                            .log_message()
-                        );
-                        // S3: deferred skill review — a breaker exit still
-                        // produced a (partial) transcript worth one review.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await;
-                        }
                         return Ok(abort_msg);
                     }
                     if identical_streak == 4 {
@@ -1670,35 +1467,6 @@ impl OperantAgent {
                             consecutive_failed_iters
                         ));
                         self.add_message(abort_msg.clone()).await;
-                        // S5: stamp the real exit reason — the operator must
-                        // see that the turn was broken off, not answered.
-                        self.emit(AgentEvent::Done {
-                            message: abort_msg.clone(),
-                            reason: TurnExitReason::CircuitBreaker,
-                        })
-                        .await;
-                        // ── Turn diagnostics (circuit-breaker abort) ──────
-                        warn!(
-                            "{}",
-                            TurnDiagnostics {
-                                exit_reason: TurnExitReason::CircuitBreaker,
-                                model: self.model(),
-                                api_calls: iteration,
-                                max_iterations: self.config.max_iterations,
-                                budget_used: self.iteration_budget.used(),
-                                budget_max: self.iteration_budget.max_total(),
-                                tool_turns: total_tool_calls,
-                                response_len: abort_msg.content.len(),
-                                session_id: session_id.clone(),
-                            }
-                            .log_message()
-                        );
-                        // S3: deferred skill review — a breaker exit still
-                        // produced a (partial) transcript worth one review.
-                        if review_fired {
-                            self.spawn_background_review(&messages, &session_id, true, false)
-                                .await;
-                        }
                         return Ok(abort_msg);
                     }
 
@@ -1969,15 +1737,9 @@ impl OperantAgent {
 
                 trigger.should_review_skills
             }; // MutexGuard dropped here — safe to .await
-            // S3 review discipline: the SPAWN is deferred to the turn's exit
-            // path and happens at most once per turn — the measured pathology
-            // was 4 reviews in one 21-minute turn, all no-op, each racing the
-            // turn for provider slots. The cadence counter above stays
-            // per-iteration (bump + persist unchanged); only the within-turn
-            // repetition is capped. The actual `spawn_background_review` is
-            // invoked by the TextResponse / GraceCall / CircuitBreaker exits.
-            if should_review_skills && !review_fired {
-                review_fired = true;
+            if should_review_skills {
+                self.spawn_background_review(&messages, &session_id, true, false)
+                    .await;
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────

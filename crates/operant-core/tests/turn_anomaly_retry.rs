@@ -54,7 +54,6 @@ impl OperantTool for EmptyResultTool {
             success: true,
             content: String::new(),
             error: None,
-            timed_out: false,
         }
     }
 }
@@ -87,7 +86,6 @@ impl OperantTool for OkResultTool {
             success: true,
             content: "42".to_string(),
             error: None,
-            timed_out: false,
         }
     }
 }
