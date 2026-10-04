@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- `operant-runtime::doctor` (1,347 lines) — the duplicate engine. Only the
+  gateway's `GET /api/doctor` consumed it; its uncalled `run`/`run_models`/
+  `run_traces` entry points went with it. Its checks live on in
+  `operant-core::doctor`, adapted to `AppConfig` where possible. Named
+  gaps (fields only `schema::Config` carries, or state nothing writes —
+  porting would be faking it): channels-configured, delegate-agent
+  provider validity, `gateway.port`, `memory.embedding_model` hint
+  targets, config-file presence (`config_path`), the runtime
+  `workspace_dir` and its SOUL.md/AGENTS.md presence checks (the AppConfig
+  world's data root is `operant_home()`; the workspace concept did not
+  carry over), and daemon heartbeat freshness (`daemon_state.json` is
+  written only by `operant-runtime::daemon::run`, which has no callers).
 - `[genome].queued_cron_jobs_resolve_grants` — declared in wave 2 but the
   scheduler sweep it described never gained a consumer (iter-600). Pending
   escalations resolve by a human verdict or the 60s interactive lapse only.
@@ -52,6 +64,17 @@ D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
 
 ### Added
 
+- `operant-core/src/doctor.rs` — ONE doctor engine on `AppConfig`
+  (docs/ORGANISM-ARCHITECTURE.md §6 F2). Two divergent engines existed:
+  `operant-runtime::doctor` ran on `schema::Config` for the gateway's
+  `GET /api/doctor`, `operant doctor` ran its own checks on `AppConfig` —
+  same intent, drifting check lists. The surviving engine runs the union:
+  config semantics on the `[providers]` section (default provider, API key,
+  model, temperature range, fallback chain, model/embedding routes), data
+  root (exists/writable/disk) at `operant_home()`, environment (git, shell,
+  HOME, curl), and CLI tool discovery (`operant_tools`). A drift-pin test
+  pins the category order so the CLI and gateway paths cannot silently
+  diverge again.
 - `org/seat_policy.rs` + `org/seat_policy_db.rs` — seat modes, the
   precedence engine, the sqlite store, and the `SeatPolicySource` seam.
 - `org/hierarchy_edges.rs` — reporting lines as an edges table feeding
@@ -69,6 +92,14 @@ D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
   stores, 2 new `cron_session_isolation` barrier tests.
 
 ### Changed
+
+- `operant doctor` renders the shared engine's Diagnostics section after
+  its install-level checks; engine errors count as issues (they gate the
+  exit code), warnings are advisories, and `--json` gains a `diagnostics`
+  array — the same list `GET /api/doctor` serves through a thin boundary
+  adapter (`schema::Config.providers` → `AppConfig.providers`).
+- `GET /api/doctor` now serves the shared engine (doc comment corrected:
+  the route was always `get(...)`, not POST).
 
 - `run_agent_job` mounts `WriteBarrier::apply` (opt-in via
   `with_write_barrier`; the gateway constructs it over the app db, so it is

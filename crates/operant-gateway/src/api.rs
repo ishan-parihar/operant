@@ -776,7 +776,11 @@ pub async fn handle_api_integrations_settings(
     Json(serde_json::json!({"settings": settings})).into_response()
 }
 
-/// POST /api/doctor — run diagnostics
+/// GET /api/doctor — run diagnostics
+///
+/// One doctor engine (docs/ORGANISM-ARCHITECTURE.md §6 F2): the checks live
+/// in `operant_core::doctor` on `AppConfig` — the same list `operant doctor`
+/// renders. The gateway's `schema::Config` adapts at this boundary.
 pub async fn handle_api_doctor(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -786,19 +790,19 @@ pub async fn handle_api_doctor(
     }
 
     let config = state.config.lock().clone();
-    let results = operant_runtime::doctor::diagnose(&config);
+    let results = operant_core::doctor::diagnose(&doctor_app_config(&config));
 
     let ok_count = results
         .iter()
-        .filter(|r| r.severity == operant_runtime::doctor::Severity::Ok)
+        .filter(|r| r.severity == operant_core::doctor::Severity::Ok)
         .count();
     let warn_count = results
         .iter()
-        .filter(|r| r.severity == operant_runtime::doctor::Severity::Warn)
+        .filter(|r| r.severity == operant_core::doctor::Severity::Warn)
         .count();
     let error_count = results
         .iter()
-        .filter(|r| r.severity == operant_runtime::doctor::Severity::Error)
+        .filter(|r| r.severity == operant_core::doctor::Severity::Error)
         .count();
 
     Json(serde_json::json!({
@@ -810,6 +814,24 @@ pub async fn handle_api_doctor(
         }
     }))
     .into_response()
+}
+
+/// Boundary adaptation for the unified doctor engine (§6 F2).
+///
+/// The engine runs on `AppConfig`. `schema::Config` shares the
+/// `[providers]` section type verbatim (`ProvidersConfig`), so the engine
+/// sees the real provider profiles, routes, and fallback chain; every other
+/// engine input is environment- or `operant_home()`-based, not config-file
+/// based. Checks that need schema-only fields (channels, delegate agents,
+/// gateway port, config-path presence, the runtime workspace dir, daemon
+/// heartbeat) are documented gaps — see `operant_core::doctor`.
+fn doctor_app_config(
+    schema_config: &operant_config::schema::Config,
+) -> operant_core::config::AppConfig {
+    operant_core::config::AppConfig {
+        providers: schema_config.providers.clone(),
+        ..Default::default()
+    }
 }
 
 /// GET /api/memory — list or search memory entries

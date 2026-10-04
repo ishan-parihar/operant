@@ -12,8 +12,9 @@ pub mod checks_tools;
 
 use anyhow::Result;
 use operant_core::config::AppConfig;
+use operant_core::doctor::Severity;
 
-use self::check_result::{print_banner, print_summary};
+use self::check_result::{print_banner, print_summary, section_header};
 
 /// The exit code `operant doctor` should return.
 ///
@@ -63,6 +64,20 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     checks_api::run_api_checks(config, &mut issues).await;
     checks_tools::run_platform_checks(config, &mut issues, &mut manual_issues);
 
+    // Unified engine (docs/ORGANISM-ARCHITECTURE.md §6 F2): the SAME check
+    // list the gateway serializes at GET /api/doctor. Engine errors are
+    // genuine issues (they gate the exit code); warnings are advisories.
+    let engine_results = operant_core::doctor::diagnose(config);
+    for result in &engine_results {
+        match result.severity {
+            Severity::Error => issues.push(result.message.clone()),
+            Severity::Warn => manual_issues.push(result.message.clone()),
+            Severity::Ok => {}
+        }
+    }
+    section_header("Diagnostics");
+    print!("{}", operant_core::doctor::render_text(&engine_results));
+
     if json {
         let result = serde_json::json!({
             "issues": issues,
@@ -70,6 +85,9 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
             "total_issues": issues.len() + manual_issues.len(),
             "auto_fixable": issues.len(),
             "manual_required": manual_issues.len(),
+            // The unified engine's structured results — the same list the
+            // gateway serves at GET /api/doctor (§6 F2).
+            "diagnostics": engine_results,
         });
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {

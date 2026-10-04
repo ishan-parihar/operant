@@ -9,6 +9,8 @@ publish = false
 [dependencies]
 operant-api.workspace = true
 operant-config.workspace = true
+# Unified doctor engine (§6 F2) — `operant_core::doctor` on `AppConfig`.
+operant-core = { path = "../operant-core" }
 operant-memory.workspace = true
 operant-providers.workspace = true
 # The channels that must exist even with every feature below off, and nothing

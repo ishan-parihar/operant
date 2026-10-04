@@ -62,6 +62,7 @@ pub mod curator;
 pub mod daemon_pool;
 pub mod database;
 pub mod distillation;
+pub mod doctor;
 pub mod env_passthrough;
 pub mod env_probe;
 pub mod error;
