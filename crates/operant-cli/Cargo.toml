@@ -189,6 +189,13 @@ ci-all = [
 ]
 
 [dev-dependencies]
+# W1.2 parity harness (tests/agent_parity.rs) drives all three turn engines:
+# core (Loop A) is a direct dep, but Loops B & C speak operant-providers
+# types and need operant-config + operant-memory for their builder/config
+# surfaces. No feature or version changes — path deps, dev-only.
+operant-providers = { workspace = true }
+operant-config = { workspace = true }
+operant-memory = { workspace = true }
 
 [lints]
 workspace = true
