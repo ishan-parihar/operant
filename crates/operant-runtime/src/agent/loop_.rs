@@ -83,11 +83,6 @@ const STREAM_TOOL_MARKER_WINDOW_CHARS: usize = 512;
 /// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
 const DEFAULT_MAX_TOOL_ITERATIONS: usize = 10;
 
-/// How many times to retry an empty assistant response (no text, no reasoning,
-/// no tool calls) before giving up and returning it. Mirrors OperantAgent's
-/// R4 `empty_content_retries` ladder and hermes's conversation_loop.py.
-const EMPTY_RESPONSE_MAX_RETRIES: usize = 3;
-
 // History management moved to `super::history`.
 pub use super::history::{
     append_or_merge_system_message, canonicalize_tool_result_media_markers, emergency_history_trim,

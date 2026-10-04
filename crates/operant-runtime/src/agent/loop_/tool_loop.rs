@@ -3,6 +3,8 @@
 
 use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalRequirement, ApprovalResponse};
 
+use operant_core::agent::turn_rules::EMPTY_RESPONSE_MAX_RETRIES;
+
 /// CLI channel factory, injected by the binary. Returns a `Box<dyn Channel>` for interactive mode.
 use super::*;
 
