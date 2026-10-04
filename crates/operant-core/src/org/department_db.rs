@@ -746,6 +746,7 @@ mod tests {
             skills: skills.iter().map(|s| (*s).to_string()).collect(),
             agent_type: None,
             persona: None,
+            system_prompt: None,
             status: STATUS_ACTIVE.to_string(),
             reason: "test fixture".to_string(),
             created_at: "2026-10-01T00:00:00.000Z".to_string(),

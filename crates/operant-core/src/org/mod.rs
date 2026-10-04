@@ -58,6 +58,7 @@
 //!   `CronJob` (OUTLINE §4 Wave 1 item 2) are a later wave.
 
 pub mod authority;
+pub mod cast;
 pub mod decisions_db;
 pub mod department_db;
 pub mod dm_thread;
@@ -79,6 +80,10 @@ pub mod worklog;
 pub mod worklog_db;
 pub mod write_barrier;
 
+pub use cast::{
+    CAST, CastCronSpec, CastSeat, CastSeedReport, PREMIERE_GRANT_CAPABILITY, PREMIERE_SEAT,
+    SEED_REASON, seed_cast,
+};
 pub use employee::{
     AgentType, EMPLOYEE_ID_HEX_LEN, EMPLOYEE_ID_PREFIX, Employee, EmployeeCronJob,
     derive_employee_id,

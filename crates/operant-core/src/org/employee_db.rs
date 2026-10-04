@@ -177,6 +177,7 @@ impl EmployeeDb {
             skills           TEXT NOT NULL DEFAULT '[]',-- JSON array of leaf names
             agent_type       TEXT,                      -- NULL|session|service|fixer  (§3.1.2)
             persona          TEXT,                      -- JSON Persona, NULL until Wave 2
+            system_prompt    TEXT,                      -- the charter (ORGANISM-ARCHITECTURE §2); NULL on cron backfill
             status           TEXT NOT NULL DEFAULT 'active',
             reason           TEXT NOT NULL,             -- the --reason of the creating write
             created_at       TEXT NOT NULL,             -- RFC3339
@@ -201,6 +202,12 @@ impl EmployeeDb {
         let conn = self.lock_conn()?;
         conn.execute_batch(Self::SCHEMA)
             .map_err(|e| Error::Agent(format!("org schema failed: {}", e)))?;
+        // Additive reconciliation for an `employees` table written before
+        // the charter column existed (ORGANISM-ARCHITECTURE §2). `ensure_column`
+        // is a no-op when the column is present — the normal case — and the
+        // org layer never touches `PRAGMA user_version` (see `schema.rs`).
+        crate::org::schema::ensure_columns(&conn, "employees", &[("system_prompt", "TEXT")])
+            .map_err(|e| Error::Agent(format!("org schema failed: {e}")))?;
         Ok(())
     }
 
@@ -261,6 +268,10 @@ impl EmployeeDb {
             agent_type: None,
             // NULL until Wave 2 ships the persona contract.
             persona: None,
+            // A cron-derived row carries no charter: the cast seed is the
+            // only charter source (ORGANISM-ARCHITECTURE §2), and the cron
+            // job owns its prompt elsewhere.
+            system_prompt: None,
             status,
             reason: reason.to_string(),
             // From the cron job, not from `now` — a re-run must not drift it.
@@ -421,13 +432,58 @@ impl EmployeeDb {
         Ok(report)
     }
 
+    /// Insert one manifest-declared employee row, ignoring the write when
+    /// the `employee_id` already exists.
+    ///
+    /// This is the cast seeder's write path (ORGANISM-ARCHITECTURE §1).
+    /// Unlike [`Self::backfill_from_cron_jobs`], which derives its rows from
+    /// live cron jobs, a cast seat arrives whole from the declared manifest.
+    /// The OR IGNORE is the idempotence contract: a re-seed must leave an
+    /// operator-edited row exactly as the operator left it, never converge it
+    /// back to the manifest. Returns `true` when this call inserted a row.
+    pub fn insert_ignore(&self, employee: &Employee) -> Result<bool, Error> {
+        let skills_json = serde_json::to_string(&employee.skills)
+            .map_err(|e| Error::Agent(format!("Failed to encode skills: {}", e)))?;
+        let agent_type_json = employee.agent_type.map(|a| a.as_str().to_string());
+        let persona_json = employee
+            .persona
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| Error::Agent(format!("Failed to encode persona: {}", e)))?;
+        let conn = self.lock_conn()?;
+        let written = conn
+            .execute(
+                "INSERT OR IGNORE INTO employees (
+                    employee_id, name, role, department, skills, agent_type,
+                    persona, system_prompt, status, reason, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    employee.employee_id,
+                    employee.name,
+                    employee.role,
+                    employee.department,
+                    skills_json,
+                    agent_type_json,
+                    persona_json,
+                    employee.system_prompt,
+                    employee.status,
+                    employee.reason,
+                    employee.created_at,
+                    employee.updated_at,
+                ],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to insert employee: {}", e)))?;
+        Ok(written > 0)
+    }
+
     /// Read one employee, or `None` if the id is not registered.
     pub fn get_employee(&self, employee_id: &str) -> Result<Option<Employee>, Error> {
         let conn = self.lock_conn()?;
         let mut stmt = conn
             .prepare(
                 "SELECT employee_id, name, role, department, skills, agent_type,
-                        persona, status, reason, created_at, updated_at
+                        persona, system_prompt, status, reason, created_at, updated_at
                  FROM employees WHERE employee_id = ?1",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare get_employee: {}", e)))?;
@@ -445,7 +501,7 @@ impl EmployeeDb {
         let mut stmt = conn
             .prepare(
                 "SELECT employee_id, name, role, department, skills, agent_type,
-                        persona, status, reason, created_at, updated_at
+                        persona, system_prompt, status, reason, created_at, updated_at
                  FROM employees ORDER BY employee_id",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare list_employees: {}", e)))?;
@@ -520,6 +576,7 @@ fn map_employee_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Employee> {
         // "absent" is preserved distinctly from every variant.
         agent_type: agent_type_raw.as_deref().and_then(AgentType::parse),
         persona,
+        system_prompt: row.get("system_prompt")?,
         status: row.get("status")?,
         reason: row.get("reason")?,
         created_at: row.get("created_at")?,

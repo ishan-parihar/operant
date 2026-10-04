@@ -21,6 +21,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived pin, and `--expires-at` is honored as a whole-day TTL override
   (mirroring `/grant`'s `--days`); a request the approver would not mint is
   refused before any row is written, with the refusal naming why.
+### Added
+
+- The cold-start cast (ORGANISM-ARCHITECTURE §1, wave 1): `org/cast.rs`
+  declares the organism's nine manifest seats — `premiere` (executive,
+  org-lead), `chief-of-staff` (executive, reports to premiere — the
+  same-department report that makes `premiere` compute as org-lead),
+  `governor` (meta-governance, reports to premiere), `identity-warden`
+  (identity, reports to governor), `compass` (strategy, reports to
+  governor), `crew-chief` (crew, reports to governor), `hrmaster` and
+  `dispatcher` (crew, report to crew-chief), and `dp-the-program`
+  (execution, reports to premiere). The gateway's org-store init seeds
+  them idempotently on first run: employee rows via INSERT-OR-IGNORE,
+  reporting edges only for seats with no edge, and premiere's standing
+  `Org`-scope grant minted once through `SeatApprover::mint_for` (the
+  approver seam — no direct `authority_grants` writes, even at seed
+  time). A topology that fails to compute premiere as org-lead aborts
+  the seed loudly instead of minting. The seeder writes no
+  `seat_policies` rows: seeded seats stay ungoverned until an operator
+  policies them. Default cron specs are recorded in the manifest; the
+  cron store has no register-without-executing path, so actual
+  registration belongs to the execution wave.
+- `employees.system_prompt` — the charter column (a session executing as
+  an employee runs under its charter). Added via the org layer's
+  additive `ensure_columns` reconciliation, so existing databases gain
+  it on next open; cron-backfilled rows keep `NULL`.
+
 
 ### Removed
 

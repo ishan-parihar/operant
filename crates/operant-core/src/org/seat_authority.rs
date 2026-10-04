@@ -407,10 +407,14 @@ impl SeatApprover {
     /// The mint body shared by queued approvals and P3's direct grants.
     /// `ttl_days_override` falls back to `[genome] grant_ttl_days`.
     ///
-    /// `pub` (F1, ORGANISM-ARCHITECTURE §6): the CLI's `org grant give`
-    /// routes here too, so every mint in the tree — gateway `/grant`,
-    /// `/approve`, and the CLI — passes the same grantor-scope ceiling,
-    /// TTL shape, and vacant/unmanaged-seat fail-closed.
+    /// `pub`: two out-of-approver callers must both reach the contained
+    /// mint — the CLI's `org grant give` (F1, ORGANISM-ARCHITECTURE §6)
+    /// and the cast seeder (§7; it cannot use [`Self::grant_direct`]: that
+    /// verb derives the approver from the hierarchy, and the org lead has
+    /// no manager edge, so it would route to the `'operator'` literal and
+    /// fail closed as a vacant grantor). Every mint — gateway `/grant`,
+    /// `/approve`, the CLI, and the seeder — passes the same grantor-scope
+    /// ceiling, TTL shape, and vacant/unmanaged-seat fail-closed.
     /// [`crate::org::authority::GrantDb::insert`] is `pub(crate)`; this is
     /// the only cross-crate write path onto the ledger.
     pub fn mint_for(

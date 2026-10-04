@@ -1327,6 +1327,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let hierarchy_edges = Arc::new(operant_core::org::hierarchy_edges::HierarchyEdgesDb::init(
         &org_db,
     )?);
+    // Wave 1 (ORGANISM-ARCHITECTURE §1): provision the cold-start cast on
+    // first run — the nine manifest seats, their charters, the reporting
+    // edges, and premiere's standing Org-scope grant. Idempotent: an
+    // already-seeded org is left byte-identical, and operator edits are
+    // never converged back to the manifest. Fails closed: a topology that
+    // does not compute premiere as org-lead aborts the boot rather than
+    // mint authority off a broken graph.
+    operant_core::org::cast::seed_cast(
+        &employee_registry,
+        &hierarchy_edges,
+        &grant_ledger,
+        &request_queue,
+        app_config.genome.grant_ttl_days,
+    )?;
     let seat_authority = Arc::new(operant_core::org::seat_authority::SeatAuthority::new(
         Arc::clone(&seat_policies),
         Arc::clone(&grant_ledger),

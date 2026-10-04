@@ -103,6 +103,12 @@ pub struct Employee {
     pub agent_type: Option<AgentType>,
     /// JSON `Persona`, NULL until Wave 2.
     pub persona: Option<serde_json::Value>,
+    /// The employee's charter: the system prompt a session executing as
+    /// this employee runs under (ORGANISM-ARCHITECTURE §2 — "each employee
+    /// carries its own `system_prompt` charter"). `None` on every
+    /// cron-backfilled row: the charter is cast-seed data, and a cron job
+    /// owns its prompt elsewhere (`employee_cron_jobs` is the link back).
+    pub system_prompt: Option<String>,
     pub status: String,
     /// Why this row exists. Never empty.
     pub reason: String,

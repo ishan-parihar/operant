@@ -468,6 +468,7 @@ mod tests {
             skills: vec![],
             agent_type: None,
             persona: None,
+            system_prompt: None,
             status: "active".to_string(),
             reason: "test fixture".to_string(),
             created_at: "2026-09-30T00:00:00.000Z".to_string(),

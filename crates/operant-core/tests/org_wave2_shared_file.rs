@@ -62,6 +62,7 @@ fn employee(id: &str, dept: Option<&str>) -> Employee {
         skills: vec![],
         agent_type: Some(AgentType::Session),
         persona: None,
+        system_prompt: None,
         status: "active".to_string(),
         reason: "integration test".to_string(),
         created_at: "2026-10-01T00:00:00Z".to_string(),

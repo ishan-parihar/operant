@@ -75,6 +75,7 @@ fn employee(id: &str, department: Option<&str>) -> Employee {
         skills: vec!["audit".to_string()],
         agent_type: None,
         persona: None,
+        system_prompt: None,
         status: "active".to_string(),
         reason: "org_authority_tools fixture".to_string(),
         created_at: "2026-09-30T00:00:00Z".to_string(),

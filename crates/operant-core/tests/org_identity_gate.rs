@@ -114,6 +114,7 @@ fn complete_employee(job_id: &str) -> Employee {
         skills: vec!["summarize".to_string()],
         agent_type: None,
         persona: None,
+        system_prompt: None,
         status: "active".to_string(),
         reason: "test".to_string(),
         created_at: "2026-09-30T00:00:00Z".to_string(),
