@@ -28,6 +28,7 @@
 //! | `org notice ack` | an `ack`-tagged `notices` row, same `correlation_id`, **plus** the parent row's `acked_by`/`acked_at` (§3.3) |
 //! | `org notice pin` / `unpin` | a `pin`/`unpin`-tagged `notices` row, plus the parent row's `pinned` |
 //! | `org worklog append` | the `artifacts` JSON of the appended row — §3.4's 20 fields have no `reason` column, so inventing a 21st was rejected; see [`operator_entry`] |
+//! | `org grant give` / `org grant revoke` | `authority_grants.reason` / `revocation_reason` — written only through the `SeatApprover` (F1, ORGANISM-ARCHITECTURE §6: one authority-write path) |
 //! | `org sync` | `employees.reason` + `employee_cron_jobs`, one row per backfilled job (§3.1) |
 //! | `org check` / `org list` / `org worklog list` | read-only — no reason |
 //!
@@ -258,7 +259,7 @@ pub enum OrgDecisionAction {
 /// always attributable, reasoned, and optionally expiring.
 #[derive(Debug, Clone, Subcommand)]
 pub enum OrgGrantAction {
-    /// Record a grant
+    /// Mint a grant through the seat approver — the same containment the gateway's /grant gets (F1)
     Give {
         /// Capability being granted (e.g. "content.tooling")
         capability: String,
@@ -274,7 +275,7 @@ pub enum OrgGrantAction {
         /// Restrict the grant to one department
         #[arg(long)]
         target_dept: Option<String>,
-        /// RFC3339 expiry; omit for a standing grant (the exception, not the default)
+        /// RFC3339 expiry, honored as a TTL override in days; the approver's shape governs (standing grants are org-lead-only)
         #[arg(long)]
         expires_at: Option<String>,
         /// Why this grant is being made (required; a grant without one is not attributable)
@@ -1006,11 +1007,61 @@ fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> 
     Ok(())
 }
 
+/// Build the approver every CLI grant/revoke speaks through (F1,
+/// ORGANISM-ARCHITECTURE §6): the genome's stores over the shared org db,
+/// the same construction the gateway runner uses. Edges takes its own
+/// connection (no `from_shared_connection`) — the same two-connection
+/// shape the core suite and the gateway's P3 tests use over one sqlite
+/// file.
+fn seat_approver_for(config: &AppConfig, conn: &OrgConn) -> Result<operant_core::org::seat_authority::SeatApprover> {
+    use operant_core::org::seat_authority::SeatApprover;
+    use std::sync::Arc;
+
+    let grants = Arc::new(
+        operant_core::org::authority::GrantDb::from_shared_connection(conn.clone())
+            .context("Failed to open grant store")?,
+    );
+    let requests = Arc::new(
+        operant_core::org::pending_requests::PendingRequestDb::from_shared_connection(
+            conn.clone(),
+        )
+        .context("Failed to open escalation queue")?,
+    );
+    let employees = Arc::new(
+        operant_core::org::employee_db::EmployeeDb::from_shared_connection(conn.clone())
+            .context("Failed to open employee registry")?,
+    );
+    let edges = Arc::new(
+        operant_core::org::hierarchy_edges::HierarchyEdgesDb::from_connection(
+            rusqlite::Connection::open(org_db_path(&config.database_path))
+                .context("Failed to open hierarchy edges db")?,
+        )
+        .context("Failed to open hierarchy edges")?,
+    );
+    Ok(SeatApprover::new(
+        grants,
+        requests,
+        employees,
+        edges,
+        config.genome.grant_ttl_days,
+    ))
+}
+
+/// `--expires-at` in the gateway's TTL-override shape: whole days from
+/// now, mirroring `/grant`'s `--days`. A past or sub-day expiry floors at
+/// 0, which `mint_for` records as already-lapsed — the approver never
+/// mints standing authority from a date.
+fn ttl_days_from_expiry(raw: &str) -> Result<i64> {
+    let exp = chrono::DateTime::parse_from_rfc3339(raw)
+        .with_context(|| format!("Invalid --expires-at '{raw}' (expected RFC3339)"))?;
+    let days = (exp.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_days();
+    Ok(days.max(0))
+}
+
 fn handle_grant(config: &AppConfig, action: OrgGrantAction) -> Result<()> {
-    use operant_core::org::authority::{AuthorityScope, Grant, GrantDb};
+    use operant_core::org::authority::{AuthorityScope, GrantDb};
 
     let conn = open_org_db(config)?;
-    let db = GrantDb::from_shared_connection(conn.clone()).context("Failed to open grant store")?;
 
     match action {
         OrgGrantAction::Give {
@@ -1023,46 +1074,75 @@ fn handle_grant(config: &AppConfig, action: OrgGrantAction) -> Result<()> {
             reason,
         } => {
             let reason = require_reason("org grant give", &reason)?;
+            // F1 (ORGANISM-ARCHITECTURE §6): the CLI no longer writes the
+            // ledger directly. The mint goes through the SeatApprover —
+            // the same grantor-scope ceiling, TTL shape, and
+            // vacant/unmanaged-seat fail-closed the gateway's `/grant`
+            // gets — so the flags the old raw insert honored become
+            // assertions about the shape the approver derives: a request
+            // the approver would not mint is refused BEFORE any row is
+            // written.
+            let approver = seat_approver_for(config, &conn)?;
+            let ttl_days: Option<i64> = expires_at
+                .as_deref()
+                .map(ttl_days_from_expiry)
+                .transpose()?;
+            let shape = approver
+                .preview_mint(&grantor, &grantee, ttl_days)
+                .map_err(|e| anyhow::anyhow!("Grant refused: {e}"))?;
+            if expires_at.is_some() && shape.expires_at.is_none() {
+                return Err(anyhow::anyhow!(
+                    "Grant refused: grantor `{grantor}` mints `{grantee}` a standing grant \
+                     (no expiry) — drop --expires-at, or grant as a department head"
+                ));
+            }
             let scope_parsed: AuthorityScope = scope.parse().map_err(|_| {
                 anyhow::anyhow!(
                     "unknown authority scope '{scope}' (expected own|peers|department|\
                      direct_reports|descendants|org)"
                 )
             })?;
-            let grant = Grant {
-                grant_id: new_id("ag"),
-                grantor: grantor.clone(),
-                grantee: grantee.clone(),
-                capability: capability.clone(),
-                scope: scope_parsed,
-                target_dept: target_dept.clone(),
-                reason: reason.to_string(),
-                granted_at: chrono::Utc::now().to_rfc3339(),
-                expires_at: expires_at.clone(),
-                revoked_at: None,
-                revocation_reason: None,
-            };
-            db.insert(&grant).context("Failed to record grant")?;
-            println!(
-                "granted {} to {} (scope {}, grantor {})",
-                grant.capability,
-                grant.grantee,
-                grant.scope.as_str(),
-                grant.grantor
-            );
+            if scope_parsed != shape.scope {
+                return Err(anyhow::anyhow!(
+                    "Grant refused: requested scope `{}` but grantor `{grantor}` mints `{}` \
+                     for `{grantee}` — the approver derives the scope from the hierarchy",
+                    scope_parsed.as_str(),
+                    shape.scope.as_str(),
+                ));
+            }
+            if let Some(requested_dept) = &target_dept
+                && shape.target_dept.as_deref() != Some(requested_dept.as_str())
+            {
+                return Err(anyhow::anyhow!(
+                    "Grant refused: requested --target-dept `{requested_dept}` but grantor \
+                     `{grantor}` pins the grant to `{}` — the approver derives the department",
+                    shape.target_dept.as_deref().unwrap_or("<any>"),
+                ));
+            }
+            match approver.mint_for(&grantee, &capability, reason, &grantor, ttl_days) {
+                Ok(_) => println!(
+                    "granted {capability} to {grantee} (scope {}, grantor {grantor})",
+                    shape.scope.as_str(),
+                ),
+                // The refusal names WHY — scope ceiling, containment, or a
+                // vacant/unmanaged seat — the gateway's wording verbatim.
+                Err(e) => return Err(anyhow::anyhow!("Grant refused: {e}")),
+            }
         }
         OrgGrantAction::Revoke { grant_id, reason } => {
             let reason = require_reason("org grant revoke", &reason)?;
-            let removed = db
-                .revoke(&grant_id, reason)
-                .context("Failed to revoke grant")?;
-            if removed {
-                println!("grant {grant_id} revoked");
-            } else {
-                println!("grant {grant_id} not found or already revoked");
+            // F1: revocation goes through the approver too — the ledger's
+            // only writer outside core is the approver itself.
+            let approver = seat_approver_for(config, &conn)?;
+            match approver.revoke_grant(&grant_id, reason) {
+                Ok(true) => println!("grant {grant_id} revoked"),
+                Ok(false) => println!("grant {grant_id} not found or already revoked"),
+                Err(e) => return Err(anyhow::anyhow!("Revoke failed: {e}")),
             }
         }
         OrgGrantAction::List { grantee, json } => {
+            let db = GrantDb::from_shared_connection(conn.clone())
+                .context("Failed to open grant store")?;
             let rows = db.list_for_grantee(&grantee)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -1765,5 +1845,236 @@ mod tests {
         assert_eq!(csv_to_json_array("a, b ,,c"), r#"["a","b","c"]"#);
         assert_eq!(csv_to_json_array(""), "[]");
         assert_eq!(csv_to_json_array("  "), "[]");
+    }
+
+    // ---------------------------------------------- F1: approver-routed grants
+
+    use operant_core::org::authority::{AuthorityScope, GrantDb};
+    use operant_core::org::hierarchy_edges::HierarchyEdgesDb;
+
+    /// A temp org db + `AppConfig` pointing at it. The `TempDir` must
+    /// outlive the config, so tests hold it in a `_` binding.
+    fn grant_fixture() -> (AppConfig, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = AppConfig::default();
+        config.database_path = dir.path().join("operant.db");
+        (config, dir)
+    }
+
+    /// Seed `emp-ceo` → `emp-head` → `emp-worker` in one department: the
+    /// HoD shape core's own approver tests use. Documented seeding via
+    /// raw SQL (`EmployeeDb` has no direct insert API), the same shape the
+    /// gateway's P3 tests use; every assertion afterwards goes through the
+    /// public stores.
+    fn seed_chain(config: &AppConfig) {
+        let conn = open_org_db(config).expect("open org db");
+        for id in ["emp-ceo", "emp-head", "emp-worker"] {
+            conn.lock()
+                .expect("conn")
+                .execute(
+                    "INSERT OR REPLACE INTO employees (
+                         employee_id, name, role, department, skills, agent_type,
+                         persona, status, reason, created_at, updated_at
+                     ) VALUES (?1, ?1, 'tester', 'platform', '[\"probe\"]', NULL, NULL,
+                               'active', 'cli test seed', '2026-10-01T00:00:00Z',
+                               '2026-10-01T00:00:00Z')",
+                    rusqlite::params![id],
+                )
+                .expect("seed employee");
+        }
+        let path = org_db_path(&config.database_path);
+        let edges = HierarchyEdgesDb::from_connection(
+            rusqlite::Connection::open(&path).expect("edges conn"),
+        )
+        .expect("edges");
+        edges
+            .upsert_edge("emp-worker", "emp-head", "cli test seed")
+            .expect("edge w->h");
+        edges
+            .upsert_edge("emp-head", "emp-ceo", "cli test seed")
+            .expect("edge h->c");
+    }
+
+    fn give(
+        grantor: &str,
+        grantee: &str,
+        scope: &str,
+        target_dept: Option<&str>,
+        expires_at: Option<&str>,
+    ) -> OrgGrantAction {
+        OrgGrantAction::Give {
+            capability: "bash".to_string(),
+            grantee: grantee.to_string(),
+            grantor: grantor.to_string(),
+            scope: scope.to_string(),
+            target_dept: target_dept.map(str::to_string),
+            expires_at: expires_at.map(str::to_string),
+            reason: "test: approver-routed CLI grant".to_string(),
+        }
+    }
+
+    fn ledger_rows(config: &AppConfig) -> Vec<operant_core::org::authority::Grant> {
+        let conn = open_org_db(config).expect("reopen org db");
+        let db = GrantDb::from_shared_connection(conn).expect("grant store");
+        db.list_for_grantee("emp-worker").expect("ledger")
+    }
+
+    #[test]
+    fn cli_grant_with_a_below_head_grantor_is_refused() {
+        let (config, _dir) = grant_fixture();
+        seed_chain(&config);
+
+        // `emp-worker` has a manager and no reports: below head rank, so
+        // the approver refuses — the grantor-scope ceiling the gateway
+        // /grant path enforces, now the CLI's too.
+        let err = handle_grant(
+            &config,
+            give("emp-worker", "emp-worker", "department", None, None),
+        )
+        .expect_err("a below-head grantor must not mint");
+        let msg = err.to_string();
+        assert!(msg.contains("Grant refused"), "{msg}");
+        assert!(
+            msg.contains("does not contain"),
+            "the refusal must name the scope ceiling: {msg}"
+        );
+        assert!(
+            ledger_rows(&config).is_empty(),
+            "a refused mint must write nothing"
+        );
+    }
+
+    #[test]
+    fn cli_grant_via_the_contained_path_mints() {
+        let (config, _dir) = grant_fixture();
+        seed_chain(&config);
+
+        // `emp-head` is a HoD (a same-dept report WITH a manager above), so
+        // the contained mint is a TTL'd department grant pinned to the
+        // grantee's department — the approver's shape, not the flags'.
+        handle_grant(
+            &config,
+            give("emp-head", "emp-worker", "department", None, None),
+        )
+        .expect("the HoD mint must succeed");
+
+        let rows = ledger_rows(&config);
+        let grant = rows
+            .iter()
+            .find(|g| g.capability == "bash")
+            .expect("the minted grant stands in the ledger");
+        assert_eq!(grant.grantor, "emp-head");
+        assert_eq!(grant.scope, AuthorityScope::Department);
+        assert_eq!(grant.target_dept.as_deref(), Some("platform"));
+        assert!(
+            grant.expires_at.is_some(),
+            "a HoD mint is TTL'd ([genome] grant_ttl_days), never standing"
+        );
+    }
+
+    #[test]
+    fn cli_revoke_via_the_approver_is_recorded() {
+        let (config, _dir) = grant_fixture();
+        seed_chain(&config);
+        handle_grant(
+            &config,
+            give("emp-head", "emp-worker", "department", None, None),
+        )
+        .expect("mint");
+        let grant_id = ledger_rows(&config)[0].grant_id.clone();
+
+        handle_grant(
+            &config,
+            OrgGrantAction::Revoke {
+                grant_id: grant_id.clone(),
+                reason: "test: revoke via the approver".to_string(),
+            },
+        )
+        .expect("the revoke must succeed");
+
+        // The revocation is recorded WITH its reason — visible only in the
+        // history view, because the live filter drops revoked rows.
+        let conn = open_org_db(&config).expect("reopen org db");
+        let db = GrantDb::from_shared_connection(conn).expect("grant store");
+        let rows = db.history_for_grantee("emp-worker").expect("history");
+        let grant = rows
+            .iter()
+            .find(|g| g.grant_id == grant_id)
+            .expect("the revoked row survives for audit");
+        assert!(grant.is_revoked());
+        assert_eq!(
+            grant.revocation_reason.as_deref(),
+            Some("test: revoke via the approver")
+        );
+    }
+
+    #[test]
+    fn cli_grant_refuses_a_shape_the_approver_would_not_mint() {
+        let (config, _dir) = grant_fixture();
+        seed_chain(&config);
+
+        // A head mints department scope; --scope org is a request the
+        // approver would not mint, refused BEFORE any row is written.
+        let err = handle_grant(
+            &config,
+            give("emp-head", "emp-worker", "org", None, None),
+        )
+        .expect_err("a head cannot mint org scope");
+        let msg = err.to_string();
+        assert!(msg.contains("Grant refused"), "{msg}");
+        assert!(
+            msg.contains("requested scope `org`") && msg.contains("mints `department`"),
+            "the refusal must name the requested and the derived scope: {msg}"
+        );
+        assert!(
+            ledger_rows(&config).is_empty(),
+            "a shape refusal must write nothing"
+        );
+    }
+
+    #[test]
+    fn cli_grant_refuses_an_expiry_on_a_standing_shape() {
+        let (config, _dir) = grant_fixture();
+        seed_chain(&config);
+
+        // `emp-ceo` is an org lead: the derived shape is a standing grant,
+        // so --expires-at (a TTL override the standing shape ignores)
+        // must be refused, not silently dropped.
+        let err = handle_grant(
+            &config,
+            give(
+                "emp-ceo",
+                "emp-head",
+                "org",
+                None,
+                Some("2030-01-01T00:00:00Z"),
+            ),
+        )
+        .expect_err("a standing shape takes no expiry");
+        assert!(
+            err.to_string().contains("standing"),
+            "the refusal must name the standing shape: {err}"
+        );
+    }
+
+    #[test]
+    fn cli_grant_by_an_org_lead_mints_standing() {
+        let (config, _dir) = grant_fixture();
+        seed_chain(&config);
+
+        handle_grant(&config, give("emp-ceo", "emp-head", "org", None, None))
+            .expect("the org-lead mint must succeed");
+
+        let conn = open_org_db(&config).expect("reopen org db");
+        let db = GrantDb::from_shared_connection(conn).expect("grant store");
+        let rows = db.list_for_grantee("emp-head").expect("ledger");
+        let grant = rows
+            .iter()
+            .find(|g| g.capability == "bash")
+            .expect("the minted grant stands in the ledger");
+        assert_eq!(grant.grantor, "emp-ceo");
+        assert_eq!(grant.scope, AuthorityScope::Org);
+        assert_eq!(grant.target_dept, None);
+        assert_eq!(grant.expires_at, None, "an org lead mints standing");
     }
 }

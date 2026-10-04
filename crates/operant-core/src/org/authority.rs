@@ -644,7 +644,14 @@ impl GrantDb {
     /// checked on the same boundary because a grant cannot arrive already
     /// revoked — [`GrantDb::revoke`] is the only way to set `revoked_at` — but
     /// the invariant is worth one cheap check rather than an assumption.
-    pub fn insert(&self, grant: &Grant) -> Result<(), Error> {
+    ///
+    /// `pub(crate)` (F1, ORGANISM-ARCHITECTURE §6): the only writers are
+    /// [`crate::tools::issue_grant`] — itself reached only through
+    /// [`crate::org::seat_authority::SeatApprover::mint_for`] — and
+    /// same-crate tests. Cross-crate callers mint through the approver; a
+    /// direct insert from outside this crate is a compile error, not a
+    /// convention to remember.
+    pub(crate) fn insert(&self, grant: &Grant) -> Result<(), Error> {
         require_reason("grant reason", &grant.reason)?;
         if grant.revoked_at.is_some() {
             require_reason(
@@ -750,7 +757,11 @@ impl GrantDb {
     /// or already revoked. Revoking twice is not an error: it is a no-op that
     /// leaves the first revocation's reason intact, which is the one worth
     /// keeping.
-    pub fn revoke(&self, grant_id: &str, revocation_reason: &str) -> Result<bool, Error> {
+    ///
+    /// `pub(crate)` (F1): the only production caller is
+    /// [`crate::org::seat_authority::SeatApprover::revoke_grant`]; cross-crate
+    /// revocation goes through the approver.
+    pub(crate) fn revoke(&self, grant_id: &str, revocation_reason: &str) -> Result<bool, Error> {
         require_reason("revocation reason", revocation_reason)?;
         let conn = self.lock_conn()?;
         let updated = conn

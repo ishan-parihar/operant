@@ -27,9 +27,13 @@ use operant_core::org::decisions_db::DecisionsDb;
 use operant_core::org::department_db::{Department, DepartmentDb};
 use operant_core::org::dm_thread::{DEFAULT_TURN_BUDGET, DmThreadDb};
 use operant_core::org::employee::{AgentType, Employee};
+use operant_core::org::employee_db::EmployeeDb;
+use operant_core::org::hierarchy_edges::HierarchyEdgesDb;
 use operant_core::org::notice_db::NoticeBoard;
+use operant_core::org::pending_requests::PendingRequestDb;
 use operant_core::org::resolver::{identity_for, inbox_query_for, resolve_recipients};
 use operant_core::org::schema::ensure_column;
+use operant_core::org::seat_authority::SeatApprover;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -307,7 +311,7 @@ fn unstaffed_employees_remain_discoverable() {
 #[test]
 fn authority_lattice_and_grant_db_coexist() {
     let (path, _dir) = shared_db();
-    let grants = GrantDb::init(path).expect("grant db");
+    let grants = std::sync::Arc::new(GrantDb::init(path.clone()).expect("grant db"));
 
     // The lattice: a wider scope contains a narrower one, and Self (Own)
     // contains nothing. §2.1 — hierarchy suffices inside a department.
@@ -319,22 +323,71 @@ fn authority_lattice_and_grant_db_coexist() {
     assert!(S::Org.is_cross_department());
     assert!(!S::Department.is_cross_department());
 
-    // A grant with a blank reason must be refused at the store boundary.
-    let blank = operant_core::org::authority::Grant {
-        grant_id: "ag-1".to_string(),
-        grantor: "emp-ceo".to_string(),
-        grantee: "emp-hod".to_string(),
-        capability: "content.tooling".to_string(),
-        scope: AuthorityScope::Department,
-        target_dept: Some("content".to_string()),
-        reason: "   ".to_string(),
-        granted_at: "2026-10-01T00:00:00Z".to_string(),
-        expires_at: None,
-        revoked_at: None,
-        revocation_reason: None,
-    };
-    assert!(
-        grants.insert(&blank).is_err(),
-        "a whitespace-only reason must be refused"
+    // F1 (ORGANISM-ARCHITECTURE §6): `GrantDb::insert` is `pub(crate)`, so
+    // from OUTSIDE the crate a grant enters the ledger only through the
+    // SeatApprover. The store's blank-reason rule still bites — it is
+    // asserted here at that seam, the only pub write path — and the
+    // four stores the approver reads must coexist in this same file,
+    // which is this suite's actual subject.
+    let conn = std::sync::Arc::new(std::sync::Mutex::new(
+        Connection::open(&path).expect("open shared file"),
+    ));
+    let requests = std::sync::Arc::new(
+        PendingRequestDb::from_shared_connection(std::sync::Arc::clone(&conn)).expect("requests"),
     );
+    let employees = std::sync::Arc::new(
+        EmployeeDb::from_shared_connection(std::sync::Arc::clone(&conn)).expect("employees"),
+    );
+    let edges = std::sync::Arc::new(
+        HierarchyEdgesDb::from_connection(Connection::open(&path).expect("edges conn"))
+            .expect("edges"),
+    );
+    // Documented seeding (the same shape the gateway's P3 tests use —
+    // `EmployeeDb` has no direct insert API): a one-edge hierarchy, so the
+    // head's approver-of-record is the ceo, an org lead.
+    for id in ["emp-ceo", "emp-hod"] {
+        conn.lock()
+            .expect("conn")
+            .execute(
+                "INSERT OR REPLACE INTO employees (
+                     employee_id, name, role, department, skills, agent_type,
+                     persona, status, reason, created_at, updated_at
+                 ) VALUES (?1, ?1, 'tester', 'content', '[\"probe\"]', NULL, NULL,
+                           'active', 'integration seed', '2026-10-01T00:00:00Z',
+                           '2026-10-01T00:00:00Z')",
+                rusqlite::params![id],
+            )
+            .expect("seed employee");
+    }
+    edges
+        .upsert_edge("emp-hod", "emp-ceo", "integration seed")
+        .expect("edge");
+
+    let approver = SeatApprover::new(
+        std::sync::Arc::clone(&grants),
+        requests,
+        employees,
+        edges,
+        7,
+    );
+    let refused = approver.grant_direct("emp-hod", "content.tooling", None, "   ");
+    let refusal = refused.expect_err("a whitespace-only reason must be refused");
+    assert!(
+        refusal.contains("reason"),
+        "the refusal must name the reason rule: {refusal}"
+    );
+
+    // And the real mint through the same seam lands in the ledger the
+    // store reads back — approver-shaped: the org lead's standing grant.
+    let minted = approver
+        .grant_direct("emp-hod", "content.tooling", None, "integration: cohabitation probe")
+        .expect("the mint must succeed");
+    let rows = grants.list_for_grantee("emp-hod").expect("ledger");
+    let grant = rows
+        .iter()
+        .find(|g| g.grant_id == minted)
+        .expect("the minted grant stands in the ledger");
+    assert_eq!(grant.scope, AuthorityScope::Org);
+    assert_eq!(grant.target_dept, None);
+    assert_eq!(grant.expires_at, None, "an org lead mints standing");
 }
