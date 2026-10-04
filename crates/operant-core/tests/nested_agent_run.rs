@@ -473,7 +473,11 @@ async fn nested_sub_agent_runs_on_its_own_budget_and_timeout() {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(16);
     let database = Arc::new(Database::init(temp.path().join("nested_agent_run.sqlite")).unwrap());
 
-    let registry = ToolRegistry::new(Duration::from_secs(5));
+    // 60s registry (delegation) deadline: the child needs ≈2 LLM turns + 1 tool
+    // call (observed ≥11s under load).  This is the ceiling for the delegate
+    // tool call itself — distinct from `config.tool_timeout = 5s` above, whose
+    // non-inheritance into the child's tools is the actual subject under test.
+    let registry = ToolRegistry::new(Duration::from_secs(60));
     registry
         .register(SubAgentTool::with_parent_tool_policy(
             &parent_http,
