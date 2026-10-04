@@ -27,7 +27,6 @@ use std::sync::LazyLock;
 
 pub use crate::tui::jcode_model::vendor_types::DiffDisplayMode;
 
-
 /// How to display mermaid diagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -59,7 +58,6 @@ pub enum DiagramPanePosition {
     Top,
 }
 
-
 /// How much vertical spacing to use when rendering markdown blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -70,7 +68,6 @@ pub enum MarkdownSpacingMode {
     /// Document-style spacing between top-level blocks.
     Document,
 }
-
 
 /// How LaTeX math is rendered in terminal markdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]

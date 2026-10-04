@@ -753,8 +753,9 @@ pub(crate) fn render_overnight_message(
     width: u16,
     diff_mode: crate::tui::jcode_app::config_shim::DiffDisplayMode,
 ) -> Vec<Line<'static>> {
-    let Ok(card) = serde_json::from_str::<crate::tui::jcode_app::overnight::OvernightProgressCard>(&msg.content)
-    else {
+    let Ok(card) = serde_json::from_str::<crate::tui::jcode_app::overnight::OvernightProgressCard>(
+        &msg.content,
+    ) else {
         return render_system_message(msg, width, diff_mode);
     };
 
@@ -974,7 +975,11 @@ impl TodoCardPayload {
     ) {
         match self {
             Self::Current { todos, plan, goals } => (todos, plan, goals),
-            Self::Legacy(todos) => (todos, crate::tui::jcode_app::todo::TodoPlan::default(), Vec::new()),
+            Self::Legacy(todos) => (
+                todos,
+                crate::tui::jcode_app::todo::TodoPlan::default(),
+                Vec::new(),
+            ),
         }
     }
 }
@@ -992,8 +997,8 @@ fn parse_todo_tool_output(content: &str) -> Option<ParsedTodoToolOutput> {
     // they reach this renderer. Keep that transport metadata outside the
     // structured payload parser so a valid todo result still renders as a card.
     let content = strip_todo_tool_output_headers(content);
-    let mut todo_stream =
-        serde_json::Deserializer::from_str(content).into_iter::<Vec<crate::tui::jcode_app::todo::TodoItem>>();
+    let mut todo_stream = serde_json::Deserializer::from_str(content)
+        .into_iter::<Vec<crate::tui::jcode_app::todo::TodoItem>>();
     let todos = todo_stream.next()?.ok()?;
     let mut remainder = content.get(todo_stream.byte_offset()..)?.trim_start();
     let plan = if let Some(plan_json) = remainder.strip_prefix("Plan:") {
@@ -1150,7 +1155,8 @@ pub(crate) fn render_todos_message(
         };
         let has_groups = todos.iter().any(|t| group_of(t).is_some());
         if has_groups {
-            let mut groups: Vec<(Option<String>, Vec<&crate::tui::jcode_app::todo::TodoItem>)> = Vec::new();
+            let mut groups: Vec<(Option<String>, Vec<&crate::tui::jcode_app::todo::TodoItem>)> =
+                Vec::new();
             for todo in &todos {
                 let key = group_of(todo);
                 if let Some(entry) = groups.iter_mut().find(|(existing, _)| *existing == key) {
@@ -1244,7 +1250,8 @@ fn todo_goal_score_spans(goal: &crate::tui::jcode_app::todo::TodoGoal) -> Vec<Sp
         let (state, color) = goal.feedback_loop_relevance.map_or_else(
             || ("missing".to_string(), todo_failure_color()),
             |state| {
-                let color = if state == crate::tui::jcode_app::todo::FeedbackLoopRelevance::Indirect {
+                let color = if state == crate::tui::jcode_app::todo::FeedbackLoopRelevance::Indirect
+                {
                     todo_failure_color()
                 } else {
                     todo_warning_color()
@@ -1272,11 +1279,12 @@ fn todo_goal_score_spans(goal: &crate::tui::jcode_app::todo::TodoGoal) -> Vec<Sp
         let (state, color) = goal.feedback_loop_traceability.map_or_else(
             || ("missing".to_string(), todo_failure_color()),
             |state| {
-                let color = if state == crate::tui::jcode_app::todo::FeedbackLoopTraceability::Unmapped {
-                    todo_failure_color()
-                } else {
-                    todo_warning_color()
-                };
+                let color =
+                    if state == crate::tui::jcode_app::todo::FeedbackLoopTraceability::Unmapped {
+                        todo_failure_color()
+                    } else {
+                        todo_warning_color()
+                    };
                 (state.as_str().to_string(), color)
             },
         );
@@ -1559,10 +1567,13 @@ fn push_todo_goal_details(
         let score_width = Line::from(scores.clone()).width();
         let score_count = usize::from(!crate::tui::jcode_app::todo::feedback_loop_passes(
             goal.closed_feedback_loop,
-        )) + usize::from(!crate::tui::jcode_app::todo::feedback_loop_relevance_passes(goal))
-            + usize::from(!crate::tui::jcode_app::todo::feedback_loop_coverage_passes(goal))
-            + usize::from(!crate::tui::jcode_app::todo::feedback_loop_traceability_passes(goal))
-            + usize::from(goal.delivery_state.is_some());
+        )) + usize::from(
+            !crate::tui::jcode_app::todo::feedback_loop_relevance_passes(goal),
+        ) + usize::from(
+            !crate::tui::jcode_app::todo::feedback_loop_coverage_passes(goal),
+        ) + usize::from(
+            !crate::tui::jcode_app::todo::feedback_loop_traceability_passes(goal),
+        ) + usize::from(goal.delivery_state.is_some());
         if score_width > inner_width.saturating_sub(2) && score_count > 1 {
             let mut states: Vec<(&str, String)> = Vec::new();
             if !crate::tui::jcode_app::todo::feedback_loop_passes(goal.closed_feedback_loop) {
@@ -1692,22 +1703,24 @@ fn render_todo_plan_update(
 
     for field in &update.fields {
         match field {
-            crate::tui::jcode_app::todo::TodoPlanField::UnderstandsUserIntent => push_todo_score_update(
-                &mut lines,
-                "Understands user intent",
-                update
-                    .before
-                    .as_ref()
-                    .and_then(|plan| plan.understands_user_intent)
-                    .map(|state| state.as_str().to_string()),
-                update
-                    .after
-                    .as_ref()
-                    .and_then(|plan| plan.understands_user_intent)
-                    .map(|state| state.as_str().to_string()),
-                base_indent,
-                inner_width,
-            ),
+            crate::tui::jcode_app::todo::TodoPlanField::UnderstandsUserIntent => {
+                push_todo_score_update(
+                    &mut lines,
+                    "Understands user intent",
+                    update
+                        .before
+                        .as_ref()
+                        .and_then(|plan| plan.understands_user_intent)
+                        .map(|state| state.as_str().to_string()),
+                    update
+                        .after
+                        .as_ref()
+                        .and_then(|plan| plan.understands_user_intent)
+                        .map(|state| state.as_str().to_string()),
+                    base_indent,
+                    inner_width,
+                )
+            }
             crate::tui::jcode_app::todo::TodoPlanField::UserIntention if intent_is_unclear => {
                 push_todo_text_update(
                     &mut lines,
@@ -1779,86 +1792,96 @@ fn render_todo_goal_updates(
 
         for field in visible_fields {
             match field {
-                crate::tui::jcode_app::todo::TodoGoalField::ClosedFeedbackLoop => push_todo_score_update(
-                    &mut lines,
-                    "Closed feedback loop",
-                    update
-                        .before
-                        .as_ref()
-                        .and_then(|goal| goal.closed_feedback_loop)
-                        .map(|state| state.as_str().to_string()),
-                    update
-                        .after
-                        .as_ref()
-                        .and_then(|goal| goal.closed_feedback_loop)
-                        .map(|state| state.as_str().to_string()),
-                    base_indent,
-                    inner_width,
-                ),
-                crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoopRelevance => push_todo_score_update(
-                    &mut lines,
-                    "Feedback-loop relevance",
-                    update
-                        .before
-                        .as_ref()
-                        .and_then(|goal| goal.feedback_loop_relevance)
-                        .map(|state| state.as_str().to_string()),
-                    update
-                        .after
-                        .as_ref()
-                        .and_then(|goal| goal.feedback_loop_relevance)
-                        .map(|state| state.as_str().to_string()),
-                    base_indent,
-                    inner_width,
-                ),
-                crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoopCoverage => push_todo_score_update(
-                    &mut lines,
-                    "Feedback-loop coverage",
-                    update
-                        .before
-                        .as_ref()
-                        .and_then(|goal| goal.feedback_loop_coverage)
-                        .map(|state| state.as_str().to_string()),
-                    update
-                        .after
-                        .as_ref()
-                        .and_then(|goal| goal.feedback_loop_coverage)
-                        .map(|state| state.as_str().to_string()),
-                    base_indent,
-                    inner_width,
-                ),
-                crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoopTraceability => push_todo_score_update(
-                    &mut lines,
-                    "Feedback-loop traceability",
-                    update
-                        .before
-                        .as_ref()
-                        .and_then(|goal| goal.feedback_loop_traceability)
-                        .map(|state| state.as_str().to_string()),
-                    update
-                        .after
-                        .as_ref()
-                        .and_then(|goal| goal.feedback_loop_traceability)
-                        .map(|state| state.as_str().to_string()),
-                    base_indent,
-                    inner_width,
-                ),
-                crate::tui::jcode_app::todo::TodoGoalField::DeliveryState => push_todo_score_update(
-                    &mut lines,
-                    "Delivery",
-                    update
-                        .before
-                        .as_ref()
-                        .and_then(|goal| goal.delivery_state)
-                        .map(|state| state.as_str().to_string()),
-                    update
-                        .after
-                        .as_ref()
-                        .and_then(|goal| goal.delivery_state)
-                        .map(|state| state.as_str().to_string()),
-                    base_indent,
-                    inner_width,
-                ),
+                crate::tui::jcode_app::todo::TodoGoalField::ClosedFeedbackLoop => {
+                    push_todo_score_update(
+                        &mut lines,
+                        "Closed feedback loop",
+                        update
+                            .before
+                            .as_ref()
+                            .and_then(|goal| goal.closed_feedback_loop)
+                            .map(|state| state.as_str().to_string()),
+                        update
+                            .after
+                            .as_ref()
+                            .and_then(|goal| goal.closed_feedback_loop)
+                            .map(|state| state.as_str().to_string()),
+                        base_indent,
+                        inner_width,
+                    )
+                }
+                crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoopRelevance => {
+                    push_todo_score_update(
+                        &mut lines,
+                        "Feedback-loop relevance",
+                        update
+                            .before
+                            .as_ref()
+                            .and_then(|goal| goal.feedback_loop_relevance)
+                            .map(|state| state.as_str().to_string()),
+                        update
+                            .after
+                            .as_ref()
+                            .and_then(|goal| goal.feedback_loop_relevance)
+                            .map(|state| state.as_str().to_string()),
+                        base_indent,
+                        inner_width,
+                    )
+                }
+                crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoopCoverage => {
+                    push_todo_score_update(
+                        &mut lines,
+                        "Feedback-loop coverage",
+                        update
+                            .before
+                            .as_ref()
+                            .and_then(|goal| goal.feedback_loop_coverage)
+                            .map(|state| state.as_str().to_string()),
+                        update
+                            .after
+                            .as_ref()
+                            .and_then(|goal| goal.feedback_loop_coverage)
+                            .map(|state| state.as_str().to_string()),
+                        base_indent,
+                        inner_width,
+                    )
+                }
+                crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoopTraceability => {
+                    push_todo_score_update(
+                        &mut lines,
+                        "Feedback-loop traceability",
+                        update
+                            .before
+                            .as_ref()
+                            .and_then(|goal| goal.feedback_loop_traceability)
+                            .map(|state| state.as_str().to_string()),
+                        update
+                            .after
+                            .as_ref()
+                            .and_then(|goal| goal.feedback_loop_traceability)
+                            .map(|state| state.as_str().to_string()),
+                        base_indent,
+                        inner_width,
+                    )
+                }
+                crate::tui::jcode_app::todo::TodoGoalField::DeliveryState => {
+                    push_todo_score_update(
+                        &mut lines,
+                        "Delivery",
+                        update
+                            .before
+                            .as_ref()
+                            .and_then(|goal| goal.delivery_state)
+                            .map(|state| state.as_str().to_string()),
+                        update
+                            .after
+                            .as_ref()
+                            .and_then(|goal| goal.delivery_state)
+                            .map(|state| state.as_str().to_string()),
+                        base_indent,
+                        inner_width,
+                    )
+                }
                 crate::tui::jcode_app::todo::TodoGoalField::Autonomy => push_todo_score_update(
                     &mut lines,
                     "Autonomy",
@@ -1875,22 +1898,24 @@ fn render_todo_goal_updates(
                     base_indent,
                     inner_width,
                 ),
-                crate::tui::jcode_app::todo::TodoGoalField::IterationMaturity => push_todo_score_update(
-                    &mut lines,
-                    "Iteration",
-                    update
-                        .before
-                        .as_ref()
-                        .and_then(|goal| goal.iteration_maturity)
-                        .map(|state| state.as_str().to_string()),
-                    update
-                        .after
-                        .as_ref()
-                        .and_then(|goal| goal.iteration_maturity)
-                        .map(|state| state.as_str().to_string()),
-                    base_indent,
-                    inner_width,
-                ),
+                crate::tui::jcode_app::todo::TodoGoalField::IterationMaturity => {
+                    push_todo_score_update(
+                        &mut lines,
+                        "Iteration",
+                        update
+                            .before
+                            .as_ref()
+                            .and_then(|goal| goal.iteration_maturity)
+                            .map(|state| state.as_str().to_string()),
+                        update
+                            .after
+                            .as_ref()
+                            .and_then(|goal| goal.iteration_maturity)
+                            .map(|state| state.as_str().to_string()),
+                        base_indent,
+                        inner_width,
+                    )
+                }
                 crate::tui::jcode_app::todo::TodoGoalField::FeedbackLoop
                 | crate::tui::jcode_app::todo::TodoGoalField::StoppingEvidence => unreachable!(),
             }
@@ -2102,7 +2127,9 @@ fn push_wrapped_kv_line(
     }
 }
 
-fn format_overnight_task_counts(card: &crate::tui::jcode_app::overnight::OvernightProgressCard) -> String {
+fn format_overnight_task_counts(
+    card: &crate::tui::jcode_app::overnight::OvernightProgressCard,
+) -> String {
     let counts = &card.task_summary.counts;
     format!(
         "{} complete, {} active, {} blocked, {} deferred · {} total, {} validated",
@@ -2736,10 +2763,12 @@ fn render_compact_swarm_background_progress(
     progress: &ParsedBackgroundTaskProgressNotification,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let label = compact_swarm_operation_label(&crate::tui::jcode_app::message::background_task_display_label(
-        &progress.tool_name,
-        progress.display_name.as_deref(),
-    ));
+    let label = compact_swarm_operation_label(
+        &crate::tui::jcode_app::message::background_task_display_label(
+            &progress.tool_name,
+            progress.display_name.as_deref(),
+        ),
+    );
     let fraction = compact_swarm_progress_fraction(&progress.summary)
         .map(|value| value.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '/'));
     let text = fraction
@@ -2752,10 +2781,12 @@ fn render_compact_swarm_background_completion(
     parsed: &ParsedBackgroundTaskNotification,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let label = compact_swarm_operation_label(&crate::tui::jcode_app::message::background_task_display_label(
-        &parsed.tool_name,
-        parsed.display_name.as_deref(),
-    ));
+    let label = compact_swarm_operation_label(
+        &crate::tui::jcode_app::message::background_task_display_label(
+            &parsed.tool_name,
+            parsed.display_name.as_deref(),
+        ),
+    );
     let (text, color) = if parsed.status.starts_with('✓') {
         (
             format!("✓ {label} · {}", parsed.duration),
@@ -3036,7 +3067,7 @@ fn render_compact_agent_notification(
     width: u16,
 ) -> Option<Vec<Line<'static>>> {
     let notification = compact_swarm_notification(title)?;
-    let icon = crate::id::session_icon(notification.sender);
+    let icon = crate::tui::jcode_app::id::session_icon(notification.sender);
     let collapsible = crate::tui::jcode_model::parse_collapsible_swarm_content(content);
     let (body, badge) = match collapsible {
         Some(parsed) if parsed.expanded => (
@@ -3194,8 +3225,16 @@ pub(crate) fn render_swarm_message(
     width: u16,
     _diff_mode: crate::tui::jcode_app::config_shim::DiffDisplayMode,
 ) -> Vec<Line<'static>> {
+    // [port-decision] swarm_gallery branch gated: W7 surface (jcode_render::
+    // swarm_gallery excised at iter-591; jcode's swarm-core member stream does
+    // not exist in operant, so the branch cannot activate anyway). cfg(any())
+    // preserves the verbatim upstream form for the W7 re-activation; until then
+    // flow falls through to the message fallback immediately below, which is the
+    // correct degraded behavior for a no-data-source surface.
+    #[cfg(any())]
     if msg.title.as_deref() == Some(SWARM_AGENT_SNAPSHOT_TITLE)
-        && let Ok(member) = serde_json::from_str::<crate::tui::jcode_app::protocol::SwarmMemberStatus>(&msg.content)
+        && let Ok(member) =
+            serde_json::from_str::<crate::tui::jcode_app::protocol::SwarmMemberStatus>(&msg.content)
     {
         return crate::tui::jcode_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(
             &[member],
@@ -4144,7 +4183,9 @@ pub(crate) fn render_tool_message(
     // transcript. Gated behind `display.show_agentgrep_output` (default false)
     // so most users keep the compact one-line summary.
     if tools_ui::canonical_tool_name(&tc.name) == "agentgrep"
-        && crate::tui::jcode_app::config_shim::config().display.show_agentgrep_output
+        && crate::tui::jcode_app::config_shim::config()
+            .display
+            .show_agentgrep_output
         && !msg.content.trim().is_empty()
     {
         for line in render_agentgrep_output_body(&msg.content, row_width) {

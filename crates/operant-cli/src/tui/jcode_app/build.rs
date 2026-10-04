@@ -7,16 +7,14 @@
 //! not ported. `Result` is re-rooted: upstream returns
 //! `anyhow::Result<PathBuf>` via `use anyhow::Result` at the top of the impl
 //! block it lives in; the re-rooted import is added below.
-use anyhow::Result;
 use crate::tui::jcode_app::storage;
+use anyhow::Result;
 use std::path::PathBuf;
-
 
 /// Get path to build progress file (for TUI to watch)
 pub fn build_progress_path() -> Result<PathBuf> {
     Ok(storage::jcode_dir()?.join("build-progress"))
 }
-
 
 /// Process-local cache for `read_build_progress`. Stores the last-read value
 /// alongside the time it was read so per-frame TUI calls can be served without
@@ -62,7 +60,6 @@ pub fn read_build_progress() -> Option<String> {
     value
 }
 
-
 fn read_build_progress_uncached() -> Option<String> {
     build_progress_path()
         .ok()
@@ -70,7 +67,6 @@ fn read_build_progress_uncached() -> Option<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
-
 
 // [port-decision] leaf port: stable_binary_path's chain, verbatim from
 // jcode-build-support — builds_dir + resolve_builds_dir (storage_helpers.rs:7-36),

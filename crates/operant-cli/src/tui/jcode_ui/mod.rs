@@ -23,10 +23,11 @@
 )]
 
 use ratatui::{prelude::*, widgets::Paragraph};
+use serde::Serialize;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -77,7 +78,10 @@ pub(crate) mod viewport;
 pub(crate) mod copy_selection;
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "lands before its cutover wiring (App-seam adaptation)")
+    expect(
+        dead_code,
+        reason = "lands before its cutover wiring (App-seam adaptation)"
+    )
 )]
 #[path = "ui_diff.rs"]
 mod ui_diff;
@@ -97,6 +101,24 @@ use box_utils::{
 use changelog::get_grouped_changelog;
 #[cfg(test)]
 use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};
+use frame_metrics::{
+    ChatLayoutMetrics, FLICKER_NOTICE_COPY_KEY, FullPrepPhaseMetrics, ViewportMetrics,
+    begin_frame_resource_sample, finalize_frame_metrics, note_body_built, note_body_cache_hit,
+    note_body_cache_lookup, note_body_cache_miss, note_body_incremental_reuse, note_body_request,
+    note_chat_layout, note_full_prep_built, note_full_prep_cache_hit, note_full_prep_cache_lookup,
+    note_full_prep_cache_miss, note_full_prep_phase_metrics, note_full_prep_request,
+    note_prep_aspect, note_prep_overflow, note_prep_prepare_at, note_prep_restage,
+    note_viewport_metrics, reset_frame_perf_stats, viewport_stability_hash,
+};
+pub(crate) use frame_metrics::{
+    DrawCallAttribution, FrameInputAttribution, frame_input_attribution_snapshot,
+    key_to_paint_debug_json, note_frame_painted, note_key_event_read, record_draw_call_attribution,
+    set_frame_input_attribution, wall_clock_ms,
+};
+pub(crate) use frame_metrics::{
+    debug_draw_call_history, debug_flicker_frame_history, debug_slow_frame_history,
+    recent_flicker_copy_target_for_key, recent_flicker_ui_notice,
+};
 pub(crate) use header::capitalize;
 use inline_ui::{draw_inline_ui, inline_ui_height};
 pub(crate) use memory_estimates::{debug_memory_profile, debug_side_panel_memory_profile};
@@ -123,39 +145,21 @@ pub(crate) use viewport::{
     reserve_copy_badge_margins, truncate_line_for_copy_badge,
     truncate_line_in_place_to_width as truncate_copy_badge_line_to_width,
 };
-use frame_metrics::{
-    ChatLayoutMetrics, FLICKER_NOTICE_COPY_KEY, FullPrepPhaseMetrics, ViewportMetrics,
-    begin_frame_resource_sample, finalize_frame_metrics, note_body_built, note_body_cache_hit,
-    note_body_cache_lookup, note_body_cache_miss, note_body_incremental_reuse, note_body_request,
-    note_chat_layout, note_full_prep_built, note_full_prep_cache_hit, note_full_prep_cache_lookup,
-    note_full_prep_cache_miss, note_full_prep_phase_metrics, note_full_prep_request,
-    note_prep_aspect, note_prep_overflow, note_prep_prepare_at, note_prep_restage,
-    note_viewport_metrics, reset_frame_perf_stats, viewport_stability_hash,
-};
-pub(crate) use frame_metrics::{
-    DrawCallAttribution, FrameInputAttribution, frame_input_attribution_snapshot,
-    key_to_paint_debug_json, note_frame_painted, note_key_event_read, record_draw_call_attribution,
-    set_frame_input_attribution, wall_clock_ms,
-};
-pub(crate) use frame_metrics::{
-    debug_draw_call_history, debug_flicker_frame_history, debug_slow_frame_history,
-    recent_flicker_copy_target_for_key, recent_flicker_ui_notice,
-};
 
+use crate::tui::jcode_app::color_support::rgb;
 pub(crate) use crate::tui::jcode_markdown::{CopyTargetKind, RawCopyTarget};
 pub(crate) use crate::tui::jcode_model::{
     CopyTarget, EditToolRange, ImageRegion, MessageBoundary, PreparedChatFrame, PreparedMessages,
     PreparedSection, PreparedSectionKind, WrappedLineMap,
 };
-use crate::tui::jcode_app::color_support::rgb;
 // Upstream ui.rs :13-23, :93 glob-consumed by every child's `use super::*`:
 // the module imports and the shared trait/type names must be in the parent's
 // scope or the children's bare `markdown::`/`TuiState`/`DisplayMessage` refs fail.
+use crate::tui::jcode_app::app::ProcessingStatus;
+use crate::tui::jcode_app::core::DisplayMessageRoleExt;
 use crate::tui::jcode_app::info_widget;
 use crate::tui::jcode_app::markdown;
 use crate::tui::jcode_app::mermaid;
-use crate::tui::jcode_app::core::DisplayMessageRoleExt;
-use crate::tui::jcode_app::app::ProcessingStatus;
 use crate::tui::jcode_app::tui_fns::TuiState;
 use crate::tui::jcode_model::DisplayMessage;
 
@@ -873,7 +877,8 @@ fn full_prep_cache() -> &'static Mutex<FullPrepCacheState> {
 
 // Copy badges intentionally avoid h/j/k/l so they never shadow vi-style
 // movement keys while the user is scanning visible actions.
-pub(crate) const COPY_BADGE_KEYS: [char; 12] = ['s', 'd', 'f', 'g', 'w', 'e', 'r', 't', 'x', 'c', 'v', 'b'];
+pub(crate) const COPY_BADGE_KEYS: [char; 12] =
+    ['s', 'd', 'f', 'g', 'w', 'e', 'r', 't', 'x', 'c', 'v', 'b'];
 
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleCopyTarget {
@@ -1015,27 +1020,22 @@ struct CopyViewportSnapshots {
 static LAST_COPY_VIEWPORT: OnceLock<Mutex<CopyViewportSnapshots>> = OnceLock::new();
 
 #[cfg(not(test))]
-fn copy_viewport_state() -> &'static Mutex<CopyViewportSnapshots> {
-    LAST_COPY_VIEWPORT.get_or_init(|| Mutex::new(CopyViewportSnapshots::default()))
-}
+// --- copy_snapshot_slot_mut: upstream ui.rs:1751-1761, ported verbatim (CopySelectionPane re-rooted)
 
 fn copy_snapshot_slot_mut(
     snapshots: &mut CopyViewportSnapshots,
-    pane: copy_selection::CopySelectionPane,
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
 ) -> &mut Option<CopyViewportSnapshot> {
     match pane {
-        copy_selection::CopySelectionPane::Chat => &mut snapshots.chat,
-        copy_selection::CopySelectionPane::SidePane => &mut snapshots.side,
-        copy_selection::CopySelectionPane::Input => &mut snapshots.input,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat => &mut snapshots.chat,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane => &mut snapshots.side,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input => &mut snapshots.input,
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Viewport snapshot helpers carry explicit render state to avoid hidden globals in call sites"
-)]
+// --- record_copy_pane_snapshot: upstream ui.rs:1803-1850, ported verbatim (CopySelectionPane re-rooted)
 fn record_copy_pane_snapshot(
-    pane: copy_selection::CopySelectionPane,
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
     wrapped_plain_lines: Arc<Vec<String>>,
     wrapped_copy_offsets: Arc<Vec<usize>>,
     raw_plain_lines: Arc<Vec<String>>,
@@ -1081,6 +1081,73 @@ fn record_copy_pane_snapshot(
         });
     }
 }
+
+// --- record_chat_overlay_copy_snapshot: upstream ui.rs:1987-2006, ported verbatim (CopySelectionPane re-rooted)
+
+/// Record a copy-selection snapshot for the chat pane from already-wrapped
+/// display lines. Used by full-screen overlays (e.g. `/changelog`) that replace
+/// the chat viewport but still want drag-to-select-and-copy support. Each
+/// display line is treated as a single raw line, so the copied text matches the
+/// rendered text verbatim.
+pub(crate) fn record_chat_overlay_copy_snapshot(
+    wrapped_lines: &[Line<'static>],
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+) {
+    record_pane_snapshot_from_lines(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+        wrapped_lines,
+        scroll,
+        visible_end,
+        content_area,
+    );
+}
+
+// --- record_pane_snapshot_from_lines: upstream ui.rs:2035-2068, ported verbatim (CopySelectionPane re-rooted)
+
+fn record_pane_snapshot_from_lines(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+    wrapped_lines: &[Line<'static>],
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+) {
+    let left_margins = line_left_margins_for_area(wrapped_lines, content_area.width);
+    let raw_plain_lines: Vec<String> = wrapped_lines.iter().map(line_plain_text).collect();
+    let wrapped_line_map: Vec<WrappedLineMap> = raw_plain_lines
+        .iter()
+        .enumerate()
+        .map(|(raw_line, text)| WrappedLineMap {
+            raw_line,
+            start_col: 0,
+            end_col: line_display_width(text),
+        })
+        .collect();
+    let visible_left_margins = left_margins
+        .get(scroll..visible_end.min(left_margins.len()))
+        .unwrap_or(&[]);
+    record_copy_pane_snapshot(
+        pane,
+        Arc::new(raw_plain_lines.clone()),
+        Arc::new(vec![0; wrapped_lines.len()]),
+        Arc::new(raw_plain_lines),
+        Arc::new(wrapped_line_map),
+        scroll,
+        visible_end,
+        content_area,
+        visible_left_margins,
+    );
+}
+
+fn copy_viewport_state() -> &'static Mutex<CopyViewportSnapshots> {
+    LAST_COPY_VIEWPORT.get_or_init(|| Mutex::new(CopyViewportSnapshots::default()))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Viewport snapshot helpers carry explicit render state to avoid hidden globals in call sites"
+)]
 
 /// Record a copy-selection snapshot for the prompt composer (input box).
 /// Called from `draw_input` each frame with the composer's wrapped rows so a

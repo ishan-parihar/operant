@@ -54,7 +54,6 @@ pub struct BatchProgress {
 
 // --- crates/jcode-base/src/bus.rs -------------------------------------------------
 
-
 #[derive(Clone, Debug)]
 pub enum UpdateStatus {
     Checking,
@@ -83,7 +82,6 @@ pub enum UpdateStatus {
     Error(String),
 }
 
-
 pub struct Bus {
     sender: broadcast::Sender<BusEvent>,
     /// Debounce state for [`Bus::publish_models_updated`]. Per-instance (not a
@@ -91,7 +89,6 @@ pub struct Bus {
     /// without racing other tests that publish to the global bus.
     models_updated_state: std::sync::Arc<Mutex<ModelsUpdatedPublishState>>,
 }
-
 
 const MODELS_UPDATED_DEBOUNCE: Duration = Duration::from_millis(750);
 
@@ -103,13 +100,11 @@ fn latest_update_status() -> &'static Mutex<Option<UpdateStatus>> {
 // [port-decision] dedup: bus.rs defined latest_update_status twice across
 // concatenated sources; kept the first (identical) copy.
 
-
 #[derive(Default)]
 struct ModelsUpdatedPublishState {
     last_published_at: Option<Instant>,
     publish_pending: bool,
 }
-
 
 impl Bus {
     pub fn global() -> &'static Bus {
@@ -159,7 +154,7 @@ impl Bus {
         // A models-updated publish means some provider catalog changed
         // out-of-band. Invalidate memoized route catalogs so the next render
         // rebuilds from the new cache instead of serving a stale memo.
-        crate::provider::catalog_scheduler::bump_catalog_generation();
+        crate::tui::jcode_app::provider::catalog_scheduler::bump_catalog_generation();
 
         let delay = {
             let now = Instant::now();
@@ -225,10 +220,14 @@ impl Bus {
 #[derive(Clone, Debug)]
 pub enum BusEvent {
     UpdateStatus(UpdateStatus),
+    /// Provider's available models list may have changed
+    ModelsUpdated,
     /// Deferred Mermaid rendering completed and cached content may now be visible
     MermaidRenderCompleted,
 }
 
 // [port-excision] upstream BusEvent (jcode-base/src/bus.rs:405-:486) carried ~25
 // payload variants (ToolUpdated, TodoUpdated, BatchProgress, ...); only
-// UpdateStatus and MermaidRenderCompleted are referenced by the ported tree.
+// UpdateStatus, ModelsUpdated (upstream bus.rs:464 — referenced by this file's
+// own publish_models_updated debounce) and MermaidRenderCompleted are
+// referenced by the ported tree.

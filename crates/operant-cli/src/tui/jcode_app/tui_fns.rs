@@ -25,16 +25,15 @@ use crate::tui::jcode_app::app::ProcessingStatus;
 use crate::tui::jcode_app::auth::ActiveCredential;
 use crate::tui::jcode_app::bus::BatchProgress;
 use crate::tui::jcode_app::info_widget::AmbientWidgetData;
-use crate::tui::jcode_app::protocol::SwarmMemberStatus;
 use crate::tui::jcode_app::prompt::ContextInfo;
+use crate::tui::jcode_app::protocol::SwarmMemberStatus;
+use crate::tui::jcode_app::provider::ActiveProvider;
 use crate::tui::jcode_app::session::RenderedImage;
 use crate::tui::jcode_model::ContentPos;
 use crate::tui::jcode_model::DisplayMessage;
 use crate::tui::jcode_model::vendor_types::ToolCall;
 use crate::tui::jcode_ui::copy_selection::{CopySelectionRange, CopySelectionStatus};
-use crate::tui::jcode_app::provider::ActiveProvider;
 use std::time::Duration;
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackgroundTaskRowStatus {
@@ -42,7 +41,6 @@ pub enum BackgroundTaskRowStatus {
     Completed,
     Failed,
 }
-
 
 /// Compact presentation state for one retained background task.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,8 +53,6 @@ pub struct BackgroundTaskRow {
     /// tasks remain visible until their state changes or the session closes.
     pub completed_at: Option<std::time::Instant>,
 }
-
-
 
 #[derive(Clone)]
 pub struct ContextSnapshot {
@@ -81,11 +77,9 @@ pub(crate) fn scheduled_notification_text(
     Some(format!("⏰ next scheduled task {}{}", next, suffix))
 }
 
-
 // [port-decision] dedup: the TuiState trait was ported twice — here and in
 // jcode_app/tui_state.rs (the canonical verbatim :395-916 port). Deleted this
 // copy; the `pub use` re-export at the bottom of this file provides the name.
-
 
 pub(crate) fn connection_type_icon(connection_type: Option<&str>) -> Option<&'static str> {
     let normalized = connection_type?.trim().to_ascii_lowercase();
@@ -100,7 +94,6 @@ pub(crate) fn connection_type_icon(connection_type: Option<&str>) -> Option<&'st
         None
     }
 }
-
 
 /// Cache TTL information for the current provider
 #[derive(Debug, Clone)]
@@ -118,7 +111,6 @@ pub struct CacheTtlInfo {
     /// Estimated cached tokens (from last response's input tokens)
     pub cached_tokens: Option<u64>,
 }
-
 
 impl CacheTtlInfo {
     /// How long before expiry the `⏳ cache ...` countdown should appear.
@@ -143,7 +135,6 @@ impl CacheTtlInfo {
         !self.is_estimate && (self.is_cold || self.expiring_soon())
     }
 }
-
 
 /// Compact human age like `30s`, `5m`, `1h 1m`, `2d 3h` for "went cold N ago"
 /// annotations. Keeps at most two units so it stays glanceable.
@@ -173,7 +164,6 @@ pub(crate) fn format_compact_age(secs: u64) -> String {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KvCacheProblemKind {
     /// The provider explicitly reported new cache creation on a turn where we expected
@@ -184,13 +174,11 @@ pub(crate) enum KvCacheProblemKind {
     ExpectedCacheReadMissing,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KvCacheProblem {
     pub kind: KvCacheProblemKind,
     pub affected_tokens: Option<u64>,
 }
-
 
 impl KvCacheProblem {
     pub(crate) fn log_reason(self) -> &'static str {
@@ -201,11 +189,9 @@ impl KvCacheProblem {
     }
 }
 
-
 fn normalized_provider_matches(provider: &str, needle: &str) -> bool {
     provider.trim().to_ascii_lowercase().contains(needle)
 }
-
 
 fn provider_stack_contains(provider: &str, upstream_provider: Option<&str>, needle: &str) -> bool {
     let needle = &needle.to_ascii_lowercase();
@@ -214,7 +200,6 @@ fn provider_stack_contains(provider: &str, upstream_provider: Option<&str>, need
             .map(|upstream| normalized_provider_matches(upstream, needle))
             .unwrap_or(false)
 }
-
 
 fn provider_stack_contains_any(
     provider: &str,
@@ -226,13 +211,11 @@ fn provider_stack_contains_any(
         .any(|needle| provider_stack_contains(provider, upstream_provider, needle))
 }
 
-
 fn cache_expected_warm(cache_ttl: Option<&CacheTtlInfo>) -> bool {
     cache_ttl
         .map(|info| !info.is_cold && !info.is_estimate)
         .unwrap_or(false)
 }
-
 
 /// Detect a KV/prompt-cache problem that is reliable enough to surface in the UI.
 ///
@@ -288,7 +271,6 @@ pub(crate) fn detect_kv_cache_problem(
     })
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
     Model,
@@ -296,7 +278,6 @@ pub enum PickerKind {
     Login,
     Usage,
 }
-
 
 /// Render snapshot of the Ctrl+R reverse prompt-history search overlay.
 /// `matches` are single-line previews, newest first.
@@ -307,13 +288,11 @@ pub struct PromptHistorySearchView {
     pub selected: usize,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InlineInteractiveLayout {
     Compact,
     ThreeColumn,
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InlineInteractiveSchema {
@@ -328,14 +307,12 @@ pub struct InlineInteractiveSchema {
     pub preview_activation_column: usize,
 }
 
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InlineViewState {
     pub title: String,
     pub status: Option<String>,
     pub lines: Vec<String>,
 }
-
 
 impl InlineViewState {
     pub fn debug_memory_profile(&self) -> serde_json::Value {
@@ -356,13 +333,11 @@ impl InlineViewState {
     }
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub enum InlineUiStateRef<'a> {
     View(&'a InlineViewState),
     Interactive(&'a InlineInteractiveState),
 }
-
 
 impl PickerKind {
     pub fn schema(&self) -> InlineInteractiveSchema {
@@ -466,8 +441,10 @@ impl PickerKind {
                 // Include the pretty name so a query like "opus 4.8" matches
                 // the row even though the underlying id is `claude-opus-4-8`.
                 let pretty =
-                    crate::tui::jcode_app::helpers::model_names::pretty_known_model_family(&entry.name)
-                        .unwrap_or_default();
+                    crate::tui::jcode_app::helpers::model_names::pretty_known_model_family(
+                        &entry.name,
+                    )
+                    .unwrap_or_default();
                 format!(
                     "{} {} {} {} {}",
                     entry.name, pretty, provider, method, detail
@@ -477,7 +454,6 @@ impl PickerKind {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountPickerAction {
     Switch { provider_id: String, label: String },
@@ -485,7 +461,6 @@ pub enum AccountPickerAction {
     Replace { provider_id: String, label: String },
     OpenCenter { provider_filter: Option<String> },
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModelTarget {
@@ -495,7 +470,6 @@ pub enum AgentModelTarget {
     Memory,
     Ambient,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerAction {
@@ -526,7 +500,6 @@ pub enum PickerAction {
     },
 }
 
-
 /// Unified inline picker with three columns.
 #[derive(Debug, Clone)]
 pub struct InlineInteractiveState {
@@ -546,7 +519,6 @@ pub struct InlineInteractiveState {
     pub preview: bool,
 }
 
-
 impl InlineInteractiveState {
     pub fn debug_memory_profile(&self) -> serde_json::Value {
         let entries_bytes: usize = self.entries.iter().map(estimate_picker_entry_bytes).sum();
@@ -562,7 +534,6 @@ impl InlineInteractiveState {
         })
     }
 }
-
 
 fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
     match action {
@@ -585,17 +556,14 @@ fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
                 .as_ref()
                 .map(|value| value.capacity())
                 .unwrap_or(0)
-        }
-        // [port-excision] Login/Logout arm — variants excised above.
-        // [port-excision] Usage arm — variant excised above.
+        } // [port-excision] Login/Logout arm — variants excised above.
+          // [port-excision] Usage arm — variant excised above.
     }
 }
-
 
 fn estimate_picker_option_bytes(option: &PickerOption) -> usize {
     option.provider.capacity() + option.api_method.capacity() + option.detail.capacity()
 }
-
 
 fn estimate_picker_entry_bytes(entry: &PickerEntry) -> usize {
     entry.name.capacity()
@@ -617,7 +585,6 @@ fn estimate_picker_entry_bytes(entry: &PickerEntry) -> usize {
             .unwrap_or(0)
 }
 
-
 /// A reusable picker entry with one or more available actions/options.
 #[derive(Debug, Clone)]
 pub struct PickerEntry {
@@ -636,7 +603,6 @@ pub struct PickerEntry {
     pub created_date: Option<String>,
     pub effort: Option<String>,
 }
-
 
 impl PickerEntry {
     pub fn active_option(&self) -> Option<&PickerOption> {
@@ -664,7 +630,6 @@ impl PickerEntry {
     }
 }
 
-
 /// A single available option for a picker entry.
 #[derive(Debug, Clone)]
 pub struct PickerOption {
@@ -674,7 +639,6 @@ pub struct PickerOption {
     pub detail: String,
     pub estimated_reference_cost_micros: Option<u64>,
 }
-
 
 /// An SSH-backed socket is not a shared-filesystem local daemon. Keep this
 /// distinct from `App::is_remote`, which also describes ordinary local clients.
@@ -706,8 +670,6 @@ const FULL_FRAME_REDRAW_REASONS: &[&str] = &[
     "swarm_spinner",
     "session_picker_spinner",
 ];
-
-
 
 pub(crate) fn last_full_frame_redraw_reason() -> Option<&'static str> {
     FULL_FRAME_REDRAW_REASONS

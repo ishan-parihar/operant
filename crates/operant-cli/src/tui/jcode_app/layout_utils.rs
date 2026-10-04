@@ -6,5 +6,3 @@
 // unreferenced by the ported tree). See jcode_app/mod.rs for scope.
 pub(crate) use crate::tui::jcode_render::layout::{parse_area_spec, point_in_rect, rect_contains};
 use ratatui::layout::Rect;
-
-

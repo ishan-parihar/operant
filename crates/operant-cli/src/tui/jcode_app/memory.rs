@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::Instant;
 
-
 /// Represents current memory system activity.
 #[derive(Debug, Clone)]
 pub struct MemoryActivity {
@@ -26,7 +25,6 @@ pub struct MemoryActivity {
     pub recent_events: Vec<MemoryEvent>,
 }
 
-
 impl MemoryActivity {
     pub fn is_processing(&self) -> bool {
         !matches!(self.state, MemoryState::Idle)
@@ -38,7 +36,6 @@ impl MemoryActivity {
     }
 }
 
-
 /// Status of a single pipeline step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepStatus {
@@ -49,14 +46,12 @@ pub enum StepStatus {
     Skipped,
 }
 
-
 /// Result data for a completed pipeline step.
 #[derive(Debug, Clone)]
 pub struct StepResult {
     pub summary: String,
     pub latency_ms: u64,
 }
-
 
 /// Tracks the 4-step per-turn memory pipeline: search, verify, inject, maintain.
 #[derive(Debug, Clone)]
@@ -72,7 +67,6 @@ pub struct PipelineState {
     pub maintain_result: Option<StepResult>,
     pub started_at: Instant,
 }
-
 
 impl PipelineState {
     pub fn new() -> Self {
@@ -110,7 +104,6 @@ impl PipelineState {
     }
 }
 
-
 /// State of the memory sidecar.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum MemoryState {
@@ -130,7 +123,6 @@ pub enum MemoryState {
     /// Agent is actively using a memory tool.
     ToolAction { action: String, detail: String },
 }
-
 
 // [port-decision] leaf port: MemoryEventKind + InjectedMemoryItem verbatim from
 // jcode-memory-types/src/lib.rs:143-201,137-141 — referenced by MemoryEvent.kind
@@ -214,7 +206,6 @@ pub struct MemoryEvent {
     pub detail: Option<String>,
 }
 
-
 /// Global memory activity state - updated by sidecar, read by info widget
 static MEMORY_ACTIVITY: Mutex<Option<MemoryActivity>> = Mutex::new(None);
 
@@ -238,7 +229,7 @@ pub fn check_staleness() -> bool {
             if !matches!(activity.state, MemoryState::Idle)
                 && activity.state_since.elapsed().as_secs() >= STALENESS_TIMEOUT_SECS
             {
-// [port-decision] re-rooted `crate::logging` -> jcode_app::logging (leftover from the app-crate root).
+                // [port-decision] re-rooted `crate::logging` -> jcode_app::logging (leftover from the app-crate root).
                 crate::tui::jcode_app::logging::info(&format!(
                     "Memory state stale ({:?} for {}s), auto-resetting to Idle",
                     activity.state,
@@ -252,4 +243,3 @@ pub fn check_staleness() -> bool {
     }
     false
 }
-

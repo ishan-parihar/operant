@@ -301,8 +301,10 @@ pub(super) struct ActiveCredentialOverrides {
 impl ActiveCredentialOverrides {
     fn from_app(app: &dyn TuiState) -> Self {
         Self {
-            anthropic: app.active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::Claude),
-            openai: app.active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::OpenAI),
+            anthropic: app
+                .active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::Claude),
+            openai: app
+                .active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::OpenAI),
         }
     }
 
@@ -361,13 +363,21 @@ fn auth_full_specs(
     let anthropic_label = provider_label(
         "anthropic",
         auth.anthropic.state,
-        dual_method_label(crate::tui::jcode_app::provider::ActiveProvider::Claude, auth, active),
+        dual_method_label(
+            crate::tui::jcode_app::provider::ActiveProvider::Claude,
+            auth,
+            active,
+        ),
     );
 
     let openai_label = provider_label(
         "openai",
         auth.openai,
-        dual_method_label(crate::tui::jcode_app::provider::ActiveProvider::OpenAI, auth, active),
+        dual_method_label(
+            crate::tui::jcode_app::provider::ActiveProvider::OpenAI,
+            auth,
+            active,
+        ),
     );
 
     let gemini_label = if auth.gemini != AuthState::NotConfigured {
@@ -477,9 +487,9 @@ fn header_provider_auth_tag(
         }
         "openrouter" | "openai-compatible" => "api-key",
         other
-            if crate::provider_catalog::resolve_openai_compatible_profile_selection(other)
+            if crate::tui::jcode_app::provider_catalog::resolve_openai_compatible_profile_selection(other)
                 .is_some()
-                || crate::provider_catalog::openai_compatible_profile_id_for_display_name(
+                || crate::tui::jcode_app::provider_catalog::openai_compatible_profile_id_for_display_name(
                     other,
                 )
                 .is_some() =>
@@ -626,7 +636,7 @@ fn build_persistent_header_with_auth(
     // icon (e.g. "ram" -> 🐏). Previously a remote http/ws connection icon
     // (🌐/🔌) replaced it entirely, which hid the name icon for every remote
     // client. Keep the connection icon as a separate trailing hint instead.
-    let icon = crate::id::session_icon(&session_name);
+    let icon = crate::tui::jcode_app::id::session_icon(&session_name);
     let connection_icon = connection_type_icon(app.connection_type().as_deref());
     let nice_model = header_model_display_name(&model, &app.provider_name());
     let align = Alignment::Left;
@@ -850,17 +860,18 @@ fn build_header_lines_with_auth(
 
     // Auth inventory: `/login` heading, then one provider per line (dim
     // hollow dot for unconfigured providers).
-    let (login_heading, auth_lines) = if let Some(host) = crate::tui::jcode_app::tui_fns::ssh_remote_host() {
-        // The native protocol reports the active route, not a complete remote
-        // credential inventory. Do not render the laptop's (or an empty)
-        // inventory as if it described providers configured on the server.
-        (format!("/login to authenticate on {host}"), Vec::new())
-    } else {
-        (
-            "/login to add provider".to_string(),
-            build_auth_status_lines(auth, active),
-        )
-    };
+    let (login_heading, auth_lines) =
+        if let Some(host) = crate::tui::jcode_app::tui_fns::ssh_remote_host() {
+            // The native protocol reports the active route, not a complete remote
+            // credential inventory. Do not render the laptop's (or an empty)
+            // inventory as if it described providers configured on the server.
+            (format!("/login to authenticate on {host}"), Vec::new())
+        } else {
+            (
+                "/login to add provider".to_string(),
+                build_auth_status_lines(auth, active),
+            )
+        };
     lines.push(
         Line::from(Span::styled(
             login_heading,
@@ -1010,10 +1021,10 @@ pub(in crate::tui) fn build_header_sections(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::Registry;
     use crate::tui::jcode_app::auth::{AuthState, AuthStatus, ProviderAuth};
     use crate::tui::jcode_app::message::Message;
     use crate::tui::jcode_app::provider::{EventStream, Provider};
-    use crate::tool::Registry;
     use anyhow::Result;
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -1606,7 +1617,9 @@ mod tests {
         crate::env::remove_var("JCODE_PROVIDER");
 
         let mut app = crate::tui::app::App::new_for_remote(None);
-        app.set_remote_startup_phase(crate::tui::jcode_app::app::RemoteStartupPhase::LoadingSession);
+        app.set_remote_startup_phase(
+            crate::tui::jcode_app::app::RemoteStartupPhase::LoadingSession,
+        );
 
         // The model line lives in the persistent header now; the startup phase
         // label renders there without a bogus "(unknown)" provider tag.

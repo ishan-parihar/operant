@@ -36,7 +36,6 @@ pub struct ProcessMemorySnapshot {
     pub allocator: AllocatorInfo,
 }
 
-
 #[cfg(target_os = "linux")]
 pub fn snapshot_with_source(source: impl Into<String>) -> ProcessMemorySnapshot {
     let source = source.into();

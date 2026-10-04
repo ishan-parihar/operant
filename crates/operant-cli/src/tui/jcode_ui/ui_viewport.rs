@@ -394,8 +394,9 @@ pub(super) fn draw_messages(
     // this frame's geometry keeps the same message under the reader instead of
     // reinterpreting a stale line index (persistent half).
     let resize_anchor_scroll = if app.auto_scroll_paused() {
-        app.pending_resize_anchor()
-            .and_then(|pos| crate::tui::jcode_model::resolve_content_pos(&pos, &prepared, max_scroll))
+        app.pending_resize_anchor().and_then(|pos| {
+            crate::tui::jcode_model::resolve_content_pos(&pos, &prepared, max_scroll)
+        })
     } else {
         // The anchor describes a reading position; following the tail is not one.
         None
@@ -423,7 +424,11 @@ pub(super) fn draw_messages(
     // handlers outside `draw` resolve anchors against it.
     super::set_last_chat_frame(prepared.clone());
 
-    let prompt_preview_lines = if crate::tui::jcode_app::config_shim::config().display.prompt_preview && scroll > 0 {
+    let prompt_preview_lines = if crate::tui::jcode_app::config_shim::config()
+        .display
+        .prompt_preview
+        && scroll > 0
+    {
         compute_prompt_preview_line_count(
             wrapped_user_prompt_starts,
             user_prompt_texts,
@@ -645,7 +650,9 @@ pub(super) fn draw_messages(
 
     let now_ms = app.now_millis();
     let policy = crate::tui::jcode_app::perf::tui_policy();
-    let prompt_anim_enabled = crate::tui::jcode_app::config_shim::config().display.prompt_entry_animation
+    let prompt_anim_enabled = crate::tui::jcode_app::config_shim::config()
+        .display
+        .prompt_entry_animation
         && policy.enable_decorative_animations
         && policy.tier.prompt_entry_animation_enabled();
     if prompt_anim_enabled {
@@ -987,7 +994,17 @@ pub(super) fn draw_messages(
 
     let centered = app.centered_mode();
     let diagram_mode = app.diagram_mode();
-    let pinned_diagrams = diagram_mode == crate::tui::jcode_model::vendor_types::DiagramDisplayMode::Pinned;
+    let pinned_diagrams =
+        diagram_mode == crate::tui::jcode_model::vendor_types::DiagramDisplayMode::Pinned;
+    // [port-decision] inline-image draw/prefetch block gated: depends on
+    // ratatui_image-backed render_image_widget* and the inline-image
+    // machinery, all engine-owned until the batch-4 dep decision lands
+    // (degraded path already names why: InlineFitReadiness::Unsupported)
+    // and no image is ever materialized today. The upstream body below is
+    // preserved verbatim; cfg(any()) simply keeps it out of the compile so
+    // batch-3 is buildable without a fabricated no-op body. Re-activate with
+    // the W6/W9 inline-image surface.
+    #[cfg(any())]
     {
         let visible_image_start = prepared
             .image_regions
@@ -1003,7 +1020,9 @@ pub(super) fn draw_messages(
             let image_end = region.end_line;
             let is_fit = region.render == crate::tui::jcode_model::ImageRegionRender::Fit;
 
-            if let Some(native_latex) = crate::tui::jcode_app::markdown::handterm_native_latex_for_hash(hash) {
+            if let Some(native_latex) =
+                crate::tui::jcode_app::markdown::handterm_native_latex_for_hash(hash)
+            {
                 // Native math writes real terminal cells rather than an overlay,
                 // so draw it only when the complete reserved region is visible.
                 // The ordinary paragraph pass has already cleared every cell in
@@ -1241,7 +1260,11 @@ pub(super) fn draw_messages(
         frame.render_widget(Paragraph::new(pinned_todo_band), band_area);
     }
 
-    if crate::tui::jcode_app::config_shim::config().display.prompt_preview && scroll > 0 {
+    if crate::tui::jcode_app::config_shim::config()
+        .display
+        .prompt_preview
+        && scroll > 0
+    {
         let last_offscreen_prompt_idx =
             lower_bound(wrapped_user_prompt_starts, scroll).checked_sub(1);
 
@@ -1399,7 +1422,10 @@ fn pinned_todo_band_lines(
         .iter()
         .map(|task| active_background_task_line(task, width))
         .collect();
-    let card_lines = if crate::tui::jcode_app::config_shim::config().display.pin_todos {
+    let card_lines = if crate::tui::jcode_app::config_shim::config()
+        .display
+        .pin_todos
+    {
         app.pinned_todos_payload()
             .map(|payload| {
                 let msg = crate::tui::jcode_model::DisplayMessage::todos(payload.to_string());
@@ -1440,7 +1466,10 @@ fn pinned_todo_band_lines(
     (lines, more_line)
 }
 
-fn active_background_task_line(task: &crate::tui::jcode_app::tui_fns::BackgroundTaskRow, width: u16) -> Line<'static> {
+fn active_background_task_line(
+    task: &crate::tui::jcode_app::tui_fns::BackgroundTaskRow,
+    width: u16,
+) -> Line<'static> {
     const BAR_WIDTH: usize = 6;
     let (icon, task_color, percent) = match task.status {
         crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Running => (
@@ -1448,7 +1477,9 @@ fn active_background_task_line(task: &crate::tui::jcode_app::tui_fns::Background
             accent_color(),
             task.percent.unwrap_or(0.0).clamp(0.0, 100.0),
         ),
-        crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Completed => ("✓", Color::Green, 100.0),
+        crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Completed => {
+            ("✓", Color::Green, 100.0)
+        }
         crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Failed => (
             "×",
             Color::Red,
@@ -1456,26 +1487,27 @@ fn active_background_task_line(task: &crate::tui::jcode_app::tui_fns::Background
         ),
     };
     let rounded_percent = percent.round() as u8;
-    let status_label = if task.status == crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Failed {
-        "failed".to_string()
-    } else {
-        format!("{}%", rounded_percent)
-    };
+    let status_label =
+        if task.status == crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Failed {
+            "failed".to_string()
+        } else {
+            format!("{}%", rounded_percent)
+        };
     let filled = ((percent / 100.0) * BAR_WIDTH as f32).round() as usize;
-    let (active_bar, remaining_bar) = if task.status == crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Failed
-    {
-        (
-            "━".repeat(filled.min(BAR_WIDTH)),
-            "─".repeat(BAR_WIDTH.saturating_sub(filled)),
-        )
-    } else if filled >= BAR_WIDTH {
-        ("━".repeat(BAR_WIDTH), String::new())
-    } else {
-        (
-            format!("{}╺", "━".repeat(filled)),
-            "─".repeat(BAR_WIDTH.saturating_sub(filled + 1)),
-        )
-    };
+    let (active_bar, remaining_bar) =
+        if task.status == crate::tui::jcode_app::tui_fns::BackgroundTaskRowStatus::Failed {
+            (
+                "━".repeat(filled.min(BAR_WIDTH)),
+                "─".repeat(BAR_WIDTH.saturating_sub(filled)),
+            )
+        } else if filled >= BAR_WIDTH {
+            ("━".repeat(BAR_WIDTH), String::new())
+        } else {
+            (
+                format!("{}╺", "━".repeat(filled)),
+                "─".repeat(BAR_WIDTH.saturating_sub(filled + 1)),
+            )
+        };
 
     let fixed_width = UnicodeWidthStr::width(
         format!("◌ bg   {} {}{}", active_bar, remaining_bar, status_label).as_str(),
@@ -1567,7 +1599,9 @@ fn compute_max_scroll_with_prompt_preview(
     pinned_todo_lines: u16,
 ) -> usize {
     let mut max_scroll = total_lines.saturating_sub(area.height as usize);
-    let preview_enabled = crate::tui::jcode_app::config_shim::config().display.prompt_preview;
+    let preview_enabled = crate::tui::jcode_app::config_shim::config()
+        .display
+        .prompt_preview;
     if max_scroll == 0 || (!preview_enabled && pinned_todo_lines == 0) {
         return max_scroll;
     }

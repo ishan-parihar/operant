@@ -7,7 +7,6 @@
 //! reaches it.
 use serde::{Deserialize, Serialize};
 
-
 /// Swarm member status for lifecycle updates
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SwarmMemberStatus {

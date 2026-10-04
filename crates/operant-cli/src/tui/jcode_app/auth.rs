@@ -12,7 +12,6 @@ pub fn auth_status_generation() -> u64 {
     AUTH_STATUS_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-
 /// Bump the auth generation without clearing the cached status.
 ///
 /// Tests that only need to observe generation-driven invalidation use this so
@@ -22,7 +21,6 @@ pub fn bump_auth_status_generation_for_tests() {
     AUTH_STATUS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-
 /// The credential a request will actually be sent with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveCredential {
@@ -31,7 +29,6 @@ pub enum ActiveCredential {
     /// Direct provider API key.
     ApiKey,
 }
-
 
 impl From<crate::tui::jcode_app::provider::ResolvedCredential> for ActiveCredential {
     fn from(value: crate::tui::jcode_app::provider::ResolvedCredential) -> Self {
@@ -205,9 +202,11 @@ pub fn resolve_dual_credential_auth(
     // pins OAuth or API key for *this* provider. This replaces the per-provider
     // hand-written alias matches that used to drift apart.
     let forced =
-        crate::tui::jcode_app::provider::pinned_mode_for(dual, runtime_provider).map(|mode| match mode {
-            crate::tui::jcode_app::provider::AuthMode::Oauth => ActiveCredential::OAuth,
-            crate::tui::jcode_app::provider::AuthMode::ApiKey => ActiveCredential::ApiKey,
+        crate::tui::jcode_app::provider::pinned_mode_for(dual, runtime_provider).map(|mode| {
+            match mode {
+                crate::tui::jcode_app::provider::AuthMode::Oauth => ActiveCredential::OAuth,
+                crate::tui::jcode_app::provider::AuthMode::ApiKey => ActiveCredential::ApiKey,
+            }
         });
 
     let (has_oauth, has_api_key) = match dual {

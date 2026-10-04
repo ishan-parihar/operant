@@ -18,7 +18,9 @@ pub(crate) use crate::tui::jcode_model::tool_display::{
 /// always fall back to the technical detail regardless of this setting.
 #[cfg(not(test))]
 pub(crate) fn show_tool_call_details() -> bool {
-    crate::tui::jcode_app::config_shim::config().display.tool_call_details
+    crate::tui::jcode_app::config_shim::config()
+        .display
+        .tool_call_details
 }
 
 #[cfg(test)]
@@ -45,7 +47,9 @@ pub(crate) mod tests_tool_call_details_override {
 
 #[cfg(not(test))]
 pub(crate) fn show_bash_output() -> bool {
-    crate::tui::jcode_app::config_shim::config().display.show_bash_output
+    crate::tui::jcode_app::config_shim::config()
+        .display
+        .show_bash_output
 }
 
 #[cfg(test)]
@@ -1591,7 +1595,10 @@ pub(super) fn render_batch_subcall_line(
             crate::tui::jcode_app::util::ApproxTokenSeverity::Warning => rgb(214, 184, 92),
             crate::tui::jcode_app::util::ApproxTokenSeverity::Danger => rgb(224, 118, 118),
         };
-        (crate::tui::jcode_app::util::format_approx_token_count(tokens), color)
+        (
+            crate::tui::jcode_app::util::format_approx_token_count(tokens),
+            color,
+        )
     });
     let intent = tool
         .intent

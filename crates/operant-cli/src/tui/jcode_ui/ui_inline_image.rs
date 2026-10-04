@@ -297,7 +297,8 @@ fn request_payload_restage(id: u64) {
     if newly_requested {
         // Materialization normally happens on the worker. Wake the UI so the
         // next prepare pass can recover the evicted source from App state.
-        crate::tui::jcode_app::bus::Bus::global().publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
+        crate::tui::jcode_app::bus::Bus::global()
+            .publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
     }
 }
 
@@ -540,7 +541,8 @@ fn finish_prewarm_request(req: PrewarmRequest) {
         inflight.remove(&req.id);
     }
     if outcome == PrewarmOutcome::Prepared {
-        crate::tui::jcode_app::bus::Bus::global().publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
+        crate::tui::jcode_app::bus::Bus::global()
+            .publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
     }
 }
 
@@ -560,7 +562,8 @@ fn prewarm_worker(rx: mpsc::Receiver<PrewarmRequest>) {
             // At least one older coalesced request was displaced. Space has now
             // been made, so repaint once and let the current viewport resubmit
             // whichever geometry is still relevant.
-            crate::tui::jcode_app::bus::Bus::global().publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
+            crate::tui::jcode_app::bus::Bus::global()
+                .publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
         }
     }
 }
@@ -646,7 +649,8 @@ fn schedule_prewarm(id: u64, target_cols: u16, target_rows: u16) {
             // permanently blank after materialization alone.
             match prepare_prewarm_request(req) {
                 PrewarmOutcome::Prepared => {
-                    crate::tui::jcode_app::bus::Bus::global().publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
+                    crate::tui::jcode_app::bus::Bus::global()
+                        .publish(crate::tui::jcode_app::bus::BusEvent::MermaidRenderCompleted);
                 }
                 PrewarmOutcome::SourceMissing => {}
                 PrewarmOutcome::MaterializeFailed => record_materialize_failure(req.id),
@@ -1234,7 +1238,9 @@ mod tests {
             // The region must point at blank placeholder lines, never the label.
             let first = &section.wrapped_lines[region.abs_line_idx];
             assert!(
-                crate::tui::jcode_render::line_plain_text(first).trim().is_empty(),
+                crate::tui::jcode_render::line_plain_text(first)
+                    .trim()
+                    .is_empty(),
                 "region should start on a blank placeholder line"
             );
             // Region height must match its line span.
@@ -1647,12 +1653,14 @@ mod tests {
     #[test]
     fn resolve_anchored_items_buckets_by_anchor() {
         let images = vec![
-            rendered_image(Some(crate::tui::jcode_app::session::RenderedImageAnchor::ToolCall {
-                id: "tool-1".to_string(),
-            })),
-            rendered_image(Some(crate::tui::jcode_app::session::RenderedImageAnchor::UserPrompt {
-                ordinal: 2,
-            })),
+            rendered_image(Some(
+                crate::tui::jcode_app::session::RenderedImageAnchor::ToolCall {
+                    id: "tool-1".to_string(),
+                },
+            )),
+            rendered_image(Some(
+                crate::tui::jcode_app::session::RenderedImageAnchor::UserPrompt { ordinal: 2 },
+            )),
             rendered_image(None),
         ];
         let anchored = resolve_anchored_items(&images);
@@ -1725,18 +1733,22 @@ mod tests {
         use crate::tui::jcode_model::DisplayMessage;
 
         let images = vec![
-            rendered_image(Some(crate::tui::jcode_app::session::RenderedImageAnchor::ToolCall {
-                id: "tool-present".to_string(),
-            })),
-            rendered_image(Some(crate::tui::jcode_app::session::RenderedImageAnchor::ToolCall {
-                id: "tool-missing".to_string(),
-            })),
-            rendered_image(Some(crate::tui::jcode_app::session::RenderedImageAnchor::UserPrompt {
-                ordinal: 0,
-            })),
-            rendered_image(Some(crate::tui::jcode_app::session::RenderedImageAnchor::UserPrompt {
-                ordinal: 5,
-            })),
+            rendered_image(Some(
+                crate::tui::jcode_app::session::RenderedImageAnchor::ToolCall {
+                    id: "tool-present".to_string(),
+                },
+            )),
+            rendered_image(Some(
+                crate::tui::jcode_app::session::RenderedImageAnchor::ToolCall {
+                    id: "tool-missing".to_string(),
+                },
+            )),
+            rendered_image(Some(
+                crate::tui::jcode_app::session::RenderedImageAnchor::UserPrompt { ordinal: 0 },
+            )),
+            rendered_image(Some(
+                crate::tui::jcode_app::session::RenderedImageAnchor::UserPrompt { ordinal: 5 },
+            )),
             rendered_image(None),
         ];
         let anchored = resolve_anchored_items(&images);
@@ -1783,7 +1795,9 @@ mod tests {
         for offset in 1..rows as usize {
             let line = &lines[marker_idx + offset];
             assert!(
-                crate::tui::jcode_render::line_plain_text(line).trim().is_empty(),
+                crate::tui::jcode_render::line_plain_text(line)
+                    .trim()
+                    .is_empty(),
                 "placeholder row {offset} should be blank"
             );
         }

@@ -23,7 +23,6 @@ use crate::tui::jcode_app::message::ConnectionPhase;
 use crate::tui::jcode_app::prompt::swarm_root_reasoning_effort;
 use std::time::{Duration, Instant};
 
-
 pub(crate) const COMMAND_SUGGESTION_VISIBLE_LIMIT: usize = 8;
 
 fn active_runtime_provider_key() -> Option<String> {
@@ -32,7 +31,6 @@ fn active_runtime_provider_key() -> Option<String> {
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
 }
-
 
 /// Current processing status
 #[derive(Clone, Default, Debug)]
@@ -53,7 +51,6 @@ pub enum ProcessingStatus {
     RunningTool(String),
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RemoteStartupPhase {
     StartingServer,
@@ -62,7 +59,6 @@ pub(crate) enum RemoteStartupPhase {
     WaitingForReload,
     Reconnecting { attempt: u32 },
 }
-
 
 impl RemoteStartupPhase {
     pub(crate) fn header_label(&self) -> String {
@@ -91,7 +87,6 @@ impl RemoteStartupPhase {
     }
 }
 
-
 #[derive(Clone, Default)]
 pub struct CopyBadgeUiState {
     pub alt_active: bool,
@@ -104,14 +99,12 @@ pub struct CopyBadgeUiState {
     pub expand_feedback_line: Option<usize>,
 }
 
-
 #[derive(Clone)]
 pub struct CopyBadgeFeedback {
     pub key: char,
     pub success: bool,
     pub expires_at: Instant,
 }
-
 
 impl CopyBadgeUiState {
     fn pulse_active(expires_at: Option<Instant>, now: Instant) -> bool {
@@ -154,7 +147,6 @@ impl CopyBadgeUiState {
     }
 }
 
-
 /// Result from running the TUI
 #[derive(Debug, Default)]
 pub struct RunResult {
@@ -172,11 +164,9 @@ pub struct RunResult {
     pub session_id: Option<String>,
 }
 
-
 pub(crate) fn effort_display_label(effort: &str) -> &str {
     effort_display_label_with_root(effort, swarm_root_reasoning_effort(effort))
 }
-
 
 // Keep finite, validated effort labels static so autocomplete can share them
 // without allocations or leaking dynamically formatted strings.
@@ -309,7 +299,8 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/autojudge", "Show/toggle automatic end-of-turn judging"),
     RegisteredCommand::public("/review", "Launch a one-shot headed review session"),
     RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
-    #[cfg(any())] // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
     RegisteredCommand::public("/effort", crate::tui::jcode_app::keybind::EFFORT_HELP),
     RegisteredCommand::public("/fast", "Toggle fast mode"),
     RegisteredCommand::public("/transport", "Show/change connection transport"),
@@ -437,7 +428,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::hidden("/zzz", "Secret premium-mode command"),
     RegisteredCommand::hidden("/zstatus", "Secret premium-mode status command"),
 ];
-
 
 /// Every non-hidden slash command with its one-line description, in
 /// registration order. The `/help` overlay uses this to list commands its

@@ -19,8 +19,8 @@
 //!   per changed item.
 
 use super::*;
-use crate::tui::jcode_model::vendor_types::ToolCall;
 use crate::tui::jcode_app::todo::TodoItem;
+use crate::tui::jcode_model::vendor_types::ToolCall;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
