@@ -46,12 +46,23 @@ pub const PREFLIGHT_DECAY_CONSTANT: f64 = 20.0;
 // ---------------------------------------------------------------------------
 
 /// Why the turn ended. Matches hermes-agent's `_turn_exit_reason` strings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnExitReason {
     /// Model produced a text response (normal completion).
     TextResponse,
     /// Budget exhausted — grace call was made.
     BudgetExhausted,
+    /// Turn exited via a grace call (budget or wall-clock exhaustion).
+    /// Distinct from `BudgetExhausted`: the agent STOPPED EARLY — the
+    /// returned message is a best-effort summary, possibly empty when the
+    /// S1 quality gate rejected a degenerate wrap-up. The operator notice
+    /// distinguishes this so a degraded partial is never presented as a
+    /// full answer (BUGS.md S5).
+    GraceCall,
+    /// In-band circuit breaker fired (repeated identical tool call, or
+    /// consecutive failed/repeated iterations) and the turn was aborted
+    /// with an abort message instead of letting the loop burn on.
+    CircuitBreaker,
     /// User interrupted (Ctrl-C or /stop).
     Interrupted,
     /// An error occurred during the turn.
@@ -63,6 +74,8 @@ impl fmt::Display for TurnExitReason {
         match self {
             Self::TextResponse => write!(f, "text_response"),
             Self::BudgetExhausted => write!(f, "budget_exhausted"),
+            Self::GraceCall => write!(f, "grace_call"),
+            Self::CircuitBreaker => write!(f, "circuit_breaker"),
             Self::Interrupted => write!(f, "interrupted"),
             Self::Error => write!(f, "error"),
         }
@@ -134,6 +147,17 @@ impl TurnDiagnostics {
                  Try breaking the task into smaller steps or increasing `max_iterations` in config.",
                 self.api_calls, self.max_iterations,
             )),
+            TurnExitReason::GraceCall => Some(
+                "⚠️ Turn ended early — the wrap-up call ran out of room mid-summary. \
+                 The answer shown is a best-effort partial; reply 'continue' to resume the task."
+                    .to_string(),
+            ),
+            TurnExitReason::CircuitBreaker => Some(
+                "⚠️ Turn ended early — the model looped the same failing tool call \
+                 until the circuit breaker stopped it. Partial work may be complete; \
+                 ask me to continue if needed."
+                    .to_string(),
+            ),
             TurnExitReason::Interrupted => Some(
                 "⚡ Turn was interrupted by the user. Partial work may have been done — \
                  check what was accomplished before the interruption."

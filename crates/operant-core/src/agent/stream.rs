@@ -307,44 +307,10 @@ impl OperantAgent {
             merge_stream_tool_call(&mut tool_calls, tc);
         }
 
-        // ── Validate tool call arguments before returning (iter-261) ──
-        // Truncated streaming can leave tool_calls with incomplete JSON
-        // arguments (e.g. `{"query": "te` from a cut-off SSE stream).
-        // Repair what we can; discard tool calls whose arguments are
-        // irreparably broken so execute_tools doesn't surface a raw
-        // "Invalid JSON" error to the user.
-        tool_calls.retain(|tc| {
-            let args = tc.function.arguments.trim();
-            if args.is_empty() || args == "{}" {
-                return true; // Empty args are valid (tool uses defaults)
-            }
-            match serde_json::from_str::<serde_json::Value>(args) {
-                Ok(_) => true,
-                Err(_) => {
-                    let repaired =
-                        message_safety::repair_tool_call_arguments(args, &tc.function.name);
-                    match serde_json::from_str::<serde_json::Value>(&repaired) {
-                        Ok(_) => {
-                            debug!(
-                                tool = %tc.function.name,
-                                original_len = args.len(),
-                                "Tool arguments auto-repaired in process_stream"
-                            );
-                            true // repaired — keep it (repair happens again in execute_tools)
-                        }
-                        Err(e) => {
-                            warn!(
-                                tool = %tc.function.name,
-                                error = %e,
-                                args_preview = %safe_truncate_str(args, 80),
-                                "Discarding tool call with irreparable arguments"
-                            );
-                            false // irreparable — drop this tool call
-                        }
-                    }
-                }
-            }
-        });
+        // (iter-261 pre-validated arguments here and dropped irreparable
+        // calls; B2/iter-602 removed that retain — unrepairable args must
+        // reach `execute_tools`, which answers them with a named
+        // not-executed error instead of silently dropping the call.)
 
         if let Some(err) = stream_error {
             // Surface the ORIGINAL stream error (e.g. reqwest's "error
@@ -514,6 +480,35 @@ impl OperantAgent {
                 continue;
             }
 
+            // ── S2 timeout-breaker mask ────────────────────────────────
+            // A tool that timed out 3× consecutively this turn is refused
+            // here WITHOUT executing — no fourth timeout burn — and the
+            // model gets a named error it can act on. The schema list also
+            // omits it (`tools_for_turn`), so a well-behaved model never
+            // reaches this arm; this is the backstop for one that calls it
+            // anyway.
+            if self
+                .masked_tools
+                .lock()
+                .expect("masked_tools lock poisoned")
+                .contains(&tool_call.function.name)
+            {
+                warn!(
+                    tool = %tool_call.function.name,
+                    "Tool masked by the timeout breaker — refusing call without executing"
+                );
+                early_results[idx] = Some(ToolResult::error_with_name(
+                    &tool_call.function.name,
+                    &tool_call.id,
+                    format!(
+                        "Tool '{}' is disabled for the rest of this turn after repeated \
+                          timeouts — take a different approach.",
+                        tool_call.function.name
+                    ),
+                ));
+                continue;
+            }
+
             let mut name = tool_call.function.name.clone();
             let raw_args = tool_call.function.arguments.clone();
             let trimmed = raw_args.trim();
@@ -555,34 +550,51 @@ impl OperantAgent {
             // caused by streaming tool-call argument fragmentation.)
             let mut args: serde_json::Value = match serde_json::from_str(&args_str) {
                 Ok(a) => a,
-                Err(e) => {
+                Err(_) => {
                     // Try to repair common truncation issues:
                     // 1. Missing closing brace — append }
                     // 2. Missing closing bracket — append ]
                     // 3. Truncated string value — append "
+                    //
+                    // S4 (iter-602): when no repair succeeds, do NOT
+                    // execute on dummied-up `{}` — the pre-B2 last resort
+                    // did exactly that, and the resulting
+                    // schema-validation failure was retried into a
+                    // 1,938-substitution cascade in the measured window.
+                    // Answer the call with a named not-executed error the
+                    // model can correct from in one round trip; it never
+                    // reaches phase 2. Log lengths only — raw model
+                    // output does not go into logs.
                     let repaired = message_safety::repair_tool_call_arguments(&args_str, &name);
-                    if let Ok(a) = serde_json::from_str(&repaired) {
-                        debug!(tool = %name, "Tool arguments auto-repaired");
-                        a
-                    } else {
-                        let preview = safe_truncate_str(&args_str, 120);
-                        warn!(
-                            tool = %name,
-                            error = %e,
-                            args_preview = %preview,
-                            args_len = args_str.len(),
-                            "Failed to parse tool arguments (truncated by provider?)"
-                        );
-                        early_results[idx] = Some(ToolResult::error(
-                            &tool_call.id,
-                            format!(
-                                "Tool '{}' received truncated arguments from the model (length {}). \
-                                 The model's response was likely cut off — please retry your request.",
-                                name,
-                                args_str.len()
-                            ),
-                        ));
-                        continue;
+                    let repaired_value = match &repaired {
+                        // Fixed is parseable by construction (the repair
+                        // only returns strings it validated); the second
+                        // from_str routes an invariant break to the same
+                        // honest refusal instead of executing garbage.
+                        message_safety::RepairOutcome::Fixed(fixed) => {
+                            serde_json::from_str(fixed).ok()
+                        }
+                        message_safety::RepairOutcome::Unrepairable => None,
+                    };
+                    match repaired_value {
+                        Some(a) => {
+                            debug!(tool = %name, "Tool arguments auto-repaired");
+                            a
+                        }
+                        None => {
+                            warn!(
+                                tool = %name,
+                                args_len = args_str.len(),
+                                "Unrepairable tool arguments — call not executed, error returned to the model"
+                            );
+                            early_results[idx] = Some(ToolResult::error_with_name(
+                                &name,
+                                &tool_call.id,
+                                "Arguments could not be parsed and were NOT executed. \
+                                 Reply with corrected arguments on the next turn if the user still wants this.",
+                            ));
+                            continue;
+                        }
                     }
                 }
             };
@@ -985,21 +997,24 @@ impl OperantAgent {
             // receiver resolves dialogs on their own (120s timeout reply),
             // and the child timeout governs delegation — the wrapper is only
             // a backstop against a wedged receiver/child.
-            let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
-                timeout(LONG_RUNNING_TOOL_TIMEOUT, tool_future).await
+            let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                LONG_RUNNING_TOOL_TIMEOUT
             } else {
-                timeout(self.config.tool_timeout, tool_future).await
+                self.config.tool_timeout
             };
+            let result = timeout(limit, tool_future).await;
             if let Some(ref bus) = self.turn_end_bus {
                 bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
             }
             early_results[idx] = Some(match result {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                Err(_) => ToolResult::error(
-                    &tool_call.id,
-                    format!("Tool timed out after {:?}", self.config.tool_timeout),
-                ),
+                // S2: the flag is what the per-tool breaker keys on — a
+                // timeout result built here without it would slip past the
+                // breaker when the outer wrapper fires before the
+                // registry's own (e.g. a per-tool override extends the
+                // inner deadline past this one).
+                Err(_) => ToolResult::timeout(&name, &tool_call.id, limit),
             });
         } else if !batch_allows_parallel_execution(
             pending.iter().map(|(_, tc, _)| tc.function.name.as_str()),
@@ -1023,21 +1038,20 @@ impl OperantAgent {
                     self.session_id().unwrap_or_else(|| "default".to_string()),
                 );
                 let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
-                let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
-                    timeout(LONG_RUNNING_TOOL_TIMEOUT, exec).await
+                let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                    LONG_RUNNING_TOOL_TIMEOUT
                 } else {
-                    timeout(self.config.tool_timeout, exec).await
+                    self.config.tool_timeout
                 };
+                let result = timeout(limit, exec).await;
                 if let Some(ref bus) = self.turn_end_bus {
                     bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
                 }
                 early_results[idx] = Some(match result {
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                    Err(_) => ToolResult::error(
-                        &tool_call.id,
-                        format!("Tool timed out after {:?}", self.config.tool_timeout),
-                    ),
+                    // S2: mark the flag (see single-tool branch above).
+                    Err(_) => ToolResult::timeout(&name, &tool_call.id, limit),
                 });
             }
         } else {
@@ -1108,11 +1122,12 @@ impl OperantAgent {
                         // user-question receiver resolves dialogs on their
                         // own 120s timeout and the child timeout governs
                         // delegation.
-                        let result = if is_interactive_tool(&name) || is_long_running_tool(&name) {
-                            timeout(LONG_RUNNING_TOOL_TIMEOUT, exec).await
+                        let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
+                            LONG_RUNNING_TOOL_TIMEOUT
                         } else {
-                            timeout(tool_timeout, exec).await
+                            tool_timeout
                         };
+                        let result = timeout(limit, exec).await;
 
                         if let Some(ref bus) = self.turn_end_bus {
                             bus.record_tool_duration(exec_started.elapsed().as_millis() as u64);
@@ -1123,10 +1138,8 @@ impl OperantAgent {
                             match result {
                                 Ok(Ok(r)) => r,
                                 Ok(Err(e)) => ToolResult::error(&tool_call.id, e.to_string()),
-                                Err(_) => ToolResult::error(
-                                    &tool_call.id,
-                                    format!("Tool timed out after {:?}", tool_timeout),
-                                ),
+                                // S2: mark the flag (see single-tool branch).
+                                Err(_) => ToolResult::timeout(&name, &tool_call.id, limit),
                             },
                         )
                     }

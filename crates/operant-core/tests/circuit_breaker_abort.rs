@@ -112,6 +112,7 @@ impl OperantTool for OkTool {
             success: true,
             content: "42".to_string(),
             error: None,
+            timed_out: false,
         }
     }
 }
@@ -147,6 +148,7 @@ impl OperantTool for FailingTool {
             success: false,
             content: String::new(),
             error: Some("probe failure (test fixture)".to_string()),
+            timed_out: false,
         }
     }
 }

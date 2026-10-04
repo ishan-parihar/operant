@@ -55,6 +55,7 @@ impl OperantTool for MemoryProviderTool {
             success: true,
             content,
             error: None,
+            timed_out: false,
         }
     }
 }

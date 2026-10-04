@@ -27,29 +27,41 @@ static TRAILING_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| {
 // Tool call argument repair
 // ---------------------------------------------------------------------------
 
+/// Outcome of [`repair_tool_call_arguments`] — the S4 honesty contract.
+///
+/// `Fixed` carries the repaired (or already-valid) argument string,
+/// parseable JSON by construction. `Unrepairable` means no repair pass
+/// produced valid JSON — including the Python-literal `None` token some
+/// models emit — and the caller must NOT execute the call: answer it with
+/// a named not-executed error instead. The pre-B2 contract returned
+/// `"{}"` here so the request wouldn't crash, which silently executed
+/// the tool on empty args — a guaranteed schema-validation failure the
+/// model retried into a substitution cascade (1,938 substitutions → 522
+/// validation failures in the measured window).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepairOutcome {
+    /// Repaired (or already-valid) argument JSON — parseable by construction.
+    Fixed(String),
+    /// No repair produced valid JSON; the call must not be executed.
+    Unrepairable,
+}
+
 /// Attempt to repair malformed tool_call argument JSON.
 ///
 /// Models like GLM-5.1 via Ollama can produce truncated JSON, trailing
 /// commas, Python `None`, etc. The API proxy rejects these with HTTP 400
 /// "invalid tool call arguments". This function applies common repairs;
-/// if all fail it returns `"{}"` so the request succeeds (better than
-/// crashing the session).
-pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
+/// if all fail it returns [`RepairOutcome::Unrepairable`] so the caller
+/// can refuse to execute rather than run the tool on dummied-up `{}`.
+pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> RepairOutcome {
     let raw_stripped = raw_args.trim();
 
-    // Fast-path: empty / whitespace-only -> empty object
+    // Fast-path: empty / whitespace-only -> empty object. A model that
+    // legitimately sends no args is NOT the S4 defect; destroyed args are,
+    // and those fall through to `Unrepairable` below.
     if raw_stripped.is_empty() {
         tracing::warn!("Sanitized empty tool_call arguments for {}", tool_name);
-        return "{}".to_string();
-    }
-
-    // Python-literal None -> normalise to {}
-    if raw_stripped == "None" {
-        tracing::warn!(
-            "Sanitized Python-None tool_call arguments for {}",
-            tool_name
-        );
-        return "{}".to_string();
+        return RepairOutcome::Fixed("{}".to_string());
     }
 
     // Pass 0: try strict=False (accept control chars in strings)
@@ -62,7 +74,7 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
                 tool_name
             );
         }
-        return reserialized;
+        return RepairOutcome::Fixed(reserialized);
     }
 
     // Attempt common JSON repairs
@@ -165,16 +177,16 @@ pub fn repair_tool_call_arguments(raw_args: &str, tool_name: &str) -> String {
             raw_stripped.len(),
             fixed.len()
         );
-        return fixed;
+        return RepairOutcome::Fixed(fixed);
     }
 
-    // Last resort: replace with empty object so the API request doesn't
-    // crash the entire session.
-    tracing::warn!(
-        "Unrepairable tool_call arguments for {} — replaced with empty object",
-        tool_name
-    );
-    "{}".to_string()
+    // Last resort: every repair failed — which is also where the
+    // Python-literal `None` token lands now that its special-case arm is
+    // gone (it was one of the S4 specimen's "{}" producers). Executing on
+    // dummied-up empty args is exactly the cascade the caller must avoid;
+    // the outcome itself carries the refusal, so there is no log to
+    // leave here — the caller's honest error is the signal.
+    RepairOutcome::Unrepairable
 }
 
 // ---------------------------------------------------------------------------
@@ -565,28 +577,65 @@ mod tests {
 
     #[test]
     fn test_repair_tool_call_arguments_empty() {
-        assert_eq!(repair_tool_call_arguments("", "test_tool"), "{}");
-        assert_eq!(repair_tool_call_arguments("  ", "test_tool"), "{}");
+        // The legitimate no-args case must stay Fixed("{}") — a model
+        // that sends nothing is not the S4 defect.
+        assert_eq!(
+            repair_tool_call_arguments("", "test_tool"),
+            RepairOutcome::Fixed("{}".to_string())
+        );
+        assert_eq!(
+            repair_tool_call_arguments("  ", "test_tool"),
+            RepairOutcome::Fixed("{}".to_string())
+        );
     }
 
     #[test]
-    fn test_repair_tool_call_arguments_none() {
-        assert_eq!(repair_tool_call_arguments("None", "test_tool"), "{}");
+    fn test_repair_tool_call_arguments_none_is_unrepairable() {
+        // S4 (iter-602): "None" used to be normalised to "{}" and the
+        // tool executed on empty args; it must now surface as
+        // Unrepairable so the call is answered, not run.
+        assert_eq!(
+            repair_tool_call_arguments("None", "test_tool"),
+            RepairOutcome::Unrepairable
+        );
+    }
+
+    #[test]
+    fn test_repair_tool_call_arguments_unrepairable_garbage() {
+        // No JSON structure survives any repair pass — the old last
+        // resort would have returned "{}" and executed anyway (S4).
+        assert_eq!(
+            repair_tool_call_arguments("not json at all", "test_tool"),
+            RepairOutcome::Unrepairable
+        );
+        assert_eq!(
+            repair_tool_call_arguments(r#"{"key": bad}"#, "test_tool"),
+            RepairOutcome::Unrepairable
+        );
     }
 
     #[test]
     fn test_repair_tool_call_arguments_valid() {
-        let args = r#"{"key": "value"}"#;
         assert_eq!(
-            repair_tool_call_arguments(args, "test_tool"),
-            r#"{"key":"value"}"#
+            repair_tool_call_arguments(r#"{"key": "value"}"#, "test_tool"),
+            RepairOutcome::Fixed(r#"{"key":"value"}"#.to_string())
         );
+    }
+
+    /// Unwrap the [`RepairOutcome::Fixed`] payload — the contract every
+    /// repairable-input test below pins. (Unrepairable inputs are covered
+    /// by their own asserts above and must never reach a Fixed payload.)
+    fn fixed_args(args: &str) -> String {
+        match repair_tool_call_arguments(args, "test_tool") {
+            RepairOutcome::Fixed(s) => s,
+            RepairOutcome::Unrepairable => panic!("args must stay repairable: {args:?}"),
+        }
     }
 
     #[test]
     fn test_repair_tool_call_arguments_trailing_comma() {
         let args = r#"{"key": "value",}"#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["key"], "value");
     }
@@ -594,7 +643,7 @@ mod tests {
     #[test]
     fn test_repair_tool_call_arguments_unclosed_brace() {
         let args = r#"{"key": "value""#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["key"], "value");
     }
@@ -657,7 +706,7 @@ mod tests {
     #[test]
     fn test_repair_unclosed_string_literal() {
         let args = r#"{"key": "value""#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["key"], "value");
     }
@@ -665,7 +714,7 @@ mod tests {
     #[test]
     fn test_repair_trailing_colon_incomplete_pair() {
         let args = r#"{"a": 1, "b": "#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["a"], 1);
         assert!(parsed.get("b").is_none());
@@ -674,7 +723,7 @@ mod tests {
     #[test]
     fn test_repair_trailing_colon_no_comma() {
         let args = r#"{"a": "#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed.is_object());
     }
@@ -682,7 +731,7 @@ mod tests {
     #[test]
     fn test_repair_string_with_escapes_unclosed() {
         let args = r#"{"path": "C:\\Users\\test""#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(parsed["path"].as_str().unwrap().contains("test"));
     }
@@ -690,7 +739,7 @@ mod tests {
     #[test]
     fn test_repair_trailing_colon_after_array() {
         let args = r#"{"a": [1, 2], "b": "#;
-        let result = repair_tool_call_arguments(args, "test_tool");
+        let result = fixed_args(args);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["a"], serde_json::json!([1, 2]));
         assert!(parsed.get("b").is_none());

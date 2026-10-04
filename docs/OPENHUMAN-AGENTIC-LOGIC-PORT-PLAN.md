@@ -66,7 +66,7 @@ vendor/tinyagents (submodule; 112,726 LOC harness + 88k sibling crates)
 - Track `(tool, arg_fingerprint) → outcome` across the turn.
 - On failure classify: `hard_reject` (security/approval denial re-issued unchanged — can never succeed), `recoverable_miss` (unknown-tool recovery sentinel), or ordinary failure.
 - Verdict: `Continue` → `Nudge` (inject a **system** message "no progress since step X" — not a tool result, so the harness's instruction isn't attributed to the tool) → `Halt` (stop, surface the message as the final response; tracker self-resets so a resumed run doesn't re-trip).
-- Recoverable failures get larger headroom: identical-repeat threshold **8**, varied-args no-progress threshold **12** (`loop_guards.rs:23-27`); tools whose contract is identical re-invocation sit on an exemption list (`is_repeat_call_exempt`).
+- Base ladder (`no_progress/mod.rs:81-94`): identical repeat — nudge **2**, halt **3**; any-failure no-progress — nudge **4**, halt **6**; hard policy rejection — halt **2**. Recoverable failures get larger headroom on top of that: identical-repeat threshold **8**, varied-args no-progress threshold **12** (`loop_guards.rs:23-27`); tools whose contract is identical re-invocation sit on an exemption list (`is_repeat_call_exempt`).
 - Successful-repeat guard: identical output ≥ 4 or identical call batch ≥ 3 (`successful_repeat.rs:21-23`) — this is the **text-domination/repetition guard BUGS.md R33 explicitly defers**.
 
 **Halt summaries name root causes** instead of a generic cap error: `failure_copy/` (`halt.rs` 172 + `table.rs` 311 + mod 22 = 505 LOC) holds the copy table — recoverable-identical, recoverable-no-progress, terminal-inference, and `user_actionable_escalation` — keyed by failure classification. This is what turns a bounded failure into an operator-readable one (S5's fix pattern).
@@ -112,6 +112,10 @@ Status legend: `HAVE` = operant equivalent exists and is wired; `WEAK` = exists 
 | `tinyagents-session` | 29,979 | Operant has `SessionStore` + `database.rs`; swapping persistence is a data-loss risk with no behavioral gain. |
 | `openhuman-tui` | 4,519 | §5. Operant TUI is 5× larger, non-lossy, and mid-way through the jcode visual port. |
 | OpenHuman event bus (`WebChannelEvent`) | — | 44 fields, ~15 read by the TUI, built web-first; `broadcast` drops deltas on lag. Porting it imports a web client's schema into a terminal app. |
+| openhuman `no_progress/` as a copied sibling module | 756 | §4c: operant already runs the live `ToolGuardrailTracker` (`tool_guardrails.rs`, wired `stream.rs:597-643`); the ladder grows INSIDE it — semantics ported, files not. |
+| openhuman `steering_forwarder.rs` | — | §4c: `OperantAgent::steer()` + `drain_steers()` + `steer_queue_handle()` already own queued steering (`agent/builders.rs:425/:527/:456`); Wave 3 extends that queue's vocabulary instead. |
+| A second `CancellationToken` primitive | — | `CancellationToken` already spans `operant-api/src/channel.rs:61`, `acp_server.rs:289/:649/:727`, `operant-gateway/src/ws.rs`; Wave 3 threads the existing token into the loop. `InterruptFlag` stays as the UI-facing edge. |
+| A fourth context compressor | — | §4c: THREE already exist; Wave 1 consolidates to the core pair + one preflight entry point, Wave 4 orders its rungs. Nothing new beside them. |
 
 ---
 
@@ -134,6 +138,8 @@ Landed with fault-injected acceptance tests per slice; see `docs/AGENT-LOOP-FIX-
 Plan 006's four steps, with the parity harness as the acceptance gate: extract shared turn rules into `turn_rules.rs` (started — both loops already share `EmptyResponseCounter`/`AssistantTurn`; Loop B still holds a dead shadowing local at `loop_.rs:89`), delete that shadow, migrate `ws.rs:343`/`acp_server.rs:563` onto the reconciled loop, land `tests/agent_parity.rs` (scripted provider × scenario matrix: empty×3→answer, empty×4→exhaustion, nudge intervals, compression+todo re-injection, budget exhaustion). **Every later wave lands once, on one loop.**
 
 **Wave 1 also consolidates the THREE context compressors** (2026-10-04 audit): Loop A's reactive pair — `agent/llm_compressor.rs` (934 LOC, the LLM summarization engine, wired via `with_llm_compressor` from `operant-cli/src/main.rs:1883/:1963`) + `agent/compress.rs` (266 LOC, overflow fallback: LLM summarize → deterministic decay, hermes parity incl. todo re-injection) — and `operant-runtime/src/agent/context_compressor.rs` (980 LOC, invoked PROACTIVELY by `operant-channels/src/orchestrator/dispatch.rs:343-352` on the WS path). The reconciled loop keeps ONE engine: the core pair (`llm_compressor` as the summarizer, `compress.rs` as its overflow/decay fallback) extended with runtime's proactive preflight entry point; `context_compressor.rs` is deleted with Loop B and `dispatch.rs` calls the survivor. **Plus a third loop consumer**: `operant-runtime/src/tools/delegate.rs:1` runs sub-agent delegation on the separate `loop_::run_tool_call_loop` engine (`loop_/tool_loop.rs`), which carries the only wired no-progress detector (`loop_detector.rs`, see §4c). Wave 1 must migrate the delegation path onto the reconciled loop like `ws.rs`/`acp_server.rs` — otherwise a third turn engine survives the merge.
+
+**Harvest ordering (decided 2026-10-04):** Wave 1 first MOVES `loop_detector.rs`'s `hash_value`/`canonicalise` pair and its `:657` key-order-independence test into `operant-core` (consumed by Wave 2's fingerprint upgrade) BEFORE any engine deletion — otherwise the `loop_` migration orphans a live `pub` module behind the `clippy -D warnings` gate mid-programme. The `loop_` engine, `tool_loop.rs`, `loop_detector.rs`, and Loop B's `turn()/turn_streamed()` are deleted only after `ws.rs`, `acp_server.rs`, and `delegate.rs` each run on the reconciled loop.
 
 ### Wave 2 — the no-progress ladder (the core port; ~1,300 LOC + tests) — **REFINED 2026-10-04: evolve `ToolGuardrailTracker`, do NOT port a parallel module**
 
@@ -196,7 +202,7 @@ Method: enumerate operant's existing implementation of each Wave 1–4 capabilit
 | Harness kernel | `operant-harness` (plan-016 claims/seams — not a turn loop) | **UNTOUCHED** |
 | Sidecars | `kernel-sidecar`/`pk-sidecar` (plan-015 process supervision stubs) | **UNTOUCHED** — not agent loops |
 
-Corrections recorded: the pre-audit draft of this plan would have ported openhuman's `no_progress/` module as a sibling of `ToolGuardrailTracker`, ported `steering_forwarder.rs` beside `steer()`, "introduced" CancellationToken, and treated compaction as two engines instead of three. The advisory-era claim that `loop_detector` had zero production call sites is corrected above: it is wired into the live `loop_` delegation engine (which is itself a third turn engine Wave 1 must absorb).
+Corrections recorded: an earlier draft of this plan would have ported openhuman's `no_progress/` module as a sibling of `ToolGuardrailTracker`, ported `steering_forwarder.rs` beside `steer()`, "introduced" a CancellationToken, and treated compaction as two engines instead of three. That same draft recorded `loop_detector` as having no production callers; in fact it is wired into the live `loop_` delegation engine, which is itself a third turn engine Wave 1 must absorb.
 
 ---
 

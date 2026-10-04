@@ -153,6 +153,15 @@ pub struct ToolResult {
     /// Optional error details
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// S2 breaker input: this result is a timeout, not an ordinary error.
+    /// Set only by [`ToolResult::timeout`] — the constructor the timeout
+    /// paths in `tools.rs` and the agent dispatch use; every other
+    /// construction path leaves it false, so the per-tool breaker in
+    /// `agent/run.rs` can never be advanced by anything but a real timeout.
+    /// `serde(default)`: results persisted by older builds lack the field
+    /// and must still deserialize as "not a timeout".
+    #[serde(default)]
+    pub timed_out: bool,
 }
 
 impl ToolResult {
@@ -170,6 +179,7 @@ impl ToolResult {
             success: true,
             content,
             error: None,
+            timed_out: false,
         }
     }
 
@@ -191,6 +201,7 @@ impl ToolResult {
             success: true,
             content,
             error: None,
+            timed_out: false,
         }
     }
 
@@ -202,6 +213,7 @@ impl ToolResult {
             success: false,
             content: String::new(),
             error: Some(error.into()),
+            timed_out: false,
         }
     }
 
@@ -217,10 +229,28 @@ impl ToolResult {
             success: false,
             content: String::new(),
             error: Some(error.into()),
+            timed_out: false,
         }
     }
 
-    /// Get the content as a parsed JSON value
+    /// Create a timeout result (S2 breaker input): the `error_with_name`
+    /// shape with [`Self::timed_out`] set and the tool name stamped, so the
+    /// per-tool consecutive-timeout breaker in `agent/run.rs` can key on it.
+    /// The only constructor that marks a result as a timeout.
+    pub fn timeout(
+        name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        after: Duration,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            name: name.into(),
+            success: false,
+            content: String::new(),
+            error: Some(format!("Tool timed out after {after:?}")),
+            timed_out: true,
+        }
+    }
     pub fn parse_content<T: for<'de> Deserialize<'de>>(&self) -> Result<T> {
         serde_json::from_str(&self.content)
             .map_err(|e| Error::ParseResponse(format!("Failed to parse tool result: {}", e)))
@@ -341,11 +371,7 @@ impl ToolExecutor {
             }
             Err(_) => {
                 warn!(tool = %tool_name, timeout = ?effective, "Tool execution timed out");
-                ToolResult::error_with_name(
-                    &tool_name,
-                    &tool_call_id,
-                    format!("Tool timed out after {:?}", effective),
-                )
+                ToolResult::timeout(&tool_name, &tool_call_id, effective)
             }
         }
     }

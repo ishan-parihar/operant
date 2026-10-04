@@ -1279,6 +1279,7 @@ impl OperantTool for SubAgentTool {
                         success: true,
                         content,
                         error: None,
+                        timed_out: false,
                     },
                     Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
                 }
@@ -1319,6 +1320,7 @@ impl OperantTool for SubAgentTool {
                     success: true,
                     content,
                     error: None,
+                    timed_out: false,
                 },
                 Err(error) => ToolResult::error(TOOL_NAME, error.to_string()),
             }

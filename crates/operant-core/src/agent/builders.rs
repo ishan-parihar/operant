@@ -84,6 +84,8 @@ impl OperantAgent {
             tool_guardrails: std::sync::Mutex::new(
                 crate::tool_guardrails::ToolGuardrailTracker::new(),
             ),
+            timeout_streaks: std::sync::Mutex::new(std::collections::HashMap::new()),
+            masked_tools: std::sync::Mutex::new(std::collections::HashSet::new()),
             session_activity_last_stamp: std::sync::Mutex::new(std::collections::HashMap::new()),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),
@@ -153,6 +155,8 @@ impl OperantAgent {
             tool_guardrails: std::sync::Mutex::new(
                 crate::tool_guardrails::ToolGuardrailTracker::new(),
             ),
+            timeout_streaks: std::sync::Mutex::new(std::collections::HashMap::new()),
+            masked_tools: std::sync::Mutex::new(std::collections::HashSet::new()),
             session_activity_last_stamp: std::sync::Mutex::new(std::collections::HashMap::new()),
             record_trajectories: false,
             session_cost_usd: Arc::new(std::sync::RwLock::new(0.0)),

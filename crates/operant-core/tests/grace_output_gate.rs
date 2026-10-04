@@ -77,6 +77,7 @@ impl OperantTool for FailingTool {
             success: false,
             content: String::new(),
             error: Some("probe failure (test fixture)".to_string()),
+            timed_out: false,
         }
     }
 }
