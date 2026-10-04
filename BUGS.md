@@ -4127,3 +4127,51 @@ file ownership. Test-fixture note, a separate defect NOT fixed here:
 LLM response re-fetches the catalog over HTTPS — the tests prime the
 on-disk cache in a temp `HOME` to stay hermetic and fast; the
 production cost of that miss is Main's to ticket.)
+
+## Round 45 (2026-10-04) — Wave 1 latent detector defects (found by the W1.2 parity-harness leg's adversarial review)
+
+Both live in the Loop C engine scheduled for deletion (W1.10). Recorded here
+so the defects outlive the files — Wave 2's merged controller owns the fixes.
+
+### S6 — Detector Block-verdict is a no-op: the "replace the tool output" comment is false (OPEN)
+
+`loop_/tool_loop.rs:1118-1126`: the `LoopDetectionResult::Block` arm logs,
+then calls `append_or_merge_system_message(history, "[Loop Detection —
+BLOCKED] {msg}")` and falls through — the tool is still executed (or its
+result still forwarded) exactly as in the `Ok` case, and the loop continues
+with BOTH the real tool result and the block note in history. The comment
+above the arm — "Replace the tool output with the block message. We still
+continue the loop so the LLM sees the block feedback." — is false: nothing
+is replaced, the verdict changes only what gets logged and one extra system
+message. A "blocked" call therefore lands its full effect (file write,
+command execution) and the model is merely told it was blocked, after the
+fact. Owner: Wave 2's merged controller — the Block verdict must actually
+suppress/substitute the tool result there. Deleting `tool_loop.rs` in Wave
+1.10 would silently discard the only code site where this could be fixed,
+which is why this record must outlive the file. Not fixed in Wave 1: parity
+pins today's behavior as-is; changing the verdict's effect is a semantics
+change that belongs to the absorb, not the migration.
+
+### S7 — LoopDetector ping-pong matches tool NAME only; identical outputs are invisible to it (OPEN)
+
+`loop_detector.rs` `detect_ping_pong` (`:171`, extended-cycle count
+`:201-212`) detects alternation purely on `ToolCallRecord::name` —
+`args_hash`/`result_hash` are never consulted, so two tools taking turns
+with IDENTICAL outputs every cycle (a genuine no-progress loop) escalates as
+ping-pong `Break` instead of no-progress, and two tools legitimately
+alternating with fresh results each round is still suspect. Two compounding
+gates make the blind spot worse: `detect_no_progress` (`:235`, evaluated
+AFTER ping-pong at `:115/:118/:121`) requires the streak to share one
+name AND one `result_hash`, then requires `unique_args.len() >= 2`
+(`:256-260` — all-same-args returns None as "exact-repeat territory"),
+and `result_hash` is computed with the RAW `hash_str` (`:105`) — not the
+canonicalising `hash_value` used for args (`:104`, the W1.1 harvest) — so
+the same logical output serialized differently hashes unequal and breaks
+the streak. Net effect: an A/B alternation whose every call returns the
+identical output — a genuine no-progress loop — can only ever be judged
+by the name-only ping-pong matcher (no_progress requires one name), and
+genuinely-stuck single-tool repeats with re-serialized-but-identical
+outputs slip past no_progress too. Wave 2's absorb of the detector
+carries this caveat: fix the semantics in the merged controller (compare
+canonical result fingerprints in ping-pong detection, gate on results
+not just names), not in the dead engine.

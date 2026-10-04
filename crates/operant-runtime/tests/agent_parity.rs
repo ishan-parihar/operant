@@ -36,21 +36,21 @@
 //! `operant-runtime/src/agent/loop_/tests.rs`) plus a direct unit-pin of
 //! the compressor's public API.
 //!
-//! NOTE on iter-609 API drift: while this harness was in flight, iter-609
-//! (4af9c9b7) moved turn-exit reasons out of `AgentEvent::Done` (now
-//! `Done { message }`; reasons live in logged `TurnDiagnostics`) and
-//! removed `ToolResult::timed_out`. The harness was adapted to pin the
-//! POST-iter-609 shapes; a later migration leg that restores richer exit
-//! events must update these pins consciously, with justification.
+//! NOTE on exit-event history: iter-609/610 (the foreign fleet's stale-baseline
+//! landing) reverted the A2 surface — `Done { message }` without a reason,//! `ToolResult` without `timed_out`. iter-612 restored it: `Done` carries
+//! `reason: TurnExitReason` again and `ToolResult` requires `timed_out: bool`.
+//! The pins below target the RESTORED state (the current tree); any later
+//! migration leg that changes exit-event shapes must update them consciously,
+//! with justification.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
+use futures_util::stream::BoxStream;
 use parking_lot::Mutex;
 
 // ── Loop A: operant-core (gateway path) ─────────────────────────
@@ -64,7 +64,7 @@ use operant_core::client::{
 use operant_core::database::Database;
 use operant_core::error::{Error, Result};
 use operant_core::schema::ToolSchema;
-use operant_core::tools::todo_tool::{todo_injection_for_session, TodoTool, TODO_INJECTION_HEADER};
+use operant_core::tools::todo_tool::{TODO_INJECTION_HEADER, TodoTool, todo_injection_for_session};
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 // ── Loops B & C: operant-runtime + operant-providers ────────────
@@ -258,6 +258,7 @@ impl OperantTool for CoreEnvProbe {
             success: true,
             content: "probe ok".to_string(),
             error: None,
+            timed_out: false,
         }
     }
 }
@@ -588,7 +589,8 @@ async fn s1_empty_recovery_loop_a() {
         drain_events(rx).iter().any(|ev| matches!(
             ev,
             AgentEvent::Done {
-                message: ref m
+                message: m,
+                ..
             } if m.content == S1_ANSWER
         )),
         "recovered turn must end with a Done carrying the answer"
@@ -652,9 +654,10 @@ async fn s2_empty_exhaustion_loop_a() {
 
     // PIN: the exhausted ladder returns Ok with an EMPTY body (the gateway
     // layer substitutes the stopped-early notice for empty content) — also
-    // pinned in core's loop_recovery_paths.rs. iter-609 moved exit reasons
-    // out of `AgentEvent::Done` into logged `TurnDiagnostics`, so the
-    // observable pin is the empty Ok + the Done event itself.
+    // pinned in core's loop_recovery_paths.rs. `Done` again carries
+    // `reason: TurnExitReason` (restored by iter-612; the `..` in the
+    // match below keeps the pin body-only), so the observable pin stays
+    // the empty Ok + the Done event itself.
     let result = agent.run("say something".to_string()).await.unwrap();
 
     assert_eq!(result.content, "");
@@ -667,7 +670,8 @@ async fn s2_empty_exhaustion_loop_a() {
         drain_events(rx).iter().any(|ev| matches!(
             ev,
             AgentEvent::Done {
-                message: ref m
+                message: m,
+                ..
             } if m.content.is_empty()
         )),
         "exhausted-empty must end Done-with-empty-message, not an error or breaker"
@@ -730,8 +734,9 @@ async fn s3_budget_exhaustion_loop_a() {
 
     // PINNED DIVERGENCE (Wave 1): Loop A does NOT bail on budget exhaustion —
     // it spends one extra GRACE LLM call and returns that (gate-validated)
-    // summary as the answer. (Exit reason is logged-only since iter-609; the
-    // pin is the returned grace text plus the extra request.)
+    // summary as the answer, exiting `Done { reason: GraceCall }` (reason
+    // observable on the event again since the iter-612 restore; the pin
+    // remains the returned grace text plus the extra request).
     let result = agent.run("do some work".to_string()).await.unwrap();
 
     assert_eq!(result.content, S3_GRACE);
