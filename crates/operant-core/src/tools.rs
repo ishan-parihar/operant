@@ -1030,7 +1030,13 @@ pub fn tool_authority_check(
 ///    stronger than §2.5's "must hold `Org` to grant an `Org`-touching scope",
 ///    and it is the rule that makes delegation non-amplifying: a department
 ///    head cannot mint an org-wide grant.
-pub fn issue_grant(
+///
+/// `pub(crate)` (F1, ORGANISM-ARCHITECTURE §6): the only caller is
+/// [`crate::org::seat_authority::SeatApprover::mint_for`] — it takes a
+/// caller-supplied `grantor_scope`, so leaving it `pub` would reopen the
+/// very bypass the visibility seal exists to close. Cross-crate callers
+/// mint through the approver.
+pub(crate) fn issue_grant(
     grant: &Grant,
     grantor_scope: AuthorityScope,
     seats: &dyn SeatDirectory,

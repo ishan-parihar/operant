@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `org grant give` / `org grant revoke` (F1, ORGANISM-ARCHITECTURE §6): the
+  CLI no longer writes the `authority_grants` ledger directly — every mint
+  and revocation goes through the `SeatApprover`, the same grantor-scope
+  ceiling, TTL shape, and vacant/unmanaged-seat fail-closed the gateway's
+  `/grant` and `/revoke` get. `GrantDb::insert`/`GrantDb::revoke` are now
+  `pub(crate)`: outside `operant-core` the approver is the only write path,
+  enforced by the compiler rather than by convention. The flags keep their
+  shape but become assertions about the approver-derived grant —
+  `--scope` must equal the derived scope, `--target-dept` (when given) the
+  derived pin, and `--expires-at` is honored as a whole-day TTL override
+  (mirroring `/grant`'s `--days`); a request the approver would not mint is
+  refused before any row is written, with the refusal naming why.
+
 ### Removed
 
 - `[genome].queued_cron_jobs_resolve_grants` — declared in wave 2 but the

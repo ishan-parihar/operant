@@ -208,6 +208,20 @@ pub struct SeatEscalation {
 /// granting topology — the mint is attempted at the department shape and
 /// `issue_grant`'s containment check refuses it, because a refusal on the
 /// record is worth more than a quiet widening of who may grant.
+/// The shape [`SeatApprover::mint_for`] confers for (approver, seat):
+/// which scope, which pinned department, which expiry — derived from the
+/// hierarchy, not requested by the caller. Read it through
+/// [`SeatApprover::preview_mint`]; the mint itself is the only writer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintShape {
+    /// `Org` for a CEO+ approver, `Department` otherwise.
+    pub scope: AuthorityScope,
+    /// The grantee's department for a departmental mint; `None` when `Org`.
+    pub target_dept: Option<String>,
+    /// `None` = standing (CEO+ only); otherwise RFC3339.
+    pub expires_at: Option<String>,
+}
+
 pub struct SeatApprover {
     grants: Arc<GrantDb>,
     requests: Arc<PendingRequestDb>,
@@ -392,7 +406,14 @@ impl SeatApprover {
 
     /// The mint body shared by queued approvals and P3's direct grants.
     /// `ttl_days_override` falls back to `[genome] grant_ttl_days`.
-    fn mint_for(
+    ///
+    /// `pub` (F1, ORGANISM-ARCHITECTURE §6): the CLI's `org grant give`
+    /// routes here too, so every mint in the tree — gateway `/grant`,
+    /// `/approve`, and the CLI — passes the same grantor-scope ceiling,
+    /// TTL shape, and vacant/unmanaged-seat fail-closed.
+    /// [`crate::org::authority::GrantDb::insert`] is `pub(crate)`; this is
+    /// the only cross-crate write path onto the ledger.
+    pub fn mint_for(
         &self,
         seat: &str,
         tool: &str,
@@ -400,6 +421,43 @@ impl SeatApprover {
         approver: &str,
         ttl_days_override: Option<i64>,
     ) -> Result<String, String> {
+        let (grantor_scope, shape) = self.mint_shape(approver, seat, ttl_days_override)?;
+        let grant = Grant::new(
+            approver,
+            seat,
+            tool,
+            shape.scope,
+            shape.target_dept,
+            why,
+            shape.expires_at,
+        );
+        issue_grant(&grant, grantor_scope, self.employees.as_ref(), &self.grants)
+            .map_err(|e| format!("{e}"))
+    }
+
+    /// The shape [`Self::mint_for`] confers for (approver, seat), derived
+    /// by the same code the mint runs — the two cannot drift. F1's CLI
+    /// route compares the operator's `--scope` / `--target-dept` /
+    /// `--expires-at` against this BEFORE minting, so a request the
+    /// approver would not mint is refused with no row written — the same
+    /// all-refusals-first promise [`issue_grant`] makes.
+    pub fn preview_mint(
+        &self,
+        approver: &str,
+        seat: &str,
+        ttl_days_override: Option<i64>,
+    ) -> Result<MintShape, String> {
+        Ok(self.mint_shape(approver, seat, ttl_days_override)?.1)
+    }
+
+    /// (grantor scope, mint shape) — one derivation shared by the mint
+    /// and the preview.
+    fn mint_shape(
+        &self,
+        approver: &str,
+        seat: &str,
+        ttl_days_override: Option<i64>,
+    ) -> Result<(AuthorityScope, MintShape), String> {
         let employees = self
             .employees
             .list_employees()
@@ -439,9 +497,14 @@ impl SeatApprover {
             Some(rfc3339(chrono::Utc::now()))
         };
 
-        let grant = Grant::new(approver, seat, tool, scope, target_dept, why, expires_at);
-        issue_grant(&grant, grantor_scope, self.employees.as_ref(), &self.grants)
-            .map_err(|e| format!("{e}"))
+        Ok((
+            grantor_scope,
+            MintShape {
+                scope,
+                target_dept,
+                expires_at,
+            },
+        ))
     }
 }
 
@@ -936,5 +999,101 @@ mod tests {
             Status::Approved.as_str(),
             "the approval is recorded"
         );
+    }
+
+    /// F1's CLI route calls `mint_for` with the operator's `--grantor` as
+    /// F1's CLI route calls `mint_for` with the operator's `--grantor` as
+    /// the approver, not the queue's approver-of-record. The runnable twin
+    /// of the cmd_org test that cannot link on a mid-port branch: a
+    /// below-head approver is refused by the scope ceiling, and the
+    /// refusal writes nothing.
+    #[test]
+    fn mint_for_with_a_below_head_approver_refuses_and_writes_nothing() {
+        let s = stores();
+        seed_employee(&s, "emp-worker", "W", Some("platform"));
+        seed_employee(&s, "emp-manager", "M", Some("platform"));
+        seed_employee(&s, "emp-ceo", "C", Some("platform"));
+        s.edges
+            .upsert_edge("emp-worker", "emp-manager", "test topology")
+            .expect("edge w->m");
+        s.edges
+            .upsert_edge("emp-manager", "emp-ceo", "test topology")
+            .expect("edge m->c");
+
+        let ap = approver(&s, 7);
+        let refusal = ap
+            .mint_for(
+                "emp-worker",
+                "bash",
+                "worker tries to grant a peer",
+                "emp-worker",
+                None,
+            )
+            .expect_err("a below-head approver must not mint");
+        assert!(
+            refusal.contains("does not contain"),
+            "the refusal must name the scope ceiling: {refusal}"
+        );
+        assert!(
+            s.grants
+                .list_for_grantee("emp-worker")
+                .expect("ledger")
+                .is_empty(),
+            "a refused mint must write nothing"
+        );
+    }
+
+    /// The preview the CLI asserts its flags against is the SAME derivation
+    /// the mint runs — scope and department cannot drift between the two.
+    #[test]
+    fn preview_mint_matches_the_minted_grant() {
+        let s = stores();
+        seed_employee(&s, "emp-worker", "W", Some("platform"));
+        seed_employee(&s, "emp-manager", "M", Some("platform"));
+        seed_employee(&s, "emp-ceo", "C", Some("platform"));
+        s.edges
+            .upsert_edge("emp-worker", "emp-manager", "test topology")
+            .expect("edge w->m");
+        s.edges
+            .upsert_edge("emp-manager", "emp-ceo", "test topology")
+            .expect("edge m->c");
+
+        let ap = approver(&s, 7);
+
+        // The HoD shape: department scope pinned to the grantee's
+        // department, TTL'd.
+        let head_shape = ap
+            .preview_mint("emp-manager", "emp-worker", None)
+            .expect("head preview");
+        assert_eq!(head_shape.scope, AuthorityScope::Department);
+        assert_eq!(head_shape.target_dept.as_deref(), Some("platform"));
+        assert!(head_shape.expires_at.is_some(), "HoD shape is TTL'd");
+
+        // The org-lead shape: standing, unpinned.
+        let ceo_shape = ap
+            .preview_mint("emp-ceo", "emp-worker", None)
+            .expect("org-lead preview");
+        assert_eq!(ceo_shape.scope, AuthorityScope::Org);
+        assert_eq!(ceo_shape.target_dept, None);
+        assert_eq!(ceo_shape.expires_at, None, "org-lead shape is standing");
+
+        // And the mint writes exactly the previewed shape.
+        let grant_id = ap
+            .mint_for(
+                "emp-worker",
+                "bash",
+                "preview must match the mint",
+                "emp-manager",
+                None,
+            )
+            .expect("the HoD mint");
+        let grants = s.grants.list_for_grantee("emp-worker").expect("ledger");
+        let grant = grants
+            .iter()
+            .find(|g| g.grant_id == grant_id)
+            .expect("the minted grant");
+        assert_eq!(grant.scope, head_shape.scope);
+        assert_eq!(grant.target_dept, head_shape.target_dept);
+        assert!(grant.expires_at.is_some(), "the mint is TTL'd like the preview");
     }
 }
