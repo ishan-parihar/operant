@@ -11,8 +11,8 @@
 //! Detection triggers escalating responses: `Warning` -> `Block` -> `Break`.
 
 use std::collections::VecDeque;
-
-use operant_core::tool_guardrails::{hash_str, hash_value};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 // ── Configuration ────────────────────────────────────────────────
 
@@ -65,6 +65,41 @@ struct ToolCallRecord {
     args_hash: u64,
     /// Hash of the tool's output/result.
     result_hash: u64,
+}
+
+/// Produce a deterministic hash for a JSON value by recursively sorting
+/// object keys before serialisation.  This ensures `{"a":1,"b":2}` and
+/// `{"b":2,"a":1}` hash identically.
+fn hash_value(value: &serde_json::Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let canonical = serde_json::to_string(&canonicalise(value)).unwrap_or_default();
+    canonical.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Return a clone of `value` with all object keys sorted recursively.
+fn canonicalise(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut sorted: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+            sorted.sort_by_key(|(k, _)| *k);
+            let new_map: serde_json::Map<String, serde_json::Value> = sorted
+                .into_iter()
+                .map(|(k, v)| (k.clone(), canonicalise(v)))
+                .collect();
+            serde_json::Value::Object(new_map)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(canonicalise).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
 }
 
 // ── Detector ─────────────────────────────────────────────────────
@@ -613,6 +648,30 @@ mod tests {
             r,
             LoopDetectionResult::Ok,
             "stale entries should be evicted"
+        );
+    }
+
+    // ── hash_value key-order independence ────────────────────────
+
+    #[test]
+    fn hash_value_is_key_order_independent() {
+        let a = json!({"alpha": 1, "beta": 2});
+        let b = json!({"beta": 2, "alpha": 1});
+        assert_eq!(
+            hash_value(&a),
+            hash_value(&b),
+            "hash_value must produce identical hashes regardless of JSON key order"
+        );
+    }
+
+    #[test]
+    fn hash_value_nested_key_order_independent() {
+        let a = json!({"outer": {"x": 1, "y": 2}, "z": [1, 2]});
+        let b = json!({"z": [1, 2], "outer": {"y": 2, "x": 1}});
+        assert_eq!(
+            hash_value(&a),
+            hash_value(&b),
+            "nested objects must also be key-order independent"
         );
     }
 

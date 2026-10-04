@@ -28,7 +28,8 @@ doctrine, no new file format).
 
 | Seat | Department | Role | Default cron job |
 |---|---|---|---|
-| `premiere` | — | org-lead; the owner's own working role; seeded with a **standing `Org`-scope grant** (unbounded — minted through `SeatApprover::mint_for`, consistent with the org-lead rule) | daily directive + aspirations review |
+| `premiere` | `executive` | org-lead; the owner's own working role; seeded with a **standing `Org`-scope grant** (unbounded — minted through `SeatApprover::grant_direct`, consistent with the org-lead rule) | daily directive + aspirations review |
+| `chief-of-staff` | `executive` | premiere's same-department report — **required by topology** (see below) | daily priorities brief |
 | `governor` | meta-governance | policy ratification review, `/audit` owner, doctor-finding triage | daily governance digest |
 | `identity-warden` | identity | binds platform users → employees; owns the session↔employee registry (identity-core) | hourly identity audit |
 | `compass` | strategy | objectives, priorities, steering (strategy-incubator / Compass) | weekly strategy review |
@@ -44,6 +45,19 @@ vocabulary agents "feel at home" in (a crew hall for agents), replacing the
 engineering term "swarm". `crew-chief` reports to `governor`; `hrmaster` and
 `dispatcher` report to `crew-chief`; wardens (`identity-warden`, `compass`)
 report to `governor`; `premiere` is above all.
+> **Topology gate (iter-609 amendment).** `Hierarchy::position_of` computes `Head`
+> only for an employee WITH a same-department report, and org-lead requires
+> `Head` + no manager. A premiere with every report in other departments
+> computes `Detached`, and `grant_direct` then mints department-pinned TTL'd
+> grants instead of the ratified standing Org grant — the genome's top
+> authority shape would be unreachable for EVERY seat. Hence the ninth seat:
+> `chief-of-staff` sits in `executive` under premiere, making premiere
+> org-lead by topology rule. The seeder MUST gate on an executable check:
+> `hierarchy.is_org_lead("premiere") == true` asserted before minting, so a
+> future topology edit that silently breaks this fails the wave-1 test suite.
+> (Follow-up, NOT wave 1: consider redefining org-lead as "has reports, no
+> manager", department-agnostic — touches `position_of`, which 250 org tests
+> and doctor pins depend on.)
 
 **Self-operationalization (owner directive):** every cast role ships with a
 default cron job (cadences above, all configurable/editable) so the organism
