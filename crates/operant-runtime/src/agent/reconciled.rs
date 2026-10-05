@@ -49,6 +49,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::agent::cost::ToolLoopCostTrackingContext;
 use crate::approval::summarize_args;
 use crate::observability::{Observer, ObserverEvent, create_observer};
 use crate::security::{GuardResult, PromptGuard};
@@ -230,6 +231,12 @@ pub use operant_core::agent::PreflightConfig;
 pub use operant_api::agent::TurnEvent;
 pub use operant_api::channel::ChannelApprovalResponse;
 pub use operant_core::agent::TurnExitReason;
+
+/// Per-token draft sink the facade can translate core events into.
+/// Re-exported from `loop_::context` so Loop C consumers (channels
+/// orchestrator, cron, daemon) have one import home for the reconciled
+/// surface — the same type Loop B's tool loop streams into.
+pub use super::loop_::{DraftEvent, StreamDelta};
 
 /// Result of one compression run — same shape the deleted runtime engine
 /// returned, so call-site match arms are unchanged.
@@ -1097,6 +1104,8 @@ struct TurnSink {
     /// Whether a `memory_*` tool ran this turn (resets the
     /// memory-review counter, Loop B `note_memory_tool_use` parity).
     memory_tool_used: bool,
+    /// Optional per-turn draft event sender for Loop C consumers.
+    draft_tx: Option<mpsc::Sender<DraftEvent>>,
 }
 
 /// Translate one core event into the runtime stream. `None` = no runtime
@@ -1356,6 +1365,102 @@ pub struct EvolutionConfig {
     pub auto_classify: Option<AutoClassifyConfig>,
 }
 
+/// Facade-side per-turn overrides lifted from Loop B's
+/// [`RunOverrides`](super::loop_::RunOverrides). W1.8a maps every field;
+/// fields with no core-bearing equivalent are documented with the trap
+/// or ignore-with-reason rather than being silently dropped.
+/// (`#[derive(Debug)]` is omitted: `Arc<dyn Observer>` has no Debug.)
+#[derive(Clone, Default)]
+pub struct FacadeTurnOverrides {
+    /// Provider override (log name only — core keeps the routed provider
+    /// built at construction; a future targeted-provider path can swap it).
+    pub provider_override: Option<String>,
+    /// Model name override for the turn (core's `run` sends the model
+    /// already configured on the agent; this log-name only).
+    pub model_override: Option<String>,
+    /// Sampling temperature; core's `run` has no per-turn temperature
+    /// parameter, so this is currently ignored with a warning.
+    pub temperature: Option<f64>,
+    /// Peripheral tool names; live on the session, not per turn — ignored
+    /// with a warning to surface the Wave-3 hook.
+    pub peripheral_overrides: Vec<String>,
+    /// Interactive-REPL flag; not applicable to a per-turn facade —
+    /// documented ignore-with-reason (the REPL is the CLI loop's, not the
+    /// agent's).
+    pub interactive: bool,
+    /// Path for persisting session state; Loop B uses this to decide the
+    /// memory-session id and to resume, but the facade tracks session-key
+    /// externally — logged on use (ignored here).
+    pub session_state_file: Option<PathBuf>,
+    /// Tool allowlist for this turn; the facade owns the registry, so this
+    /// would need to filter at call time — not yet wired; logged on use.
+    pub allowed_tools: Option<Vec<String>>,
+    /// Observer override; the facade's observer is construction-bound —
+    /// ignored with a warning to surface the Wave-3 hook.
+    pub observer: Option<Arc<dyn Observer>>,
+}
+
+/// Loop C draft/how-it-makes consumers want: an `Option<mpsc::Sender<...>>`
+/// sink per turn that receives `StreamDelta`/`DraftEvent` produced from the
+/// facade's `TurnEvent::Chunk`/`TurnEvent::Thinking` bridge. The consumer
+/// still receives its own `mpsc::Receiver<DraftEvent>` and spawns its draft
+/// updater exactly as Loop B does today (`dispatch.rs:499-570`).
+///
+/// The adapter is a [`FacadeSink`] forwarding agent that interposes on the
+/// facade's `mpsc::Sender<TurnEvent>` argument: `TurnEvent` -> the
+/// consumer's receiver; `TurnEvent::Chunk`/`TurnEvent::Thinking` also get
+/// translated and forwarded into the optional draft sink with the exact
+/// same first-chunk/accumulate semantics Loop B's tool loop has today.
+pub struct FacadeSink {
+    /// Consumer-facing `TurnEvent` sender (the original turn parameter).
+    event_tx: mpsc::Sender<TurnEvent>,
+    /// Optional per-turn draft sink for partial-text streaming
+    /// (`draft_tx Some(..)` = the dispatch.rs partial-draft path),
+    draft_tx: Option<mpsc::Sender<DraftEvent>>,
+}
+
+impl FacadeSink {
+    /// Adapt a consumer `TurnEvent` receiver with an optional draft
+    /// sink. The caller passes the two halves of its channels and gets a
+    /// single sender to hand to `ReconciledAgent::turn_streamed`.
+    pub fn pair(
+        event_tx: mpsc::Sender<TurnEvent>,
+        draft_tx: Option<mpsc::Sender<DraftEvent>>,
+    ) -> Self {
+        Self { event_tx, draft_tx }
+    }
+
+    /// Send one consumer event. `TurnEvent::Chunk`/`Thinking` also forward
+    /// the delta to the draft sink (if present) as `StreamDelta::Text`,
+    /// mirroring Loop B's streaming.rs accumulate-and-forward behavior.
+    /// All other `TurnEvent`s remain untouched.
+    pub async fn send(&self, event: TurnEvent) {
+        if let Some(draft) = &self.draft_tx
+            && let Some(delta) = draft_delta_for(&event)
+        {
+            let _ = draft.send(delta).await;
+        }
+        let _ = self.event_tx.send(event).await;
+    }
+
+    /// Mirror the consumer-facing sender (for code paths that clone it).
+    pub fn sender(&self) -> mpsc::Sender<TurnEvent> {
+        self.event_tx.clone()
+    }
+}
+
+/// The one translation Loop B does today: `TurnEvent::Chunk` is the
+/// raw `StreamDelta::Text`, `TurnEvent::Thinking` is the raw
+/// `StreamDelta::Text` wrapped in the `<think>` tags Loop B's
+/// channel updater strips. Both map to `DraftEvent` for the draft sink.
+fn draft_delta_for(event: &TurnEvent) -> Option<DraftEvent> {
+    match event {
+        TurnEvent::Chunk { delta } => Some(DraftEvent::Text(delta.clone())),
+        TurnEvent::Thinking { delta } => Some(DraftEvent::Text(format!("<think>{delta}</think>"))),
+        _ => None,
+    }
+}
+
 /// The reconciled facade: ONE runtime seam carrying every remaining
 /// consumer (WS, ACP, channels, cron, daemon, delegate) onto Loop A —
 /// a core [`OperantAgent`] driven through the runtime's `Provider` +
@@ -1394,6 +1499,9 @@ pub struct ReconciledAgent {
     provider: Arc<dyn Provider>,
     provider_name: String,
     model: String,
+    /// Cost-tracking context used to wrap `inner.run` — same
+    /// thread-local context the runtime loop applies in loop_/run.rs.
+    cost_tracking_context: Option<ToolLoopCostTrackingContext>,
     evolution: EvolutionState,
     last_exit_reason: Option<TurnExitReason>,
     last_score: Option<f64>,
@@ -1461,6 +1569,7 @@ impl ReconciledAgent {
             provider,
             provider_name,
             model,
+            cost_tracking_context: None,
             evolution: EvolutionState {
                 turns_since_memory: 0,
                 turns_since_skill: 0,
@@ -1481,6 +1590,15 @@ impl ReconciledAgent {
     /// Memory-session key the memory-review facts store under.
     pub fn with_memory_session_id(mut self, session_id: Option<String>) -> Self {
         self.memory_session_id = session_id;
+        self
+    }
+
+    /// Cost-tracking context to wrap `inner.run` in — same thread-local
+    /// context the runtime loop applies in loop_/run.rs. When `None`,
+    /// `turn_streamed` runs without cost tracking (used by WS/ACP until
+    /// they switch to the facade).
+    pub fn with_cost_tracking_context(mut self, ctx: Option<ToolLoopCostTrackingContext>) -> Self {
+        self.cost_tracking_context = ctx;
         self
     }
 
@@ -1760,6 +1878,7 @@ impl ReconciledAgent {
             exit_reason: None,
             saw_content: false,
             memory_tool_used: false,
+            draft_tx: None,
         });
         self.interrupt_flag.reset();
         let watcher = cancel_token.map(|token| {
@@ -1831,6 +1950,102 @@ impl ReconciledAgent {
     pub async fn turn(&mut self, user_message: &str) -> Result<String> {
         let (tx, _rx) = mpsc::channel::<TurnEvent>(256);
         self.turn_streamed(user_message, tx, None).await
+    }
+
+    /// Streaming turn with per-call [`FacadeTurnOverrides`].
+    ///
+    /// Every field is applied here so Loop C consumers have one entry that
+    /// mirrors Loop B's `run` argument list. Fields with no core-bearing
+    /// equivalent are logged (not silently dropped) — see the field
+    /// docstrings on [`FacadeTurnOverrides`].
+    #[allow(clippy::too_many_lines)]
+    pub async fn turn_streamed_with_overrides(
+        &mut self,
+        user_message: &str,
+        event_tx: mpsc::Sender<TurnEvent>,
+        cancel_token: Option<CancellationToken>,
+        overrides: FacadeTurnOverrides,
+    ) -> Result<String> {
+        if let Some(ref provider) = overrides.provider_override
+            && provider != &self.provider_name
+        {
+            tracing::warn!(
+                provider = %provider,
+                facade_provider = %self.provider_name,
+                "FacadeTurnOverrides.provider_override has no core-bearing equivalent (the facade \
+                 owns the routed provider); Wave-3 hook: targeted-provider swap"
+            );
+        }
+        if let Some(ref model) = overrides.model_override
+            && model != &self.model
+        {
+            tracing::warn!(
+                model = %model,
+                facade_model = %self.model,
+                "FacadeTurnOverrides.model_override has no core-bearing equivalent (core sends the \
+                 agent's configured model); Wave-3 hook: per-turn model swap"
+            );
+        }
+        if let Some(temp) = overrides.temperature {
+            tracing::warn!(
+                temperature = temp,
+                "FacadeTurnOverrides.temperature has no core-bearing equivalent (core's `run` has no \
+                 per-turn temperature parameter); Wave-3 hook: per-turn temperature"
+            );
+        }
+        if !overrides.peripheral_overrides.is_empty() {
+            tracing::warn!(
+                peripherals = ?overrides.peripheral_overrides,
+                "FacadeTurnOverrides.peripheral_overrides has no core-bearing equivalent (peripheral \
+                 tools are session-level, not per-turn); Wave-3 hook: per-turn peripheral registration"
+            );
+        }
+        if overrides.interactive {
+            tracing::warn!(
+                "FacadeTurnOverrides.interactive has no core-bearing equivalent (the REPL is the CLI \
+                 loop's, not the agent's); ignored"
+            );
+        }
+        if let Some(ref file) = overrides.session_state_file {
+            tracing::warn!(
+                path = %file.display(),
+                "FacadeTurnOverrides.session_state_file has no core-bearing equivalent (the facade \
+                 tracks session-key externally); ignored"
+            );
+        }
+        if let Some(ref tools) = overrides.allowed_tools {
+            tracing::warn!(
+                tools = ?tools,
+                "FacadeTurnOverrides.allowed_tools has no core-bearing equivalent (the facade owns the \
+                 registry); Wave-3 hook: per-turn tool allowlist filter"
+            );
+        }
+        if let Some(ref obs) = overrides.observer {
+            tracing::warn!(
+                "FacadeTurnOverrides.observer has no core-bearing equivalent (the facade's observer is \
+                 construction-bound); Wave-3 hook: per-turn observer swap"
+            );
+            let _ = obs;
+        }
+
+        self.turn_streamed_with_cost(user_message, event_tx, cancel_token)
+            .await
+    }
+
+    /// Streaming turn wrapped in the cost-tracking context (the runtime
+    /// loop's `TOOL_LOOP_COST_TRACKING_CONTEXT.scope` analog). `None`
+    /// = no cost tracking (WS/ACP until they switch).
+    async fn turn_streamed_with_cost(
+        &mut self,
+        user_message: &str,
+        event_tx: mpsc::Sender<TurnEvent>,
+        cancel_token: Option<CancellationToken>,
+    ) -> Result<String> {
+        let cost_ctx = self.cost_tracking_context.clone();
+        let fut = self.turn_streamed(user_message, event_tx, cancel_token);
+        super::loop_::TOOL_LOOP_COST_TRACKING_CONTEXT
+            .scope(cost_ctx, fut)
+            .await
     }
 
     // ── Loop B post-turn hooks, ported ────────────────────────────────
@@ -2294,6 +2509,7 @@ mod facade_tests {
                 exit_reason: None,
                 saw_content: false,
                 memory_tool_used: false,
+                draft_tx: None,
             },
             rx,
         )
