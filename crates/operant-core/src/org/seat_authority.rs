@@ -1098,6 +1098,9 @@ mod tests {
             .expect("the minted grant");
         assert_eq!(grant.scope, head_shape.scope);
         assert_eq!(grant.target_dept, head_shape.target_dept);
-        assert!(grant.expires_at.is_some(), "the mint is TTL'd like the preview");
+        assert!(
+            grant.expires_at.is_some(),
+            "the mint is TTL'd like the preview"
+        );
     }
 }

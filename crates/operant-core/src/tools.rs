@@ -6,7 +6,14 @@
 //! - Built-in tools for common operations
 
 pub mod aft_tools;
+// In-crate home for the authority-tools test battery (moved from
+// tests/org_authority_tools.rs by F1's follow-through): the tests exercise
+// `issue_grant` with hand-built grants and precise timestamps — semantics
+// only reachable at the sealed `pub(crate)` seam. Integration-test crates
+// are external, so the file lives here under cfg(test) instead.
 pub mod async_delegation;
+#[cfg(test)]
+mod authority_tools_tests;
 pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
 pub mod browser_dialog_tool;

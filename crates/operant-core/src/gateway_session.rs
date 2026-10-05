@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Timelike, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -616,7 +616,21 @@ impl PersistentSessionStore {
             );
             CREATE INDEX IF NOT EXISTS idx_gw_sessions_platform ON gateway_sessions(platform);
             CREATE INDEX IF NOT EXISTS idx_gw_sessions_updated ON gateway_sessions(updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_gw_sessions_session_id ON gateway_sessions(session_id);",
+            CREATE INDEX IF NOT EXISTS idx_gw_sessions_session_id ON gateway_sessions(session_id);
+            -- Wave 3 (ORGANISM-ARCHITECTURE §3): the rolling per-session
+            -- summary an employee's continuation begins from. ONE row per
+            -- (employee, session) — upserted after every completed turn
+            -- (rolling: new roll = previous roll + this session's doings,
+            -- never an aggregate). TTL is enforced at READ time against
+            -- updated_at, so config changes apply without migration.
+            CREATE TABLE IF NOT EXISTS employee_session_summaries (
+                employee_id TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                tokens INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (employee_id, session_key)
+            );",
         )
         .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {}", e)))?;
         ensure_employee_binding(&conn)?;
@@ -663,7 +677,21 @@ impl PersistentSessionStore {
             );
             CREATE INDEX IF NOT EXISTS idx_gw_sessions_platform ON gateway_sessions(platform);
             CREATE INDEX IF NOT EXISTS idx_gw_sessions_updated ON gateway_sessions(updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_gw_sessions_session_id ON gateway_sessions(session_id);",
+            CREATE INDEX IF NOT EXISTS idx_gw_sessions_session_id ON gateway_sessions(session_id);
+            -- Wave 3 (ORGANISM-ARCHITECTURE §3): the rolling per-session
+            -- summary an employee's continuation begins from. ONE row per
+            -- (employee, session) — upserted after every completed turn
+            -- (rolling: new roll = previous roll + this session's doings,
+            -- never an aggregate). TTL is enforced at READ time against
+            -- updated_at, so config changes apply without migration.
+            CREATE TABLE IF NOT EXISTS employee_session_summaries (
+                employee_id TEXT NOT NULL,
+                session_key TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                tokens INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (employee_id, session_key)
+            );",
         )
         .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {}", e)))?;
         ensure_employee_binding(&conn)?;
@@ -1170,6 +1198,62 @@ impl PersistentSessionStore {
     /// silently binding nothing. Existence/validity of the employee id is
     /// the CALLER's job (the command checks the employee registry), not the
     /// store's — the store also runs in harnesses with no org layer at all.
+    /// Wave 3 (ORGANISM-ARCHITECTURE §3): upsert the rolling summary for
+    /// (employee, session). ONE row per pair — every completed turn writes
+    /// the new roll (previous roll + this session's doings); the table
+    /// never accumulates old rolls. `tokens` is the caller's estimate of
+    /// the summary's token cost (injection bookkeeping + budget later).
+    pub fn upsert_summary(
+        &self,
+        employee_id: &str,
+        session_key: &str,
+        summary: &str,
+        tokens: i64,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO employee_session_summaries
+                 (employee_id, session_key, summary, tokens, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(employee_id, session_key) DO UPDATE SET
+                 summary = excluded.summary,
+                 tokens = excluded.tokens,
+                 updated_at = excluded.updated_at",
+            params![employee_id, session_key, summary, tokens, now_rfc3339()],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to upsert session summary: {e}")))?;
+        Ok(())
+    }
+
+    /// Wave 3: the valid (non-expired) rolling summary for
+    /// (employee, session), if one exists inside the TTL window. TTL is
+    /// read-time, so a config change applies to already-written rows.
+    /// Returns (summary, tokens).
+    pub fn valid_summary(
+        &self,
+        employee_id: &str,
+        session_key: &str,
+        ttl_minutes: i64,
+    ) -> Result<Option<(String, i64)>, Error> {
+        let conn = self.lock_conn()?;
+        // Same format as `now_rfc3339()` (fractional seconds included) so
+        // the lexicographic `updated_at >= cutoff` compare is honest: a
+        // precision-mismatched cutoff (e.g. from_timestamp(_, 0), which
+        // drops the fraction) compares wrong against sub-second rows.
+        let cutoff_rfc3339 =
+            (Utc::now() - chrono::Duration::minutes(ttl_minutes.max(0))).to_rfc3339();
+        let row = conn
+            .query_row(
+                "SELECT summary, tokens FROM employee_session_summaries
+                 WHERE employee_id = ?1 AND session_key = ?2 AND updated_at >= ?3",
+                params![employee_id, session_key, cutoff_rfc3339],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(|e| Error::Agent(format!("Failed to read session summary: {e}")))?;
+        Ok(row)
+    }
+
     pub fn bind_employee(
         &self,
         session_key: &str,
@@ -1842,6 +1926,54 @@ mod tests {
         store.get_or_create_session(&source, false).unwrap();
         assert!(store.entry_for_source("telegram", "u1", "OTHER").is_none());
         assert!(store.entry_for_source("discord", "u1", "c1").is_none());
+    }
+
+    // ── Wave 3 (ORGANISM-ARCHITECTURE §3): rolling summary handoff ────
+
+    #[test]
+    fn wave3_summary_upserts_rolling_never_aggregates() {
+        // ONE row per (employee, session): the second write REPLACES the
+        // first (the new roll contains the old one plus the new turn) —
+        // the table must not accumulate history.
+        let store = test_store();
+        store
+            .upsert_summary("premiere", "k1", "roll one", 10)
+            .unwrap();
+        store
+            .upsert_summary("premiere", "k1", "roll one\n\nLatest turn:\nroll two", 20)
+            .unwrap();
+        let (text, tokens) = store
+            .valid_summary("premiere", "k1", 30)
+            .unwrap()
+            .expect("summary must be valid within ttl");
+        assert_eq!(text, "roll one\n\nLatest turn:\nroll two");
+        assert_eq!(tokens, 20);
+        // A different employee's roll is independent.
+        store
+            .upsert_summary("hrmaster", "k1", "hr roll", 5)
+            .unwrap();
+        let hr = store.valid_summary("hrmaster", "k1", 30).unwrap().unwrap();
+        assert_eq!(hr.0, "hr roll");
+    }
+
+    #[test]
+    fn wave3_summary_expires_with_ttl() {
+        // TTL is read-time: ttl=0 means "expired immediately" — a
+        // continuation after the window starts fresh.
+        let store = test_store();
+        store
+            .upsert_summary("premiere", "k1", "stale roll", 10)
+            .unwrap();
+        assert!(store.valid_summary("premiere", "k1", 0).unwrap().is_none());
+        // And a generous window still sees it.
+        assert!(store.valid_summary("premiere", "k1", 30).unwrap().is_some());
+        // Unknown pair: None, not an error.
+        assert!(
+            store
+                .valid_summary("premiere", "nope", 30)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

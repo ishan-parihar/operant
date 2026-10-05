@@ -113,7 +113,7 @@ impl Default for AppConfig {
 /// `[genome]` — the permission-genome knobs (wave-2 slice F2,
 /// `docs/PERMISSION-SCOPING-PLAN.md` §5 P2 + §11's owner defaults).
 ///
-/// Both knobs are live — the repo's `lifeos` rule forbids keys that
+/// All knobs are live — the repo's `lifeos` rule forbids keys that
 /// gate nothing, so each field below states exactly which slice reads it.
 ///
 /// - `grant_ttl_days` — LIVE (F2): the TTL in days a department-head
@@ -136,6 +136,14 @@ pub struct GenomeSettings {
     /// Days a department-head approval's grant stands. 0/negative =
     /// never-standing for non-CEO approvals (see the struct docs).
     pub grant_ttl_days: i64,
+    /// Wave 3 (ORGANISM-ARCHITECTURE §3): minutes a session's rolling
+    /// summary stays a valid continuation entry point after the turn that
+    /// wrote it. 15–30 per the owner spec; default 30. A continuation
+    /// (restart / session reload) within the window begins from the
+    /// latest summary; after the window it starts fresh. The summary is
+    /// UPSERTed per (employee, session) every completed turn — rolling,
+    /// never aggregating old rolls.
+    pub session_summary_ttl_minutes: i64,
 }
 
 impl Default for GenomeSettings {
@@ -143,6 +151,7 @@ impl Default for GenomeSettings {
         Self {
             unrestricted_default: "yolo".to_string(),
             grant_ttl_days: 7,
+            session_summary_ttl_minutes: 30,
         }
     }
 }

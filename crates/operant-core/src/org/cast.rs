@@ -592,7 +592,10 @@ mod tests {
             .expect("the standing grant exists")
             .clone();
         assert_eq!(grant.scope, AuthorityScope::Org);
-        assert_eq!(grant.grantor, PREMIERE_SEAT, "contained: the org-lead minted it");
+        assert_eq!(
+            grant.grantor, PREMIERE_SEAT,
+            "contained: the org-lead minted it"
+        );
         assert_eq!(grant.grantee, PREMIERE_SEAT);
         assert!(grant.expires_at.is_none(), "standing, not TTL'd");
         assert!(
@@ -684,7 +687,11 @@ mod tests {
 
         seed(&s).expect("seed");
 
-        let row = s.employees.get_employee("governor").expect("read").expect("row");
+        let row = s
+            .employees
+            .get_employee("governor")
+            .expect("read")
+            .expect("row");
         assert_eq!(row.name, "Operator's Governor");
         assert_eq!(row.system_prompt.as_deref(), Some("operator's own charter"));
         assert_ne!(row.reason, SEED_REASON, "the row is not re-stamped");

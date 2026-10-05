@@ -381,7 +381,12 @@ fn authority_lattice_and_grant_db_coexist() {
     // And the real mint through the same seam lands in the ledger the
     // store reads back — approver-shaped: the org lead's standing grant.
     let minted = approver
-        .grant_direct("emp-hod", "content.tooling", None, "integration: cohabitation probe")
+        .grant_direct(
+            "emp-hod",
+            "content.tooling",
+            None,
+            "integration: cohabitation probe",
+        )
         .expect("the mint must succeed");
     let rows = grants.list_for_grantee("emp-hod").expect("ledger");
     let grant = rows

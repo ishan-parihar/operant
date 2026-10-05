@@ -677,6 +677,11 @@ struct GatewayMessageHandler {
     /// non-`TextResponse` exit becomes an operator-visible stopped-early
     /// notice.
     exit_reasons: ExitReasonMap,
+    /// Wave 3 (ORGANISM-ARCHITECTURE §3): the continuation-summary TTL
+    /// (`[genome].session_summary_ttl_minutes`, captured at gateway start
+    /// — the handler has no config handle of its own and the value is not
+    /// hot-reloadable).
+    summary_ttl_minutes: i64,
 }
 
 #[async_trait::async_trait]
@@ -872,6 +877,11 @@ impl MessageHandler for GatewayMessageHandler {
         // backfills `premiere` on load (owner ruling: default conversations
         // talk to the premiere), so `employee_id` is Some in every
         // post-migration row; the None arm is the pre-migration transient.
+        //
+        // Wave 3 reuses `bound_employee` twice below: the continuation
+        // injection (a reloaded session begins from the rolling summary)
+        // and the post-turn summary write.
+        let mut bound_employee: Option<String> = None;
         {
             let gw_guard = self.gateway.lock().await;
             if let Some(ref gw) = *gw_guard {
@@ -895,10 +905,47 @@ impl MessageHandler for GatewayMessageHandler {
                             seat = %employee_id,
                             "Wave 2: session runs as its bound employee"
                         );
+                        bound_employee = Some(employee_id);
                     }
                 }
             }
         }
+
+        // Wave 3 (ORGANISM-ARCHITECTURE §3): a CONTINUATION begins from the
+        // bound employee's rolling summary. Only when the transcript
+        // actually reloaded (restart, session switch, /resume) — a live
+        // conversation keeps its full in-memory context and must not see
+        // the block, or the model would double-count prior turns.
+        // TTL-guarded (read-time): an expired roll means a fresh start —
+        // "always rolling, never aggregating old rolls".
+        let query = if needs_reload && bound_employee.is_some() {
+            let employee_id = bound_employee.clone().unwrap_or_default();
+            let summary = {
+                let gw_guard = self.gateway.lock().await;
+                gw_guard
+                    .as_ref()
+                    .and_then(|gw| gw.get_persistent_sessions())
+                    .and_then(|store| {
+                        store
+                            .valid_summary(&employee_id, &session_key, self.summary_ttl_minutes)
+                            .ok()
+                            .flatten()
+                    })
+            };
+            match summary {
+                Some((text, tokens)) if !text.is_empty() => {
+                    tracing::debug!(
+                        session_key = %session_key,
+                        summary_tokens = tokens,
+                        "Wave 3: continuation begins from the rolling summary"
+                    );
+                    format!("<continuation_summary>\n{text}\n</continuation_summary>\n\n{query}")
+                }
+                _ => query,
+            }
+        } else {
+            query
+        };
 
         // Turn start. `reloaded` is logged because it is the single fact that
         // explains what the model can see this turn: `true` means the
@@ -967,6 +1014,67 @@ impl MessageHandler for GatewayMessageHandler {
                     .agent
                     .db()
                     .save_message(&session_id, "assistant", &content, &now);
+
+                // Wave 3 (ORGANISM-ARCHITECTURE §3): write the ROLLING
+                // summary — every completed turn upserts ONE row per
+                // (employee, session): the previous roll plus this turn's
+                // doings. Deterministic v1 (no extra LLM call): the roll is
+                // the prior roll + the turn's final response, head-bounded
+                // so a long-lived session cannot grow it without limit —
+                // "rolling, never aggregating". An LLM-compressed roll is
+                // a follow-up knob, not this wave's contract.
+                if let Some(employee_id) = bound_employee.as_ref() {
+                    let prior = self
+                        .gateway
+                        .lock()
+                        .await
+                        .as_ref()
+                        .and_then(|gw| gw.get_persistent_sessions())
+                        .and_then(|store| {
+                            store
+                                .valid_summary(employee_id, &session_key, self.summary_ttl_minutes)
+                                .ok()
+                                .flatten()
+                        });
+                    const MAX_SUMMARY_CHARS: usize = 8_000;
+                    let mut roll = match &prior {
+                        Some((text, _)) => format!("{text}\n\n"),
+                        None => String::new(),
+                    };
+                    roll.push_str("Latest turn:\n");
+                    roll.push_str(&content);
+                    let roll = if roll.len() > MAX_SUMMARY_CHARS {
+                        // Keep the TAIL: the latest turns are what a
+                        // continuation most needs. Snap to a UTF-8 char
+                        // boundary — a blind byte slice panics mid-character.
+                        let mut start = roll.len() - MAX_SUMMARY_CHARS;
+                        while !roll.is_char_boundary(start) {
+                            start += 1;
+                        }
+                        roll[start..].to_string()
+                    } else {
+                        roll
+                    };
+                    let tokens = (roll.len() / 4).max(1) as i64; // ~4 chars/token estimate
+                    let upserted = self
+                        .gateway
+                        .lock()
+                        .await
+                        .as_ref()
+                        .and_then(|gw| gw.get_persistent_sessions())
+                        .map(|store| {
+                            store.upsert_summary(employee_id, &session_key, &roll, tokens)
+                        });
+                    match upserted {
+                        Some(Ok(())) => {}
+                        Some(Err(e)) => tracing::warn!(
+                            session_key = %session_key,
+                            error = %e,
+                            "Wave 3: summary write failed — continuation falls back to raw transcript"
+                        ),
+                        None => {}
+                    }
+                }
 
                 tracing::info!(
                     session_key = %session_key,
@@ -1539,6 +1647,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         bridge_state_tx,
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
+        summary_ttl_minutes: app_config.genome.session_summary_ttl_minutes,
     });
     gateway = gateway.with_handler(handler.clone());
 

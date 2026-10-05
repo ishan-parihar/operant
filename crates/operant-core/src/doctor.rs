@@ -244,7 +244,10 @@ fn check_config_semantics(config: &AppConfig, items: &mut Vec<CheckResult>) {
         if route.dimensions.is_some_and(|value| value == 0) {
             items.push(CheckResult::warn(
                 cat,
-                format!("embedding route \"{}\" has invalid dimensions=0", route.hint),
+                format!(
+                    "embedding route \"{}\" has invalid dimensions=0",
+                    route.hint
+                ),
             ));
         }
     }
@@ -394,7 +397,10 @@ fn check_environment(items: &mut Vec<CheckResult>) {
         .or_else(|| std::env::var("ComSpec").ok().filter(|s| !s.is_empty()));
     match shell {
         Some(s) => items.push(CheckResult::ok(cat, format!("shell: {s}"))),
-        None => items.push(CheckResult::warn(cat, "neither $SHELL nor %ComSpec% is set")),
+        None => items.push(CheckResult::warn(
+            cat,
+            "neither $SHELL nor %ComSpec% is set",
+        )),
     }
 
     // HOME
@@ -460,10 +466,7 @@ fn check_command_available(
             cat,
             format!("{cmd} found but returned non-zero"),
         )),
-        Err(_) => items.push(CheckResult::warn(
-            cat,
-            format!("{cmd} not found in PATH"),
-        )),
+        Err(_) => items.push(CheckResult::warn(cat, format!("{cmd} not found in PATH"))),
     }
 }
 
@@ -564,9 +567,7 @@ mod tests {
     fn provider_validation_checks_custom_url_shape() {
         assert!(provider_validation_error("openrouter").is_none());
         assert!(provider_validation_error("custom:https://example.com").is_none());
-        assert!(
-            provider_validation_error("anthropic-custom:https://example.com").is_none()
-        );
+        assert!(provider_validation_error("anthropic-custom:https://example.com").is_none());
     }
 
     #[test]
@@ -606,9 +607,10 @@ mod tests {
         let mut config = AppConfig::default();
         config.providers.fallback = Some("custom:".into());
         let items = diagnose(&config);
-        let prov_item = items
-            .iter()
-            .find(|item| item.message.contains("default provider \"custom:\" is invalid"));
+        let prov_item = items.iter().find(|item| {
+            item.message
+                .contains("default provider \"custom:\" is invalid")
+        });
         assert!(prov_item.is_some());
         assert_eq!(prov_item.map(|i| i.severity), Some(Severity::Error));
     }
@@ -631,7 +633,9 @@ mod tests {
     fn config_validation_silent_when_providers_section_unused() {
         let items = diagnose(&AppConfig::default());
         assert!(
-            !items.iter().any(|i| i.message.contains("providers.fallback")),
+            !items
+                .iter()
+                .any(|i| i.message.contains("providers.fallback")),
             "empty [providers] section must not warn"
         );
     }
@@ -661,9 +665,10 @@ mod tests {
             model: "m".into(),
         }];
         let items = diagnose(&config);
-        let fb_item = items
-            .iter()
-            .find(|i| i.message.contains("fallback provider \"fake-provider\" is invalid"));
+        let fb_item = items.iter().find(|i| {
+            i.message
+                .contains("fallback provider \"fake-provider\" is invalid")
+        });
         assert!(fb_item.is_some());
         assert_eq!(fb_item.map(|i| i.severity), Some(Severity::Warn));
     }
@@ -694,9 +699,10 @@ mod tests {
             api_key: None,
         }];
         let items = diagnose(&config);
-        let route_item = items
-            .iter()
-            .find(|item| item.message.contains("embedding route \"semantic\" has empty model"));
+        let route_item = items.iter().find(|item| {
+            item.message
+                .contains("embedding route \"semantic\" has empty model")
+        });
         assert!(route_item.is_some());
         assert_eq!(route_item.map(|i| i.severity), Some(Severity::Warn));
     }

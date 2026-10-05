@@ -29,14 +29,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use async_trait::async_trait;
-use operant_core::org::authority::{AuthorityScope, Grant, GrantDb, resolve_scope};
-use operant_core::org::employee::Employee;
-use operant_core::schema::ToolSchema;
-use operant_core::tools::{
+use crate::org::authority::{AuthorityScope, Grant, GrantDb, resolve_scope};
+use crate::org::employee::Employee;
+use crate::schema::ToolSchema;
+use crate::tools::{
     AuthorityActor, OperantTool, SeatDirectory, ToolAuthority, ToolContext, ToolRegistry,
     ToolResult, issue_grant, tool_authority_check,
 };
+use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -46,10 +46,10 @@ use tempfile::TempDir;
 
 /// A clock relative to now. Every timestamp in this file goes through here, so
 /// the expiry tests are about the *comparison* rather than about wall-clock
-/// luck. Must match [`operant_core::org::notice::rfc3339`]'s fixed millisecond
+/// luck. Must match [`crate::org::notice::rfc3339`]'s fixed millisecond
 /// width, because that is what makes the lexicographic `<` chronological.
 fn at(offset_secs: i64) -> String {
-    operant_core::org::notice::rfc3339(chrono::Utc::now() + chrono::Duration::seconds(offset_secs))
+    crate::org::notice::rfc3339(chrono::Utc::now() + chrono::Duration::seconds(offset_secs))
 }
 
 /// Two departments and their two capabilities (§2.5's naming shape).

@@ -23,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Added
 
+- Wave 3 — rolling compaction handoff (ORGANISM-ARCHITECTURE §3): every
+  completed gateway turn upserts ONE rolling summary row per
+  (employee, session) — new roll = previous roll + the turn's doings,
+  never an aggregate; head-bounded at 8 KB (tail-kept, UTF-8-boundary
+  safe). A continuation (restart / session switch / /resume — a real
+  transcript reload, not a live conversation) begins from the roll inside
+  a `<continuation_summary>` block; TTL is read-time against
+  `[genome].session_summary_ttl_minutes` (owner range 15–30, default 30),
+  so an expired roll means a fresh start and config changes apply without
+  migration. Deterministic v1 roll (prior roll + final turn text) — no
+  extra LLM call; LLM-compressed rolls remain a follow-up knob. Summary
+  writes fail soft (warn + continue): a failed write degrades to raw
+  transcript continuation, never a lost turn.
+  F1 follow-through: the authority-tools battery moved from
+  `tests/org_authority_tools.rs` to in-crate
+  `src/tools/authority_tools_tests.rs` under cfg(test) — its 54 tests
+  exercise `issue_grant` at hand-built grants and precise timestamps,
+  which only the sealed `pub(crate)` seam reaches; integration-test crates
+  are external and must mint through the approver.
+
 - Wave 2 — sessions bind employees (ORGANISM-ARCHITECTURE §2):
   `gateway_sessions` gains `employee_id` (additive migration; legacy rows
   backfill to `premiere` on load — owner ruling: the default conversation

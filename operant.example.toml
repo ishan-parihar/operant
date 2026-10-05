@@ -509,6 +509,13 @@ unrestricted_default = "yolo"
 # recorded already-lapsed, so the approval stays auditable while conferring
 # nothing. CEO+ (org-lead) approvals mint standing grants regardless.
 grant_ttl_days = 7
+# Wave 3 — minutes a completed turn's rolling session summary remains a
+# valid continuation entry point (restart / session reload inside the
+# window begins from it; after the window the next session starts fresh).
+# Owner spec range 15-30; default 30. The summary is rewritten (upserted)
+# after EVERY completed turn: new roll = previous roll + this session's
+# doings — rolling, never an aggregate of old rolls.
+session_summary_ttl_minutes = 30
 # The P3 queue-sweep switch (queued_cron_jobs_resolve_grants) was removed in
 # iter-600 without ever gaining a consumer — pending escalations resolve
 # only by a human verdict or the 60s interactive lapse. [genome] rejects
