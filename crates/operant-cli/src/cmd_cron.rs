@@ -28,6 +28,19 @@ pub enum CronSubcommand {
         /// Run at most this many times, then mark the job completed (default: infinite)
         #[arg(long)]
         repeat: Option<i32>,
+        /// Wave 5 (ORGANISM-ARCHITECTURE §4): the seat mode the automaton's
+        /// policy row is created under. Defaults to
+        /// `[genome].unrestricted_default` when absent — the documented
+        /// ungoverned posture. One of: yolo | standard | scoped | lockdown.
+        #[arg(long)]
+        seat_mode: Option<String>,
+        /// Allow-list globs for the seat's policy row (repeatable).
+        #[arg(long)]
+        allow: Vec<String>,
+        /// Deny-list globs for the seat's policy row (repeatable; deny is
+        /// absolute — it outranks allow and grants).
+        #[arg(long)]
+        deny: Vec<String>,
     },
     /// Show details of a specific cron job
     Get {
@@ -104,7 +117,15 @@ pub async fn handle_cron_command(
             schedule,
             command,
             repeat,
-        } => cmd_create(config, &name, &schedule, &command, repeat).await,
+            seat_mode,
+            allow,
+            deny,
+        } => {
+            cmd_create(
+                config, &name, &schedule, &command, repeat, seat_mode, allow, deny,
+            )
+            .await
+        }
         CronSubcommand::Get { id } => cmd_get(config, &id).await,
         CronSubcommand::Update {
             id,
@@ -202,6 +223,9 @@ async fn cmd_create(
     schedule: &str,
     command: &str,
     repeat: Option<i32>,
+    seat_mode: Option<String>,
+    allow: Vec<String>,
+    deny: Vec<String>,
 ) -> Result<()> {
     let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     // Normalize + validate the schedule up front: the cron crate only parses
@@ -237,9 +261,92 @@ async fn cmd_create(
             no_agent: false,
         })
         .context("Failed to create cron job")?;
-    println!("Cron job created successfully.");
-    println!("ID: {}", id);
+
+    // Wave 5 (ORGANISM-ARCHITECTURE §4): the onboarding transaction. Job
+    // creation and seat provisioning are one step — an automaton must not
+    // exist ungoverned by accident. Cross-file sqlite cannot be one
+    // transaction, so the honest shape is job-first-then-provision with a
+    // DELETE rollback if provisioning fails: the operator either gets a
+    // governed automaton or no automaton, never an ungoverned one.
+    let provisioned = provision_cron_seat(config, &id, seat_mode.as_deref(), &allow, &deny);
+    match provisioned {
+        Ok(report) => {
+            println!("Cron job created successfully.");
+            println!("ID: {}", id);
+            println!("{report}");
+        }
+        Err(e) => {
+            // Rollback: the job exists but its seat does not — that is the
+            // ungoverned automaton this transaction exists to prevent.
+            let _ = db.delete_job(&id);
+            return Err(e).context(
+                "Seat provisioning failed — the cron job was rolled back \
+                 (no ungoverned automaton was left behind)",
+            );
+        }
+    }
     Ok(())
+}
+
+/// Wave 5: provision employee + policy row for a freshly created cron job.
+/// Employee shape comes from the registry's own backfill (single source of
+/// truth); the policy row defaults to `[genome].unrestricted_default` —
+/// the documented posture — unless `--seat-mode` names one.
+#[allow(clippy::too_many_arguments)]
+fn provision_cron_seat(
+    config: &AppConfig,
+    job_id: &str,
+    seat_mode: Option<&str>,
+    allow: &[String],
+    deny: &[String],
+) -> Result<String> {
+    use operant_core::org::employee_db::EmployeeDb;
+    use operant_core::org::seat_policy::SeatPolicy;
+    use operant_core::org::seat_policy_db::SeatPolicyDb;
+
+    let cron_db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
+    let job = cron_db
+        .get_job(job_id)
+        .context("Failed to read the new cron job")?
+        .with_context(|| format!("cron job {job_id} vanished before seat provisioning"))?;
+
+    let org_db = operant_core::platform::operant_home().join("database.db");
+    let registry =
+        EmployeeDb::init(org_db.clone()).context("Failed to open the employee registry")?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let report = registry
+        .backfill_from_cron_jobs(
+            std::slice::from_ref(&job),
+            &now,
+            "wave5: onboarded at cron register",
+        )
+        .context("Failed to provision the automaton's employee row")?;
+
+    let employee_id = operant_core::org::employee::derive_employee_id(&job.id);
+    let mode_raw = seat_mode
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| config.genome.unrestricted_default.clone());
+    let mode = std::str::FromStr::from_str(&mode_raw)
+        .map_err(|e| anyhow::anyhow!("invalid --seat-mode '{mode_raw}': {e}"))?;
+    let policies = SeatPolicyDb::init(org_db).context("Failed to open the seat policy store")?;
+    policies
+        .upsert(
+            &employee_id,
+            &SeatPolicy {
+                mode,
+                allow: allow.to_vec(),
+                deny: deny.to_vec(),
+            },
+        )
+        .context("Failed to seat the automaton's policy row")?;
+
+    Ok(format!(
+        "Seat provisioned: employee `{employee_id}` (registry backfill wrote {} row(s)), policy mode `{}` (allow {}, deny {})",
+        report.employees_written,
+        mode.as_str(),
+        allow.len(),
+        deny.len(),
+    ))
 }
 
 async fn cmd_get(config: &AppConfig, id: &str) -> Result<()> {

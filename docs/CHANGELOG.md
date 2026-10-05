@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Added
 
+- Wave 5 — onboarding governance (ORGANISM-ARCHITECTURE §4):
+  `operant cron create` is now the onboarding TRANSACTION — new flags
+  `--seat-mode <yolo|standard|scoped|lockdown>`, `--allow <glob>`
+  (repeatable), `--deny <glob>` (repeatable). The automaton's employee row
+  is provisioned via the registry's own backfill and its policy row is
+  seated in the same step (mode defaults to `[genome].unrestricted_default`
+  — the documented posture — unless named). Cross-file sqlite cannot be
+  one transaction, so the honest shape is job-first-then-provision with a
+  DELETE rollback: the operator gets a governed automaton or no automaton,
+  never an ungoverned one left behind by a failed register.
+  The unified doctor (F2) grows a `genome` section — the owner's no-new-
+  commands flag surface: registry census; UNGOVERNED CRON AUTOMATON count
+  (the ratified D-2 default made visible, with the exact seating
+  commands); budget-window typos named per seat (the fail-open value the
+  resolver silently absorbs); pre-Wave-2 session rows pending their
+  premiere backfill; cast-not-seeded guidance. Both `operant doctor` and
+  GET /api/doctor see it (drift pin extended to five categories).
+
 - Wave 4 — budgets as policy (ORGANISM-ARCHITECTURE §5):
   `[genome].budget` sets the org-wide default (basis tokens|usd, window
   daily|weekly|monthly UTC, cap, mode hard|soft); per-seat overrides live

@@ -82,10 +82,154 @@ impl CheckResult {
 pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     let mut items = Vec::new();
     check_config_semantics(config, &mut items);
+    check_genome(config, &mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
     check_cli_tools(&mut items);
     items
+}
+
+// ── Genome / organism health (Wave 5, ORGANISM-ARCHITECTURE §4) ─────
+
+/// Read-only health checks over the org stores — the onboarding-time
+/// governance flags the owner directed to surface THROUGH the doctor (no
+/// new commands). Degrades to a single Info when the genome tables do not
+/// exist yet (doctor may run before any gateway boot seeded them).
+fn check_genome(config: &AppConfig, items: &mut Vec<CheckResult>) {
+    let cat = "genome";
+    let org_db = crate::platform::operant_home().join("database.db");
+    let Ok(conn) =
+        rusqlite::Connection::open_with_flags(&org_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        items.push(CheckResult::ok(
+            cat,
+            "org database not created yet — the gateway seeds the cast on first boot",
+        ));
+        return;
+    };
+
+    let has_table = |name: &str| -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+            rusqlite::params![name],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    };
+
+    if !has_table("employees") {
+        items.push(CheckResult::ok(
+            cat,
+            "genome stores not initialized — the gateway seeds them on first boot",
+        ));
+        return;
+    }
+
+    // Cast seeded: a fresh install with zero employees has no governed
+    // org at all — the next gateway boot seeds the nine-seat cast.
+    let employees: i64 = conn
+        .query_row("SELECT COUNT(*) FROM employees", [], |row| row.get(0))
+        .unwrap_or(0);
+    if employees == 0 {
+        items.push(CheckResult::warn(
+            cat,
+            "employee registry is empty — the nine-seat cast seeds on the next gateway boot",
+        ));
+    } else {
+        items.push(CheckResult::ok(
+            cat,
+            format!("employee registry: {employees} seat(s)"),
+        ));
+    }
+
+    // Ungoverned cron automata (D-2 residual, the ratified posture made
+    // visible): seats that exist BECAUSE of a cron job but carry no
+    // policy row — they run byte-identical to legacy (unattended
+    // auto-allow for gated tools). Informational, not an error: the
+    // owner ratified the default; the fix is `--seat-mode` at register
+    // or a `/grant`-seated row.
+    if has_table("employee_cron_jobs") && has_table("seat_policies") {
+        let ungoverned: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT e.employee_id) FROM employees e \
+                 JOIN employee_cron_jobs ec ON ec.employee_id = e.employee_id \
+                 LEFT JOIN seat_policies p ON p.employee_id = e.employee_id \
+                 WHERE p.employee_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if ungoverned > 0 {
+            items.push(CheckResult::warn(
+                cat,
+                format!(
+                    "{ungoverned} cron automaton seat(s) run ungoverned (no policy row) \
+                     — the documented default. Seat one with `operant cron create --seat-mode \
+                     <yolo|standard|scoped|lockdown>` or /grant, or ratify as-is"
+                ),
+            ));
+        } else {
+            items.push(CheckResult::ok(
+                cat,
+                "every cron automaton seat carries a policy row",
+            ));
+        }
+    }
+
+    // Budget window typos: resolution fails OPEN to daily (turns keep
+    // running); the doctor is what names the typo instead of cargo.
+    if has_table("seat_budgets") {
+        let mut stmt = match conn.prepare(
+            "SELECT employee_id, window FROM seat_budgets \
+             WHERE window IS NOT NULL \
+               AND window NOT IN ('daily', 'weekly', 'monthly')",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return,
+        };
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0).unwrap_or_default(),
+                    row.get::<_, String>(1).unwrap_or_default(),
+                ))
+            })
+            .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>());
+        if let Ok(bad) = rows {
+            for (seat, window) in bad {
+                items.push(CheckResult::warn(
+                    cat,
+                    format!(
+                        "seat `{seat}` budget window '{window}' is not daily/weekly/monthly \
+                         — failing open to daily; fix the seat_budgets row"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Unbound chat sessions (pre-Wave-2 rows the store has not healed
+    // yet — the backfill happens on load, so a nonzero count here means
+    // the gateway has not run since Wave 2 landed).
+    if has_table("gateway_sessions") {
+        let unbound: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gateway_sessions WHERE employee_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if unbound > 0 {
+            items.push(CheckResult::ok(
+                cat,
+                format!(
+                    "{unbound} pre-Wave-2 session row(s) not yet backfilled — \
+                     they bind to premiere on the next gateway load"
+                ),
+            ));
+        }
+    }
 }
 
 /// Plain-text render used by `operant doctor`'s Diagnostics section.
@@ -484,6 +628,7 @@ fn truncate_for_display(input: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use operant_config::schema::{EmbeddingRouteConfig, FallbackProviderConfig, ModelRouteConfig};
+    use serial_test::serial;
 
     fn fixture_config() -> AppConfig {
         // A config with real `[providers]` content so the config category
@@ -518,7 +663,7 @@ mod tests {
         }
         assert_eq!(
             categories,
-            ["config", "workspace", "environment", "cli-tools"]
+            ["config", "genome", "workspace", "environment", "cli-tools"]
         );
 
         for category in categories {
@@ -746,6 +891,81 @@ mod tests {
     fn truncate_for_display_preserves_utf8_boundaries() {
         let preview = truncate_for_display("🙂example-alpha-build", 3);
         assert_eq!(preview, "🙂ex…");
+    }
+
+    #[test]
+    #[serial]
+    fn genome_checks_flag_ungoverned_cron_seats_and_budget_typos() {
+        // Wave 5: the doctor is the onboarding-governance flag surface.
+        // HERMES_HOME redirects the org DB to a fixture so the counts are
+        // assertable — serial because operant_home() is process-global.
+        let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY (edition-2024 env mutation): single-threaded test process,
+        // serial-locked, no other thread reads HERMES_HOME concurrently.
+        unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+        let conn = rusqlite::Connection::open(tmp.path().join("database.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE employees (employee_id TEXT PRIMARY KEY);
+             CREATE TABLE employee_cron_jobs (employee_id TEXT, cron_job_id TEXT);
+             CREATE TABLE seat_policies (employee_id TEXT PRIMARY KEY);
+             CREATE TABLE seat_budgets (
+                 employee_id TEXT PRIMARY KEY, basis TEXT,
+                 window TEXT, cap REAL, mode TEXT);
+             INSERT INTO employees VALUES ('emp-governed');
+             INSERT INTO employees VALUES ('emp-free');
+             INSERT INTO employees VALUES ('emp-typo');
+             INSERT INTO employee_cron_jobs VALUES ('emp-governed', 'job-1');
+             INSERT INTO employee_cron_jobs VALUES ('emp-free', 'job-2');
+             INSERT INTO seat_policies VALUES ('emp-governed');
+             INSERT INTO seat_budgets VALUES ('emp-typo', 'tokens', 'weakly', 100.0, 'hard');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let results = diagnose(&fixture_config());
+        let genome: Vec<&str> = results
+            .iter()
+            .filter(|r| r.category == "genome")
+            .map(|r| r.message.as_str())
+            .collect();
+
+        assert!(
+            genome
+                .iter()
+                .any(|m| m.contains("1 cron automaton seat(s) run ungoverned")),
+            "ungoverned-cron flag missing: {genome:?}"
+        );
+        assert!(
+            genome.iter().any(|m| m.contains("budget window 'weakly'")),
+            "budget-typo flag missing: {genome:?}"
+        );
+        assert!(
+            genome
+                .iter()
+                .any(|m| m.contains("employee registry: 3 seat(s)")),
+            "registry count missing: {genome:?}"
+        );
+        // SAFETY: same serial-test rationale.
+        unsafe { std::env::remove_var("HERMES_HOME") };
+    }
+
+    #[test]
+    #[serial]
+    fn genome_checks_degrade_to_info_when_stores_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: serial test, single-threaded runner.
+        unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
+        // No database.db at all → the doctor must not error, just say so.
+        let results = diagnose(&fixture_config());
+        assert!(
+            results
+                .iter()
+                .any(|r| r.category == "genome"
+                    && r.message.contains("org database not created yet")),
+            "absent-stores info missing: {results:?}"
+        );
+        // SAFETY: same serial-test rationale.
+        unsafe { std::env::remove_var("HERMES_HOME") };
     }
 
     #[test]
