@@ -265,7 +265,7 @@ impl PendingRequestDb {
         tool: &str,
         requester_note: &str,
     ) -> Result<String, Error> {
-        require_non_blank("requester note", requester_note)?;
+        require_field("requester note", requester_note)?;
         let request_id = format!("pr_{}", uuid::Uuid::new_v4());
         let requested_at = rfc3339(chrono::Utc::now());
         let conn = self.lock_conn()?;
@@ -304,7 +304,7 @@ impl PendingRequestDb {
         resolution: Resolution,
         resolved_by: &str,
     ) -> Result<bool, Error> {
-        require_non_blank("resolved_by", resolved_by)?;
+        require_field("resolved_by", resolved_by)?;
         let (status, grant_id) = match &resolution {
             Resolution::Approved { grant_id } => (Status::Approved.as_str(), Some(grant_id)),
             Resolution::Denied => (Status::Denied.as_str(), None),
@@ -500,9 +500,10 @@ fn columns_to_request(raw: RawRow) -> Result<PendingRequest, Error> {
 /// `authority.rs`'s `require_reason`: an escalation without its `why` (or a
 /// resolution without its resolver) is unattributable, and an
 /// unattributable mutation is indistinguishable from a bug.
-fn require_non_blank(field: &str, value: &str) -> Result<(), Error> {
+fn require_field(field: &str, value: &str) -> Result<(), Error> {
     // iter-637: the guard lives in org::require_non_blank; this keeps the
-    // pending-requests message verbatim.
+    // pending-requests message verbatim. Named `require_field` (not
+    // `require_non_blank`) so the delegation does not read as recursion.
     super::require_non_blank(value, || {
         format!("pending requests: {field} is required and must not be blank")
     })
