@@ -15,6 +15,35 @@ use tracing::{debug, error, info, instrument, warn};
 
 use super::*;
 
+// ── Mid-flight seat budget (iter-633, Wave 4) ───────────────────────────
+
+/// The per-turn HARD-cap envelope the gateway runner sets before
+/// `agent.run()`. Token basis only (see the boundary check in `run` for
+/// the usd-basis deferral note).
+///
+/// Set ONLY by the gateway runner — a seat with no envelope (or a
+/// non-gateway caller: CLI `run`, chat, TUI, autonomous) runs the
+/// byte-identical legacy loop. Because this rides a tokio task-local and
+/// every gateway turn is its own spawned task, one seat's breach can never
+/// abort a concurrent seat's turn — the agent-wide `InterruptFlag` shares
+/// one `Arc<AtomicBool>` and is unusable for per-seat enforcement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeatBudgetEnvelope {
+    /// The window cap in tokens (the seat's FULL cap, not the remainder —
+    /// the loop adds `used_at_turn_start` itself so the check mirrors the
+    /// turn-start gate exactly).
+    pub cap_tokens: f64,
+    /// Window usage measured at turn start (from the session accumulator
+    /// the Wave-4 gate already reads).
+    pub used_at_turn_start: f64,
+}
+
+tokio::task_local! {
+    /// iter-633: the mid-flight seat-budget envelope for the CURRENT turn's
+    /// task. Absent outside gateway hard-cap turns.
+    pub static SEAT_BUDGET_ENVELOPE: SeatBudgetEnvelope;
+}
+
 /// The text of the most recent user message, used as the relevance trigger
 /// for turn-triggered materialisation of deferred (MCP) tools.
 ///
@@ -114,14 +143,14 @@ impl OperantAgent {
 
         let grace_result = if self.config.stream {
             let stream = self.client.chat_streaming(grace_request).await?;
-            let (text, reasoning, _tcs, _extra, _finish_reason) =
+            let (text, reasoning, _tcs, _extra, _finish_reason, _usage) =
                 self.process_stream(stream).await?;
             Ok((text, reasoning))
         } else {
             let response = self.client.chat(grace_request).await?;
             self.process_response(response)
                 .await
-                .map(|(t, r, _, _)| (t, r))
+                .map(|(t, r, _, _, _)| (t, r))
         };
 
         match grace_result {
@@ -349,6 +378,10 @@ impl OperantAgent {
         // AgentEnd duration; the per-iteration `llm_start` only covers the
         // model call).
         let turn_start = std::time::Instant::now();
+        // iter-633 (Wave-4 mid-flight): cumulative TOKEN spend of THIS turn,
+        // accumulated from each model response's usage. Checked against the
+        // per-turn seat envelope at every iteration boundary below.
+        let mut turn_spend_tokens: u64 = 0;
         // Hard ceiling on a single turn, independent of iteration count.
         // A turn that keeps making real progress should not be cut off, but one
         // that is spinning against a degraded upstream must not hold a gateway
@@ -498,6 +531,56 @@ impl OperantAgent {
                     limit_secs = TURN_WALL_CLOCK_LIMIT_SECS,
                     "Turn wall-clock limit reached — attempting grace call"
                 );
+                return self
+                    .attempt_grace_call(
+                        &messages,
+                        &session_id,
+                        iteration,
+                        total_tool_calls,
+                        None,
+                        review_fired,
+                    )
+                    .await;
+            }
+
+            // Mid-flight seat budget (iter-633, ORGANISM-ARCHITECTURE §5).
+            // A HARD token cap must stop a runaway turn AT the boundary,
+            // not after it: a turn that spends the whole window in one go
+            // is exactly the burst the cap exists to prevent. The envelope
+            // is a task-local set ONLY by the gateway runner inside the
+            // per-turn tokio task — per-turn by construction, so one seat's
+            // breach can never abort a concurrent seat's turn (the agent's
+            // InterruptFlag is shared Arc state and CANNOT be used here).
+            // Absent envelope (CLI/chat/TUI callers) = ungoverned,
+            // byte-identical legacy. Token basis only: usd-basis seats keep
+            // turn-start-only enforcement (per-call catalog cost inside the
+            // loop is a recorded follow-up).
+            if turn_spend_tokens > 0
+                && let Some(envelope) = SEAT_BUDGET_ENVELOPE.try_with(|e| *e).ok()
+                && envelope.used_at_turn_start + turn_spend_tokens as f64 >= envelope.cap_tokens
+            {
+                warn!(
+                    turn_spend = turn_spend_tokens,
+                    cap = envelope.cap_tokens,
+                    "Seat budget cap reached mid-flight — stopping the turn with a grace call"
+                );
+                self.emit(AgentEvent::Content {
+                    text: "🛑 Seat budget cap reached mid-turn — stopping with a partial summary."
+                        .to_string(),
+                })
+                .await;
+                let diag = TurnDiagnostics {
+                    exit_reason: TurnExitReason::BudgetExhausted,
+                    model: self.model(),
+                    api_calls: iteration,
+                    max_iterations: self.config.max_iterations,
+                    budget_used: self.iteration_budget.used(),
+                    budget_max: self.iteration_budget.max_total(),
+                    tool_turns: total_tool_calls,
+                    response_len: 0,
+                    session_id: session_id.clone(),
+                };
+                warn!("{}", diag.log_message());
                 return self
                     .attempt_grace_call(
                         &messages,
@@ -880,9 +963,9 @@ impl OperantAgent {
                         }
                     }
                 };
-                let (text, reasoning, tcs, extra, finish_reason) = processed;
+                let (text, reasoning, tcs, extra, finish_reason, usage_tokens) = processed;
                 stream_extra_content = extra;
-                Ok((text, reasoning, tcs, finish_reason))
+                Ok((text, reasoning, tcs, finish_reason, usage_tokens))
             } else {
                 let response = match self.call_with_loop_timeout(self.client.chat(request)).await {
                     Ok(r) => r,
@@ -976,7 +1059,10 @@ impl OperantAgent {
             let mut tool_names: Vec<String> = Vec::new();
 
             match response {
-                Ok((response_text, reasoning_text, tool_calls, finish_reason)) => {
+                Ok((response_text, reasoning_text, tool_calls, finish_reason, usage_tokens)) => {
+                    // iter-633: fold this call's tokens into the turn total
+                    // for the mid-flight seat-budget boundary check above.
+                    turn_spend_tokens += usage_tokens;
                     // Reset retry state on successful LLM response.
                     retry_state.reset_on_success();
 

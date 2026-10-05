@@ -1160,6 +1160,11 @@ mod prompting;
 mod run;
 mod stream;
 
+// iter-633: the per-turn seat-budget envelope + its task-local. The gateway
+// runner is the only setter — see run.rs for why this is task-local and not
+// a field on the agent (the shared InterruptFlag incident, 2026-10-05).
+pub use run::{SEAT_BUDGET_ENVELOPE, SeatBudgetEnvelope};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1870,7 +1875,7 @@ mod tests {
             },
         };
 
-        let (content, reasoning, tool_calls, _finish_reason) =
+        let (content, reasoning, tool_calls, _finish_reason, _usage) =
             agent.process_response(response).await.unwrap();
 
         assert_eq!(content, "");
@@ -1924,6 +1929,204 @@ mod tests {
                 Ok(Box::pin(stream))
             }
         }
+    }
+
+    // ── iter-633: mid-flight seat budget (Wave-4 §5) ──────────────────
+
+    /// Mock that drives a MULTI-ITERATION turn without needing any tool:
+    /// call 1 reports `finish_reason="length"` (a cut-off response), so the
+    /// loop's truncation-continuation re-loops to a second iteration whose
+    /// top is where the seat-budget boundary check runs. Call 1 burns 900
+    /// tokens — far over the test's 500-token envelope.
+    struct BudgetBurstClient {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl BudgetBurstClient {
+        fn chat_response(
+            &self,
+            text: &str,
+            finish_reason: &str,
+            usage: crate::client::Usage,
+        ) -> crate::client::ChatResponse {
+            use crate::client::{Choice, MessageDelta};
+            crate::client::ChatResponse {
+                id: format!(
+                    "resp-{}",
+                    self.calls.load(std::sync::atomic::Ordering::SeqCst)
+                ),
+                object: "chat.completion".to_string(),
+                created: 0,
+                model: "mock".to_string(),
+                choices: vec![Choice {
+                    index: 0,
+                    message: MessageDelta {
+                        role: Some(crate::client::Role::Assistant),
+                        content: Some(text.to_string()),
+                        reasoning_content: None,
+                        tool_calls: None,
+                    },
+                    finish_reason: Some(finish_reason.to_string()),
+                }],
+                usage,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelClient for BudgetBurstClient {
+        fn provider_name(&self) -> &str {
+            "mock-budget-burst"
+        }
+
+        async fn chat(&self, _request: ChatRequest) -> Result<crate::client::ChatResponse> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                // Iteration 1: a truncated response (re-loops) + a 900-token
+                // burn that crosses the 500-token envelope.
+                Ok(self.chat_response(
+                    "partial answer cut off",
+                    "length",
+                    crate::client::Usage {
+                        prompt_tokens: 800,
+                        completion_tokens: 100,
+                        total_tokens: 900,
+                    },
+                ))
+            } else {
+                // Iteration 2 (ungoverned) OR the grace call (governed).
+                Ok(self.chat_response(
+                    "second call answer",
+                    "stop",
+                    crate::client::Usage {
+                        prompt_tokens: 40,
+                        completion_tokens: 10,
+                        total_tokens: 50,
+                    },
+                ))
+            }
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            Err(Error::Agent("streaming not used in budget test".into()))
+        }
+    }
+
+    fn budget_test_agent(
+        event_tx: tokio::sync::mpsc::Sender<AgentEvent>,
+    ) -> (OperantAgent, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let config = AgentConfig {
+            stream: false,
+            ..AgentConfig::default()
+        };
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let db = Database::init(std::path::PathBuf::from(format!(
+            "test_seat_budget_{}_{}.sqlite",
+            std::process::id(),
+            n
+        )))
+        .unwrap();
+        // The mock and the test share one counter so the test can assert
+        // the number of model calls without another channel.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent = OperantAgent::with_events(
+            config,
+            Box::new(BudgetBurstClient {
+                calls: calls.clone(),
+            }),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+            event_tx,
+        );
+        (agent, calls)
+    }
+
+    /// The envelope stops the turn AT the iteration boundary: iteration 1's
+    /// 900 tokens cross the 500-token cap, so the second model call is the
+    /// GRACE call (exit reason GraceCall) and the operator sees the 🛑
+    /// budget notice — not a silently-continued turn.
+    #[tokio::test]
+    async fn seat_budget_envelope_stops_the_turn_at_the_iteration_boundary() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let (agent, calls) = budget_test_agent(event_tx);
+        let envelope = SeatBudgetEnvelope {
+            cap_tokens: 500.0,
+            used_at_turn_start: 0.0,
+        };
+        let response = SEAT_BUDGET_ENVELOPE
+            .scope(envelope, agent.run("do the thing".to_string()))
+            .await
+            .expect("run under envelope");
+        assert_eq!(response.content, "second call answer");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "iteration 1 + one grace call — the boundary fired before a normal iteration 2"
+        );
+        let mut done_reason = None;
+        let mut saw_budget_notice = false;
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                AgentEvent::Done { reason, .. } => done_reason = Some(reason),
+                AgentEvent::Content { text }
+                    if text.starts_with("🛑 Seat budget cap reached mid-turn") =>
+                {
+                    saw_budget_notice = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_budget_notice,
+            "the 🛑 budget meta-notice must be emitted so the operator sees WHY"
+        );
+        assert_eq!(
+            done_reason,
+            Some(TurnExitReason::GraceCall),
+            "budget breach must exit via the grace path, not a silent full turn"
+        );
+    }
+
+    /// No envelope (CLI/chat/TUI callers) = byte-identical legacy: the
+    /// truncation continuation completes normally as a TextResponse with no
+    /// budget notice.
+    #[tokio::test]
+    async fn without_envelope_the_turn_is_ungoverned_legacy() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let (agent, calls) = budget_test_agent(event_tx);
+        let response = agent
+            .run("do the thing".to_string())
+            .await
+            .expect("ungoverned run");
+        assert_eq!(response.content, "second call answer");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "iteration 1 (truncated) + iteration 2 (final) — no grace call"
+        );
+        let mut done_reason = None;
+        let mut saw_budget_notice = false;
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                AgentEvent::Done { reason, .. } => done_reason = Some(reason),
+                AgentEvent::Content { text }
+                    if text.starts_with("🛑 Seat budget cap reached mid-turn") =>
+                {
+                    saw_budget_notice = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(!saw_budget_notice, "no envelope: no budget notice");
+        assert_eq!(
+            done_reason,
+            Some(TurnExitReason::TextResponse),
+            "ungoverned turn ends as a normal text response"
+        );
     }
 
     #[tokio::test]
@@ -2497,7 +2700,7 @@ mod tests {
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::iter(chunks));
 
-        let (text, _reasoning, tcs, _extra, finish_reason) =
+        let (text, _reasoning, tcs, _extra, finish_reason, _usage) =
             agent.process_stream(stream).await.unwrap();
         assert_eq!(text, "partial answer cut off");
         assert!(tcs.is_empty());
@@ -2513,7 +2716,7 @@ mod tests {
             vec![Ok(StreamChunk::new(Some("hello".to_string()), None, None))];
         let stream: BoxStream<'static, Result<StreamChunk>> =
             Box::pin(futures::stream::iter(chunks));
-        let (_t, _r, _tcs, _e, finish_reason) = agent.process_stream(stream).await.unwrap();
+        let (_t, _r, _tcs, _e, finish_reason, _usage) = agent.process_stream(stream).await.unwrap();
         assert!(finish_reason.is_none());
     }
 

@@ -23,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Added
 
+- **iter-633 — mid-flight seat-budget enforcement (Wave-4 §5)**: a HARD
+  token cap now stops a runaway turn AT the iteration boundary instead of
+  after it — a turn that spends the whole window in one go is exactly the
+  burst the cap exists to prevent. Design notes: the envelope
+  (`SeatBudgetEnvelope{cap_tokens, used_at_turn_start}`) rides a
+  `tokio::task_local!` set ONLY by the gateway runner inside the per-turn
+  task, so it is per-turn by construction — one seat's breach can never
+  abort a concurrent seat's turn. The agent-wide `InterruptFlag` is
+  explicitly NOT used: it wraps one `Arc<AtomicBool>` shared by every
+  session's handle (the `/stop` `turn_inflight` entries all point at it),
+  so tripping it on one seat's breach would abort every concurrent turn.
+  On breach: a 🛑 meta-notice (surfaced as its own message by the existing
+  meta-notice path), a `TurnDiagnostics{BudgetExhausted}` log, and the
+  existing grace call for a legible partial. Ungoverned callers (CLI `run`,
+  chat, TUI, autonomous) set no envelope and keep the byte-identical legacy
+  loop. Token basis only — usd-basis seats stay turn-start-enforced (per-call
+  catalog cost inside the loop is a recorded follow-up). Two regression
+  tests prove the boundary fires (grace exit + notice) and that the
+  ungoverned path is unchanged (normal text response, no notice).
+
 - **iter-632 — Wave-4 metering wire (production bug fix)**: real model
   usage now reaches the budget accumulator. Before this,
   `SessionStore::update_tokens` had ZERO production callers — the

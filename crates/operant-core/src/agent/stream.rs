@@ -25,6 +25,7 @@ impl OperantAgent {
         Vec<ToolCall>,
         Option<serde_json::Value>,
         Option<String>,
+        u64,
     )> {
         let mut accumulated_extra: Option<serde_json::Value> = None;
         let mut parser = ToolCallStreamParser::new().on_tool_call(|tc| {
@@ -342,6 +343,10 @@ impl OperantAgent {
             return Err(err);
         }
 
+        let usage_tokens: u64 = match (usage_prompt_tokens, usage_completion_tokens) {
+            (Some(p), Some(c)) => u64::from(p) + u64::from(c),
+            _ => 0,
+        };
         // iter-247: emit Usage/Cost for streaming the same way
         // process_response does for non-streaming, now that both usage
         // halves are available. If the provider never sent usage data (or
@@ -364,13 +369,14 @@ impl OperantAgent {
             tool_calls,
             accumulated_extra,
             finish_reason,
+            usage_tokens,
         ))
     }
 
     pub(crate) async fn process_response(
         &self,
         response: ChatResponse,
-    ) -> Result<(String, String, Vec<ToolCall>, Option<String>)> {
+    ) -> Result<(String, String, Vec<ToolCall>, Option<String>, u64)> {
         let mut choice = response
             .choices
             .into_iter()
@@ -409,7 +415,8 @@ impl OperantAgent {
 
         self.emit_usage_and_cost(&response.usage).await;
 
-        Ok((content, reasoning, tool_calls, finish_reason))
+        let usage_tokens = u64::from(response.usage.total_tokens);
+        Ok((content, reasoning, tool_calls, finish_reason, usage_tokens))
     }
 
     #[expect(

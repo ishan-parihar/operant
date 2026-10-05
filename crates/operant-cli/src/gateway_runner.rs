@@ -1031,6 +1031,13 @@ impl MessageHandler for GatewayMessageHandler {
         // is injected every turn so the agent self-economizes BEFORE the
         // cap, and past it, warns and continues. Mid-flight enforcement is
         // a recorded follow-up.
+        // iter-633 (Wave-4 mid-flight): the per-turn HARD-cap envelope for
+        // the loop's iteration-boundary check. Token basis only — usd-basis
+        // seats keep turn-start enforcement (per-call catalog cost inside
+        // the loop is a recorded follow-up). Set ONLY when the turn is
+        // allowed to run: a refused turn (hard cap already blown at turn
+        // start) never reaches the loop.
+        let mut seat_envelope: Option<operant_core::agent::SeatBudgetEnvelope> = None;
         let query = if let Some(employee_id) = bound_employee.as_ref() {
             let seat_override = seat_budget_db().and_then(|db| db.get(employee_id).ok().flatten());
             let effective = operant_core::org::seat_budgets::resolve_budget(
@@ -1064,8 +1071,7 @@ impl MessageHandler for GatewayMessageHandler {
                                 tracing::warn!(
                                     seat = %employee_id,
                                     basis = %budget.basis,
-                                    cap = budget.cap,
-                                    used = used,
+                                    cap = budget.cap,                                    used = used,
                                     "Wave 4: hard budget cap — refusing the turn"
                                 );
                                 return Ok(OutgoingMessage::new(
@@ -1081,6 +1087,20 @@ impl MessageHandler for GatewayMessageHandler {
                                         owner = "hrmaster",
                                     ),
                                 ));
+                            }
+                            // iter-633: arm the mid-flight envelope for a
+                            // HARD token cap the turn still fits under — the
+                            // loop stops the turn at its next iteration
+                            // boundary once this turn's spend crosses the
+                            // window line. Soft mode self-economizes via the
+                            // injection above and never stops mid-flight;
+                            // usd basis defers to turn-start enforcement.
+                            if budget.mode == "hard" && budget.basis == "tokens" && remaining > 0.0
+                            {
+                                seat_envelope = Some(operant_core::agent::SeatBudgetEnvelope {
+                                    cap_tokens: budget.cap,
+                                    used_at_turn_start: tokens_used as f64,
+                                });
                             }
                             let posture = if remaining <= 0.0 {
                                 "OVER the cap (soft mode: continue, but say so)".to_string()
@@ -1123,7 +1143,17 @@ impl MessageHandler for GatewayMessageHandler {
             "Gateway turn start"
         );
 
-        let run_result = self.agent.run(query).await;
+        // iter-633: scope the turn inside its seat-budget envelope when one
+        // is armed — the loop's iteration-boundary check reads the task-local.
+        // Ungoverned turns (no envelope) take the byte-identical legacy call.
+        let run_result = match seat_envelope {
+            Some(envelope) => {
+                operant_core::agent::SEAT_BUDGET_ENVELOPE
+                    .scope(envelope, self.agent.run(query))
+                    .await
+            }
+            None => self.agent.run(query).await,
+        };
         // Wave-4 metering wire (iter-632): drain the turn's accumulated
         // model usage into the session accumulator AFTER the turn (the
         // events fire during run()) but BEFORE the outcome arms, so error
@@ -2214,6 +2244,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         text.starts_with("Empty assistant response — retrying")
             || text.starts_with("↻ Response truncated — requesting continuation")
             || text.starts_with("⚠ The model's thinking phase may have exceeded")
+            || text.starts_with("🛑 Seat budget cap reached mid-turn")
             || (text.starts_with("⚠ Tool '") && text.contains("identical arguments"))
     }
 
@@ -3874,10 +3905,8 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("sessions.db");
-        let store = PersistentSessionStore::open(
-            db_path.to_str().expect("utf-8 path"),
-        )
-        .expect("open store");
+        let store = PersistentSessionStore::open(db_path.to_str().expect("utf-8 path"))
+            .expect("open store");
 
         let source = SessionSource {
             platform: "telegram".to_string(),
@@ -3918,7 +3947,10 @@ mod tests {
         drain_turn_usage_into_store(&store, &map, key, &entry.session_key).await;
 
         // The map is drained (no leak into the next turn).
-        assert!(map.lock().await.is_empty(), "turn usage entry must be consumed");
+        assert!(
+            map.lock().await.is_empty(),
+            "turn usage entry must be consumed"
+        );
 
         // The accumulator the Wave-4 rollup reads now sees real spend.
         let since = "1970-01-01T00:00:00+00:00".to_string();
