@@ -52,6 +52,48 @@ type StreamDeliveryMap = Arc<Mutex<HashMap<ThreadKey, String>>>;
 /// 25-day silence-after-degenerate-warning class).
 type ExitReasonMap = Arc<Mutex<HashMap<ThreadKey, operant_core::agent::TurnExitReason>>>;
 
+/// iter-632 (Wave-4 metering wire): one turn's accumulated model usage,
+/// folded per model call by the event receiver and drained ONCE by the
+/// turn-end block into the session-store accumulator — the row
+/// `employee_window_usage` rolls up for budget enforcement.
+#[derive(Debug, Clone, Copy, Default)]
+struct TurnUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: f64,
+}
+
+type TurnUsageMap = Arc<Mutex<HashMap<ThreadKey, TurnUsage>>>;
+
+/// iter-632: drain one turn's accumulated usage into the session store's
+/// metering accumulator (`gateway_sessions.total_tokens` /
+/// `estimated_cost_usd` — the columns Wave 4's budget rollup sums).
+/// Fail-open on telemetry (genome invariant): a metering write must never
+/// fail a turn, so the store error is swallowed and logged by the caller.
+async fn drain_turn_usage_into_store(
+    store: &operant_core::gateway_session::PersistentSessionStore,
+    map: &TurnUsageMap,
+    key: ThreadKey,
+    session_key: &str,
+) {
+    let Some(usage) = map.lock().await.remove(&key) else {
+        return;
+    };
+    if usage.input_tokens == 0 && usage.output_tokens == 0 && usage.cost_usd == 0.0 {
+        return;
+    }
+    if let Err(e) = store.update_tokens(
+        session_key,
+        usage.input_tokens,
+        usage.output_tokens,
+        0,
+        0,
+        usage.cost_usd,
+    ) {
+        tracing::warn!(%session_key, %e, "Wave-4 metering write failed (fail-open)");
+    }
+}
+
 /// (platform, channel_id, thread_id) -> (message_id, tool_lines) for the
 /// per-segment tool-progress timeline. Each TOOL GROUP (a run of tool calls
 /// with no intervening text) owns one message; the group is closed when a
@@ -700,6 +742,9 @@ struct GatewayMessageHandler {
     /// non-`TextResponse` exit becomes an operator-visible stopped-early
     /// notice.
     exit_reasons: ExitReasonMap,
+    /// iter-632: per-thread turn usage accumulator written by the event
+    /// receiver (`AgentEvent::Usage`/`Cost`) and drained at turn end.
+    turn_usage: TurnUsageMap,
     /// Wave 3 (ORGANISM-ARCHITECTURE §3): the continuation-summary TTL
     /// (`[genome].session_summary_ttl_minutes`, captured at gateway start
     /// — the handler has no config handle of its own and the value is not
@@ -1078,7 +1123,33 @@ impl MessageHandler for GatewayMessageHandler {
             "Gateway turn start"
         );
 
-        match self.agent.run(query).await {
+        let run_result = self.agent.run(query).await;
+        // Wave-4 metering wire (iter-632): drain the turn's accumulated
+        // model usage into the session accumulator AFTER the turn (the
+        // events fire during run()) but BEFORE the outcome arms, so error
+        // and early-stop turns are metered too and no entry leaks into the
+        // next turn on this thread. Before this wire nothing in production
+        // called `update_tokens` — the budget rollup read permanently-zero
+        // columns and the hard cap could never trip on real spend.
+        {
+            let usage_key = (
+                message.platform.clone(),
+                message.channel_id.clone(),
+                message.thread_id,
+            );
+            let store = {
+                let gw_guard = self.gateway.lock().await;
+                gw_guard
+                    .as_ref()
+                    .and_then(|gw| gw.get_persistent_sessions())
+                    .cloned()
+            };
+            if let Some(store) = store {
+                drain_turn_usage_into_store(&store, &self.turn_usage, usage_key, &session_key)
+                    .await;
+            }
+        }
+        match run_result {
             Ok(response) => {
                 let used_fallback = response.content.trim().is_empty();
                 // S5 (BUGS.md) — the exit reason stashed by the event
@@ -1547,6 +1618,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // isolation parity).
     let stream_delivery: StreamDeliveryMap = Arc::new(Mutex::new(HashMap::new()));
     let exit_reasons: ExitReasonMap = Arc::new(Mutex::new(HashMap::new()));
+    let turn_usage: TurnUsageMap = Arc::new(Mutex::new(HashMap::new()));
 
     // Create permission channel for tool-approval flow (Bug #1 from iter-98
     // audit — gateway never called with_permissions, so bash/file_write ran
@@ -1764,6 +1836,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         bridge_state_tx,
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
+        turn_usage: turn_usage.clone(),
         summary_ttl_minutes: app_config.genome.session_summary_ttl_minutes,
         default_budget: app_config.genome.budget.clone(),
     });
@@ -2155,6 +2228,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let current_channel_for_events = current_channel.clone();
     let stream_delivery_for_events = stream_delivery.clone();
     let exit_reasons_for_events = exit_reasons.clone();
+    let turn_usage_for_events = turn_usage.clone();
     tokio::spawn(async move {
         // Per-segment tool-progress messages (closed on text boundaries).
         let mut progress_tracker = ToolProgressTracker::new();
@@ -2457,10 +2531,31 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         last_stream_sent.clear();
                     }
                 }
-                AgentEvent::Usage { .. } => {
-                    // Usage events are not surfaced to the user in gateway
-                    // mode. The TUI uses them for /stats; the gateway
-                    // doesn't have those overlays.
+                AgentEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } => {
+                    // iter-632 (Wave-4 metering wire): fold every model
+                    // call's tokens into the per-thread TurnUsage; the
+                    // turn-end block drains it into the session-store
+                    // accumulator the budget rollup reads. Still not
+                    // surfaced to the user — the TUI uses these for
+                    // /stats overlays, the gateway counts them instead.
+                    let mut map = turn_usage_for_events.lock().await;
+                    let entry = map.entry(key).or_default();
+                    entry.input_tokens += u64::from(input_tokens);
+                    entry.output_tokens += u64::from(output_tokens);
+                }
+                AgentEvent::Cost { cost_usd, .. } => {
+                    // iter-632: the cost half of the metering wire —
+                    // emitted right after Usage from the models_dev
+                    // catalog rates. `None` (model not in catalog) is a
+                    // legitimate zero-cost estimate, not an error.
+                    if let Some(cost) = cost_usd {
+                        let mut map = turn_usage_for_events.lock().await;
+                        map.entry(key).or_default().cost_usd += cost;
+                    }
                 }
                 AgentEvent::Error { error } => {
                     // Surface errors to the user.
@@ -3766,6 +3861,73 @@ fn enrich_document(raw: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use operant_core::config::GatewaySettings;
+
+    /// iter-632 regression (Wave-4 metering wire): a turn's accumulated
+    /// usage must land in the `gateway_sessions` accumulator the budget
+    /// rollup reads. Before the wire, `update_tokens` had zero production
+    /// callers — `employee_window_usage` returned (0, 0.0) forever, the
+    /// hard gate at turn start could never trip, and `<budget_state>`
+    /// always claimed the full cap remained.
+    #[tokio::test]
+    async fn wave4_turn_usage_drains_into_the_budget_accumulator() {
+        use operant_core::gateway_session::{PersistentSessionStore, SessionSource};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("sessions.db");
+        let store = PersistentSessionStore::open(
+            db_path.to_str().expect("utf-8 path"),
+        )
+        .expect("open store");
+
+        let source = SessionSource {
+            platform: "telegram".to_string(),
+            chat_id: "42".to_string(),
+            chat_name: None,
+            chat_type: "dm".to_string(),
+            user_id: Some("7".to_string()),
+            user_name: None,
+            thread_id: None,
+            chat_topic: None,
+            user_id_alt: None,
+            chat_id_alt: None,
+            is_bot: false,
+            guild_id: None,
+            parent_chat_id: None,
+            message_id: None,
+            role_authorized: false,
+        };
+        let entry = store
+            .get_or_create_session(&source, false)
+            .expect("create session");
+        store
+            .bind_employee(&entry.session_key, "dp-the-program")
+            .expect("bind employee");
+
+        // The receiver folds two model calls' Usage/Cost events into the
+        // per-thread map — exactly as the live arms do.
+        let map: TurnUsageMap = Arc::new(Mutex::new(HashMap::new()));
+        let key: ThreadKey = ("telegram".to_string(), "42".to_string(), None);
+        {
+            let mut guard = map.lock().await;
+            let u = guard.entry(key.clone()).or_default();
+            u.input_tokens = 400;
+            u.output_tokens = 100;
+            u.cost_usd = 0.025;
+        }
+
+        drain_turn_usage_into_store(&store, &map, key, &entry.session_key).await;
+
+        // The map is drained (no leak into the next turn).
+        assert!(map.lock().await.is_empty(), "turn usage entry must be consumed");
+
+        // The accumulator the Wave-4 rollup reads now sees real spend.
+        let since = "1970-01-01T00:00:00+00:00".to_string();
+        let (tokens, usd) = store
+            .employee_window_usage("dp-the-program", &since)
+            .expect("rollup");
+        assert_eq!(tokens, 500);
+        assert!((usd - 0.025).abs() < 1e-9);
+    }
 
     #[test]
     fn format_turn_elapsed_boundaries() {

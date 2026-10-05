@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Added
 
+- **iter-632 — Wave-4 metering wire (production bug fix)**: real model
+  usage now reaches the budget accumulator. Before this,
+  `SessionStore::update_tokens` had ZERO production callers — the
+  `gateway_sessions.total_tokens`/`estimated_cost_usd` columns the Wave-4
+  rollup sums stayed permanently 0, `employee_window_usage` always
+  returned (0, 0.0), the hard cap at turn start could never trip on real
+  spend, and `<budget_state>` always claimed the full cap remained.
+  The wire: the gateway event receiver folds every `AgentEvent::Usage`
+  (tokens) and `AgentEvent::Cost` (models_dev-catalog USD, emitted per
+  model call on both streaming and non-streaming paths) into a
+  per-thread `TurnUsageMap` — same lifecycle as the S5 `ExitReasonMap` —
+  and the turn-end block drains it ONCE into the session accumulator
+  after `agent.run()` returns but before the outcome arms, so error and
+  early-stop turns are metered too and no entry leaks into the next turn.
+  Fail-open on telemetry (genome invariant): a metering write never fails
+  a turn. Regression test: `wave4_turn_usage_drains_into_the_budget_accumulator`
+  proves the drain makes real spend visible to `employee_window_usage`.
+
 - Wave 5 — onboarding governance (ORGANISM-ARCHITECTURE §4):
   `operant cron create` is now the onboarding TRANSACTION — new flags
   `--seat-mode <yolo|standard|scoped|lockdown>`, `--allow <glob>`
