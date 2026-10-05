@@ -805,12 +805,11 @@ impl GrantDb {
 /// grant write is covered without each call site repeating the check (and
 /// forgetting it once).
 fn require_reason(field: &str, value: &str) -> Result<(), Error> {
-    if value.trim().is_empty() {
-        return Err(Error::Agent(format!(
-            "authority grants: {field} is required and must not be blank"
-        )));
-    }
-    Ok(())
+    // iter-637: the guard lives in org::require_non_blank; this keeps the
+    // authority message verbatim.
+    super::require_non_blank(value, || {
+        format!("authority grants: {field} is required and must not be blank")
+    })
 }
 
 /// Ordinals of the grant columns, so the SELECT list and the mapper cannot

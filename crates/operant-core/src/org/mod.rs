@@ -123,6 +123,22 @@ pub use resolver::{
     selectors_for_identity, unstaffed_employees,
 };
 pub use schema::{SchemaReport, ensure_column, ensure_columns, table_columns};
+
+/// iter-637 (consolidation): the ONE required-field guard the org stores
+/// share. Emptiness semantics (`trim().is_empty()`) live here exactly once;
+/// each store supplies its own domain message, so the error TEXT that the
+/// org tests pin is unchanged. Four near-identical copies existed
+/// (authority `require_reason`, pending_requests `require_non_blank`,
+/// decisions_db `require_mutation_reason` + `require_text`).
+pub(crate) fn require_non_blank(
+    value: &str,
+    message: impl FnOnce() -> String,
+) -> Result<(), crate::error::Error> {
+    if value.trim().is_empty() {
+        return Err(crate::error::Error::Agent(message()));
+    }
+    Ok(())
+}
 pub use worklog::{
     KAIZEN_LIMIT, KaizenProposal, Outcome, OutcomeSignals, TurnObservation, UNKNOWN_EMPLOYEE,
     UsageAccumulator, WORKLOG_DB_FILE, WorkflowKind, WorklogEntry, WorklogRecord,

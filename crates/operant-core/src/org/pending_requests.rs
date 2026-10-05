@@ -501,12 +501,11 @@ fn columns_to_request(raw: RawRow) -> Result<PendingRequest, Error> {
 /// resolution without its resolver) is unattributable, and an
 /// unattributable mutation is indistinguishable from a bug.
 fn require_non_blank(field: &str, value: &str) -> Result<(), Error> {
-    if value.trim().is_empty() {
-        return Err(Error::Agent(format!(
-            "pending requests: {field} is required and must not be blank"
-        )));
-    }
-    Ok(())
+    // iter-637: the guard lives in org::require_non_blank; this keeps the
+    // pending-requests message verbatim.
+    super::require_non_blank(value, || {
+        format!("pending requests: {field} is required and must not be blank")
+    })
 }
 
 #[cfg(test)]

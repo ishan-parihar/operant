@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Changed
 
+- **iter-637 — one canonical required-field guard in the org stores
+  (consolidation)**: `org::require_non_blank(value, message)` now owns the
+  emptiness rule (`trim().is_empty()`) exactly once. The four copies
+  (`authority::require_reason`, `pending_requests::require_non_blank`,
+  `decisions_db::{require_mutation_reason, require_text}`) became thin
+  wrappers that keep their domain message verbatim, so every error string
+  the 268 org tests pin is byte-identical.
+
 - **iter-636 — one glob matcher across every allowlist (consolidation)**:
   the two hand-rolled glob subsets are deleted and both delegate to the
   canonical `context::lcm::glob_match` — the matcher the org seat policy

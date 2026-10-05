@@ -905,26 +905,24 @@ impl DecisionsDb {
 /// to create employee rows. It lives at the store boundary, not in the caller,
 /// because a caller that forgets is exactly the case the rule exists for.
 fn require_mutation_reason(reason: &str) -> Result<(), Error> {
-    if reason.trim().is_empty() {
-        return Err(Error::Agent(
-            "every decision mutation requires a non-empty reason: an audit trail that \
-             accepts a blank justification is not an audit trail, and a default reason is \
-             a lie about who decided what"
-                .to_string(),
-        ));
-    }
-    Ok(())
+    // iter-637: the guard lives in org::require_non_blank; this keeps the
+    // decisions-db audit-trail message verbatim.
+    super::require_non_blank(reason, || {
+        "every decision mutation requires a non-empty reason: an audit trail that \
+         accepts a blank justification is not an audit trail, and a default reason is \
+         a lie about who decided what"
+            .to_string()
+    })
 }
 
 /// Reject a blank/whitespace-only required column, with the caller supplying the
 /// one-line justification of *why* that column cannot be empty.
 fn require_text(value: &str, field: &str, why: &str) -> Result<(), Error> {
-    if value.trim().is_empty() {
-        return Err(Error::Agent(format!(
-            "decision requires a non-empty {field}: {why}"
-        )));
-    }
-    Ok(())
+    // iter-637: the guard lives in org::require_non_blank; this keeps the
+    // decisions-db field message verbatim.
+    super::require_non_blank(value, || {
+        format!("decision requires a non-empty {field}: {why}")
+    })
 }
 
 fn row_to_entry(row: &Row<'_>) -> rusqlite::Result<SubjectiveEntry> {
