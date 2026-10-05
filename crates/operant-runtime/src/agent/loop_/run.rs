@@ -60,13 +60,23 @@ pub(super) async fn answer_approval_request(
         ),
         ApprovalRequirement::Prompt => {
             eprintln!("\n\u{1b}[1m{tool_name}\u{1b}[0m requires approval:\n  {arguments_summary}");
-            let mut line = String::new();
-            match std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line) {
-                Ok(_) if line.trim() == "a" || line.trim() == "always" => (
+            // W1.8b-fix: the read runs on a blocking task — an inline
+            // `read_line` in the forwarder arm parks a tokio worker for the
+            // user's whole think-time.
+            let answer = tokio::task::spawn_blocking(|| {
+                let mut line = String::new();
+                std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
+                    .ok()
+                    .map(|_| line.trim().to_string())
+            })
+            .await
+            .unwrap_or(None);
+            match answer.as_deref() {
+                Some("a") | Some("always") => (
                     ChannelApprovalResponse::AlwaysApprove,
                     crate::approval::ApprovalResponse::Always,
                 ),
-                Ok(_) if line.trim() == "y" || line.trim() == "yes" => (
+                Some("y") | Some("yes") => (
                     ChannelApprovalResponse::Approve,
                     crate::approval::ApprovalResponse::Yes,
                 ),
@@ -111,6 +121,16 @@ pub(super) async fn answer_approval_request(
 /// facade's turn carries Loop C's exact prompt rather than a
 /// default — the same text `run_tool_call_loop` received as
 /// `history[0]`.
+///
+/// `temperature` (thinking-adjusted, already clamped) rides the client
+/// default — the only seam core exposes (W1.8b-fix).
+/// `allowed_tools` restricts the facade registry at construction — the
+/// caller's `RunOverrides.allowed_tools` (cron jobs set it), so user-
+/// authored job allowlists keep their meaning (W1.8b-fix).
+/// W1.8b-fix also pins the core session id to `memory_session_id` (which
+/// `run` derives from `session_state_file`): without it every REPL turn
+/// rehydrated a fresh empty transcript, because the facade is built per
+/// turn while core's conversation lives in the DB keyed by session id.
 pub(super) async fn build_facade_agent(
     config: &Config,
     provider_name: &str,
@@ -120,6 +140,8 @@ pub(super) async fn build_facade_agent(
     memory_session_id: Option<&str>,
     cost_tracking_context: Option<ToolLoopCostTrackingContext>,
     system_prompt: &str,
+    temperature: Option<f64>,
+    allowed_tools: Option<Vec<String>>,
 ) -> Result<crate::agent::reconciled::ReconciledAgent> {
     let facade = crate::agent::reconciled::ReconciledAgent::from_config_with(
         config,
@@ -132,8 +154,13 @@ pub(super) async fn build_facade_agent(
             model_name.to_string(),
         )),
         Some(system_prompt.to_string()),
+        temperature,
+        allowed_tools,
     )
     .await?;
+    if let Some(id) = memory_session_id {
+        facade.core_agent().set_session_id(id);
+    }
     Ok(facade.with_cost_tracking_context(cost_tracking_context))
 }
 
@@ -358,7 +385,11 @@ pub async fn run(
             &provider_runtime_options,
         )?);
 
-    let _model_switch_callback = get_model_switch_state();
+    // W1.8b-fix: the model-switch callback clone is gone — on the facade path
+    // the switch is detected from the turn's `Err` (is_model_switch_requested,
+    // the same signal both call sites already branch on), so this binding
+    // had no consumer. The accessor itself stays for the W1.10 deletion
+    // pass to remove.
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),
@@ -717,6 +748,8 @@ pub async fn run(
                     memory_session_id.as_deref(),
                     cost_tracking_context.clone(),
                     &system_prompt,
+                    Some(effective_temperature),
+                    allowed_tools.clone(),
                 )
                 .await?;
                 // No TurnEvent consumer on the one-shot CLI path, but
@@ -727,13 +760,17 @@ pub async fn run(
                 // string is `run`'s only output).
                 let approvals_handle = facade.approvals().clone();
                 let (facade_tx, mut facade_rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
-                let mut turn_overrides = facade_overrides(&overrides_snapshot);
-                turn_overrides.temperature = Some(effective_temperature);
+                // W1.8b-fix: `&enriched` (memory RAG + hardware board
+                // context + `[timestamp]` prefix) is what Loop C fed as
+                // `history[1]`; passing the raw message silently dropped
+                // all three. The temperature rides the client default
+                // (`build_facade_agent`), so the warn-only per-turn
+                // temperature override is no longer set here.
                 let turn = facade.turn_streamed_with_overrides(
-                    &effective_msg,
+                    &enriched,
                     facade_tx,
                     None,
-                    turn_overrides,
+                    facade_overrides(&overrides_snapshot),
                 );
                 let (result, _) = tokio::join!(turn, async {
                     while let Some(event) = facade_rx.recv().await {
@@ -1094,6 +1131,8 @@ pub async fn run(
                         memory_session_id.as_deref(),
                         cost_tracking_context.clone(),
                         &system_prompt,
+                        Some(turn_temperature),
+                        allowed_tools.clone(),
                     )
                     .await?;
                     // The facade writes into `facade_tx`; the forwarder
@@ -1111,13 +1150,16 @@ pub async fn run(
                         Some(delta_tx.clone()),
                     );
                     let approvals_handle = facade.approvals().clone();
-                    let mut turn_overrides = facade_overrides(&overrides_snapshot);
-                    turn_overrides.temperature = Some(turn_temperature);
+                    // W1.8b-fix: `&enriched` (Loop C's `history[1]`: memory
+                    // RAG + hardware board context + timestamp prefix) and
+                    // the thinking-adjusted temperature rides the client
+                    // default, so the warn-only per-turn temperature
+                    // override is not set.
                     let turn = facade.turn_streamed_with_overrides(
-                        &effective_input,
+                        &enriched,
                         facade_tx,
                         Some(cancel_token.clone()),
-                        turn_overrides,
+                        facade_overrides(&overrides_snapshot),
                     );
                     // Permission requests are answered on the terminal
                     // here (the old tool-loop prompt), everything else

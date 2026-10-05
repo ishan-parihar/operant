@@ -1515,6 +1515,7 @@ mod tests {
             Arc::new(operant_runtime::observability::NoopObserver),
             None,
             EvolutionConfig::default(),
+            None,
         )
     }
 

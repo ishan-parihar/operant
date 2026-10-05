@@ -4178,40 +4178,77 @@ not just names), not in the dead engine.
 
 ## Round 46 (2026-10-05) — W1.8b: Loop C CLI/daemon consumers onto the reconciled facade
 
-### S8 — Four Loop C guardrails have no facade equivalent yet; wired as warns, carried to W3 (OPEN)
+### S8 — Loop C guardrails across the facade boundary (W1.8b-fix status)
 
-The `loop_::run`/`process_message` switch to the facade (W1.8b) leaves
-four Loop-C-only mechanisms without a core-bearing equivalent. Each is
-computed and `tracing::warn!`-logged rather than silently dropped; none
-regresses the WS/ACP consumers.
+The `loop_::run`/`process_message` switch to the facade (W1.8b) dropped
+seven Loop-C-only mechanisms. iter-634 shipped with FIVE of them as real
+regressions that no suite exercises (the CLI/daemon paths have no test
+harness); iter-635 (`W1.8b-fix`) repaired the recoverable ones. Status:
 
-1. **Per-turn tool exclusions** (`tool_filter_groups` via
-   `compute_excluded_mcp_tools`, plus `autonomy.non_cli_excluded_tools`
-   on the daemon path at non-Full autonomy): the facade's core registry
-   is construction-bound, so per-turn exclusion needs the per-turn
-   allowlist — `FacadeTurnOverrides::allowed_tools` is the entry point,
-   currently `#[derive]`-documented as not-yet-wired. WARN + carry to
-   the W3 turn-journal/steering wave. Worst case until then: a daemon
-   turn CAN call a tool the old path would have pre-excluded (core's
-   SecurityPolicy still gates dangerous operations).
-2. **`tool_call_dedup_exempt`**: superseded by the Wave-0
-   guardrail tracker (`ToolGuardrailTracker` + `NO_EFFECT_TOOL_NAMES`);
-   the exemption list is NOT carried.
-3. **Approval flow**: facade turns park permission requests on the
-   TurnEvent channel (unanswered = core's 120s deadline denies). The
-   CLI/daemon drains now answer per the same `ApprovalManager` policy
-   the tool loop applied (`answer_approval_request`: interactive turns
-   prompt the terminal with y/a/n; daemon turns approve
-   `auto_approve`-listed tools and deny ask-gated ones). Session
-   allowlist ("always") and the audit log flow through
-   `record_decision` unchanged. WS/ACP keep their transport-driven
-   answers (W1.6/W1.7 semantics untouched).
-4. **Loop C's time-gated identical-output abort**
-   (`tool_loop.rs:1172-1207` semantics): carried to Wave 2's
-   identical-result rung on `ToolGuardrailTracker`, not ported.
+**FIXED in W1.8b-fix — silently broken in iter-634, repaired:**
+
+1. **`allowed_tools` was unenforced** (silent privilege escalation:
+   cron jobs set `RunOverrides.allowed_tools` from `job.allowed_tools`,
+   `cron/scheduler.rs:376`, and got the FULL facade tool surface —
+   kanban writes, `memory_*`, MCP, edit). Now construction-time policy:
+   `from_config_with(..., allowed_tools)` → `policy_disabled_tools` →
+   `disable_tool` per registered name outside the allowlist (fresh
+   registry per construction; `disable_tool` inserts without clobbering
+   config `disabled_tools`).
+2. **`autonomy.non_cli_excluded_tools` was unenforced** (same shape).
+   Now applied inside `build_from_config` whenever autonomy is not Full —
+   the identical condition Loop C used at turn start.
+3. **Temperature never reached the model** —
+   `FacadeTurnOverrides.temperature` is warn-and-ignore (core `run` has
+   no per-turn temperature). The thinking-adjusted value now rides
+   `ProviderModelClient::with_default_temperature` at construction;
+   the warn-only per-turn field stays documented as the W3 hook.
+4. **Session continuity was gone**: the facade is constructed per turn
+   while core's conversation is DB-keyed by session id, and nothing ever
+   called `set_session_id` — every REPL turn rehydrated an empty
+   transcript. `build_facade_agent` now pins the id derived from
+   `session_state_file` (`memory_session_id`).
+5. **Memory RAG + hardware board context + `[timestamp]` prefix were
+   computed then discarded**: both sites passed the raw message, not
+   Loop C's `history[1]` (`&enriched`). Fixed at both call sites.
+
+**STILL OPEN — carried:**
+
+6. **Per-turn `tool_filter_groups` exclusions** (message-matched, via
+   `compute_excluded_mcp_tools`): no per-turn registry filter exists and
+   one cannot be added cheaply — `impl Clone for ToolRegistry` shares the
+   disabled set process-wide, so per-turn toggling would leak across
+   concurrent turns. WARN-logged at both sites; W3's per-turn allowlist
+   hook (a core-side per-turn filter, not a registry toggle) is the
+   carry target.
+7. **Peripheral/hardware tools are absent from facade turns**:
+   `PERIPHERAL_TOOLS_FN` (loop_.rs:38, consumed at run.rs:233) yields
+   runtime `Box<dyn Tool>`; core's registry takes `Arc<dyn OperantTool>`
+   and has zero peripheral registration, so they cannot be threaded
+   without an adapter. With the hardware feature on, every Loop C turn
+   loses those tools. WARN-and-carry to the Wave 2/3 adapter.
+8. **Deferred-MCP `tool_search` activation** (runtime ToolSearchTool +
+   `activated` handle at run.rs:263-289): the facade runs core's own
+   deferred-MCP machinery from config; the runtime-side handle now feeds
+   only the (prompt-only) registry. Verify core's config-driven
+   deferred semantics against Loop C's before W1.10 deletes the runtime
+   block.
+9. **`tool_call_dedup_exempt`**: superseded by the Wave-0 guardrail
+   tracker (`ToolGuardrailTracker` + `NO_EFFECT_TOOL_NAMES`); the
+   exemption list is NOT carried.
+10. **Loop C's time-gated identical-output abort**
+    (`tool_loop.rs:1172-1207` semantics): carried to Wave 2's
+    identical-result rung on `ToolGuardrailTracker`, not ported.
 
 Also recorded for W1.8c (next leg): `dispatch.rs:682` still runs
 `run_tool_call_loop` — the channels orchestrator owns conversation
 history externally and has no per-session facade (ACP's `AcpSession`
 pattern is the reference); migrating it changes history semantics and
-is its own leg, not a call-site swap.
+is its own leg, not a call-site swap. Its call site carries
+`ctx.tools_registry` (runtime `Box<dyn Tool>` — core cannot accept it),
+`ctx.approval_manager` (per-channel, distinct from the answerer
+policy), `ctx.activated_tools`, `ctx.pacing`, `ctx.hooks`, per-channel
+dedup/non_cli exclusions, and `TOOL_LOOP_RECEIPT_CONTEXT` — the last is
+read by RUNTIME tool execution, so on the facade path receipts would
+silently stop being signed; W1.8c must port receipt emission to core
+before switching.

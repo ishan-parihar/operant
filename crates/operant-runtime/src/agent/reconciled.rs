@@ -1090,6 +1090,40 @@ const APPROVAL_TIMEOUT_SECS: u64 = 120;
 
 /// Mutable per-turn state the event forwarder accumulates while the core
 /// turn runs.
+/// Construction-time tool-policy resolution (W1.8b-fix). Returns the
+/// registered names to disable, reproducing Loop C's two policies:
+///
+/// - `allowed_tools` (a `Some` allowlist) — every registered tool NOT on
+///   the list is disabled (Loop C did the same as a registry `retain`).
+/// - `non_cli_excluded_tools` — disabled only when autonomy is not Full
+///   (Loop C excluded them at turn start only in that case).
+///
+/// Pure by construction so the policy is unit-testable without a registry;
+/// the caller applies the result with `disable_tool`.
+pub(crate) fn policy_disabled_tools(
+    registered: &[String],
+    allowed_tools: Option<&[String]>,
+    non_cli_excluded_tools: &[String],
+    autonomy_is_full: bool,
+) -> Vec<String> {
+    let mut disabled: Vec<String> = Vec::new();
+    if let Some(allow) = allowed_tools {
+        for name in registered {
+            if !allow.iter().any(|a| a == name) && !disabled.contains(name) {
+                disabled.push(name.clone());
+            }
+        }
+    }
+    if !autonomy_is_full {
+        for name in non_cli_excluded_tools {
+            if registered.iter().any(|r| r == name) && !disabled.contains(name) {
+                disabled.push(name.clone());
+            }
+        }
+    }
+    disabled
+}
+
 struct TurnSink {
     /// The per-call consumer sender active for this turn (ACP passes it
     /// per call; ws binds per session — the slot is what makes one
@@ -1104,8 +1138,6 @@ struct TurnSink {
     /// Whether a `memory_*` tool ran this turn (resets the
     /// memory-review counter, Loop B `note_memory_tool_use` parity).
     memory_tool_used: bool,
-    /// Optional per-turn draft event sender for Loop C consumers.
-    draft_tx: Option<mpsc::Sender<DraftEvent>>,
 }
 
 /// Translate one core event into the runtime stream. `None` = no runtime
@@ -1532,6 +1564,9 @@ impl ReconciledAgent {
         observer: Arc<dyn Observer>,
         multimodal: Option<MultimodalConfig>,
         evolution: EvolutionConfig,
+        // Client default temperature (W1.8b-fix). `None` = provider
+        // defaults — the WS/ACP behavior, unchanged.
+        default_temperature: Option<f64>,
     ) -> Self {
         let provider_name = provider_name.into();
         let model = config.model.clone();
@@ -1543,6 +1578,7 @@ impl ReconciledAgent {
         if let Some(mm) = multimodal {
             client = client.with_multimodal(mm);
         }
+        client = client.with_default_temperature(default_temperature);
         let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(512);
         let (perm_tx, perm_rx) = mpsc::channel::<ToolPermissionRequest>(64);
         let interrupt_flag = InterruptFlag::new();
@@ -1594,9 +1630,8 @@ impl ReconciledAgent {
     }
 
     /// Cost-tracking context to wrap `inner.run` in — same thread-local
-    /// context the runtime loop applies in loop_/run.rs. When `None`,
-    /// `turn_streamed` runs without cost tracking (used by WS/ACP until
-    /// they switch to the facade).
+    /// context the runtime loop applies in loop_/run.rs. `None` scopes the
+    /// task-local to `None` (turn runs untracked; WS/ACP pass `None`).
     pub fn with_cost_tracking_context(mut self, ctx: Option<ToolLoopCostTrackingContext>) -> Self {
         self.cost_tracking_context = ctx;
         self
@@ -1638,6 +1673,8 @@ impl ReconciledAgent {
             initialize_mcp,
             None,
             None,
+            None,
+            None,
         )
         .await
     }
@@ -1655,6 +1692,21 @@ impl ReconciledAgent {
     /// `AgentConfig.model` is set from the model, exactly as `from_config`
     /// sets it from its own resolution. The provider is passed by
     /// `Arc`, so the caller's own clone keeps working.
+    ///
+    /// `temperature` (`Some`) becomes the client's default — core's `run`
+    /// has no per-turn temperature parameter, so the facade cannot change
+    /// it mid-turn; this is the ONLY seam that carries the Loop C
+    /// thinking-adjusted temperature to the model (W1.8b-fix: before,
+    /// `FacadeTurnOverrides::temperature` warned and dropped it).
+    /// `None` keeps provider defaults (WS/ACP behavior, unchanged).
+    ///
+    /// `allowed_tools` (`Some` allowlist — Loop C's
+    /// `RunOverrides.allowed_tools`, which cron jobs set from
+    /// `job.allowed_tools`) restricts the core registry AT CONSTRUCTION:
+    /// every registered name outside the allowlist is disabled through
+    /// [`policy_disabled_tools`]. Before W1.8b-fix the allowlist was
+    /// warn-and-dropped, handing cron jobs the full tool surface.
+    /// `None` = unrestricted (WS/ACP never had the option).
     pub async fn from_config_with(
         config: &Config,
         observer: Option<Arc<dyn Observer>>,
@@ -1662,6 +1714,8 @@ impl ReconciledAgent {
         initialize_mcp: bool,
         external_provider: Option<(String, Arc<dyn operant_providers::Provider>, String)>,
         system_prompt: Option<String>,
+        temperature: Option<f64>,
+        allowed_tools: Option<Vec<String>>,
     ) -> Result<Self> {
         Self::build_from_config(
             config,
@@ -1670,6 +1724,8 @@ impl ReconciledAgent {
             initialize_mcp,
             external_provider,
             system_prompt,
+            temperature,
+            allowed_tools,
         )
         .await
     }
@@ -1682,6 +1738,8 @@ impl ReconciledAgent {
         initialize_mcp: bool,
         external_provider: Option<(String, Arc<dyn operant_providers::Provider>, String)>,
         system_prompt: Option<String>,
+        temperature: Option<f64>,
+        allowed_tools: Option<Vec<String>>,
     ) -> Result<Self> {
         // Provider routing + model resolution — verbatim Loop B inputs,
         // unless the caller already resolved both (the Loop C adapters).
@@ -1830,6 +1888,40 @@ impl ReconciledAgent {
         )
         .await?;
 
+        // W1.8b-fix: construction-time tool policy on this FRESH registry.
+        // Loop C enforced (a) the caller's `allowed_tools` allowlist by
+        // retaining the registry and (b) `autonomy.non_cli_excluded_tools`
+        // at turn start whenever autonomy was not Full. The facade has no
+        // per-turn filter hook, so both are applied here — `disable_tool`
+        // INSERTS into the disabled set, leaving the config-provided
+        // `core_app.tools.disabled_tools`/`disabled_toolsets` untouched
+        // (`set_disabled_tools` would clobber them). Per-turn
+        // `tool_filter_groups` exclusions deliberately stay OUT: a
+        // `ToolRegistry` clone shares the disabled set process-wide, so a
+        // per-turn toggle would leak across concurrent turns (W3's
+        // per-turn allowlist hook is the carry target).
+        let registered: Vec<String> = registry
+            .get_schemas()
+            .await
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        let policy_disabled = policy_disabled_tools(
+            &registered,
+            allowed_tools.as_deref(),
+            &config.autonomy.non_cli_excluded_tools,
+            config.autonomy.level == crate::security::AutonomyLevel::Full,
+        );
+        for name in &policy_disabled {
+            registry.disable_tool(name).await;
+        }
+        if !policy_disabled.is_empty() {
+            tracing::info!(
+                count = policy_disabled.len(),
+                "facade tool policy: disabled at construction (allowlist/autonomy)"
+            );
+        }
+
         // The caller's own runtime tools on top of core's builtins (Loop C
         // parity: the orchestrator/CLI tool surface must be reachable).
         // Core loop config: started from the process behavior settings (same
@@ -1876,6 +1968,7 @@ impl ReconciledAgent {
                 creation_nudge_interval: config.agent.creation_nudge_interval,
                 auto_classify: config.agent.auto_classify.clone(),
             },
+            temperature,
         )
         .with_memory_session_id(memory_session_id.map(str::to_string)))
     }
@@ -1960,7 +2053,6 @@ impl ReconciledAgent {
             exit_reason: None,
             saw_content: false,
             memory_tool_used: false,
-            draft_tx: None,
         });
         self.interrupt_flag.reset();
         let watcher = cancel_token.map(|token| {
@@ -2575,6 +2667,7 @@ mod facade_tests {
             Arc::new(Database::init(tmp.path().join("facade.db")).expect("database init"));
         let agent = ReconciledAgent::new(
             config, provider, "scripted", registry, database, memory, observer, None, evolution,
+            None,
         );
         TestFacade { agent, probe_calls }
     }
@@ -2591,7 +2684,6 @@ mod facade_tests {
                 exit_reason: None,
                 saw_content: false,
                 memory_tool_used: false,
-                draft_tx: None,
             },
             rx,
         )
@@ -3158,5 +3250,113 @@ mod facade_tests {
         // provider step).
         let kinds = recorder.events.lock().clone();
         assert_eq!(kinds, vec!["memory".to_string(), "skill".to_string()]);
+    }
+}
+#[cfg(test)]
+mod w18b_fix_tests {
+    //! W1.8b-fix: covers the two load-bearing additions the iter-634 gate
+    //! could not see (nothing exercised them):
+    //!  - `FacadeSink::send` actually translates `Chunk`/`Thinking` into
+    //!    `DraftEvent`s on the draft channel while forwarding every
+    //!    `TurnEvent` on the event channel (the CLI's streaming path).
+    //!  - `policy_disabled_tools` reproduces Loop C's allowlist-retain and
+    //!    autonomy-level bans exactly (boundary cases included).
+
+    use super::*;
+
+    #[tokio::test]
+    async fn facade_sink_forwards_events_and_translates_drafts() {
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+        let (draft_tx, mut draft_rx) = mpsc::channel(8);
+        let sink = FacadeSink::pair(event_tx, Some(draft_tx));
+
+        sink.send(TurnEvent::Chunk {
+            delta: "hello ".to_string(),
+        })
+        .await;
+        sink.send(TurnEvent::Thinking {
+            delta: "hm".to_string(),
+        })
+        .await;
+        sink.send(TurnEvent::ToolCall {
+            id: "t1".to_string(),
+            name: "read_file".to_string(),
+            args: serde_json::json!({"path": "a"}),
+        })
+        .await;
+
+        // Every TurnEvent reaches the consumer channel...
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TurnEvent::Chunk { .. })
+        ));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TurnEvent::Thinking { .. })
+        ));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TurnEvent::ToolCall { .. })
+        ));
+        // ...while only Chunk/Thinking produce drafts: Text, <think>-wrapped
+        // Text, and nothing for the tool call.
+        let first = draft_rx.recv().await.expect("chunk must produce a draft");
+        let second = draft_rx
+            .recv()
+            .await
+            .expect("thinking must produce a draft");
+        assert!(
+            matches!(&first, DraftEvent::Text(t) if t == "hello "),
+            "unexpected first draft: {first:?}"
+        );
+        assert!(
+            matches!(&second, DraftEvent::Text(t) if t.contains("hm") && t.contains("think")),
+            "unexpected thinking draft: {second:?}"
+        );
+        assert!(
+            draft_rx.try_recv().is_err(),
+            "ToolCall must not produce a draft"
+        );
+    }
+
+    #[test]
+    fn policy_allowlist_disables_everything_off_the_list() {
+        let registered = vec![
+            "read_file".to_string(),
+            "shell".to_string(),
+            "kanban_write".to_string(),
+        ];
+        let allow = vec!["read_file".to_string()];
+        assert_eq!(
+            policy_disabled_tools(&registered, Some(&allow), &[], true),
+            vec!["shell".to_string(), "kanban_write".to_string()]
+        );
+        // No allowlist = unrestricted.
+        assert!(policy_disabled_tools(&registered, None, &[], true).is_empty());
+    }
+
+    #[test]
+    fn policy_autonomy_bans_apply_only_when_not_full() {
+        let registered = vec!["shell".to_string(), "read_file".to_string()];
+        let bans = vec!["shell".to_string()];
+        assert!(policy_disabled_tools(&registered, None, &bans, true).is_empty());
+        assert_eq!(
+            policy_disabled_tools(&registered, None, &bans, false),
+            vec!["shell".to_string()]
+        );
+        // A ban naming an unregistered tool is a no-op.
+        let unknown = vec!["never_registered".to_string()];
+        assert!(policy_disabled_tools(&registered, None, &unknown, false).is_empty());
+    }
+
+    #[test]
+    fn policy_union_deduplicates_allowlist_and_bans() {
+        let registered = vec!["shell".to_string(), "read_file".to_string()];
+        let allow = vec!["read_file".to_string()];
+        let bans = vec!["shell".to_string()];
+        assert_eq!(
+            policy_disabled_tools(&registered, Some(&allow), &bans, false),
+            vec!["shell".to_string()]
+        );
     }
 }

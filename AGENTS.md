@@ -216,12 +216,14 @@ incident happened.
     Any leg expected to run for hours (or driven by a subagent) pushes
     its uncommitted state to a backup branch on origin at every
     meaningful milestone — `git push origin HEAD:fleet-<label>-wip` —
-    with commit messages labeled `WIP(...) [do not deploy]`. WIP
-    commits NEVER land on main; the successor resumes by cherry-picking
-    the backup branch, squashing into one green iteration, and deleting
-    the branch. (Observed 2026-10-05: the wt-wave1 worktree was deleted
-    mid-leg by a concurrent storage sweep; the leg survived only because
-    its checkpoint lived on `origin/fleet-wave1-wip`.)
+    with commit messages labeled `WIP(...) [do not deploy]`. The WIP
+    branch belongs to the agent running the leg: do not push or delete
+    a peer's `*-wip` branch (rule 8 applies). WIP commits NEVER land
+    on main; the successor resumes by cherry-picking the backup branch,
+    squashing into one green iteration, and deleting the branch.
+    (Observed 2026-10-05: the wt-wave1 worktree was deleted mid-leg by
+    a concurrent storage sweep; the leg survived only because its
+    checkpoint lived on `origin/fleet-wave1-wip`.)
 11. **Storage cleanup must not eat in-flight work.** Before removing any
     `wt-*` directory, target cache, or running a storage sweep:
     `git worktree list`, then per worktree `git -C <wt> status

@@ -406,18 +406,22 @@ pub async fn process_message(
     // same treatment as `run`: warn + BUGS.md S8; the W3 per-turn
     // allowlist (`FacadeTurnOverrides::allowed_tools`) is the carry
     // target.
-    let mut excluded_tools = compute_excluded_mcp_tools(
+    // Per-turn `tool_filter_groups` exclusions are Loop C guardrail
+    // plumbing with no facade equivalent yet (the W3 per-turn allowlist
+    // hook is the carry target). The autonomy-level tool bans
+    // (`non_cli_excluded_tools`) are NOT here: W1.8b-fix enforces those
+    // inside `from_config_with` at construction (the facade applies them
+    // whenever autonomy is not Full, same condition as the old turn-start
+    // exclusion), so only the message-matched exclusions warn.
+    let excluded_tools = compute_excluded_mcp_tools(
         &tools_registry,
         &config.agent.tool_filter_groups,
         effective_msg_ref,
     );
-    if config.autonomy.level != AutonomyLevel::Full {
-        excluded_tools.extend(config.autonomy.non_cli_excluded_tools.iter().cloned());
-    }
     if !excluded_tools.is_empty() {
         tracing::warn!(
             count = excluded_tools.len(),
-            "per-turn tool exclusions matched on the daemon path; facade turn runs unfiltered until the W3 per-turn allowlist"
+            "tool_filter_groups matched tools on the daemon path; facade turn runs unfiltered until the W3 per-turn allowlist"
         );
     }
 
@@ -440,6 +444,8 @@ pub async fn process_message(
         session_id,
         None,
         &system_prompt,
+        Some(effective_temperature),
+        None,
     )
     .await?;
     // W1.8b: the daemon path has no transport consumer, so the drain
@@ -452,11 +458,10 @@ pub async fn process_message(
         &enriched,
         facade_tx,
         None,
-        crate::agent::reconciled::FacadeTurnOverrides {
-            temperature: Some(effective_temperature),
-            interactive: true,
-            ..Default::default()
-        },
+        // W1.8b-fix: the temperature rides the client default
+        // (`build_facade_agent`); `interactive: false` — this is the
+        // daemon path, and the flag only fires the per-turn warn.
+        crate::agent::reconciled::FacadeTurnOverrides::default(),
     );
     let (result, _) = tokio::join!(turn, async {
         while let Some(event) = facade_rx.recv().await {
