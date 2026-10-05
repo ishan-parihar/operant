@@ -10,13 +10,13 @@ use super::{
     ProcessingStatus, TuiState, accent_color, ai_color, asap_color, dim_color, pending_color,
     queued_color, rainbow_prompt_color, user_color,
 };
-use crate::tui::jcode_app::message::ConnectionPhase;
 use crate::tui::jcode_app::app;
 use crate::tui::jcode_app::color_support::rgb;
-use crate::tui::jcode_app::tui_fns::detect_kv_cache_problem;
 use crate::tui::jcode_app::info_widget::occasional_status_tip;
 use crate::tui::jcode_app::layout_utils;
+use crate::tui::jcode_app::message::ConnectionPhase;
 use crate::tui::jcode_app::session_facts;
+use crate::tui::jcode_app::tui_fns::detect_kv_cache_problem;
 use ratatui::{prelude::*, style::Modifier, widgets::Paragraph};
 
 fn shell_mode_color() -> Color {
@@ -337,7 +337,9 @@ fn command_suggestion_needle(input: &str) -> Option<String> {
 /// unhighlighted span when there is nothing (useful) to highlight.
 fn highlight_command_spans(cmd: &str, needle: Option<&str>, base: Style) -> Vec<Span<'static>> {
     let positions: Vec<usize> = match needle {
-        Some(n) if !n.is_empty() && n != "/" => crate::tui::jcode_app::fuzzy::fuzzy_match_positions(n, cmd),
+        Some(n) if !n.is_empty() && n != "/" => {
+            crate::tui::jcode_app::fuzzy::fuzzy_match_positions(n, cmd)
+        }
         _ => Vec::new(),
     };
     if positions.is_empty() {
@@ -863,14 +865,22 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                     .connection_phase_elapsed()
                     .map_or(elapsed, |d| d.as_secs_f32());
                 let label_color = match phase {
-                    crate::tui::jcode_app::message::ConnectionPhase::Retrying { .. } => rgb(255, 193, 7),
-                    crate::tui::jcode_app::message::ConnectionPhase::Authenticating if phase_elapsed > 10.0 => {
+                    crate::tui::jcode_app::message::ConnectionPhase::Retrying { .. } => {
                         rgb(255, 193, 7)
                     }
-                    crate::tui::jcode_app::message::ConnectionPhase::Connecting if phase_elapsed > 10.0 => {
+                    crate::tui::jcode_app::message::ConnectionPhase::Authenticating
+                        if phase_elapsed > 10.0 =>
+                    {
                         rgb(255, 193, 7)
                     }
-                    crate::tui::jcode_app::message::ConnectionPhase::SendingRequest if phase_elapsed > 10.0 => {
+                    crate::tui::jcode_app::message::ConnectionPhase::Connecting
+                        if phase_elapsed > 10.0 =>
+                    {
+                        rgb(255, 193, 7)
+                    }
+                    crate::tui::jcode_app::message::ConnectionPhase::SendingRequest
+                        if phase_elapsed > 10.0 =>
+                    {
                         rgb(255, 193, 7)
                     }
                     _ => dim_color(),
@@ -1817,7 +1827,9 @@ pub(super) fn build_notification_spans(app: &dyn TuiState) -> Vec<Span<'static>>
                 spans.push(Span::styled(
                     format!(
                         " {}",
-                        crate::tui::jcode_app::tui_fns::format_compact_age(cache_info.cold_for_secs)
+                        crate::tui::jcode_app::tui_fns::format_compact_age(
+                            cache_info.cold_for_secs
+                        )
                     ),
                     Style::default().fg(dim_color()),
                 ));
@@ -2239,7 +2251,9 @@ fn overscroll_truncate_spans(spans: Vec<Span<'static>>, max_width: usize) -> Vec
 /// Format a working dir path home-relative (~/foo/bar), keeping the last 2 segments.
 /// Compact git branch label for the status line and fact stack. Truncated so
 /// long branch names cannot crowd out the other facts.
-fn overscroll_git_branch(data: &crate::tui::jcode_app::info_widget::InfoWidgetData) -> Option<String> {
+fn overscroll_git_branch(
+    data: &crate::tui::jcode_app::info_widget::InfoWidgetData,
+) -> Option<String> {
     let branch = data.git_info.as_ref()?.branch.trim();
     if branch.is_empty() {
         return None;

@@ -99,7 +99,8 @@ fn picker_entry_display_name(entry: &crate::tui::jcode_app::tui_fns::PickerEntry
 fn picker_entry_pretty_name(entry: &crate::tui::jcode_app::tui_fns::PickerEntry) -> String {
     if !matches!(
         entry.action,
-        crate::tui::jcode_app::tui_fns::PickerAction::Model | crate::tui::jcode_app::tui_fns::PickerAction::AgentModelChoice { .. }
+        crate::tui::jcode_app::tui_fns::PickerAction::Model
+            | crate::tui::jcode_app::tui_fns::PickerAction::AgentModelChoice { .. }
     ) {
         return entry.name.clone();
     }
@@ -179,8 +180,11 @@ fn selected_route_notice_text(
     None
 }
 
-fn model_picker_top_hint(picker: &crate::tui::jcode_app::tui_fns::InlineInteractiveState) -> Option<&'static str> {
-    let is_swarm_agent_model_picker = picker.kind == crate::tui::jcode_app::tui_fns::PickerKind::Model
+fn model_picker_top_hint(
+    picker: &crate::tui::jcode_app::tui_fns::InlineInteractiveState,
+) -> Option<&'static str> {
+    let is_swarm_agent_model_picker = picker.kind
+        == crate::tui::jcode_app::tui_fns::PickerKind::Model
         && picker.entries.iter().any(|entry| {
             matches!(
                 entry.action,
@@ -200,10 +204,12 @@ fn model_picker_top_hint(picker: &crate::tui::jcode_app::tui_fns::InlineInteract
     // as-you-type preview, so the hint is shown whenever this is a runtime model
     // picker (i.e. it has selectable model rows).
     let is_runtime_model_picker = picker.kind == crate::tui::jcode_app::tui_fns::PickerKind::Model
-        && picker
-            .entries
-            .iter()
-            .any(|entry| matches!(entry.action, crate::tui::jcode_app::tui_fns::PickerAction::Model));
+        && picker.entries.iter().any(|entry| {
+            matches!(
+                entry.action,
+                crate::tui::jcode_app::tui_fns::PickerAction::Model
+            )
+        });
     if is_runtime_model_picker {
         Some(
             " keys: Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next favorite",
@@ -213,7 +219,9 @@ fn model_picker_top_hint(picker: &crate::tui::jcode_app::tui_fns::InlineInteract
     }
 }
 
-fn account_picker_shows_provider_badge(picker: &crate::tui::jcode_app::tui_fns::InlineInteractiveState) -> bool {
+fn account_picker_shows_provider_badge(
+    picker: &crate::tui::jcode_app::tui_fns::InlineInteractiveState,
+) -> bool {
     let mut providers: Vec<&str> = Vec::new();
     for &fi in &picker.filtered {
         let entry = &picker.entries[fi];
@@ -252,11 +260,16 @@ fn account_picker_entry_title(
     (format!("{}{}", provider_prefix, display_name), prefix_chars)
 }
 
-fn account_inline_interactive_state_label(entry: &crate::tui::jcode_app::tui_fns::PickerEntry) -> &'static str {
+fn account_inline_interactive_state_label(
+    entry: &crate::tui::jcode_app::tui_fns::PickerEntry,
+) -> &'static str {
     entry.account_state_label().unwrap_or("-")
 }
 
-fn picker_render_width(picker: &crate::tui::jcode_app::tui_fns::InlineInteractiveState, max_width: usize) -> usize {
+fn picker_render_width(
+    picker: &crate::tui::jcode_app::tui_fns::InlineInteractiveState,
+    max_width: usize,
+) -> usize {
     let marker_width = 3usize;
     let is_preview = picker.preview;
     const WIDTH_SCAN_LIMIT: usize = 200;
@@ -357,6 +370,10 @@ fn fuzzy_match_positions(pattern: &str, text: &str) -> Vec<usize> {
     crate::tui::jcode_app::fuzzy_engine::fuzzy_match_token_positions(pattern, text)
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Compact, borderless model choices for the command-suggestion surface.
 /// Uses the existing picker state so filtering, routes and hotkeys are unchanged.
 pub(super) fn model_suggestion_lines(
@@ -781,15 +798,15 @@ pub(super) fn draw_inline_interactive(frame: &mut Frame, app: &dyn TuiState, are
         ));
         let display_name = picker_entry_display_name(entry);
         let account_action_color = match &entry.action {
-            crate::tui::jcode_app::tui_fns::PickerAction::Account(crate::tui::jcode_app::tui_fns::AccountPickerAction::Add { .. }) => {
-                Some(rgb(140, 220, 170))
-            }
-            crate::tui::jcode_app::tui_fns::PickerAction::Account(crate::tui::jcode_app::tui_fns::AccountPickerAction::Replace {
-                ..
-            }) => Some(rgb(240, 200, 120)),
-            crate::tui::jcode_app::tui_fns::PickerAction::Account(crate::tui::jcode_app::tui_fns::AccountPickerAction::OpenCenter {
-                ..
-            }) => Some(rgb(150, 190, 255)),
+            crate::tui::jcode_app::tui_fns::PickerAction::Account(
+                crate::tui::jcode_app::tui_fns::AccountPickerAction::Add { .. },
+            ) => Some(rgb(140, 220, 170)),
+            crate::tui::jcode_app::tui_fns::PickerAction::Account(
+                crate::tui::jcode_app::tui_fns::AccountPickerAction::Replace { .. },
+            ) => Some(rgb(240, 200, 120)),
+            crate::tui::jcode_app::tui_fns::PickerAction::Account(
+                crate::tui::jcode_app::tui_fns::AccountPickerAction::OpenCenter { .. },
+            ) => Some(rgb(150, 190, 255)),
             _ => None,
         };
         let primary_style = if unavailable {
@@ -1127,7 +1144,9 @@ mod tests {
         assert!(model_suggestion_lines(&picker, 0).is_empty());
     }
 
-    fn sample_account_picker(mixed_providers: bool) -> crate::tui::jcode_app::tui_fns::InlineInteractiveState {
+    fn sample_account_picker(
+        mixed_providers: bool,
+    ) -> crate::tui::jcode_app::tui_fns::InlineInteractiveState {
         let mut models = vec![crate::tui::jcode_app::tui_fns::PickerEntry {
             name: "work".to_string(),
             options: vec![crate::tui::jcode_app::tui_fns::PickerOption {
@@ -1137,10 +1156,12 @@ mod tests {
                 detail: String::new(),
                 estimated_reference_cost_micros: None,
             }],
-            action: crate::tui::jcode_app::tui_fns::PickerAction::Account(crate::tui::jcode_app::tui_fns::AccountPickerAction::Switch {
-                provider_id: "claude".to_string(),
-                label: "work".to_string(),
-            }),
+            action: crate::tui::jcode_app::tui_fns::PickerAction::Account(
+                crate::tui::jcode_app::tui_fns::AccountPickerAction::Switch {
+                    provider_id: "claude".to_string(),
+                    label: "work".to_string(),
+                },
+            ),
             selected_option: 0,
             is_current: true,
             is_default: false,
@@ -1210,7 +1231,9 @@ mod tests {
                     detail: "/agents swarm".to_string(),
                     estimated_reference_cost_micros: None,
                 }],
-                action: crate::tui::jcode_app::tui_fns::PickerAction::AgentTarget(crate::tui::jcode_app::tui_fns::AgentModelTarget::Swarm),
+                action: crate::tui::jcode_app::tui_fns::PickerAction::AgentTarget(
+                    crate::tui::jcode_app::tui_fns::AgentModelTarget::Swarm,
+                ),
                 selected_option: 0,
                 is_current: false,
                 is_default: false,

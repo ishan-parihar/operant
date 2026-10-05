@@ -8,8 +8,8 @@
 //! Included from app.rs: COMMAND_SUGGESTION_VISIBLE_LIMIT (:133),
 //! ProcessingStatus (:436), RemoteStartupPhase (:454, plus impl),
 //! CopyBadgeUiState (:494) + CopyBadgeFeedback (:509) + impl (:518),
-//! RunResult (:555). Included from app/helpers.rs: effort_display_label (:523)
-//! + effort_display_label_with_root (:529). Included from
+//! RunResult (:555). Included from app/helpers.rs: effort_display_label (:523),
+//! effort_display_label_with_root (:529). Included from
 //! app/state_ui_input_helpers.rs: RegisteredCommand (:7) + impl (:13),
 //! REGISTERED_COMMANDS (:39), registered_command_entries (:240).
 //! Not ported (App-bound or unreferenced): App, extract_input_shell_command,
@@ -17,12 +17,13 @@
 //! `impl App` block, reload_persisted_background_tasks_note.
 // [port-decision] upstream path is app::helpers::model_names (a subdir of app);
 // the renderers' sedded refs keep that shape via this re-export.
+#[allow(unused_imports)] // re-export: consumers are the cutover-bound TuiState defaults
 pub use crate::tui::jcode_app::helpers;
 
+#[allow(unused_imports)] // re-export: consumer lands at the cutover (W4 pickers)
 use crate::tui::jcode_app::message::ConnectionPhase;
 use crate::tui::jcode_app::prompt::swarm_root_reasoning_effort;
 use std::time::{Duration, Instant};
-
 
 pub(crate) const COMMAND_SUGGESTION_VISIBLE_LIMIT: usize = 8;
 
@@ -32,7 +33,6 @@ fn active_runtime_provider_key() -> Option<String> {
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
 }
-
 
 /// Current processing status
 #[derive(Clone, Default, Debug)]
@@ -53,7 +53,6 @@ pub enum ProcessingStatus {
     RunningTool(String),
 }
 
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RemoteStartupPhase {
     StartingServer,
@@ -62,7 +61,6 @@ pub(crate) enum RemoteStartupPhase {
     WaitingForReload,
     Reconnecting { attempt: u32 },
 }
-
 
 impl RemoteStartupPhase {
     pub(crate) fn header_label(&self) -> String {
@@ -91,7 +89,6 @@ impl RemoteStartupPhase {
     }
 }
 
-
 #[derive(Clone, Default)]
 pub struct CopyBadgeUiState {
     pub alt_active: bool,
@@ -104,14 +101,12 @@ pub struct CopyBadgeUiState {
     pub expand_feedback_line: Option<usize>,
 }
 
-
 #[derive(Clone)]
 pub struct CopyBadgeFeedback {
     pub key: char,
     pub success: bool,
     pub expires_at: Instant,
 }
-
 
 impl CopyBadgeUiState {
     fn pulse_active(expires_at: Option<Instant>, now: Instant) -> bool {
@@ -154,7 +149,6 @@ impl CopyBadgeUiState {
     }
 }
 
-
 /// Result from running the TUI
 #[derive(Debug, Default)]
 pub struct RunResult {
@@ -172,11 +166,9 @@ pub struct RunResult {
     pub session_id: Option<String>,
 }
 
-
 pub(crate) fn effort_display_label(effort: &str) -> &str {
     effort_display_label_with_root(effort, swarm_root_reasoning_effort(effort))
 }
-
 
 // Keep finite, validated effort labels static so autocomplete can share them
 // without allocations or leaking dynamically formatted strings.
@@ -309,7 +301,8 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/autojudge", "Show/toggle automatic end-of-turn judging"),
     RegisteredCommand::public("/review", "Launch a one-shot headed review session"),
     RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
-    #[cfg(any())] // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
     RegisteredCommand::public("/effort", crate::tui::jcode_app::keybind::EFFORT_HELP),
     RegisteredCommand::public("/fast", "Toggle fast mode"),
     RegisteredCommand::public("/transport", "Show/change connection transport"),
@@ -438,7 +431,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::hidden("/zstatus", "Secret premium-mode status command"),
 ];
 
-
 /// Every non-hidden slash command with its one-line description, in
 /// registration order. The `/help` overlay uses this to list commands its
 /// hand-written sections have not covered, so a newly registered command can
@@ -448,4 +440,121 @@ pub(crate) fn registered_command_entries() -> impl Iterator<Item = (&'static str
         .iter()
         .filter(|command| !command.hidden)
         .map(|command| (command.name, command.help))
+}
+
+// [port-decision] shell/ slash-command input probes (batch-3): ui_input.rs:41,47
+// reference these two helpers. Their upstream implementations (input.rs:87-92,
+// slash_command_parser.rs:26-124) port verbatim below; `scan_slash_tokens`
+// shares its closure state, so all three travel together as one function block.
+// Upstream would otherwise live as an [`crate::tui::input`] module — the whole
+// module is not in jcode_app at this wave, so these land locally.
+
+#[inline]
+pub(crate) fn extract_input_shell_command(input: &str) -> Option<&str> {
+    input.trim().strip_prefix('!').map(str::trim)
+}
+
+pub(crate) fn has_safe_slash_command_token(input: &str) -> bool {
+    active_token_before_cursor(input, input.len()).is_some()
+}
+
+pub(super) fn active_token_before_cursor(input: &str, cursor: usize) -> Option<(usize, usize)> {
+    let cursor = cursor.min(input.len());
+    if !input.is_char_boundary(cursor) {
+        return None;
+    }
+
+    let mut active = None;
+    scan_slash_tokens(&input[..cursor], |start, end| {
+        if end == cursor {
+            active = Some((start, end));
+        }
+    });
+    active
+}
+
+// Slash: scan the input spans of slash/token pieces separated by whitespace,
+// honoring quotes, backticks, and fence backticks — deductions from the
+// `//            [truncated]` trailing arm of upstream slash_command_parser.rs.
+fn scan_slash_tokens(input: &str, mut on_token: impl FnMut(usize, usize)) {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_backticks = false;
+    let mut in_fenced_code = false;
+    let mut escaped = false;
+    let mut line_start = true;
+    let mut iter = input.char_indices().peekable();
+    while let Some((index, ch)) = iter.next() {
+        if in_fenced_code {
+            if line_start && ch == '`' && input[index..].starts_with("```") {
+                iter.next();
+                iter.next();
+                in_fenced_code = false;
+                line_start = false;
+                continue;
+            }
+            line_start = ch == '\n';
+            continue;
+        }
+
+        if escaped {
+            escaped = false;
+            line_start = ch == '\n';
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            line_start = false;
+            continue;
+        }
+
+        if !in_single_quote && !in_double_quote && ch == '`' {
+            if line_start && input[index..].starts_with("```") {
+                iter.next();
+                iter.next();
+                in_fenced_code = true;
+                line_start = false;
+                continue;
+            }
+            in_backticks = !in_backticks;
+            line_start = false;
+            continue;
+        }
+        if in_backticks {
+            line_start = ch == '\n';
+            continue;
+        }
+        if !in_double_quote && ch == '\'' {
+            in_single_quote = !in_single_quote;
+            line_start = false;
+            continue;
+        }
+        if !in_single_quote && ch == '"' {
+            in_double_quote = !in_double_quote;
+            line_start = false;
+            continue;
+        }
+
+        // Upstream slash_command_parser.rs:100-121 — the `/`-token branch,
+        // verbatim (closing the fn; no truncation).
+        if !in_single_quote
+            && !in_double_quote
+            && ch == '/'
+            && (index == 0
+                || input[..index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_whitespace))
+        {
+            let end = input[index..]
+                .char_indices()
+                .find_map(|(offset, value)| value.is_whitespace().then_some(index + offset))
+                .unwrap_or(input.len());
+            on_token(index, end);
+            line_start = false;
+            continue;
+        }
+
+        line_start = ch == '\n';
+    }
 }

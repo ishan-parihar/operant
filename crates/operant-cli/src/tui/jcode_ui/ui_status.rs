@@ -8,7 +8,7 @@ use super::*;
 /// Extract semantic version for UI display/grouping.
 pub(super) fn semver() -> &'static str {
     static SEMVER: OnceLock<String> = OnceLock::new();
-    SEMVER.get_or_init(|| format!("v{}", jcode_build_meta::semver()))
+    SEMVER.get_or_init(|| format!("v{}", crate::tui::jcode_app::build_meta::semver()))
 }
 
 /// True when this process is running from the stable release binary path.

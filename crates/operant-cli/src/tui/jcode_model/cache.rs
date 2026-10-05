@@ -3,7 +3,8 @@
 // imports were re-rooted. See jcode_model/mod.rs for scope.
 
 use super::DisplayMessage;
-use super::vendor_types::{DiagramDisplayMode, DiffDisplayMode};
+use super::vendor_types::DiffDisplayMode;
+use crate::tui::jcode_app::config_shim::DiagramDisplayMode;
 use ratatui::layout::Alignment;
 use ratatui::text::{Line, Span};
 use std::collections::{HashMap, VecDeque};

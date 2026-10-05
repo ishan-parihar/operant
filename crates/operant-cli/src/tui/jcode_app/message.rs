@@ -13,8 +13,8 @@
 // (jcode-base/src/message.rs:32) re-rooted to jcode_app::logging::error.
 // [port-excision] notifications' InputShell/model-refresh/stalled formatters are
 // not referenced by the ported tree and are not ported. See jcode_app/mod.rs.
-use std::sync::OnceLock;
 use regex::Regex;
+use std::sync::OnceLock;
 
 pub use crate::tui::jcode_model::vendor_types::ToolCall;
 // [port-decision] dedup: ToolCall's derive line was left behind when its
@@ -1062,7 +1062,6 @@ mod tool_use_block_tests {
 
 // --- crates/jcode-base/src/message/notifications.rs -------------------------------
 
-
 /// Remove terminal escape sequences before captured command output is rendered.
 ///
 /// Captured output is not attached to a terminal, so retaining control sequences
@@ -1129,7 +1128,6 @@ pub fn strip_ansi_escape_sequences(text: &str) -> String {
     clean
 }
 
-
 fn background_task_display_name<'a>(
     tool_name: &'a str,
     display_name: Option<&'a str>,
@@ -1138,7 +1136,6 @@ fn background_task_display_name<'a>(
         .map(str::trim)
         .filter(|name| !name.is_empty() && *name != tool_name)
 }
-
 
 fn background_task_header_label(tool_name: &str, display_name: Option<&str>) -> String {
     if let Some(display_name) = background_task_display_name(tool_name, display_name) {
@@ -1152,13 +1149,11 @@ fn background_task_header_label(tool_name: &str, display_name: Option<&str>) -> 
     }
 }
 
-
 pub fn background_task_display_label(tool_name: &str, display_name: Option<&str>) -> String {
     background_task_display_name(tool_name, display_name)
         .unwrap_or(tool_name)
         .to_string()
 }
-
 
 fn parse_background_task_header_label(label: &str) -> (String, Option<String>) {
     static NAMED_RE: OnceLock<Option<Regex>> = OnceLock::new();
@@ -1186,14 +1181,12 @@ fn parse_background_task_header_label(label: &str) -> (String, Option<String>) {
     (label.trim().to_string(), None)
 }
 
-
 fn strip_stream_prefix(line: &str) -> &str {
     line.trim()
         .strip_prefix("[stderr] ")
         .or_else(|| line.trim().strip_prefix("[stdout] "))
         .unwrap_or_else(|| line.trim())
 }
-
 
 fn background_task_failure_summary(preview: &str) -> Option<String> {
     let normalized = strip_ansi_escape_sequences(preview)
@@ -1224,7 +1217,6 @@ fn background_task_failure_summary(preview: &str) -> Option<String> {
     fallback
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedBackgroundTaskProgressNotification {
     pub task_id: String,
@@ -1235,7 +1227,6 @@ pub struct ParsedBackgroundTaskProgressNotification {
     pub source: Option<String>,
     pub percent: Option<f32>,
 }
-
 
 pub fn parse_background_task_progress_notification_markdown(
     content: &str,
@@ -1306,7 +1297,6 @@ pub fn parse_background_task_progress_notification_markdown(
     })
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedBackgroundTaskNotification {
     pub task_id: String,
@@ -1319,7 +1309,6 @@ pub struct ParsedBackgroundTaskNotification {
     pub preview: Option<String>,
     pub full_output_command: String,
 }
-
 
 pub fn parse_background_task_notification_markdown(
     content: &str,
@@ -1392,12 +1381,13 @@ pub fn parse_background_task_notification_markdown(
 
 // --- crates/jcode-base/src/message.rs --------------------------------------------
 
-
 fn compile_static_regex(pattern: &str) -> Option<Regex> {
     match Regex::new(pattern) {
         Ok(regex) => Some(regex),
         Err(err) => {
-            crate::tui::jcode_app::logging::error(&format!("failed to compile static message regex: {err}"));
+            crate::tui::jcode_app::logging::error(&format!(
+                "failed to compile static message regex: {err}"
+            ));
             eprintln!("jcode: failed to compile static regex: {err}");
             None
         }

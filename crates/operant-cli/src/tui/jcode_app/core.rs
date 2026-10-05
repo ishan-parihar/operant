@@ -81,7 +81,10 @@ impl DisplayMessageRoleExt for DisplayMessage {
 
 fn is_background_task_notification_content(content: &str) -> bool {
     crate::tui::jcode_app::message::parse_background_task_notification_markdown(content).is_some()
-        || crate::tui::jcode_app::message::parse_background_task_progress_notification_markdown(content).is_some()
+        || crate::tui::jcode_app::message::parse_background_task_progress_notification_markdown(
+            content,
+        )
+        .is_some()
 }
 
 #[cfg(test)]

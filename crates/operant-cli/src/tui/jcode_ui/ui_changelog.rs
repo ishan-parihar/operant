@@ -70,7 +70,7 @@ fn parse_changelog_from_impl(changelog: &str) -> Vec<ChangelogEntry<'_>> {
 
 /// Parse the embedded changelog from the build-time environment.
 fn parse_changelog() -> Vec<ChangelogEntry<'static>> {
-    let changelog: &'static str = jcode_build_meta::CHANGELOG;
+    let changelog: &'static str = crate::tui::jcode_app::build_meta::CHANGELOG;
     parse_changelog_from_impl(changelog)
 }
 
@@ -149,8 +149,8 @@ pub(super) fn get_grouped_changelog() -> Vec<ChangelogGroup> {
             let entries = parse_changelog();
             group_changelog_entries_impl(
                 &entries,
-                jcode_build_meta::version(),
-                jcode_build_meta::git_date(),
+                crate::tui::jcode_app::build_meta::version(),
+                crate::tui::jcode_app::build_meta::git_date(),
             )
         })
         .clone()

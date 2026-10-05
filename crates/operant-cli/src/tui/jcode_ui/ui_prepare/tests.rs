@@ -113,12 +113,12 @@ fn wrapped_copy_rows_match_visible_content_at_reported_widths() {
         for (row, map) in prepared.wrapped_line_map.iter().enumerate() {
             let displayed = &prepared.wrapped_plain_lines[row];
             let offset = prepared.wrapped_copy_offsets[row];
-            let visible = ui::display_col_slice(
+            let visible = crate::tui::jcode_ui::display_col_slice(
                 displayed,
                 offset,
                 unicode_width::UnicodeWidthStr::width(displayed.as_str()),
             );
-            let copied = ui::display_col_slice(
+            let copied = crate::tui::jcode_ui::display_col_slice(
                 &prepared.raw_plain_lines[map.raw_line],
                 map.start_col,
                 map.end_col,

@@ -27,7 +27,6 @@ use std::sync::LazyLock;
 
 pub use crate::tui::jcode_model::vendor_types::DiffDisplayMode;
 
-
 /// How to display mermaid diagrams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -59,7 +58,6 @@ pub enum DiagramPanePosition {
     Top,
 }
 
-
 /// How much vertical spacing to use when rendering markdown blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -70,7 +68,6 @@ pub enum MarkdownSpacingMode {
     /// Document-style spacing between top-level blocks.
     Document,
 }
-
 
 /// How LaTeX math is rendered in terminal markdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -123,6 +120,13 @@ pub struct DisplayConfig {
     pub show_agentgrep_output: bool,
     pub show_bash_output: bool,
     pub tool_call_details: bool,
+    /// Profile performance tier name ("full" / "reduced" / "minimal"). Both the
+    /// upstream default and its priority order land here so perf paths can
+    /// compare verbatim. Ported from jcode-config-types/src/display.rs:64.
+    pub performance: String,
+    /// Alt-click copy-badge label (empty = default label). Upstream
+    /// jcode-config-types/src/display.rs:75, default at :149 (String::new()).
+    pub copy_badge_alt_label: String,
 }
 
 impl Default for DisplayConfig {
@@ -141,6 +145,8 @@ impl Default for DisplayConfig {
             show_agentgrep_output: false,
             show_bash_output: false,
             tool_call_details: false,
+            performance: "auto".to_string(),
+            copy_badge_alt_label: String::new(),
         }
     }
 }

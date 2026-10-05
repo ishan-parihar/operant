@@ -6,7 +6,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-
 /// Ambient mode status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum AmbientStatus {

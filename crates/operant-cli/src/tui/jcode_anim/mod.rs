@@ -22,6 +22,8 @@
 //!    Rust never enables fast-math, so results are deterministic regardless of
 //!    optimization level.
 
+#![cfg_attr(test, allow(dead_code))]
+
 use std::sync::OnceLock;
 
 /// Build a `(cos, sin)` table for the angle sequence `0, step, 2*step, ...`

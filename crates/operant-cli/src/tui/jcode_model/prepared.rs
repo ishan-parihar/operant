@@ -5,7 +5,11 @@
 // field this module never sets. See jcode_model/mod.rs for scope.
 
 use super::WrappedLineMap;
-use crate::tui::copy_targets::CopyTargetKind;
+// [port-decision] batch-3 re-root: jcode-markdown's CopyTargetKind is the
+// canonical home upstream (markdown_types.rs); the W1 interim re-root to
+// operant's copy_targets.rs predates the W2 markdown port. The renderer family
+// (extract_copy_targets + estimators) matches on these variants.
+use crate::tui::jcode_markdown::CopyTargetKind;
 use ratatui::text::Line;
 use std::sync::Arc;
 

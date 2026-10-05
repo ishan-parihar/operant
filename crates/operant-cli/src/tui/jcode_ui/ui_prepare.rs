@@ -235,7 +235,7 @@ pub(super) fn compute_image_regions(
 
     let mut image_regions = Vec::new();
     for (idx, line) in wrapped_lines.iter().enumerate() {
-        if let Some(hash) = super::super::mermaid::parse_image_placeholder(line) {
+        if let Some(hash) = crate::tui::jcode_app::mermaid::parse_image_placeholder(line) {
             // The placeholder line plus the blank run immediately after it.
             let height = (1 + blank_run[idx + 1]).min(u16::MAX as usize) as u16;
             image_regions.push(ImageRegion {
@@ -249,7 +249,7 @@ pub(super) fn compute_image_regions(
                 render: crate::tui::jcode_model::ImageRegionRender::Crop,
             });
         } else if let Some((hash, rows, cols)) =
-            super::super::mermaid::parse_inline_image_placeholder(line)
+            crate::tui::jcode_app::mermaid::parse_inline_image_placeholder(line)
         {
             // Inline raster image anchored in the transcript body. The marker
             // encodes its exact geometry; clamp to the blank run that actually
@@ -317,7 +317,9 @@ fn assistant_message_copy_targets(
             .collect();
     }
 
-    crate::tui::jcode_markdown::render_support::extract_copy_targets_from_rendered_lines(rendered_lines)
+    crate::tui::jcode_markdown::render_support::extract_copy_targets_from_rendered_lines(
+        rendered_lines,
+    )
 }
 
 fn tool_message_copy_target(
@@ -377,7 +379,8 @@ fn push_user_prompt_lines(
         + unicode_width::UnicodeWidthStr::width("› ");
     // Voice prompts carry <transcription> tags for the model. Show the spoken
     // words with a mic marker instead, like Jcode Desktop.
-    let (visible, transcribed) = jcode_session_types::strip_transcription(content);
+    let (visible, transcribed) =
+        crate::tui::jcode_model::transcription::strip_transcription(content);
     let content: &str = if transcribed {
         &format!("🎙 {visible}")
     } else {
@@ -683,10 +686,15 @@ pub(super) fn prepare_messages(
         messages_version: app
             .display_messages_version()
             .wrapping_mul(2)
-            .wrapping_add(u64::from(crate::tui::jcode_app::config_shim::config().display.pin_todos)),
+            .wrapping_add(u64::from(
+                crate::tui::jcode_app::config_shim::config()
+                    .display
+                    .pin_todos,
+            )),
         diagram_mode: app.diagram_mode(),
         centered: app.centered_mode(),
-        mermaid_aspect_bucket: crate::tui::jcode_app::mermaid::current_preferred_aspect_ratio_bucket(),
+        mermaid_aspect_bucket:
+            crate::tui::jcode_app::mermaid::current_preferred_aspect_ratio_bucket(),
         is_processing: app.is_processing(),
         streaming_text_len: app.streaming_text().len(),
         streaming_text_hash: super::hash_text_for_cache(app.streaming_text()),
@@ -722,9 +730,9 @@ pub(super) fn prepare_messages(
             // `messages_version`/`streaming_text_hash`, so an exact hit can
             // still bake in a stale "rendering..." placeholder. Fall through
             // to a rebuild, which re-renders the pending tail.
-            let stale = prepared
-                .mermaid_pending_epoch()
-                .is_some_and(|stamp| crate::tui::jcode_app::mermaid::deferred_render_epoch() != stamp);
+            let stale = prepared.mermaid_pending_epoch().is_some_and(|stamp| {
+                crate::tui::jcode_app::mermaid::deferred_render_epoch() != stamp
+            });
             if !stale {
                 super::note_full_prep_cache_lookup(cache_lookup_start.elapsed());
                 super::note_full_prep_cache_hit(kind, prepared.as_ref());
@@ -1133,10 +1141,15 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
         messages_version: app
             .display_messages_version()
             .wrapping_mul(2)
-            .wrapping_add(u64::from(crate::tui::jcode_app::config_shim::config().display.pin_todos)),
+            .wrapping_add(u64::from(
+                crate::tui::jcode_app::config_shim::config()
+                    .display
+                    .pin_todos,
+            )),
         diagram_mode: app.diagram_mode(),
         centered: app.centered_mode(),
-        mermaid_aspect_bucket: crate::tui::jcode_app::mermaid::current_preferred_aspect_ratio_bucket(),
+        mermaid_aspect_bucket:
+            crate::tui::jcode_app::mermaid::current_preferred_aspect_ratio_bucket(),
         pin_images: app.pin_images(),
         inline_images_visible: app.inline_images_visible(),
         images_signature: app.side_pane_images_signature(),
@@ -1398,7 +1411,9 @@ fn render_message_into(
     // todo tool messages in display_messages for history/session fidelity, but
     // omit their duplicate cards from the prepared transcript.
     if role == "tool"
-        && crate::tui::jcode_app::config_shim::config().display.pin_todos
+        && crate::tui::jcode_app::config_shim::config()
+            .display
+            .pin_todos
         && msg
             .tool_data
             .as_ref()
@@ -1538,11 +1553,18 @@ fn render_message_into(
             for line in cached {
                 acc.push_auto(align_if_unset(line, align));
             }
+            // [port-decision] swarm_gallery loop gated: same W7 story as the
+            // ui_messages.rs gate above (jet; swarm-core stream absent so the
+            // branch is inert; cfg(any()) preserves the verbatim form for the
+            // batch-5 re-activation).
+            #[cfg(any())]
             if let Some(member) = spawned_member_for_tool(msg, &ctx.swarm_members) {
-                for line in crate::tui::jcode_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(
-                    std::slice::from_ref(member),
-                    width.saturating_sub(1) as usize,
-                ) {
+                for line in
+                    crate::tui::jcode_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(
+                        std::slice::from_ref(member),
+                        width.saturating_sub(1) as usize,
+                    )
+                {
                     acc.push_auto(line.alignment(ratatui::layout::Alignment::Left));
                 }
             }

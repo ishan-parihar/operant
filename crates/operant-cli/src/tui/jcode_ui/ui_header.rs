@@ -301,8 +301,10 @@ pub(super) struct ActiveCredentialOverrides {
 impl ActiveCredentialOverrides {
     fn from_app(app: &dyn TuiState) -> Self {
         Self {
-            anthropic: app.active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::Claude),
-            openai: app.active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::OpenAI),
+            anthropic: app
+                .active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::Claude),
+            openai: app
+                .active_dual_credential(crate::tui::jcode_app::provider::ActiveProvider::OpenAI),
         }
     }
 
@@ -361,13 +363,21 @@ fn auth_full_specs(
     let anthropic_label = provider_label(
         "anthropic",
         auth.anthropic.state,
-        dual_method_label(crate::tui::jcode_app::provider::ActiveProvider::Claude, auth, active),
+        dual_method_label(
+            crate::tui::jcode_app::provider::ActiveProvider::Claude,
+            auth,
+            active,
+        ),
     );
 
     let openai_label = provider_label(
         "openai",
         auth.openai,
-        dual_method_label(crate::tui::jcode_app::provider::ActiveProvider::OpenAI, auth, active),
+        dual_method_label(
+            crate::tui::jcode_app::provider::ActiveProvider::OpenAI,
+            auth,
+            active,
+        ),
     );
 
     let gemini_label = if auth.gemini != AuthState::NotConfigured {
@@ -477,9 +487,9 @@ fn header_provider_auth_tag(
         }
         "openrouter" | "openai-compatible" => "api-key",
         other
-            if crate::provider_catalog::resolve_openai_compatible_profile_selection(other)
+            if crate::tui::jcode_app::provider_catalog::resolve_openai_compatible_profile_selection(other)
                 .is_some()
-                || crate::provider_catalog::openai_compatible_profile_id_for_display_name(
+                || crate::tui::jcode_app::provider_catalog::openai_compatible_profile_id_for_display_name(
                     other,
                 )
                 .is_some() =>
@@ -626,7 +636,7 @@ fn build_persistent_header_with_auth(
     // icon (e.g. "ram" -> 🐏). Previously a remote http/ws connection icon
     // (🌐/🔌) replaced it entirely, which hid the name icon for every remote
     // client. Keep the connection icon as a separate trailing hint instead.
-    let icon = crate::id::session_icon(&session_name);
+    let icon = crate::tui::jcode_app::id::session_icon(&session_name);
     let connection_icon = connection_type_icon(app.connection_type().as_deref());
     let nice_model = header_model_display_name(&model, &app.provider_name());
     let align = Alignment::Left;
@@ -660,7 +670,7 @@ fn build_persistent_header_with_auth(
     let server_version_full = app.server_display_version();
     let client_version_full = server_name
         .as_ref()
-        .map(|_| jcode_build_meta::version().to_string());
+        .map(|_| crate::tui::jcode_app::build_meta::version().to_string());
     let version_mismatch = matches!(
         (&server_version_full, &client_version_full),
         (Some(server), Some(client)) if server.trim() != client.trim()
@@ -813,7 +823,7 @@ fn build_persistent_header_with_auth(
     // still surface the running version on the jcode line's own row.
     if client_version_label.is_none() {
         let version_text = if is_running_stable_release() {
-            let tag = jcode_build_meta::git_tag();
+            let tag = crate::tui::jcode_app::build_meta::git_tag();
             if tag.is_empty() || tag.contains('-') {
                 format!("{} · release", semver())
             } else {
@@ -850,17 +860,18 @@ fn build_header_lines_with_auth(
 
     // Auth inventory: `/login` heading, then one provider per line (dim
     // hollow dot for unconfigured providers).
-    let (login_heading, auth_lines) = if let Some(host) = crate::tui::jcode_app::tui_fns::ssh_remote_host() {
-        // The native protocol reports the active route, not a complete remote
-        // credential inventory. Do not render the laptop's (or an empty)
-        // inventory as if it described providers configured on the server.
-        (format!("/login to authenticate on {host}"), Vec::new())
-    } else {
-        (
-            "/login to add provider".to_string(),
-            build_auth_status_lines(auth, active),
-        )
-    };
+    let (login_heading, auth_lines) =
+        if let Some(host) = crate::tui::jcode_app::tui_fns::ssh_remote_host() {
+            // The native protocol reports the active route, not a complete remote
+            // credential inventory. Do not render the laptop's (or an empty)
+            // inventory as if it described providers configured on the server.
+            (format!("/login to authenticate on {host}"), Vec::new())
+        } else {
+            (
+                "/login to add provider".to_string(),
+                build_auth_status_lines(auth, active),
+            )
+        };
     lines.push(
         Line::from(Span::styled(
             login_heading,
@@ -1007,13 +1018,21 @@ pub(in crate::tui) fn build_header_sections(
     )
 }
 
+// [port-decision] header test module gated at batch-3: it exercises header
+// building through jcode's app-core test harness (MockProvider implementing
+// crate::tool::Registry's Provider trait, EventStream, ToolDefinition, the
+// JCODE_HOME env fixture) — a harness that does not exist in operant and is
+// cutover/W8 scope. The 763 lines stay verbatim under the gate; the cutover
+// re-activates them against operant's provider harness (or rewrites the mocks
+// onto it). Not deleting: the coverage contract survives for the rewrite.
+#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tool::Registry;
     use crate::tui::jcode_app::auth::{AuthState, AuthStatus, ProviderAuth};
     use crate::tui::jcode_app::message::Message;
     use crate::tui::jcode_app::provider::{EventStream, Provider};
-    use crate::tool::Registry;
     use anyhow::Result;
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -1160,7 +1179,7 @@ mod tests {
             server_line.contains("server: Blazing 🔥 · v0.14.2-dev"),
             "server line should carry the server version: {server_line}"
         );
-        let client_version = compact_version_label(jcode_build_meta::version());
+        let client_version = compact_version_label(crate::tui::jcode_app::build_meta::version());
         assert!(
             client_line.contains("client: Fox"),
             "client line should keep the session name: {client_line}"
@@ -1174,7 +1193,7 @@ mod tests {
     #[test]
     fn persistent_header_keeps_git_hash_when_semvers_match_but_builds_differ() {
         let mut app = create_test_app();
-        let client_semver = compact_version_label(jcode_build_meta::version());
+        let client_semver = compact_version_label(crate::tui::jcode_app::build_meta::version());
         let fake_server_version = format!("{} (0000000)", client_semver);
         app.set_remote_server_identity_for_tests(
             Some("blazing"),
@@ -1198,7 +1217,10 @@ mod tests {
             "same-semver mismatch should keep the server git hash: {server_line}"
         );
         assert!(
-            client_line.contains(&format!("· {}", jcode_build_meta::version())),
+            client_line.contains(&format!(
+                "· {}",
+                crate::tui::jcode_app::build_meta::version()
+            )),
             "same-semver mismatch should keep the client git hash: {client_line}"
         );
     }
@@ -1606,7 +1628,9 @@ mod tests {
         crate::env::remove_var("JCODE_PROVIDER");
 
         let mut app = crate::tui::app::App::new_for_remote(None);
-        app.set_remote_startup_phase(crate::tui::jcode_app::app::RemoteStartupPhase::LoadingSession);
+        app.set_remote_startup_phase(
+            crate::tui::jcode_app::app::RemoteStartupPhase::LoadingSession,
+        );
 
         // The model line lives in the persistent header now; the startup phase
         // label renders there without a bogus "(unknown)" provider tag.

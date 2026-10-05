@@ -36,7 +36,6 @@ pub struct ProcessMemorySnapshot {
     pub allocator: AllocatorInfo,
 }
 
-
 #[cfg(target_os = "linux")]
 pub fn snapshot_with_source(source: impl Into<String>) -> ProcessMemorySnapshot {
     let source = source.into();
@@ -160,7 +159,7 @@ fn memory_history() -> &'static Mutex<VecDeque<ProcessMemoryHistoryEntry>> {
 }
 
 pub fn allocator_info() -> AllocatorInfo {
-    #[cfg(feature = "jemalloc")]
+    #[cfg(any())] // [port-decision] upstream jemalloc feature not declared in operant
     {
         let stats = jemalloc_stats();
         let profiling = jemalloc_profiling_info();
@@ -173,7 +172,7 @@ pub fn allocator_info() -> AllocatorInfo {
         }
     }
 
-    #[cfg(not(feature = "jemalloc"))]
+    // [port-decision] (jemalloc branch above cfg-any() gated; this branch is unconditional)
     {
         let stats = glibc_malloc_stats();
         AllocatorInfo {
@@ -198,7 +197,7 @@ pub fn allocator_info() -> AllocatorInfo {
 /// symbol does not exist, so a direct call fails to link. At runtime on a
 /// modern glibc the lookup succeeds and stats work as before; on an old glibc
 /// this returns `None` and callers already treat stats as unavailable.
-#[cfg(all(target_os = "linux", target_env = "gnu", not(feature = "jemalloc")))]
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn glibc_malloc_stats() -> Option<AllocatorStats> {
     // Mirrors glibc's `struct mallinfo2` (all fields `size_t`).
     #[repr(C)]
@@ -246,10 +245,7 @@ fn glibc_malloc_stats() -> Option<AllocatorStats> {
     })
 }
 
-#[cfg(all(
-    not(all(target_os = "linux", target_env = "gnu")),
-    not(feature = "jemalloc")
-))]
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn glibc_malloc_stats() -> Option<AllocatorStats> {
     None
 }

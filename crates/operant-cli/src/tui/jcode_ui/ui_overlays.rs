@@ -7,8 +7,8 @@ use super::{
     header_icon_color, header_name_color, header_session_color, pending_color, queued_color,
     record_chat_overlay_copy_snapshot, rgb, tool_color, user_bg, user_color, user_text,
 };
-use crate::tui::jcode_app::tui_fns::TuiState;
 use crate::tui::jcode_app::info_widget::WidgetPlacement;
+use crate::tui::jcode_app::tui_fns::TuiState;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
@@ -61,6 +61,7 @@ pub(super) fn draw_changelog_overlay(
     let scroll = scroll.min(max_scroll);
 
     let scroll_info = if total_lines > visible_height {
+        #[allow(clippy::manual_checked_ops)] // vendored-verbatim / re-export for cutover consumers
         let pct = if max_scroll > 0 {
             (scroll * 100) / max_scroll
         } else {
@@ -496,12 +497,14 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         section_style,
     )));
     lines.push(Line::from(""));
-    #[cfg(any())] // [port-decision] keybind registry not ported (side_panel_toggle_key_label); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (side_panel_toggle_key_label); re-activate at cutover
     lines.push(key_entry(
         &crate::tui::jcode_app::keybind::side_panel_toggle_key_label(),
         "Cycle side panel: split, fullscreen, hidden",
     ));
-    #[cfg(any())] // [port-decision] keybind registry not ported (diagram_pane_visibility_key_label); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (diagram_pane_visibility_key_label); re-activate at cutover
     lines.push(key_entry(
         &crate::tui::jcode_app::keybind::diagram_pane_visibility_key_label(),
         "Show/hide diagram pane",
@@ -605,7 +608,8 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     lines.push(key_entry(&alt("S"), "Toggle typing scroll lock"));
     lines.push(key_entry("Ctrl+P", "Toggle auto-poke for incomplete todos"));
     lines.push(key_entry(&alt("X"), "Show/dismiss todo list card in chat"));
-    #[cfg(any())] // [port-decision] keybind registry not ported (effort_switch_keys_label); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (effort_switch_keys_label); re-activate at cutover
     lines.push(key_entry(
         &crate::tui::jcode_app::keybind::effort_switch_keys_label(),
         "Cycle effort (reasoning + swarm)",
@@ -619,11 +623,13 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     if let Some(label) = app.dictation_key_label() {
         lines.push(key_entry(&label, "Run configured dictation"));
     }
-    #[cfg(any())] // [port-decision] keybind registry not ported (load_open_resume_key); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (load_open_resume_key); re-activate at cutover
     if let Some(label) = crate::tui::jcode_app::keybind::load_open_resume_key().label {
         lines.push(key_entry(&label, "Open the /resume session picker"));
     }
-    #[cfg(any())] // [port-decision] keybind registry not ported (load_new_terminal_key); re-activate at cutover
+    #[cfg(any())]
+    // [port-decision] keybind registry not ported (load_new_terminal_key); re-activate at cutover
     if let Some(label) = crate::tui::jcode_app::keybind::load_new_terminal_key().label {
         lines.push(key_entry(
             &label,
@@ -635,10 +641,12 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     let total_lines = lines.len();
     let visible_height = area.height.saturating_sub(2) as usize;
+    #[allow(clippy::manual_checked_ops)] // vendored-verbatim upstream scrollbar math
     let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll = scroll.min(max_scroll);
 
     let scroll_info = if total_lines > visible_height {
+        #[allow(clippy::manual_checked_ops)] // vendored-verbatim upstream scrollbar math
         let pct = if max_scroll > 0 {
             (scroll * 100) / max_scroll
         } else {
@@ -727,8 +735,8 @@ pub(super) fn draw_model_status_overlay(
 fn model_status_line_style(raw: &str, default: Style) -> Style {
     // Reuse the same semantic classification the CLI uses so the TUI overlay
     // and `jcode provider-test-coverage` stay color-consistent.
-    use crate::live_tests::CoverageLineStyle;
-    match crate::live_tests::classify_provider_test_coverage_line(raw) {
+    use crate::tui::jcode_app::live_tests::CoverageLineStyle;
+    match crate::tui::jcode_app::live_tests::classify_provider_test_coverage_line(raw) {
         CoverageLineStyle::Title => Style::default()
             .fg(accent_color())
             .add_modifier(Modifier::BOLD),

@@ -7,10 +7,14 @@
 pub mod chrome;
 pub mod layout;
 // [port-excision] swarm_gallery.rs (3,099) / swarm_tiles.rs (611): out of port
-// scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2; 3,710 LOC of
-// unwired swarm surface). memory_tiles.rs (587) was excised with them at
-// iter-591 as zero-consumer, then RE-PORTED at batch-3 when ui_prepare's live
-// call (parse_memory_display_entries) inverted that call — declaration below.
+// scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2; unwired swarm
+// surface). A batch-3 final-sweep re-port (against the integrator's gate
+// decision — the call sites' data source, jcode's swarm-core, does not exist
+// in operant, so the surface cannot activate until W7) was reverted; the two
+// call sites are gated with [port-decision] markers naming W7.
+// memory_tiles.rs (587) was excised with them at iter-591 as zero-consumer,
+// then RE-PORTED at batch-3 when ui_prepare's live call
+// (parse_memory_display_entries) inverted that call — declaration below.
 pub mod memory_tiles;
 
 use ratatui::prelude::{Line, Span, Style};

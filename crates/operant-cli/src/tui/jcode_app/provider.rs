@@ -12,6 +12,11 @@
 //! `crate::auth_mode::` re-root to this module.
 use serde::{Deserialize, Serialize};
 
+// [port-decision] batch-4: bus.rs's publish_models_updated calls
+// `crate::provider::catalog_scheduler::bump_catalog_generation` (upstream
+// jcode-base/src/bus.rs:157); re-export the ported catalog_scheduler module
+// here so that re-rooted path resolves without touching bus.rs's call site.
+pub use super::catalog_scheduler;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ActiveProvider {
@@ -24,7 +29,6 @@ pub enum ActiveProvider {
     Bedrock,
     OpenRouter,
 }
-
 
 /// The credential a dual-auth provider (Anthropic / OpenAI) will actually use
 /// for the next request. This is the authoritative billing identity: `Oauth`
@@ -267,7 +271,6 @@ impl AuthRoute {
     }
 }
 
-
 /// Typed view of [`ModelRoute::api_method`].
 ///
 /// The wire format intentionally remains a string so older clients and saved
@@ -292,7 +295,6 @@ pub enum ModelRouteApiMethod {
     GrokBuild,
     Other(String),
 }
-
 
 impl ModelRouteApiMethod {
     /// The route-vocabulary api_method for a canonical dual-auth route.
@@ -405,7 +407,6 @@ impl ModelRouteApiMethod {
         }
     }
 }
-
 
 /// Default context window size when model-specific data isn't known.
 pub const DEFAULT_CONTEXT_LIMIT: usize = 200_000;
@@ -865,8 +866,7 @@ pub fn pretty_picker_model_name(model: &str) -> String {
     }
     // Routing prefixes (`openai-api:`) and vendor namespaces (`anthropic/`)
     // are shown by the picker's group header, not the title.
-    let bare = explicit_model_provider_prefix(trimmed)
-        .map_or(trimmed, |(_, _, bare)| bare);
+    let bare = explicit_model_provider_prefix(trimmed).map_or(trimmed, |(_, _, bare)| bare);
     if bare.starts_with("arn:") {
         return bare.to_string();
     }
@@ -967,6 +967,10 @@ fn append_markers(base: String, markers: Vec<String>) -> String {
     }
 }
 
+#[expect(
+    clippy::unwrap_used,
+    reason = "invariant guaranteed by surrounding validation"
+)]
 /// Case one model-id token for a picker title.
 fn pretty_picker_token(token: &str) -> String {
     let lower = token.to_ascii_lowercase();
@@ -1032,7 +1036,6 @@ fn pretty_picker_token(token: &str) -> String {
 
 // --- selection.rs additions (referenced by ui_header.rs) ---------------------------
 
-
 pub fn parse_provider_hint(value: &str) -> Option<ActiveProvider> {
     match value.trim().to_ascii_lowercase().as_str() {
         "claude" | "anthropic" => Some(ActiveProvider::Claude),
@@ -1046,7 +1049,6 @@ pub fn parse_provider_hint(value: &str) -> Option<ActiveProvider> {
         _ => None,
     }
 }
-
 
 pub fn provider_label(provider: ActiveProvider) -> &'static str {
     match provider {

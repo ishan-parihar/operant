@@ -1712,6 +1712,10 @@ fn tool_should_transition_queued_to_running_on_permit_acquire() {
             success: true,
             content: "ok".to_string(),
             error: None,
+            // [courtesy fix] field added by a concurrent peer iter
+            // (ToolResult::timed_out) without updating this initializer;
+            // carries the pass-through default a completed call implies.
+            timed_out: false,
         },
     });
     assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Done);

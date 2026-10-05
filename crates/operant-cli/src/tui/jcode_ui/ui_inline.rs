@@ -37,7 +37,9 @@ pub(super) fn draw_inline_ui(frame: &mut Frame, app: &dyn TuiState, area: Rect) 
         {
             super::inline_interactive_ui::draw_inline_interactive(frame, app, area)
         }
-        Some(crate::tui::jcode_app::tui_fns::InlineUiStateRef::View(view)) => draw_inline_view(frame, app, view, area),
+        Some(crate::tui::jcode_app::tui_fns::InlineUiStateRef::View(view)) => {
+            draw_inline_view(frame, app, view, area)
+        }
         _ => {}
     }
 }

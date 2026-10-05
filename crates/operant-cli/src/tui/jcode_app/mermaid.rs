@@ -18,6 +18,20 @@
 // engine; the integrator either stubs them at the W9 seam or excises callers.
 use ratatui::prelude::*;
 
+// [port-decision] the W4.5 inline-image subset: 9/11 of the callers' symbols
+// come from this module directly (verbatim or degraded where ratatui_image is
+// unavailable); InlineFitReadiness itself is a verbatim port of
+// mermaid_viewport.rs:868-883. See mermaid_inline.rs for the spine.
+#[allow(unused_imports)] // re-export: engine-side hooks consumed at W6
+pub use crate::tui::jcode_app::mermaid_inline::{
+    InlineFitReadiness, TERMINAL_IMAGE_FALLBACK_NOTE, current_preferred_aspect_ratio_bucket,
+    get_cached_path, inline_fit_geometry, inline_fit_geometry_upscaled, inline_fit_readiness,
+    inline_image_dims, inline_image_id, inline_image_is_materialized, is_video_export_mode,
+    materialize_inline_image, materialize_inline_image_by_id, mermaid_inline_expand_epoch,
+    prewarm_inline_fit_state, rediscover_external_image, rediscover_inline_image,
+    register_inline_level_geometries, set_log_hooks, set_mermaid_inline_expand_level,
+    set_render_completed_hook, text_image_fallback_note_line, uses_text_image_fallback,
+};
 
 const INLINE_IMAGE_MARKER_PREFIX: &str = "\x00IIMG:";
 const INLINE_IMAGE_MARKER_SUFFIX: &str = ":END";

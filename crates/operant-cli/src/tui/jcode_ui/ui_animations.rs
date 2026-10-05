@@ -207,7 +207,12 @@ where
 }
 
 fn disabled_animation_names() -> HashSet<String> {
-    expand_disabled_animation_names(crate::tui::jcode_app::config_shim::config().display.disabled_animations.iter())
+    expand_disabled_animation_names(
+        crate::tui::jcode_app::config_shim::config()
+            .display
+            .disabled_animations
+            .iter(),
+    )
 }
 
 fn choose_animation_variant_from_disabled<'a>(

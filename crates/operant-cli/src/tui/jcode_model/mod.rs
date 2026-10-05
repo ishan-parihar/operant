@@ -33,6 +33,7 @@ mod message;
 mod prepared;
 #[path = "swarm_collapse.rs"]
 pub mod swarm_collapse;
+pub mod transcription;
 #[allow(unused_imports)]
 pub use swarm_collapse::{
     CollapsibleSwarmContent, encode_collapsible_swarm_content, parse_collapsible_swarm_content,

@@ -10,23 +10,25 @@
 // App state gets adapted onto the jcode renderer inputs; every excised item
 // is named in the `[port-excision]` deferred block below (nothing dropped
 // silently).
-#![cfg_attr(
-    test,
-    expect(
-        clippy::items_after_test_module,
-        clippy::let_and_return,
-        clippy::missing_const_for_thread_local,
-        clippy::needless_borrow,
-        clippy::needless_return,
-        clippy::too_many_arguments
-    )
-)]
+#![cfg_attr(test, allow(dead_code))]
+// The parent skeleton's re-export surface: upstream ui.rs imports exist FOR
+// the child renderers + frame draw path; until the cutover wires them, the
+// imports are unused by construction. Pruned/audited at the cutover + W7
+// grep-gate pass — not a blanket pass on future edits to living code.
+#![allow(unused_imports)]
+// [port-decision] expect list trimmed at batch-3: four of the six upstream
+// lints no longer fire (their trigger code — the App-bound draw path — is
+// deferred to the cutover), and an unfulfilled expect is itself a warning.
+// Re-add `items_after_test_module`, `let_and_return`, `missing_const_for_
+// thread_local`, `needless_borrow` when the draw path ports.
+#![cfg_attr(test, expect(clippy::needless_return, clippy::items_after_test_module))]
 
 use ratatui::{prelude::*, widgets::Paragraph};
+use serde::Serialize;
 #[cfg(test)]
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,6 +36,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[path = "ui_animations.rs"]
 mod animations;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 pub(crate) use animations::{
     idle_animation_debug_json, idle_donut_reserved_height, last_idle_animation_area,
     note_idle_animation_fast_path_blocked, note_idle_animation_full_repaint,
@@ -77,7 +80,10 @@ pub(crate) mod viewport;
 pub(crate) mod copy_selection;
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "lands before its cutover wiring (App-seam adaptation)")
+    expect(
+        dead_code,
+        reason = "lands before its cutover wiring (App-seam adaptation)"
+    )
 )]
 #[path = "ui_diff.rs"]
 mod ui_diff;
@@ -85,10 +91,17 @@ use ui_diff::{
     DiffLineKind, ParsedDiffLine, collect_diff_lines, diff_add_color, diff_change_counts_for_tool,
     diff_del_color, generate_diff_lines_from_tool_input, tint_span_with_diff_color,
 };
+#[path = "ui/display_width.rs"]
+pub(crate) mod display_width;
 #[path = "ui/selection_highlight.rs"]
 pub(crate) mod selection_highlight;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+pub(crate) use display_width::{
+    clamp_display_col, display_col_slice, display_col_to_byte_offset, line_display_width,
+};
 
 #[cfg(test)]
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 pub(crate) use box_utils::truncate_line_to_width;
 use box_utils::{
     line_plain_text, render_rounded_box, truncate_line_preserving_suffix_to_width,
@@ -97,6 +110,24 @@ use box_utils::{
 use changelog::get_grouped_changelog;
 #[cfg(test)]
 use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};
+use frame_metrics::{
+    ChatLayoutMetrics, FLICKER_NOTICE_COPY_KEY, FullPrepPhaseMetrics, ViewportMetrics,
+    begin_frame_resource_sample, finalize_frame_metrics, note_body_built, note_body_cache_hit,
+    note_body_cache_lookup, note_body_cache_miss, note_body_incremental_reuse, note_body_request,
+    note_chat_layout, note_full_prep_built, note_full_prep_cache_hit, note_full_prep_cache_lookup,
+    note_full_prep_cache_miss, note_full_prep_phase_metrics, note_full_prep_request,
+    note_prep_aspect, note_prep_overflow, note_prep_prepare_at, note_prep_restage,
+    note_viewport_metrics, reset_frame_perf_stats, viewport_stability_hash,
+};
+pub(crate) use frame_metrics::{
+    DrawCallAttribution, FrameInputAttribution, frame_input_attribution_snapshot,
+    key_to_paint_debug_json, note_frame_painted, note_key_event_read, record_draw_call_attribution,
+    set_frame_input_attribution, wall_clock_ms,
+};
+pub(crate) use frame_metrics::{
+    debug_draw_call_history, debug_flicker_frame_history, debug_slow_frame_history,
+    recent_flicker_copy_target_for_key, recent_flicker_ui_notice,
+};
 pub(crate) use header::capitalize;
 use inline_ui::{draw_inline_ui, inline_ui_height};
 pub(crate) use memory_estimates::{debug_memory_profile, debug_side_panel_memory_profile};
@@ -123,39 +154,23 @@ pub(crate) use viewport::{
     reserve_copy_badge_margins, truncate_line_for_copy_badge,
     truncate_line_in_place_to_width as truncate_copy_badge_line_to_width,
 };
-use frame_metrics::{
-    ChatLayoutMetrics, FLICKER_NOTICE_COPY_KEY, FullPrepPhaseMetrics, ViewportMetrics,
-    begin_frame_resource_sample, finalize_frame_metrics, note_body_built, note_body_cache_hit,
-    note_body_cache_lookup, note_body_cache_miss, note_body_incremental_reuse, note_body_request,
-    note_chat_layout, note_full_prep_built, note_full_prep_cache_hit, note_full_prep_cache_lookup,
-    note_full_prep_cache_miss, note_full_prep_phase_metrics, note_full_prep_request,
-    note_prep_aspect, note_prep_overflow, note_prep_prepare_at, note_prep_restage,
-    note_viewport_metrics, reset_frame_perf_stats, viewport_stability_hash,
-};
-pub(crate) use frame_metrics::{
-    DrawCallAttribution, FrameInputAttribution, frame_input_attribution_snapshot,
-    key_to_paint_debug_json, note_frame_painted, note_key_event_read, record_draw_call_attribution,
-    set_frame_input_attribution, wall_clock_ms,
-};
-pub(crate) use frame_metrics::{
-    debug_draw_call_history, debug_flicker_frame_history, debug_slow_frame_history,
-    recent_flicker_copy_target_for_key, recent_flicker_ui_notice,
-};
 
+use crate::tui::jcode_app::color_support;
+use crate::tui::jcode_app::color_support::rgb;
+use crate::tui::jcode_app::visual_debug;
 pub(crate) use crate::tui::jcode_markdown::{CopyTargetKind, RawCopyTarget};
 pub(crate) use crate::tui::jcode_model::{
     CopyTarget, EditToolRange, ImageRegion, MessageBoundary, PreparedChatFrame, PreparedMessages,
     PreparedSection, PreparedSectionKind, WrappedLineMap,
 };
-use crate::tui::jcode_app::color_support::rgb;
 // Upstream ui.rs :13-23, :93 glob-consumed by every child's `use super::*`:
 // the module imports and the shared trait/type names must be in the parent's
 // scope or the children's bare `markdown::`/`TuiState`/`DisplayMessage` refs fail.
+use crate::tui::jcode_app::app::ProcessingStatus;
+use crate::tui::jcode_app::core::DisplayMessageRoleExt;
 use crate::tui::jcode_app::info_widget;
 use crate::tui::jcode_app::markdown;
 use crate::tui::jcode_app::mermaid;
-use crate::tui::jcode_app::core::DisplayMessageRoleExt;
-use crate::tui::jcode_app::app::ProcessingStatus;
 use crate::tui::jcode_app::tui_fns::TuiState;
 use crate::tui::jcode_model::DisplayMessage;
 
@@ -299,11 +314,20 @@ thread_local! {
     static TEST_LAST_RESOLVED_CHAT_SCROLL: Cell<usize> = const { Cell::new(0) };
     static TEST_TAIL_CATCHUP_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static TEST_TAIL_FOLLOW_SNAP_PENDING: Cell<bool> = const { Cell::new(false) };
+    static TEST_LAST_LAYOUT: RefCell<Option<LayoutSnapshot>> = const { RefCell::new(None) };
     static TEST_LAST_CHAT_FRAME: RefCell<Option<Arc<PreparedChatFrame>>> = const { RefCell::new(None) };
+    static TEST_LAST_STATUS_AREA: RefCell<Option<Rect>> = const { RefCell::new(None) };
     static TEST_VISIBLE_EXPAND_EDIT_BADGE: Cell<bool> = const { Cell::new(false) };
     static TEST_VISIBLE_EXPAND_EDIT_BADGE_LINE: Cell<Option<usize>> = const { Cell::new(None) };
     static TEST_VISIBLE_EXPAND_EDIT_BADGE_RECT: Cell<Option<Rect>> = const { Cell::new(None) };
     static TEST_VISIBLE_COPY_TARGETS: RefCell<Vec<VisibleCopyTarget>> = const { RefCell::new(Vec::new()) };
+    static TEST_PROMPT_VIEWPORT_STATE: RefCell<PromptViewportState> =
+        const { RefCell::new(PromptViewportState {
+            initialized: false,
+            last_visible_start: 0,
+            last_visible_end: 0,
+            active: None,
+        }) };
     static TEST_COPY_VIEWPORT: RefCell<CopyViewportSnapshots> = RefCell::new(CopyViewportSnapshots::default());
 }
 
@@ -873,7 +897,8 @@ fn full_prep_cache() -> &'static Mutex<FullPrepCacheState> {
 
 // Copy badges intentionally avoid h/j/k/l so they never shadow vi-style
 // movement keys while the user is scanning visible actions.
-pub(crate) const COPY_BADGE_KEYS: [char; 12] = ['s', 'd', 'f', 'g', 'w', 'e', 'r', 't', 'x', 'c', 'v', 'b'];
+pub(crate) const COPY_BADGE_KEYS: [char; 12] =
+    ['s', 'd', 'f', 'g', 'w', 'e', 'r', 't', 'x', 'c', 'v', 'b'];
 
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleCopyTarget {
@@ -893,6 +918,441 @@ pub(crate) fn visible_copy_targets_state() -> &'static Mutex<Vec<VisibleCopyTarg
     VISIBLE_COPY_TARGETS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+// [port-decision] prompt-entry animation block, verbatim port of upstream
+// ui.rs:741-929 (struct + const + statics + four fns). No re-roots needed —
+// state walks the SAME test/OnceLock pattern as the parent helpers above.
+
+#[derive(Clone, Copy)]
+struct PromptViewportAnimation {
+    line_idx: usize,
+    start_ms: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PromptViewportState {
+    initialized: bool,
+    last_visible_start: usize,
+    last_visible_end: usize,
+    active: Option<PromptViewportAnimation>,
+}
+
+const PROMPT_ENTRY_ANIMATION_MS: u64 = 450;
+
+#[cfg(not(test))]
+static PROMPT_VIEWPORT_STATE: OnceLock<Mutex<PromptViewportState>> = OnceLock::new();
+
+#[cfg(not(test))]
+fn prompt_viewport_state() -> &'static Mutex<PromptViewportState> {
+    PROMPT_VIEWPORT_STATE.get_or_init(|| Mutex::new(PromptViewportState::default()))
+}
+
+fn active_prompt_entry_animation(now_ms: u64) -> Option<PromptViewportAnimation> {
+    #[cfg(test)]
+    {
+        TEST_PROMPT_VIEWPORT_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            if let Some(anim) = state.active {
+                if now_ms.saturating_sub(anim.start_ms) <= PROMPT_ENTRY_ANIMATION_MS {
+                    return Some(anim);
+                }
+                state.active = None;
+            }
+            None
+        })
+    }
+    #[cfg(not(test))]
+    {
+        let mut state = match prompt_viewport_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if let Some(anim) = state.active {
+            if now_ms.saturating_sub(anim.start_ms) <= PROMPT_ENTRY_ANIMATION_MS {
+                return Some(anim);
+            }
+            state.active = None;
+        }
+        None
+    }
+}
+
+fn record_prompt_viewport(visible_start: usize, visible_end: usize) {
+    #[cfg(test)]
+    {
+        TEST_PROMPT_VIEWPORT_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.initialized = true;
+            state.last_visible_start = visible_start;
+            state.last_visible_end = visible_end;
+            state.active = None;
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        let mut state = match prompt_viewport_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.initialized = true;
+        state.last_visible_start = visible_start;
+        state.last_visible_end = visible_end;
+        state.active = None;
+    }
+}
+
+fn update_prompt_entry_animation(
+    user_prompt_lines: &[usize],
+    visible_start: usize,
+    visible_end: usize,
+    now_ms: u64,
+) {
+    #[cfg(test)]
+    {
+        TEST_PROMPT_VIEWPORT_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+
+            if !state.initialized {
+                state.initialized = true;
+                state.last_visible_start = visible_start;
+                state.last_visible_end = visible_end;
+                return;
+            }
+
+            let prev_visible_start = state.last_visible_start;
+            let prev_visible_end = state.last_visible_end;
+            let viewport_changed =
+                prev_visible_start != visible_start || prev_visible_end != visible_end;
+
+            if let Some(anim) = state.active {
+                let still_fresh = now_ms.saturating_sub(anim.start_ms) <= PROMPT_ENTRY_ANIMATION_MS;
+                let still_visible = anim.line_idx >= visible_start && anim.line_idx < visible_end;
+                if still_fresh && still_visible {
+                    state.last_visible_start = visible_start;
+                    state.last_visible_end = visible_end;
+                    return;
+                }
+                if !still_fresh || !still_visible {
+                    state.active = None;
+                }
+            }
+
+            if viewport_changed && state.active.is_none() {
+                let newly_visible = user_prompt_lines.iter().copied().find(|line| {
+                    *line >= visible_start
+                        && *line < visible_end
+                        && (*line < prev_visible_start || *line >= prev_visible_end)
+                });
+                if let Some(line_idx) = newly_visible {
+                    state.active = Some(PromptViewportAnimation {
+                        line_idx,
+                        start_ms: now_ms,
+                    });
+                }
+            }
+
+            state.last_visible_start = visible_start;
+            state.last_visible_end = visible_end;
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        let mut state = match prompt_viewport_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if !state.initialized {
+            state.initialized = true;
+            state.last_visible_start = visible_start;
+            state.last_visible_end = visible_end;
+            return;
+        }
+
+        let prev_visible_start = state.last_visible_start;
+        let prev_visible_end = state.last_visible_end;
+        let viewport_changed =
+            prev_visible_start != visible_start || prev_visible_end != visible_end;
+
+        if let Some(anim) = state.active {
+            let still_fresh = now_ms.saturating_sub(anim.start_ms) <= PROMPT_ENTRY_ANIMATION_MS;
+            let still_visible = anim.line_idx >= visible_start && anim.line_idx < visible_end;
+            if still_fresh && still_visible {
+                state.last_visible_start = visible_start;
+                state.last_visible_end = visible_end;
+                return;
+            }
+            if !still_fresh || !still_visible {
+                state.active = None;
+            }
+        }
+
+        if viewport_changed && state.active.is_none() {
+            let newly_visible = user_prompt_lines.iter().copied().find(|line| {
+                *line >= visible_start
+                    && *line < visible_end
+                    && (*line < prev_visible_start || *line >= prev_visible_end)
+            });
+            if let Some(line_idx) = newly_visible {
+                state.active = Some(PromptViewportAnimation {
+                    line_idx,
+                    start_ms: now_ms,
+                });
+            }
+        }
+
+        state.last_visible_start = visible_start;
+        state.last_visible_end = visible_end;
+    }
+}
+
+// [port-decision] batch-3 mod-tail splice. The redacted copy-viewport/state
+// tail of upstream ui.rs lands here verbatim (scroll getters, expand-edit
+// badge family, status/layout/chat-frame snapshots, render-state test family,
+// copy-viewport snapshot family, native scrollbar helpers, ActiveFileDiffContext
+// plumbing, profile module), with only the batch-3 re-roots applied:
+//   crate::tui::CopySelection*  -> crate::tui::jcode_ui::copy_selection::*
+//   crate::tui::TuiState        -> crate::tui::jcode_app::tui_fns::TuiState
+//   jcode_tui_messages::ImageRegionRender -> crate::tui::jcode_model::ImageRegionRender
+//   crate::logging::info        -> crate::tui::jcode_app::logging::info
+// Upstream siblings re-homed into this module (single-file splice) drop their
+// `pub(super)` (they sit in the parent now): active_file_diff_context (from
+// ui_file_diff.rs), copy_point_from_snapshot (from ui/copy_selection.rs),
+// line_display_width + clamp_display_col (from ui/display_width.rs).
+// Per-block source lines cited in [port-source] comments.
+
+// [port-source] ui.rs:307-320
+/// Maximum scroll offset of the side pane on the most recent render frame
+/// (total content lines minus the visible viewport height). Scroll handlers
+/// clamp against this so stored offsets cannot accumulate invisible
+/// "phantom" overscroll past the bottom of the content.
+pub fn last_diff_pane_max_scroll() -> usize {
+    #[cfg(test)]
+    {
+        return TEST_LAST_DIFF_PANE_MAX_SCROLL.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        LAST_DIFF_PANE_MAX_SCROLL.load(Ordering::Relaxed)
+    }
+}
+
+// [port-source] ui.rs:334-344
+pub(crate) fn set_pinned_pane_total_lines(value: usize) {
+    #[cfg(test)]
+    {
+        TEST_PINNED_PANE_TOTAL_LINES.with(|cell| cell.set(value));
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        PINNED_PANE_TOTAL_LINES.store(value, Ordering::Relaxed);
+    }
+}
+
+// [port-source] ui.rs:346-356
+pub(crate) fn set_last_diff_pane_effective_scroll(value: usize) {
+    #[cfg(test)]
+    {
+        TEST_LAST_DIFF_PANE_EFFECTIVE_SCROLL.with(|cell| cell.set(value));
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        LAST_DIFF_PANE_EFFECTIVE_SCROLL.store(value, Ordering::Relaxed);
+    }
+}
+
+// [port-source] ui.rs:358-368
+pub(crate) fn set_last_diff_pane_max_scroll(value: usize) {
+    #[cfg(test)]
+    {
+        TEST_LAST_DIFF_PANE_MAX_SCROLL.with(|cell| cell.set(value));
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        LAST_DIFF_PANE_MAX_SCROLL.store(value, Ordering::Relaxed);
+    }
+}
+
+// [port-source] ui.rs:370-381
+/// Total wrapped line count of the chat transcript on the most recent frame.
+/// Returns 0 if no frame has been rendered yet.
+pub fn last_total_wrapped_lines() -> usize {
+    #[cfg(test)]
+    {
+        return TEST_LAST_TOTAL_WRAPPED_LINES.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        LAST_TOTAL_WRAPPED_LINES.load(Ordering::Relaxed)
+    }
+}
+
+// [port-source] ui.rs:395-406
+/// Height (rows) of the chat messages viewport on the most recent frame.
+/// Returns 0 if no frame has been rendered yet.
+pub(crate) fn last_chat_viewport_height() -> usize {
+    #[cfg(test)]
+    {
+        return TEST_LAST_CHAT_VIEWPORT_HEIGHT.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        LAST_CHAT_VIEWPORT_HEIGHT.load(Ordering::Relaxed)
+    }
+}
+
+// [port-source] ui.rs:445-456
+/// Whether the tail-follow viewport is still sliding toward the bottom after a
+/// large append. The redraw loop keeps animation cadence while this is set.
+pub(crate) fn tail_catchup_active() -> bool {
+    #[cfg(test)]
+    {
+        return TEST_TAIL_CATCHUP_ACTIVE.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        TAIL_CATCHUP_ACTIVE.load(Ordering::Relaxed)
+    }
+}
+
+// [port-source] ui.rs:470-487
+/// Request that the next tail-follow render land at the exact bottom.
+///
+/// Set by explicit navigation and composer actions, and by a terminal resize,
+/// which rewraps the transcript and would otherwise look like a large append
+/// that the catch-up animation slides through. Automatic transcript growth does
+/// not set it, so large committed blocks still use the bounded catch-up
+/// animation.
+pub(crate) fn request_tail_follow_snap() {
+    #[cfg(test)]
+    {
+        TEST_TAIL_FOLLOW_SNAP_PENDING.with(|cell| cell.set(true));
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        TAIL_FOLLOW_SNAP_PENDING.store(true, Ordering::Relaxed);
+    }
+}
+
+// [port-source] ui.rs:537-545
+#[derive(Clone, Debug)]
+struct ActiveFileDiffContext {
+    edit_index: usize,
+    msg_index: usize,
+    file_path: String,
+    start_line: usize,
+    end_line: usize,
+    expandable: bool,
+}
+
+// [port-source] ui_file_diff.rs:356-411
+fn find_visible_edit_tool(
+    edit_ranges: &[EditToolRange],
+    scroll: usize,
+    visible_height: usize,
+) -> Option<&EditToolRange> {
+    if edit_ranges.is_empty() {
+        return None;
+    }
+
+    let visible_start = scroll;
+    let visible_end = scroll + visible_height;
+    let visible_mid = scroll + visible_height / 2;
+    let candidate_start = edit_ranges.partition_point(|range| range.end_line <= visible_start);
+    let candidate_end = edit_ranges.partition_point(|range| range.start_line < visible_end);
+
+    let mut best: Option<&EditToolRange> = None;
+    let mut best_overlap = 0usize;
+    let mut best_distance = usize::MAX;
+
+    for range in &edit_ranges[candidate_start..candidate_end] {
+        let overlap_start = range.start_line.max(visible_start);
+        let overlap_end = range.end_line.min(visible_end);
+        let overlap = overlap_end.saturating_sub(overlap_start);
+
+        let range_mid = (range.start_line + range.end_line) / 2;
+        let distance = range_mid.abs_diff(visible_mid);
+
+        if overlap > best_overlap || (overlap == best_overlap && distance < best_distance) {
+            best = Some(range);
+            best_overlap = overlap;
+            best_distance = distance;
+        }
+    }
+
+    if best.is_some() {
+        return best;
+    }
+
+    // No overlapping edit range. Check the nearest neighbors around the insertion window
+    // instead of rescanning the entire history.
+    for idx in [candidate_start.checked_sub(1), Some(candidate_start)]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(range) = edit_ranges.get(idx) {
+            let range_mid = (range.start_line + range.end_line) / 2;
+            let distance = range_mid.abs_diff(visible_mid);
+            if best.is_none() || distance < best_distance {
+                best = Some(range);
+                best_distance = distance;
+            }
+        }
+    }
+
+    best
+}
+
+// [port-source] ui_file_diff.rs:413-427
+fn active_file_diff_context(
+    prepared: &PreparedChatFrame,
+    scroll: usize,
+    visible_height: usize,
+) -> Option<ActiveFileDiffContext> {
+    let range = find_visible_edit_tool(&prepared.edit_tool_ranges, scroll, visible_height)?;
+    Some(ActiveFileDiffContext {
+        edit_index: range.edit_index + 1,
+        msg_index: range.msg_index,
+        file_path: range.file_path.clone(),
+        start_line: range.start_line,
+        end_line: range.end_line,
+        expandable: range.expandable,
+    })
+}
+
+// [port-source] ui.rs:564-571
+#[cfg(not(test))]
+static VISIBLE_EXPAND_EDIT_BADGE: OnceLock<Mutex<bool>> = OnceLock::new();
+
+#[cfg(not(test))]
+static VISIBLE_EXPAND_EDIT_BADGE_LINE: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
+
+#[cfg(not(test))]
+static VISIBLE_EXPAND_EDIT_BADGE_RECT: OnceLock<Mutex<Option<Rect>>> = OnceLock::new();
+
+// [port-source] ui.rs:578-591
+#[cfg(not(test))]
+fn visible_expand_edit_badge_state() -> &'static Mutex<bool> {
+    VISIBLE_EXPAND_EDIT_BADGE.get_or_init(|| Mutex::new(false))
+}
+
+#[cfg(not(test))]
+fn visible_expand_edit_badge_line_state() -> &'static Mutex<Option<usize>> {
+    VISIBLE_EXPAND_EDIT_BADGE_LINE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(not(test))]
+fn visible_expand_edit_badge_rect_state() -> &'static Mutex<Option<Rect>> {
+    VISIBLE_EXPAND_EDIT_BADGE_RECT.get_or_init(|| Mutex::new(None))
+}
+
+// [port-source] ui.rs:593-606
 pub(crate) fn set_visible_expand_edit_badge_rect(rect: Option<Rect>) {
     #[cfg(test)]
     {
@@ -908,6 +1368,23 @@ pub(crate) fn set_visible_expand_edit_badge_rect(rect: Option<Rect>) {
     }
 }
 
+// [port-source] ui.rs:608-621
+pub(crate) fn visible_expand_edit_badge_at(column: u16, row: u16) -> bool {
+    #[cfg(test)]
+    let rect = TEST_VISIBLE_EXPAND_EDIT_BADGE_RECT.with(Cell::get);
+    #[cfg(not(test))]
+    let rect = *visible_expand_edit_badge_rect_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    rect.is_some_and(|rect| {
+        column >= rect.x
+            && column < rect.x.saturating_add(rect.width)
+            && row >= rect.y
+            && row < rect.y.saturating_add(rect.height)
+    })
+}
+
+// [port-source] ui.rs:623-644
 pub(crate) fn set_visible_expand_edit_badge(visible: bool, line: Option<usize>) {
     #[cfg(test)]
     {
@@ -931,29 +1408,156 @@ pub(crate) fn set_visible_expand_edit_badge(visible: bool, line: Option<usize>) 
     }
 }
 
+// [port-source] ui.rs:646-659
+pub(crate) fn visible_expand_edit_badge() -> bool {
+    #[cfg(test)]
+    {
+        return TEST_VISIBLE_EXPAND_EDIT_BADGE.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        let state = match visible_expand_edit_badge_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *state
+    }
+}
+
+// [port-source] ui.rs:661-674
+pub(crate) fn visible_expand_edit_badge_line() -> Option<usize> {
+    #[cfg(test)]
+    {
+        return TEST_VISIBLE_EXPAND_EDIT_BADGE_LINE.with(Cell::get);
+    }
+    #[cfg(not(test))]
+    {
+        let state = match visible_expand_edit_badge_line_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *state
+    }
+}
+
+// [port-source] ui.rs:676-692
+fn set_visible_copy_targets(targets: Vec<VisibleCopyTarget>) {
+    #[cfg(test)]
+    {
+        TEST_VISIBLE_COPY_TARGETS.with(|state| {
+            *state.borrow_mut() = targets;
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        let mut state = match visible_copy_targets_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *state = targets;
+    }
+}
+
+// [port-source] ui.rs:694-716
+pub(crate) fn visible_copy_target_for_key(key: char) -> Option<VisibleCopyTarget> {
+    #[cfg(test)]
+    {
+        TEST_VISIBLE_COPY_TARGETS.with(|state| {
+            state
+                .borrow()
+                .iter()
+                .find(|target| target.key.eq_ignore_ascii_case(&key))
+                .cloned()
+        })
+    }
+    #[cfg(not(test))]
+    {
+        let state = match visible_copy_targets_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state
+            .iter()
+            .find(|target| target.key.eq_ignore_ascii_case(&key))
+            .cloned()
+    }
+}
+
+// [port-source] ui.rs:718-739
+pub(crate) fn visible_copy_target_at(column: u16, row: u16) -> Option<VisibleCopyTarget> {
+    let contains = |target: &&VisibleCopyTarget| {
+        target.badge_rect.is_some_and(|rect| {
+            column >= rect.x
+                && column < rect.x.saturating_add(rect.width)
+                && row >= rect.y
+                && row < rect.y.saturating_add(rect.height)
+        })
+    };
+    #[cfg(test)]
+    {
+        TEST_VISIBLE_COPY_TARGETS.with(|state| state.borrow().iter().find(contains).cloned())
+    }
+    #[cfg(not(test))]
+    {
+        let state = match visible_copy_targets_state().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.iter().find(contains).cloned()
+    }
+}
+
+// [port-source] ui.rs:1332-1368
 #[cfg(not(test))]
-static VISIBLE_EXPAND_EDIT_BADGE: OnceLock<Mutex<bool>> = OnceLock::new();
+static LAST_STATUS_AREA: OnceLock<Mutex<Option<Rect>>> = OnceLock::new();
 
 #[cfg(not(test))]
-static VISIBLE_EXPAND_EDIT_BADGE_LINE: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
+fn last_status_area_state() -> &'static Mutex<Option<Rect>> {
+    LAST_STATUS_AREA.get_or_init(|| Mutex::new(None))
+}
 
-#[cfg(not(test))]
-static VISIBLE_EXPAND_EDIT_BADGE_RECT: OnceLock<Mutex<Option<Rect>>> = OnceLock::new();
+pub(crate) fn record_status_area(area: Rect) {
+    #[cfg(test)]
+    {
+        TEST_LAST_STATUS_AREA.with(|snapshot| {
+            *snapshot.borrow_mut() = Some(area);
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        if let Ok(mut snapshot) = last_status_area_state().lock() {
+            *snapshot = Some(area);
+        }
+    }
+}
 
-#[cfg(not(test))]
-fn visible_expand_edit_badge_state() -> &'static Mutex<bool> {
-    VISIBLE_EXPAND_EDIT_BADGE.get_or_init(|| Mutex::new(false))
+pub(crate) fn last_status_area() -> Option<Rect> {
+    #[cfg(test)]
+    {
+        return TEST_LAST_STATUS_AREA.with(|snapshot| *snapshot.borrow());
+    }
+    #[cfg(not(test))]
+    {
+        last_status_area_state()
+            .lock()
+            .ok()
+            .and_then(|snapshot| *snapshot)
+    }
+}
+
+// [port-source] ui.rs:1398-1500
+#[derive(Clone, Copy, Debug)]
+pub struct LayoutSnapshot {
+    pub messages_area: Rect,
+    pub diagram_area: Option<Rect>,
+    pub diff_pane_area: Option<Rect>,
+    pub input_area: Option<Rect>,
 }
 
 #[cfg(not(test))]
-fn visible_expand_edit_badge_line_state() -> &'static Mutex<Option<usize>> {
-    VISIBLE_EXPAND_EDIT_BADGE_LINE.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(not(test))]
-fn visible_expand_edit_badge_rect_state() -> &'static Mutex<Option<Rect>> {
-    VISIBLE_EXPAND_EDIT_BADGE_RECT.get_or_init(|| Mutex::new(None))
-}
+static LAST_LAYOUT: OnceLock<Mutex<Option<LayoutSnapshot>>> = OnceLock::new();
 
 /// The prepared transcript frame the renderer last drew. The retained frame
 /// *is* the published geometry: it carries per-item row ranges and totals, so
@@ -964,6 +1568,56 @@ static LAST_CHAT_FRAME: OnceLock<Mutex<Option<Arc<PreparedChatFrame>>>> = OnceLo
 #[cfg(not(test))]
 fn last_chat_frame_state() -> &'static Mutex<Option<Arc<PreparedChatFrame>>> {
     LAST_CHAT_FRAME.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(not(test))]
+fn last_layout_state() -> &'static Mutex<Option<LayoutSnapshot>> {
+    LAST_LAYOUT.get_or_init(|| Mutex::new(None))
+}
+
+pub fn record_layout_snapshot(
+    messages_area: Rect,
+    diagram_area: Option<Rect>,
+    diff_pane_area: Option<Rect>,
+    input_area: Option<Rect>,
+) {
+    #[cfg(test)]
+    {
+        TEST_LAST_LAYOUT.with(|snapshot| {
+            *snapshot.borrow_mut() = Some(LayoutSnapshot {
+                messages_area,
+                diagram_area,
+                diff_pane_area,
+                input_area,
+            });
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        if let Ok(mut snapshot) = last_layout_state().lock() {
+            *snapshot = Some(LayoutSnapshot {
+                messages_area,
+                diagram_area,
+                diff_pane_area,
+                input_area,
+            });
+        }
+    }
+}
+
+pub fn last_layout_snapshot() -> Option<LayoutSnapshot> {
+    #[cfg(test)]
+    {
+        return TEST_LAST_LAYOUT.with(|snapshot| *snapshot.borrow());
+    }
+    #[cfg(not(test))]
+    {
+        last_layout_state()
+            .lock()
+            .ok()
+            .and_then(|snapshot| *snapshot)
+    }
 }
 
 /// Record the prepared transcript frame the renderer just drew.
@@ -981,6 +1635,147 @@ pub(crate) fn set_last_chat_frame(frame: Arc<PreparedChatFrame>) {
     }
 }
 
+/// The prepared transcript frame the renderer last drew, if any.
+// First production consumer lands in epic #1411 phase 4/5a.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn last_chat_frame() -> Option<Arc<PreparedChatFrame>> {
+    #[cfg(test)]
+    {
+        return TEST_LAST_CHAT_FRAME.with(|slot| slot.borrow().clone());
+    }
+    #[cfg(not(test))]
+    {
+        last_chat_frame_state()
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+    }
+}
+
+// [port-source] ui.rs:1502-1603
+/// The one lock guarding process-global render state in tests.
+///
+/// Render snapshots, scroll metrics, flicker history, and prompt positions all
+/// live in process globals, so *every* test that renders must serialize on the
+/// same mutex. Two separate helpers previously each defined their own private
+/// lock, which serialized nothing between them and produced failures that
+/// appeared only under parallelism (same root cause as issue #593). Both now
+/// delegate here.
+#[cfg(test)]
+pub(crate) fn render_state_test_lock() -> RenderStateTestGuard {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let guard = LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    RENDER_STATE_LOCK_HELD.with(|held| held.set(true));
+    RenderStateTestGuard { _guard: guard }
+}
+
+/// Guard for [`render_state_test_lock`] that also records ownership on this
+/// thread, so a nested `clear_test_render_state_for_tests` can tell it is
+/// already inside the lock instead of deadlocking on it.
+#[cfg(test)]
+pub(crate) struct RenderStateTestGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for RenderStateTestGuard {
+    fn drop(&mut self) {
+        RENDER_STATE_LOCK_HELD.with(|held| held.set(false));
+    }
+}
+
+/// Take the render-state lock unless this thread already holds it.
+///
+/// `clear_test_render_state_for_tests` mutates the same globals the lock
+/// protects, but it is called from both locked contexts (rendering tests) and
+/// unlocked ones (`create_test_app`, used by ~570 tests). Acquiring
+/// unconditionally would deadlock the former; not acquiring at all lets the
+/// latter wipe state from under the former, which is the race behind
+/// jcode-tui's intermittent layout failures.
+///
+/// Tracking ownership per thread lets one function serve both: the outermost
+/// holder owns the guard, and nested calls become no-ops.
+#[cfg(test)]
+fn with_render_state_lock<T>(body: impl FnOnce() -> T) -> T {
+    if render_state_lock_held() {
+        return body();
+    }
+
+    let _guard = render_state_test_lock();
+    body()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether this thread currently holds the render-state lock. Set by
+    /// [`render_state_test_lock`]'s guard so nested clears can detect it.
+    static RENDER_STATE_LOCK_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn render_state_lock_held() -> bool {
+    RENDER_STATE_LOCK_HELD.with(|held| held.get())
+}
+
+#[cfg(test)]
+pub(crate) fn clear_test_render_state_for_tests() {
+    with_render_state_lock(clear_test_render_state_locked)
+}
+
+/// The actual reset, run with the render-state lock held.
+#[cfg(test)]
+fn clear_test_render_state_locked() {
+    set_last_max_scroll(0);
+    set_pinned_pane_total_lines(0);
+    set_last_diff_pane_effective_scroll(0);
+    set_last_diff_pane_max_scroll(0);
+    set_last_total_wrapped_lines(0);
+    set_last_resolved_chat_scroll(0);
+    TEST_TAIL_FOLLOW_SNAP_PENDING.with(|cell| cell.set(false));
+    // Flicker events recorded by sibling tests add a "⚠ flicker detected"
+    // notification line to subsequent renders, shifting every layout-sensitive
+    // assertion (click mapping, snapshot rows).
+    frame_metrics::clear_flicker_frame_history_for_tests();
+    TEST_LAST_LAYOUT.with(|snapshot| {
+        *snapshot.borrow_mut() = None;
+    });
+    TEST_LAST_CHAT_FRAME.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    TEST_LAST_STATUS_AREA.with(|snapshot| {
+        *snapshot.borrow_mut() = None;
+    });
+    set_visible_copy_targets(Vec::new());
+    clear_copy_viewport_snapshot();
+
+    TEST_PROMPT_VIEWPORT_STATE.with(|state| {
+        *state.borrow_mut() = PromptViewportState::default();
+    });
+}
+
+// [port-source] ui.rs:1605-1616
+/// Test-only: render just the onboarding welcome screen into `area`, using the
+/// exact same code path the live UI uses. Lets onboarding golden/snapshot tests
+/// capture the rendered copy without reaching into the private `onboarding`
+/// submodule.
+#[cfg(test)]
+// [port-decision] onboarding welcome draw gated: upstream's onboarding module
+// (tui/onboarding.rs) is W8-cut scope — operant has its own onboarding/connect
+// dialogs. The test-only hook below stays verbatim under the gate for the
+// W8 reversal (if ever); nothing else in the ported surface calls it.
+#[cfg(any())]
+pub(crate) fn draw_onboarding_welcome_for_tests(
+    frame: &mut ratatui::Frame,
+    app: &dyn crate::tui::jcode_app::tui_fns::TuiState,
+    area: ratatui::layout::Rect,
+) {
+    onboarding::draw_onboarding_welcome(frame, app, area);
+}
+
+// [port-source] ui.rs:1618-1727
 #[derive(Clone)]
 enum CopyViewportData {
     Dense {
@@ -996,12 +1791,90 @@ enum CopyViewportData {
 
 #[derive(Clone)]
 struct CopyViewportSnapshot {
-    pane: copy_selection::CopySelectionPane,
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
     data: CopyViewportData,
     scroll: usize,
     visible_end: usize,
     content_area: Rect,
     left_margins: Vec<u16>,
+}
+
+impl CopyViewportSnapshot {
+    fn wrapped_plain_line_count(&self) -> usize {
+        match &self.data {
+            CopyViewportData::Dense {
+                wrapped_plain_lines,
+                ..
+            } => wrapped_plain_lines.len(),
+            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_plain_line_count(),
+        }
+    }
+
+    fn wrapped_plain_line(&self, abs_line: usize) -> Option<&str> {
+        match &self.data {
+            CopyViewportData::Dense {
+                wrapped_plain_lines,
+                ..
+            } => wrapped_plain_lines.get(abs_line).map(String::as_str),
+            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_plain_line(abs_line),
+        }
+    }
+
+    fn wrapped_copy_offset(&self, abs_line: usize) -> Option<usize> {
+        match &self.data {
+            CopyViewportData::Dense {
+                wrapped_copy_offsets,
+                ..
+            } => wrapped_copy_offsets.get(abs_line).copied(),
+            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_copy_offset(abs_line),
+        }
+    }
+
+    fn raw_plain_line(&self, raw_line: usize) -> Option<&str> {
+        match &self.data {
+            CopyViewportData::Dense {
+                raw_plain_lines, ..
+            } => raw_plain_lines.get(raw_line).map(String::as_str),
+            CopyViewportData::ChatFrame { prepared } => prepared.raw_plain_line(raw_line),
+        }
+    }
+
+    fn raw_plain_line_count(&self) -> usize {
+        match &self.data {
+            CopyViewportData::Dense {
+                raw_plain_lines, ..
+            } => raw_plain_lines.len(),
+            CopyViewportData::ChatFrame { prepared } => prepared.total_raw_lines,
+        }
+    }
+
+    fn wrapped_line_map(&self, abs_line: usize) -> Option<WrappedLineMap> {
+        match &self.data {
+            CopyViewportData::Dense {
+                wrapped_line_map, ..
+            } => wrapped_line_map.get(abs_line).copied(),
+            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_line_map(abs_line),
+        }
+    }
+
+    /// If `abs_line` is the label line of a visible inline-image region, return
+    /// that image's id. The label line sits exactly one wrapped line above the
+    /// region's first placeholder line (see `anchored_image_lines`), so we map a
+    /// click on the label row back to the image it annotates.
+    fn inline_image_id_for_label_line(&self, abs_line: usize) -> Option<u64> {
+        let prepared = match &self.data {
+            CopyViewportData::ChatFrame { prepared } => prepared,
+            CopyViewportData::Dense { .. } => return None,
+        };
+        prepared
+            .image_regions
+            .iter()
+            .find(|region| {
+                region.render == crate::tui::jcode_model::ImageRegionRender::Fit
+                    && region.abs_line_idx == abs_line + 1
+            })
+            .map(|region| region.hash)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1014,6 +1887,106 @@ struct CopyViewportSnapshots {
 #[cfg(not(test))]
 static LAST_COPY_VIEWPORT: OnceLock<Mutex<CopyViewportSnapshots>> = OnceLock::new();
 
+// [port-source] ui.rs:1734-1735 + ui/profile.rs:1-54 (inlined: single-file splice)
+
+mod profile {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct RenderProfile {
+        frames: u64,
+        total: Duration,
+        prepare: Duration,
+        draw: Duration,
+        last_log: Option<Instant>,
+    }
+
+    static PROFILE_STATE: OnceLock<Mutex<RenderProfile>> = OnceLock::new();
+
+    fn profile_state() -> &'static Mutex<RenderProfile> {
+        PROFILE_STATE.get_or_init(|| Mutex::new(RenderProfile::default()))
+    }
+
+    pub(super) fn profile_enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("JCODE_TUI_PROFILE").is_ok())
+    }
+
+    pub(super) fn record_profile(prepare: Duration, draw: Duration, total: Duration) {
+        let mut state = match profile_state().lock() {
+            Ok(s) => s,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.frames += 1;
+        state.prepare += prepare;
+        state.draw += draw;
+        state.total += total;
+
+        let now = Instant::now();
+        let should_log = match state.last_log {
+            Some(last) => now.duration_since(last) >= Duration::from_secs(1),
+            None => true,
+        };
+        if should_log && state.frames > 0 {
+            let frames = state.frames as f64;
+            let avg_prepare = state.prepare.as_secs_f64() * 1000.0 / frames;
+            let avg_draw = state.draw.as_secs_f64() * 1000.0 / frames;
+            let avg_total = state.total.as_secs_f64() * 1000.0 / frames;
+            crate::tui::jcode_app::logging::info(&format!(
+                "TUI perf: {:.1} fps | prepare {:.2}ms | draw {:.2}ms | total {:.2}ms",
+                frames, avg_prepare, avg_draw, avg_total
+            ));
+            state.frames = 0;
+            state.prepare = Duration::from_secs(0);
+            state.draw = Duration::from_secs(0);
+            state.total = Duration::from_secs(0);
+            state.last_log = Some(now);
+        }
+    }
+}
+
+use self::profile::{profile_enabled, record_profile};
+
+// [port-decision] line_display_width/clamp_display_col moved to the
+// ui/display_width.rs module (upstream's home — the earlier inlined splice is
+// superseded by the whole-file module port; tests reach them via the
+// mod.rs re-export).
+
+// [port-source] ui.rs:1740-1742 + ui/copy_selection.rs:7-37 (inlined: single-file splice)
+fn copy_point_from_snapshot(
+    snapshot: &CopyViewportSnapshot,
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    let area = snapshot.content_area;
+    if row < area.y
+        || row >= area.y.saturating_add(area.height)
+        || column < area.x
+        || column >= area.x.saturating_add(area.width)
+    {
+        return None;
+    }
+
+    let rel_row = row.saturating_sub(area.y) as usize;
+    let abs_line = snapshot.scroll.saturating_add(rel_row);
+    if abs_line >= snapshot.visible_end || abs_line >= snapshot.wrapped_plain_line_count() {
+        return None;
+    }
+
+    let left_margin = snapshot.left_margins.get(rel_row).copied().unwrap_or(0);
+    let content_x = area.x.saturating_add(left_margin);
+    let rel_col = column.saturating_sub(content_x) as usize;
+    let text = snapshot.wrapped_plain_line(abs_line)?;
+    let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+    Some(crate::tui::jcode_ui::copy_selection::CopySelectionPoint {
+        pane: snapshot.pane,
+        abs_line,
+        column: clamp_display_col(text, rel_col).max(copy_start),
+    })
+}
+
+// [port-source] ui.rs:1747-1784
 #[cfg(not(test))]
 fn copy_viewport_state() -> &'static Mutex<CopyViewportSnapshots> {
     LAST_COPY_VIEWPORT.get_or_init(|| Mutex::new(CopyViewportSnapshots::default()))
@@ -1021,21 +1994,62 @@ fn copy_viewport_state() -> &'static Mutex<CopyViewportSnapshots> {
 
 fn copy_snapshot_slot_mut(
     snapshots: &mut CopyViewportSnapshots,
-    pane: copy_selection::CopySelectionPane,
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
 ) -> &mut Option<CopyViewportSnapshot> {
     match pane {
-        copy_selection::CopySelectionPane::Chat => &mut snapshots.chat,
-        copy_selection::CopySelectionPane::SidePane => &mut snapshots.side,
-        copy_selection::CopySelectionPane::Input => &mut snapshots.input,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat => &mut snapshots.chat,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane => &mut snapshots.side,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input => &mut snapshots.input,
     }
 }
 
+fn copy_snapshot_for_pane(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+) -> Option<CopyViewportSnapshot> {
+    #[cfg(test)]
+    {
+        TEST_COPY_VIEWPORT.with(|snapshots| {
+            let snapshots = snapshots.borrow().clone();
+            match pane {
+                crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat => snapshots.chat,
+                crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane => snapshots.side,
+                crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input => snapshots.input,
+            }
+        })
+    }
+    #[cfg(not(test))]
+    {
+        let snapshots = copy_viewport_state().lock().ok()?.clone();
+        match pane {
+            crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat => snapshots.chat,
+            crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane => snapshots.side,
+            crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input => snapshots.input,
+        }
+    }
+}
+
+// [port-source] ui.rs:1786-1798
+pub(crate) fn clear_copy_viewport_snapshot() {
+    #[cfg(test)]
+    {
+        TEST_COPY_VIEWPORT.with(|state| {
+            *state.borrow_mut() = CopyViewportSnapshots::default();
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    if let Ok(mut state) = copy_viewport_state().lock() {
+        *state = CopyViewportSnapshots::default();
+    }
+}
+
+// [port-source] ui.rs:1800-1850
 #[expect(
     clippy::too_many_arguments,
     reason = "Viewport snapshot helpers carry explicit render state to avoid hidden globals in call sites"
 )]
 fn record_copy_pane_snapshot(
-    pane: copy_selection::CopySelectionPane,
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
     wrapped_plain_lines: Arc<Vec<String>>,
     wrapped_copy_offsets: Arc<Vec<usize>>,
     raw_plain_lines: Arc<Vec<String>>,
@@ -1082,10 +2096,177 @@ fn record_copy_pane_snapshot(
     }
 }
 
+// [port-source] ui.rs:1852-1886
+fn record_copy_viewport_frame_snapshot(
+    prepared: Arc<PreparedChatFrame>,
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+    left_margins: &[u16],
+) {
+    #[cfg(test)]
+    {
+        TEST_COPY_VIEWPORT.with(|state| {
+            *copy_snapshot_slot_mut(
+                &mut state.borrow_mut(),
+                crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+            ) = Some(CopyViewportSnapshot {
+                pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+                data: CopyViewportData::ChatFrame { prepared },
+                scroll,
+                visible_end,
+                content_area,
+                left_margins: left_margins.to_vec(),
+            });
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    if let Ok(mut state) = copy_viewport_state().lock() {
+        *copy_snapshot_slot_mut(
+            &mut state,
+            crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+        ) = Some(CopyViewportSnapshot {
+            pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+            data: CopyViewportData::ChatFrame { prepared },
+            scroll,
+            visible_end,
+            content_area,
+            left_margins: left_margins.to_vec(),
+        });
+    }
+}
+
+// [port-source] ui.rs:1888-1913
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Viewport snapshot helpers carry explicit render state to avoid hidden globals in call sites"
+)]
+pub(crate) fn record_side_pane_snapshot_precomputed(
+    wrapped_plain_lines: Arc<Vec<String>>,
+    wrapped_copy_offsets: Arc<Vec<usize>>,
+    raw_plain_lines: Arc<Vec<String>>,
+    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+    left_margins: &[u16],
+) {
+    record_copy_pane_snapshot(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane,
+        wrapped_plain_lines,
+        wrapped_copy_offsets,
+        raw_plain_lines,
+        wrapped_line_map,
+        scroll,
+        visible_end,
+        content_area,
+        left_margins,
+    );
+}
+
+// [port-source] ui.rs:1915-1956
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Viewport snapshot helpers carry explicit render state to avoid hidden globals in call sites"
+)]
+#[cfg(test)]
+pub(crate) fn record_copy_viewport_snapshot(
+    wrapped_plain_lines: Arc<Vec<String>>,
+    wrapped_copy_offsets: Arc<Vec<usize>>,
+    raw_plain_lines: Arc<Vec<String>>,
+    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+    left_margins: &[u16],
+) {
+    record_copy_pane_snapshot(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+        wrapped_plain_lines,
+        wrapped_copy_offsets,
+        raw_plain_lines,
+        wrapped_line_map,
+        scroll,
+        visible_end,
+        content_area,
+        left_margins,
+    );
+}
+
+/// Record a real `ChatFrame` viewport snapshot for tests. Unlike
+/// `record_copy_viewport_snapshot` (which records a `Dense` snapshot that cannot
+/// resolve inline-image label lines), this preserves the `PreparedChatFrame` so
+/// `inline_image_id_for_label_line` works end to end.
+#[cfg(test)]
+pub(crate) fn record_copy_viewport_frame_snapshot_for_test(
+    prepared: Arc<PreparedChatFrame>,
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+    left_margins: &[u16],
+) {
+    record_copy_viewport_frame_snapshot(prepared, scroll, visible_end, content_area, left_margins);
+}
+
+// [port-source] ui.rs:1958-1971
+pub(crate) fn line_left_margins_for_area(lines: &[Line<'static>], area_width: u16) -> Vec<u16> {
+    lines
+        .iter()
+        .map(|line| {
+            let used = line.width().min(area_width as usize) as u16;
+            let total_margin = area_width.saturating_sub(used);
+            match line.alignment.unwrap_or(Alignment::Left) {
+                Alignment::Left => 0,
+                Alignment::Center => total_margin / 2,
+                Alignment::Right => total_margin,
+            }
+        })
+        .collect()
+}
+
+// [port-source] ui.rs:1973-1986
+pub(crate) fn record_side_pane_snapshot(
+    wrapped_lines: &[Line<'static>],
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+) {
+    record_pane_snapshot_from_lines(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane,
+        wrapped_lines,
+        scroll,
+        visible_end,
+        content_area,
+    );
+}
+
+// [port-source] ui.rs:1988-2006
+/// Record a copy-selection snapshot for the chat pane from already-wrapped
+/// display lines. Used by full-screen overlays (e.g. `/changelog`) that replace
+/// the chat viewport but still want drag-to-select-and-copy support. Each
+/// display line is treated as a single raw line, so the copied text matches the
+/// rendered text verbatim.
+pub(crate) fn record_chat_overlay_copy_snapshot(
+    wrapped_lines: &[Line<'static>],
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+) {
+    record_pane_snapshot_from_lines(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+        wrapped_lines,
+        scroll,
+        visible_end,
+        content_area,
+    );
+}
+
+// [port-source] ui.rs:2008-2034
 /// Record a copy-selection snapshot for the prompt composer (input box).
 /// Called from `draw_input` each frame with the composer's wrapped rows so a
 /// mouse drag over the text being typed selects and copies it, exactly like
-/// the chat transcript. Raw lines are the logical `\n`-separated
+/// the chat transcript (issue #430). Raw lines are the logical `\n`-separated
 /// input lines, so selections spanning soft wraps copy the original text.
 pub(crate) fn record_input_copy_snapshot(
     wrapped_plain_lines: Vec<String>,
@@ -1098,7 +2279,7 @@ pub(crate) fn record_input_copy_snapshot(
 ) {
     let wrapped_copy_offsets = vec![0usize; wrapped_plain_lines.len()];
     record_copy_pane_snapshot(
-        copy_selection::CopySelectionPane::Input,
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input,
         Arc::new(wrapped_plain_lines),
         Arc::new(wrapped_copy_offsets),
         Arc::new(raw_plain_lines),
@@ -1110,13 +2291,91 @@ pub(crate) fn record_input_copy_snapshot(
     );
 }
 
-/// How close (in rows) the mouse must be to the top/bottom edge of a scrollable
-/// pane before a drag autoscrolls it. Using a zone rather than a single row
-/// avoids the "stuck at the edge" feel where a fast drag overshoots the pane
-/// boundary and the autoscroll stops firing; the extra rows give the handler
-/// pulling in more transcript, instead of requiring the cursor to land exactly
-/// on the boundary row. Scales gently with pane height and is capped so small
-/// panes keep a usable middle region.
+// [port-source] ui.rs:2036-2068
+fn record_pane_snapshot_from_lines(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+    wrapped_lines: &[Line<'static>],
+    scroll: usize,
+    visible_end: usize,
+    content_area: Rect,
+) {
+    let left_margins = line_left_margins_for_area(wrapped_lines, content_area.width);
+    let raw_plain_lines: Vec<String> = wrapped_lines.iter().map(line_plain_text).collect();
+    let wrapped_line_map: Vec<WrappedLineMap> = raw_plain_lines
+        .iter()
+        .enumerate()
+        .map(|(raw_line, text)| WrappedLineMap {
+            raw_line,
+            start_col: 0,
+            end_col: line_display_width(text),
+        })
+        .collect();
+    let visible_left_margins = left_margins
+        .get(scroll..visible_end.min(left_margins.len()))
+        .unwrap_or(&[]);
+    record_copy_pane_snapshot(
+        pane,
+        Arc::new(raw_plain_lines.clone()),
+        Arc::new(vec![0; wrapped_lines.len()]),
+        Arc::new(raw_plain_lines),
+        Arc::new(wrapped_line_map),
+        scroll,
+        visible_end,
+        content_area,
+        visible_left_margins,
+    );
+}
+
+// [port-source] ui.rs:2070-2116
+pub(crate) fn copy_point_from_screen(
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    #[cfg(test)]
+    {
+        TEST_COPY_VIEWPORT.with(|snapshots| {
+            let snapshots = snapshots.borrow().clone();
+            snapshots
+                .chat
+                .as_ref()
+                .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
+                .or_else(|| {
+                    snapshots
+                        .side
+                        .as_ref()
+                        .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
+                })
+                .or_else(|| {
+                    snapshots
+                        .input
+                        .as_ref()
+                        .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
+                })
+        })
+    }
+    #[cfg(not(test))]
+    {
+        let snapshots = copy_viewport_state().lock().ok()?.clone();
+        snapshots
+            .chat
+            .as_ref()
+            .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
+            .or_else(|| {
+                snapshots
+                    .side
+                    .as_ref()
+                    .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
+            })
+            .or_else(|| {
+                snapshots
+                    .input
+                    .as_ref()
+                    .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
+            })
+    }
+}
+
+// [port-source] ui.rs:2123-2148
 fn edge_autoscroll_zone_rows(height: u16) -> u16 {
     (height / 4).clamp(1, 3)
 }
@@ -1144,6 +2403,76 @@ mod edge_autoscroll_zone_tests {
     }
 }
 
+// [port-source] ui.rs:2150-2196
+pub(crate) fn copy_pane_vertical_edge_point(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+    column: u16,
+    row: u16,
+) -> Option<(
+    crate::tui::jcode_ui::copy_selection::CopySelectionPoint,
+    bool,
+)> {
+    // The prompt composer cannot be wheel-scrolled, so it has no browser-style
+    // edge auto-scroll. Drags past its edge clamp via `copy_pane_drag_point`.
+    if pane == crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input {
+        return None;
+    }
+    let snapshot = copy_snapshot_for_pane(pane)?;
+    let area = snapshot.content_area;
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+
+    // Browser-style edge auto-scroll: terminals clamp the mouse to the visible
+    // viewport, so a drag that "leaves" the top/bottom of the pane is reported on
+    // the boundary row itself. We additionally treat a small band near each edge
+    // as a hot zone, so dragging *near* (not just exactly onto) the top/bottom
+    // keeps pulling in more transcript, just like dragging a selection toward the
+    // edge of a browser window. The horizontal position is clamped into the pane
+    // so the selection extends no matter where along the edge the cursor sits.
+    let last_row = area.y.saturating_add(area.height).saturating_sub(1);
+    let zone = edge_autoscroll_zone_rows(area.height);
+    let top_trigger = area.y.saturating_add(zone);
+    let bottom_trigger = last_row.saturating_sub(zone);
+    // Only engage the hot zone when there is actually more transcript to pull in
+    // that direction. Otherwise dragging into the bottom band while the view is
+    // already pinned to the end (the common case) would snap the selection to the
+    // last visible line and fight precise highlighting of the bottom rows. When
+    // there is nothing to scroll, fall through (`None`) so the caller extends the
+    // selection to the exact cell under the cursor instead.
+    let can_scroll_up = snapshot.scroll > 0;
+    let can_scroll_down = snapshot.visible_end < snapshot.wrapped_plain_line_count();
+    let (edge_row, upward) = if row <= top_trigger && can_scroll_up {
+        (area.y, true)
+    } else if row >= bottom_trigger && can_scroll_down {
+        (last_row, false)
+    } else {
+        return None;
+    };
+
+    let clamped_col = column.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
+
+    copy_point_from_snapshot(&snapshot, clamped_col, edge_row).map(|point| (point, upward))
+}
+
+// [port-source] ui.rs:2308-2316
+fn copy_pane_line_text(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+    abs_line: usize,
+) -> Option<String> {
+    copy_snapshot_for_pane(pane)?
+        .wrapped_plain_line(abs_line)
+        .map(str::to_owned)
+}
+
+pub(crate) fn copy_viewport_line_text(abs_line: usize) -> Option<String> {
+    copy_pane_line_text(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat,
+        abs_line,
+    )
+}
+
+// [port-source] ui.rs:3626-3709
 pub(crate) fn split_native_scrollbar_area(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
     if !enabled || area.width <= 1 {
         return (area, None);
@@ -1194,7 +2523,9 @@ pub(crate) fn render_native_scrollbar(
         ((visible_height * track_height).div_ceil(total_lines)).clamp(1, track_height)
     };
     let max_thumb_offset = track_height.saturating_sub(thumb_height);
+    #[allow(clippy::manual_checked_ops)] // vendored-verbatim upstream scrollbar math
     let max_scroll = total_lines.saturating_sub(visible_height);
+    #[allow(clippy::manual_checked_ops)] // vendored-verbatim upstream scrollbar math
     let thumb_offset = if max_scroll == 0 {
         0
     } else {

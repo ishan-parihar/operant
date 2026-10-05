@@ -56,27 +56,25 @@ pub mod input_history;
 // the expectation is cfg-gated off in test builds (same as copy_targets).
 #[cfg_attr(
     not(test),
+    expect(dead_code, reason = "lands before its cutover wiring (W5 animations)")
+)]
+pub mod jcode_anim;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "lands before its cutover wiring (App-seam adaptation)"
+    )
+)]
+pub mod jcode_app;
+#[cfg_attr(
+    not(test),
     expect(
         dead_code,
         reason = "lands before its W3 transcript-renderer consumers"
     )
 )]
 pub mod jcode_markdown;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lands before its cutover wiring (W5 animations)")
-)]
-pub mod jcode_anim;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lands before its cutover wiring (App-seam adaptation)")
-)]
-pub mod jcode_app;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lands before its cutover wiring (App-seam adaptation)")
-)]
-pub mod jcode_ui;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "lands before its W3 renderer consumers")
@@ -95,6 +93,14 @@ pub mod jcode_render;
     )
 )]
 pub mod jcode_render_core;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "lands before its cutover wiring (App-seam adaptation)"
+    )
+)]
+pub mod jcode_ui;
 pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;

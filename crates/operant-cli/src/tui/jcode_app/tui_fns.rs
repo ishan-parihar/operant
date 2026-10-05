@@ -21,20 +21,32 @@
 //! pickers) are unported waves; no ported renderer calls them.
 //! context_info/context_snapshot stay (ContextInfo and ContextSnapshot are
 //! ported). Everything else in the trait is verbatim.
+#[allow(unused_imports)] // re-export: TuiState trait method defaults consume at cutover
 use crate::tui::jcode_app::app::ProcessingStatus;
+#[allow(unused_imports)] // re-export: TuiState trait method defaults consume at cutover
 use crate::tui::jcode_app::auth::ActiveCredential;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 use crate::tui::jcode_app::bus::BatchProgress;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 use crate::tui::jcode_app::info_widget::AmbientWidgetData;
-use crate::tui::jcode_app::protocol::SwarmMemberStatus;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 use crate::tui::jcode_app::prompt::ContextInfo;
-use crate::tui::jcode_app::session::RenderedImage;
-use crate::tui::jcode_model::ContentPos;
-use crate::tui::jcode_model::DisplayMessage;
-use crate::tui::jcode_model::vendor_types::ToolCall;
-use crate::tui::jcode_ui::copy_selection::{CopySelectionRange, CopySelectionStatus};
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_app::protocol::SwarmMemberStatus;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 use crate::tui::jcode_app::provider::ActiveProvider;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_app::session::RenderedImage;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_model::ContentPos;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_model::DisplayMessage;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_model::vendor_types::ToolCall;
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_ui::copy_selection::{CopySelectionRange, CopySelectionStatus};
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 use std::time::Duration;
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackgroundTaskRowStatus {
@@ -42,7 +54,6 @@ pub enum BackgroundTaskRowStatus {
     Completed,
     Failed,
 }
-
 
 /// Compact presentation state for one retained background task.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,8 +66,6 @@ pub struct BackgroundTaskRow {
     /// tasks remain visible until their state changes or the session closes.
     pub completed_at: Option<std::time::Instant>,
 }
-
-
 
 #[derive(Clone)]
 pub struct ContextSnapshot {
@@ -81,11 +90,9 @@ pub(crate) fn scheduled_notification_text(
     Some(format!("⏰ next scheduled task {}{}", next, suffix))
 }
 
-
 // [port-decision] dedup: the TuiState trait was ported twice — here and in
 // jcode_app/tui_state.rs (the canonical verbatim :395-916 port). Deleted this
 // copy; the `pub use` re-export at the bottom of this file provides the name.
-
 
 pub(crate) fn connection_type_icon(connection_type: Option<&str>) -> Option<&'static str> {
     let normalized = connection_type?.trim().to_ascii_lowercase();
@@ -100,7 +107,6 @@ pub(crate) fn connection_type_icon(connection_type: Option<&str>) -> Option<&'st
         None
     }
 }
-
 
 /// Cache TTL information for the current provider
 #[derive(Debug, Clone)]
@@ -118,7 +124,6 @@ pub struct CacheTtlInfo {
     /// Estimated cached tokens (from last response's input tokens)
     pub cached_tokens: Option<u64>,
 }
-
 
 impl CacheTtlInfo {
     /// How long before expiry the `⏳ cache ...` countdown should appear.
@@ -143,7 +148,6 @@ impl CacheTtlInfo {
         !self.is_estimate && (self.is_cold || self.expiring_soon())
     }
 }
-
 
 /// Compact human age like `30s`, `5m`, `1h 1m`, `2d 3h` for "went cold N ago"
 /// annotations. Keeps at most two units so it stays glanceable.
@@ -173,7 +177,6 @@ pub(crate) fn format_compact_age(secs: u64) -> String {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KvCacheProblemKind {
     /// The provider explicitly reported new cache creation on a turn where we expected
@@ -184,13 +187,11 @@ pub(crate) enum KvCacheProblemKind {
     ExpectedCacheReadMissing,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KvCacheProblem {
     pub kind: KvCacheProblemKind,
     pub affected_tokens: Option<u64>,
 }
-
 
 impl KvCacheProblem {
     pub(crate) fn log_reason(self) -> &'static str {
@@ -201,11 +202,9 @@ impl KvCacheProblem {
     }
 }
 
-
 fn normalized_provider_matches(provider: &str, needle: &str) -> bool {
     provider.trim().to_ascii_lowercase().contains(needle)
 }
-
 
 fn provider_stack_contains(provider: &str, upstream_provider: Option<&str>, needle: &str) -> bool {
     let needle = &needle.to_ascii_lowercase();
@@ -215,24 +214,11 @@ fn provider_stack_contains(provider: &str, upstream_provider: Option<&str>, need
             .unwrap_or(false)
 }
 
-
-fn provider_stack_contains_any(
-    provider: &str,
-    upstream_provider: Option<&str>,
-    needles: &[&str],
-) -> bool {
-    needles
-        .iter()
-        .any(|needle| provider_stack_contains(provider, upstream_provider, needle))
-}
-
-
 fn cache_expected_warm(cache_ttl: Option<&CacheTtlInfo>) -> bool {
     cache_ttl
         .map(|info| !info.is_cold && !info.is_estimate)
         .unwrap_or(false)
 }
-
 
 /// Detect a KV/prompt-cache problem that is reliable enough to surface in the UI.
 ///
@@ -288,7 +274,6 @@ pub(crate) fn detect_kv_cache_problem(
     })
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {
     Model,
@@ -296,7 +281,6 @@ pub enum PickerKind {
     Login,
     Usage,
 }
-
 
 /// Render snapshot of the Ctrl+R reverse prompt-history search overlay.
 /// `matches` are single-line previews, newest first.
@@ -307,13 +291,11 @@ pub struct PromptHistorySearchView {
     pub selected: usize,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InlineInteractiveLayout {
     Compact,
     ThreeColumn,
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InlineInteractiveSchema {
@@ -328,14 +310,12 @@ pub struct InlineInteractiveSchema {
     pub preview_activation_column: usize,
 }
 
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InlineViewState {
     pub title: String,
     pub status: Option<String>,
     pub lines: Vec<String>,
 }
-
 
 impl InlineViewState {
     pub fn debug_memory_profile(&self) -> serde_json::Value {
@@ -356,13 +336,11 @@ impl InlineViewState {
     }
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub enum InlineUiStateRef<'a> {
     View(&'a InlineViewState),
     Interactive(&'a InlineInteractiveState),
 }
-
 
 impl PickerKind {
     pub fn schema(&self) -> InlineInteractiveSchema {
@@ -466,8 +444,10 @@ impl PickerKind {
                 // Include the pretty name so a query like "opus 4.8" matches
                 // the row even though the underlying id is `claude-opus-4-8`.
                 let pretty =
-                    crate::tui::jcode_app::helpers::model_names::pretty_known_model_family(&entry.name)
-                        .unwrap_or_default();
+                    crate::tui::jcode_app::helpers::model_names::pretty_known_model_family(
+                        &entry.name,
+                    )
+                    .unwrap_or_default();
                 format!(
                     "{} {} {} {} {}",
                     entry.name, pretty, provider, method, detail
@@ -477,7 +457,6 @@ impl PickerKind {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountPickerAction {
     Switch { provider_id: String, label: String },
@@ -485,7 +464,6 @@ pub enum AccountPickerAction {
     Replace { provider_id: String, label: String },
     OpenCenter { provider_filter: Option<String> },
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModelTarget {
@@ -495,7 +473,6 @@ pub enum AgentModelTarget {
     Memory,
     Ambient,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerAction {
@@ -526,7 +503,6 @@ pub enum PickerAction {
     },
 }
 
-
 /// Unified inline picker with three columns.
 #[derive(Debug, Clone)]
 pub struct InlineInteractiveState {
@@ -546,7 +522,6 @@ pub struct InlineInteractiveState {
     pub preview: bool,
 }
 
-
 impl InlineInteractiveState {
     pub fn debug_memory_profile(&self) -> serde_json::Value {
         let entries_bytes: usize = self.entries.iter().map(estimate_picker_entry_bytes).sum();
@@ -562,7 +537,6 @@ impl InlineInteractiveState {
         })
     }
 }
-
 
 fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
     match action {
@@ -585,17 +559,14 @@ fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
                 .as_ref()
                 .map(|value| value.capacity())
                 .unwrap_or(0)
-        }
-        // [port-excision] Login/Logout arm — variants excised above.
-        // [port-excision] Usage arm — variant excised above.
+        } // [port-excision] Login/Logout arm — variants excised above.
+          // [port-excision] Usage arm — variant excised above.
     }
 }
-
 
 fn estimate_picker_option_bytes(option: &PickerOption) -> usize {
     option.provider.capacity() + option.api_method.capacity() + option.detail.capacity()
 }
-
 
 fn estimate_picker_entry_bytes(entry: &PickerEntry) -> usize {
     entry.name.capacity()
@@ -617,7 +588,6 @@ fn estimate_picker_entry_bytes(entry: &PickerEntry) -> usize {
             .unwrap_or(0)
 }
 
-
 /// A reusable picker entry with one or more available actions/options.
 #[derive(Debug, Clone)]
 pub struct PickerEntry {
@@ -636,7 +606,6 @@ pub struct PickerEntry {
     pub created_date: Option<String>,
     pub effort: Option<String>,
 }
-
 
 impl PickerEntry {
     pub fn active_option(&self) -> Option<&PickerOption> {
@@ -664,7 +633,6 @@ impl PickerEntry {
     }
 }
 
-
 /// A single available option for a picker entry.
 #[derive(Debug, Clone)]
 pub struct PickerOption {
@@ -674,7 +642,6 @@ pub struct PickerOption {
     pub detail: String,
     pub estimated_reference_cost_micros: Option<u64>,
 }
-
 
 /// An SSH-backed socket is not a shared-filesystem local daemon. Keep this
 /// distinct from `App::is_remote`, which also describes ordinary local clients.
@@ -707,8 +674,6 @@ const FULL_FRAME_REDRAW_REASONS: &[&str] = &[
     "session_picker_spinner",
 ];
 
-
-
 pub(crate) fn last_full_frame_redraw_reason() -> Option<&'static str> {
     FULL_FRAME_REDRAW_REASONS
         .get(LAST_FULL_FRAME_REDRAW_REASON.load(std::sync::atomic::Ordering::Relaxed))
@@ -716,3 +681,180 @@ pub(crate) fn last_full_frame_redraw_reason() -> Option<&'static str> {
 }
 
 pub use crate::tui::jcode_app::tui_state::TuiState;
+
+// Verbatim from jcode-tui/src/tui/mod.rs:1035-1086 (kv_cache_problem's two
+// predicates plus the three fns they stand on; nothing here depends on app
+// state — these are pure and gated on the same upstream definitions).
+
+fn provider_stack_contains_any(
+    provider: &str,
+    upstream_provider: Option<&str>,
+    needles: &[&str],
+) -> bool {
+    needles
+        .iter()
+        .any(|needle| provider_stack_contains(provider, upstream_provider, needle))
+}
+
+fn supports_reliable_zero_cache_read_warning(
+    provider: &str,
+    upstream_provider: Option<&str>,
+) -> bool {
+    if provider_stack_contains_any(
+        provider,
+        upstream_provider,
+        &["openai", "anthropic", "claude", "gemini", "google"],
+    ) {
+        return true;
+    }
+
+    // OpenRouter/Jcode-subscription routes can only be treated as reliable for zero-read
+    // warnings once the upstream provider identifies a known cache-reporting family.
+    // A bare OpenRouter route with cached_tokens=0 is not enough: some upstreams simply
+    // do not implement prompt caching, and warning on those would make the UI untrustworthy.
+    false
+}
+
+fn min_cacheable_input_tokens(provider: &str, upstream_provider: Option<&str>) -> u64 {
+    if provider_stack_contains_any(provider, upstream_provider, &["gemini", "google"]) {
+        // Be conservative for Gemini-style implicit caching. Several Gemini models have
+        // higher minimums than OpenAI/Anthropic; a higher UI threshold avoids warning on
+        // prompts that might legitimately be below the provider's cacheable size.
+        4_096
+    } else {
+        1_024
+    }
+}
+impl InlineInteractiveState {
+    pub fn schema(&self) -> InlineInteractiveSchema {
+        if self.is_agent_target_picker() {
+            InlineInteractiveSchema {
+                layout: InlineInteractiveLayout::ThreeColumn,
+                primary_label: "TARGET",
+                secondary_label: "MODEL",
+                secondary_preview_label: "MODEL",
+                tertiary_label: "CONFIG",
+                preview_submit_hint: "  ↵ open",
+                active_submit_hint: "  ↑↓ ←→ ↵ Esc",
+                shows_default_shortcut_hint: false,
+                preview_activation_column: 2,
+            }
+        } else {
+            self.kind.schema()
+        }
+    }
+
+    pub fn selected_entry_index(&self) -> Option<usize> {
+        self.filtered.get(self.selected).copied()
+    }
+
+    pub fn selected_entry(&self) -> Option<&PickerEntry> {
+        self.selected_entry_index()
+            .and_then(|index| self.entries.get(index))
+    }
+
+    pub fn selected_entry_mut(&mut self) -> Option<&mut PickerEntry> {
+        self.selected_entry_index()
+            .and_then(|index| self.entries.get_mut(index))
+    }
+
+    pub fn is_agent_target_picker(&self) -> bool {
+        self.kind == PickerKind::Model
+            && !self.entries.is_empty()
+            && self
+                .entries
+                .iter()
+                .all(|entry| matches!(entry.action, PickerAction::AgentTarget(_)))
+    }
+
+    pub fn uses_compact_navigation(&self) -> bool {
+        self.schema().layout == InlineInteractiveLayout::Compact
+    }
+
+    pub fn preview_submit_hint(&self) -> &'static str {
+        self.schema().preview_submit_hint
+    }
+
+    pub fn active_submit_hint(&self) -> &'static str {
+        self.schema().active_submit_hint
+    }
+
+    pub fn preview_activation_column(&self) -> usize {
+        self.schema().preview_activation_column
+    }
+
+    pub fn max_navigable_column(&self) -> usize {
+        match self.schema().layout {
+            InlineInteractiveLayout::Compact => 0,
+            InlineInteractiveLayout::ThreeColumn => 2,
+        }
+    }
+
+    pub fn header_layout(&self, preview: bool) -> ([&'static str; 3], [usize; 3]) {
+        if self.uses_compact_navigation() {
+            (
+                [self.primary_label(), self.secondary_label(preview), ""],
+                [0, 0, 0],
+            )
+        } else if preview {
+            (
+                [
+                    self.secondary_label(true),
+                    self.primary_label(),
+                    self.tertiary_label(),
+                ],
+                [1, 0, 2],
+            )
+        } else {
+            (
+                [
+                    self.primary_label(),
+                    self.secondary_label(false),
+                    self.tertiary_label(),
+                ],
+                [0, 1, 2],
+            )
+        }
+    }
+
+    pub fn filter_text(&self, entry: &PickerEntry) -> String {
+        if self.is_agent_target_picker() {
+            let model = entry
+                .active_option()
+                .map(|option| option.provider.as_str())
+                .unwrap_or("");
+            let config = entry
+                .active_option()
+                .map(|option| option.api_method.as_str())
+                .unwrap_or("");
+            let detail = entry
+                .active_option()
+                .map(|option| option.detail.as_str())
+                .unwrap_or("");
+            format!("{} {} {} {}", entry.name, model, config, detail)
+        } else {
+            self.kind.filter_text(entry)
+        }
+    }
+
+    pub fn primary_label(&self) -> &'static str {
+        self.schema().primary_label
+    }
+
+    pub fn secondary_label(&self, preview: bool) -> &'static str {
+        let schema = self.schema();
+        if preview {
+            schema.secondary_preview_label
+        } else {
+            schema.secondary_label
+        }
+    }
+
+    pub fn tertiary_label(&self) -> &'static str {
+        self.schema().tertiary_label
+    }
+
+    pub fn shows_default_shortcut_hint(&self) -> bool {
+        self.schema().shows_default_shortcut_hint
+    }
+}

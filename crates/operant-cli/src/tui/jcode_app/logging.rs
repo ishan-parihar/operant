@@ -615,7 +615,10 @@ fn cleanup_old_logs_in(log_dir: &std::path::Path, now: chrono::DateTime<Local>) 
 
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() > max_len {
-        format!("{}...", crate::tui::jcode_app::util::truncate_str(s, max_len))
+        format!(
+            "{}...",
+            crate::tui::jcode_app::util::truncate_str(s, max_len)
+        )
     } else {
         s.to_string()
     }

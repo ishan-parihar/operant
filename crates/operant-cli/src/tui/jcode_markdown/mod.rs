@@ -27,7 +27,7 @@ use unicode_width::UnicodeWidthStr;
 // upstream ships this exact fallback path as the default when the feature is
 // off, so it is ported as the only (unconditional) mermaid module.
 #[path = "markdown_mermaid_fallback.rs"]
-mod mermaid;
+pub(crate) mod mermaid;
 
 #[path = "markdown_types.rs"]
 mod types;
@@ -88,9 +88,20 @@ pub fn set_memory_snapshot_hook(hook: fn() -> ProcessMemorySnapshot) {
 }
 
 // [port-excision] markdown_latex_image.rs skipped per brief (operant has its
-// own latex.rs; mdwright-latex dep does not exist here): `set_latex_log_hook`
-// and `pub use latex_image::{HandtermNativeLatex, encode_handterm_latex_apc,
-// handterm_native_latex_for_hash}` removed with the module.
+// own latex.rs; mdwright-latex dep does not exist here).
+// [port-decision] set_latex_log_hook signature restored from upstream
+// jcode-tui-markdown/src/lib.rs:78: upstream forwards into latex_image
+// (jcode-tui-markdown/src/markdown_latex_image.rs), which is excised, so the
+// hook is stored but never invoked; the stored-and-unused state mirrors the
+// config/memory snapshot hooks' upstream shape. Re-activate at latex-image
+// cutover. install_jcode_markdown_hooks (jcode_app/markdown.rs:88) calls it.
+static LATEX_LOG_HOOK: std::sync::Mutex<Option<fn(&str)>> = std::sync::Mutex::new(None);
+
+pub fn set_latex_log_hook(hook: fn(&str)) {
+    if let Ok(mut current) = LATEX_LOG_HOOK.lock() {
+        *current = Some(hook);
+    }
+}
 
 pub(crate) fn config_snapshot() -> MarkdownConfigSnapshot {
     CONFIG_SNAPSHOT_HOOK

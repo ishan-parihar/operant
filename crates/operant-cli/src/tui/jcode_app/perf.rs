@@ -200,7 +200,10 @@ pub fn synthetic_profile(kind: SyntheticSystemProfile) -> SystemProfile {
 }
 
 pub fn tui_policy() -> TuiPerfPolicy {
-    tui_policy_for(profile(), &crate::tui::jcode_app::config_shim::config().display)
+    tui_policy_for(
+        profile(),
+        &crate::tui::jcode_app::config_shim::config().display,
+    )
 }
 
 pub fn tui_policy_for(
@@ -334,15 +337,18 @@ fn detect() -> SystemProfile {
         }
     });
 
-    let tier =
-        env_tier.unwrap_or_else(
-            || match crate::tui::jcode_app::config_shim::config().display.performance.as_str() {
-                "full" => PerformanceTier::Full,
-                "reduced" => PerformanceTier::Reduced,
-                "minimal" => PerformanceTier::Minimal,
-                _ => auto_tier,
-            },
-        );
+    let tier = env_tier.unwrap_or_else(|| {
+        match crate::tui::jcode_app::config_shim::config()
+            .display
+            .performance
+            .as_str()
+        {
+            "full" => PerformanceTier::Full,
+            "reduced" => PerformanceTier::Reduced,
+            "minimal" => PerformanceTier::Minimal,
+            _ => auto_tier,
+        }
+    });
 
     SystemProfile {
         load_avg_1m,
@@ -609,4 +615,3 @@ fn detect_memory() -> (Option<u64>, Option<u64>) {
 fn detect_memory() -> (Option<u64>, Option<u64>) {
     (None, None)
 }
-

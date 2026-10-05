@@ -5,7 +5,6 @@
 // format_approx_token_count (:45), approx_tool_output_token_severity (:62).
 //! (Upstream reaches these via jcode-base/src/util.rs:1 `pub use jcode_core::util::*`.)
 
-
 pub const APPROX_CHARS_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +22,6 @@ pub fn estimate_tokens(s: &str) -> usize {
     s.len() / APPROX_CHARS_PER_TOKEN
 }
 
-
 /// Format a number with ASCII thousands separators.
 pub fn format_number(n: usize) -> String {
     let digits = n.to_string();
@@ -36,7 +34,6 @@ pub fn format_number(n: usize) -> String {
     }
     out
 }
-
 
 /// Format a token count in the compact style used by the TUI.
 pub fn format_approx_token_count(tokens: usize) -> String {
@@ -55,7 +52,6 @@ pub fn format_approx_token_count(tokens: usize) -> String {
     }
 }
 
-
 /// Light severity levels for tool outputs that are unusually large for context.
 pub fn approx_tool_output_token_severity(tokens: usize) -> ApproxTokenSeverity {
     if tokens >= 12_000 {
@@ -66,7 +62,6 @@ pub fn approx_tool_output_token_severity(tokens: usize) -> ApproxTokenSeverity {
         ApproxTokenSeverity::Normal
     }
 }
-
 
 /// Truncate a string at a valid UTF-8 character boundary.
 ///

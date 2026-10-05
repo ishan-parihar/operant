@@ -1,0 +1,115 @@
+// Vendored from jcode (crates/jcode-build-meta/src/lib.rs), MIT License,
+// Copyright (c) 2025 Jeremy Huang. Ported @ 0a9dc7805 with ONE deliberate
+// adaptation: upstream's values come from jcode's build.rs pipeline, which
+// emits `JCODE_*` compile-time env vars; operant has no such pipeline, so the
+// consts re-point at operant's own version surface (CARGO_PKG_VERSION,
+// operant's CHANGELOG.md, option_env! git identity with "unknown" fallbacks).
+// The fn bodies (runtime-override OnceLocks, parse_release_semver, the
+// version()/git_* accessors) are verbatim. The cutover may replace the consts
+// with operant's richer version identity if one exists.
+// See jcode_app/mod.rs for scope.
+
+use std::sync::OnceLock;
+
+// [port-decision] consts adapted: jcode's build.rs env! pipeline is not ported;
+// operant's own version/changelog is the honest source. GIT_* fall back to
+// "unknown" absent a build step that emits them.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const GIT_HASH: &str = "unknown";
+pub const GIT_DATE: &str = "unknown";
+pub const GIT_TAG: &str = "unknown";
+pub const SEMVER: &str = env!("CARGO_PKG_VERSION");
+pub const BASE_SEMVER: &str = env!("CARGO_PKG_VERSION");
+// Operant's changelog lives at docs/CHANGELOG.md (the release pipeline reads it
+// from there); from jcode_app/ that is five `..` then docs/CHANGELOG.md.
+pub const CHANGELOG: &str = include_str!("../../../../../docs/CHANGELOG.md");
+
+static RUNTIME_RELEASE_SEMVER: OnceLock<Option<String>> = OnceLock::new();
+static RUNTIME_VERSION: OnceLock<Option<String>> = OnceLock::new();
+static RUNTIME_GIT_HASH: OnceLock<Option<String>> = OnceLock::new();
+static RUNTIME_GIT_DATE: OnceLock<Option<String>> = OnceLock::new();
+static RUNTIME_GIT_TAG: OnceLock<Option<String>> = OnceLock::new();
+
+fn parse_release_semver(value: &str) -> Option<String> {
+    let value = value.trim().trim_start_matches('v');
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{major}.{minor}.{patch}"))
+}
+
+/// Optional release semver supplied by the fast-release wrapper at process start.
+pub fn runtime_release_semver() -> Option<&'static str> {
+    RUNTIME_RELEASE_SEMVER
+        .get_or_init(|| {
+            std::env::var("JCODE_RUNTIME_RELEASE_SEMVER")
+                .ok()
+                .and_then(|value| parse_release_semver(&value))
+        })
+        .as_deref()
+}
+
+/// Human-readable runtime version, honoring a fast-release wrapper override.
+pub fn version() -> &'static str {
+    RUNTIME_VERSION
+        .get_or_init(|| {
+            runtime_release_semver().map(|semver| format!("v{semver} ({})", git_hash()))
+        })
+        .as_deref()
+        .unwrap_or(VERSION)
+}
+
+fn runtime_identity_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Runtime git hash, honoring the fast-release wrapper identity.
+pub fn git_hash() -> &'static str {
+    RUNTIME_GIT_HASH
+        .get_or_init(|| runtime_identity_value("JCODE_RUNTIME_GIT_HASH"))
+        .as_deref()
+        .unwrap_or(GIT_HASH)
+}
+
+/// Runtime git date, honoring the fast-release wrapper identity.
+pub fn git_date() -> &'static str {
+    RUNTIME_GIT_DATE
+        .get_or_init(|| runtime_identity_value("JCODE_RUNTIME_GIT_DATE"))
+        .as_deref()
+        .unwrap_or(GIT_DATE)
+}
+
+/// Runtime git tag, honoring the fast-release wrapper identity.
+pub fn git_tag() -> &'static str {
+    RUNTIME_GIT_TAG
+        .get_or_init(|| runtime_identity_value("JCODE_RUNTIME_GIT_TAG"))
+        .as_deref()
+        .unwrap_or(GIT_TAG)
+}
+
+/// Whether a runtime fast-release override is active.
+pub fn runtime_override_active() -> bool {
+    runtime_release_semver().is_some()
+}
+
+/// Whether this build is a tagged release (git tag present).
+pub fn is_tagged_release() -> bool {
+    !GIT_TAG.is_empty()
+}
+
+/// Runtime build semver, honoring a fast-release wrapper override.
+pub fn semver() -> &'static str {
+    runtime_release_semver().unwrap_or(SEMVER)
+}
+
+/// Runtime base semver, honoring a fast-release wrapper override.
+pub fn base_semver() -> &'static str {
+    runtime_release_semver().unwrap_or(BASE_SEMVER)
+}

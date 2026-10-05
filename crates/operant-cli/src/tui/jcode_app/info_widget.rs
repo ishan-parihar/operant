@@ -11,18 +11,27 @@
 //! `impl InfoWidgetData` block (is_empty/has_data_for — unreferenced) are dropped:
 //! their payload types live in the cut mermaid engine and the unported
 //! workspace_map module. `Margins` re-export (from info_widget_layout, upstream
-//! :262) is not ported. `swarm_gallery` (info_widget_swarm_gallery.rs) is NOT
-//! ported — its renderer (jcode_tui_render::swarm_gallery) is [port-excision] in
-//! operant's jcode_render; render_swarm_chat_card_lines is recorded unresolved.
+//! :262) is not ported. [port-decision] `swarm_gallery`
+//! (info_widget_swarm_gallery.rs) was ported portially by the sweep and then
+//! reverted with the whole swarm deck at batch-3; the W2 excision stands.
+//! module declaration below keeps the upstream parent shape
+//! (upstream info_widget.rs:25-26).
 use crate::tui::jcode_app::ambient::AmbientStatus;
 use crate::tui::jcode_app::memory::MemoryActivity;
-use crate::tui::jcode_app::protocol::SwarmMemberStatus;
 use crate::tui::jcode_app::prompt::ContextInfo;
+use crate::tui::jcode_app::protocol::SwarmMemberStatus;
+#[allow(unused_imports)] // re-export: W7 info_widget consumers
 use crate::tui::jcode_app::todo::{TodoGoal, TodoItem};
 use ratatui::layout::Rect;
 use std::collections::HashMap;
+#[allow(unused_imports)] // re-export: W7 consumers
 use std::time::Duration;
 
+// [port-decision] same upstream decl shape (info_widget.rs:25-26, verbatim).
+// [port-decision] swarm_gallery decl removed at integration revert (batch-3):
+// the unauthorized re-port (jcode_render::swarm_gallery files) is deleted;
+// the W2 excision stands until the W7 surface ports the machinery with its
+// swarm-core data source. Callership gate remains in ui_messages/ui_prepare.
 
 // [port-decision] dedup: two upstream sources each derived these traits;
 // moved WidgetKind/UsageInfo derives onto their items per upstream :85-87,:363-365.
@@ -128,6 +137,30 @@ pub enum WidgetKind {
     Commits,
 }
 
+impl WidgetKind {
+    /// Short machine label used by debug/title overlays
+    /// (upstream info_widget.rs:206-224, verbatim; the rest of the upstream
+    /// impl block — priority/label — is unreferenced and stays excised).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WidgetKind::Diagrams => "diagrams",
+            WidgetKind::WorkspaceMap => "workspace",
+            WidgetKind::Overview => "overview",
+            WidgetKind::Todos => "todos",
+            WidgetKind::MemoryActivity => "memory",
+            WidgetKind::SwarmStatus => "swarm",
+            WidgetKind::BackgroundTasks => "background",
+            WidgetKind::Compaction => "compaction",
+            WidgetKind::AmbientMode => "ambient",
+            WidgetKind::UsageLimits => "usage",
+            WidgetKind::KvCache => "kv-cache",
+            WidgetKind::ModelInfo => "model",
+            WidgetKind::Tips => "tips",
+            WidgetKind::GitStatus => "git",
+            WidgetKind::Commits => "commits",
+        }
+    }
+}
 
 /// Which side of the screen a widget is on
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +168,6 @@ pub enum Side {
     Left,
     Right,
 }
-
 
 impl Side {
     pub fn as_str(self) -> &'static str {
@@ -145,7 +177,6 @@ impl Side {
         }
     }
 }
-
 
 /// Which provider the usage info is for
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -162,7 +193,6 @@ pub enum UsageProvider {
     Copilot,
 }
 
-
 impl UsageProvider {
     pub fn label(&self) -> &'static str {
         match self {
@@ -174,7 +204,6 @@ impl UsageProvider {
         }
     }
 }
-
 
 /// Swarm/subagent status for the info widget
 #[derive(Debug, Default, Clone)]
@@ -202,7 +231,6 @@ pub struct SwarmInfo {
     /// Spinner frame for animating active agents' status glyphs.
     pub spinner_frame: usize,
 }
-
 
 /// Background task status for the info widget
 #[derive(Debug, Default, Clone)]
@@ -258,7 +286,6 @@ pub struct UsageInfo {
     pub available: bool,
 }
 
-
 /// Authentication method used to access the model
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AuthMethod {
@@ -283,7 +310,6 @@ pub enum AuthMethod {
     /// Google Gemini OAuth
     GeminiOAuth,
 }
-
 
 /// Session-level KV cache telemetry for providers that report cache usage.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -321,7 +347,6 @@ pub struct CacheMissAttribution {
     pub reason: String,
 }
 
-
 /// Memory statistics for the info widget
 #[derive(Debug, Default, Clone)]
 pub struct MemoryInfo {
@@ -348,7 +373,6 @@ pub struct MemoryInfo {
     pub graph_edges: Vec<GraphEdge>,
 }
 
-
 /// Git repository status for the info widget
 #[derive(Debug, Clone, Default)]
 pub struct GitInfo {
@@ -372,7 +396,6 @@ pub struct GitInfo {
     pub recent_commits: Vec<RecentCommit>,
 }
 
-
 /// One commit for the Commits widget.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RecentCommit {
@@ -386,7 +409,6 @@ pub struct RecentCommit {
     pub added: Option<usize>,
     pub removed: Option<usize>,
 }
-
 
 /// One dirty path from `git status --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -403,7 +425,6 @@ pub struct DirtyFile {
     pub modified_at: Option<std::time::SystemTime>,
 }
 
-
 impl GitInfo {
     pub fn is_interesting(&self) -> bool {
         self.modified > 0
@@ -413,7 +434,6 @@ impl GitInfo {
             || self.behind > 0
     }
 }
-
 
 /// Ambient mode status data for the info widget
 #[derive(Debug, Clone)]
@@ -430,7 +450,6 @@ pub struct AmbientWidgetData {
     pub next_reminder_wake: Option<String>,
     pub budget_percent: Option<f32>,
 }
-
 
 /// Data to display in the info widget
 #[derive(Debug, Default, Clone)]
@@ -505,7 +524,6 @@ pub struct InfoWidgetData {
     pub agent_edited: std::sync::Arc<std::collections::HashSet<std::path::PathBuf>>,
 }
 
-
 #[derive(Clone, Debug)]
 pub struct CompactionInfo {
     pub is_compacting: bool,
@@ -514,7 +532,6 @@ pub struct CompactionInfo {
     pub summary_chars: usize,
     pub mode: String,
 }
-
 
 // --- crates/jcode-tui/src/tui/info_widget_tips.rs (occasional_status_tip closure) -----
 // Vendored from jcode (crates/jcode-tui/src/tui/info_widget_tips.rs +
@@ -537,11 +554,9 @@ const STATUS_TIP_PERIOD_SECONDS: u64 = 90;
 const STATUS_TIP_OFFSET_SECONDS: u64 = 28;
 const STATUS_TIP_SHOW_SECONDS: u64 = 12;
 
-
 struct Tip {
     text: String,
 }
-
 
 fn all_tips() -> Vec<Tip> {
     let mut tips = vec![
@@ -556,7 +571,10 @@ fn all_tips() -> Vec<Tip> {
         "Most terminals can be configured to copy text on highlight - no Ctrl+C needed. Check your terminal's settings for 'copy on select'",
         "Alt+G (or /diff) cycles diff mode: Off, Inline, Pinned, File. Shift+Tab cycles favorited models. Pinned shows all diffs in a side pane. File shows the full file with changes highlighted, synced to your scroll position",
     ];
-    if crate::tui::jcode_app::config_shim::config().features.mermaid {
+    if crate::tui::jcode_app::config_shim::config()
+        .features
+        .mermaid
+    {
         tips.insert(3, "```mermaid code blocks render as diagrams");
     }
     // Mac keyboards label this modifier ⌥, not Alt, so rewrite hints there.
@@ -567,7 +585,6 @@ fn all_tips() -> Vec<Tip> {
         })
         .collect()
 }
-
 
 static TIP_STATE: Mutex<Option<(usize, Instant)>> = Mutex::new(None);
 
@@ -592,7 +609,6 @@ fn current_tip(_max_width: usize) -> Tip {
 
 // [port-decision] dedup: info_widget.rs defined current_tip twice across
 // concatenated sources; kept the first (identical) copy.
-
 
 pub(crate) fn occasional_status_tip(max_width: usize, elapsed_secs: u64) -> Option<String> {
     if max_width < 16 {
@@ -641,11 +657,9 @@ pub(crate) fn truncate_smart(s: &str, max_len: usize) -> String {
     format!("{}...", prefix)
 }
 
-
 pub(crate) fn truncate_chars(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((idx, _)) => &s[..idx],
         None => s,
     }
 }
-

@@ -13,23 +13,36 @@ pub(crate) fn get_cached_message_lines<F>(
     render: F,
 ) -> Vec<Line<'static>>
 where
-    F: FnOnce(&DisplayMessage, u16, crate::tui::jcode_app::config_shim::DiffDisplayMode) -> Vec<Line<'static>>,
+    F: FnOnce(
+        &DisplayMessage,
+        u16,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode,
+    ) -> Vec<Line<'static>>,
 {
     crate::tui::jcode_model::get_cached_message_lines(
         msg,
         width,
         diff_mode,
         crate::tui::jcode_model::MessageCacheContext {
-            diagram_mode: crate::tui::jcode_app::config_shim::config().display.diagram_mode,
+            diagram_mode: crate::tui::jcode_app::config_shim::config()
+                .display
+                .diagram_mode,
             centered: markdown::center_code_blocks(),
             // Message lines contain Mermaid placeholder rows. Size clicks must
             // invalidate this cache just like a completed deferred render does.
             mermaid_epoch: crate::tui::jcode_app::mermaid::deferred_render_epoch()
                 .wrapping_add(crate::tui::jcode_app::mermaid::mermaid_inline_expand_epoch()),
-            mermaid_aspect_bucket: crate::tui::jcode_app::mermaid::current_preferred_aspect_ratio_bucket(),
-            show_agentgrep_output: crate::tui::jcode_app::config_shim::config().display.show_agentgrep_output,
-            show_bash_output: crate::tui::jcode_app::config_shim::config().display.show_bash_output,
-            tool_call_details: crate::tui::jcode_app::config_shim::config().display.tool_call_details,
+            mermaid_aspect_bucket:
+                crate::tui::jcode_app::mermaid::current_preferred_aspect_ratio_bucket(),
+            show_agentgrep_output: crate::tui::jcode_app::config_shim::config()
+                .display
+                .show_agentgrep_output,
+            show_bash_output: crate::tui::jcode_app::config_shim::config()
+                .display
+                .show_bash_output,
+            tool_call_details: crate::tui::jcode_app::config_shim::config()
+                .display
+                .tool_call_details,
         },
         render,
     )
@@ -47,17 +60,21 @@ mod tests {
         ));
 
         crate::tui::jcode_app::mermaid::set_mermaid_inline_expand_level(hash, 0);
-        let first =
-            get_cached_message_lines(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off, |_, _, _| {
-                vec![Line::from("fit")]
-            });
+        let first = get_cached_message_lines(
+            &msg,
+            80,
+            crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+            |_, _, _| vec![Line::from("fit")],
+        );
         assert_eq!(first.len(), 1);
 
         crate::tui::jcode_app::mermaid::set_mermaid_inline_expand_level(hash, 1);
-        let second =
-            get_cached_message_lines(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off, |_, _, _| {
-                vec![Line::from("large-1"), Line::from("large-2")]
-            });
+        let second = get_cached_message_lines(
+            &msg,
+            80,
+            crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+            |_, _, _| vec![Line::from("large-1"), Line::from("large-2")],
+        );
         crate::tui::jcode_app::mermaid::set_mermaid_inline_expand_level(hash, 0);
 
         assert_eq!(

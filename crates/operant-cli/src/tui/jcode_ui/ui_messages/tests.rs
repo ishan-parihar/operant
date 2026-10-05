@@ -32,7 +32,11 @@ fn system_glyph_env_lock() -> std::sync::MutexGuard<'static, ()> {
 fn render_system_message_forces_system_color_on_all_spans() {
     let msg = DisplayMessage::system("**Reload complete** - continuing.");
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
 
     assert!(!lines.is_empty(), "expected rendered system message lines");
     for line in lines {
@@ -52,7 +56,11 @@ fn render_cold_cache_warning_is_always_one_width_bounded_line() {
     for centered in [false, true] {
         crate::tui::jcode_app::markdown::set_center_code_blocks(centered);
         for width in [80_u16, 50, 30] {
-            let lines = render_system_message(&msg, width, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+            let lines = render_system_message(
+                &msg,
+                width,
+                crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+            );
             assert_eq!(
                 lines.len(),
                 1,
@@ -96,7 +104,11 @@ fn render_launch_hotkeys_keeps_both_shortcuts_visible() {
     for centered in [false, true] {
         crate::tui::jcode_app::markdown::set_center_code_blocks(centered);
         for width in [80_u16, 50] {
-            let lines = render_system_message(&msg, width, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+            let lines = render_system_message(
+                &msg,
+                width,
+                crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+            );
             assert_eq!(lines.len(), 1);
             assert_eq!(extract_line_text(&lines[0]).trim(), content);
             assert!(lines[0].width() <= width as usize);
@@ -124,7 +136,11 @@ fn render_compact_launch_and_divergence_notices_as_one_line() {
         crate::tui::jcode_app::markdown::set_center_code_blocks(centered);
         for msg in &notices {
             for width in [80_u16, 50, 30] {
-                let lines = render_system_message(msg, width, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+                let lines = render_system_message(
+                    msg,
+                    width,
+                    crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+                );
                 assert_eq!(
                     lines.len(),
                     1,
@@ -156,7 +172,11 @@ fn render_system_message_renders_markdown_formatting() {
         "**bold** and `code` and # heading\n- bullet item\n[link](http://example.com)",
     );
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -196,7 +216,11 @@ fn render_system_message_renders_markdown_formatting() {
 fn render_system_message_preserves_indentation_and_newlines() {
     let msg = DisplayMessage::system("Header line\n  indented detail\n\nNext block");
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = lines.iter().map(extract_line_text).collect::<Vec<_>>();
 
     // Centered mode may add uniform left padding; compare relative structure.
@@ -248,7 +272,11 @@ fn render_system_message_centered_mode_left_aligns_with_padding() {
     crate::tui::jcode_app::markdown::set_center_code_blocks(true);
     let msg = DisplayMessage::system("Reload complete - continuing.");
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
 
     assert!(!lines.is_empty(), "expected rendered system message lines");
     for line in &lines {
@@ -272,15 +300,19 @@ fn render_system_message_uses_width_stable_titles_on_kitty() {
     let _guard = system_glyph_env_lock();
     let prev_term_program = std::env::var("TERM_PROGRAM").ok();
     let prev_term = std::env::var("TERM").ok();
-    crate::env::set_var("TERM_PROGRAM", "kitty");
-    crate::env::set_var("TERM", "xterm-kitty");
+    crate::tui::jcode_app::env::set_var("TERM_PROGRAM", "kitty");
+    crate::tui::jcode_app::env::set_var("TERM", "xterm-kitty");
 
     let msg = DisplayMessage::system(
         "⚡ Connection lost - retrying (attempt 2, 7s) - connection reset by server",
     )
     .with_title("Connection");
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -291,12 +323,12 @@ fn render_system_message_uses_width_stable_titles_on_kitty() {
     assert!(!plain.contains("⚡ reconnecting"));
 
     match prev_term_program {
-        Some(value) => crate::env::set_var("TERM_PROGRAM", value),
-        None => crate::env::remove_var("TERM_PROGRAM"),
+        Some(value) => crate::tui::jcode_app::env::set_var("TERM_PROGRAM", value),
+        None => crate::tui::jcode_app::env::remove_var("TERM_PROGRAM"),
     }
     match prev_term {
-        Some(value) => crate::env::set_var("TERM", value),
-        None => crate::env::remove_var("TERM"),
+        Some(value) => crate::tui::jcode_app::env::set_var("TERM", value),
+        None => crate::tui::jcode_app::env::remove_var("TERM"),
     }
 }
 
@@ -306,7 +338,11 @@ fn render_background_task_message_uses_box_and_truncates_preview_lines() {
         "**Background task** `bg123` · `bash` · ✓ completed · 7.1s · exit 0\n\n```text\nline 1\nline 2\nline 3\nline 4\nline 5\n```\n\n_Full output:_ `bg action=\"output\" task_id=\"bg123\"`",
     );
 
-    let lines = render_background_task_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_background_task_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(|line| {
@@ -334,11 +370,15 @@ fn render_background_task_message_strips_ansi_from_existing_preview() {
         "**Background task** `bg123` · `bash` · ✓ completed · 0.1s · exit 0\n\n```text\n\u{1b}[32m✓\u{1b}[39m passes \u{1b}[2m12ms\u{1b}[22m\n```\n\n_Full output:_ `bg action=\"output\" task_id=\"bg123\"`",
     );
 
-    let plain = render_background_task_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_background_task_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(
         plain.contains("✓ passes 12ms"),
@@ -355,11 +395,15 @@ fn render_system_message_strips_ansi_from_existing_inline_command_preview() {
         "Shell command · ✓ exit 0 · 12ms\n\n  cargo test\n\n  \u{1b}[32m✓\u{1b}[39m passes \u{1b}[2m12ms\u{1b}[22m",
     );
 
-    let plain = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(
         plain.contains("✓ passes 12ms"),
@@ -377,7 +421,11 @@ fn render_background_task_message_uses_swarm_flavor_for_swarm_tool() {
         "**Background task** `bg777` · `run_plan (6 nodes, deep mode)` (`swarm`) · ✓ completed · 92.4s · exit 0\n\n```text\nSwarm plan reached terminal/blocked state after 9 loop(s). completed=6 blocked=0 cycles=0 active=0 assignments=8\n```\n\n_Full output:_ `bg action=\"output\" task_id=\"bg777\"`",
     );
 
-    let lines = render_background_task_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_background_task_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -396,7 +444,11 @@ fn render_background_task_progress_message_uses_swarm_flavor_for_swarm_tool() {
         "**Background task progress** `bg777` · `run_plan (6 nodes, deep mode)` (`swarm`)\n\n[####--------] 33% · 2/6 nodes · completed 2 · blocked 0 · active 3 · assignments 5 (reported)",
     );
 
-    let lines = render_background_task_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_background_task_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -413,7 +465,11 @@ fn render_background_task_progress_message_uses_box_with_progress_bar() {
         "**Background task progress** `bg123` · `bash`\n\n[#####-------] 42% · Running tests (reported)",
     );
 
-    let lines = render_background_task_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_background_task_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -438,7 +494,7 @@ fn render_background_task_progress_message_uses_box_with_progress_bar() {
 
 #[test]
 fn render_overnight_message_uses_rounded_progress_card() {
-    let card = crate::overnight::OvernightProgressCard {
+    let card = crate::tui::jcode_app::overnight::OvernightProgressCard {
         run_id: "overnight_1234567890abcdef".to_string(),
         status: "running".to_string(),
         phase: "running".to_string(),
@@ -458,9 +514,9 @@ fn render_overnight_message_uses_rounded_progress_card() {
             .to_string(),
         latest_event_kind: Some("coordinator_turn_completed".to_string()),
         latest_event_summary: Some("Coordinator turn completed".to_string()),
-        task_summary: crate::overnight::OvernightTaskCardSummary {
+        task_summary: crate::tui::jcode_app::overnight::OvernightTaskCardSummary {
             total: 4,
-            counts: crate::overnight::OvernightTaskStatusCounts {
+            counts: crate::tui::jcode_app::overnight::OvernightTaskStatusCounts {
                 completed: 2,
                 active: 1,
                 blocked: 0,
@@ -482,7 +538,11 @@ fn render_overnight_message_uses_rounded_progress_card() {
     };
     let msg = DisplayMessage::overnight(serde_json::to_string(&card).unwrap());
 
-    let lines = render_overnight_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_overnight_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -501,7 +561,12 @@ fn render_overnight_message_uses_rounded_progress_card() {
 
 #[test]
 fn render_todos_message_shows_grouped_card_with_status_glyphs() {
-    fn todo(id: &str, content: &str, status: &str, group: Option<&str>) -> crate::tui::jcode_app::todo::TodoItem {
+    fn todo(
+        id: &str,
+        content: &str,
+        status: &str,
+        group: Option<&str>,
+    ) -> crate::tui::jcode_app::todo::TodoItem {
         crate::tui::jcode_app::todo::TodoItem {
             id: id.to_string(),
             content: content.to_string(),
@@ -524,7 +589,11 @@ fn render_todos_message_shows_grouped_card_with_status_glyphs() {
     ];
     let msg = DisplayMessage::todos(serde_json::to_string(&todos).unwrap());
 
-    let lines = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -584,27 +653,37 @@ fn render_todos_message_shows_goal_scores_without_verbose_feedback() {
     }];
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("todo rendering".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95),
+        ),
         feedback_loop: Some("Inspect a debug frame".to_string()),
-        feedback_loop_relevance: Some(crate::tui::jcode_app::todo::FeedbackLoopRelevance::Representative),
+        feedback_loop_relevance: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopRelevance::Representative,
+        ),
         feedback_loop_coverage: Some(crate::tui::jcode_app::todo::FeedbackLoopCoverage::MainPaths),
         delivery_state: Some(crate::tui::jcode_app::todo::DeliveryState::from_legacy_score(90)),
         ..Default::default()
     }];
     let plan = crate::tui::jcode_app::todo::TodoPlan {
         user_intention: Some("Keep the agent aligned with the user's request".to_string()),
-        understands_user_intent: Some(crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(98)),
+        understands_user_intent: Some(
+            crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(98),
+        ),
         ..Default::default()
     };
     let msg = DisplayMessage::todos(
         serde_json::json!({ "todos": todos, "plan": plan, "goals": goals }).to_string(),
     );
 
-    let plain = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     for assessment in ["Closed feedback loop strong", "Delivery workflow_validated"] {
         assert!(plain.contains(assessment), "{plain}");
@@ -651,10 +730,14 @@ fn render_todos_message_shows_user_intention_when_understanding_is_unclear() {
         serde_json::json!({ "todos": todos, "plan": plan, "goals": goals }).to_string(),
     );
 
-    let narrow = render_todos_message(&msg, 60, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>();
+    let narrow = render_todos_message(
+        &msg,
+        60,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>();
     assert_eq!(
         narrow
             .iter()
@@ -679,10 +762,14 @@ fn render_todos_message_shows_user_intention_when_understanding_is_unclear() {
         narrow.join("\n")
     );
 
-    let wide = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>();
+    let wide = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>();
     assert!(
         wide.iter()
             .any(|line| line.contains("Intent partial: This deliberately long assessment detail")),
@@ -720,19 +807,27 @@ fn render_todos_message_uses_readable_semantic_colors() {
     }];
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("todo rendering".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95),
+        ),
         feedback_loop: None,
         ..Default::default()
     }];
     let plan = crate::tui::jcode_app::todo::TodoPlan {
         user_intention: Some("Readable metadata".to_string()),
-        understands_user_intent: Some(crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(98)),
+        understands_user_intent: Some(
+            crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(98),
+        ),
         ..Default::default()
     };
     let msg = DisplayMessage::todos(
         serde_json::json!({ "todos": todos, "plan": plan, "goals": goals }).to_string(),
     );
-    let lines = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let color_for = |text: &str| {
         lines
             .iter()
@@ -763,7 +858,10 @@ fn render_todos_message_color_codes_every_intent_state() {
             crate::tui::jcode_app::todo::IntentUnderstanding::Partial,
             todo_warning_color(),
         ),
-        (crate::tui::jcode_app::todo::IntentUnderstanding::Clear, todo_score_color()),
+        (
+            crate::tui::jcode_app::todo::IntentUnderstanding::Clear,
+            todo_score_color(),
+        ),
         (
             crate::tui::jcode_app::todo::IntentUnderstanding::Complete,
             todo_score_color(),
@@ -783,7 +881,11 @@ fn render_todos_message_color_codes_every_intent_state() {
             })
             .to_string(),
         );
-        let lines = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+        let lines = render_todos_message(
+            &msg,
+            100,
+            crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+        );
         let rendered_color = lines
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -815,15 +917,25 @@ fn render_todos_message_collapses_passing_quality_gates() {
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("quality".to_string()),
         closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::Closed),
-        feedback_loop_relevance: Some(crate::tui::jcode_app::todo::FeedbackLoopRelevance::AcceptanceAligned),
-        feedback_loop_coverage: Some(crate::tui::jcode_app::todo::FeedbackLoopCoverage::EdgeAndIntegrationPaths),
-        feedback_loop_traceability: Some(crate::tui::jcode_app::todo::FeedbackLoopTraceability::Complete),
+        feedback_loop_relevance: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopRelevance::AcceptanceAligned,
+        ),
+        feedback_loop_coverage: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopCoverage::EdgeAndIntegrationPaths,
+        ),
+        feedback_loop_traceability: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopTraceability::Complete,
+        ),
         delivery_state: Some(crate::tui::jcode_app::todo::DeliveryState::OutcomeDelivered),
         ..Default::default()
     }];
     let msg =
         DisplayMessage::todos(serde_json::json!({ "todos": todos, "goals": goals }).to_string());
-    let lines = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -862,7 +974,9 @@ fn render_todos_message_wraps_goal_scores_at_narrow_widths() {
     }];
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("todo rendering".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95),
+        ),
         feedback_loop: None,
         delivery_state: Some(crate::tui::jcode_app::todo::DeliveryState::from_legacy_score(90)),
         ..Default::default()
@@ -870,7 +984,11 @@ fn render_todos_message_wraps_goal_scores_at_narrow_widths() {
     let msg =
         DisplayMessage::todos(serde_json::json!({ "todos": todos, "goals": goals }).to_string());
 
-    let lines = render_todos_message(&msg, 40, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_todos_message(
+        &msg,
+        40,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -888,11 +1006,15 @@ fn render_todos_message_wraps_goal_scores_at_narrow_widths() {
 #[test]
 fn render_todos_message_empty_list_shows_placeholder() {
     let msg = DisplayMessage::todos("[]");
-    let plain = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
     assert!(!plain.contains("Todos"), "{plain}");
     assert!(plain.contains("No tasks yet"), "{plain}");
 }
@@ -900,7 +1022,11 @@ fn render_todos_message_empty_list_shows_placeholder() {
 #[test]
 fn render_todos_message_bad_payload_falls_back_to_system() {
     let msg = DisplayMessage::todos("not json");
-    let lines = render_todos_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_todos_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     assert!(!lines.is_empty());
 }
 
@@ -923,7 +1049,9 @@ fn render_todo_tool_result_uses_borderless_card_with_goal_scores() {
     }];
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("todo rendering".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(95),
+        ),
         feedback_loop: Some("Inspect the rendered frame".to_string()),
         delivery_state: Some(crate::tui::jcode_app::todo::DeliveryState::from_legacy_score(92)),
         ..Default::default()
@@ -949,11 +1077,15 @@ fn render_todo_tool_result_uses_borderless_card_with_goal_scores() {
         }),
     };
 
-    let plain = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(!plain.contains("Todos"), "{plain}");
     assert!(plain.contains("todo rendering  ●"), "{plain}");
@@ -989,18 +1121,24 @@ fn render_todo_quality_gate_retry_shows_only_changed_goal_fields() {
     }];
     let before = crate::tui::jcode_app::todo::TodoGoal {
         group: Some("todo rendering".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(90)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(90),
+        ),
         feedback_loop: Some("Inspect one frame".to_string()),
         feedback_loop_relevance: Some(crate::tui::jcode_app::todo::FeedbackLoopRelevance::Indirect),
         feedback_loop_coverage: Some(crate::tui::jcode_app::todo::FeedbackLoopCoverage::Narrow),
         ..Default::default()
     };
     let after = crate::tui::jcode_app::todo::TodoGoal {
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(98)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(98),
+        ),
         feedback_loop: Some(
             "Render before and after fixtures and assert unchanged fields are absent".to_string(),
         ),
-        feedback_loop_relevance: Some(crate::tui::jcode_app::todo::FeedbackLoopRelevance::Representative),
+        feedback_loop_relevance: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopRelevance::Representative,
+        ),
         feedback_loop_coverage: Some(crate::tui::jcode_app::todo::FeedbackLoopCoverage::MainPaths),
         ..before.clone()
     };
@@ -1036,11 +1174,15 @@ fn render_todo_quality_gate_retry_shows_only_changed_goal_fields() {
         }),
     };
 
-    let plain = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(plain.contains("todo rendering  updated"), "{plain}");
     assert!(
@@ -1120,11 +1262,15 @@ fn render_todo_plan_update_card_shows_only_changed_intent_fields() {
     }];
     let before = crate::tui::jcode_app::todo::TodoPlan {
         user_intention: Some("Ship the plan-level intent gate".to_string()),
-        understands_user_intent: Some(crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(80)),
+        understands_user_intent: Some(
+            crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(80),
+        ),
         ..Default::default()
     };
     let after = crate::tui::jcode_app::todo::TodoPlan {
-        understands_user_intent: Some(crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(97)),
+        understands_user_intent: Some(
+            crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(97),
+        ),
         ..before.clone()
     };
     let update = crate::tui::jcode_app::todo::TodoPlanChange {
@@ -1153,11 +1299,15 @@ fn render_todo_plan_update_card_shows_only_changed_intent_fields() {
         }),
     };
 
-    let plain = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(plain.contains("Plan  updated"), "{plain}");
     assert!(
@@ -1224,44 +1374,53 @@ fn unbiased_visual_prompt_retry_renders_complete_feedback_change() {
         confidence: Some(crate::tui::jcode_app::todo::ConfidenceState::from_legacy_score(90)),
         ..Default::default()
     }];
-    let render = |goal: crate::tui::jcode_app::todo::TodoGoal,
-                  intention: &str,
-                  continuation: Option<&str>,
-                  tool_data: Option<crate::tui::jcode_model::vendor_types::ToolCall>| {
-        let plan = crate::tui::jcode_app::todo::TodoPlan {
-            user_intention: Some(intention.to_string()),
-            understands_user_intent: Some(crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(96)),
-            ..Default::default()
-        };
-        let mut content = format!(
-            "[todo] [tool timing: start=2026-07-13T19:51:50.261Z finish=2026-07-13T19:51:50.265Z duration=4ms] {}\n\nPlan:\n{}\n\nGoals:\n{}",
-            serde_json::to_string_pretty(&todos).unwrap(),
-            serde_json::to_string_pretty(&plan).unwrap(),
-            serde_json::to_string_pretty(&vec![goal]).unwrap()
-        );
-        if let Some(continuation) = continuation {
-            content.push_str("\n\n");
-            content.push_str(continuation);
-        }
-        let msg = DisplayMessage {
-            role: "tool".to_string(),
-            content,
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: Some("1 todos".to_string()),
-            tool_data,
-        };
-        render_tool_message(&msg, 72, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
+    let render =
+        |goal: crate::tui::jcode_app::todo::TodoGoal,
+         intention: &str,
+         continuation: Option<&str>,
+         tool_data: Option<crate::tui::jcode_model::vendor_types::ToolCall>| {
+            let plan = crate::tui::jcode_app::todo::TodoPlan {
+                user_intention: Some(intention.to_string()),
+                understands_user_intent: Some(
+                    crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(96),
+                ),
+                ..Default::default()
+            };
+            let mut content = format!(
+                "[todo] [tool timing: start=2026-07-13T19:51:50.261Z finish=2026-07-13T19:51:50.265Z duration=4ms] {}\n\nPlan:\n{}\n\nGoals:\n{}",
+                serde_json::to_string_pretty(&todos).unwrap(),
+                serde_json::to_string_pretty(&plan).unwrap(),
+                serde_json::to_string_pretty(&vec![goal]).unwrap()
+            );
+            if let Some(continuation) = continuation {
+                content.push_str("\n\n");
+                content.push_str(continuation);
+            }
+            let msg = DisplayMessage {
+                role: "tool".to_string(),
+                content,
+                tool_calls: Vec::new(),
+                duration_secs: None,
+                title: Some("1 todos".to_string()),
+                tool_data,
+            };
+            render_tool_message(
+                &msg,
+                72,
+                crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+            )
             .iter()
             .map(extract_line_text)
             .collect::<Vec<_>>()
             .join("\n")
-    };
+        };
 
     let initial = render(
         crate::tui::jcode_app::todo::TodoGoal {
             group: Some("pelican-bike-animation".to_string()),
-            closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(90)),
+            closed_feedback_loop: Some(
+                crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(90),
+            ),
             feedback_loop: Some(INITIAL_FEEDBACK.to_string()),
             ..Default::default()
         },
@@ -1284,7 +1443,9 @@ fn unbiased_visual_prompt_retry_renders_complete_feedback_change() {
     let revised = render(
         crate::tui::jcode_app::todo::TodoGoal {
             group: Some("pelican-bike-animation".to_string()),
-            closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(98)),
+            closed_feedback_loop: Some(
+                crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(98),
+            ),
             feedback_loop: Some(REVISED_FEEDBACK.to_string()),
             ..Default::default()
         },
@@ -1329,14 +1490,20 @@ fn visually_appealing_prompt_batched_retry_renders_complete_todo_card() {
     }];
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("pelican-bike".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(98)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(98),
+        ),
         feedback_loop: Some(FEEDBACK.to_string()),
-        feedback_loop_traceability: Some(crate::tui::jcode_app::todo::FeedbackLoopTraceability::Complete),
+        feedback_loop_traceability: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopTraceability::Complete,
+        ),
         ..Default::default()
     }];
     let plan = crate::tui::jcode_app::todo::TodoPlan {
         user_intention: Some(OBJECTIVE.to_string()),
-        understands_user_intent: Some(crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(97)),
+        understands_user_intent: Some(
+            crate::tui::jcode_app::todo::IntentUnderstanding::from_legacy_score(97),
+        ),
         ..Default::default()
     };
     let todo_output = format!(
@@ -1376,11 +1543,15 @@ fn visually_appealing_prompt_batched_retry_renders_complete_todo_card() {
         }),
     };
 
-    let rendered = render_tool_message(&msg, 84, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let rendered = render_tool_message(
+        &msg,
+        84,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
     let compact = without_whitespace(&rendered);
 
     assert!(rendered.contains("✓ todo"), "{rendered}");
@@ -1428,11 +1599,17 @@ fn render_ownership_gated_todo_result_keeps_the_full_card() {
     }];
     let goals = vec![crate::tui::jcode_app::todo::TodoGoal {
         group: Some("ship outcome".to_string()),
-        closed_feedback_loop: Some(crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(100)),
+        closed_feedback_loop: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopState::from_legacy_score(100),
+        ),
         feedback_loop: Some("Run the complete workflow".to_string()),
-        feedback_loop_relevance: Some(crate::tui::jcode_app::todo::FeedbackLoopRelevance::Representative),
+        feedback_loop_relevance: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopRelevance::Representative,
+        ),
         feedback_loop_coverage: Some(crate::tui::jcode_app::todo::FeedbackLoopCoverage::MainPaths),
-        feedback_loop_traceability: Some(crate::tui::jcode_app::todo::FeedbackLoopTraceability::Complete),
+        feedback_loop_traceability: Some(
+            crate::tui::jcode_app::todo::FeedbackLoopTraceability::Complete,
+        ),
         delivery_state: Some(crate::tui::jcode_app::todo::DeliveryState::from_legacy_score(80)),
         ..Default::default()
     }];
@@ -1457,11 +1634,15 @@ fn render_ownership_gated_todo_result_keeps_the_full_card() {
         }),
     };
 
-    let plain = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(plain.contains("ship outcome  ●"), "{plain}");
     assert!(plain.contains("Deliver the complete workflow"), "{plain}");
@@ -1477,33 +1658,50 @@ fn render_background_task_messages_prefer_display_name() {
     let completion = DisplayMessage::background_task(
         "**Background task** `bg123` · `Run integration tests` (`bash`) · ✓ completed · 7.1s · exit 0\n\n_No output captured._\n\n_Full output:_ `bg action=\"output\" task_id=\"bg123\"`",
     );
-    let completion_plain =
-        render_background_task_message(&completion, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-            .iter()
-            .map(extract_line_text)
-            .collect::<Vec<_>>()
-            .join("\n");
+    let completion_plain = render_background_task_message(
+        &completion,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
     assert!(completion_plain.contains("✓ bg Run integration tests completed · bg123"));
 
     let progress = DisplayMessage::background_task(
         "**Background task progress** `bg123` · `Run integration tests` (`bash`)\n\n[#####-------] 42% · Running tests (reported)",
     );
-    let progress_plain =
-        render_background_task_message(&progress, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-            .iter()
-            .map(extract_line_text)
-            .collect::<Vec<_>>()
-            .join("\n");
+    let progress_plain = render_background_task_message(
+        &progress,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
     assert!(progress_plain.contains("◌ bg Run integration tests · bg123"));
 }
 
 #[test]
 fn render_system_message_uses_scheduled_task_card() {
+    // [port-decision] guard added (divergence from upstream): the sibling kitty
+    // test mutates TERM_PROGRAM/TERM process-globally under this same lock;
+    // without holding it here, a concurrent flip between render and assert
+    // makes width_stable_system_title select a different glyph set than the
+    // one rendered — a latent race upstream's runner happened not to hit.
+    // Serializing against the env mutator makes the test deterministic.
+    let _env_guard = system_glyph_env_lock();
     let msg = DisplayMessage::system(
         "[Scheduled task]\nA scheduled task for this session is now due.\n\nTask: Follow up on the scheduler test\nWorking directory: /home/jeremy/jcode\nRelevant files: src/tui/ui_messages.rs\nBranch: master\n\nBackground: Verify the scheduled task card styling\nSuccess criteria: The due task renders clearly\nScheduled by session: session_test",
     );
 
-    let lines = render_system_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -1540,7 +1738,11 @@ fn render_tool_message_uses_scheduled_card() {
             intent: None, thought_signature: None, }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -1563,7 +1765,11 @@ fn render_assistant_message_renders_plan_block_as_card() {
         "Here is the plan:\n\n```plan\n# Ship compact mode\n\n## Goal\nAdd a compact message mode.\n\n## Approach\n1. Add config flag\n2. Wire renderer\n```\n\nLet me know if this works.",
     );
 
-    let lines = render_assistant_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     crate::tui::jcode_app::markdown::set_center_code_blocks(saved);
     let plain = lines
         .iter()
@@ -1589,7 +1795,11 @@ fn render_assistant_message_plan_card_survives_unterminated_fence() {
     crate::tui::jcode_app::markdown::set_center_code_blocks(false);
     let msg = DisplayMessage::assistant("```plan\n# Streaming plan\n\n- step one");
 
-    let lines = render_assistant_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     crate::tui::jcode_app::markdown::set_center_code_blocks(saved);
     let plain = lines
         .iter()
@@ -1609,7 +1819,11 @@ fn render_assistant_message_plan_card_keeps_nested_fences_inside() {
         "```plan\n# Validation plan\n\n```bash\ncargo test -p jcode-tui\n```\n\nAfter the block.\n```\n\nOutside text.",
     );
 
-    let lines = render_assistant_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     crate::tui::jcode_app::markdown::set_center_code_blocks(saved);
     let plain = lines
         .iter()
@@ -1657,7 +1871,11 @@ fn render_assistant_message_truncates_tool_calls_to_single_line() {
         tool_data: None,
     };
 
-    let lines = render_assistant_message(&msg, 20, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        20,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     assert_eq!(extract_line_text(&lines[1]), "");
     let tool_lines: Vec<String> = lines
         .iter()
@@ -1703,7 +1921,11 @@ fn render_assistant_message_centers_single_line_tool_summary() {
         tool_data: None,
     };
 
-    let lines = render_assistant_message(&msg, 28, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        28,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     assert_eq!(extract_line_text(&lines[1]), "");
     let tool_lines: Vec<String> = lines
         .iter()
@@ -1749,7 +1971,11 @@ fn render_assistant_message_without_body_does_not_add_extra_blank_line_before_to
         tool_data: None,
     };
 
-    let lines = render_assistant_message(&msg, 28, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        28,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
 
     assert_eq!(rendered.len(), 1, "rendered={rendered:?}");
@@ -1766,7 +1992,11 @@ fn render_assistant_message_centered_mode_keeps_markdown_unpadded_for_center_ali
         "streaming-block streaming-block streaming-block streaming-block",
     );
 
-    let lines = render_assistant_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let content_line = lines
         .iter()
         .find(|line| extract_line_text(line).contains("streaming-block"))
@@ -1794,7 +2024,11 @@ fn render_assistant_message_recenters_structured_markdown_to_actual_width() {
     crate::tui::jcode_app::markdown::set_center_code_blocks(true);
     let msg = DisplayMessage::assistant("- one\n- two");
 
-    let lines = render_assistant_message(&msg, 140, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_assistant_message(
+        &msg,
+        140,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
     let bullets: Vec<&String> = rendered.iter().filter(|line| line.contains("• ")).collect();
 
@@ -1831,7 +2065,11 @@ fn render_system_message_centered_mode_caps_wrap_width_for_visible_gutters() {
         "This is a long centered-mode system notification that should keep visible side gutters instead of stretching nearly edge to edge in a wide terminal.",
     );
 
-    let lines = render_system_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: Vec<String> = lines
         .iter()
         .map(|line| {
@@ -1854,7 +2092,11 @@ fn render_system_message_centered_mode_caps_wrap_width_for_visible_gutters() {
 fn render_system_message_uses_minimal_inline_style_for_reload_title() {
     let msg = DisplayMessage::system("Reloading server with newer binary...").with_title("Reload");
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -1883,7 +2125,11 @@ fn render_system_message_uses_connection_card_for_reconnect_status() {
     )
     .with_title("Connection");
 
-    let lines = render_system_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_system_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -1908,7 +2154,11 @@ fn render_swarm_message_centered_mode_caps_wrap_width_for_long_notifications() {
         "/home/jeremy/jcode/src/tui/ui_messages.rs - moss just edited this file while you were working nearby, so the notification should still read as centered in wide layouts.",
     );
 
-    let lines = render_swarm_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_swarm_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: Vec<String> = lines.iter().map(extract_line_text).collect();
     let first_pad = rendered[0].chars().take_while(|c| *c == ' ').count();
 
@@ -1936,7 +2186,11 @@ fn render_swarm_message_collapsed_shows_tldr_and_expand_badge_only() {
     );
     let msg = DisplayMessage::swarm("DM from sheep", content);
 
-    let lines = render_swarm_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_swarm_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -1964,7 +2218,11 @@ fn render_swarm_message_expanded_shows_body_and_collapse_badge() {
         crate::tui::jcode_model::toggle_collapsible_swarm_content(&collapsed).expect("toggle");
     let msg = DisplayMessage::swarm("DM from sheep", expanded);
 
-    let lines = render_swarm_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_swarm_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -1997,7 +2255,11 @@ fn render_tool_message_prefers_subagent_title_with_model() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: String = lines[0]
         .spans
         .iter()
@@ -2028,7 +2290,11 @@ fn render_tool_message_shows_intent_and_technical_preview_on_one_line() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = extract_line_text(&lines[0]);
 
     assert!(rendered.contains("bash · Verify compact progress card · $ cargo test"));
@@ -2059,7 +2325,11 @@ fn render_tool_message_hides_technical_preview_by_default() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = extract_line_text(&lines[0]);
 
     assert!(
@@ -2095,7 +2365,11 @@ fn render_tool_message_keeps_error_summary_when_details_hidden() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = extract_line_text(&lines[0]);
 
     assert!(
@@ -2121,7 +2395,11 @@ fn render_tool_message_shows_token_badge() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let badge_span = lines[0]
         .spans
         .iter()
@@ -2150,7 +2428,11 @@ fn render_tool_message_hides_bash_output() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = lines.iter().map(extract_line_text).collect::<Vec<_>>();
 
     assert!(!rendered.iter().any(|line| line.contains("<class 'zip'>")));
@@ -2175,10 +2457,14 @@ fn render_tool_message_shows_bash_output_when_enabled() {
         }),
     };
 
-    let rendered = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>();
+    let rendered = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>();
 
     assert_eq!(rendered.len(), 4);
     assert!(!rendered.iter().any(|line| line.trim() == "one"));
@@ -2216,7 +2502,11 @@ fn render_tool_message_shows_gmail_draft_card() {
         }),
     );
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2247,7 +2537,11 @@ fn render_gmail_draft_card_marks_failures_and_empty_fields() {
         serde_json::json!({ "action": "draft", "body": "" }),
     );
 
-    let lines = render_tool_message(&msg, 80, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        80,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2280,7 +2574,11 @@ fn render_gmail_draft_card_wraps_attachments_and_shows_complete_long_body() {
         }),
     );
 
-    let lines = render_tool_message(&msg, 48, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        48,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = lines.iter().map(extract_line_text).collect::<Vec<_>>();
     let plain = rendered.join("\n");
     let compact = without_whitespace(&plain.replace('│', ""));
@@ -2323,11 +2621,15 @@ fn render_gmail_draft_card_preserves_html_like_body_text() {
         }),
     );
 
-    let plain = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(
         plain.contains("<p>Hello <strong>team</strong></p>"),
@@ -2362,7 +2664,11 @@ fn render_batch_tool_message_shows_nested_gmail_draft_card() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2409,11 +2715,15 @@ fn render_batch_tool_message_shows_flat_and_nested_subcall_intents() {
         }),
     };
 
-    let plain = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(
         plain.contains("read · Inspect flat batch input ·"),
@@ -2456,7 +2766,11 @@ fn render_tool_message_shows_discovery_browse_results_and_rationale() {
             "reason": "the task needs test-mode catalog administration through scoped agent access"
         }),
     );
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2532,7 +2846,11 @@ fn batched_discovery_renders_without_disclosure_notice() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2568,7 +2886,11 @@ fn render_tool_message_shows_selected_discovery_setup() {
             "reason": "selected because capped cards fit the purchase constraints better than alternatives"
         }),
     );
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2599,7 +2921,11 @@ fn render_tool_message_does_not_duplicate_selected_when_tool_is_missing() {
             "query": "find current public estimates"
         }),
     );
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2621,7 +2947,11 @@ fn render_tool_message_marks_off_catalog_selection_without_fake_details() {
             "reason": "the user explicitly requested Firecrawl instead of the catalog listing"
         }),
     );
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2656,7 +2986,11 @@ fn render_tool_message_shows_catalog_suggestion_receipt_and_trust_line() {
             "prior_request_id": "11111111-2222-4333-8444-555555555555"
         }),
     );
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2690,7 +3024,11 @@ fn discovery_cards_wrap_within_narrow_transcript_width() {
             "requirements": ["A long requirement that also needs reliable narrow-width wrapping"]
         }),
     );
-    let lines = render_tool_message(&msg, 48, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        48,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     assert!(
         lines.iter().all(|line| line.width() <= 47),
         "discovery card exceeded width: {:?}",
@@ -2715,7 +3053,11 @@ fn render_tool_message_colors_high_token_badge() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let badge_span = lines[0]
         .spans
         .iter()
@@ -2746,7 +3088,11 @@ fn render_tool_message_shows_inline_diff_for_pascal_case_multiedit() {
             intent: None, thought_signature: None, }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2778,7 +3124,11 @@ fn render_tool_message_labels_single_file_apply_patch_diff() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2810,7 +3160,11 @@ fn render_tool_message_preserves_multi_file_apply_patch_boundaries() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2850,7 +3204,11 @@ fn render_tool_message_shows_numbered_write_result_diff_after_input_compaction()
         }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2893,7 +3251,11 @@ fn render_tool_message_never_draws_an_empty_edit_diff_frame() {
             }),
         };
 
-        let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+        let lines = render_tool_message(
+            &msg,
+            100,
+            crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+        );
         let plain = lines
             .iter()
             .map(extract_line_text)
@@ -2924,7 +3286,11 @@ fn render_tool_message_marks_failed_apply_patch_without_empty_diff() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -2966,7 +3332,11 @@ fn render_tool_message_inline_mode_truncates_large_diffs() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 40, crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline);
+    let lines = render_tool_message(
+        &msg,
+        40,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Inline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -3010,7 +3380,11 @@ fn render_tool_message_full_inline_mode_shows_full_diff() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 40, crate::tui::jcode_app::config_shim::DiffDisplayMode::FullInline);
+    let lines = render_tool_message(
+        &msg,
+        40,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::FullInline,
+    );
     let plain = lines
         .iter()
         .map(extract_line_text)
@@ -3052,7 +3426,11 @@ fn render_tool_message_memory_recall_centered_mode_left_aligns_with_padding() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: Vec<String> = lines
         .iter()
         .map(|line| {
@@ -3106,7 +3484,11 @@ fn render_tool_message_memory_store_centered_mode_left_aligns_with_padding() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: Vec<String> = lines
         .iter()
         .map(|line| {
@@ -3151,7 +3533,11 @@ fn render_tool_message_shows_swarm_spawn_prompt_summary() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered: String = lines[0]
         .spans
         .iter()
@@ -3191,7 +3577,11 @@ fn render_tool_message_batch_subcall_shows_swarm_dm_details() {
         }),
     };
 
-    let lines = render_tool_message(&msg, 120, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_tool_message(
+        &msg,
+        120,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     let rendered = lines
         .iter()
         .map(extract_line_text)
@@ -3256,7 +3646,11 @@ fn render_assistant_message_plan_card_wraps_instead_of_truncating() {
     let msg = DisplayMessage::assistant(&content);
 
     for width in [40u16, 60, 80, 100, 140] {
-        let lines = render_assistant_message(&msg, width, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+        let lines = render_assistant_message(
+            &msg,
+            width,
+            crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+        );
         let squashed = lines
             .iter()
             .map(extract_line_text)
@@ -3299,7 +3693,8 @@ fn render_swarm_message_preserves_inline_image_placeholder_lines() {
     // Simulate a rendered mermaid diagram inside a swarm message body: the
     // marker line plus its blank fill rows must survive rendering without a
     // rail prefix or blank-line cleanup so the image draws at full height.
-    let placeholder = crate::tui::jcode_app::mermaid::inline_image_placeholder_lines(0xabcd1234, 4, 20);
+    let placeholder =
+        crate::tui::jcode_app::mermaid::inline_image_placeholder_lines(0xabcd1234, 4, 20);
     assert_eq!(placeholder.len(), 4);
     let marker_text = placeholder[0]
         .spans
@@ -3324,7 +3719,11 @@ fn render_swarm_message_preserves_inline_image_placeholder_lines() {
     );
 
     // And the swarm renderer must not panic or drop content for a mermaid body.
-    let lines = render_swarm_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off);
+    let lines = render_swarm_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    );
     assert!(!lines.is_empty());
 
     crate::tui::jcode_app::markdown::set_center_code_blocks(saved);
@@ -3347,11 +3746,15 @@ fn render_empty_todo_tool_result_collapses_to_compact_line() {
         }),
     };
 
-    let plain = render_tool_message(&msg, 100, crate::tui::jcode_app::config_shim::DiffDisplayMode::Off)
-        .iter()
-        .map(extract_line_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let plain = render_tool_message(
+        &msg,
+        100,
+        crate::tui::jcode_app::config_shim::DiffDisplayMode::Off,
+    )
+    .iter()
+    .map(extract_line_text)
+    .collect::<Vec<_>>()
+    .join("\n");
 
     assert!(!plain.contains("No tasks yet"), "{plain}");
     assert!(plain.contains("no tasks"), "{plain}");

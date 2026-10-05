@@ -412,7 +412,7 @@ mod tests {
         DiffLineKind, collect_diff_lines, diff_change_counts_for_tool,
         diff_counts_from_apply_patch_input, generate_diff_lines_from_strings,
     };
-    use crate::message::ToolCall;
+    use crate::tui::jcode_model::vendor_types::ToolCall;
     use serde_json::json;
 
     #[test]

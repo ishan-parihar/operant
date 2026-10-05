@@ -41,7 +41,6 @@ pub(crate) fn usage_reset_passed<'a>(
         .any(|reset| reset <= now)
 }
 
-
 // ─── Combined usage for /usage command ───────────────────────────────────────
 
 /// Normalized OpenAI/Codex usage window info used by the TUI widget.
@@ -52,7 +51,6 @@ pub struct OpenAIUsageWindow {
     pub usage_ratio: f32,
     pub resets_at: Option<String>,
 }
-
 
 /// Cached OpenAI/Codex usage snapshot for info widgets.
 #[derive(Debug, Clone, Default)]
@@ -65,7 +63,6 @@ pub struct OpenAIUsageData {
     pub fetched_at: Option<Instant>,
     pub last_error: Option<String>,
 }
-
 
 impl OpenAIUsageData {
     /// Recommend a reset only with fresh, account-matched availability and an

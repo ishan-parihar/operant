@@ -48,7 +48,6 @@ pub fn is_deep_swarm_effort(effort: &str) -> bool {
     effort.trim().eq_ignore_ascii_case(SWARM_DEEP_EFFORT)
 }
 
-
 /// Configured root reasoning level for an orchestration sentinel. Providers
 /// translate this real level to their supported range while retaining the
 /// sentinel in session state. Ordinary reasoning efforts are left untouched.
@@ -62,7 +61,6 @@ pub fn swarm_root_reasoning_effort(effort: &str) -> Option<&'static str> {
             .root_effort_for_swarm(is_deep_swarm_effort(effort)),
     )
 }
-
 
 /// Information about what's loaded in the context window
 #[derive(Debug, Clone, Default)]
@@ -115,7 +113,6 @@ pub struct ContextInfo {
     /// Total system prompt size (chars)
     pub total_chars: usize,
 }
-
 
 impl ContextInfo {
     /// Rough estimate of tokens (chars / 4 is a common approximation)
@@ -174,4 +171,3 @@ impl ContextInfo {
         parts
     }
 }
-

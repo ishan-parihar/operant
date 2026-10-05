@@ -8,7 +8,6 @@
 //! session-types (ResumeTarget, History, titles/transcription) is not ported.
 use serde::{Deserialize, Serialize};
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderedImageSource {
@@ -16,7 +15,6 @@ pub enum RenderedImageSource {
     ToolResult { tool_name: String },
     Other { role: String },
 }
-
 
 /// Where an image belongs in the transcript flow. Used by UIs to render the
 /// image inline at the message that produced it instead of appending it at the
@@ -30,7 +28,6 @@ pub enum RenderedImageAnchor {
     /// transcript.
     UserPrompt { ordinal: usize },
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RenderedImage {
@@ -53,7 +50,6 @@ pub struct RenderedImage {
     pub history_message_index: Option<usize>,
 }
 
-
 fn parse_attached_image_label(text: &str) -> Option<String> {
     let prefix = "[Attached image associated with the preceding tool result: ";
     let suffix = "]";
@@ -65,7 +61,6 @@ fn parse_attached_image_label(text: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-
 /// True when `text` is exactly an attached-image label message (the synthetic
 /// "[Attached image associated with the preceding tool result: ...]" text that
 /// follows tool-result images). UIs use this to keep user-prompt ordinals
@@ -74,4 +69,3 @@ fn parse_attached_image_label(text: &str) -> Option<String> {
 pub fn is_attached_image_label_text(text: &str) -> bool {
     parse_attached_image_label(text).is_some()
 }
-

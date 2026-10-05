@@ -29,7 +29,6 @@
 
 use serde::{Deserialize, Serialize};
 
-
 /// Declare a semantic assessment enum that serializes as a snake_case string
 /// but still deserializes legacy 0-100 numeric scores (and numeric strings)
 /// from sessions recorded before the semantic-state migration.
@@ -249,7 +248,6 @@ semantic_state! {
         OutcomeDelivered = "outcome_delivered", legacy: 96..=100, score: 98,
     }
 }
-
 
 impl IterationMaturity {
     /// Terminal bases that can justify completing a goal. `BudgetExhausted` is
@@ -481,7 +479,6 @@ pub struct TodoGoalChange {
 // its HashMap import were left behind when the struct was excised per the
 // file-header [port-excision]; deleted both (unused after excision).
 
-
 /// Minimum directness expected from a completion check. More involved goals
 /// need checks aligned with acceptance behavior rather than a representative
 /// proxy alone.
@@ -493,7 +490,6 @@ pub fn required_feedback_loop_relevance(difficulty: Option<Difficulty>) -> Feedb
     }
 }
 
-
 /// Minimum breadth expected from a completion check. More involved goals must
 /// include edge cases and integration boundaries as well as their main paths.
 pub fn required_feedback_loop_coverage(difficulty: Option<Difficulty>) -> FeedbackLoopCoverage {
@@ -503,7 +499,6 @@ pub fn required_feedback_loop_coverage(difficulty: Option<Difficulty>) -> Feedba
         FeedbackLoopCoverage::MainPaths
     }
 }
-
 
 pub fn required_feedback_loop_traceability(
     difficulty: Option<Difficulty>,
@@ -515,30 +510,25 @@ pub fn required_feedback_loop_traceability(
     }
 }
 
-
 /// Whether the plan's intent understanding is solid enough to work against.
 pub fn intent_understanding_passes(state: Option<IntentUnderstanding>) -> bool {
     state.is_some_and(|state| state >= IntentUnderstanding::Clear)
 }
-
 
 /// Whether a goal's feedback loop reports back on the requirements by itself.
 pub fn feedback_loop_passes(state: Option<FeedbackLoopState>) -> bool {
     state.is_some_and(|state| state >= FeedbackLoopState::Closed)
 }
 
-
 pub fn feedback_loop_relevance_passes(goal: &TodoGoal) -> bool {
     goal.feedback_loop_relevance
         .is_some_and(|state| state >= required_feedback_loop_relevance(goal.difficulty))
 }
 
-
 pub fn feedback_loop_coverage_passes(goal: &TodoGoal) -> bool {
     goal.feedback_loop_coverage
         .is_some_and(|state| state >= required_feedback_loop_coverage(goal.difficulty))
 }
-
 
 pub fn feedback_loop_traceability_passes(goal: &TodoGoal) -> bool {
     goal.feedback_loop_traceability
@@ -553,4 +543,3 @@ pub const TODO_CLOSED_FEEDBACK_LOOP_CONTINUATION_MESSAGE: &str = "[auto] Your fe
 /// asks for more work without revealing that an evaluator triggered it.
 pub const TODO_OWNERSHIP_CONTINUATION_MESSAGE: &str =
     "[auto] Continue the work below. Keep the todo up to date; do not reply or wait for the user.";
-
