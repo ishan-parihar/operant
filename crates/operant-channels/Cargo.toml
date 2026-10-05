@@ -61,6 +61,9 @@ toml = "0.8"
 tokio = { version = "1.36", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
 http-body-util = "0.1"
+# Facade-path tests construct ReconciledAgent fixtures directly
+# (ToolRegistry, Database, AgentConfig) the way the gateway WS suite does.
+operant-core = { path = "../operant-core" }
 
 [features]
 default = [

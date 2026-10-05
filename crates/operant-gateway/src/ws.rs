@@ -66,12 +66,9 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use operant_api::channel::ChannelApprovalResponse;
-use operant_config::schema::Config;
-use operant_runtime::agent::reconciled::{EvolutionConfig, ReconciledAgent, TurnExitReason};
+use operant_runtime::agent::reconciled::{ReconciledAgent, TurnExitReason};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
 use tracing::debug;
 
 /// Optional connection parameters sent as the first WebSocket message.
@@ -341,7 +338,18 @@ async fn handle_socket(
     // wiring parity notes: the SSE observer rides through the facade's
     // core→api bridge, approvals route through `ReconciledApprovals`, and the
     // core session id keys the facade's own transcript continuity.
-    let mut agent = match build_ws_facade_agent(&config, &state.observer, &memory_session_id).await
+    //
+    // Construction is shared with every other facade consumer
+    // (`ReconciledAgent::from_config`); this call site passes the gateway's
+    // SSE observer, the memory session id, and eager MCP (iter-628 wiring,
+    // lifted verbatim).
+    let mut agent = match ReconciledAgent::from_config(
+        &config,
+        Some(state.observer.clone()),
+        Some(&memory_session_id),
+        true,
+    )
+    .await
     {
         Ok(a) => a,
         Err(e) => {
@@ -587,194 +595,6 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
         Some(event_session_id) => event_session_id == session_id,
         None => true,
     }
-}
-
-/// Build the per-session [`ReconciledAgent`] (Loop A) for a WS connection.
-///
-/// Inputs mirror what Loop B's construction assembled for this consumer —
-/// provider routing + model resolution from the schema config (identical to
-/// `Agent::from_config_with_session_cwd_and_mcp_backchannel`), memory backend
-/// per session, evolution intervals — while tool registration uses core's
-/// registry (`register_builtin_tools_with_sub_agent` = the registry every
-/// Loop A consumer shares) sourced from the process-installed core runtime
-/// config (cron/kanban/db paths, registry timeout, disabled tool(sets), MCP
-/// servers). Per-session `cwd` sandboxing is a Loop B-only feature: core
-/// tools resolve paths against the process cwd, so `?cwd` still validates
-/// the directory (INVALID_CWD) but does not re-root the sandbox.
-async fn build_ws_facade_agent(
-    config: &Config,
-    observer: &Arc<dyn operant_runtime::observability::Observer>,
-    memory_session_id: &str,
-) -> anyhow::Result<ReconciledAgent> {
-    // Provider routing + model resolution — verbatim Loop B inputs.
-    let fallback_provider_ag = config.providers.fallback_provider();
-    let provider_name = config.providers.fallback.as_deref().unwrap_or("openrouter");
-    let model_name = match fallback_provider_ag
-        .and_then(|e| e.model.as_deref())
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-    {
-        Some(m) => m.to_string(),
-        None => match config.providers.resolve_default_model() {
-            Some(m) => {
-                tracing::warn!(
-                    provider = provider_name,
-                    model = %m,
-                    "fallback provider has no `model` set; using first configured \
-                     providers.models entry as default. Set [providers.models.{provider_name}] \
-                     model = \"...\" to silence this warning.",
-                );
-                m
-            }
-            None => {
-                anyhow::bail!(
-                    "no model configured: providers.fallback = {:?} resolves with no model, \
-                     and no [[providers.models.*]] entry has a `model` field set. \
-                     Configure at least one [providers.models.<name>] model = \"...\" \
-                     or define a [[model_routes]] hint.",
-                    config.providers.fallback,
-                )
-            }
-        },
-    };
-
-    let provider_runtime_options = operant_providers::provider_runtime_options_from_config(config);
-    let provider: Arc<dyn operant_providers::Provider> =
-        Arc::from(operant_providers::create_routed_provider_with_options(
-            provider_name,
-            fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
-            fallback_provider_ag.and_then(|e| e.base_url.as_deref()),
-            &config.reliability,
-            &config.providers.model_routes,
-            &model_name,
-            &provider_runtime_options,
-        )?);
-
-    // Per-session memory, same builder Loop B's constructor used, so the
-    // facade's memory-review triggers read/write the same store.
-    let memory: Arc<dyn operant_memory::Memory> =
-        Arc::from(operant_memory::create_memory_with_storage_and_routes(
-            &config.memory,
-            &config.providers.embedding_routes,
-            Some(&config.storage.provider.config),
-            &config.workspace_dir,
-            fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
-        )?);
-
-    // Core-agent assembly — the process's shared on-disk layout comes from
-    // the core runtime config (installed at every binary entry point).
-    let core_app = operant_core::config::runtime_config();
-    let database = Arc::new(operant_core::database::Database::init(
-        core_app.database_path.clone(),
-    )?);
-    let registry = operant_core::tools::ToolRegistry::new(Duration::from_secs(
-        core_app.tools.registry_timeout_secs,
-    ));
-    let db_dir = core_app
-        .database_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let cron_db = Arc::new(operant_core::cronjobs::CronDb::init(
-        db_dir.join("operant_cron.db"),
-    )?);
-    let kanban_db = Arc::new(operant_core::kanban::KanbanDb::init(
-        db_dir.join("operant_kanban.db"),
-    )?);
-
-    // MCP: connect the configured servers (Loop B did this eagerly with
-    // `initialize_mcp = true`); failures bind no tools and are non-fatal.
-    let mcp_manager = operant_core::mcp::McpManager::new();
-    if config.mcp.enabled && !core_app.mcp.servers.is_empty() {
-        for server in core_app
-            .mcp
-            .servers
-            .iter()
-            .filter(|s| s.enabled && !s.deferred)
-        {
-            let result = match server.transport {
-                operant_core::config::McpTransportKind::Http
-                | operant_core::config::McpTransportKind::StreamableHttp => match &server.url {
-                    Some(url) => mcp_manager
-                        .add_server(server.name.clone(), url.clone(), server.auth_token.clone())
-                        .await
-                        .map(|_| ()),
-                    None => continue,
-                },
-                operant_core::config::McpTransportKind::Stdio => match &server.command {
-                    Some(command) => mcp_manager
-                        .add_stdio_server(
-                            server.name.clone(),
-                            command.clone(),
-                            server.args.clone(),
-                            server.env.clone(),
-                        )
-                        .await
-                        .map(|_| ()),
-                    None => continue,
-                },
-            };
-            if let Err(e) = result {
-                tracing::warn!(server = %server.name, "WS facade MCP server connect failed: {e:#}");
-            }
-        }
-    }
-
-    operant_core::tools::register_builtin_tools_with_sub_agent(
-        &registry,
-        &core_app.skills.root_dir,
-        &core_app.skills.memory_dir,
-        &operant_core::client::OpenAIClient::new(operant_core::client::ClientConfig::from(
-            &core_app.client,
-        )),
-        model_name.clone(),
-        database.clone(),
-        cron_db,
-        kanban_db,
-        Some(mcp_manager),
-        None, // the facade already translates core events; a per-tool side
-        // channel would only double-emit into the same bus
-        core_app.tools.disabled_tools.iter().cloned().collect(),
-        core_app.tools.disabled_toolsets.iter().cloned().collect(),
-    )
-    .await?;
-
-    // Core loop config: started from the process behavior settings (same
-    // source the CLI channel gateway uses), then the WS consumer's own
-    // model + iteration bound on top. Evolution intervals stay off in core
-    // (the facade fires them via EvolutionConfig below).
-    let mut agent_config = operant_core::agent::AgentConfig::from(&core_app.agent);
-    agent_config.model = model_name;
-    agent_config.max_iterations = config.agent.max_tool_iterations;
-    agent_config.approval_allowlist = core_app.command_allowlist.clone();
-    agent_config.approval_allowlist_path =
-        std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| {
-            std::path::PathBuf::from(h)
-                .join(".operant")
-                .join("approval_allowlist.json")
-        });
-    let mut tool_search = core_app.tools.tool_search.clone();
-    if !config.mcp.deferred_loading {
-        tool_search.enabled = "off".to_string();
-    }
-    agent_config.tool_search = tool_search;
-
-    Ok(ReconciledAgent::new(
-        agent_config,
-        provider,
-        provider_name,
-        registry,
-        database,
-        Some(memory),
-        observer.clone(),
-        Some(config.multimodal.clone()),
-        EvolutionConfig {
-            memory_nudge_interval: config.agent.memory_nudge_interval,
-            creation_nudge_interval: config.agent.creation_nudge_interval,
-            auto_classify: config.agent.auto_classify.clone(),
-        },
-    )
-    .with_memory_session_id(Some(memory_session_id.to_string())))
 }
 
 #[expect(
@@ -1259,6 +1079,9 @@ fn record_turn_cost(
 mod tests {
     use super::*;
     use axum::http::HeaderMap;
+    use operant_runtime::agent::reconciled::EvolutionConfig;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn extract_ws_token_from_authorization_header() {

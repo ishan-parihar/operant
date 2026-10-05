@@ -10,6 +10,7 @@
 //! zero consumers are switched yet.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -19,7 +20,7 @@ use async_trait::async_trait;
 use futures_util::stream::{self, StreamExt};
 use operant_api::provider::{ChatMessage, Provider, ProviderCapabilityError};
 use operant_config::scattered_types::AutoClassifyConfig;
-use operant_config::schema::MultimodalConfig;
+use operant_config::schema::{Config, MultimodalConfig};
 use operant_core::agent::llm_compressor::{LlmCompressor, LlmCompressorConfig};
 use operant_core::agent::{
     AgentConfig, AgentEvent, ChatRequest, ModelClient, OperantAgent, ToolPermissionRequest,
@@ -30,12 +31,16 @@ use operant_core::agent::{
     reinject_todos, repair_tool_pairs,
 };
 use operant_core::client::{
-    ChatResponse, Choice, Message, MessageDelta, Role, ToolCallDelta, ToolCallFunction, Usage,
+    ChatResponse, Choice, ClientConfig, Message, MessageDelta, OpenAIClient, Role, ToolCallDelta,
+    ToolCallFunction, Usage,
 };
 use operant_core::context_management::{estimate_total_tokens, manage_context};
+use operant_core::cronjobs::CronDb;
 use operant_core::database::Database;
 use operant_core::error::Error as CoreError;
 use operant_core::interrupt::InterruptFlag;
+use operant_core::kanban::KanbanDb;
+use operant_core::mcp::McpManager;
 use operant_core::schema::ToolSchema;
 use operant_core::tools::ToolRegistry;
 use operant_memory::traits::{Memory, MemoryCategory};
@@ -45,7 +50,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::approval::summarize_args;
-use crate::observability::{Observer, ObserverEvent};
+use crate::observability::{Observer, ObserverEvent, create_observer};
 use crate::security::{GuardResult, PromptGuard};
 
 // Core keeps its own (pre-supertrait-dedup) observer enum — same variants,
@@ -1477,6 +1482,202 @@ impl ReconciledAgent {
     pub fn with_memory_session_id(mut self, session_id: Option<String>) -> Self {
         self.memory_session_id = session_id;
         self
+    }
+
+    /// Build a per-session facade agent from the process schema config.
+    ///
+    /// Extracted from the gateway WS consumer (iter-628) so every Loop B
+    /// consumer switching to the facade shares one construction: provider
+    /// routing + model resolution from the schema config (identical inputs
+    /// to Loop B's `Agent::from_config_with_session_cwd_and_mcp_backchannel`),
+    /// per-session memory backend, evolution intervals — while tool
+    /// registration uses core's registry
+    /// (`register_builtin_tools_with_sub_agent` = the registry every Loop A
+    /// consumer shares) sourced from the process-installed core runtime
+    /// config (cron/kanban/db paths, registry timeout, disabled tool(sets)).
+    ///
+    /// `observer` overrides the config-derived observer (`None` = the same
+    /// `create_observer(&config.observability)` Loop B constructed).
+    /// `memory_session_id` keys the facade's memory-review facts (WS passes
+    /// its gateway session id; ACP passes `None`, matching Loop B).
+    /// `initialize_mcp` gates the eager MCP connect loop — ACP passes
+    /// `false` so `session/new` returns promptly, exactly as its Loop B
+    /// constructor did.
+    ///
+    /// Per-session `cwd` sandboxing is a Loop B-only feature: core tools
+    /// resolve paths against the process cwd, so consumers still validate
+    /// the directory up front but it does not re-root the sandbox.
+    pub async fn from_config(
+        config: &Config,
+        observer: Option<Arc<dyn Observer>>,
+        memory_session_id: Option<&str>,
+        initialize_mcp: bool,
+    ) -> Result<Self> {
+        // Provider routing + model resolution — verbatim Loop B inputs.
+        let fallback_provider_ag = config.providers.fallback_provider();
+        let provider_name = config.providers.fallback.as_deref().unwrap_or("openrouter");
+        let model_name = match fallback_provider_ag
+            .and_then(|e| e.model.as_deref())
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+        {
+            Some(m) => m.to_string(),
+            None => match config.providers.resolve_default_model() {
+                Some(m) => {
+                    tracing::warn!(
+                        provider = provider_name,
+                        model = %m,
+                        "fallback provider has no `model` set; using first configured \
+                      providers.models entry as default. Set [providers.models.{provider_name}] \
+                      model = \"...\" to silence this warning.",
+                    );
+                    m
+                }
+                None => {
+                    anyhow::bail!(
+                        "no model configured: providers.fallback = {:?} resolves with no model, \
+                      and no [[providers.models.*]] entry has a `model` field set. \
+                      Configure at least one [providers.models.<name>] model = \"...\" \
+                      or define a [[model_routes]] hint.",
+                        config.providers.fallback,
+                    )
+                }
+            },
+        };
+
+        let provider_runtime_options =
+            operant_providers::provider_runtime_options_from_config(config);
+        let provider: Arc<dyn operant_providers::Provider> =
+            Arc::from(operant_providers::create_routed_provider_with_options(
+                provider_name,
+                fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
+                fallback_provider_ag.and_then(|e| e.base_url.as_deref()),
+                &config.reliability,
+                &config.providers.model_routes,
+                &model_name,
+                &provider_runtime_options,
+            )?);
+
+        // Per-session memory, same builder Loop B's constructor used, so the
+        // facade's memory-review triggers read/write the same store.
+        let memory: Arc<dyn operant_memory::Memory> =
+            Arc::from(operant_memory::create_memory_with_storage_and_routes(
+                &config.memory,
+                &config.providers.embedding_routes,
+                Some(&config.storage.provider.config),
+                &config.workspace_dir,
+                fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
+            )?);
+
+        // Core-agent assembly — the process's shared on-disk layout comes from
+        // the core runtime config (installed at every binary entry point).
+        let core_app = operant_core::config::runtime_config();
+        let database = Arc::new(Database::init(core_app.database_path.clone())?);
+        let registry = ToolRegistry::new(Duration::from_secs(core_app.tools.registry_timeout_secs));
+        let db_dir = core_app
+            .database_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let cron_db = Arc::new(CronDb::init(db_dir.join("operant_cron.db"))?);
+        let kanban_db = Arc::new(KanbanDb::init(db_dir.join("operant_kanban.db"))?);
+
+        // MCP: connect the configured servers (Loop B did this eagerly with
+        // `initialize_mcp = true`); failures bind no tools and are non-fatal.
+        // ACP skips this so `session/new` stays fast — no MCP tools, the same
+        // trade its Loop B constructor made.
+        let mcp_manager = McpManager::new();
+        if initialize_mcp && config.mcp.enabled && !core_app.mcp.servers.is_empty() {
+            for server in core_app
+                .mcp
+                .servers
+                .iter()
+                .filter(|s| s.enabled && !s.deferred)
+            {
+                let result = match server.transport {
+                    operant_core::config::McpTransportKind::Http
+                    | operant_core::config::McpTransportKind::StreamableHttp => match &server.url {
+                        Some(url) => mcp_manager
+                            .add_server(server.name.clone(), url.clone(), server.auth_token.clone())
+                            .await
+                            .map(|_| ()),
+                        None => continue,
+                    },
+                    operant_core::config::McpTransportKind::Stdio => match &server.command {
+                        Some(command) => mcp_manager
+                            .add_stdio_server(
+                                server.name.clone(),
+                                command.clone(),
+                                server.args.clone(),
+                                server.env.clone(),
+                            )
+                            .await
+                            .map(|_| ()),
+                        None => continue,
+                    },
+                };
+                if let Err(e) = result {
+                    warn!(
+                        server = %server.name,
+                        "facade MCP server connect failed: {e:#}"
+                    );
+                }
+            }
+        }
+
+        operant_core::tools::register_builtin_tools_with_sub_agent(
+            &registry,
+            &core_app.skills.root_dir,
+            &core_app.skills.memory_dir,
+            &OpenAIClient::new(ClientConfig::from(&core_app.client)),
+            model_name.clone(),
+            database.clone(),
+            cron_db,
+            kanban_db,
+            Some(mcp_manager),
+            None, // the facade already translates core events; a per-tool side
+            // channel would only double-emit into the same bus
+            core_app.tools.disabled_tools.iter().cloned().collect(),
+            core_app.tools.disabled_toolsets.iter().cloned().collect(),
+        )
+        .await?;
+
+        // Core loop config: started from the process behavior settings (same
+        // source the CLI channel gateway uses), then the consumer's own
+        // model + iteration bound on top. Evolution intervals stay off in core
+        // (the facade fires them via EvolutionConfig below).
+        let mut agent_config = AgentConfig::from(&core_app.agent);
+        agent_config.model = model_name;
+        agent_config.max_iterations = config.agent.max_tool_iterations;
+        agent_config.approval_allowlist = core_app.command_allowlist.clone();
+        agent_config.approval_allowlist_path =
+            std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| {
+                std::path::PathBuf::from(h)
+                    .join(".operant")
+                    .join("approval_allowlist.json")
+            });
+        let mut tool_search = core_app.tools.tool_search.clone();
+        if !config.mcp.deferred_loading {
+            tool_search.enabled = "off".to_string();
+        }
+        agent_config.tool_search = tool_search;
+
+        Ok(ReconciledAgent::new(
+            agent_config,
+            provider,
+            provider_name,
+            registry,
+            database,
+            Some(memory),
+            observer.unwrap_or_else(|| Arc::from(create_observer(&config.observability))),
+            Some(config.multimodal.clone()),
+            EvolutionConfig {
+                memory_nudge_interval: config.agent.memory_nudge_interval,
+                creation_nudge_interval: config.agent.creation_nudge_interval,
+                auto_classify: config.agent.auto_classify.clone(),
+            },
+        )
+        .with_memory_session_id(memory_session_id.map(str::to_string)))
     }
 
     /// Pending-approval registry — consumers route `approval_response`s

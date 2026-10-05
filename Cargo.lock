@@ -4759,6 +4759,7 @@ dependencies = [
  "nanohtml2text",
  "operant-api",
  "operant-config",
+ "operant-core",
  "operant-infra",
  "operant-memory",
  "operant-providers",

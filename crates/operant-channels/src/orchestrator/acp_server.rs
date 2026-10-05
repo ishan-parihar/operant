@@ -19,7 +19,8 @@
 
 use anyhow::Result;
 use operant_config::schema::Config;
-use operant_runtime::agent::agent::{Agent, TurnEvent};
+use operant_runtime::agent::TurnEvent;
+use operant_runtime::agent::reconciled::{ReconciledAgent, TurnExitReason};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -33,6 +34,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::acp_channel::AcpChannel;
+use operant_api::channel::Channel as _;
 
 // ── Configuration ────────────────────────────────────────────────
 
@@ -260,7 +262,13 @@ impl RpcOutbound {
 // ── Session state ────────────────────────────────────────────────
 
 struct Session {
-    agent: Agent,
+    agent: ReconciledAgent,
+    /// Per-session ACP back-channel. Under Loop B this was registered into
+    /// the agent's channel handles (ask_user/escalate/reaction/poll tool
+    /// maps); on the facade it serves one purpose — bridging the facade's
+    /// `TurnEvent::ApprovalRequest` onto ACP's `session/request_permission`
+    /// so the IDE's answer resolves the facade's permission oneshot.
+    acp_channel: Arc<AcpChannel>,
     #[allow(dead_code)] // WIP: intended for session expiry logic
     created_at: Instant,
     last_active: Instant,
@@ -556,39 +564,47 @@ impl AcpServer {
 
         let session_id = Uuid::new_v4().to_string();
 
-        // Build agent from global config, with the session's cwd pinned as
-        // the file/shell sandbox boundary. The agent's data directory
-        // (memory DB, identity, scheduled tasks) still lives under
-        // `config.workspace_dir`.
-        let agent = Agent::from_config_with_session_cwd_and_mcp_backchannel(
-            &self.config,
-            Some(std::path::Path::new(&workspace_dir)),
-            false,
-        )
-        .await
-        .map_err(|e| RpcError {
-            code: INTERNAL_ERROR,
-            message: format!("Failed to create agent: {e}"),
-            data: None,
-        })?;
+        // Build the per-session reconciled-facade agent (Loop A under the
+        // hood) — the same construction every facade consumer shares
+        // (`ReconciledAgent::from_config`): provider routing, model
+        // resolution, per-session memory, evolution intervals, and core's
+        // builtin tool registry (sub-agent enabled) from the process runtime
+        // config. MCP is NOT initialized eagerly (Loop B parity:
+        // `session/new` must return promptly — its constructor also passed
+        // `initialize_mcp = false`). The canonicalized `workspace_dir` above
+        // still validates the cwd (INVALID_PARAMS on a bad directory);
+        // per-session cwd sandbox re-rooting was a Loop B feature — core
+        // tools resolve paths against the process cwd.
+        //
+        // The core session id is pinned to the ACP session id so each
+        // session's transcript/trajectory is keyed by the id the client knows.
+        let agent = ReconciledAgent::from_config(&self.config, None, None, false)
+            .await
+            .map_err(|e| RpcError {
+                code: INTERNAL_ERROR,
+                message: format!("Failed to create agent: {e}"),
+                data: None,
+            })?;
+        agent.core_agent().set_session_id(session_id.clone());
 
-        // Wire an ACP back-channel so tools like `ask_user`,
-        // `escalate_to_human`, and `reaction` can talk to the IDE/CLI client
-        // for this session. Registered as `"acp"`; resolved by name when the
-        // agent picks a channel.
+        // Wire the per-session ACP back-channel. On Loop B this was
+        // registered into the agent's channel maps so ask_user /
+        // escalate_to_human / reaction could reach the IDE; those channel
+        // tools are Loop B registrations the facade does not carry. It now
+        // bridges the facade's approval requests to `session/request_permission`.
         let acp_channel = Arc::new(AcpChannel::new(
             "acp",
             session_id.clone(),
             Arc::clone(&self.rpc),
             Duration::from_secs(self.acp_config.session_timeout_secs),
         ));
-        agent.channel_handles().register_channel("acp", acp_channel);
 
         let now = Instant::now();
         sessions.insert(
             session_id.clone(),
             Arc::new(Mutex::new(Session {
                 agent,
+                acp_channel,
                 created_at: now,
                 last_active: now,
             })),
@@ -650,18 +666,38 @@ impl AcpServer {
         self.register_cancel_token(&session_id, cancel_token.clone())?;
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TurnEvent>(100);
 
+        // Facade plumbing this turn needs OUTSIDE the inner Mutex: the
+        // approval registry (clonable, Arc-backed) and the ACP back-channel.
+        // Both are consumed by the event-forward loop below while the turn
+        // task holds the inner lock, so they are cloned in a brief pre-spawn
+        // acquisition (same short-critical-section invariant as above).
+        let (approvals, acp_channel) = {
+            let session = session_arc.lock().await;
+            (
+                session.agent.approvals().clone(),
+                session.acp_channel.clone(),
+            )
+        };
+
+        // The drain loop below listens on the same token the turn is
+        // driven with, so clone before the spawn moves one copy in.
+        let drain_cancel_token = cancel_token.clone();
+
         // Move the Arc into the spawned task and lock inside it.  The inner
         // Mutex stays locked for the duration of the turn, preventing
         // concurrent stop/reap from touching the agent mid-turn. The outer
-        // map entry remains in place.
+        // map entry remains in place. The facade's exit reason is captured
+        // inside the lock and returned alongside the turn result — it is the
+        // structured replacement for Loop B's ToolLoopCancelled string sniff.
         let turn_handle = tokio::spawn(async move {
             let mut session = session_arc.lock().await;
             let result = session
                 .agent
                 .turn_streamed(&prompt, event_tx, Some(cancel_token))
                 .await;
+            let exit_reason = session.agent.last_exit_reason();
             session.last_active = Instant::now();
-            result
+            (result, exit_reason)
             // guard drops here, releasing the inner lock
         });
 
@@ -671,20 +707,83 @@ impl AcpServer {
         // proper pending→completed flow in ACP clients.
         // Track streamed text so partial content survives cancellation.
         let mut accumulated_text = String::new();
-        while let Some(event) = event_rx.recv().await {
-            // ACP has no `session/update` shape for token-usage events; the
-            // task-local cost tracker records them out-of-band. Skip before
-            // dispatching to the notification builder so the helper match
-            // can stay exhaustive on the four UI-relevant variants.
-            if matches!(event, TurnEvent::Usage { .. }) {
-                continue;
-            }
-            // Track streamed text so partial content survives cancellation.
-            if let TurnEvent::Chunk { ref delta } = event {
-                accumulated_text.push_str(delta);
-            }
-            if let Some(notification) = notification_for_turn_event(&session_id, &event) {
-                self.write_notification(&notification).await;
+        // Multiplexed drain — mirrors the WS facade switch (iter-628):
+        //   1. the cancel arm auto-denies every parked approval the moment
+        //      `session/cancel` fires, so a turn parked on the facade's
+        //      permission oneshot unwinds promptly instead of racing the
+        //      120s deadline (a hung approval would otherwise stall the
+        //      turn's observation of the interrupt flag),
+        //   2. the event arm forwards `session/update` notifications and
+        //      bridges `ApprovalRequest`s onto ACP's own
+        //      `session/request_permission` round-trip, resolving through
+        //      the facade's approval registry when the IDE answers.
+        let mut cancel_drained = false;
+        loop {
+            tokio::select! {
+                biased;
+                _ = drain_cancel_token.cancelled(), if !cancel_drained => {
+                    approvals.deny_all();
+                    cancel_drained = true;
+                    // Fall through; the agent loop wakes from the approval
+                    // await, sees the interrupt, and closes event_rx — the
+                    // `event_rx.recv()` arm below then ends the drain.
+                }
+                event_opt = event_rx.recv() => {
+                    let Some(event) = event_opt else { break };
+                    // ACP has no `session/update` shape for token-usage
+                    // events; the task-local cost tracker records them
+                    // out-of-band. Skip before dispatching to the
+                    // notification builder so the helper match can stay
+                    // exhaustive on the four UI-relevant variants.
+                    if matches!(event, TurnEvent::Usage { .. }) {
+                        continue;
+                    }
+                    // Approval bridge: park the IDE round-trip in its own
+                    // task so this drain keeps serving the cancel arm and
+                    // later events while the permission dialog is open. The
+                    // spawned task resolves (or denies) the facade's
+                    // oneshot by request id; a response arriving after the
+                    // turn already ended resolves nothing (registry miss).
+                    if let TurnEvent::ApprovalRequest {
+                        ref request_id,
+                        ref tool_name,
+                        ref arguments_summary,
+                        ..
+                    } = event
+                    {
+                        let acp = acp_channel.clone();
+                        let approvals = approvals.clone();
+                        let request_id = request_id.clone();
+                        let tool_name = tool_name.clone();
+                        let arguments_summary = arguments_summary.clone();
+                        tokio::spawn(async move {
+                            let request =
+                                operant_api::channel::ChannelApprovalRequest {
+                                    tool_name,
+                                    arguments_summary,
+                                };
+                            let decision = match acp.request_approval("", &request).await {
+                                Ok(Some(decision)) => decision,
+                                // No answer / channel failure: deny rather
+                                // than letting the facade's 120s deadline be
+                                // the only exit — same posture as the WS
+                                // client disconnect path.
+                                Ok(None) | Err(_) => {
+                                    operant_api::channel::ChannelApprovalResponse::Deny
+                                }
+                            };
+                            approvals.resolve(&request_id, decision);
+                        });
+                        continue;
+                    }
+                    // Track streamed text so partial content survives cancellation.
+                    if let TurnEvent::Chunk { ref delta } = event {
+                        accumulated_text.push_str(delta);
+                    }
+                    if let Some(notification) = notification_for_turn_event(&session_id, &event) {
+                        self.write_notification(&notification).await;
+                    }
+                }
             }
         }
 
@@ -692,18 +791,18 @@ impl AcpServer {
         // Lock poisoned invariant: same as the insert site above.
         self.remove_cancel_token(&session_id);
 
-        let turn_result = turn_handle.await.map_err(|e| RpcError {
+        let (turn_result, exit_reason) = turn_handle.await.map_err(|e| RpcError {
             code: INTERNAL_ERROR,
             message: format!("Agent task panicked: {e}"),
             data: None,
         })?;
 
         // Per ACP spec: a cancelled turn must respond with stopReason "cancelled",
-        // not an error. Detect via ToolLoopCancelled propagated through anyhow.
-        let was_cancelled = match &turn_result {
-            Err(e) => operant_runtime::agent::loop_::is_tool_loop_cancelled(e),
-            Ok(_) => false,
-        };
+        // not an error. Loop B encoded that as the ToolLoopCancelled anyhow
+        // string; the facade carries it in the structured exit reason
+        // instead (`Interrupted` covers session/cancel tokens and approval
+        // denial unwinds alike).
+        let was_cancelled = matches!(exit_reason, Some(TurnExitReason::Interrupted));
 
         if was_cancelled {
             return Ok(Self::cancelled_prompt_result(session_id, &accumulated_text));
@@ -824,10 +923,10 @@ impl AcpServer {
 
         // Wait for any in-flight prompt turn to finish before cleaning up.
         // The inner lock is held by the turn task; this blocks until it drops.
-        let session = session_arc.lock().await;
-        // Drop the ACP back-channel from each tool's channel map so the
-        // session's RpcOutbound clone isn't kept alive by stale entries.
-        session.agent.channel_handles().unregister_channel("acp");
+        // (Loop B additionally unregistered the "acp" channel from the
+        // agent's channel maps here; the facade carries no channel maps —
+        // the AcpChannel lives in the Session and drops with it.)
+        let _session = session_arc.lock().await;
         debug!("Stopped session {session_id}");
         Ok(serde_json::json!({
             "sessionId": session_id,
@@ -1846,5 +1945,433 @@ mod tests {
             .expect("cancel_tokens lock poisoned")
             .len();
         assert_eq!(remaining, 0, "cancel token must be removed after turn ends");
+    }
+
+    // ── Facade (Loop A) end-to-end: scripted provider + permission-gated
+    // ── Facade (Loop A) end-to-end: scripted provider + permission-gated
+    // tool + approval round-trip + cancellation through the REAL
+    // `handle_session_prompt` path. Mirrors the gateway WS facade test
+    // (iter-628): same tolerant-script provider shape, same gated `bash`
+    // probe, same Interrupted-vs-error exit-reason contract — but driven
+    // over the ACP JSON-RPC surfaces: `session/update` notifications, the
+    // `session/request_permission` bridge, and `session/cancel`.
+    //
+    // The scripted agent is injected directly into the session map (the WS
+    // test built its facade directly for the same reason): `session/new`
+    // constructs from the schema config, which cannot carry a scripted
+    // provider.
+
+    enum AcpStep {
+        Text(&'static str),
+        Tool(&'static str, &'static str),
+    }
+
+    struct AcpScriptedProvider {
+        steps: std::sync::Mutex<Vec<AcpStep>>,
+        next_id: std::sync::atomic::AtomicUsize,
+    }
+
+    impl AcpScriptedProvider {
+        fn new(steps: Vec<AcpStep>) -> Arc<Self> {
+            Arc::new(Self {
+                steps: std::sync::Mutex::new(steps),
+                next_id: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl operant_providers::Provider for AcpScriptedProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
+        async fn chat(
+            &self,
+            _request: operant_api::provider::ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<operant_api::provider::ChatResponse> {
+            // Tolerant script: extra core iterations (healing, post-denial
+            // follow-ups) get the final answer again instead of panicking.
+            let step = {
+                let mut steps = self.steps.lock().expect("scripted provider steps");
+                if steps.is_empty() {
+                    AcpStep::Text("approved and done")
+                } else {
+                    steps.remove(0)
+                }
+            };
+            Ok(match step {
+                AcpStep::Text(t) => operant_api::provider::ChatResponse {
+                    text: Some(t.to_string()),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+                AcpStep::Tool(name, args) => {
+                    let id = self
+                        .next_id
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    operant_api::provider::ChatResponse {
+                        text: Some(String::new()),
+                        tool_calls: vec![operant_api::provider::ToolCall {
+                            id: format!("call_{id}"),
+                            name: name.to_string(),
+                            arguments: args.to_string(),
+                            extra_content: None,
+                        }],
+                        usage: None,
+                        reasoning_content: None,
+                    }
+                }
+            })
+        }
+
+        fn supports_vision(&self) -> bool {
+            false
+        }
+
+        fn supports_streaming(&self) -> bool {
+            false
+        }
+
+        fn stream_chat(
+            &self,
+            _request: operant_api::provider::ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+            _options: operant_api::provider::StreamOptions,
+        ) -> futures_util::stream::BoxStream<
+            'static,
+            Result<operant_api::provider::StreamEvent, operant_api::provider::StreamError>,
+        > {
+            unreachable!("non-streaming scripted provider")
+        }
+    }
+
+    struct AcpBashProbe;
+
+    #[async_trait::async_trait]
+    impl operant_core::tools::OperantTool for AcpBashProbe {
+        fn name(&self) -> &str {
+            "bash"
+        }
+
+        fn description(&self) -> &str {
+            "acp test probe"
+        }
+
+        fn schema(&self) -> operant_core::schema::ToolSchema {
+            operant_core::schema::ToolSchema::new(
+                "bash",
+                "acp test probe",
+                serde_json::json!({"type": "object", "properties": {}}),
+            )
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+            _context: operant_core::tools::ToolContext,
+        ) -> operant_core::tools::ToolResult {
+            operant_core::tools::ToolResult {
+                tool_call_id: String::new(),
+                name: "bash".to_string(),
+                success: true,
+                content: "probe ok".to_string(),
+                error: None,
+                timed_out: false,
+            }
+        }
+    }
+
+    fn acp_facade_config() -> operant_core::agent::AgentConfig {
+        operant_core::agent::AgentConfig {
+            model: "demo".to_string(),
+            max_iterations: 5,
+            tool_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(10),
+            system_prompt: None,
+            stream: false,
+            context_window: 8000,
+            max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+            max_healing_attempts: 1,
+            fallback_models: Vec::new(),
+            fallback_on_errors: false,
+            // "smart": bash is permission-gated, so the turn parks on the
+            // facade's approval bridge — the exact flow ACP clients ride
+            // through `session/request_permission`.
+            approval_mode: "smart".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
+            record_trajectories: false,
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
+            max_retries: 3,
+            tool_search: Default::default(),
+        }
+    }
+
+    async fn build_acp_script_facade(provider: Arc<AcpScriptedProvider>) -> ReconciledAgent {
+        let registry = operant_core::tools::ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(AcpBashProbe)
+            .await
+            .expect("register bash probe");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let database = Arc::new(
+            operant_core::database::Database::init(tmp.path().join("acp-facade.db"))
+                .expect("database init"),
+        );
+        ReconciledAgent::new(
+            acp_facade_config(),
+            provider,
+            "scripted",
+            registry,
+            database,
+            None,
+            Arc::new(operant_runtime::observability::NoopObserver),
+            None,
+            operant_runtime::agent::reconciled::EvolutionConfig::default(),
+        )
+    }
+
+    /// What the drain loop observed for one turn.
+    #[derive(Default)]
+    struct AcpTurnObserved {
+        saw_tool_pending: bool,
+        saw_tool_completed: bool,
+        saw_permission_request: bool,
+    }
+
+    /// One scripted session riding the real prompt path.
+    struct AcpTurnHarness {
+        server: Arc<AcpServer>,
+        writer_rx: mpsc::Receiver<String>,
+        session_id: String,
+        last_observed: AcpTurnObserved,
+    }
+
+    impl AcpTurnHarness {
+        async fn new(steps: Vec<AcpStep>) -> Self {
+            let cwd = tempfile::tempdir().expect("tempdir");
+            let server = Arc::new(AcpServer::new(
+                make_test_config(cwd.path()),
+                AcpServerConfig::default(),
+            ));
+            let writer_rx = server
+                .writer_rx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+                .expect("writer receiver present (run() not started)");
+            let session_id = "acp-e2e-1".to_string();
+            let agent = build_acp_script_facade(AcpScriptedProvider::new(steps)).await;
+            agent.core_agent().set_session_id(session_id.clone());
+            let acp_channel = Arc::new(AcpChannel::new(
+                "acp",
+                session_id.clone(),
+                Arc::clone(&server.rpc),
+                Duration::from_secs(2),
+            ));
+            let now = Instant::now();
+            server.sessions.lock().await.insert(
+                session_id.clone(),
+                Arc::new(Mutex::new(Session {
+                    agent,
+                    acp_channel,
+                    created_at: now,
+                    last_active: now,
+                })),
+            );
+            Self {
+                server,
+                writer_rx,
+                session_id,
+                last_observed: AcpTurnObserved::default(),
+            }
+        }
+
+        /// Drive one `session/prompt` to completion. `on_permission` runs
+        /// whenever the IDE-side `session/request_permission` request
+        /// surfaces (approve / answer-later / cancel — the test decides per
+        /// turn) and receives the outbound request's JSON-RPC id.
+        async fn prompt<F>(&mut self, prompt: &str, on_permission: F) -> Value
+        where
+            F: Fn(&Arc<AcpServer>, &str),
+        {
+            let server = Arc::clone(&self.server);
+            let params = serde_json::json!({
+                "sessionId": self.session_id,
+                "prompt": prompt,
+            });
+            let mut prompt_task =
+                tokio::spawn(
+                    async move { server.handle_session_prompt(&params, &Value::Null).await },
+                );
+
+            let mut observed = AcpTurnObserved::default();
+            let deadline = tokio::time::sleep(Duration::from_secs(30));
+            tokio::pin!(deadline);
+            let server = Arc::clone(&self.server);
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => panic!("prompt turn did not complete in 30s"),
+                    line = self.writer_rx.recv() => {
+                        let line = line.expect("writer stays open for the test");
+                        let v: Value = serde_json::from_str(&line).expect("outbound JSON line");
+                        match v["method"].as_str() {
+                            Some("session/update") => {
+                                let update = &v["params"]["update"];
+                                match update["sessionUpdate"].as_str() {
+                                    Some("tool_call") => observed.saw_tool_pending = true,
+                                    Some("tool_call_update") => observed.saw_tool_completed = true,
+                                    _ => {}
+                                }
+                            }
+                            Some("session/request_permission") => {
+                                observed.saw_permission_request = true;
+                                let id = v["id"].clone();
+                                let id_str = id
+                                    .as_str()
+                                    .map(String::from)
+                                    .unwrap_or_else(|| id.to_string());
+                                on_permission(&server, &id_str);
+                            }
+                            _ => {}
+                        }
+                    }
+                    res = &mut prompt_task => {
+                        // All notifications are written before the prompt
+                        // resolves; drain anything still buffered.
+                        while let Ok(line) = self.writer_rx.try_recv() {
+                            let v: Value = serde_json::from_str(&line).expect("outbound JSON line");
+                            if v["method"].as_str() == Some("session/update") {
+                                match v["params"]["update"]["sessionUpdate"].as_str() {
+                                    Some("tool_call") => observed.saw_tool_pending = true,
+                                    Some("tool_call_update") => observed.saw_tool_completed = true,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        self.last_observed = observed;
+                        return res
+                            .expect("prompt task joins")
+                            .unwrap_or_else(|e| panic!("prompt turn ended in an error frame: {e:?}"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn facade_acp_turn_toolcall_approval_roundtrip_and_cancel_exit() {
+        let mut harness = AcpTurnHarness::new(vec![
+            // Turn 1: tool call → approval round-trip → answer.
+            AcpStep::Tool("bash", "{}"),
+            AcpStep::Text("approved and done"),
+            // Turn 2: park on the approval gate again, then get cancelled.
+            AcpStep::Tool("bash", "{}"),
+            AcpStep::Text("after the abort"),
+        ])
+        .await;
+
+        // ── Turn 1: approve the gated tool via the IDE round-trip ──────
+        let turn1 = harness
+            .prompt("run the probe", |server, request_id| {
+                // Answer as the IDE: allow-once. Routed back through the
+                // same dispatch a real client response takes.
+                server.rpc.dispatch_response(
+                    request_id,
+                    Some(serde_json::json!({
+                        "outcome": {"outcome": "selected", "optionId": "allow-once"}
+                    })),
+                    None,
+                );
+            })
+            .await;
+        assert_eq!(
+            turn1["stopReason"], "end_turn",
+            "approved turn completes normally"
+        );
+        assert_eq!(turn1["content"], "approved and done");
+        assert!(
+            harness.last_observed.saw_permission_request,
+            "the facade's ApprovalRequest must bridge onto session/request_permission"
+        );
+        assert!(
+            harness.last_observed.saw_tool_pending,
+            "tool_call update must reach the client"
+        );
+        assert!(
+            harness.last_observed.saw_tool_completed,
+            "approved tool's tool_call_update must reach the client"
+        );
+        {
+            let sessions = harness.server.sessions.lock().await;
+            let session = sessions.get(&harness.session_id).cloned().unwrap();
+            drop(sessions);
+            let session = session.lock().await;
+            assert_eq!(
+                session.agent.last_exit_reason(),
+                Some(TurnExitReason::TextResponse),
+                "approved turn exits TextResponse"
+            );
+        }
+
+        // ── Turn 2: cancel while parked on the approval gate ──────────
+        // Per ACP spec the result is a clean stopReason "cancelled" frame,
+        // never an error frame: the facade's exit-reason mapping (Interrupted)
+        // must drive the response, not the turn's anyhow error.
+        let turn2_started = Instant::now();
+        let session_id = harness.session_id.clone();
+        let turn2 = harness
+            .prompt("run it again", |server, _request_id| {
+                // The IDE instead cancels the turn. session/cancel fires the
+                // registered token; the drain loop's cancel arm denies the
+                // parked approval so the turn unwinds promptly.
+                let server = Arc::clone(server);
+                let session_id = session_id.clone();
+                tokio::spawn(async move {
+                    server
+                        .handle_session_cancel(&serde_json::json!({"sessionId": session_id}))
+                        .await
+                        .expect("cancel must be accepted");
+                });
+            })
+            .await;
+        assert_eq!(
+            turn2["stopReason"], "cancelled",
+            "cancelled turn must map to stopReason cancelled, not an error frame"
+        );
+        assert!(
+            turn2["content"]
+                .as_str()
+                .expect("content is text")
+                .contains("[interrupted by user]")
+        );
+        assert!(
+            turn2_started.elapsed() < Duration::from_secs(30),
+            "deny_all() must unblock the parked approval long before core's 120s deadline (elapsed {:?})",
+            turn2_started.elapsed()
+        );
+        {
+            let sessions = harness.server.sessions.lock().await;
+            let session = sessions.get(&harness.session_id).cloned().unwrap();
+            drop(sessions);
+            let session = session.lock().await;
+            assert_eq!(
+                session.agent.last_exit_reason(),
+                Some(TurnExitReason::Interrupted),
+                "cancelled turn must exit Interrupted"
+            );
+        }
     }
 }
