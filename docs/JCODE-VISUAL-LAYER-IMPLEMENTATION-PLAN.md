@@ -98,6 +98,14 @@ or write into a buffer, excluding `app/tests/`, `ui_tests/`, `*tests.rs`, and
 
 **Batch-3 landing facts (iter-623):** the renderers are dead-in-bin wired for cutover; `tui/jcode_app/` (36 modules) carries the app-core leaf surface, **TuiState** (the 114-method read-only presentation trait — the actual cutover contract: operant's App implements it; the App struct never ports), the todo family, config_shim (the one deliberate adaptation), mermaid/visual_debug/build_meta/env/transcription leaf ports, and the W9-cut degraded engine shims (ratatui_image is the pending batch-4 dependency decision). Gates: 0 errors `--all-targets`; suite 1504/0/1; corpus `verify PASSED: 0 drift`; clippy gate 0 in jcode files. Deferred surfaces each carry a named `[port-decision]` marker: swarm_gallery (W7 — jcode's swarm-core has no operant equivalent), inline-image engine (ratatui_image), pinned_ui (W6), onboarding (W8).
 
+**Cutover preconditions — the exact, ordered list (no cutover attempt before all four):**
+1. Port the full `ui.rs` aggregate root: the 30+ child `#[path]` declarations that are still excised, the `use super::ui_diff` block, and the App-bound frame draw path (10-band chrome, row math at ui.rs:3001-3088) — adapted, not copied, because the next item defines the seam.
+2. Implement `TuiState` (jcode_app/tui_state.rs) for operant's `App` — 114 methods, each a field-mapping onto operant's own state; the W1 adapter (jcode_model/adapter.rs) is the pattern.
+3. Decide `ratatui_image` (user call): YES unlocks the inline-image engine subset (mermaid_inline.rs real bodies at git 68efd95c) and the 8 gated engine tests; NO seals the degraded shims permanently and W6's `ui_inline_image` stays badge-only.
+4. Then, and only then: the one-time deliberate golden rebaseline in its own commit (the corpus MUST stay 0-drift through items 1-2's dead-in-bin phase; the rebaseline is the FIRST sanctioned change to baselines in the whole port).
+
+Batch-4 (W6 panes + W7 surfaces) runs before the cutover and needs none of these — its files port the same dead-in-bin way batches 1-3 did.
+
 ### W6 — Media and panes
 | Source | LOC |
 |---|---|
