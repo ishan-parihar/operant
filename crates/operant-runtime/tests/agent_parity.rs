@@ -23,18 +23,19 @@
 //! | empty×4 | Ok(empty), TextResponse exit | Ok("") | Ok("") |
 //! | budget exhaustion | grace LLM call → Ok(summary) | hard `bail!` | final summary LLM call |
 //! | identical repeat ×3 | guardrail Warn event (no-effect tool) | NO guardrail | `[Loop Detection]` in history |
-//! | context overflow | compress + reinject todos + events | error propagates (no compressor) | deterministic trim, no todo reinject |
+//! | context overflow | compress + reinject todos + events | error propagates (no compressor) | deterministic trim in-loop; facade compressor re-injects todos (W1.4 flip) |
 //!
 //! Cells where engines intentionally differ carry a `// PINNED DIVERGENCE
 //! (Wave 1)` comment. Post-migration, each pin must still hold OR the
 //! migration leg must consciously update it with justification.
 //!
-//! NOTE on Loop C compression: the LLM `ContextCompressor` itself lives in
-//! the `loop_::run` wrapper (loop_/run.rs:960/:1019), which builds real
-//! providers from a full `Config` and is not test-callable without heavy
-//! plumbing; the loop proper is pinned via direct-drive (the pattern from
-//! `operant-runtime/src/agent/loop_/tests.rs`) plus a direct unit-pin of
-//! the compressor's public API.
+//! NOTE on Loop C compression: the compressor itself now lives in the
+//! reconciled facade (`agent/reconciled.rs`, the core pair's runtime front
+//! door) driven from the `loop_::run` wrapper (loop_/run.rs), which builds
+//! real providers from a full `Config` and is not test-callable without
+//! heavy plumbing; the loop proper is pinned via direct-drive (the pattern
+//! from `operant-runtime/src/agent/loop_/tests.rs`) plus a direct unit-pin
+//! of the facade's public API.
 //!
 //! NOTE on exit-event history: iter-609/610 (the foreign fleet's stale-baseline
 //! landing) reverted the A2 surface — `Done { message }` without a reason,//! `ToolResult` without `timed_out`. iter-612 restored it: `Done` carries
@@ -68,7 +69,6 @@ use operant_core::tools::todo_tool::{TODO_INJECTION_HEADER, TodoTool, todo_injec
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 // ── Loops B & C: operant-runtime + operant-providers ────────────
-use operant_config::scattered_types::ContextCompressionConfig;
 use operant_config::schema::{
     AgentConfig as RtAgentConfig, MemoryConfig, MultimodalConfig, PacingConfig,
 };
@@ -76,9 +76,9 @@ use operant_memory::Memory;
 use operant_providers::{
     ChatMessage, ChatRequest as RtChatRequest, ChatResponse as RtChatResponse, Provider, ToolCall,
 };
-use operant_runtime::agent::context_compressor::ContextCompressor;
 use operant_runtime::agent::dispatcher::{NativeToolDispatcher, ToolDispatcher};
 use operant_runtime::agent::loop_::run_tool_call_loop;
+use operant_runtime::agent::reconciled::{PreflightConfig, compress_if_needed};
 use operant_runtime::agent::{Agent, TurnEvent};
 use operant_runtime::observability::{NoopObserver, Observer};
 use operant_runtime::tools::{Tool, ToolResult as RtToolResult};
@@ -1052,11 +1052,12 @@ async fn s5_compression_loop_c() {
         "the trimmed tool result must keep its pairing identity"
     );
 
-    // Part 2 — PINNED DIVERGENCE (Wave 1): the runtime `ContextCompressor`
-    // (the wrapper's overflow-recovery engine, loop_/run.rs:960) compresses
-    // but does NOT re-inject todos — the mirror image of Loop A's
-    // reinjection. Same global todo store, same active todo: Loop A folds
-    // it back in, the runtime compressor drops it.
+    // Part 2 — W1.4 CONSCIOUS PIN UPDATE: the runtime compressor is gone;
+    // the reconciled facade drives the core pair, which folds the active
+    // todo list back in after any effective compression (previously a
+    // Loop-A-only behavior). Same global todo store, same active todo:
+    // the facade now re-injects it like Loop A does — the divergence this
+    // cell pinned is retired by the consolidation.
     seed_todo("parity-c", "parity compressor divergence probe").await;
     assert!(
         todo_injection_for_session("parity-c").is_some(),
@@ -1075,20 +1076,26 @@ async fn s5_compression_loop_c() {
             .to_string(),
         ),
     );
-    let compressor = ContextCompressor::new(ContextCompressionConfig::default(), 100);
-    let result = compressor
-        .compress_if_needed(&mut big_history, provider.as_ref(), "demo")
-        .await
-        .unwrap();
+    let result = compress_if_needed(
+        &mut big_history,
+        provider.as_ref(),
+        "demo",
+        &PreflightConfig::default(),
+        100,
+        None,
+        Some("parity-c"),
+    )
+    .await
+    .unwrap();
 
     assert!(
         result.compressed,
-        "the compressor must actually compress the oversized history"
+        "the facade must actually compress the oversized history"
     );
     assert!(
-        !big_history
+        big_history
             .iter()
             .any(|m| m.content.contains(TODO_INJECTION_HEADER)),
-        "the runtime compressor must not re-inject todos (Loop A divergence)"
+        "the reconciled facade must re-inject todos (W1.4: converged with Loop A)"
     );
 }

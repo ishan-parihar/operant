@@ -457,7 +457,7 @@ impl Autocompactor {
         };
         let generation = pre.generation();
         let replacement = match compressor
-            .compress(pre.middle_slice().to_vec(), client)
+            .compress(pre.middle_slice().to_vec(), client.as_ref())
             .await
         {
             Ok(result) if !result.summary_text.trim().is_empty() => {

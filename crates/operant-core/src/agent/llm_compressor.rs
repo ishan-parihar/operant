@@ -79,8 +79,19 @@ pub struct LlmCompressorConfig {
     pub threshold_percent: f64,
     /// Number of head messages to protect from compression (system + first exchange).
     pub protect_head_n: usize,
-    /// Tail token budget — recent messages preserved verbatim.
+    /// Tail token budget — recent messages preserved verbatim. Consulted only
+    /// when `protect_tail_n` is `None`.
     pub tail_token_budget: usize,
+    /// Message-count tail protection (ported from the deleted runtime engine's
+    /// `protect_last_n`): the last N messages are preserved verbatim regardless
+    /// of token cost. `None` keeps the `tail_token_budget` walk (gateway path).
+    pub protect_tail_n: Option<usize>,
+    /// Character ceiling for the whole summarizer input. The gateway default
+    /// preserves the historical 80 000-char cap.
+    pub source_max_chars: usize,
+    /// Character ceiling for a generated summary (`usize::MAX` = unbounded on
+    /// the gateway path; the facade maps the old engine's 4 000 default here).
+    pub summary_max_chars: usize,
     /// Whether LLM compression is enabled.
     pub enabled: bool,
 }
@@ -93,6 +104,9 @@ impl Default for LlmCompressorConfig {
             threshold_percent: 0.80,
             protect_head_n: 3,
             tail_token_budget: 20_000,
+            protect_tail_n: None,
+            source_max_chars: SUMMARIZER_INPUT_MAX_CHARS,
+            summary_max_chars: usize::MAX,
             enabled: true,
         }
     }
@@ -120,6 +134,16 @@ pub struct CompressionResult {
 // ---------------------------------------------------------------------------
 // LLM Compressor
 // ---------------------------------------------------------------------------
+
+/// Keep the first `max` chars of `s`, marking the cut. `usize::MAX` (the
+/// gateway default) leaves the string untouched.
+fn clamp_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max).collect();
+    format!("{head}\n[...summary truncated...]")
+}
 
 /// LLM-based context compressor.
 ///
@@ -313,7 +337,7 @@ impl LlmCompressor {
     pub async fn compress(
         &mut self,
         messages: Vec<Message>,
-        client: &Arc<dyn ModelClient>,
+        client: &dyn ModelClient,
     ) -> Result<CompressionResult> {
         // Anti-thrash: skip LLM compression if we're in cooldown after recent failures.
         if self.is_in_cooldown() {
@@ -356,9 +380,13 @@ impl LlmCompressor {
         let head_n = self.config.protect_head_n.min(pruned.len());
         let (head, middle_and_tail) = pruned.split_at(head_n);
 
-        // Find the tail boundary: walk backward from the end, accumulating
-        // tokens until we exceed tail_token_budget.
-        let tail_start = self.find_tail_start(middle_and_tail);
+        // Find the tail boundary. Facade callers (runtime reconciled.rs) map
+        // the deleted engine's `protect_last_n` — a message-count protection —
+        // onto `protect_tail_n`; `None` keeps the token-budget walk.
+        let tail_start = match self.config.protect_tail_n {
+            Some(n) => middle_and_tail.len().saturating_sub(n),
+            None => self.find_tail_start(middle_and_tail),
+        };
         // Never start the tail on a `tool_result` whose `tool_use` was
         // summarized into the middle — that is an orphaned result, which
         // strict providers reject outright. Pull the boundary back to the
@@ -509,7 +537,7 @@ impl LlmCompressor {
     /// Generate a structured summary of the middle turns using the auxiliary LLM.
     async fn generate_summary(
         &self,
-        client: &Arc<dyn ModelClient>,
+        client: &dyn ModelClient,
         middle: &[Message],
         previous_summary: &Option<String>,
     ) -> Result<String> {
@@ -525,7 +553,7 @@ impl LlmCompressor {
             .find_map(|c| c.message.content.clone())
             .unwrap_or_default();
 
-        Ok(summary.trim().to_string())
+        Ok(clamp_chars(summary.trim(), self.config.summary_max_chars))
     }
 
     /// Build the message list for the summarizer LLM call.
@@ -589,10 +617,10 @@ impl LlmCompressor {
             };
 
             total_chars += truncated_content.len();
-            if total_chars > SUMMARIZER_INPUT_MAX_CHARS {
+            if total_chars > self.config.source_max_chars {
                 debug!(
                     "Summarizer input truncated at {} chars (budget: {})",
-                    total_chars, SUMMARIZER_INPUT_MAX_CHARS
+                    total_chars, self.config.source_max_chars
                 );
                 break;
             }

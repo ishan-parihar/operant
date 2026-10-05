@@ -952,25 +952,28 @@ pub async fn run(
                             continue;
                         }
                         // Context overflow recovery: compress and retry
+                        // Context overflow recovery: compress and retry.
+                        // W1.4: one compressor — the core pair, driven via
+                        // the reconciled facade (fresh probe window per
+                        // error, matching the per-error construction the
+                        // deleted engine used).
                         if operant_providers::reliable::is_context_window_exceeded(&e) {
                             tracing::warn!(
                                 "Context overflow in interactive loop, attempting recovery"
                             );
-                            let mut compressor =
-                                crate::agent::context_compressor::ContextCompressor::new(
-                                    config.agent.context_compression.clone(),
-                                    config.agent.max_context_tokens,
-                                )
-                                .with_memory(mem.clone());
+                            let mut window = config.agent.max_context_tokens;
                             let error_msg = format!("{e}");
-                            match compressor
-                                .compress_on_error(
-                                    &mut history,
-                                    provider.as_ref(),
-                                    &model_name,
-                                    &error_msg,
-                                )
-                                .await
+                            match crate::agent::reconciled::compress_on_error(
+                                &mut history,
+                                provider.as_ref(),
+                                &model_name,
+                                &error_msg,
+                                &crate::agent::reconciled::PreflightConfig::default(),
+                                &mut window,
+                                Some(&mem),
+                                memory_session_id.as_deref(),
+                            )
+                            .await
                             {
                                 Ok(true) => {
                                     tracing::info!(
@@ -1015,15 +1018,19 @@ pub async fn run(
             observer.record_event(&ObserverEvent::TurnComplete);
 
             // Context compression before hard trimming to preserve long-context signal.
+            // W1.4: the core pair via the reconciled facade — todo re-injection
+            // now also folds the active todo list back in here.
             {
-                let compressor = crate::agent::context_compressor::ContextCompressor::new(
-                    config.agent.context_compression.clone(),
+                match crate::agent::reconciled::compress_if_needed(
+                    &mut history,
+                    provider.as_ref(),
+                    &model_name,
+                    &crate::agent::reconciled::PreflightConfig::default(),
                     config.agent.max_context_tokens,
+                    Some(&mem),
+                    memory_session_id.as_deref(),
                 )
-                .with_memory(mem.clone());
-                match compressor
-                    .compress_if_needed(&mut history, provider.as_ref(), &model_name)
-                    .await
+                .await
                 {
                     Ok(result) if result.compressed => {
                         tracing::info!(

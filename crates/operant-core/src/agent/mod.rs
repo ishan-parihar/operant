@@ -1139,6 +1139,12 @@ pub mod clients;
 // Method-group impl blocks extracted from the former 4.1K-line impl OperantAgent.
 mod builders;
 mod compress;
+// W1.4: the preflight compression surface the runtime reconciled facade
+// drives (old runtime engine's knobs + ported behaviors b/c/e + todo fold).
+pub use compress::{
+    PreflightConfig, fast_trim_tool_results, next_probe_tier, parse_context_limit_from_error,
+    reinject_todos, repair_tool_pairs,
+};
 mod events;
 mod prompting;
 mod run;

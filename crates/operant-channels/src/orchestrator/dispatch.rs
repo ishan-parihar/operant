@@ -341,19 +341,22 @@ pub(crate) async fn process_channel_message(
     history.extend(prior_turns);
 
     // ── Proactive context compression ────────────────────────────
-    // Use the existing ContextCompressor to summarize older history
-    // before the LLM call, preventing context-window-exceeded errors
-    // and preserving key decisions through LLM-driven summarization.
+    // W1.4: one compressor — the core pair, via the runtime reconciled
+    // facade. Summarizes older history before the LLM call, preventing
+    // context-window-exceeded errors; on compression the active todo list
+    // is also folded back in (previously a gateway-loop-only behavior) and
+    // the summary persists to memory before old turns are discarded.
     {
-        let cc_config = ctx.prompt_config.agent.context_compression.clone();
-        let compressor = operant_runtime::agent::context_compressor::ContextCompressor::new(
-            cc_config,
+        match operant_runtime::agent::reconciled::compress_if_needed(
+            &mut history,
+            active_provider.as_ref(),
+            route.model.as_str(),
+            &operant_runtime::agent::reconciled::PreflightConfig::default(),
             ctx.context_token_budget,
+            Some(&ctx.memory),
+            Some(&history_key),
         )
-        .with_memory(Arc::clone(&ctx.memory));
-        match compressor
-            .compress_if_needed(&mut history, active_provider.as_ref(), route.model.as_str())
-            .await
+        .await
         {
             Ok(result) if result.compressed => {
                 tracing::info!(
