@@ -516,6 +516,18 @@ grant_ttl_days = 7
 # after EVERY completed turn: new roll = previous roll + this session's
 # doings — rolling, never an aggregate of old rolls.
 session_summary_ttl_minutes = 30
+# Wave 4 — the org-wide default budget a seat runs under when no per-seat
+# override row exists. cap = 0 (default) = ungoverned: no budget consulted.
+# basis: "tokens" | "usd". window: "daily" | "weekly" | "monthly" (UTC).
+# mode: "soft" = inject remaining-budget + warn past the cap and continue;
+#        "hard" = refuse turns that start over the cap with a clear notice.
+# Per-employee fine-tuning lives in the seat_budgets table (data), so one
+# seat can be capped without a config edit + restart.
+[genome.budget]
+basis = "tokens"
+window = "daily"
+cap = 0.0
+mode = "soft"
 # The P3 queue-sweep switch (queued_cron_jobs_resolve_grants) was removed in
 # iter-600 without ever gaining a consumer — pending escalations resolve
 # only by a human verdict or the 60s interactive lapse. [genome] rejects

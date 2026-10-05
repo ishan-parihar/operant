@@ -74,6 +74,7 @@ pub mod pending_requests;
 pub mod resolver;
 pub mod schema;
 pub mod seat_authority;
+pub mod seat_budgets;
 pub mod seat_policy;
 pub mod seat_policy_db;
 pub mod worklog;

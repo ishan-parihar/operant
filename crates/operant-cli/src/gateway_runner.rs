@@ -310,6 +310,29 @@ pub(crate) fn employee_registry() -> Option<Arc<operant_core::org::employee_db::
     guard.clone()
 }
 
+/// Wave 4 (ORGANISM-ARCHITECTURE §5): the per-seat budget override store.
+/// Same shape as the other org-store globals — the turn prologue resolves
+/// a seat's effective budget through it (per-field precedence over
+/// `[genome].budget`) without a handle back into `start_gateway`'s locals.
+pub static SEAT_BUDGET_DBS: OnceLock<
+    std::sync::Mutex<Option<Arc<operant_core::org::seat_budgets::SeatBudgetDb>>>,
+> = OnceLock::new();
+
+/// Install the seat budget store (Wave 4). Overwrite-once at gateway start.
+pub fn store_seat_budget_db(db: Arc<operant_core::org::seat_budgets::SeatBudgetDb>) {
+    let cell = SEAT_BUDGET_DBS.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(db);
+    }
+}
+
+/// The installed seat budget store, if the gateway started one.
+pub(crate) fn seat_budget_db() -> Option<Arc<operant_core::org::seat_budgets::SeatBudgetDb>> {
+    let cell = SEAT_BUDGET_DBS.get_or_init(|| std::sync::Mutex::new(None));
+    let guard = cell.lock().ok()?;
+    guard.clone()
+}
+
 /// Install the gateway's concrete seat-policy store (P3). Overwrite-once
 /// at gateway start, mirroring [`store_seat_approver`].
 pub fn store_seat_policy_db(db: Arc<operant_core::org::seat_policy_db::SeatPolicyDb>) {
@@ -682,6 +705,11 @@ struct GatewayMessageHandler {
     /// — the handler has no config handle of its own and the value is not
     /// hot-reloadable).
     summary_ttl_minutes: i64,
+    /// Wave 4 (ORGANISM-ARCHITECTURE §5): the org-wide default budget
+    /// (`[genome].budget`, captured at gateway start for the same reason).
+    /// Per-seat overrides resolve through the SEAT_BUDGET_DBS global at
+    /// turn time.
+    default_budget: operant_core::config::BudgetSettings,
 }
 
 #[async_trait::async_trait]
@@ -942,6 +970,91 @@ impl MessageHandler for GatewayMessageHandler {
                     format!("<continuation_summary>\n{text}\n</continuation_summary>\n\n{query}")
                 }
                 _ => query,
+            }
+        } else {
+            query
+        };
+
+        // Wave 4 (ORGANISM-ARCHITECTURE §5): the budget gate + the
+        // remaining-budget injection. Resolution: per-seat override row
+        // (per-field precedence) over `[genome].budget`; cap <= 0 =
+        // ungoverned, nothing is computed or injected. Metering READS the
+        // existing per-session accumulator rolled up per employee over the
+        // window — no second counter. Enforcement is TURN-BOUNDARY v1: a
+        // turn that STARTS over a HARD cap is refused with a clear notice
+        // (the owner's "stop and provide the summary"); soft = the remainder
+        // is injected every turn so the agent self-economizes BEFORE the
+        // cap, and past it, warns and continues. Mid-flight enforcement is
+        // a recorded follow-up.
+        let query = if let Some(employee_id) = bound_employee.as_ref() {
+            let seat_override = seat_budget_db().and_then(|db| db.get(employee_id).ok().flatten());
+            let effective = operant_core::org::seat_budgets::resolve_budget(
+                seat_override.as_ref(),
+                &self.default_budget,
+            );
+            match effective {
+                None => query,
+                Some(budget) => {
+                    let since = operant_core::org::seat_budgets::window_start(&budget.window);
+                    let usage = {
+                        let gw_guard = self.gateway.lock().await;
+                        gw_guard
+                            .as_ref()
+                            .and_then(|gw| gw.get_persistent_sessions())
+                            .and_then(|store| store.employee_window_usage(employee_id, &since).ok())
+                    };
+                    match usage {
+                        None => query,
+                        Some((tokens_used, usd_used)) => {
+                            let (used, remaining, unit) = if budget.basis == "usd" {
+                                (usd_used, budget.cap - usd_used, "USD")
+                            } else {
+                                (
+                                    tokens_used as f64,
+                                    budget.cap - tokens_used as f64,
+                                    "tokens",
+                                )
+                            };
+                            if remaining <= 0.0 && budget.mode == "hard" {
+                                tracing::warn!(
+                                    seat = %employee_id,
+                                    basis = %budget.basis,
+                                    cap = budget.cap,
+                                    used = used,
+                                    "Wave 4: hard budget cap — refusing the turn"
+                                );
+                                return Ok(OutgoingMessage::new(
+                                    message.channel_id.clone(),
+                                    format!(
+                                        "🛑 Budget cap reached for `{employee_id}` — {used:.0} of \
+                                         {cap:.0} {unit} used this {window}. The turn was not run. \
+                                         Ask `{owner}` to raise the `seat_budgets` cap, or wait for the \
+                                         window to roll.",
+                                        cap = budget.cap,
+                                        unit = unit,
+                                        window = budget.window,
+                                        owner = "hrmaster",
+                                    ),
+                                ));
+                            }
+                            let posture = if remaining <= 0.0 {
+                                "OVER the cap (soft mode: continue, but say so)".to_string()
+                            } else {
+                                format!(
+                                    "{remaining:.0} of {cap:.0} {unit} remain",
+                                    cap = budget.cap,
+                                    unit = unit
+                                )
+                            };
+                            format!(
+                                "<budget_state>\nEmployee `{employee_id}` budget — {basis} window {window}, mode {mode}: {posture}. Be mindful of consumption; prefer efficient tool use and concise reasoning while the budget is tight.\n</budget_state>\n\n{query}",
+                                basis = budget.basis,
+                                window = budget.window,
+                                mode = budget.mode,
+                            )
+                        }
+                    }
+                }
             }
         } else {
             query
@@ -1498,6 +1611,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // employee ids through the global seam; the Arc is cloned BEFORE any
     // dyn coercion below keeps the concrete type reachable.
     store_employee_registry(Arc::clone(&employee_registry));
+    let seat_budget_store = Arc::new(operant_core::org::seat_budgets::SeatBudgetDb::init(
+        &org_db,
+    )?);
+    store_seat_budget_db(Arc::clone(&seat_budget_store));
     let hierarchy_edges = Arc::new(operant_core::org::hierarchy_edges::HierarchyEdgesDb::init(
         &org_db,
     )?);
@@ -1648,6 +1765,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
         summary_ttl_minutes: app_config.genome.session_summary_ttl_minutes,
+        default_budget: app_config.genome.budget.clone(),
     });
     gateway = gateway.with_handler(handler.clone());
 

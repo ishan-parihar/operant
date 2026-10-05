@@ -1198,6 +1198,31 @@ impl PersistentSessionStore {
     /// silently binding nothing. Existence/validity of the employee id is
     /// the CALLER's job (the command checks the employee registry), not the
     /// store's — the store also runs in harnesses with no org layer at all.
+    /// Wave 4 (ORGANISM-ARCHITECTURE §5): the employee's metered usage in a
+    /// budget window — the SUM over the employee's sessions of the
+    /// per-session accumulator (`total_tokens`, `estimated_cost_usd`),
+    /// filtered to rows touched since `since_rfc3339`. This READS the
+    /// existing metering; budgets add no second counter.
+    /// Returns (tokens, usd).
+    pub fn employee_window_usage(
+        &self,
+        employee_id: &str,
+        since_rfc3339: &str,
+    ) -> Result<(i64, f64), Error> {
+        let conn = self.lock_conn()?;
+        let row = conn
+            .query_row(
+                "SELECT COALESCE(SUM(total_tokens), 0),
+                        COALESCE(SUM(estimated_cost_usd), 0.0)
+                 FROM gateway_sessions
+                 WHERE employee_id = ?1 AND updated_at >= ?2",
+                params![employee_id, since_rfc3339],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+            )
+            .map_err(|e| Error::Agent(format!("Failed to roll up employee window usage: {e}")))?;
+        Ok(row)
+    }
+
     /// Wave 3 (ORGANISM-ARCHITECTURE §3): upsert the rolling summary for
     /// (employee, session). ONE row per pair — every completed turn writes
     /// the new roll (previous roll + this session's doings); the table
@@ -1954,6 +1979,55 @@ mod tests {
             .unwrap();
         let hr = store.valid_summary("hrmaster", "k1", 30).unwrap().unwrap();
         assert_eq!(hr.0, "hr roll");
+    }
+
+    #[test]
+    fn wave4_employee_window_usage_rolls_up_the_accumulator() {
+        // Budgets READ the existing metering — this is the only rollup.
+        // Two sessions of one employee sum; another employee's session
+        // does not leak in; the since-cutoff excludes stale rows.
+        let store = test_store();
+        let source_a = test_source("telegram", "u1", "c1", "dm");
+        let entry_a = store.get_or_create_session(&source_a, false).unwrap();
+        store
+            .bind_employee(&entry_a.session_key, "dp-the-program")
+            .unwrap();
+        store
+            .update_tokens(&entry_a.session_key, 100, 50, 0, 0, 0.10)
+            .unwrap();
+        let source_b = test_source("telegram", "u2", "c2", "dm");
+        let entry_b = store.get_or_create_session(&source_b, false).unwrap();
+        store
+            .bind_employee(&entry_b.session_key, "dp-the-program")
+            .unwrap();
+        store
+            .update_tokens(&entry_b.session_key, 200, 50, 0, 0, 0.20)
+            .unwrap();
+        let source_c = test_source("telegram", "u3", "c3", "dm");
+        let entry_c = store.get_or_create_session(&source_c, false).unwrap();
+        store
+            .bind_employee(&entry_c.session_key, "hrmaster")
+            .unwrap();
+        store
+            .update_tokens(&entry_c.session_key, 1000, 0, 0, 0, 1.0)
+            .unwrap();
+
+        let long_ago = "1970-01-01T00:00:00+00:00".to_string();
+        let (tokens, usd) = store
+            .employee_window_usage("dp-the-program", &long_ago)
+            .unwrap();
+        assert_eq!(tokens, 100 + 50 + 200 + 50);
+        assert!((usd - 0.30).abs() < 1e-9);
+        // Another employee: isolated.
+        let (hr_tokens, _) = store.employee_window_usage("hrmaster", &long_ago).unwrap();
+        assert_eq!(hr_tokens, 1000);
+        // A cutoff in the future excludes everything → zero usage.
+        let far_future = "2999-01-01T00:00:00+00:00".to_string();
+        let (none, none_usd) = store
+            .employee_window_usage("dp-the-program", &far_future)
+            .unwrap();
+        assert_eq!(none, 0);
+        assert_eq!(none_usd, 0.0);
     }
 
     #[test]

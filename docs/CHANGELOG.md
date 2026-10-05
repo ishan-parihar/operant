@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Added
 
+- Wave 4 — budgets as policy (ORGANISM-ARCHITECTURE §5):
+  `[genome].budget` sets the org-wide default (basis tokens|usd, window
+  daily|weekly|monthly UTC, cap, mode hard|soft); per-seat overrides live
+  in the new `seat_budgets` table with per-field precedence — a row with
+  `cap = 0` is the deliberate release valve ("this seat runs free even
+  though the org caps"). Ungoverned when no row and cap 0 (the shipped
+  default): nothing computed, nothing injected, byte-identical legacy.
+  Metering READS the existing per-session accumulator
+  (`employee_window_usage`: SUM(total_tokens)/SUM(estimated_cost_usd) over
+  the employee's sessions in the window) — no second counter. Every turn
+  injects a `<budget_state>` block with the remainder so the agent
+  self-economizes before the cap; HARD mode refuses turns that start over
+  the cap with a clear notice naming the seat, usage, cap, and the
+  escalation path; SOFT warns and continues. Enforcement is turn-boundary
+  v1 — mid-flight enforcement is a recorded follow-up, not this contract.
+  Typo'd window values fail OPEN to daily (turns keep running; doctor can
+  flag the value) — a silent refusal would be worse.
+
 - Wave 3 — rolling compaction handoff (ORGANISM-ARCHITECTURE §3): every
   completed gateway turn upserts ONE rolling summary row per
   (employee, session) — new roll = previous roll + the turn's doings,

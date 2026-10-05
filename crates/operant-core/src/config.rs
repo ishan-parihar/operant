@@ -144,6 +144,45 @@ pub struct GenomeSettings {
     /// UPSERTed per (employee, session) every completed turn — rolling,
     /// never aggregating old rolls.
     pub session_summary_ttl_minutes: i64,
+    /// Wave 4 (ORGANISM-ARCHITECTURE §5): the ORG-WIDE default budget a
+    /// seat runs under when no `seat_budgets` row overrides it. `cap = 0`
+    /// (the default) = ungoverned — no budget is consulted at all, which
+    /// is the genome's rule-2 posture (byte-identical legacy). Per-employee
+    /// overrides live in the `seat_budgets` table (data, not config) so
+    /// hrmaster can fine-tune one seat without a config edit + restart.
+    pub budget: BudgetSettings,
+}
+
+/// `[genome].budget` — Wave 4. Basis is `tokens` or `usd` (metering has
+/// both; tokens is model-agnostic, USD maps 1:1 to paid-model invoices).
+/// Window is `daily` | `weekly` | `monthly`, UTC boundaries. Mode `hard`
+/// refuses the turn at the cap (with a clear notice); `soft` warns and
+/// continues. Enforcement is TURN-BOUNDARY v1: a turn that STARTS over a
+/// hard cap is refused; in-flight turns complete and their usage lands in
+/// the accumulator for the next boundary check. Mid-flight enforcement is
+/// a recorded follow-up, not this contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BudgetSettings {
+    /// `tokens` (default) or `usd` — what `cap` counts.
+    pub basis: String,
+    /// `daily` (default) | `weekly` | `monthly` — the rollup window.
+    pub window: String,
+    /// The cap on the basis within the window. 0 = ungoverned (no budget).
+    pub cap: f64,
+    /// `soft` (default: warn + continue) or `hard` (refuse at the cap).
+    pub mode: String,
+}
+
+impl Default for BudgetSettings {
+    fn default() -> Self {
+        Self {
+            basis: "tokens".to_string(),
+            window: "daily".to_string(),
+            cap: 0.0,
+            mode: "soft".to_string(),
+        }
+    }
 }
 
 impl Default for GenomeSettings {
@@ -152,6 +191,7 @@ impl Default for GenomeSettings {
             unrestricted_default: "yolo".to_string(),
             grant_ttl_days: 7,
             session_summary_ttl_minutes: 30,
+            budget: BudgetSettings::default(),
         }
     }
 }
