@@ -393,10 +393,52 @@ pub struct SessionEntry {
     /// When resume_pending was set
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_resume_marked_at: Option<String>,
+    /// The cast employee this session executes as (ORGANISM-ARCHITECTURE §2:
+    /// a session borrows the employee's authority, budget and charter; the
+    /// seat under the genome IS this id). `None` only for pre-Wave-2 rows
+    /// still unread since the migration — `load_from_db` and the schema
+    /// migration backfill them to `premiere` (owner ruling: default
+    /// conversations talk to the premiere).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub employee_id: Option<String>,
 }
 
 fn default_cost_status() -> String {
     "unknown".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Schema reconciliation (ORGANISM-ARCHITECTURE §2)
+// ---------------------------------------------------------------------------
+
+/// Additive reconciliation for a `gateway_sessions` table written before the
+/// employee binding existed: add the nullable `employee_id` column and
+/// backfill every existing row to `premiere` (owner ruling — the default
+/// conversation talks to the premiere, not a separate assistant role). A
+/// plain `TEXT` column, not a `REFERENCES employees(id)` FK: the org layer
+/// refuses `PRAGMA user_version` versioning AND the employees table lives in
+/// the same `database.db`, but a hard FK here would make session writes fail
+/// in test harnesses that open the store on an empty connection. The
+/// enforcement of "this must be a real employee" lives at the binding
+/// surface (the `/session new` command), not the schema.
+///
+/// Idempotent: `ensure_column` no-ops when the column is present, and the
+/// backfill update touches only NULL rows.
+fn ensure_employee_binding(conn: &Connection) -> Result<(), Error> {
+    crate::org::schema::ensure_column(conn, "gateway_sessions", "employee_id", "TEXT")
+        .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {e}")))?;
+    conn.execute(
+        "UPDATE gateway_sessions SET employee_id = ?1 WHERE employee_id IS NULL",
+        params![crate::org::cast::PREMIERE_SEAT],
+    )
+    .map_err(|e| Error::Agent(format!("Gateway session employee backfill failed: {e}")))?;
+    Ok(())
+}
+
+/// The binding a NEW session gets when none was chosen explicitly: the
+/// premiere (ORGANISM-ARCHITECTURE §2, owner ruling).
+fn default_employee_binding() -> Option<String> {
+    Some(crate::org::cast::PREMIERE_SEAT.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +619,7 @@ impl PersistentSessionStore {
             CREATE INDEX IF NOT EXISTS idx_gw_sessions_session_id ON gateway_sessions(session_id);",
         )
         .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {}", e)))?;
+        ensure_employee_binding(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -623,6 +666,7 @@ impl PersistentSessionStore {
             CREATE INDEX IF NOT EXISTS idx_gw_sessions_session_id ON gateway_sessions(session_id);",
         )
         .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {}", e)))?;
+        ensure_employee_binding(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -660,7 +704,7 @@ impl PersistentSessionStore {
                         cache_write_tokens, total_tokens, last_prompt_tokens, estimated_cost_usd,
                         cost_status, was_auto_reset, auto_reset_reason, reset_had_activity,
                         is_fresh_reset, expiry_finalized, suspended, resume_pending,
-                        resume_reason, last_resume_marked_at
+                        resume_reason, last_resume_marked_at, employee_id
                  FROM gateway_sessions",
             )
             .map_err(|e| Error::Agent(format!("Failed to prepare load: {}", e)))?;
@@ -697,6 +741,15 @@ impl PersistentSessionStore {
                     resume_pending: row.get::<_, i32>(22)? != 0,
                     resume_reason: row.get(23)?,
                     last_resume_marked_at: row.get(24)?,
+                    // §2 backfill: a row written before the column existed
+                    // reads NULL here only if the migration's UPDATE somehow
+                    // did not run — treat that as premiere too, never None,
+                    // so a turn never runs seatless.
+                    employee_id: Some(
+                        row.get::<_, Option<String>>(25)?.unwrap_or_else(|| {
+                            crate::org::cast::PREMIERE_SEAT.to_string()
+                        }),
+                    ),
                 })
             })
             .map_err(|e| Error::Agent(format!("Failed to query sessions: {}", e)))?;
@@ -726,10 +779,10 @@ impl PersistentSessionStore {
                 cache_write_tokens, total_tokens, last_prompt_tokens, estimated_cost_usd,
                 cost_status, was_auto_reset, auto_reset_reason, reset_had_activity,
                 is_fresh_reset, expiry_finalized, suspended, resume_pending,
-                resume_reason, last_resume_marked_at
+                resume_reason, last_resume_marked_at, employee_id
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
+                ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
             )
             ON CONFLICT(session_key) DO UPDATE SET
                 session_id = excluded.session_id,
@@ -755,7 +808,8 @@ impl PersistentSessionStore {
                 suspended = excluded.suspended,
                 resume_pending = excluded.resume_pending,
                 resume_reason = excluded.resume_reason,
-                last_resume_marked_at = excluded.last_resume_marked_at",
+                last_resume_marked_at = excluded.last_resume_marked_at,
+                employee_id = excluded.employee_id",
             params![
                 entry.session_key,
                 entry.session_id,
@@ -782,6 +836,7 @@ impl PersistentSessionStore {
                 entry.resume_pending as i32,
                 entry.resume_reason,
                 entry.last_resume_marked_at,
+                entry.employee_id,
             ],
         )
         .map_err(|e| Error::Agent(format!("Failed to save session entry: {}", e)))?;
@@ -867,6 +922,8 @@ impl PersistentSessionStore {
         }
 
         // Create new session
+        // §2: a NEW session binds to the premiere unless a `/session new`
+        // rebind overrides it later.
         let entry = SessionEntry {
             session_key: session_key.clone(),
             session_id: format!(
@@ -880,6 +937,7 @@ impl PersistentSessionStore {
             display_name: source.chat_name.clone(),
             platform: Some(source.platform.clone()),
             chat_type: source.chat_type.clone(),
+            employee_id: default_employee_binding(),
             ..Default::default()
         };
 
@@ -947,6 +1005,9 @@ impl PersistentSessionStore {
             display_name: source.chat_name.clone(),
             platform: Some(source.platform.clone()),
             chat_type: source.chat_type.clone(),
+            // §2: a reset mints a NEW session, and new sessions bind to the
+            // premiere — a rebind never survives an auto/forced reset.
+            employee_id: default_employee_binding(),
             was_auto_reset,
             auto_reset_reason: auto_reset_reason.map(String::from),
             ..Default::default()
@@ -997,6 +1058,7 @@ impl PersistentSessionStore {
             display_name: old_entry.display_name,
             platform: old_entry.platform,
             chat_type: old_entry.chat_type,
+            employee_id: old_entry.employee_id,
             ..Default::default()
         };
 
@@ -1097,6 +1159,35 @@ impl PersistentSessionStore {
             return Ok(());
         }
         Err(Error::Agent(format!("Session not found: {}", session_key)))
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// Re-bind a session to a different cast employee (ORGANISM-ARCHITECTURE
+    /// §2, the `/session new <employee>` surface). `None` is returned when no
+    /// row exists for the key so the caller can say so honestly instead of
+    /// silently binding nothing. Existence/validity of the employee id is
+    /// the CALLER's job (the command checks the employee registry), not the
+    /// store's — the store also runs in harnesses with no org layer at all.
+    pub fn bind_employee(
+        &self,
+        session_key: &str,
+        employee_id: &str,
+    ) -> Result<Option<SessionEntry>, Error> {
+        let mut entries = self
+            .entries
+            .write()
+            .expect("session entries/config write lock poisoned — programmer error");
+        let Some(entry) = entries.get_mut(session_key) else {
+            return Ok(None);
+        };
+        entry.employee_id = Some(employee_id.to_string());
+        let entry = entry.clone();
+        drop(entries);
+        self.save_entry(&entry)?;
+        Ok(Some(entry))
     }
 
     #[expect(
@@ -1620,6 +1711,7 @@ impl Default for SessionEntry {
             resume_pending: false,
             resume_reason: None,
             last_resume_marked_at: None,
+            employee_id: default_employee_binding(),
         }
     }
 }
