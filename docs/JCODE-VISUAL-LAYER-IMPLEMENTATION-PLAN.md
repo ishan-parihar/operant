@@ -71,30 +71,32 @@ or write into a buffer, excluding `app/tests/`, `ui_tests/`, `*tests.rs`, and
 3. **Degradations, deliberate and marked at site:** mermaid = upstream's own cfg-off fallback (W9 cut, zero divergence); latex image → unicode `math_display_lines` (mdwright-latex absent; operant's live TUI renders display math as text today). Restore paths recorded in `[port-decision]` comments.
 4. **Fence shape is mutation-proven:** `│ `→`││` at render_full:494 fails exactly 5 tests incl. the copy-target test `copy_targets.rs` depends on. W3's `ui_messages` is now unblocked.
 
-### W3 — Content renderers (sequential; the transcript)
+### W3 — Content renderers (sequential; the transcript) — **DONE, iter-623**
 | Source | LOC | Delivers |
 |---|---|---|
 | `ui_tools.rs` | 1,687 | tool rows, summary budget, 3-state icons, hide-by-default output |
 | `ui_prepare.rs` | 2,721 | role dispatch, user bubble + rainbow ordinal, no-blank-separator rules |
 | `ui_messages.rs` | 4,480 | `render_assistant_message`, tool assembly |
-| **W3 total** | **8,888** | |
+| **W3 total** | **8,888** | landed with their satellites (batch.rs, tests.rs, ui_messages_cache.rs) + `ui_diff.rs` (the TuiState trait references its types) |
 
-### W4 — Composer and viewport
+### W4 — Composer and viewport — **DONE, iter-623**
 | Source | LOC | Delivers |
 |---|---|---|
 | `ui_input.rs` | 3,052 | 4-state composer glyph, cursor by display width, notice taxonomy, status line compaction, zero-height palette overlay |
 | `ui_viewport.rs` | 1,692 | scroll math, copy badges (**consumer of `copy_targets`**), truncation |
 | `ui_inline.rs` + `ui_inline_interactive.rs` | 1,577 | inline UI band |
-| **W4 total** | **6,321** | |
+| **W4 total** | **6,321** | + `copy_selection.rs` (jcode-tui-core leaf) |
 
-### W5 — The frame
+### W5 — The frame — **LEAVES DONE; the ui.rs AGGREGATE ROOT DEFERS TO CUTOVER (iter-623)**
 | Source | LOC | Delivers |
 |---|---|---|
-| `ui.rs` | 3,713 | full-frame clear every tick, 10-band chrome, packed/scrolling, overlay early-return |
+| `ui.rs` | 3,713 | **[CORRECTION]** upstream ui.rs is the parent module declaring 30+ `#[path]` children + the App-bound draw path; it ports FULLY at the cutover, where the App seam exists. A slim parent skeleton landed instead (child decls + App-free state helpers + the deferred block naming every excision) |
 | `ui_overlays.rs` | 796 | erase → `Borders::ALL` → content (finishes iter-549's slice) |
-| `ui_header.rs` | 1,767 | header — **operant has no header renderer at all** |
-| `ui_animations.rs` | 714 | spinner phase-lock, donut band |
-| **W5 total** | **6,990** | |
+| `ui_header.rs` | 1,767 | header — **operant has no header renderer at all** — landed with its 763-line app-harness test module gated `cfg(any())` (re-activate at cutover against operant's provider harness) |
+| `ui_animations.rs` | 714 | spinner phase-lock, donut band — + `jcode_anim/` (the 930-line engine, re-port of the iter-591 excision) |
+| **W5 total as landed** | **~10,100** | + `memory_tiles.rs` re-port (587 — iter-591's zero-consumer excision inverted by ui_prepare's live call) |
+
+**Batch-3 landing facts (iter-623):** the renderers are dead-in-bin wired for cutover; `tui/jcode_app/` (36 modules) carries the app-core leaf surface, **TuiState** (the 114-method read-only presentation trait — the actual cutover contract: operant's App implements it; the App struct never ports), the todo family, config_shim (the one deliberate adaptation), mermaid/visual_debug/build_meta/env/transcription leaf ports, and the W9-cut degraded engine shims (ratatui_image is the pending batch-4 dependency decision). Gates: 0 errors `--all-targets`; suite 1504/0/1; corpus `verify PASSED: 0 drift`; clippy gate 0 in jcode files. Deferred surfaces each carry a named `[port-decision]` marker: swarm_gallery (W7 — jcode's swarm-core has no operant equivalent), inline-image engine (ratatui_image), pinned_ui (W6), onboarding (W8).
 
 ### W6 — Media and panes
 | Source | LOC |
