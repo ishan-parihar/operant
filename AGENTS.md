@@ -68,8 +68,17 @@ git log origin/main -1 --oneline    # must print your new commit
 
 # 7. Build release binary and deploy to global executable (R&D protocol).
 cargo build --release -p operant-cli
-sudo cp target/release/operant /usr/local/bin/operant
+# Deploy to BOTH install paths (2026-10-05 lesson): the user's PATH and the
+gateway systemd unit resolve ~/.local/bin/operant; /usr/local/bin is the
+# convention target. A running daemon holds the old inode open — `cp` fails
+# with "Text file busy"; rename-over works: build to a temp name, then `mv`.
+cp target/release/operant /usr/local/bin/operant.new && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant
+cp target/release/operant ~/.local/bin/operant.new && mv ~/.local/bin/operant.new ~/.local/bin/operant
 operant --version   # confirm the deployed binary matches
+# Then restart the gateway daemon so it adopts the new inode:
+systemctl --user restart operant-gateway
+# and verify the RUNNING process actually executes the new binary:
+md5sum /proc/$(systemctl --user show -p MainPID --value operant-gateway)/exe
 ```
 
 ### R&D Protocol — Deploy After Every Push
@@ -125,7 +134,7 @@ both commits, note the collision in the next commit body, and carry on.
 
 Force-pushing to "clean up" a number is never the fix.
 
-### Parallel-Agent Coordination Protocol (fleet work — ADDED iter-619, REQUIRED for any concurrent session)
+### Parallel-Agent Coordination Protocol (fleet work — ADDED iter-619, storage doctrine REVISED iter-631 by owner order 2026-10-05)
 
 Multiple agents work this repo at once. The hardest discipline is not
 code — it is never destroying a peer's work that lives only in the shared
@@ -149,30 +158,59 @@ incident happened.
    peer's; `git log <your-base>..origin/main --oneline` + diff-name-only vs
    your staged set must show zero file overlap, or coordinate first
    (peers message via `agent://<name>` when slices share files).
-4. **All integration happens in a dedicated worktree**, never the shared
-   main tree: `git worktree add <wt> origin/main`, cherry-pick the slice
-   branch, verify scoped, `git push origin HEAD:main`. Remove the worktree
-   after merge (`git worktree remove`) — a release target/ dir is ~6-10 GB
-   and the box is 2 CPU.
-5. **Never share a `target/` via symlink while two builds can run
-   concurrently** — build-script fingerprints race (observed: ring/
-   aws-lc-sys/sqlite failing with incoherent errors). Symlink ONLY for
-   serial single-builder reuse; otherwise pay for the cold cache and
-   delete promptly.
+4. **Integration happens in the SHARED main tree** (owner order 2026-10-05:
+   per-worktree `target/` caches measured 6–62 GB and the box is
+   storage-critical — the fleet now builds against ONE shared `target/`):
+   work your slice in the main tree, stage explicit paths only (rule 3),
+   push from it. A dirty tree does NOT block a `git merge --ff-only
+   origin/main` catch-up — git refuses the ff if the incoming range touches
+   a dirty tracked file; VERIFY first:
+   `git diff --name-only <base> origin/main` ∩ `git status --porcelain`
+   must be empty (a `Cargo.lock` intersection is fine — the lock is derived:
+   `git checkout -- Cargo.lock`, never stash-merge it, the next build
+   regenerates it). Exception: a TEMPORARY worktree is allowed only for a
+   clean release build when a peer's dirty WIP blocks the bin compile —
+   `df -h` before/after, `git submodule update --init` at creation, and
+   `git worktree remove` immediately after the artifact is out.
+5. **The shared `target/` is the fleet's single build cache — do not
+   casually delete it.** Do NOT `rm -rf target/` (that destroys the
+   release binary and the fleet's warm cache). Clean debug debris ONLY
+   when free disk drops under 20 GB: `rm -rf target/debug/deps
+   target/debug/build target/debug/incremental` (keeps `target/release`).
+   Never share a `target/` via symlink while two builds can run
+   concurrently — build-script fingerprints race (observed: ring/
+   aws-lc-sys/sqlite failing with incoherent errors).
 6. **Compute budgets: scoped builds only, always** (`-p <crate>` — see
-   Compile Strategy). `df -h /` before a second worktree build. Build
-   failures saying `ar: unrecognizsed subcommand 'cq'`: check
-   `which ar` — a foreign CLI has twice (~/.local/bin/ar) shadowed
-   binutils; rename it to `ar-cli.shadow-N` instead of debugging cargo.
+    Compile Strategy). `df -h /` before any build when free disk < 30 GB.
+    Build failures saying `ar: unrecognizsed subcommand 'cq'`: check
+    `which ar` — a foreign CLI has twice (~/.local/bin/ar) shadowed
+    binutils; rename it to `ar-cli.shadow-N` instead of debugging cargo.
+    Kernel-sidecar tests (`tools::kernel::*`) pass ONLY in the main tree:
+    a fresh checkout/worktree lacks the untracked `kernel-sidecar/.venv`
+    and the uninitialized `vendor/prime-agent` submodule — `ping_roundtrip`
+    fails `has_runtime: false` there. Run them in the main tree or not at
+    all; never treat that failure as a tip regression outside the main
+    tree.
 7. **If the tip is red from a peer's in-flight subsystem, don't fix it and
    don't block on it.** Prove your delta adds zero (error-count before/after
    on the untouched base vs patched), say so in the commit body, push.
    Fixing a peer's subsystem mid-flight from another slice is how
    oscillation happens.
 8. **A slice is yours or nobody's.** Git branches sound shared but labour is
-   not: never amend, rebase, or delete a branch/worktree you did not
-   create; `fleet-hold-*` naming makes ownership legible in
-   `git branch`/`git worktree list`.
+    not: never amend, rebase, or delete a branch/worktree you did not
+    create; `fleet-hold-*` naming makes ownership legible in
+    `git branch`/`git worktree list`.
+9. **Stash mechanics are all-or-nothing and untracked-unaware.**
+    `git stash push -- <paths>` FAILS ENTIRELY if any pathspec names an
+    untracked file (no partial stash is created) — to preserve a peer's
+    full WIP use `git stash push -u -m "peer-wip <why>"`, never bare
+    pathspec lists from `git status --porcelain`. Untracked files never
+    block a ff merge unless the incoming range adds a file at the same
+    path. When in doubt whether a stash was created: `git stash list`
+    BEFORE any further ref move — a failed stash plus a merge is how WIP
+    silently rides through (observed 2026-10-05: the stash failed, the
+    `;`-chained merge ran, and only the ff's path-disjointness saved the
+    peer's 40-file WIP).
 
 ### What Counts as an Iteration
 
