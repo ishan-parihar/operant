@@ -125,6 +125,55 @@ both commits, note the collision in the next commit body, and carry on.
 
 Force-pushing to "clean up" a number is never the fix.
 
+### Parallel-Agent Coordination Protocol (fleet work — ADDED iter-619, REQUIRED for any concurrent session)
+
+Multiple agents work this repo at once. The hardest discipline is not
+code — it is never destroying a peer's work that lives only in the shared
+tree. These rules are load-bearing; every one exists because a specific
+incident happened.
+
+1. **The iteration-label authority is `origin/main`, hand-computed.** Fetch,
+   read the top label, compute `top+1` yourself (arithmetic in the message,
+   never a pipeline that serves the top label back). Push, confirm, then
+   `git log origin/main --oneline | grep -c "iter-N"` MUST print 1.
+   Duplicate labels are append-only history — you lose the race, you
+   land with the next free number.
+2. **The main working tree may carry a peer's uncommitted WIP and even
+   their local-only WIP commits.** NEVER `git reset --hard`, `git clean`,
+   `checkout` over it, or update-ref its branch without preserving first.
+   Before ANY ref move: `git branch fleet-hold-<label>-wip <sha>` for every
+   unpushed-looking commit (a peer's "restore point" commit on a pushed
+   label's back is THEIR recovery tool; orphan it and you ate their work).
+3. **Never `git add -A`.** Stage explicit paths. Overlap-check before push:
+   `git status --porcelain -- <your paths>` must show nothing of the
+   peer's; `git log <your-base>..origin/main --oneline` + diff-name-only vs
+   your staged set must show zero file overlap, or coordinate first
+   (peers message via `agent://<name>` when slices share files).
+4. **All integration happens in a dedicated worktree**, never the shared
+   main tree: `git worktree add <wt> origin/main`, cherry-pick the slice
+   branch, verify scoped, `git push origin HEAD:main`. Remove the worktree
+   after merge (`git worktree remove`) — a release target/ dir is ~6-10 GB
+   and the box is 2 CPU.
+5. **Never share a `target/` via symlink while two builds can run
+   concurrently** — build-script fingerprints race (observed: ring/
+   aws-lc-sys/sqlite failing with incoherent errors). Symlink ONLY for
+   serial single-builder reuse; otherwise pay for the cold cache and
+   delete promptly.
+6. **Compute budgets: scoped builds only, always** (`-p <crate>` — see
+   Compile Strategy). `df -h /` before a second worktree build. Build
+   failures saying `ar: unrecognizsed subcommand 'cq'`: check
+   `which ar` — a foreign CLI has twice (~/.local/bin/ar) shadowed
+   binutils; rename it to `ar-cli.shadow-N` instead of debugging cargo.
+7. **If the tip is red from a peer's in-flight subsystem, don't fix it and
+   don't block on it.** Prove your delta adds zero (error-count before/after
+   on the untouched base vs patched), say so in the commit body, push.
+   Fixing a peer's subsystem mid-flight from another slice is how
+   oscillation happens.
+8. **A slice is yours or nobody's.** Git branches sound shared but labour is
+   not: never amend, rebase, or delete a branch/worktree you did not
+   create; `fleet-hold-*` naming makes ownership legible in
+   `git branch`/`git worktree list`.
+
 ### What Counts as an Iteration
 
 - A bug fix → one iteration.
