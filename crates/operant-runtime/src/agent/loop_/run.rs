@@ -2,9 +2,140 @@
 //! Re-exported from `loop_` so every import path is unchanged.
 
 use crate::approval::ApprovalManager;
+use operant_api::agent::TurnEvent;
 
 /// CLI channel factory, injected by the binary. Returns a `Box<dyn Channel>` for interactive mode.
 use super::*;
+
+/// Map every [`RunOverrides`] field onto the facade's
+/// [`crate::agent::reconciled::FacadeTurnOverrides`], field for field:
+/// the two override strings, temperature, the peripheral-tool list, the
+/// interactive flag, the session-state path and the tool allowlist all
+/// carry straight across. The observer is NOT carried: the facade's
+/// observer is construction-bound and is already the caller's observer
+/// (passed to `build_facade_agent`); the override form exists for the
+/// Wave-3 per-turn swap hook, so it stays `None` here rather than
+/// producing a warn on every turn.
+fn facade_overrides(overrides: &RunOverrides) -> crate::agent::reconciled::FacadeTurnOverrides {
+    crate::agent::reconciled::FacadeTurnOverrides {
+        provider_override: overrides.provider_override.clone(),
+        model_override: overrides.model_override.clone(),
+        temperature: Some(overrides.temperature),
+        peripheral_overrides: overrides.peripheral_overrides.clone(),
+        interactive: overrides.interactive,
+        session_state_file: overrides.session_state_file.clone(),
+        allowed_tools: overrides.allowed_tools.clone(),
+        observer: None,
+    }
+}
+
+/// W1.8b: facade turns park permission requests on the TurnEvent
+/// channel; an unanswered request sits until core's 120s deadline
+/// denies it. The CLI/daemon paths have no transport consumer, so
+/// their drain loops answer every request with the SAME policy the
+/// old tool-loop [`ApprovalManager`] applied: `approval_requirement()`
+/// decides, and `Prompt` means the terminal (interactive run) or
+/// denial (no operator on the daemon paths). Decisions flow through
+/// `record_decision` so the session allowlist ("always") and the audit
+/// log keep their old behavior.
+pub(super) async fn answer_approval_request(
+    approvals: &crate::agent::reconciled::ReconciledApprovals,
+    policy: &ApprovalManager,
+    interactive: bool,
+    request_id: &str,
+    tool_name: &str,
+    arguments_summary: &str,
+) {
+    use crate::approval::ApprovalRequirement;
+    use operant_api::channel::ChannelApprovalResponse;
+
+    let (response, legacy) = match policy.approval_requirement(tool_name) {
+        ApprovalRequirement::Approved | ApprovalRequirement::NotRequired => (
+            ChannelApprovalResponse::Approve,
+            crate::approval::ApprovalResponse::Yes,
+        ),
+        ApprovalRequirement::Prompt if !interactive => (
+            ChannelApprovalResponse::Deny,
+            crate::approval::ApprovalResponse::No,
+        ),
+        ApprovalRequirement::Prompt => {
+            eprintln!("\n\u{1b}[1m{tool_name}\u{1b}[0m requires approval:\n  {arguments_summary}");
+            let mut line = String::new();
+            match std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line) {
+                Ok(_) if line.trim() == "a" || line.trim() == "always" => (
+                    ChannelApprovalResponse::AlwaysApprove,
+                    crate::approval::ApprovalResponse::Always,
+                ),
+                Ok(_) if line.trim() == "y" || line.trim() == "yes" => (
+                    ChannelApprovalResponse::Approve,
+                    crate::approval::ApprovalResponse::Yes,
+                ),
+                _ => (
+                    ChannelApprovalResponse::Deny,
+                    crate::approval::ApprovalResponse::No,
+                ),
+            }
+        }
+    };
+    policy.record_decision(
+        tool_name,
+        &serde_json::Value::String(arguments_summary.to_string()),
+        legacy,
+        if interactive { "cli" } else { "daemon" },
+    );
+    if !approvals.resolve(request_id, response) {
+        tracing::warn!(
+            request_id,
+            tool_name,
+            "approval request expired before answer"
+        );
+    }
+}
+
+/// Facade construction for the Loop C CLI/daemon adapters
+/// (`loop_::run`, `loop_::process_message`). W1.8b: the turn itself now
+/// runs on the reconciled facade (Loop A under the hood) instead of
+/// `run_tool_call_loop`.
+///
+/// The inputs are the same ones the old call site handed the tool loop:
+/// the caller's already-resolved `(provider, model)` pair (the facade
+/// must not re-resolve it — `run`'s model-switch loop and the channels
+/// route selection both own that choice), the caller's own runtime tool
+/// registry (Loop C's tool surface), the observer, the memory-session id
+/// and the cost-tracking context. Every other facade input
+/// (`AgentConfig` from the process behavior settings, core's builtin tool
+/// registry, MCP, evolution intervals) is the shared
+/// `from_config_with_tools` construction.
+///
+/// `system_prompt` becomes the core agent's frozen system prompt so the
+/// facade's turn carries Loop C's exact prompt rather than a
+/// default — the same text `run_tool_call_loop` received as
+/// `history[0]`.
+pub(super) async fn build_facade_agent(
+    config: &Config,
+    provider_name: &str,
+    provider: &Arc<dyn Provider>,
+    model_name: &str,
+    observer: Arc<dyn Observer>,
+    memory_session_id: Option<&str>,
+    cost_tracking_context: Option<ToolLoopCostTrackingContext>,
+    system_prompt: &str,
+) -> Result<crate::agent::reconciled::ReconciledAgent> {
+    let facade = crate::agent::reconciled::ReconciledAgent::from_config_with(
+        config,
+        Some(observer),
+        memory_session_id,
+        true,
+        Some((
+            provider_name.to_string(),
+            Arc::clone(provider),
+            model_name.to_string(),
+        )),
+        Some(system_prompt.to_string()),
+    )
+    .await?;
+    Ok(facade.with_cost_tracking_context(cost_tracking_context))
+}
 
 #[allow(clippy::too_many_lines)]
 pub async fn run(
@@ -22,6 +153,20 @@ pub async fn run(
         allowed_tools,
         observer,
     } = overrides;
+    // W1.8b: the facade maps `RunOverrides` field-by-field onto
+    // `FacadeTurnOverrides`. Keep a snapshot of the originals so each
+    // turn can be re-mapped (the interactive loop runs many turns, and
+    // the non-interactive path can retry after a model switch).
+    let overrides_snapshot = RunOverrides {
+        provider_override: provider_override.clone(),
+        model_override: model_override.clone(),
+        temperature,
+        peripheral_overrides: peripheral_overrides.clone(),
+        interactive,
+        session_state_file: session_state_file.clone(),
+        allowed_tools: allowed_tools.clone(),
+        observer: None,
+    };
     // ── Wire up agnostic subsystems ──────────────────────────────
     let observer: Arc<dyn Observer> = observer
         .unwrap_or_else(|| Arc::from(observability::create_observer(&config.observability)));
@@ -119,7 +264,12 @@ pub async fn run(
     // eagerly. Instead, a `tool_search` built-in is registered so the LLM can
     // fetch schemas on demand. This reduces context window waste.
     let mut deferred_section = String::new();
-    let mut activated_handle: Option<
+    // W1.8b: deferred-MCP activation is core-owned on the facade path;
+    // the registry (still built for the system prompt + skill tools)
+    // keeps its ToolSearchTool registration, so the handle stays live
+    // but no loop consumes it here. Underscored, not removed, until
+    // W1.10 deletes the Loop C registry construction entirely.
+    let mut _activated_handle: Option<
         std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>,
     > = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
@@ -145,7 +295,7 @@ pub async fn run(
                     let activated = std::sync::Arc::new(std::sync::Mutex::new(
                         crate::tools::ActivatedToolSet::new(),
                     ));
-                    activated_handle = Some(std::sync::Arc::clone(&activated));
+                    _activated_handle = Some(std::sync::Arc::clone(&activated));
                     tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
                         deferred_set,
                         activated,
@@ -197,17 +347,18 @@ pub async fn run(
 
     let provider_runtime_options = operant_providers::provider_runtime_options_from_config(&config);
 
-    let mut provider: Box<dyn Provider> = operant_providers::create_routed_provider_with_options(
-        &provider_name,
-        fallback_provider_loop.and_then(|e| e.api_key.as_deref()),
-        fallback_provider_loop.and_then(|e| e.base_url.as_deref()),
-        &config.reliability,
-        &config.providers.model_routes,
-        &model_name,
-        &provider_runtime_options,
-    )?;
+    let mut provider: Arc<dyn Provider> =
+        Arc::from(operant_providers::create_routed_provider_with_options(
+            &provider_name,
+            fallback_provider_loop.and_then(|e| e.api_key.as_deref()),
+            fallback_provider_loop.and_then(|e| e.base_url.as_deref()),
+            &config.reliability,
+            &config.providers.model_routes,
+            &model_name,
+            &provider_runtime_options,
+        )?);
 
-    let model_switch_callback = get_model_switch_state();
+    let _model_switch_callback = get_model_switch_state();
 
     observer.record_event(&ObserverEvent::AgentStart {
         provider: provider_name.to_string(),
@@ -399,13 +550,16 @@ pub async fn run(
         system_prompt.push_str(&deferred_section);
     }
 
-    // ── Approval manager (supervised mode) ───────────────────────
-    let approval_manager = if interactive {
-        Some(ApprovalManager::from_config(&config.autonomy))
+    // ── Approval policy (W1.8b) ───────────────────────────────────
+    // The facade drain answers permission requests with this manager:
+    // interactive turns prompt the terminal (old tool-loop behavior),
+    // non-interactive turns apply the daemon policy (auto_approve
+    // passes, ask-gated denies — no operator).
+    let approval_policy = if interactive {
+        ApprovalManager::from_config(&config.autonomy)
     } else {
-        None
+        ApprovalManager::for_non_interactive(&config.autonomy)
     };
-    let channel_name = if interactive { "cli" } else { "daemon" };
     let memory_session_id = session_state_file.as_deref().and_then(|path| {
         let raw = path.to_string_lossy().trim().to_string();
         if raw.is_empty() {
@@ -525,51 +679,86 @@ pub async fn run(
             );
         }
 
-        // Compute per-turn excluded MCP tools from tool_filter_groups.
+        // Per-turn MCP exclusion from `tool_filter_groups` is Loop C-only
+        // guardrail plumbing. The facade's core registry is
+        // construction-bound (per-turn allowlist is the Wave-3 hook —
+        // `FacadeTurnOverrides::allowed_tools` is the entry point), so the
+        // exclusion set is computed for the warning and recorded in
+        // BUGS.md (S8) rather than silently dropped.
         let excluded_tools = compute_excluded_mcp_tools(
             &tools_registry,
             &config.agent.tool_filter_groups,
             &effective_msg,
         );
+        if !excluded_tools.is_empty() {
+            tracing::warn!(
+                count = excluded_tools.len(),
+                "tool_filter_groups matched tools this turn; facade turn runs unfiltered until the W3 per-turn allowlist"
+            );
+        }
 
         #[allow(unused_assignments)]
         let mut response = String::new();
         loop {
-            match TOOL_LOOP_COST_TRACKING_CONTEXT
-                .scope(
+            // W1.8b — the turn runs on the reconciled facade (Loop A under
+            // the hood). Same inputs the tool loop took: this caller's
+            // provider/model, its tool registry, its observer, its system
+            // prompt, and the cost-tracking context (which the facade now
+            // wraps around `core.run` itself, so the explicit
+            // `TOOL_LOOP_COST_TRACKING_CONTEXT.scope` the old call site
+            // applied is carried by `.with_cost_tracking_context`).
+            let facade_result = {
+                let mut facade = build_facade_agent(
+                    &config,
+                    &provider_name,
+                    &provider,
+                    &model_name,
+                    Arc::clone(&observer),
+                    memory_session_id.as_deref(),
                     cost_tracking_context.clone(),
-                    run_tool_call_loop(
-                        provider.as_ref(),
-                        &mut history,
-                        &tools_registry,
-                        observer.as_ref(),
-                        &provider_name,
-                        &model_name,
-                        effective_temperature,
-                        false,
-                        approval_manager.as_ref(),
-                        channel_name,
-                        None,
-                        &config.multimodal,
-                        config.agent.max_tool_iterations,
-                        None,
-                        None,
-                        None,
-                        &excluded_tools,
-                        &config.agent.tool_call_dedup_exempt,
-                        activated_handle.as_ref(),
-                        Some(model_switch_callback.clone()),
-                        &config.pacing,
-                        config.agent.max_tool_result_chars,
-                        config.agent.max_context_tokens,
-                        None, // shared_budget
-                        None, // channel: CLI mode — uses prompt_cli
-                        None, // receipt_generator
-                        None, // collected_receipts
-                    ),
+                    &system_prompt,
                 )
-                .await
-            {
+                .await?;
+                // No TurnEvent consumer on the one-shot CLI path, but
+                // permission requests still arrive on this channel and
+                // park core's turn until answered (or its 120s deadline
+                // denies) — so the drain answers them per the daemon
+                // policy; everything else is discarded (the response
+                // string is `run`'s only output).
+                let approvals_handle = facade.approvals().clone();
+                let (facade_tx, mut facade_rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
+                let mut turn_overrides = facade_overrides(&overrides_snapshot);
+                turn_overrides.temperature = Some(effective_temperature);
+                let turn = facade.turn_streamed_with_overrides(
+                    &effective_msg,
+                    facade_tx,
+                    None,
+                    turn_overrides,
+                );
+                let (result, _) = tokio::join!(turn, async {
+                    while let Some(event) = facade_rx.recv().await {
+                        if let TurnEvent::ApprovalRequest {
+                            request_id,
+                            tool_name,
+                            arguments_summary,
+                            ..
+                        } = event
+                        {
+                            answer_approval_request(
+                                &approvals_handle,
+                                &approval_policy,
+                                false,
+                                &request_id,
+                                &tool_name,
+                                &arguments_summary,
+                            )
+                            .await;
+                        }
+                    }
+                });
+                result
+            };
+            match facade_result {
                 Ok(resp) => {
                     response = resp;
                     break;
@@ -584,15 +773,16 @@ pub async fn run(
                             new_model
                         );
 
-                        provider = operant_providers::create_routed_provider_with_options(
-                            &new_provider,
-                            fallback_provider_loop.and_then(|e| e.api_key.as_deref()),
-                            fallback_provider_loop.and_then(|e| e.base_url.as_deref()),
-                            &config.reliability,
-                            &config.providers.model_routes,
-                            &new_model,
-                            &provider_runtime_options,
-                        )?;
+                        provider =
+                            Arc::from(operant_providers::create_routed_provider_with_options(
+                                &new_provider,
+                                fallback_provider_loop.and_then(|e| e.api_key.as_deref()),
+                                fallback_provider_loop.and_then(|e| e.base_url.as_deref()),
+                                &config.reliability,
+                                &config.providers.model_routes,
+                                &new_model,
+                                &provider_runtime_options,
+                            )?);
 
                         provider_name = new_provider;
                         model_name = new_model;
@@ -833,12 +1023,20 @@ pub async fn run(
 
             history.push(ChatMessage::user(&enriched));
 
-            // Compute per-turn excluded MCP tools from tool_filter_groups.
+            // Per-turn MCP exclusion from `tool_filter_groups` — same
+            // treatment as the non-interactive path: warn + BUGS.md S8,
+            // W3 per-turn allowlist is the carry target.
             let excluded_tools = compute_excluded_mcp_tools(
                 &tools_registry,
                 &config.agent.tool_filter_groups,
                 &effective_input,
             );
+            if !excluded_tools.is_empty() {
+                tracing::warn!(
+                    count = excluded_tools.len(),
+                    "tool_filter_groups matched tools this turn; facade turn runs unfiltered until the W3 per-turn allowlist"
+                );
+            }
 
             // Set up streaming channel so tool progress and response
             // content are printed progressively instead of buffered.
@@ -879,41 +1077,78 @@ pub async fn run(
             });
 
             let response = loop {
-                match TOOL_LOOP_COST_TRACKING_CONTEXT
-                    .scope(
+                // W1.8b — interactive turn on the reconciled facade. The
+                // draft sink rides through `FacadeSink::pair`, so the
+                // `StreamDelta::Text` deltas the CLI consumer prints
+                // arrive exactly as the tool loop's `on_delta` produced
+                // them (`TurnEvent::Chunk`/`Thinking` -> `DraftEvent`).
+                // `TOOL_LOOP_COST_TRACKING_CONTEXT` is applied by the
+                // facade (`with_cost_tracking_context` wraps `core.run`).
+                let facade_result = {
+                    let mut facade = build_facade_agent(
+                        &config,
+                        &provider_name,
+                        &provider,
+                        &model_name,
+                        Arc::clone(&observer),
+                        memory_session_id.as_deref(),
                         cost_tracking_context.clone(),
-                        run_tool_call_loop(
-                            provider.as_ref(),
-                            &mut history,
-                            &tools_registry,
-                            observer.as_ref(),
-                            &provider_name,
-                            &model_name,
-                            turn_temperature,
-                            true,
-                            approval_manager.as_ref(),
-                            channel_name,
-                            None,
-                            &config.multimodal,
-                            config.agent.max_tool_iterations,
-                            Some(cancel_token.clone()),
-                            Some(delta_tx.clone()),
-                            None,
-                            &excluded_tools,
-                            &config.agent.tool_call_dedup_exempt,
-                            activated_handle.as_ref(),
-                            Some(model_switch_callback.clone()),
-                            &config.pacing,
-                            config.agent.max_tool_result_chars,
-                            config.agent.max_context_tokens,
-                            None, // shared_budget
-                            None, // channel: interactive CLI — uses prompt_cli
-                            None, // receipt_generator
-                            None, // collected_receipts
-                        ),
+                        &system_prompt,
                     )
-                    .await
-                {
+                    .await?;
+                    // The facade writes into `facade_tx`; the forwarder
+                    // below pumps each event through `FacadeSink::send`,
+                    // which is what fans `TurnEvent::Chunk`/`Thinking`
+                    // into the CLI's `DraftEvent` consumer. The consumer
+                    // `event_tx` leg is drained (the CLI has no
+                    // TurnEvent consumer of its own — it renders the
+                    // draft channel).
+                    let (facade_tx, mut facade_rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
+                    let (consumer_tx, mut consumer_rx) =
+                        tokio::sync::mpsc::channel::<TurnEvent>(64);
+                    let sink = crate::agent::reconciled::FacadeSink::pair(
+                        consumer_tx,
+                        Some(delta_tx.clone()),
+                    );
+                    let approvals_handle = facade.approvals().clone();
+                    let mut turn_overrides = facade_overrides(&overrides_snapshot);
+                    turn_overrides.temperature = Some(turn_temperature);
+                    let turn = facade.turn_streamed_with_overrides(
+                        &effective_input,
+                        facade_tx,
+                        Some(cancel_token.clone()),
+                        turn_overrides,
+                    );
+                    // Permission requests are answered on the terminal
+                    // here (the old tool-loop prompt), everything else
+                    // fans out to the CLI draft consumer as before.
+                    let (result, _) = tokio::join!(turn, async {
+                        while let Some(event) = facade_rx.recv().await {
+                            if let TurnEvent::ApprovalRequest {
+                                request_id,
+                                tool_name,
+                                arguments_summary,
+                                ..
+                            } = event
+                            {
+                                answer_approval_request(
+                                    &approvals_handle,
+                                    &approval_policy,
+                                    true,
+                                    &request_id,
+                                    &tool_name,
+                                    &arguments_summary,
+                                )
+                                .await;
+                                continue;
+                            }
+                            sink.send(event).await;
+                        }
+                    });
+                    while consumer_rx.try_recv().is_ok() {}
+                    result
+                };
+                match facade_result {
                     Ok(resp) => break resp,
                     Err(e) => {
                         if is_tool_loop_cancelled(&e) {
@@ -929,15 +1164,16 @@ pub async fn run(
                                 new_model
                             );
 
-                            provider = operant_providers::create_routed_provider_with_options(
-                                &new_provider,
-                                fallback_provider_loop.and_then(|e| e.api_key.as_deref()),
-                                fallback_provider_loop.and_then(|e| e.base_url.as_deref()),
-                                &config.reliability,
-                                &config.providers.model_routes,
-                                &new_model,
-                                &provider_runtime_options,
-                            )?;
+                            provider =
+                                Arc::from(operant_providers::create_routed_provider_with_options(
+                                    &new_provider,
+                                    fallback_provider_loop.and_then(|e| e.api_key.as_deref()),
+                                    fallback_provider_loop.and_then(|e| e.base_url.as_deref()),
+                                    &config.reliability,
+                                    &config.providers.model_routes,
+                                    &new_model,
+                                    &provider_runtime_options,
+                                )?);
 
                             provider_name = new_provider;
                             model_name = new_model;
@@ -1023,7 +1259,7 @@ pub async fn run(
             {
                 match crate::agent::reconciled::compress_if_needed(
                     &mut history,
-                    provider.as_ref(),
+                    &provider,
                     &model_name,
                     &crate::agent::reconciled::PreflightConfig::default(),
                     config.agent.max_context_tokens,
@@ -1078,4 +1314,89 @@ pub async fn run(
     });
 
     Ok(final_output)
+}
+
+#[cfg(test)]
+mod w18b_tests {
+    //! W1.8b: the facade's approval answerer must reproduce the old
+    //! tool-loop ApprovalManager decisions on the CLI/daemon paths:
+    //! auto-approve passes, ask-gated denies (no operator), Full autonomy
+    //! approves everything, and an "always" answer persists into the
+    //! session allowlist so later requests auto-approve.
+
+    use super::*;
+    use crate::approval::{ApprovalManager, ApprovalResponse};
+
+    fn autonomy_cfg() -> operant_config::schema::AutonomyConfig {
+        operant_config::schema::AutonomyConfig::default()
+    }
+
+    #[tokio::test]
+    async fn daemon_auto_approve_passes_and_ask_gated_denies() {
+        let mut cfg = autonomy_cfg();
+        cfg.level = crate::security::AutonomyLevel::Supervised;
+        cfg.auto_approve.push("read_file".to_string());
+        cfg.always_ask.push("deny_gated_tool".to_string());
+        let policy = ApprovalManager::for_non_interactive(&cfg);
+        let approvals = crate::agent::reconciled::ReconciledApprovals::default();
+
+        // auto_approve tool: allowed, recorded as Yes on the daemon channel.
+        answer_approval_request(&approvals, &policy, false, "r1", "read_file", "{}").await;
+        // ask-gated tool: denied (no operator to prompt), recorded as No.
+        answer_approval_request(&approvals, &policy, false, "r2", "deny_gated_tool", "{}").await;
+
+        let log = policy.audit_log();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].tool_name, "read_file");
+        assert_eq!(log[0].decision, ApprovalResponse::Yes);
+        assert_eq!(log[0].channel, "daemon");
+        assert_eq!(log[1].tool_name, "deny_gated_tool");
+        assert_eq!(log[1].decision, ApprovalResponse::No);
+    }
+
+    #[tokio::test]
+    async fn full_autonomy_approves_everything_without_operator() {
+        let mut cfg = autonomy_cfg();
+        cfg.level = crate::security::AutonomyLevel::Full;
+        let policy = ApprovalManager::for_non_interactive(&cfg);
+        let approvals = crate::agent::reconciled::ReconciledApprovals::default();
+
+        answer_approval_request(&approvals, &policy, false, "r1", "shell", "rm -rf /").await;
+        let log = policy.audit_log();
+        assert_eq!(log[0].decision, ApprovalResponse::Yes);
+    }
+
+    #[tokio::test]
+    async fn always_answer_persists_into_session_allowlist() {
+        let mut cfg = autonomy_cfg();
+        cfg.level = crate::security::AutonomyLevel::Supervised;
+        cfg.auto_approve.retain(|t| t != "grep");
+        let policy = ApprovalManager::from_config(&cfg);
+        let approvals = crate::agent::reconciled::ReconciledApprovals::default();
+
+        // "always" decision lands in the manager's session allowlist
+        // (record_decision); the very next requirement check must now
+        // resolve as Approved without prompting.
+        policy.record_decision(
+            "grep",
+            &serde_json::Value::String("{}".to_string()),
+            ApprovalResponse::Always,
+            "cli",
+        );
+        assert!(
+            policy.approval_requirement("grep") != crate::approval::ApprovalRequirement::Prompt
+        );
+        assert!(policy.session_allowlist().contains("grep"));
+    }
+
+    #[tokio::test]
+    async fn resolving_unknown_request_is_a_no_op_warn() {
+        let policy = ApprovalManager::for_non_interactive(&autonomy_cfg());
+        let approvals = crate::agent::reconciled::ReconciledApprovals::default();
+        // No parked request with this id: resolve() must return false
+        // (logged warn in the answerer) and NOT panic.
+        answer_approval_request(&approvals, &policy, false, "nonexistent", "read_file", "{}").await;
+        // The decision was still recorded (audit honesty): one entry.
+        assert_eq!(policy.audit_log().len(), 1);
+    }
 }

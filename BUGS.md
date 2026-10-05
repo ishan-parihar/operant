@@ -4175,3 +4175,43 @@ outputs slip past no_progress too. Wave 2's absorb of the detector
 carries this caveat: fix the semantics in the merged controller (compare
 canonical result fingerprints in ping-pong detection, gate on results
 not just names), not in the dead engine.
+
+## Round 46 (2026-10-05) — W1.8b: Loop C CLI/daemon consumers onto the reconciled facade
+
+### S8 — Four Loop C guardrails have no facade equivalent yet; wired as warns, carried to W3 (OPEN)
+
+The `loop_::run`/`process_message` switch to the facade (W1.8b) leaves
+four Loop-C-only mechanisms without a core-bearing equivalent. Each is
+computed and `tracing::warn!`-logged rather than silently dropped; none
+regresses the WS/ACP consumers.
+
+1. **Per-turn tool exclusions** (`tool_filter_groups` via
+   `compute_excluded_mcp_tools`, plus `autonomy.non_cli_excluded_tools`
+   on the daemon path at non-Full autonomy): the facade's core registry
+   is construction-bound, so per-turn exclusion needs the per-turn
+   allowlist — `FacadeTurnOverrides::allowed_tools` is the entry point,
+   currently `#[derive]`-documented as not-yet-wired. WARN + carry to
+   the W3 turn-journal/steering wave. Worst case until then: a daemon
+   turn CAN call a tool the old path would have pre-excluded (core's
+   SecurityPolicy still gates dangerous operations).
+2. **`tool_call_dedup_exempt`**: superseded by the Wave-0
+   guardrail tracker (`ToolGuardrailTracker` + `NO_EFFECT_TOOL_NAMES`);
+   the exemption list is NOT carried.
+3. **Approval flow**: facade turns park permission requests on the
+   TurnEvent channel (unanswered = core's 120s deadline denies). The
+   CLI/daemon drains now answer per the same `ApprovalManager` policy
+   the tool loop applied (`answer_approval_request`: interactive turns
+   prompt the terminal with y/a/n; daemon turns approve
+   `auto_approve`-listed tools and deny ask-gated ones). Session
+   allowlist ("always") and the audit log flow through
+   `record_decision` unchanged. WS/ACP keep their transport-driven
+   answers (W1.6/W1.7 semantics untouched).
+4. **Loop C's time-gated identical-output abort**
+   (`tool_loop.rs:1172-1207` semantics): carried to Wave 2's
+   identical-result rung on `ToolGuardrailTracker`, not ported.
+
+Also recorded for W1.8c (next leg): `dispatch.rs:682` still runs
+`run_tool_call_loop` — the channels orchestrator owns conversation
+history externally and has no per-session facade (ACP's `AcpSession`
+pattern is the reference); migrating it changes history semantics and
+is its own leg, not a call-site swap.

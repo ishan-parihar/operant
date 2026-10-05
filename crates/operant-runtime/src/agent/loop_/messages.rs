@@ -73,7 +73,7 @@ pub async fn process_message(
     // injected after filter_primary_agent_tools_or_fail (or equivalent built-in
     // tool allow/deny filtering) to avoid MCP tools being silently dropped.
     let mut deferred_section = String::new();
-    let mut activated_handle_pm: Option<
+    let mut _activated_handle_pm: Option<
         std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>,
     > = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
@@ -98,7 +98,7 @@ pub async fn process_message(
                     let activated = std::sync::Arc::new(std::sync::Mutex::new(
                         crate::tools::ActivatedToolSet::new(),
                     ));
-                    activated_handle_pm = Some(std::sync::Arc::clone(&activated));
+                    _activated_handle_pm = Some(std::sync::Arc::clone(&activated));
                     tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
                         deferred_set,
                         activated,
@@ -401,10 +401,11 @@ pub async fn process_message(
         format!("{context}[{now}] {effective_message}")
     };
 
-    let mut history = vec![
-        ChatMessage::system(&system_prompt),
-        ChatMessage::user(&enriched),
-    ];
+    // Per-turn exclusions (tool_filter_groups + autonomy-level tool
+    // bans) are Loop C guardrail plumbing with no facade equivalent yet —
+    // same treatment as `run`: warn + BUGS.md S8; the W3 per-turn
+    // allowlist (`FacadeTurnOverrides::allowed_tools`) is the carry
+    // target.
     let mut excluded_tools = compute_excluded_mcp_tools(
         &tools_registry,
         &config.agent.tool_filter_groups,
@@ -413,26 +414,70 @@ pub async fn process_message(
     if config.autonomy.level != AutonomyLevel::Full {
         excluded_tools.extend(config.autonomy.non_cli_excluded_tools.iter().cloned());
     }
+    if !excluded_tools.is_empty() {
+        tracing::warn!(
+            count = excluded_tools.len(),
+            "per-turn tool exclusions matched on the daemon path; facade turn runs unfiltered until the W3 per-turn allowlist"
+        );
+    }
 
-    agent_turn(
-        provider.as_ref(),
-        &mut history,
-        &tools_registry,
-        observer.as_ref(),
+    // W1.8b: the daemon turn runs on the reconciled facade (Loop A under
+    // the hood) instead of `agent_turn`. The facade builds the core agent
+    // from the same config (registry, MCP, permissions, max iterations
+    // all flow through `from_config_with`), receives this caller's
+    // resolved provider so routing is unchanged, and carries the exact
+    // system prompt the tool loop saw as `history[0]`. Approval flow is
+    // the facade's own permission channel (the same trade the WS/ACP
+    // consumers took in W1.6/W1.7); `tool_call_dedup_exempt` is superseded
+    // by the Wave-0 guardrail tracker (BUGS.md S8).
+    let provider_arc: Arc<dyn Provider> = provider.into();
+    let mut facade = super::run::build_facade_agent(
+        &config,
         provider_name,
+        &provider_arc,
         &model_name,
-        effective_temperature,
-        true,
-        "daemon",
+        Arc::clone(&observer),
+        session_id,
         None,
-        &config.multimodal,
-        config.agent.max_tool_iterations,
-        Some(&approval_manager),
-        &excluded_tools,
-        &config.agent.tool_call_dedup_exempt,
-        activated_handle_pm.as_ref(),
-        None,
-        None, // channel: process_message path has no channel ref
+        &system_prompt,
     )
-    .await
+    .await?;
+    // W1.8b: the daemon path has no transport consumer, so the drain
+    // answers facade permission requests with the same non-interactive
+    // policy the old tool-loop manager applied to `agent_turn`.
+    let approvals_handle = facade.approvals().clone();
+    let (facade_tx, mut facade_rx) =
+        tokio::sync::mpsc::channel::<crate::agent::reconciled::TurnEvent>(64);
+    let turn = facade.turn_streamed_with_overrides(
+        &enriched,
+        facade_tx,
+        None,
+        crate::agent::reconciled::FacadeTurnOverrides {
+            temperature: Some(effective_temperature),
+            interactive: true,
+            ..Default::default()
+        },
+    );
+    let (result, _) = tokio::join!(turn, async {
+        while let Some(event) = facade_rx.recv().await {
+            if let crate::agent::reconciled::TurnEvent::ApprovalRequest {
+                request_id,
+                tool_name,
+                arguments_summary,
+                ..
+            } = event
+            {
+                super::run::answer_approval_request(
+                    &approvals_handle,
+                    &approval_manager,
+                    false,
+                    &request_id,
+                    &tool_name,
+                    &arguments_summary,
+                )
+                .await;
+            }
+        }
+    });
+    result
 }

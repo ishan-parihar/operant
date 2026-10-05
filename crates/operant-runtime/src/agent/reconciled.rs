@@ -1631,50 +1631,120 @@ impl ReconciledAgent {
         memory_session_id: Option<&str>,
         initialize_mcp: bool,
     ) -> Result<Self> {
-        // Provider routing + model resolution — verbatim Loop B inputs.
+        Self::from_config_with(
+            config,
+            observer,
+            memory_session_id,
+            initialize_mcp,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::from_config`] with an externally-resolved provider. The Loop
+    /// C adapters (`loop_::run`, `loop_::process_message`, channels
+    /// `dispatch`) each resolve their own routed provider first — the same
+    /// `create_routed_provider_with_options` call, but against the model
+    /// *they* resolved (a per-turn model switch, a channel route
+    /// selection), so the facade must not re-resolve it. Everything else —
+    /// memory, core tool registry, MCP, agent config, evolution — is the
+    /// identical construction `from_config` performs.
+    ///
+    /// The tuple is `(provider name, provider, model)`; the core agent's
+    /// `AgentConfig.model` is set from the model, exactly as `from_config`
+    /// sets it from its own resolution. The provider is passed by
+    /// `Arc`, so the caller's own clone keeps working.
+    pub async fn from_config_with(
+        config: &Config,
+        observer: Option<Arc<dyn Observer>>,
+        memory_session_id: Option<&str>,
+        initialize_mcp: bool,
+        external_provider: Option<(String, Arc<dyn operant_providers::Provider>, String)>,
+        system_prompt: Option<String>,
+    ) -> Result<Self> {
+        Self::build_from_config(
+            config,
+            observer,
+            memory_session_id,
+            initialize_mcp,
+            external_provider,
+            system_prompt,
+        )
+        .await
+    }
+
+    /// Shared body of [`Self::from_config`] and [`Self::from_config_with`].
+    async fn build_from_config(
+        config: &Config,
+        observer: Option<Arc<dyn Observer>>,
+        memory_session_id: Option<&str>,
+        initialize_mcp: bool,
+        external_provider: Option<(String, Arc<dyn operant_providers::Provider>, String)>,
+        system_prompt: Option<String>,
+    ) -> Result<Self> {
+        // Provider routing + model resolution — verbatim Loop B inputs,
+        // unless the caller already resolved both (the Loop C adapters).
         let fallback_provider_ag = config.providers.fallback_provider();
-        let provider_name = config.providers.fallback.as_deref().unwrap_or("openrouter");
-        let model_name = match fallback_provider_ag
-            .and_then(|e| e.model.as_deref())
-            .map(str::trim)
-            .filter(|m| !m.is_empty())
-        {
-            Some(m) => m.to_string(),
-            None => match config.providers.resolve_default_model() {
-                Some(m) => {
-                    tracing::warn!(
-                        provider = provider_name,
-                        model = %m,
-                        "fallback provider has no `model` set; using first configured \
-                      providers.models entry as default. Set [providers.models.{provider_name}] \
-                      model = \"...\" to silence this warning.",
-                    );
-                    m
-                }
-                None => {
-                    anyhow::bail!(
-                        "no model configured: providers.fallback = {:?} resolves with no model, \
-                      and no [[providers.models.*]] entry has a `model` field set. \
-                      Configure at least one [providers.models.<name>] model = \"...\" \
-                      or define a [[model_routes]] hint.",
-                        config.providers.fallback,
-                    )
-                }
-            },
+        let default_provider_name: String;
+        let default_model_name: String;
+        let (provider_name, model_name): (&str, &str) = match &external_provider {
+            Some((name, _, model)) => (name, model),
+            None => {
+                default_provider_name = config
+                    .providers
+                    .fallback
+                    .clone()
+                    .unwrap_or_else(|| "openrouter".to_string());
+                let name: &str = &default_provider_name;
+                default_model_name = match fallback_provider_ag
+                    .and_then(|e| e.model.as_deref())
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty())
+                {
+                    Some(m) => m.to_string(),
+                    None => match config.providers.resolve_default_model() {
+                        Some(m) => {
+                            tracing::warn!(
+                                provider = name,
+                                model = %m,
+                                "fallback provider has no `model` set; using first configured \
+                              providers.models entry as default. Set [providers.models.{name}] \
+                              model = \"...\" to silence this warning.",
+                            );
+                            m
+                        }
+                        None => {
+                            anyhow::bail!(
+                                "no model configured: providers.fallback = {:?} resolves with no \
+                              model, and no [[providers.models.*]] entry has a `model` field set. \
+                              Configure at least one [providers.models.<name>] model = \"...\" \
+                              or define a [[model_routes]] hint.",
+                                config.providers.fallback,
+                            )
+                        }
+                    },
+                };
+                (name, &default_model_name)
+            }
         };
 
-        let provider_runtime_options =
-            operant_providers::provider_runtime_options_from_config(config);
-        let provider: Arc<dyn operant_providers::Provider> =
-            Arc::from(operant_providers::create_routed_provider_with_options(
-                provider_name,
-                fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
-                fallback_provider_ag.and_then(|e| e.base_url.as_deref()),
-                &config.reliability,
-                &config.providers.model_routes,
-                &model_name,
-                &provider_runtime_options,
-            )?);
+        let provider: Arc<dyn operant_providers::Provider> = match &external_provider {
+            Some((_, provider, _)) => provider.clone(),
+            None => {
+                let provider_runtime_options =
+                    operant_providers::provider_runtime_options_from_config(config);
+                Arc::from(operant_providers::create_routed_provider_with_options(
+                    provider_name,
+                    fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
+                    fallback_provider_ag.and_then(|e| e.base_url.as_deref()),
+                    &config.reliability,
+                    &config.providers.model_routes,
+                    model_name,
+                    &provider_runtime_options,
+                )?)
+            }
+        };
 
         // Per-session memory, same builder Loop B's constructor used, so the
         // facade's memory-review triggers read/write the same store.
@@ -1748,7 +1818,7 @@ impl ReconciledAgent {
             &core_app.skills.root_dir,
             &core_app.skills.memory_dir,
             &OpenAIClient::new(ClientConfig::from(&core_app.client)),
-            model_name.clone(),
+            model_name.to_string(),
             database.clone(),
             cron_db,
             kanban_db,
@@ -1760,12 +1830,14 @@ impl ReconciledAgent {
         )
         .await?;
 
+        // The caller's own runtime tools on top of core's builtins (Loop C
+        // parity: the orchestrator/CLI tool surface must be reachable).
         // Core loop config: started from the process behavior settings (same
         // source the CLI channel gateway uses), then the consumer's own
         // model + iteration bound on top. Evolution intervals stay off in core
         // (the facade fires them via EvolutionConfig below).
         let mut agent_config = AgentConfig::from(&core_app.agent);
-        agent_config.model = model_name;
+        agent_config.model = model_name.to_string();
         agent_config.max_iterations = config.agent.max_tool_iterations;
         agent_config.approval_allowlist = core_app.command_allowlist.clone();
         agent_config.approval_allowlist_path =
@@ -1779,6 +1851,16 @@ impl ReconciledAgent {
             tool_search.enabled = "off".to_string();
         }
         agent_config.tool_search = tool_search;
+        // The Loop C adapters assemble their own system prompt (workspace
+        // MD files, tool descriptions, autonomy mode, native-tool
+        // instructions) and hand it to the turn. Core's frozen prefix is
+        // built from `config.system_prompt`, so setting it here is what
+        // carries Loop C's exact prompt into the facade's turn instead of
+        // core's default. `None` = keep the process behavior default,
+        // which is what WS/ACP have always run on.
+        if let Some(prompt) = system_prompt {
+            agent_config.system_prompt = Some(prompt);
+        }
 
         Ok(ReconciledAgent::new(
             agent_config,
