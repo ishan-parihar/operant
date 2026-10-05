@@ -79,6 +79,8 @@ impl OperantAgent {
             skill_manager: None,
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
+            seat_id: Arc::new(std::sync::RwLock::new(None)),
+            charter: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
             tool_guardrails: std::sync::Mutex::new(
@@ -150,6 +152,8 @@ impl OperantAgent {
             skill_manager: None,
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
+            seat_id: Arc::new(std::sync::RwLock::new(None)),
+            charter: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
             tool_guardrails: std::sync::Mutex::new(

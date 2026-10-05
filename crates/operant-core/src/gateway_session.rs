@@ -746,9 +746,8 @@ impl PersistentSessionStore {
                     // did not run — treat that as premiere too, never None,
                     // so a turn never runs seatless.
                     employee_id: Some(
-                        row.get::<_, Option<String>>(25)?.unwrap_or_else(|| {
-                            crate::org::cast::PREMIERE_SEAT.to_string()
-                        }),
+                        row.get::<_, Option<String>>(25)?
+                            .unwrap_or_else(|| crate::org::cast::PREMIERE_SEAT.to_string()),
                     ),
                 })
             })
@@ -1387,6 +1386,32 @@ impl PersistentSessionStore {
         reason = "poisoned lock: panic is the intended recovery"
     )]
     /// Find a session matching platform + user + channel (legacy API).
+    /// Wave 2 (ORGANISM-ARCHITECTURE §2): the full entry for a source
+    /// triple — [`Self::find_session`]'s predicate, but returning the
+    /// `SessionEntry` (its `session_key` + employee binding) so the
+    /// `/session` command can read the binding and re-bind through
+    /// [`Self::bind_employee`] with the key the store actually filed the
+    /// conversation under (group/thread shapes included).
+    pub fn entry_for_source(
+        &self,
+        platform: &str,
+        user_id: &str,
+        channel_id: &str,
+    ) -> Option<SessionEntry> {
+        self.entries
+            .read()
+            .expect("session entries read lock poisoned — programmer error")
+            .values()
+            .find(|e| {
+                e.platform.as_deref() == Some(platform)
+                    && e.origin
+                        .as_ref()
+                        .map(|o| o.user_id.as_deref() == Some(user_id) && o.chat_id == channel_id)
+                        .unwrap_or(false)
+            })
+            .cloned()
+    }
+
     pub fn find_session(
         &self,
         platform: &str,
@@ -1771,6 +1796,52 @@ mod tests {
         let source = test_source("telegram", "123", "456", "dm");
         let key = build_session_key(&source, true, false);
         assert_eq!(key, "agent:main:telegram:dm:456");
+    }
+
+    // ── Wave 2 (ORGANISM-ARCHITECTURE §2): employee binding ────────────
+
+    #[test]
+    fn wave2_new_session_binds_premiere_by_default() {
+        // Owner ruling: a conversation without an explicit employee runs
+        // as the premiere, not a separate assistant role.
+        let store = test_store();
+        let source = test_source("telegram", "u1", "c1", "dm");
+        let entry = store.get_or_create_session(&source, false).unwrap();
+        assert_eq!(entry.employee_id.as_deref(), Some("premiere"));
+    }
+
+    #[test]
+    fn wave2_bind_employee_persists_and_reloads() {
+        let store = test_store();
+        let source = test_source("telegram", "u1", "c1", "dm");
+        let entry = store.get_or_create_session(&source, false).unwrap();
+        let key = entry.session_key.clone();
+        store.bind_employee(&key, "hrmaster").unwrap();
+        // Re-read through the entry map — binding survives the store.
+        let reread = store.get_entry(&key).unwrap();
+        assert_eq!(reread.employee_id.as_deref(), Some("hrmaster"));
+        // And through the source triple the /session command uses.
+        let by_source = store.entry_for_source("telegram", "u1", "c1").unwrap();
+        assert_eq!(by_source.employee_id.as_deref(), Some("hrmaster"));
+        assert_eq!(by_source.session_key, key);
+    }
+
+    #[test]
+    fn wave2_bind_employee_unknown_key_is_none_not_error() {
+        // Binding a chat that never started must not fabricate an entry —
+        // the command tells the operator to send a message first.
+        let store = test_store();
+        let bound = store.bind_employee("no:such:key", "hrmaster").unwrap();
+        assert!(bound.is_none());
+    }
+
+    #[test]
+    fn wave2_entry_for_source_misses_other_chats() {
+        let store = test_store();
+        let source = test_source("telegram", "u1", "c1", "dm");
+        store.get_or_create_session(&source, false).unwrap();
+        assert!(store.entry_for_source("telegram", "u1", "OTHER").is_none());
+        assert!(store.entry_for_source("discord", "u1", "c1").is_none());
     }
 
     #[test]

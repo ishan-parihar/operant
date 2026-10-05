@@ -23,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 ### Added
 
+- Wave 2 — sessions bind employees (ORGANISM-ARCHITECTURE §2):
+  `gateway_sessions` gains `employee_id` (additive migration; legacy rows
+  backfill to `premiere` on load — owner ruling: the default conversation
+  talks to the premiere). The genome consult resolves the SEAT through the
+  bound employee before the session id, so chat sessions run under their
+  employee's policy/grants instead of an ungoverned `gw_<hash>` seat; cron
+  runs are unchanged (their session id already IS the employee id). The
+  employee's charter (org system prompt) rides the frozen prefix inside an
+  explicit `<employee_charter>` block — appended after the base prompt,
+  byte-stable while the binding holds, so the prompt-cache discipline is
+  preserved. New `/session [employee]` gateway command (alias `/use`):
+  no args reports the bound employee; with an id it validates against the
+  registry (unknown ids list the known cast) and rebinds at the next turn
+  start — binding is a conversation act, not an authority act; every tool
+  consult still gates under the bound employee's genome row at run time.
+  `Gateway::get_persistent_sessions()` exposes the persistent store the
+  binding lives on (survives restarts); `SessionStore::entry_for_source`
+  gives commands the entry under its real key (group/thread shapes
+  included).
+
 - The cold-start cast (ORGANISM-ARCHITECTURE §1, wave 1): `org/cast.rs`
   declares the organism's nine manifest seats — `premiere` (executive,
   org-lead), `chief-of-staff` (executive, reports to premiere — the

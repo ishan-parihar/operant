@@ -450,6 +450,16 @@ pub struct OperantAgent {
     /// between turns via [`Self::set_session_id`] without rebuilding
     /// it, exactly like [`Self::set_model`] retargets the model.
     session_id: Arc<std::sync::RwLock<Option<String>>>,
+    /// Wave 2 (ORGANISM-ARCHITECTURE §2): the cast employee this agent
+    /// executes as — THE seat the genome consults. `None` = no gateway
+    /// employee binding (cron runs derive their employee id as the session
+    /// id already; local runs stay session-keyed, byte-identical).
+    seat_id: Arc<std::sync::RwLock<Option<String>>>,
+    /// The bound employee's charter (org-layer system prompt), appended to
+    /// the frozen prefix by [`Self::build_frozen_prefix`]. Set together with
+    /// `seat_id` by the gateway turn so prompt-cache stability holds: the
+    /// pair only changes when the conversation switches employee.
+    charter: Arc<std::sync::RwLock<Option<String>>>,
     /// Shared interrupt flag for graceful Ctrl-C cancellation.
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.
@@ -1153,8 +1163,10 @@ mod stream;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::clients::openai::OpenAIModelClient;
     use crate::agent::model_client::ChatRequest;
     use crate::client::ChatResponse;
+    use crate::client::OpenAIClient;
     use crate::error::{Error, Result};
     use async_trait::async_trait;
     use futures::stream::BoxStream;
@@ -1166,6 +1178,41 @@ mod tests {
         assert_eq!(prefer_reported(0, 120), 120);
         // real reported prompt-token count wins over the heuristic
         assert_eq!(prefer_reported(5_000, 120), 5_000);
+    }
+
+    #[test]
+    fn wave2_charter_rides_the_frozen_prefix_and_none_keeps_it_byte_identical() {
+        // Wave 2 (ORGANISM-ARCHITECTURE §2): the bound employee's charter is
+        // appended to the frozen prefix inside an explicit marker so the
+        // org role is visible to the model and cache-stable across turns.
+        // A None charter must leave the prefix byte-identical to the
+        // pre-Wave-2 output — the ungoverned/legacy path must not shift by
+        // one byte (prompt-cache discipline).
+        let db = Database::init(std::env::temp_dir().join("test_charter_prefix.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        let plain = agent.build_frozen_prefix();
+        assert!(!plain.contains("<employee_charter>"));
+
+        agent.set_charter(Some("You are hrmaster — workforce lifecycle.".to_string()));
+        let with_charter = agent.build_frozen_prefix();
+        assert!(with_charter.contains("<employee_charter>"));
+        assert!(with_charter.contains("You are hrmaster — workforce lifecycle."));
+        assert!(with_charter.contains("</employee_charter>"));
+        // The charter APPENDS in this no-skills test; with skills present
+        // it inserts before the skills block by design (byte-stable per
+        // employee, which is the cache discipline that matters).
+        assert!(with_charter.starts_with(&plain));
+
+        // Clearing restores byte-identity (binding flipped back / unbound).
+        agent.set_charter(None);
+        assert_eq!(agent.build_frozen_prefix(), plain);
     }
 
     #[test]

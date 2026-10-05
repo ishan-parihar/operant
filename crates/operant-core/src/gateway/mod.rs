@@ -614,6 +614,16 @@ impl Gateway {
         &self.session_store
     }
 
+    /// Get the persistent session store, when the gateway runs with one
+    /// (Wave 2, ORGANISM-ARCHITECTURE §2): the DB-backed layer that owns
+    /// the employee binding — `SessionEntry.employee_id` — which survives
+    /// restarts, unlike the in-memory [`SessionStore`]. The `/session`
+    /// command and the turn prologue read and write the binding through
+    /// THIS seam so there is exactly one employee-binding path.
+    pub fn get_persistent_sessions(&self) -> Option<&Arc<PersistentSessionStore>> {
+        self.persistent_sessions.as_ref()
+    }
+
     /// Get a reference to the channel directory
     pub fn get_channel_directory(&self) -> &ChannelDirectory {
         &self.channel_directory

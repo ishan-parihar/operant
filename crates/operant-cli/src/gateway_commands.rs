@@ -169,6 +169,20 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
+        name: "session",
+        // Wave 2 (ORGANISM-ARCHITECTURE §2): show or switch the cast
+        // employee this conversation executes as. Binding is a
+        // conversation act, not an authority act — the genome still gates
+        // every tool consult under the bound employee's policy at run
+        // time, so an operator cannot /session their way past a lockdown
+        // row.
+        description: "Show the employee this session runs as, or bind a new one",
+        aliases: &["use"],
+        category: "Session",
+        args_hint: "[employee]",
+        admin_only: false,
+    },
+    CommandDef {
         name: "title",
         description: "Set session title",
         aliases: &[],
@@ -788,6 +802,76 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 {
                     msg.push_str(&format!("\nNew session ID: `{}`", new_session.session_id));
                 }
+            }
+            msg
+        }
+
+        "session" => {
+            // Wave 2 (ORGANISM-ARCHITECTURE §2). No args: report the bound
+            // employee. With an employee id: validate against the registry
+            // (fail with the known-employee list if unknown), bind the
+            // session, and say the NEXT turn runs as that employee — the
+            // binding is applied at turn start, so the consult seat and the
+            // charter flip together, never mid-turn.
+            let mut msg = String::new();
+            if let Some(gateway) = ctx.gateway {
+                if let Some(store) = gateway.get_persistent_sessions() {
+                    let entry = store.entry_for_source(ctx.platform, ctx.user_id, ctx.channel_id);
+                    match (args.trim(), entry) {
+                        ("", Some(entry)) => {
+                            let emp = entry
+                                .employee_id
+                                .clone()
+                                .unwrap_or_else(|| "premiere".to_string());
+                            msg.push_str(&format!("This session runs as `{emp}`."));
+                        }
+                        ("", None) => {
+                            msg.push_str(
+                                "No session entry yet — it will bind to `premiere` on first message.",
+                            );
+                        }
+                        (requested, Some(entry)) => {
+                            let known = crate::gateway_runner::employee_registry()
+                                .and_then(|r| r.get_employee(requested).ok().flatten());
+                            if known.is_some() {
+                                match store.bind_employee(&entry.session_key, requested) {
+                                    Ok(Some(_)) => msg.push_str(&format!(
+                                        "Bound this session to `{requested}` — the next turn runs as that employee."
+                                    )),
+                                    Ok(None) => msg.push_str(
+                                        "Session entry vanished before binding — retry.",
+                                    ),
+                                    Err(e) => msg.push_str(&format!("Could not bind: {e}")),
+                                }
+                            } else {
+                                let cast = crate::gateway_runner::employee_registry()
+                                    .map(|r| {
+                                        r.list_employees()
+                                            .map(|emps| {
+                                                emps.iter()
+                                                    .map(|e| e.employee_id.clone())
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            })
+                                            .unwrap_or_default()
+                                    })
+                                    .unwrap_or_else(|| "registry unavailable".to_string());
+                                msg.push_str(&format!(
+                                    "Unknown employee `{requested}`. Known employees: {cast}"
+                                ));
+                            }
+                        }
+                        (requested, None) => {
+                            msg.push_str(&format!(
+                                "No session entry for this chat yet — send a message first, then `/session {requested}`."
+                            ));
+                        }
+                    }
+                } else {
+                    msg.push_str("Persistent sessions are not enabled for this gateway.");
+                }
+            } else {
+                msg.push_str("Session commands need a running gateway.");
             }
             msg
         }

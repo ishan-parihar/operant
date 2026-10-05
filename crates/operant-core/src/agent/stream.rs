@@ -773,10 +773,15 @@ impl OperantAgent {
             //
             // `has_grant` is REAL since F2 (plan §4 rule 6 completed): the
             // ledger's unexpired, unrevoked grant naming THIS tool exactly.
-            let seat: Option<SeatDecision> = match (self.seat_authority.as_ref(), self.session_id())
-            {
-                (Some(authority), Some(session_id)) => {
-                    authority.consult(&session_id, &name, is_permission_gated_tool(&name))
+            let seat: Option<SeatDecision> = match (
+                self.seat_authority.as_ref(),
+                // Wave 2: the seat is the bound EMPLOYEE when the gateway set
+                // one; the session id otherwise (cron already runs as its
+                // derived employee id, so its path is unchanged).
+                self.seat_id().or_else(|| self.session_id()),
+            ) {
+                (Some(authority), Some(seat)) => {
+                    authority.consult(&seat, &name, is_permission_gated_tool(&name))
                 }
                 _ => None,
             };

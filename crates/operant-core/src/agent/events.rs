@@ -349,6 +349,48 @@ impl OperantAgent {
             .clone()
     }
 
+    /// Wave 2 (ORGANISM-ARCHITECTURE §2): the cast employee this agent
+    /// executes as. The genome consult resolves through this FIRST — the
+    /// seat a chat session runs under is its bound employee's id, not the
+    /// `gw_<hash>` conversation id. `None` keeps today's behavior (consult
+    /// on the session id, which is what cron runs already key on).
+    pub fn seat_id(&self) -> Option<String> {
+        self.seat_id
+            .read()
+            .expect("seat_id RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    /// Assign the employee this agent executes as (the genome seat). Set by
+    /// the gateway turn from the session's employee binding; mirrors
+    /// [`Self::set_session_id`] through `Arc<OperantAgent>`.
+    pub fn set_seat_id(&self, seat_id: impl Into<String>) {
+        let new_id = seat_id.into();
+        tracing::debug!(seat_id = %new_id, "Agent genome seat set at runtime");
+        if let Ok(mut guard) = self.seat_id.write() {
+            *guard = Some(new_id);
+        }
+    }
+
+    /// The bound employee's charter (org system prompt), if the gateway set
+    /// one. Appended to the frozen prefix — see [`Self::build_frozen_prefix`].
+    pub fn charter(&self) -> Option<String> {
+        self.charter
+            .read()
+            .expect("charter RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    /// Set the employee charter the frozen prefix carries. Set with
+    /// [`Self::set_seat_id`] so the pair — seat + charter — changes atomically
+    /// enough for prompt-cache purposes (both flip only when the bound
+    /// employee changes, which is rare per conversation).
+    pub fn set_charter(&self, charter: Option<String>) {
+        if let Ok(mut guard) = self.charter.write() {
+            *guard = charter;
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -478,6 +520,18 @@ impl OperantAgent {
                 After receiving tool results, continue reasoning and either call more tools or provide your final response to the user."
                 .to_string()
         });
+        // Wave 2: the bound employee's charter — the role definition the
+        // org layer gives the seat this agent runs as. Appended AFTER the
+        // base prompt, BEFORE skills, and byte-stable across turns (it only
+        // changes when the bound employee changes), so the frozen-prefix
+        // cache discipline holds.
+        if let Some(charter) = self.charter() {
+            if !charter.is_empty() {
+                frozen.push_str("\n\n<employee_charter>\n");
+                frozen.push_str(&charter);
+                frozen.push_str("\n</employee_charter>");
+            }
+        }
         if let Some(skill_manager) = &self.skill_manager {
             let skills = skill_manager.list();
             if !skills.is_empty() {

@@ -284,6 +284,32 @@ pub static SEAT_POLICY_DBS: OnceLock<
     std::sync::Mutex<Option<Arc<operant_core::org::seat_policy_db::SeatPolicyDb>>>,
 > = OnceLock::new();
 
+/// Wave 2: the employee registry the gateway turn reads charters from and
+/// the `/session new` command validates employee ids against. Same
+/// OnceLock-over-Mutex shape as [`SEAT_APPROVERS`] for the same reason —
+/// sync surfaces (commands, the turn prologue) have no handle back into
+/// `start_gateway`'s locals. `None` until the gateway starts; consumers
+/// degrade to "no charter, binding refused" rather than guessing.
+pub static EMPLOYEE_REGISTRIES: OnceLock<
+    std::sync::Mutex<Option<Arc<operant_core::org::employee_db::EmployeeDb>>>,
+> = OnceLock::new();
+
+/// Install the gateway's employee registry (Wave 2). Mirrors
+/// [`store_seat_approver`]: overwrite-once at gateway start.
+pub fn store_employee_registry(db: Arc<operant_core::org::employee_db::EmployeeDb>) {
+    let cell = EMPLOYEE_REGISTRIES.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some(db);
+    }
+}
+
+/// The installed employee registry, if the gateway started one.
+pub(crate) fn employee_registry() -> Option<Arc<operant_core::org::employee_db::EmployeeDb>> {
+    let cell = EMPLOYEE_REGISTRIES.get_or_init(|| std::sync::Mutex::new(None));
+    let guard = cell.lock().ok()?;
+    guard.clone()
+}
+
 /// Install the gateway's concrete seat-policy store (P3). Overwrite-once
 /// at gateway start, mirroring [`store_seat_approver`].
 pub fn store_seat_policy_db(db: Arc<operant_core::org::seat_policy_db::SeatPolicyDb>) {
@@ -838,6 +864,42 @@ impl MessageHandler for GatewayMessageHandler {
             }
         }
 
+        // Wave 2 (ORGANISM-ARCHITECTURE §2): apply the session's employee
+        // binding — the genome SEAT this turn runs under, and the charter
+        // the frozen prefix carries. The binding lives on the PERSISTENT
+        // session store (survives restarts); the in-memory SessionStore is
+        // metadata-only and holds no employee state. The persistent store
+        // backfills `premiere` on load (owner ruling: default conversations
+        // talk to the premiere), so `employee_id` is Some in every
+        // post-migration row; the None arm is the pre-migration transient.
+        {
+            let gw_guard = self.gateway.lock().await;
+            if let Some(ref gw) = *gw_guard {
+                if let Some(store) = gw.get_persistent_sessions() {
+                    if let Some(entry) = store.get_entry(&session_key) {
+                        let employee_id = entry
+                            .employee_id
+                            .clone()
+                            .unwrap_or_else(|| "premiere".to_string());
+                        self.agent.set_seat_id(employee_id.clone());
+                        let charter = employee_registry().and_then(|registry| {
+                            registry
+                                .get_employee(&employee_id)
+                                .ok()
+                                .flatten()
+                                .and_then(|emp| emp.system_prompt.clone())
+                        });
+                        self.agent.set_charter(charter);
+                        tracing::debug!(
+                            session_key = %session_key,
+                            seat = %employee_id,
+                            "Wave 2: session runs as its bound employee"
+                        );
+                    }
+                }
+            }
+        }
+
         // Turn start. `reloaded` is logged because it is the single fact that
         // explains what the model can see this turn: `true` means the
         // conversation was rebuilt from the last 20 stored messages of
@@ -1324,6 +1386,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let employee_registry = Arc::new(operant_core::org::employee_db::EmployeeDb::init(
         org_db.clone(),
     )?);
+    // Wave 2: commands and the turn prologue read charters and validate
+    // employee ids through the global seam; the Arc is cloned BEFORE any
+    // dyn coercion below keeps the concrete type reachable.
+    store_employee_registry(Arc::clone(&employee_registry));
     let hierarchy_edges = Arc::new(operant_core::org::hierarchy_edges::HierarchyEdgesDb::init(
         &org_db,
     )?);
