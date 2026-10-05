@@ -33,7 +33,6 @@ pub mod tls;
 #[cfg(feature = "gateway-voice-duplex")]
 pub mod voice_duplex;
 pub mod ws;
-pub mod ws_approval;
 
 use crate::error::{Error, GatewayContextExt as _, Result};
 use axum::{

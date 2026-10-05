@@ -48,6 +48,172 @@ use crate::approval::summarize_args;
 use crate::observability::{Observer, ObserverEvent};
 use crate::security::{GuardResult, PromptGuard};
 
+// Core keeps its own (pre-supertrait-dedup) observer enum — same variants,
+// separate type. The bridge below rebroadcasts everything the core turn
+// emits onto the consumer's runtime observer so Loop B consumers that fed
+// `Agent::set_observer` (gateway SSE dashboard) keep identical telemetry
+// through the facade.
+use operant_core::observer as core_observer;
+
+/// Core → runtime observer bridge (see module comment above).
+struct CoreObserverBridge {
+    inner: Arc<dyn Observer>,
+}
+
+fn core_observer_event(event: &core_observer::ObserverEvent) -> ObserverEvent {
+    use core_observer::ObserverEvent as C;
+    match event {
+        C::AgentStart { provider, model } => ObserverEvent::AgentStart {
+            provider: provider.clone(),
+            model: model.clone(),
+        },
+        C::LlmRequest {
+            provider,
+            model,
+            messages_count,
+        } => ObserverEvent::LlmRequest {
+            provider: provider.clone(),
+            model: model.clone(),
+            messages_count: *messages_count,
+        },
+        C::LlmResponse {
+            provider,
+            model,
+            duration,
+            success,
+            error_message,
+            input_tokens,
+            output_tokens,
+        } => ObserverEvent::LlmResponse {
+            provider: provider.clone(),
+            model: model.clone(),
+            duration: *duration,
+            success: *success,
+            error_message: error_message.clone(),
+            input_tokens: *input_tokens,
+            output_tokens: *output_tokens,
+        },
+        C::AgentEnd {
+            provider,
+            model,
+            duration,
+            tokens_used,
+            cost_usd,
+        } => ObserverEvent::AgentEnd {
+            provider: provider.clone(),
+            model: model.clone(),
+            duration: *duration,
+            tokens_used: *tokens_used,
+            cost_usd: *cost_usd,
+        },
+        C::ToolCallStart { tool, arguments } => ObserverEvent::ToolCallStart {
+            tool: tool.clone(),
+            arguments: arguments.clone(),
+        },
+        C::ToolCall {
+            tool,
+            duration,
+            success,
+        } => ObserverEvent::ToolCall {
+            tool: tool.clone(),
+            duration: *duration,
+            success: *success,
+        },
+        C::TurnComplete => ObserverEvent::TurnComplete,
+        C::ChannelMessage { channel, direction } => ObserverEvent::ChannelMessage {
+            channel: channel.clone(),
+            direction: direction.clone(),
+        },
+        C::HeartbeatTick => ObserverEvent::HeartbeatTick,
+        C::CacheHit {
+            cache_type,
+            tokens_saved,
+        } => ObserverEvent::CacheHit {
+            cache_type: cache_type.clone(),
+            tokens_saved: *tokens_saved,
+        },
+        C::CacheMiss { cache_type } => ObserverEvent::CacheMiss {
+            cache_type: cache_type.clone(),
+        },
+        C::Error { component, message } => ObserverEvent::Error {
+            component: component.clone(),
+            message: message.clone(),
+        },
+        C::HandStarted { hand_name } => ObserverEvent::HandStarted {
+            hand_name: hand_name.clone(),
+        },
+        C::HandCompleted {
+            hand_name,
+            duration_ms,
+            findings_count,
+        } => ObserverEvent::HandCompleted {
+            hand_name: hand_name.clone(),
+            duration_ms: *duration_ms,
+            findings_count: *findings_count,
+        },
+        C::HandFailed {
+            hand_name,
+            error,
+            duration_ms,
+        } => ObserverEvent::HandFailed {
+            hand_name: hand_name.clone(),
+            error: error.clone(),
+            duration_ms: *duration_ms,
+        },
+        other => ObserverEvent::Error {
+            component: "core_observer_bridge".to_string(),
+            message: format!("unbridgeable core observer event: {other:?}"),
+        },
+    }
+}
+
+fn core_observer_metric(
+    metric: &core_observer::ObserverMetric,
+) -> Option<operant_api::observability_traits::ObserverMetric> {
+    use core_observer::ObserverMetric as C;
+    use operant_api::observability_traits::ObserverMetric as A;
+    Some(match metric {
+        C::RequestLatency(d) => A::RequestLatency(*d),
+        C::TokensUsed(n) => A::TokensUsed(*n),
+        C::ActiveSessions(n) => A::ActiveSessions(*n),
+        C::QueueDepth(n) => A::QueueDepth(*n),
+        C::HandRunDuration {
+            hand_name,
+            duration,
+        } => A::HandRunDuration {
+            hand_name: hand_name.clone(),
+            duration: *duration,
+        },
+        C::HandFindingsCount { hand_name, count } => A::HandFindingsCount {
+            hand_name: hand_name.clone(),
+            count: *count,
+        },
+        C::HandSuccessRate { hand_name, success } => A::HandSuccessRate {
+            hand_name: hand_name.clone(),
+            success: *success,
+        },
+        // core's enum is non_exhaustive; the runtime copy adds variants core
+        // never emits, so a wildcard arm is a shape guard, not dead weight.
+        _ => return None,
+    })
+}
+
+impl core_observer::Observer for CoreObserverBridge {
+    fn record_event(&self, event: &core_observer::ObserverEvent) {
+        self.inner.record_event(&core_observer_event(event));
+    }
+
+    fn record_metric(&self, metric: &core_observer::ObserverMetric) {
+        if let Some(mapped) = core_observer_metric(metric) {
+            self.inner.record_metric(&mapped);
+        }
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+}
+
 /// Re-exported so channels (which has no direct operant-core dependency)
 /// can construct the facade's config without a new edge in the dep graph.
 pub use operant_core::agent::PreflightConfig;
@@ -1270,7 +1436,10 @@ impl ReconciledAgent {
         let inner =
             OperantAgent::with_events(config, Box::new(client), registry, database, event_tx)
                 .with_permissions(perm_tx)
-                .with_interrupt_flag(interrupt_flag.clone());
+                .with_interrupt_flag(interrupt_flag.clone())
+                .with_observer(Arc::new(CoreObserverBridge {
+                    inner: observer.clone(),
+                }));
 
         let bus = FacadeEventBus::default();
         spawn_event_forwarder(event_rx, bus.clone());
@@ -1331,6 +1500,21 @@ impl ReconciledAgent {
     /// migration legs).
     pub fn core_agent(&self) -> &OperantAgent {
         &self.inner
+    }
+
+    /// Seed prior conversation turns into the core conversation (memory of
+    /// gateway WS sessions migrating off Loop B's in-memory `seed_history`).
+    /// Call AFTER `core_agent().set_session_id(...)` retargeted the session
+    /// (so the hot conversation is that session's), and ONLY when the core
+    /// session store has no transcript — otherwise the imported history is
+    /// duplicated on top of the rehydrated turns.
+    pub async fn seed_history_if_empty(&self, messages: &[ChatMessage]) {
+        if messages.is_empty() || !self.inner.conversation().await.is_empty() {
+            return;
+        }
+        for message in messages {
+            self.inner.add_message(to_core(message)).await;
+        }
     }
 
     /// Deterministic drain: block until the forwarder has processed every

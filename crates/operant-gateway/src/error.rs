@@ -7,7 +7,7 @@
 //! where upstream contracts still return it:
 //!
 //! - `operant-api`'s `Tool` / `Channel` / `Provider` trait methods
-//!   (implemented by `node_tool.rs`, `ws_approval.rs`, and test mocks),
+//!   (implemented by `node_tool.rs` and test mocks),
 //! - `operant-config`'s `Config` methods (consumed by
 //!   `api_config.rs::map_prop_error` and `Config::save`),
 //! - `operant-runtime`'s `process_message` (the agent dispatch entry).

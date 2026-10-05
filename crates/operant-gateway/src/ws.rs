@@ -56,7 +56,6 @@
 //! - `token` — bearer auth token (alternative to Authorization header)
 
 use super::AppState;
-use crate::ws_approval::{PendingApprovals, WsApprovalChannel, new_pending_approvals};
 use axum::{
     extract::{
         Query, State, WebSocketUpgrade,
@@ -67,16 +66,13 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use operant_api::channel::ChannelApprovalResponse;
+use operant_config::schema::Config;
+use operant_runtime::agent::reconciled::{EvolutionConfig, ReconciledAgent, TurnExitReason};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::debug;
-
-/// Default wall-clock budget for the operator to answer an
-/// `approval_request` frame before the channel auto-denies. Mirrors the
-/// channel-side default on `TelegramConfig::approval_timeout_secs`.
-const WS_APPROVAL_TIMEOUT_SECS: u64 = 120;
 
 /// Optional connection parameters sent as the first WebSocket message.
 ///
@@ -318,7 +314,10 @@ async fn handle_socket(
         }
     }
 
-    let session_cwd = match resolve_session_cwd(requested_cwd.as_deref(), &config.workspace_dir) {
+    // validated for the INVALID_CWD error path; core tools resolve paths
+    // against the process cwd (Loop A semantics) so the value is not
+    // consumed by the facade.
+    let _session_cwd = match resolve_session_cwd(requested_cwd.as_deref(), &config.workspace_dir) {
         Ok(cwd) => cwd,
         Err(e) => {
             let err = serde_json::json!({
@@ -336,64 +335,39 @@ async fn handle_socket(
         return;
     }
 
-    // Build a persistent Agent for this connection so history is maintained
-    // across turns. The session cwd becomes the security sandbox root; config
-    // workspace remains the daemon data directory.
-    let mut agent =
-        match operant_runtime::agent::Agent::from_config_with_session_cwd_and_mcp_backchannel(
-            &config,
-            Some(&session_cwd),
-            true,
-        )
-        .await
-        {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::error!(error = %e, "Agent initialization failed");
-                let err = serde_json::json!({
-                    "type": "error",
-                    "message": format!("Failed to initialise agent: {e}"),
-                    "code": "AGENT_INIT_FAILED"
-                });
-                let _ = sender.send(Message::Text(err.to_string().into())).await;
-                let _ = sender
-                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 1011,
-                        reason: "Agent initialization failed".into(),
-                    })))
-                    .await;
-                return;
-            }
-        };
-    // Inject the gateway's BroadcastObserver so that lifecycle events emitted
-    // inside Agent::turn_streamed (AgentStart, LlmRequest, LlmResponse,
-    // TurnComplete, AgentEnd) are broadcast to the SSE /api/events stream.
-    // Without this injection the WS path is dark to SSE dashboard clients.
-    agent.set_observer(state.observer.clone());
-    agent.set_memory_session_id(Some(memory_session_id));
+    // Build a per-session reconciled-facade agent (Loop A under the hood) so
+    // history is maintained across turns on this connection. The facade owns
+    // injection scanning, approvals, cancellation and the TurnEvent stream;
+    // wiring parity notes: the SSE observer rides through the facade's
+    // core→api bridge, approvals route through `ReconciledApprovals`, and the
+    // core session id keys the facade's own transcript continuity.
+    let mut agent = match build_ws_facade_agent(&config, &state.observer, &memory_session_id).await
+    {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!(error = %e, "Agent initialization failed");
+            let err = serde_json::json!({
+                "type": "error",
+                "message": format!("Failed to initialise agent: {e}"),
+                "code": "AGENT_INIT_FAILED"
+            });
+            let _ = sender.send(Message::Text(err.to_string().into())).await;
+            let _ = sender
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 1011,
+                    reason: "Agent initialization failed".into(),
+                })))
+                .await;
+            return;
+        }
+    };
+    agent.core_agent().set_session_id(session_key.clone());
     if !stored_messages.is_empty() {
-        agent.seed_history(&stored_messages);
+        // Migrate Loop B history: seed only when the core session store has
+        // no transcript yet — otherwise the import would duplicate the turns
+        // the facade already rehydrates for this session id.
+        agent.seed_history_if_empty(&stored_messages).await;
     }
-
-    // ── Tool-approval back-channel ─────────────────────────────────
-    // Connection-level event channel that the WsApprovalChannel shares
-    // with the per-turn forward task: it pushes ApprovalRequest frames
-    // here when the agent's tool loop pauses for consent, and the
-    // forward task drains them out the same WebSocket as the regular
-    // streaming events. The pending map is shared with the receive loop
-    // so inbound `approval_response` frames can resolve the matching
-    // oneshot waiter.
-    let (approval_event_tx, mut approval_event_rx) =
-        tokio::sync::mpsc::channel::<operant_api::agent::TurnEvent>(8);
-    let pending_approvals: PendingApprovals = new_pending_approvals();
-    let approval_channel = Arc::new(WsApprovalChannel::new(
-        approval_event_tx.clone(),
-        pending_approvals.clone(),
-        Duration::from_secs(WS_APPROVAL_TIMEOUT_SECS),
-    ));
-    agent
-        .channel_handles()
-        .register_channel("ws", approval_channel.clone());
 
     // Process the first message if it was not a connect frame
     if let Some(ref text) = first_msg_fallback {
@@ -411,8 +385,6 @@ async fn handle_socket(
                         &mut agent,
                         &mut sender,
                         &mut receiver,
-                        &mut approval_event_rx,
-                        &pending_approvals,
                         &content,
                         &session_key,
                     )
@@ -514,9 +486,11 @@ async fn handle_socket(
                         let _ = sender.send(Message::Text(err.to_string().into())).await;
                         continue;
                     }
-                    if let Some(tx) = pending_approvals.lock().remove(request_id) {
-                        let _ = tx.send(decision.expect("checked above"));
-                    } else {
+                    // Facade registry: a live turn's parked approvals resolve
+                    // here; a stale id (turn ended) logs and is ignored.
+                    if let Some(d) = decision
+                        && !agent.approvals().resolve(request_id, d)
+                    {
                         debug!(%request_id, "approval_response with no matching pending request");
                     }
                     continue;
@@ -565,17 +539,8 @@ async fn handle_socket(
                     let _ = backend.append(&session_key, &user_msg);
                 }
 
-                process_chat_message(
-                    &state,
-                    &mut agent,
-                    &mut sender,
-                    &mut receiver,
-                    &mut approval_event_rx,
-                    &pending_approvals,
-                    &content,
-                    &session_key,
-                )
-                .await;
+                process_chat_message(&state, &mut agent, &mut sender, &mut receiver, &content, &session_key)
+                    .await;
             }
 
             // ── Broadcast event (cron/heartbeat results) ──────────────
@@ -585,38 +550,6 @@ async fn handle_socket(
                 {
                     let _ = sender.send(Message::Text(event.to_string().into())).await;
                 }
-            }
-
-            // ── Approval request from the agent's tool loop ────────────
-            // The WsApprovalChannel emits these whenever a supervised tool
-            // call needs operator consent. Forwarded out the same socket
-            // as the regular streaming events; the matching response
-            // arrives via the `approval_response` arm above and resolves
-            // the channel's pending oneshot.
-            approval_event = approval_event_rx.recv() => {
-                let Some(event) = approval_event else { break };
-                let frame = match event {
-                    operant_api::agent::TurnEvent::ApprovalRequest {
-                        request_id,
-                        tool_name,
-                        arguments_summary,
-                        timeout_secs,
-                    } => serde_json::json!({
-                        "type": "approval_request",
-                        "request_id": request_id,
-                        "tool": tool_name,
-                        "arguments_summary": arguments_summary,
-                        "timeout_secs": timeout_secs,
-                    }),
-                    other => {
-                        tracing::warn!(
-                            kind = ?other,
-                            "non-ApprovalRequest event leaked into approval channel"
-                        );
-                        continue;
-                    }
-                };
-                let _ = sender.send(Message::Text(frame.to_string().into())).await;
             }
         }
     }
@@ -656,22 +589,210 @@ fn event_matches_session(event: &serde_json::Value, session_id: &str) -> bool {
     }
 }
 
+/// Build the per-session [`ReconciledAgent`] (Loop A) for a WS connection.
+///
+/// Inputs mirror what Loop B's construction assembled for this consumer —
+/// provider routing + model resolution from the schema config (identical to
+/// `Agent::from_config_with_session_cwd_and_mcp_backchannel`), memory backend
+/// per session, evolution intervals — while tool registration uses core's
+/// registry (`register_builtin_tools_with_sub_agent` = the registry every
+/// Loop A consumer shares) sourced from the process-installed core runtime
+/// config (cron/kanban/db paths, registry timeout, disabled tool(sets), MCP
+/// servers). Per-session `cwd` sandboxing is a Loop B-only feature: core
+/// tools resolve paths against the process cwd, so `?cwd` still validates
+/// the directory (INVALID_CWD) but does not re-root the sandbox.
+async fn build_ws_facade_agent(
+    config: &Config,
+    observer: &Arc<dyn operant_runtime::observability::Observer>,
+    memory_session_id: &str,
+) -> anyhow::Result<ReconciledAgent> {
+    // Provider routing + model resolution — verbatim Loop B inputs.
+    let fallback_provider_ag = config.providers.fallback_provider();
+    let provider_name = config.providers.fallback.as_deref().unwrap_or("openrouter");
+    let model_name = match fallback_provider_ag
+        .and_then(|e| e.model.as_deref())
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        Some(m) => m.to_string(),
+        None => match config.providers.resolve_default_model() {
+            Some(m) => {
+                tracing::warn!(
+                    provider = provider_name,
+                    model = %m,
+                    "fallback provider has no `model` set; using first configured \
+                     providers.models entry as default. Set [providers.models.{provider_name}] \
+                     model = \"...\" to silence this warning.",
+                );
+                m
+            }
+            None => {
+                anyhow::bail!(
+                    "no model configured: providers.fallback = {:?} resolves with no model, \
+                     and no [[providers.models.*]] entry has a `model` field set. \
+                     Configure at least one [providers.models.<name>] model = \"...\" \
+                     or define a [[model_routes]] hint.",
+                    config.providers.fallback,
+                )
+            }
+        },
+    };
+
+    let provider_runtime_options = operant_providers::provider_runtime_options_from_config(config);
+    let provider: Arc<dyn operant_providers::Provider> =
+        Arc::from(operant_providers::create_routed_provider_with_options(
+            provider_name,
+            fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
+            fallback_provider_ag.and_then(|e| e.base_url.as_deref()),
+            &config.reliability,
+            &config.providers.model_routes,
+            &model_name,
+            &provider_runtime_options,
+        )?);
+
+    // Per-session memory, same builder Loop B's constructor used, so the
+    // facade's memory-review triggers read/write the same store.
+    let memory: Arc<dyn operant_memory::Memory> =
+        Arc::from(operant_memory::create_memory_with_storage_and_routes(
+            &config.memory,
+            &config.providers.embedding_routes,
+            Some(&config.storage.provider.config),
+            &config.workspace_dir,
+            fallback_provider_ag.and_then(|e| e.api_key.as_deref()),
+        )?);
+
+    // Core-agent assembly — the process's shared on-disk layout comes from
+    // the core runtime config (installed at every binary entry point).
+    let core_app = operant_core::config::runtime_config();
+    let database = Arc::new(operant_core::database::Database::init(
+        core_app.database_path.clone(),
+    )?);
+    let registry = operant_core::tools::ToolRegistry::new(Duration::from_secs(
+        core_app.tools.registry_timeout_secs,
+    ));
+    let db_dir = core_app
+        .database_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let cron_db = Arc::new(operant_core::cronjobs::CronDb::init(
+        db_dir.join("operant_cron.db"),
+    )?);
+    let kanban_db = Arc::new(operant_core::kanban::KanbanDb::init(
+        db_dir.join("operant_kanban.db"),
+    )?);
+
+    // MCP: connect the configured servers (Loop B did this eagerly with
+    // `initialize_mcp = true`); failures bind no tools and are non-fatal.
+    let mcp_manager = operant_core::mcp::McpManager::new();
+    if config.mcp.enabled && !core_app.mcp.servers.is_empty() {
+        for server in core_app
+            .mcp
+            .servers
+            .iter()
+            .filter(|s| s.enabled && !s.deferred)
+        {
+            let result = match server.transport {
+                operant_core::config::McpTransportKind::Http
+                | operant_core::config::McpTransportKind::StreamableHttp => match &server.url {
+                    Some(url) => mcp_manager
+                        .add_server(server.name.clone(), url.clone(), server.auth_token.clone())
+                        .await
+                        .map(|_| ()),
+                    None => continue,
+                },
+                operant_core::config::McpTransportKind::Stdio => match &server.command {
+                    Some(command) => mcp_manager
+                        .add_stdio_server(
+                            server.name.clone(),
+                            command.clone(),
+                            server.args.clone(),
+                            server.env.clone(),
+                        )
+                        .await
+                        .map(|_| ()),
+                    None => continue,
+                },
+            };
+            if let Err(e) = result {
+                tracing::warn!(server = %server.name, "WS facade MCP server connect failed: {e:#}");
+            }
+        }
+    }
+
+    operant_core::tools::register_builtin_tools_with_sub_agent(
+        &registry,
+        &core_app.skills.root_dir,
+        &core_app.skills.memory_dir,
+        &operant_core::client::OpenAIClient::new(operant_core::client::ClientConfig::from(
+            &core_app.client,
+        )),
+        model_name.clone(),
+        database.clone(),
+        cron_db,
+        kanban_db,
+        Some(mcp_manager),
+        None, // the facade already translates core events; a per-tool side
+        // channel would only double-emit into the same bus
+        core_app.tools.disabled_tools.iter().cloned().collect(),
+        core_app.tools.disabled_toolsets.iter().cloned().collect(),
+    )
+    .await?;
+
+    // Core loop config: started from the process behavior settings (same
+    // source the CLI channel gateway uses), then the WS consumer's own
+    // model + iteration bound on top. Evolution intervals stay off in core
+    // (the facade fires them via EvolutionConfig below).
+    let mut agent_config = operant_core::agent::AgentConfig::from(&core_app.agent);
+    agent_config.model = model_name;
+    agent_config.max_iterations = config.agent.max_tool_iterations;
+    agent_config.approval_allowlist = core_app.command_allowlist.clone();
+    agent_config.approval_allowlist_path =
+        std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| {
+            std::path::PathBuf::from(h)
+                .join(".operant")
+                .join("approval_allowlist.json")
+        });
+    let mut tool_search = core_app.tools.tool_search.clone();
+    if !config.mcp.deferred_loading {
+        tool_search.enabled = "off".to_string();
+    }
+    agent_config.tool_search = tool_search;
+
+    Ok(ReconciledAgent::new(
+        agent_config,
+        provider,
+        provider_name,
+        registry,
+        database,
+        Some(memory),
+        observer.clone(),
+        Some(config.multimodal.clone()),
+        EvolutionConfig {
+            memory_nudge_interval: config.agent.memory_nudge_interval,
+            creation_nudge_interval: config.agent.creation_nudge_interval,
+            auto_classify: config.agent.auto_classify.clone(),
+        },
+    )
+    .with_memory_session_id(Some(memory_session_id.to_string())))
+}
+
 #[expect(
     clippy::expect_used,
     reason = "poisoned lock: panic is the intended recovery"
 )]
 /// Process a single chat message through the agent and send the response.
 ///
-/// Uses [`Agent::turn_streamed`] so that intermediate text chunks, tool calls,
-/// and tool results are forwarded to the WebSocket client in real time.
+/// Runs through the reconciled facade
+/// ([`ReconciledAgent::turn_streamed`], Loop A) so that intermediate text
+/// chunks, tool calls, and tool results are forwarded to the WebSocket
+/// client in real time.
 #[allow(clippy::too_many_arguments)]
 async fn process_chat_message(
     state: &AppState,
-    agent: &mut operant_runtime::agent::Agent,
+    agent: &mut ReconciledAgent,
     sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     receiver: &mut futures_util::stream::SplitStream<WebSocket>,
-    approval_event_rx: &mut tokio::sync::mpsc::Receiver<operant_api::agent::TurnEvent>,
-    pending_approvals: &PendingApprovals,
     content: &str,
     session_key: &str,
 ) {
@@ -708,6 +829,11 @@ async fn process_chat_message(
     // Channel for streaming turn events from the agent.
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TurnEvent>(64);
 
+    // Approval routing for this turn: resolve/deny through the facade's
+    // registry (clonable, Arc-backed) so `forward_fut` can drive it while
+    // `turn_fut` holds the &mut borrow on the agent.
+    let approvals = agent.approvals().clone();
+
     // Run the streamed turn concurrently: the agent produces events
     // while we forward them to the WebSocket below.  We cannot move
     // `agent` into a spawned task (it is `&mut`), so we use a join
@@ -743,31 +869,28 @@ async fn process_chat_message(
     let mut total_input_tokens: Option<u64> = None;
     let mut total_output_tokens: Option<u64> = None;
 
-    // Routes the three concurrent streams that the running turn cares about:
-    //   1. inbound `approval_response` frames from the WebSocket client,
-    //   2. `TurnEvent::ApprovalRequest` events from `WsApprovalChannel`,
-    //   3. ordinary `TurnEvent`s from the agent loop.
-    // Without the multiplexed select, the loop draining only `event_rx`
-    // would block the approval back-channel for the whole turn, so a pending
-    // tool approval could neither be sent to the client nor answered before
-    // the timeout fired.
+    // Routes the concurrent streams the running turn cares about:
+    //   1. inbound `approval_response` frames from the WebSocket client
+    //      (resolved through the facade's `ReconciledApprovals`),
+    //   2. `TurnEvent`s from the facade — including `ApprovalRequest`,
+    //      bridged from core's permission pump.
+    // Without the multiplexed select, draining only `event_rx` would block
+    // the approval back-channel for the whole turn, so a pending tool
+    // approval could neither be sent to the client nor answered before the
+    // 120s deadline fired.
     let forward_fut = async {
         let mut cancel_drained = false;
         loop {
             tokio::select! {
                 biased;
                 // ── Cancellation arm ─────────────────────────────
-                // When `/abort` cancels the token, immediately drop every
-                // parked oneshot sender so any in-flight `request_approval`
-                // unblocks via the "sender dropped → deny" path in
-                // `WsApprovalChannel`. Without this, the approval future
-                // races only its own `timeout_secs` (default 120s) and
-                // ignores the cancel token, so the abort sits idle for up
-                // to two minutes before the tool loop even gets a chance
-                // to observe the cancellation.
+                // When `/abort` cancels the token, auto-deny every parked
+                // approval so any in-flight permission oneshot unblocks
+                // immediately instead of racing the 120s deadline — a
+                // hung approval would otherwise stall the turn's
+                // observation of the interrupt flag.
                 _ = cancel_token.cancelled(), if !cancel_drained => {
-                    let drained: Vec<_> = pending_approvals.lock().drain().collect();
-                    drop(drained);
+                    approvals.deny_all();
                     cancel_drained = true;
                     // Fall through; the agent loop will now wake from the
                     // approval await, see the cancel token, and propagate
@@ -807,28 +930,10 @@ async fn process_chat_message(
                     if request_id.is_empty() || decision.is_none() {
                         continue;
                     }
-                    if let Some(tx) = pending_approvals.lock().remove(request_id) {
-                        let _ = tx.send(decision.expect("checked above"));
-                    } else {
+                    if let Some(d) = decision
+                        && !approvals.resolve(request_id, d)
+                    {
                         debug!(%request_id, "approval_response with no matching pending request (mid-turn)");
-                    }
-                }
-                approval = approval_event_rx.recv() => {
-                    let Some(event) = approval else { continue };
-                    if let TurnEvent::ApprovalRequest {
-                        request_id,
-                        tool_name,
-                        arguments_summary,
-                        timeout_secs,
-                    } = event {
-                        let frame = serde_json::json!({
-                            "type": "approval_request",
-                            "request_id": request_id,
-                            "tool": tool_name,
-                            "arguments_summary": arguments_summary,
-                            "timeout_secs": timeout_secs,
-                        });
-                        let _ = sender.send(Message::Text(frame.to_string().into())).await;
                     }
                 }
                 event_opt = event_rx.recv() => {
@@ -907,12 +1012,11 @@ async fn process_chat_message(
             .remove(session_key);
     }
 
-    // Check if this turn was cancelled. `turn_streamed` propagates
-    // `ToolLoopCancelled` through anyhow, so we detect it here.
-    let was_cancelled = match &result {
-        Err(e) => operant_runtime::agent::loop_::is_tool_loop_cancelled(e),
-        Ok(_) => false,
-    };
+    // Check if this turn was cancelled. Loop B encoded that as the
+    // `ToolLoopCancelled` anyhow string; the facade carries it in the
+    // structured exit reason instead (`Interrupted` covers /abort tokens,
+    // client disconnects mid-turn, and approval-denial unwinds alike).
+    let was_cancelled = matches!(agent.last_exit_reason(), Some(TurnExitReason::Interrupted));
 
     if was_cancelled {
         // Store partial content with interruption marker so the
@@ -1397,6 +1501,326 @@ mod tests {
         assert!(
             clone_for_turn.is_cancelled(),
             "cloned token (held by turn_fut via agent.turn_streamed) must observe cancellation"
+        );
+    }
+
+    // ── W1.6: facade (Loop A) turn e2e through the exact ws.rs wiring ──
+    //
+    // Drives `ReconciledAgent::turn_streamed` through a scripted provider
+    // and a permission-gated (`bash`) tool, resolving approvals through the
+    // same cloned `ReconciledApprovals` registry the `forward_fut` select
+    // uses, then cancelling through the same cancel-token + `deny_all()`
+    // arm — asserting the SSE/frame-relevant `TurnEvent` sequence and the
+    // exit behavior `process_chat_message` keys its `aborted`/`done` frames
+    // on (`last_exit_reason`).
+
+    enum WsStep {
+        Text(&'static str),
+        Tool(&'static str, &'static str),
+    }
+
+    struct WsScriptedProvider {
+        steps: std::sync::Mutex<Vec<WsStep>>,
+        next_id: std::sync::atomic::AtomicUsize,
+    }
+
+    impl WsScriptedProvider {
+        fn new(steps: Vec<WsStep>) -> Arc<Self> {
+            Arc::new(Self {
+                steps: std::sync::Mutex::new(steps),
+                next_id: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl operant_providers::Provider for WsScriptedProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
+        async fn chat(
+            &self,
+            _request: operant_api::provider::ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<operant_api::provider::ChatResponse> {
+            // Tolerant script: extra core iterations (healing, post-denial
+            // follow-ups) get the final answer again instead of panicking.
+            let step = {
+                let mut steps = self.steps.lock().expect("scripted provider steps");
+                if steps.is_empty() {
+                    WsStep::Text("approved and done")
+                } else {
+                    steps.remove(0)
+                }
+            };
+            Ok(match step {
+                WsStep::Text(t) => operant_api::provider::ChatResponse {
+                    text: Some(t.to_string()),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    reasoning_content: None,
+                },
+                WsStep::Tool(name, args) => {
+                    let id = self
+                        .next_id
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    operant_api::provider::ChatResponse {
+                        text: Some(String::new()),
+                        tool_calls: vec![operant_api::provider::ToolCall {
+                            id: format!("call_{id}"),
+                            name: name.to_string(),
+                            arguments: args.to_string(),
+                            extra_content: None,
+                        }],
+                        usage: None,
+                        reasoning_content: None,
+                    }
+                }
+            })
+        }
+
+        fn supports_vision(&self) -> bool {
+            false
+        }
+
+        fn supports_streaming(&self) -> bool {
+            false
+        }
+
+        fn stream_chat(
+            &self,
+            _request: operant_api::provider::ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+            _options: operant_api::provider::StreamOptions,
+        ) -> futures_util::stream::BoxStream<
+            'static,
+            Result<operant_api::provider::StreamEvent, operant_api::provider::StreamError>,
+        > {
+            unreachable!("non-streaming scripted provider")
+        }
+    }
+
+    struct WsBashProbe;
+
+    #[async_trait::async_trait]
+    impl operant_core::tools::OperantTool for WsBashProbe {
+        fn name(&self) -> &str {
+            "bash"
+        }
+
+        fn description(&self) -> &str {
+            "ws test probe"
+        }
+
+        fn schema(&self) -> operant_core::schema::ToolSchema {
+            operant_core::schema::ToolSchema::new(
+                "bash",
+                "ws test probe",
+                serde_json::json!({"type": "object", "properties": {}}),
+            )
+        }
+
+        async fn execute(
+            &self,
+            _args: serde_json::Value,
+            _context: operant_core::tools::ToolContext,
+        ) -> operant_core::tools::ToolResult {
+            operant_core::tools::ToolResult {
+                tool_call_id: String::new(),
+                name: "bash".to_string(),
+                success: true,
+                content: "probe ok".to_string(),
+                error: None,
+                timed_out: false,
+            }
+        }
+    }
+
+    fn ws_facade_config() -> operant_core::agent::AgentConfig {
+        operant_core::agent::AgentConfig {
+            model: "demo".to_string(),
+            max_iterations: 5,
+            tool_timeout: Duration::from_secs(5),
+            request_timeout: Duration::from_secs(10),
+            system_prompt: None,
+            stream: false,
+            context_window: 8000,
+            max_tool_result_share: operant_core::context_management::DEFAULT_MAX_TOOL_RESULT_SHARE,
+            max_healing_attempts: 1,
+            fallback_models: Vec::new(),
+            fallback_on_errors: false,
+            // "smart": bash is permission-gated, so the turn parks on the
+            // facade's approval bridge — the exact flow WS clients ride.
+            approval_mode: "smart".to_string(),
+            approval_allowlist: Vec::new(),
+            approval_allowlist_path: None,
+            record_trajectories: false,
+            skill_nudge_interval: 0,
+            memory_review_interval: 0,
+            max_retries: 3,
+            tool_search: Default::default(),
+        }
+    }
+
+    async fn build_ws_script_facade(provider: Arc<WsScriptedProvider>) -> ReconciledAgent {
+        let registry = operant_core::tools::ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(WsBashProbe)
+            .await
+            .expect("register bash probe");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let database = Arc::new(
+            operant_core::database::Database::init(tmp.path().join("ws-facade.db"))
+                .expect("database init"),
+        );
+        ReconciledAgent::new(
+            ws_facade_config(),
+            provider,
+            "scripted",
+            registry,
+            database,
+            None,
+            Arc::new(operant_runtime::observability::NoopObserver),
+            None,
+            EvolutionConfig::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn facade_ws_turn_toolcall_approval_roundtrip_and_cancel_exit() {
+        // ── Turn 1: tool call → approval round-trip → answer ──────────
+        let provider = WsScriptedProvider::new(vec![
+            WsStep::Tool("bash", "{}"),
+            WsStep::Text("approved and done"),
+            // Turn 2's script: park on the approval gate again.
+            WsStep::Tool("bash", "{}"),
+            WsStep::Text("after the abort"),
+        ]);
+        let mut agent = build_ws_script_facade(Arc::clone(&provider)).await;
+        let approvals = agent.approvals().clone();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<operant_runtime::agent::TurnEvent>(64);
+        let forwarder = {
+            let approvals = approvals;
+            tokio::spawn(async move {
+                let mut saw_tool_call = false;
+                let mut saw_tool_result = false;
+                let mut final_text = String::new();
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        operant_runtime::agent::TurnEvent::ToolCall { name, .. } => {
+                            assert_eq!(name, "bash");
+                            saw_tool_call = true;
+                        }
+                        operant_runtime::agent::TurnEvent::ApprovalRequest {
+                            request_id,
+                            tool_name,
+                            timeout_secs,
+                            ..
+                        } => {
+                            assert_eq!(tool_name, "bash");
+                            assert_eq!(timeout_secs, 120);
+                            // The `forward_fut` client_msg arm routing:
+                            assert!(
+                                approvals.resolve(&request_id, ChannelApprovalResponse::Approve),
+                                "live approval must resolve"
+                            );
+                        }
+                        operant_runtime::agent::TurnEvent::ToolResult { name, output, .. } => {
+                            assert_eq!(name, "bash");
+                            assert_eq!(output, "probe ok");
+                            saw_tool_result = true;
+                        }
+                        operant_runtime::agent::TurnEvent::Chunk { delta } => {
+                            final_text.push_str(&delta)
+                        }
+                        _ => {}
+                    }
+                }
+                (saw_tool_call, saw_tool_result, final_text)
+            })
+        };
+        let response = agent
+            .turn_streamed("run the probe", tx, None)
+            .await
+            .expect("turn 1 ok");
+        let (saw_tool_call, saw_tool_result, final_text) =
+            forwarder.await.expect("turn 1 forwarder");
+        assert_eq!(response, "approved and done");
+        assert_eq!(final_text, "approved and done");
+        assert!(
+            saw_tool_call,
+            "tool_call frame precursor must precede approval"
+        );
+        assert!(saw_tool_result);
+        assert_eq!(
+            agent.last_exit_reason(),
+            Some(TurnExitReason::TextResponse),
+            "approved turn completes normally — done-frame path"
+        );
+
+        // ── Turn 2: cancel while parked on the approval gate ─────────
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<operant_runtime::agent::TurnEvent>(64);
+        let forwarder = {
+            let approvals2 = agent.approvals().clone();
+            let cancel_token = cancel_token.clone();
+            tokio::spawn(async move {
+                let mut saw_approval_request = false;
+                let mut saw_denial_surface = false;
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        operant_runtime::agent::TurnEvent::ApprovalRequest { .. } => {
+                            saw_approval_request = true;
+                            // The `forward_fut` cancel arm, verbatim: deny
+                            // every parked approval, then trip the token.
+                            approvals2.deny_all();
+                            cancel_token.cancel();
+                        }
+                        // A denied tool surfaces as a ToolResult carrying the
+                        // refusal (success=false → error text), mirroring the
+                        // tool_result frame a WS client sees on abort.
+                        operant_runtime::agent::TurnEvent::ToolResult { output, .. } => {
+                            if output.contains("Permission denied by user") {
+                                saw_denial_surface = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                (saw_approval_request, saw_denial_surface)
+            })
+        };
+        let started = std::time::Instant::now();
+        let _result2 = agent
+            .turn_streamed("run it again", tx, Some(cancel_token))
+            .await;
+        let (saw_approval_request, _saw_denial_surface) =
+            forwarder.await.expect("turn 2 forwarder");
+        assert!(
+            saw_approval_request,
+            "turn 2 must park on the approval gate before cancellation"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "deny_all() must unblock the parked approval long before core's \
+             120s deadline (elapsed {:?})",
+            started.elapsed()
+        );
+        // The exact expression `process_chat_message` keys the aborted frame
+        // on after the W1.6 switch:
+        assert!(
+            matches!(agent.last_exit_reason(), Some(TurnExitReason::Interrupted)),
+            "cancelled turn must map to Interrupted, not an error frame"
         );
     }
 }
