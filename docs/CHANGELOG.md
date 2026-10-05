@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived pin, and `--expires-at` is honored as a whole-day TTL override
   (mirroring `/grant`'s `--days`); a request the approver would not mint is
   refused before any row is written, with the refusal naming why.
+### Changed
+
+- **iter-636 — one glob matcher across every allowlist (consolidation)**:
+  the two hand-rolled glob subsets are deleted and both delegate to the
+  canonical `context::lcm::glob_match` — the matcher the org seat policy
+  already enforced with. Three matchers meant a pattern written with a
+  character class (`content.[0-9]`) matched in the org layer and silently
+  never matched in the agent command allowlist and the kernel import
+  allowlist. One deliberate behavior delta on kernel imports, in the
+  fail-closed direction: `skills.*` now requires the literal dot (it no
+  longer matches the bare name `skills`); character classes now work as
+  written. Also drops `check_genome`'s unused `config` parameter (the
+  genome checks read the org DB directly, not the config).
+
 ### Added
 
 - **iter-633 — mid-flight seat-budget enforcement (Wave-4 §5)**: a HARD

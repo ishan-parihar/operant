@@ -82,7 +82,7 @@ impl CheckResult {
 pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     let mut items = Vec::new();
     check_config_semantics(config, &mut items);
-    check_genome(config, &mut items);
+    check_genome(&mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
     check_cli_tools(&mut items);
@@ -95,7 +95,7 @@ pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
 /// governance flags the owner directed to surface THROUGH the doctor (no
 /// new commands). Degrades to a single Info when the genome tables do not
 /// exist yet (doctor may run before any gateway boot seeded them).
-fn check_genome(config: &AppConfig, items: &mut Vec<CheckResult>) {
+fn check_genome(items: &mut Vec<CheckResult>) {
     let cat = "genome";
     let org_db = crate::platform::operant_home().join("database.db");
     let Ok(conn) =

@@ -763,28 +763,17 @@ fn persist_approval_allowlist(
     }
 }
 
-/// Match a tool name against an allowlist pattern: exact match or a `*`/`?`
-/// glob (hermes `_command_matches_permanent_allowlist` uses `fnmatch`, the
-/// Python equivalent).
+/// Match a tool name against an allowlist pattern: exact match or a
+/// `*`/`?` glob (hermes `_command_matches_permanent_allowlist` uses
+/// `fnmatch`, the Python equivalent).
+///
+/// iter-636 (consolidation): delegate to the canonical matcher
+/// (`context::lcm::glob_match`) — the same one the seat policy in
+/// `org::seat_policy` enforces with. Three independent glob matchers
+/// meant a pattern written with a character class (`content.[0-9]`) matched
+/// in the org layer and silently NEVER matched in the two local subsets.
 fn allowlist_pattern_matches(pattern: &str, name: &str) -> bool {
-    if pattern == name {
-        return true;
-    }
-    if !pattern.contains('*') && !pattern.contains('?') {
-        return false;
-    }
-    fn rec(p: &[char], n: &[char]) -> bool {
-        match (p.first(), n.first()) {
-            (None, None) => true,
-            (Some('*'), _) => rec(&p[1..], n) || (!n.is_empty() && rec(p, &n[1..])),
-            (Some('?'), Some(_)) => rec(&p[1..], &n[1..]),
-            (Some(a), Some(b)) if a == b => rec(&p[1..], &n[1..]),
-            _ => false,
-        }
-    }
-    let p: Vec<char> = pattern.chars().collect();
-    let n: Vec<char> = name.chars().collect();
-    rec(&p, &n)
+    crate::context::lcm::glob_match(pattern, name)
 }
 
 #[derive(Debug, Default)]
@@ -2491,6 +2480,11 @@ mod tests {
             "mcp_*_tool",
             "mcp_management_tool"
         ));
+        // iter-636 consolidation: character classes now behave as written
+        // (the divergence this deleted — `content.[0-9]` matched in the org
+        // seat policy and silently never matched here).
+        assert!(allowlist_pattern_matches("content.[0-9]", "content.5"));
+        assert!(!allowlist_pattern_matches("content.[0-9]", "content.x"));
     }
 
     #[test]

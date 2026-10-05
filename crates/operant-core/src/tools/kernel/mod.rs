@@ -170,55 +170,22 @@ fn executable_skills_section(budget: usize) -> Option<String> {
     Some(section)
 }
 
+/// Whether an import name is covered by the configured allowlist.
+///
+/// iter-636 (consolidation): the hand-rolled matcher (a `.*`-prefix
+/// special case plus a substring-wildcard loop) is replaced by the
+/// canonical `context::lcm::glob_match` — one matcher across every
+/// allowlist surface (agent command allowlist, kernel imports, seat
+/// policy). One deliberate behavior delta, in the fail-closed direction:
+/// `skills.*` no longer matches the bare name `skills` (the literal `.`
+/// must now match); character classes (`nlp.[0-9]*`) now work as written.
 fn is_import_allowed(import: &str, allowlist: &[String]) -> bool {
     if allowlist.is_empty() {
         return false;
     }
-    for pat in allowlist {
-        if pat == "*" {
-            return true;
-        }
-        if pat.ends_with(".*") {
-            let prefix = &pat[..pat.len() - 2];
-            if import == prefix || import.starts_with(&format!("{prefix}.")) {
-                return true;
-            }
-        } else if pat.contains('*') || pat.contains('?') {
-            // Simple glob: convert to fnmatch-style check via glob crate fallback
-            // For now, handle `*` as substring wildcard.
-            let star_parts: Vec<&str> = pat.split('*').collect();
-            let mut ok = true;
-            let mut pos = 0usize;
-            for (i, part) in star_parts.iter().enumerate() {
-                if part.is_empty() {
-                    continue;
-                }
-                if i == 0 {
-                    if !import.starts_with(*part) {
-                        ok = false;
-                        break;
-                    }
-                    pos = part.len();
-                } else if i == star_parts.len() - 1 {
-                    if !import[pos..].ends_with(*part) {
-                        ok = false;
-                        break;
-                    }
-                } else if let Some(idx) = import[pos..].find(*part) {
-                    pos += idx + part.len();
-                } else {
-                    ok = false;
-                    break;
-                }
-            }
-            if ok {
-                return true;
-            }
-        } else if import == pat {
-            return true;
-        }
-    }
-    false
+    allowlist
+        .iter()
+        .any(|pat| crate::context::lcm::glob_match(pat, import))
 }
 
 /// Register the three model-facing tools under the gated `kernel`
@@ -255,6 +222,29 @@ mod tests {
     //! Live sidecar integration tests: spawn the real Python subprocess and
     //! exercise ping / exec persistence / transparent restart / harness CRUD.
     //! Skipped naturally when python>=3.11 is absent (spawn error surfaces).
+
+    /// iter-636 consolidation: the matcher now delegates to the canonical
+    /// `lcm::glob_match`. Pins the deliberate delta — `skills.*` requires
+    /// the literal dot (fail-closed for the bare name) — plus character
+    /// classes, which the deleted substring-wildcard loop could not express.
+    #[test]
+    fn import_allowlist_uses_the_canonical_glob_semantics() {
+        let allow =
+            |patterns: &[&str]| -> Vec<String> { patterns.iter().map(|s| s.to_string()).collect() };
+        // Wildcard prefix still allows the namespace and its submodules.
+        assert!(is_import_allowed("skills", &allow(&["*"])));
+        assert!(is_import_allowed("skills.foo", &allow(&["skills.*"])));
+        assert!(is_import_allowed("skills.foo.bar", &allow(&["skills.*"])));
+        // Deliberate tightening: the bare prefix no longer matches.
+        assert!(!is_import_allowed("skills", &allow(&["skills.*"])));
+        // Character classes work as written.
+        assert!(is_import_allowed("nlp.5", &allow(&["nlp.[0-9]"])));
+        assert!(!is_import_allowed("nlp.x", &allow(&["nlp.[0-9]"])));
+        // Exact and empty-allowlist semantics unchanged.
+        assert!(is_import_allowed("math", &allow(&["math"])));
+        assert!(!is_import_allowed("math2", &allow(&["math"])));
+        assert!(!is_import_allowed("math", &[]));
+    }
 
     use super::*;
     use crate::config::KernelSettings;
