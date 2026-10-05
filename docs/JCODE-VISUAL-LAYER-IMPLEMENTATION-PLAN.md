@@ -101,7 +101,7 @@ or write into a buffer, excluding `app/tests/`, `ui_tests/`, `*tests.rs`, and
 **Cutover preconditions — the exact, ordered list (no cutover attempt before all four):**
 1. Port the full `ui.rs` aggregate root: the 30+ child `#[path]` declarations that are still excised, the `use super::ui_diff` block, and the App-bound frame draw path (10-band chrome, row math at ui.rs:3001-3088) — adapted, not copied, because the next item defines the seam.
 2. Implement `TuiState` (jcode_app/tui_state.rs) for operant's `App` — 114 methods, each a field-mapping onto operant's own state; the W1 adapter (jcode_model/adapter.rs) is the pattern.
-3. Decide `ratatui_image` (user call): YES unlocks the inline-image engine subset (mermaid_inline.rs real bodies at git 68efd95c) and the 8 gated engine tests; NO seals the degraded shims permanently and W6's `ui_inline_image` stays badge-only.
+3. Decide `ratatui_image` (user call): YES unlocks the inline-image engine subset (re-extract the real bodies from upstream `parent-projects/jcode/crates/jcode-tui-mermaid/src/{mermaid_widget,mermaid_viewport,mermaid_inline,mermaid_content}.rs` — the authoritative home; the batch-3 partial port was overwritten by the degraded shim and its local wip commit never reached origin) and the 8 gated engine tests; NO seals the degraded shims permanently and W6's `ui_inline_image` stays badge-only.
 4. Then, and only then: the one-time deliberate golden rebaseline in its own commit (the corpus MUST stay 0-drift through items 1-2's dead-in-bin phase; the rebaseline is the FIRST sanctioned change to baselines in the whole port).
 
 Batch-4 (W6 panes + W7 surfaces) runs before the cutover and needs none of these — its files port the same dead-in-bin way batches 1-3 did.
