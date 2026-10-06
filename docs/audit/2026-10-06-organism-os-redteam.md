@@ -310,3 +310,58 @@ in the table above was re-measured with the redirect-to-file form.
 - Should `IdentityGate` be wired (a behaviour change at cron boot) or removed?
   Wiring it can start blocking jobs that run today, which is a policy decision,
   not a refactor.
+
+---
+
+## 9. Addendum — iter-650/651 findings and the open Slice-2 decision
+
+### Closed by iter-650 (verified live)
+The DB-path split is fixed and **proven**: after deploying a clean `origin/main`
+build and restarting the daemon, `operant doctor` and `operant org check` both
+report **9 seat(s)** (baseline: 11 vs 0). The nine seats are the cast —
+`premiere`(org-lead), `chief-of-staff`, `compass`, `crew-chief`, `dispatcher`,
+`dp-the-program`, `governor`, `hrmaster`, `identity-warden`. The old
+`employees` table in `database.db` still holds the 11 stale rows from the split;
+it is now unwritten by every process but not yet dropped (see §10).
+
+### Closed by iter-651 (deploy-procedure defects)
+Three real defects in the step-7 deploy block, each of which caused a bad
+deploy this session: shared-tree builds are not `origin/main` under fleet
+conditions; the `/usr/local/bin` `cp` ran unprivileged and failed EACCES
+before its own `sudo mv`; and nothing checked that a failed build had not
+silently left a stale artifact that still passes `--version`.
+
+### NOT closed — Slice 2 needs an owner decision (security-relevant)
+
+`iter-636` claimed "one canonical glob matcher". **That claim is false on tip.**
+Two runtime matchers remain, and both gate tool *permissions*:
+
+| Site | Dialect | Gates | Callers |
+|---|---|---|---|
+| `crates/operant-runtime/src/agent/loop_support.rs:20` | `*` only (first-star split) | MCP tool-group exposure per turn | `filter_tool_specs_for_turn:64` |
+| `crates/operant-runtime/src/hooks/builtin/webhook_audit.rs:149` | `*` only (multi-segment split) | tool allowlist | `:216` |
+| canonical `crates/operant-core/src/context/lcm.rs:49` | `*`, `?`, `[a-z]` | (already used by core allowlists) | agent/mod.rs:776, tools/kernel/mod.rs:188 |
+
+**The consolidation is a permission WIDENING, not a refactor.** Today a
+pattern like `mcp_[ab]*` matches *nothing* in the MCP filter (the `[` is
+literal and no star-split applies); under `lcm::glob_match` it matches
+`mcp_a…`/`mcp_b…`. Patterns that currently *deny by accident* would start
+allowing. Same for `?`: `mcp_?avigate` changes meaning silently.
+
+**Owner decision required — three options:**
+- **A. Delegate to `lcm::glob_match` (accept the widening).** Smallest diff,
+  one matcher tree-wide. Changes MCP/webhook tool-group semantics. Requires
+  a migration note for anyone who wrote `[`-bearing patterns expecting literal.
+- **B. Keep the `*`-only dialect, consolidate onto one `*`-only helper.**
+  Preserves every existing permission exactly; still removes the duplication
+  that made `iter-636`'s claim false. Loses `?`/`[a-z]` for MCP patterns.
+- **C. Leave both, fix the doc claim.** Smallest risk; the duplication and the
+  dialect split both persist, but nothing changes for users.
+
+**Recommendation: B.** It removes the real problem (two divergent
+implementations of the same concept, and a false claim in the changelog)
+without silently widening any permission. Option A is defensible only if you
+want full fnmatch semantics on MCP patterns and accept the migration.
+
+`filter_by_allowed_tools` (`loop_support.rs:85`) is deliberately excluded: it
+is exact-match by design and widening it is a separate behavior change.
