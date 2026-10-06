@@ -571,6 +571,37 @@ impl EmployeeDb {
         }
         Ok(out)
     }
+
+    /// Write one `employee_cron_jobs` link row. Idempotent: a re-link of the
+    /// same (employee, job) pair updates `schedule`/`enabled` in place, so a
+    /// re-seeded cast job refreshes its cadence without duplicating the row.
+    ///
+    /// Used by `CronDb::seed_cast_jobs` to attach the cast's deterministic
+    /// cron jobs to their manifest-declared employees.
+    pub fn upsert_link(
+        &self,
+        employee_id: &str,
+        cron_job_id: &str,
+        schedule: &str,
+        enabled: bool,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO employee_cron_jobs (employee_id, cron_job_id, schedule, enabled)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(employee_id, cron_job_id) DO UPDATE SET
+                schedule = excluded.schedule,
+                enabled  = excluded.enabled",
+            params![employee_id, cron_job_id, schedule, i64::from(enabled)],
+        )
+        .map_err(|e| {
+            Error::Agent(format!(
+                "Failed to link employee {} to cron job {}: {}",
+                employee_id, cron_job_id, e
+            ))
+        })?;
+        Ok(())
+    }
 }
 
 /// Map an `employees` row. Named columns (not positional) — the

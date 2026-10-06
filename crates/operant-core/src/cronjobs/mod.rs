@@ -4,7 +4,8 @@ pub mod scheduler;
 pub mod suggestions;
 
 pub use db::{
-    CreateJobParams, CronDb, CronJob, CronRewriteDrop, CronRewriteMapping, CronRewriteReport,
+    CastCronSeedReport, CreateJobParams, CronDb, CronJob, CronRewriteDrop, CronRewriteMapping,
+    CronRewriteReport,
 };
 pub use schedule::normalize_schedule;
 pub use scheduler::{CronDelivery, CronScheduler};

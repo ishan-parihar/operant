@@ -76,6 +76,49 @@ pub const PREMIERE_GRANT_CAPABILITY: &str = "org";
 /// The `reason` recorded on every row the seeder writes.
 pub const SEED_REASON: &str = "org cast seed (ORGANISM-ARCHITECTURE §1 cold-start)";
 
+/// Map a cast cadence label to the cron expression the seeder writes into
+/// `cron_jobs.schedule`. The labels live in the §1 manifest
+/// ([`CastSeat::cron`]); this table is the only place cadence is resolved
+/// into a concrete schedule, so a cadence change is a one-edit fix.
+///
+/// `continuous (existing)` returns an error — `dp-the-program` is the
+/// long-running execution engine and does not take a scheduled job; [`cast_cron_job_for`]
+/// turns that into a `None` skip.
+///
+/// Schedules are 6-field (seconds-prefixed) so `normalize_schedule` passes
+/// them through unchanged and `next_run_from_schedule` parses them directly.
+pub fn cadence_to_schedule(cadence: &str) -> Result<&'static str, Error> {
+    Ok(match cadence {
+        "daily" => "0 0 9 * * *",    // 09:00 daily
+        "hourly" => "0 */2 * * * *", // every 2h
+        "weekly" => "0 0 9 * * 1",   // 09:00 Mondays
+        "continuous (existing)" => {
+            return Err(Error::Agent(
+                "cast cadence 'continuous (existing)' has no scheduled job — skip the seat"
+                    .to_string(),
+            ));
+        }
+        other => {
+            return Err(Error::Agent(format!(
+                "unknown cast cadence '{other}' — add its schedule to cadence_to_schedule"
+            )));
+        }
+    })
+}
+
+/// Resolve the deterministic cron job id + schedule for a cast seat, or
+/// `None` when the seat does not own a scheduled job.
+///
+/// Only `dp-the-program` is skipped — its `continuous (existing)` cadence is a
+/// long-running engine, not a cron job. Every other cast seat gets exactly one.
+/// The job id is `cron_cast_<seat_id>` so re-seeds are idempotent: the
+/// primary-key collision lets `CronDb::seed_cast_jobs` use `INSERT OR IGNORE`.
+pub fn cast_cron_job_for(seat: &CastSeat) -> Option<(String, String)> {
+    let id = format!("cron_cast_{}", seat.id);
+    let schedule = cadence_to_schedule(seat.cron.cadence).ok()?;
+    Some((id, schedule.to_string()))
+}
+
 /// The default cron job a cast role ships with (§1 self-operationalization).
 /// Recorded in the manifest; see the module docs for the registration gap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3562,6 +3562,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // ── Spawn Cron Scheduler ─────────────────────────────────────────────
     let cron_db_path = operant_core::platform::operant_home().join("operant_cron.db");
     if let Ok(cron_db) = operant_core::cronjobs::CronDb::init(cron_db_path) {
+        // Seed the cold-start cast's default cron jobs (idempotent). Each cast
+        // seat gets a deterministic `cron_cast_<seat>` job; dp-the-program is
+        // skipped (continuous engine, not a scheduled job). Fail-open: a seed
+        // failure warns but does not block the scheduler or the gateway.
+        if let Err(e) = cron_db.seed_cast_jobs(
+            operant_core::org::cast::CAST,
+            operant_core::org::employee_db::EmployeeDb::for_app(&app_config.database_path)
+                .ok()
+                .as_ref(),
+        ) {
+            tracing::warn!("cast cron seed failed — cast seats will not self-run: {e}");
+        }
         let cron_db = Arc::new(cron_db);
         let (cron_tx, mut cron_rx) =
             tokio::sync::mpsc::unbounded_channel::<operant_core::cronjobs::CronDelivery>();
