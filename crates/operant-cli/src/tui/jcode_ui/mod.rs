@@ -46,6 +46,8 @@ pub(crate) use animations::{
 mod box_utils;
 #[path = "ui_changelog.rs"]
 mod changelog;
+#[path = "ui_diagram_pane.rs"]
+mod diagram_pane;
 #[path = "ui_frame_metrics.rs"]
 mod frame_metrics;
 #[path = "ui_header.rs"]
@@ -60,6 +62,13 @@ mod inline_ui;
 pub(crate) mod input_ui;
 #[path = "ui_memory_estimates.rs"]
 mod memory_estimates;
+#[path = "ui_panel_image_preview.rs"]
+pub(crate) mod panel_image_preview;
+#[path = "ui_pinned.rs"]
+mod pinned_ui;
+// session_picker declares its children bare (mod filter; mod loading; ...),
+// which resolve into session_picker/ — the plain (non-#[path]) declaration is
+// what makes that directory rule apply.
 #[path = "ui_memory.rs"]
 mod memory_ui;
 #[path = "ui_messages.rs"]
@@ -68,6 +77,7 @@ mod messages;
 mod overlays;
 #[path = "ui_prepare.rs"]
 pub(crate) mod prepare;
+pub(crate) mod session_picker;
 #[path = "ui_todo_changes.rs"]
 mod todo_changes;
 #[path = "ui_tools.rs"]

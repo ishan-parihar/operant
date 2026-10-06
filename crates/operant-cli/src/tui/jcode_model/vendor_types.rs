@@ -7,6 +7,7 @@
 //   ToolCall                                <- crates/jcode-message-types/src/lib.rs
 //   ResponseStats, RenderedMessage           <- crates/jcode-session-types/src/lib.rs
 //   DiffDisplayMode, DiagramDisplayMode      <- crates/jcode-config-types/src/lib.rs
+//   SessionStatus                           <- crates/jcode-session-types/src/lib.rs
 //
 // Only the types `jcode-tui-messages` names came over. The upstream impl
 // blocks (e.g. `DiffDisplayMode::is_inline`) stayed behind: nothing in this
@@ -153,4 +154,58 @@ pub enum DiagramDisplayMode {
     Margin,
     /// Show diagrams in a dedicated pinned pane (forces space allocation).
     Pinned,
+}
+
+/// Session lifecycle status persisted with each session snapshot/journal
+/// entry. Verbatim from crates/jcode-session-types/src/lib.rs:154-:236
+/// (struct + display/icon/detail impls — the picker and the session render
+/// path call all three).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum SessionStatus {
+    #[default]
+    Active,
+    Closed,
+    Crashed {
+        message: Option<String>,
+    },
+    Reloaded,
+    Compacted,
+    RateLimited,
+    Error {
+        message: String,
+    },
+}
+
+impl SessionStatus {
+    pub fn display(&self) -> &'static str {
+        match self {
+            SessionStatus::Active => "active",
+            SessionStatus::Closed => "closed",
+            SessionStatus::Crashed { .. } => "crashed",
+            SessionStatus::Reloaded => "reloaded",
+            SessionStatus::Compacted => "compacted",
+            SessionStatus::RateLimited => "rate limited",
+            SessionStatus::Error { .. } => "error",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            SessionStatus::Active => "▶",
+            SessionStatus::Closed => "✓",
+            SessionStatus::Crashed { .. } => "💥",
+            SessionStatus::Reloaded => "🔄",
+            SessionStatus::Compacted => "📦",
+            SessionStatus::RateLimited => "⏳",
+            SessionStatus::Error { .. } => "❌",
+        }
+    }
+
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            SessionStatus::Crashed { message } => message.as_deref(),
+            SessionStatus::Error { message } => Some(message.as_str()),
+            _ => None,
+        }
+    }
 }

@@ -152,3 +152,18 @@ pub fn session_icon(name: &str) -> &'static str {
         .map(|(_, icon)| *icon)
         .unwrap_or("💫")
 }
+
+/// Try to extract the memorable name from a session ID
+/// e.g., "session_fox_1234567890_deadbeefcafebabe" -> Some("fox")
+/// Verbatim from crates/jcode-core/src/id.rs:287.
+pub fn extract_session_name(session_id: &str) -> Option<&str> {
+    if let Some(rest) = session_id.strip_prefix("session_") {
+        // Session names are the first token after the prefix.
+        // This supports both old IDs (session_name_ts) and new IDs
+        // with an added random suffix (session_name_ts_rand).
+        if let Some(pos) = rest.find('_') {
+            return Some(&rest[..pos]);
+        }
+    }
+    None
+}

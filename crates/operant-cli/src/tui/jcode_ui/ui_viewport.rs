@@ -1381,13 +1381,9 @@ pub(super) fn draw_messages(
     if margins.centered {
         margins.left_reliable = windowed_min(&margins.left_widths, INFO_WIDGET_LOOKAHEAD_ROWS);
     }
-    // [port-decision] info-widget settlement gated: apply_settlement drags the
-    // widgets-state machine (get_or_init_state + anchor/settlement types,
-    // info_widget.rs:915-1019 upstream) that only matters once info widgets
-    // dock (W7). With no widgets, settlement is identity: margins pass through
-    // unadjusted, which is exactly what this statement being inert produces.
-    // Re-activate with the W7 info_widget surface.
-    #[cfg(any())]
+    // [port-decision un-gated at batch-4]: the W7 info_widget family landed
+    // (jcode_app/info_widget/ full port incl. _settle.rs); the settlement
+    // machinery is live.
     info_widget::apply_settlement(&mut margins, content_area.width);
 
     margins

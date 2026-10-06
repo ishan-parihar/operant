@@ -3225,13 +3225,10 @@ pub(crate) fn render_swarm_message(
     width: u16,
     _diff_mode: crate::tui::jcode_app::config_shim::DiffDisplayMode,
 ) -> Vec<Line<'static>> {
-    // [port-decision] swarm_gallery branch gated: W7 surface (jcode_render::
-    // swarm_gallery excised at iter-591; jcode's swarm-core member stream does
-    // not exist in operant, so the branch cannot activate anyway). cfg(any())
-    // preserves the verbatim upstream form for the W7 re-activation; until then
-    // flow falls through to the message fallback immediately below, which is the
-    // correct degraded behavior for a no-data-source surface.
-    #[cfg(any())]
+    // [port-decision un-gated at batch-4]: the W7 info_widget family landed
+    // (jcode_app/info_widget/info_widget_swarm_gallery.rs); the swarm card
+    // renderer is live. The branch stays inert until operant produces
+    // SwarmMemberStatus events, but the code path is real now.
     if msg.title.as_deref() == Some(SWARM_AGENT_SNAPSHOT_TITLE)
         && let Ok(member) =
             serde_json::from_str::<crate::tui::jcode_app::protocol::SwarmMemberStatus>(&msg.content)

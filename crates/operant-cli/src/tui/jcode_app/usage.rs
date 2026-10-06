@@ -189,3 +189,50 @@ pub struct OpenAiResetCredits {
     pub account_label: Option<String>,
     pub ordinary_usage_allowed: Option<bool>,
 }
+
+/// Read-only Claude session-limit reset offer (the `/limit-reset` program),
+/// pinned to the login whose usage was fetched. `None` label is the default
+/// scope. Only fetched at the five-hour wall, where the offer applies.
+/// Verbatim from crates/jcode-usage-types/src/lib.rs:16.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnthropicLimitResetOffer {
+    pub account_label: Option<String>,
+    /// The server says a reset can be claimed right now.
+    pub available: bool,
+    /// RFC3339 time the next reset becomes available when one was spent.
+    pub next_available_at: Option<String>,
+    pub resets_per_week: u64,
+}
+
+/// Verbatim from crates/jcode-usage-types/src/lib.rs:26.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderUsage {
+    pub provider_name: String,
+    pub limits: Vec<UsageLimit>,
+    pub extra_info: Vec<(String, String)>,
+    pub hard_limit_reached: bool,
+    pub openai_reset_credits: Option<OpenAiResetCredits>,
+    pub anthropic_limit_reset: Option<AnthropicLimitResetOffer>,
+    pub error: Option<String>,
+    /// When jcode last successfully used this login/credential (unix seconds).
+    /// Drives most-recently-used-first ordering in `/usage`. `None` sorts last.
+    pub last_used_unix_secs: Option<u64>,
+}
+
+/// Verbatim from crates/jcode-usage-types/src/lib.rs:40.
+#[derive(Debug, Clone)]
+pub struct UsageLimit {
+    pub name: String,
+    pub usage_percent: f32,
+    pub resets_at: Option<String>,
+}
+
+/// Verbatim from crates/jcode-usage-types/src/lib.rs:47.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderUsageProgress {
+    pub results: Vec<ProviderUsage>,
+    pub completed: usize,
+    pub total: usize,
+    pub done: bool,
+    pub from_cache: bool,
+}

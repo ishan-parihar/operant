@@ -110,4 +110,18 @@ pub struct SwarmToolIntent {
     pub intent: String,
     /// "running", "completed", or "error".
     pub status: String,
+    // [port-source] jcode-protocol/src/lib.rs:566-567 — field re-added at
+    // batch-4 when info_widget_swarm_gallery::members_to_gallery mapped it
+    // (SwarmToolProgress ported verbatim below, lib.rs:570-576).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<SwarmToolProgress>,
+}
+
+/// [port-source] jcode-protocol/src/lib.rs:570-576 — ported verbatim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SwarmToolProgress {
+    pub current: u64,
+    pub total: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }

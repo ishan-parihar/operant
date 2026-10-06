@@ -1553,11 +1553,9 @@ fn render_message_into(
             for line in cached {
                 acc.push_auto(align_if_unset(line, align));
             }
-            // [port-decision] swarm_gallery loop gated: same W7 story as the
-            // ui_messages.rs gate above (jet; swarm-core stream absent so the
-            // branch is inert; cfg(any()) preserves the verbatim form for the
-            // batch-5 re-activation).
-            #[cfg(any())]
+            // [port-decision un-gated at batch-4]: the W7 info_widget family
+            // landed (info_widget_swarm_gallery.rs); live path, inert until
+            // operant produces swarm-member events.
             if let Some(member) = spawned_member_for_tool(msg, &ctx.swarm_members) {
                 for line in
                     crate::tui::jcode_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(

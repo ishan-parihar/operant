@@ -37,3 +37,23 @@ pub fn alt_chord_lower(keys: &str) -> String {
         format!("{}+{keys}", label.to_ascii_lowercase())
     }
 }
+
+// [port-decision] batch-4: the two toggle-key labels the ported renderers
+// call un-gated (ui_pinned.rs:588, ui_diagram_pane.rs:834). Bodies from
+// crates/jcode-tui/src/tui/keybind.rs:450-:458, re-rooted: upstream's
+// jcode_tui_core::keybind::alt_chord is this same module's alt_chord.
+
+/// Upstream keybind.rs:450. The side-panel toggle is the fixed Alt+M chord.
+pub(crate) fn side_panel_toggle_key_label() -> String {
+    alt_chord("M")
+}
+
+/// Upstream keybind.rs:454, degraded arm: upstream reads the per-config
+/// keybinding registry (load_toggle_keys -> cfg.keybindings
+/// .diagram_pane_visibility_toggle) and falls back to Alt+Shift+M; the
+/// registry is deliberately not ported (see the gate notes at
+/// ui_overlays.rs:501-:632), so this returns the upstream default chord.
+/// Re-activate the registry read when the keybinding registry ports.
+pub(crate) fn diagram_pane_visibility_key_label() -> String {
+    alt_chord("Shift+M")
+}

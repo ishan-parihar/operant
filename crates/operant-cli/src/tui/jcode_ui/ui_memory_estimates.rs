@@ -11,7 +11,7 @@ use super::TEST_VISIBLE_COPY_TARGETS;
 use super::visible_copy_targets_state;
 use super::{
     CopyTarget, CopyTargetKind, EditToolRange, ImageRegion, PreparedChatFrame, PreparedMessages,
-    PreparedSection, VisibleCopyTarget, WrappedLineMap, body_cache, full_prep_cache,
+    PreparedSection, VisibleCopyTarget, WrappedLineMap, body_cache, full_prep_cache, pinned_ui,
 };
 
 fn estimate_lines_bytes(lines: &[Line<'static>]) -> usize {
@@ -202,13 +202,7 @@ pub(crate) fn debug_memory_profile() -> serde_json::Value {
 }
 
 pub(crate) fn debug_side_panel_memory_profile() -> serde_json::Value {
-    // [port-decision] pinned-pane memory profile gated: the pinned-ui surface
-    // (ui_pinned.rs, W6) is not ported — it drags the diagram-pane machinery.
-    // This is a debug-profile accessor (nothing renders through it); the
-    // honest degraded answer is an empty profile. Re-activate at W6 with
-    // ui_pinned.rs.
-    serde_json::json!({})
+    // [port-decision un-gated at batch-4]: ui_pinned.rs landed (W6); the
+    // real profile machinery is live.
+    pinned_ui::debug_memory_profile()
 }
-
-// [port-decision] pinned_ui import removed with the gated call above; the
-// module ports at W6 (ui_pinned.rs + diagram-pane family).

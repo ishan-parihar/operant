@@ -359,3 +359,27 @@ fn parse_proc_value_bytes(status: &str, key: &str) -> Option<u64> {
         })
     })
 }
+
+// [port-source] jcode-base/src/process_memory.rs:455-475 — ported verbatim.
+pub fn estimate_json_bytes<T: Serialize>(value: &T) -> usize {
+    #[derive(Default)]
+    struct ByteCounter {
+        bytes: usize,
+    }
+
+    impl std::io::Write for ByteCounter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.bytes = self.bytes.saturating_add(buffer.len());
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut counter = ByteCounter::default();
+    serde_json::to_writer(&mut counter, value)
+        .map(|()| counter.bytes)
+        .unwrap_or(0)
+}

@@ -6,16 +6,27 @@
 
 pub mod chrome;
 pub mod layout;
-// [port-excision] swarm_gallery.rs (3,099) / swarm_tiles.rs (611): out of port
-// scope (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2; unwired swarm
-// surface). A batch-3 final-sweep re-port (against the integrator's gate
-// decision — the call sites' data source, jcode's swarm-core, does not exist
-// in operant, so the surface cannot activate until W7) was reverted; the two
-// call sites are gated with [port-decision] markers naming W7.
+// [port-excision] swarm_tiles.rs (611): out of port scope
+// (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md W2; unwired swarm surface).
+// A batch-3 final-sweep re-port (against the integrator's gate decision — the
+// call sites' data source, jcode's swarm-core, does not exist in operant, so
+// the surface cannot activate until W7) was reverted; the strip/dock/panel/
+// gallery-grid call sites in info_widget_swarm_gallery.rs are gated with
+// [port-decision] markers naming W7.
+// swarm_gallery.rs (3,099) was excised with swarm_tiles at iter-591, then
+// RE-PORTED at batch-4 as a PARTIAL leaf: the transcript-card closure
+// (status/age/glyph helpers, spinner consts, GalleryMember/GalleryTodo/
+// GalleryToolIntent, member sort, render_swarm_chat_cards) is live because
+// the batch-4 port of the info_widget swarm adapters + protocol::
+// SwarmMemberStatus wired the live transcript path (ui_messages/ui_prepare
+// -> render_swarm_chat_card_lines) and the info-widget swarm dock
+// (swarm_background, WidgetKind::SwarmStatus dispatch); the SwarmTile-bound
+// strip surface stays excised pending W7 (see the leaf's TRUTH CLAUSE).
 // memory_tiles.rs (587) was excised with them at iter-591 as zero-consumer,
 // then RE-PORTED at batch-3 when ui_prepare's live call
 // (parse_memory_display_entries) inverted that call — declaration below.
 pub mod memory_tiles;
+pub mod swarm_gallery;
 
 use ratatui::prelude::{Line, Span, Style};
 

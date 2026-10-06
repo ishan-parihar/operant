@@ -17,13 +17,18 @@ pub mod build;
 pub mod build_meta;
 pub mod bus;
 pub mod catalog_scheduler;
+pub mod catchup;
+pub mod claude_live;
 pub mod color_support;
+pub mod compaction;
 pub mod config_shim;
 pub mod core;
 pub mod env;
 pub mod fuzzy;
 pub mod fuzzy_engine;
+pub mod graph_topology;
 pub mod id;
+pub mod import;
 pub mod info_widget;
 pub mod keybind;
 pub mod layout_utils;
@@ -33,23 +38,34 @@ pub mod markdown;
 pub mod memory;
 pub mod mermaid;
 pub mod mermaid_inline;
+pub mod onboarding_flow;
 // [port-decision] mermaid_inline re-declared at integration (reviving the earlier
 // un-declare): the ui_inline_image content surface calls into it, and most of it
 // is on disk already. The batch-4 remaining piece is the ratatui_image dep
 // (pending a user call) - statements requiring it are gated with markers in place.
+pub mod keyboard;
 pub mod message;
+pub mod output_style;
 pub mod overnight;
 pub mod perf;
+pub mod permissions;
+pub mod plan;
+pub mod platform;
 pub mod process_memory;
 pub mod prompt;
 pub mod protocol;
 pub mod provider;
 pub mod provider_catalog;
 pub mod provider_metadata;
+pub mod registry;
+pub mod safety;
 pub mod session;
 pub mod session_facts;
+pub mod session_picker_types;
 pub mod storage;
+pub mod theme_detect;
 pub mod tui_fns;
+pub mod usage_overlay;
 // [port-decision] the TuiState presentation trait ports beside the tui-level
 // fns: sed'd consumers reference jcode_app::tui_fns::TuiState, so tui_fns
 // re-exports it from tui_state (the full 114-method cutover contract).
@@ -63,4 +79,7 @@ pub mod visual_debug;
 pub mod helpers {
     // Renderer-facing slice of jcode-tui/src/tui/app/helpers/ (model_names).
     pub mod model_names;
+    // Git-gathering family (gather_git_info_inner/parse_recent_commits/
+    // parse_numstat/porcelain_status_letter), ported verbatim.
+    pub mod git;
 }
