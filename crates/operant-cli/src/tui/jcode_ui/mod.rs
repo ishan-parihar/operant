@@ -841,6 +841,38 @@ fn body_cache() -> &'static Mutex<BodyCacheState> {
     BODY_CACHE.get_or_init(|| Mutex::new(BodyCacheState::default()))
 }
 
+/// Drop every memoized transcript body / prepared frame.
+///
+/// Operant's render loop owns two async raster producers (mermaid + latex) that
+/// land a PNG some frames after the transcript showed a placeholder; the
+/// prepared caches then hold a stale "rendering…" row. Upstream jcode has no
+/// equivalent hook because it rasterises inline inside the draw.
+pub(crate) fn invalidate_prepared_caches() {
+    // Poison-tolerant on purpose: draw runs inside catch_unwind, so a panic
+    // while this lock is held is exactly how it gets poisoned — and silently
+    // skipping invalidation would leave stale "rendering…" rows forever.
+    *body_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = BodyCacheState::default();
+    *full_prep_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = FullPrepCacheState::default();
+}
+
+thread_local! {
+    /// The messages band's rect from the last `draw`, so operant-only
+    /// surfaces that dock into the transcript (the background-task rows) can
+    /// find it without duplicating the 10-band chrome's layout math.
+    static LAST_MESSAGE_AREA: std::cell::Cell<Rect> =
+        const { std::cell::Cell::new(Rect::new(0, 0, 0, 0)) };
+}
+
+/// The messages band from the last drawn frame (zero-sized before the first
+/// draw). Consumers must tolerate a zero height.
+pub(crate) fn message_area() -> Rect {
+    LAST_MESSAGE_AREA.with(|area| area.get())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FullPrepCacheKey {
     width: u16,
@@ -3171,7 +3203,21 @@ pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
         // home for), so a recovered frame is left as the partially-drawn buffer
         // instead of the "rendering error recovered" placeholder — wire at
         // jcode_ui/ui/draw_recovery.rs.
-        Err(_payload) => {}
+        // The payload IS logged: once this draw drives the live render loop a
+        // recovered panic would otherwise be invisible (stderr is swallowed by
+        // raw mode + the alternate screen, and catch_unwind keeps the TUI
+        // running on a partial frame), leaving only golden-baseline drift as
+        // the symptom.
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            crate::tui::jcode_app::logging::error(&format!(
+                "TUI draw recovered from panic: {message}"
+            ));
+        }
     }
     // Adapt the finished frame at buffer level so every widget and overlay
     // follows the same policy. User-configured colors remain exact.
@@ -3715,6 +3761,8 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         clear_area(frame, chunks[2]);
         frame.render_widget(Paragraph::new(swarm_strip_lines.clone()), chunks[2]);
     }
+
+    LAST_MESSAGE_AREA.with(|area| area.set(chunks[0]));
 
     // Capture layout info for visual debug
     if let Some(capture) = &mut debug_capture {
