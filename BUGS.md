@@ -4271,9 +4271,25 @@ channel surface is materially missing from core:
   `learning_manage`, `checkpoint`, `mcp_management`.
 
 So the port is not a call-site swap: it needs a `Box<dyn Tool>` ->
-`Arc<dyn OperantTool>` adapter (or core-side registration of the runtime
-tools) BEFORE any Telegram/Slack turn can be moved, otherwise channel
-turns silently lose shell/cron/file-write/calendar tools.
+`Arc<dyn OperantTool>` adapter BEFORE any Telegram/Slack turn can be
+moved, otherwise channel turns silently lose shell/cron/file-write/
+calendar tools.
+
+**Status: the adapter now EXISTS** (iter-644): `RuntimeToolBridge` in
+`reconciled.rs` implements core's `OperantTool` over a runtime
+`operant_api::tool::Tool` (name/description/params map directly; a
+runtime `Err` becomes a FAILED result carrying the error text), and
+`from_config_with` takes `caller_tools: Option<Arc<Vec<Arc<dyn Tool>>>>`
+which registers them AFTER core's builtins — so a same-name caller tool
+REPLACES the core builtin, which is exactly what the tool loop ran
+before. Paired with the existing `allowed_tools` policy this reproduces a
+caller's exact surface: register the caller's tools and allowlist their
+names, and every core builtin outside that list is disabled.
+
+The port is now unblocked at the tool layer. The remaining W1.8c
+requirements are the receipt signing hook, the rollback parity, the
+prompt-shape decision, and `model_switch` — none of which the adapter
+solves.
 
 **Also required for the port (each measured, not assumed):**
 

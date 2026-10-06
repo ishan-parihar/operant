@@ -2140,6 +2140,7 @@ mod tests {
             Arc::new(operant_runtime::observability::NoopObserver),
             None,
             operant_runtime::agent::reconciled::EvolutionConfig::default(),
+            None,
         )
     }
 

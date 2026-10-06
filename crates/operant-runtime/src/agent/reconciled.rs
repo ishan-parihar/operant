@@ -1090,6 +1090,74 @@ const APPROVAL_TIMEOUT_SECS: u64 = 120;
 
 /// Mutable per-turn state the event forwarder accumulates while the core
 /// turn runs.
+/// Bridge a runtime [`operant_api::tool::Tool`] into core's
+/// [`operant_core::tools::OperantTool`] registry (W1.9).
+///
+/// This is the missing half of the facade's tool surface: `run` and
+/// `process_message` build core's registry from config, but the channels
+/// orchestrator and the delegate sub-agent own runtime `Tool` objects the
+/// facade could not execute (its turn only sees core's registry). The two
+/// traits are structurally compatible — name/description/params map
+/// directly, and `execute` returns the same three fields — so the adapter
+/// is a field-for-field translation with no behavior of its own.
+///
+/// Errors translate honestly: a runtime tool returning `Err` becomes a
+/// FAILED result carrying the error text (not a success with an empty
+/// output), which is what `run_tool_call_loop` did with the same call.
+pub struct RuntimeToolBridge(Arc<dyn operant_api::tool::Tool>);
+
+impl RuntimeToolBridge {
+    /// Wrap a runtime tool for core's registry.
+    pub fn new(tool: Arc<dyn operant_api::tool::Tool>) -> Self {
+        Self(tool)
+    }
+}
+
+#[async_trait]
+impl operant_core::tools::OperantTool for RuntimeToolBridge {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+
+    fn schema(&self) -> operant_core::schema::ToolSchema {
+        operant_core::schema::ToolSchema::new(
+            self.0.name(),
+            self.0.description(),
+            self.0.parameters_schema(),
+        )
+    }
+
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _context: operant_core::tools::ToolContext,
+    ) -> operant_core::tools::ToolResult {
+        let name = self.0.name().to_string();
+        match self.0.execute(args).await {
+            Ok(result) => operant_core::tools::ToolResult {
+                tool_call_id: String::new(),
+                name,
+                success: result.success,
+                content: result.output,
+                error: result.error,
+                timed_out: false,
+            },
+            Err(error) => operant_core::tools::ToolResult {
+                tool_call_id: String::new(),
+                name,
+                success: false,
+                content: String::new(),
+                error: Some(format!("{error:#}")),
+                timed_out: false,
+            },
+        }
+    }
+}
+
 /// Construction-time tool-policy resolution (W1.8b-fix). Returns the
 /// registered names to disable, reproducing Loop C's two policies:
 ///
@@ -1747,6 +1815,7 @@ impl ReconciledAgent {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -1788,6 +1857,7 @@ impl ReconciledAgent {
         system_prompt: Option<String>,
         temperature: Option<f64>,
         allowed_tools: Option<Vec<String>>,
+        caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
     ) -> Result<Self> {
         Self::build_from_config(
             config,
@@ -1798,6 +1868,7 @@ impl ReconciledAgent {
             system_prompt,
             temperature,
             allowed_tools,
+            caller_tools,
         )
         .await
     }
@@ -1812,6 +1883,7 @@ impl ReconciledAgent {
         system_prompt: Option<String>,
         temperature: Option<f64>,
         allowed_tools: Option<Vec<String>>,
+        caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
     ) -> Result<Self> {
         // Provider routing + model resolution — verbatim Loop B inputs,
         // unless the caller already resolved both (the Loop C adapters).
@@ -1959,6 +2031,19 @@ impl ReconciledAgent {
             core_app.tools.disabled_toolsets.iter().cloned().collect(),
         )
         .await?;
+
+        // W1.8c/W1.9: the caller's own runtime tools, registered through
+        // `RuntimeToolBridge` so core's loop can execute them. Same-name
+        // entries REPLACE the core builtin (that is the Loop C behavior —
+        // the caller's tool of that name is the one that ran before).
+        if let Some(tools) = &caller_tools {
+            for tool in tools.iter() {
+                registry
+                    .register(RuntimeToolBridge::new(Arc::clone(tool)))
+                    .await?;
+            }
+            tracing::info!(count = tools.len(), "facade: caller tools registered");
+        }
 
         // W1.8b-fix: construction-time tool policy on this FRESH registry.
         // Loop C enforced (a) the caller's `allowed_tools` allowlist by
@@ -3388,6 +3473,112 @@ mod w18b_fix_tests {
         assert!(
             draft_rx.try_recv().is_err(),
             "ToolCall must not produce a draft"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_tool_bridge_executes_through_core_registry() {
+        use operant_core::tools::{OperantTool, ToolContext, ToolResult as CoreToolResult};
+
+        struct Echo;
+        #[async_trait::async_trait]
+        impl operant_api::tool::Tool for Echo {
+            fn name(&self) -> &str {
+                "echo"
+            }
+            fn description(&self) -> &str {
+                "echo the input back"
+            }
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "text": { "type": "string" } },
+                })
+            }
+            async fn execute(
+                &self,
+                args: serde_json::Value,
+            ) -> anyhow::Result<operant_api::tool::ToolResult> {
+                Ok(operant_api::tool::ToolResult {
+                    success: true,
+                    output: args["text"].as_str().unwrap_or_default().to_string(),
+                    error: None,
+                })
+            }
+        }
+
+        struct Boom;
+        #[async_trait::async_trait]
+        impl operant_api::tool::Tool for Boom {
+            fn name(&self) -> &str {
+                "boom"
+            }
+            fn description(&self) -> &str {
+                "always fails"
+            }
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object" })
+            }
+            async fn execute(
+                &self,
+                _args: serde_json::Value,
+            ) -> anyhow::Result<operant_api::tool::ToolResult> {
+                anyhow::bail!("tool exploded");
+            }
+        }
+
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(RuntimeToolBridge::new(Arc::new(Echo)))
+            .await
+            .expect("register echo");
+        registry
+            .register(RuntimeToolBridge::new(Arc::new(Boom)))
+            .await
+            .expect("register boom");
+
+        // The bridged tools are visible to core exactly as core tools are:
+        // named in the schema list with the runtime description/params.
+        let names: Vec<String> = registry
+            .get_schemas()
+            .await
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect();
+        assert!(names.contains(&"echo".to_string()));
+        assert!(names.contains(&"boom".to_string()));
+
+        // A successful call returns the runtime tool's output.
+        let ok: CoreToolResult = registry
+            .execute(
+                "echo",
+                "call-1",
+                serde_json::json!({ "text": "hi there" }),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute echo");
+        assert!(ok.success);
+        assert_eq!(ok.content, "hi there");
+        assert!(!ok.timed_out);
+
+        // A runtime error becomes a FAILED result carrying the text — not a
+        // success with empty output.
+        let err: CoreToolResult = registry
+            .execute(
+                "boom",
+                "call-2",
+                serde_json::json!({}),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute boom");
+        assert!(!err.success);
+        assert!(
+            err.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("tool exploded")
         );
     }
 
