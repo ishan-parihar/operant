@@ -1090,6 +1090,139 @@ const APPROVAL_TIMEOUT_SECS: u64 = 120;
 
 /// Mutable per-turn state the event forwarder accumulates while the core
 /// turn runs.
+/// Facade-side `model_switch` tool (W1.8c). Core has no provider
+/// factory — constructing a provider is operant-providers' job — so the
+/// switch keeps Loop C's protocol: the tool records the request and
+/// trips the interrupt flag (core aborts the turn immediately, as the
+/// loop did between iterations), and the facade converts the abort into
+/// [`ModelSwitchRequested`](crate::agent::loop_::ModelSwitchRequested),
+/// the error every consumer already inspects with
+/// `is_model_switch_requested` to rebuild its provider and retry.
+///
+/// Registering it here (rather than porting the tool into core) keeps
+/// core free of provider construction while restoring the capability to
+/// every facade consumer — including the CLI/daemon path that lost it in
+/// iter-634.
+pub struct ModelSwitchFacadeTool {
+    request: Arc<Mutex<Option<(String, String)>>>,
+    current: Arc<Mutex<(String, String)>>,
+    interrupt: InterruptFlag,
+}
+
+impl ModelSwitchFacadeTool {
+    pub(crate) fn new(
+        request: Arc<Mutex<Option<(String, String)>>>,
+        current: Arc<Mutex<(String, String)>>,
+        interrupt: InterruptFlag,
+    ) -> Self {
+        Self {
+            request,
+            current,
+            interrupt,
+        }
+    }
+}
+
+#[async_trait]
+impl operant_core::tools::OperantTool for ModelSwitchFacadeTool {
+    fn name(&self) -> &str {
+        "model_switch"
+    }
+
+    fn description(&self) -> &str {
+        "Switch the AI model at runtime. Use 'get' to see the current model or a pending switch, or 'set' with 'provider' and 'model' to switch. The switch takes effect immediately for the current conversation."
+    }
+
+    fn schema(&self) -> operant_core::schema::ToolSchema {
+        operant_core::schema::ToolSchema::new(
+            self.name(),
+            self.description(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["get", "set"],
+                        "description": "get the current model, or set a new one"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "description": "Provider name. Required for 'set'."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model id. Required for 'set'."
+                    }
+                },
+                "required": ["action"]
+            }),
+        )
+    }
+
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        _context: operant_core::tools::ToolContext,
+    ) -> operant_core::tools::ToolResult {
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("get");
+        let (provider, model) = self.current.lock().clone();
+        let fail = |message: String| operant_core::tools::ToolResult {
+            tool_call_id: String::new(),
+            name: "model_switch".to_string(),
+            success: false,
+            content: String::new(),
+            error: Some(message),
+            timed_out: false,
+        };
+
+        match action {
+            "get" => {
+                let pending = self.request.lock().clone();
+                let payload = serde_json::json!({
+                    "provider": provider,
+                    "model": model,
+                    "pending_switch": pending,
+                });
+                operant_core::tools::ToolResult {
+                    tool_call_id: String::new(),
+                    name: "model_switch".to_string(),
+                    success: true,
+                    content: payload.to_string(),
+                    error: None,
+                    timed_out: false,
+                }
+            }
+            "set" => {
+                let Some(new_provider) = args.get("provider").and_then(|v| v.as_str()) else {
+                    return fail("Missing 'provider' parameter for 'set' action".to_string());
+                };
+                let Some(new_model) = args.get("model").and_then(|v| v.as_str()) else {
+                    return fail("Missing 'model' parameter for 'set' action".to_string());
+                };
+                *self.request.lock() = Some((new_provider.to_string(), new_model.to_string()));
+                // Abort the turn now: the consumer rebuilds the provider
+                // and retries, exactly as the Loop C loop did when it saw
+                // the request between iterations.
+                self.interrupt.trigger();
+                operant_core::tools::ToolResult {
+                    tool_call_id: String::new(),
+                    name: "model_switch".to_string(),
+                    success: true,
+                    content: serde_json::json!({
+                        "message": "Model switch requested",
+                        "provider": new_provider,
+                        "model": new_model,
+                    })
+                    .to_string(),
+                    error: None,
+                    timed_out: false,
+                }
+            }
+            other => fail(format!("Unknown action: {other}. Valid actions: get, set")),
+        }
+    }
+}
+
 /// Bridge a runtime [`operant_api::tool::Tool`] into core's
 /// [`operant_core::tools::OperantTool`] registry (W1.9).
 ///
@@ -1688,6 +1821,10 @@ fn draft_delta_for(event: &TurnEvent) -> Option<DraftEvent> {
 pub struct ReconciledAgent {
     inner: OperantAgent,
     interrupt_flag: InterruptFlag,
+    /// Pending mid-turn provider switch requested by the
+    /// `model_switch` tool (W1.8c). Drained and converted into
+    /// `ModelSwitchRequested` when the turn ends.
+    model_switch_request: Arc<Mutex<Option<(String, String)>>>,
     bus: FacadeEventBus,
     guard: PromptGuard,
     observer: Arc<dyn Observer>,
@@ -1736,6 +1873,10 @@ impl ReconciledAgent {
         // Client default temperature (W1.8b-fix). `None` = provider
         // defaults — the WS/ACP behavior, unchanged.
         default_temperature: Option<f64>,
+        // Slot shared with the registered `model_switch` tool (W1.8c).
+        model_switch_request: Arc<Mutex<Option<(String, String)>>>,
+        // Interrupt flag the tool trips; also the agent's own (W1.8c).
+        interrupt_flag: InterruptFlag,
     ) -> Self {
         let provider_name = provider_name.into();
         let model = config.model.clone();
@@ -1750,7 +1891,6 @@ impl ReconciledAgent {
         client = client.with_default_temperature(default_temperature);
         let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(512);
         let (perm_tx, perm_rx) = mpsc::channel::<ToolPermissionRequest>(64);
-        let interrupt_flag = InterruptFlag::new();
         let inner =
             OperantAgent::with_events(config, Box::new(client), registry, database, event_tx)
                 .with_permissions(perm_tx)
@@ -1766,6 +1906,7 @@ impl ReconciledAgent {
         Self {
             inner,
             interrupt_flag,
+            model_switch_request,
             bus,
             guard: PromptGuard::new(),
             observer,
@@ -1997,6 +2138,9 @@ impl ReconciledAgent {
         let core_app = operant_core::config::runtime_config();
         let database = Arc::new(Database::init(core_app.database_path.clone())?);
         let registry = ToolRegistry::new(Duration::from_secs(core_app.tools.registry_timeout_secs));
+        // The tool trips THIS agent's interrupt flag so the turn aborts the
+        // way the Loop C loop did when it saw the request mid-iteration.
+        let model_switch_interrupt = InterruptFlag::new();
         let db_dir = core_app
             .database_path
             .parent()
@@ -2077,6 +2221,20 @@ impl ReconciledAgent {
             }
             tracing::info!(count = tools.len(), "facade: caller tools registered");
         }
+
+        // W1.8c: the facade's `model_switch` tool (core has no provider
+        // factory, so the switch keeps Loop C's abort-and-retry protocol).
+        let model_switch_request: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        registry
+            .register(ModelSwitchFacadeTool::new(
+                Arc::clone(&model_switch_request),
+                Arc::new(Mutex::new((
+                    provider_name.to_string(),
+                    model_name.to_string(),
+                ))),
+                model_switch_interrupt.clone(),
+            ))
+            .await?;
 
         // W1.8b-fix: construction-time tool policy on this FRESH registry.
         // Loop C enforced (a) the caller's `allowed_tools` allowlist by
@@ -2165,6 +2323,8 @@ impl ReconciledAgent {
                 auto_classify: config.agent.auto_classify.clone(),
             },
             temperature,
+            model_switch_request,
+            model_switch_interrupt,
         )
         .with_memory_session_id(memory_session_id.map(str::to_string)))
     }
@@ -2304,7 +2464,21 @@ impl ReconciledAgent {
                 Ok(message.content)
             }
             Err(e) => {
-                let reason = if self.interrupt_flag.is_triggered() {
+                let interrupted = self.interrupt_flag.is_triggered();
+                // W1.8c: a pending `model_switch` request converts the
+                // interrupt into the retry signal every facade consumer
+                // already handles (`is_model_switch_requested` -> rebuild
+                // provider -> retry), the same protocol the Loop C loop
+                // used. The slot drains so the NEXT switch starts clean.
+                if interrupted {
+                    if let Some((provider, model)) = self.model_switch_request.lock().take() {
+                        self.last_exit_reason = Some(TurnExitReason::Interrupted);
+                        return Err(
+                            crate::agent::loop_::ModelSwitchRequested { provider, model }.into(),
+                        );
+                    }
+                }
+                let reason = if interrupted {
                     TurnExitReason::Interrupted
                 } else {
                     TurnExitReason::Error
@@ -2862,8 +3036,18 @@ mod facade_tests {
         let database =
             Arc::new(Database::init(tmp.path().join("facade.db")).expect("database init"));
         let agent = ReconciledAgent::new(
-            config, provider, "scripted", registry, database, memory, observer, None, evolution,
+            config,
+            provider,
+            "scripted",
+            registry,
+            database,
+            memory,
+            observer,
             None,
+            evolution,
+            None,
+            Arc::new(Mutex::new(None)),
+            InterruptFlag::new(),
         );
         TestFacade { agent, probe_calls }
     }
@@ -3701,6 +3885,103 @@ mod w18b_fix_tests {
         let entries = collector.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(entries.len(), 1);
         assert!(entries[0].starts_with("echo: zc-receipt-"));
+    }
+
+    #[tokio::test]
+    async fn model_switch_tool_records_request_and_trips_the_interrupt() {
+        use operant_core::tools::{OperantTool, ToolContext};
+
+        let request: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let interrupt = InterruptFlag::new();
+        let tool = ModelSwitchFacadeTool::new(
+            Arc::clone(&request),
+            Arc::new(Mutex::new((
+                "openrouter".to_string(),
+                "old-model".to_string(),
+            ))),
+            interrupt.clone(),
+        );
+
+        // `get` reports the current pair and any pending switch.
+        let got = tool
+            .execute(
+                serde_json::json!({ "action": "get" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(got.success);
+        assert!(got.content.contains("old-model"));
+
+        // `set` records the request AND trips the interrupt — that is what
+        // aborts the turn so the consumer rebuilds its provider and
+        // retries, the same protocol the Loop C loop used.
+        let set = tool
+            .execute(
+                serde_json::json!({ "action": "set", "provider": "anthropic", "model": "new-model" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(set.success);
+        assert!(
+            interrupt.is_triggered(),
+            "set must abort the in-flight turn"
+        );
+        assert_eq!(
+            request.lock().clone(),
+            Some(("anthropic".to_string(), "new-model".to_string()))
+        );
+
+        // `get` now shows the pending switch, and the reported current
+        // model is unchanged (the switch applies on the retry).
+        let pending = tool
+            .execute(
+                serde_json::json!({ "action": "get" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(pending.content.contains("anthropic"));
+        assert!(pending.content.contains("new-model"));
+    }
+
+    #[tokio::test]
+    async fn model_switch_tool_rejects_incomplete_set() {
+        use operant_core::tools::{OperantTool, ToolContext};
+
+        let tool = ModelSwitchFacadeTool::new(
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(("openrouter".to_string(), "m".to_string()))),
+            InterruptFlag::new(),
+        );
+        let missing_model = tool
+            .execute(
+                serde_json::json!({ "action": "set", "provider": "anthropic" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(!missing_model.success);
+        assert!(
+            missing_model
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Missing 'model'")
+        );
+    }
+
+    #[test]
+    fn the_switch_error_is_the_one_consumers_retry_on() {
+        // The facade converts an interrupted turn with a pending request
+        // into `ModelSwitchRequested`; every consumer's retry arm keys off
+        // `is_model_switch_requested`, so that recognition is the contract.
+        let err: anyhow::Error = crate::agent::loop_::ModelSwitchRequested {
+            provider: "anthropic".to_string(),
+            model: "new-model".to_string(),
+        }
+        .into();
+        assert_eq!(
+            crate::agent::loop_::is_model_switch_requested(&err),
+            Some(("anthropic".to_string(), "new-model".to_string()))
+        );
     }
 
     #[test]
