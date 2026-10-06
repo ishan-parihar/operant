@@ -115,9 +115,18 @@ pub struct EmployeeDb {
 }
 
 impl EmployeeDb {
-    /// Open (or create) the registry. The DDL is idempotent, so this is
-    /// safe to call against a live kanban DB and on every boot.
-    pub fn init(path: PathBuf) -> Result<Self, Error> {
+    /// Open (or create) the registry at an **exact file path**. The DDL is
+    /// idempotent, so this is safe to call against a live kanban DB and on
+    /// every boot.
+    ///
+    /// The name says what it does because the org layer has two different path
+    /// contracts and they were previously both called `init`: this one takes
+    /// the literal file, [`Self::for_app`] takes the *main* app database and
+    /// derives the sibling. Calling the literal form with the main path opened
+    /// the wrong file with no error, which is how the daemon and the `org` CLI
+    /// ended up writing two different employee registries. Prefer [`Self::for_app`]
+    /// unless you genuinely hold the sibling path.
+    pub fn open_at(path: PathBuf) -> Result<Self, Error> {
         let conn = Connection::open(&path)
             .map_err(|e| Error::Agent(format!("Failed to open org database: {}", e)))?;
 
@@ -127,6 +136,16 @@ impl EmployeeDb {
 
         db.setup_schema()?;
         Ok(db)
+    }
+
+    /// Open the registry from the *main* app database path, deriving the
+    /// kanban sibling through the one canonical helper.
+    ///
+    /// This is the form every production caller should use: it cannot disagree
+    /// with the `org` CLI or the doctor, because all three go through
+    /// [`org_db_path`]. Mirrors [`super::decisions_db::DecisionsDb::for_app`].
+    pub fn for_app(database_path: &Path) -> Result<Self, Error> {
+        Self::open_at(org_db_path(database_path))
     }
 
     /// Open the registry on a connection somebody else already owns.

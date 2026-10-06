@@ -310,9 +310,9 @@ fn provision_cron_seat(
         .context("Failed to read the new cron job")?
         .with_context(|| format!("cron job {job_id} vanished before seat provisioning"))?;
 
-    let org_db = operant_core::platform::operant_home().join("database.db");
+    let org_db = operant_core::org::employee_db::org_db_path(&config.database_path);
     let registry =
-        EmployeeDb::init(org_db.clone()).context("Failed to open the employee registry")?;
+        EmployeeDb::open_at(org_db.clone()).context("Failed to open the employee registry")?;
     let now = chrono::Utc::now().to_rfc3339();
     let report = registry
         .backfill_from_cron_jobs(

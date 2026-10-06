@@ -82,7 +82,7 @@ impl CheckResult {
 pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     let mut items = Vec::new();
     check_config_semantics(config, &mut items);
-    check_genome(&mut items);
+    check_genome(&config.database_path, &mut items);
     check_data_root(&mut items);
     check_environment(&mut items);
     check_cli_tools(&mut items);
@@ -95,9 +95,14 @@ pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
 /// governance flags the owner directed to surface THROUGH the doctor (no
 /// new commands). Degrades to a single Info when the genome tables do not
 /// exist yet (doctor may run before any gateway boot seeded them).
-fn check_genome(items: &mut Vec<CheckResult>) {
+///
+/// `database_path` is the *main* app database path. The org registry lives in
+/// the kanban sibling, so it is derived through the one canonical helper rather
+/// than re-derived here — a hardcoded `operant_home().join("database.db")`
+/// read a different file than the CLI for any non-default install.
+fn check_genome(database_path: &std::path::Path, items: &mut Vec<CheckResult>) {
     let cat = "genome";
-    let org_db = crate::platform::operant_home().join("database.db");
+    let org_db = crate::org::employee_db::org_db_path(database_path);
     let Ok(conn) =
         rusqlite::Connection::open_with_flags(&org_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
@@ -634,6 +639,14 @@ mod tests {
         // A config with real `[providers]` content so the config category
         // produces results on any machine.
         let mut config = AppConfig::default();
+        // The genome checks read the org registry through
+        // `config.database_path` (iter-643): they no longer consult
+        // `HERMES_HOME` directly, because a hardcoded home is exactly what
+        // split the daemon's registry from the CLI's. Honour the same override
+        // the serial tests set so the fixture points where they intend.
+        if let Ok(home) = std::env::var("HERMES_HOME") {
+            config.database_path = std::path::Path::new(&home).join("database.db");
+        }
         config.providers.fallback = Some("openrouter".into());
         config.providers.models.insert(
             "openrouter".into(),
@@ -903,7 +916,13 @@ mod tests {
         // SAFETY (edition-2024 env mutation): single-threaded test process,
         // serial-locked, no other thread reads HERMES_HOME concurrently.
         unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
-        let conn = rusqlite::Connection::open(tmp.path().join("database.db")).unwrap();
+        // The genome tables live in the kanban sibling, which `check_genome`
+        // derives from `config.database_path` (iter-643) — NOT in the main db.
+        // Seeding the main file is what the daemon did by mistake.
+        let conn = rusqlite::Connection::open(crate::org::employee_db::org_db_path(
+            &tmp.path().join("database.db"),
+        ))
+        .unwrap();
         conn.execute_batch(
             "CREATE TABLE employees (employee_id TEXT PRIMARY KEY);
              CREATE TABLE employee_cron_jobs (employee_id TEXT, cron_job_id TEXT);

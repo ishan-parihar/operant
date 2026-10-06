@@ -1622,7 +1622,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     }
 
     // Attach persistent session store for cross-restart session tracking
-    let session_db_path = operant_core::platform::operant_home().join("database.db");
+    let session_db_path = app_config.database_path.clone();
     if let Ok(store) = operant_core::PersistentSessionStore::open(session_db_path.to_str().unwrap())
     {
         gateway = gateway.with_persistent_sessions(std::sync::Arc::new(store));
@@ -1693,7 +1693,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // durably queued the moment it happens. The employee registry and the
     // hierarchy edges feed the SeatApprover the dispatcher resolves
     // approvals through.
-    let org_db = operant_core::platform::operant_home().join("database.db");
+    let org_db = operant_core::org::employee_db::org_db_path(&app_config.database_path);
     let seat_policy_store = Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
         org_db.clone(),
     )?);
@@ -1706,7 +1706,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let request_queue = Arc::new(operant_core::org::pending_requests::PendingRequestDb::init(
         org_db.clone(),
     )?);
-    let employee_registry = Arc::new(operant_core::org::employee_db::EmployeeDb::init(
+    let employee_registry = Arc::new(operant_core::org::employee_db::EmployeeDb::open_at(
         org_db.clone(),
     )?);
     // Wave 2: commands and the turn prologue read charters and validate
@@ -3579,7 +3579,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // killing scheduled work because the worklog is unavailable is the
         // worse failure.
         let scheduler = match operant_core::org::write_barrier::WriteBarrier::for_app(
-            &operant_core::platform::operant_home().join("database.db"),
+            &app_config.database_path,
         ) {
             Ok(barrier) => operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
                 .with_write_barrier(barrier)

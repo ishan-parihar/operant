@@ -589,9 +589,7 @@ impl WriteBarrier {
         Ok(Self {
             worklog: Arc::new(WorklogDb::init(database_path)?),
             decisions: Arc::new(DecisionsDb::for_app(database_path)?),
-            employees: Arc::new(EmployeeDb::init(super::employee_db::org_db_path(
-                database_path,
-            ))?),
+            employees: Arc::new(EmployeeDb::for_app(database_path)?),
         })
     }
 
