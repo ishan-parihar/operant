@@ -1136,16 +1136,45 @@ impl operant_core::tools::OperantTool for RuntimeToolBridge {
         args: serde_json::Value,
         _context: operant_core::tools::ToolContext,
     ) -> operant_core::tools::ToolResult {
+        use crate::agent::tool_receipts::TOOL_LOOP_RECEIPT_CONTEXT;
+
         let name = self.0.name().to_string();
-        match self.0.execute(args).await {
-            Ok(result) => operant_core::tools::ToolResult {
-                tool_call_id: String::new(),
-                name,
-                success: result.success,
-                content: result.output,
-                error: result.error,
-                timed_out: false,
-            },
+        // Receipt signing lives in the runtime tool-execution layer, which
+        // core's registry bypasses — so the bridge signs here, reading the
+        // same task-local and applying the same transform the loop applies
+        // (`scrub_credentials`, "(no output)" for empty, `[receipt: ...]`
+        // appended to the content, `<tool>: <receipt>` into the collector).
+        // Without this, every bridged tool call would silently stop being
+        // signed on facade turns.
+        let receipt_scope = TOOL_LOOP_RECEIPT_CONTEXT
+            .try_with(Clone::clone)
+            .ok()
+            .flatten();
+
+        match self.0.execute(args.clone()).await {
+            Ok(result) => {
+                let mut content = if result.output.is_empty() {
+                    "(no output)".to_string()
+                } else {
+                    result.output
+                };
+                content = crate::agent::loop_support::scrub_credentials(&content);
+                if let Some(ref scope) = receipt_scope {
+                    let receipt = scope.generator.generate_now(&name, &args, &content);
+                    content = format!("{content}\n\n[receipt: {receipt}]");
+                    if let Ok(mut collector) = scope.collector.lock() {
+                        collector.push(format!("{name}: {receipt}"));
+                    }
+                }
+                operant_core::tools::ToolResult {
+                    tool_call_id: String::new(),
+                    name,
+                    success: result.success,
+                    content,
+                    error: result.error,
+                    timed_out: false,
+                }
+            }
             Err(error) => operant_core::tools::ToolResult {
                 tool_call_id: String::new(),
                 name,
@@ -3580,6 +3609,88 @@ mod w18b_fix_tests {
                 .unwrap_or_default()
                 .contains("tool exploded")
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_tool_bridge_signs_receipts_into_the_scope_collector() {
+        use crate::agent::tool_receipts::{
+            ReceiptGenerator, ReceiptScope, TOOL_LOOP_RECEIPT_CONTEXT,
+        };
+        use operant_core::tools::{OperantTool, ToolContext};
+
+        struct Echo;
+        #[async_trait::async_trait]
+        impl operant_api::tool::Tool for Echo {
+            fn name(&self) -> &str {
+                "echo"
+            }
+            fn description(&self) -> &str {
+                "echo"
+            }
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object" })
+            }
+            async fn execute(
+                &self,
+                args: serde_json::Value,
+            ) -> anyhow::Result<operant_api::tool::ToolResult> {
+                Ok(operant_api::tool::ToolResult {
+                    success: true,
+                    output: args["text"].as_str().unwrap_or_default().to_string(),
+                    error: None,
+                })
+            }
+        }
+
+        let registry = ToolRegistry::new(Duration::from_secs(5));
+        registry
+            .register(RuntimeToolBridge::new(Arc::new(Echo)))
+            .await
+            .expect("register echo");
+
+        // With NO receipt scope: content is the raw output, nothing appended.
+        let plain = registry
+            .execute(
+                "echo",
+                "c1",
+                serde_json::json!({ "text": "hi" }),
+                ToolContext::default(),
+            )
+            .await
+            .expect("execute echo");
+        assert_eq!(plain.content, "hi");
+        assert!(!plain.content.contains("[receipt:"));
+
+        // With a scope set (what the orchestrator provides per turn): the
+        // content carries the receipt and the collector records it, so the
+        // trailing `Tool receipts:` block is populated on facade turns.
+        let collector = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let scope = ReceiptScope {
+            generator: ReceiptGenerator::new(),
+            collector: std::sync::Arc::clone(&collector),
+        };
+        let signed = TOOL_LOOP_RECEIPT_CONTEXT
+            .scope(Some(scope), async {
+                registry
+                    .execute(
+                        "echo",
+                        "c2",
+                        serde_json::json!({ "text": "hi" }),
+                        ToolContext::default(),
+                    )
+                    .await
+            })
+            .await
+            .expect("execute echo under receipt scope");
+
+        assert!(
+            signed.content.contains("[receipt: zc-receipt-"),
+            "content: {}",
+            signed.content
+        );
+        let entries = collector.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].starts_with("echo: zc-receipt-"));
     }
 
     #[test]

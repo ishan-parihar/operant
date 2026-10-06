@@ -4293,12 +4293,18 @@ solves.
 
 **Also required for the port (each measured, not assumed):**
 
-1. **Receipts.** `TOOL_LOOP_RECEIPT_CONTEXT` is read by RUNTIME tool
-   execution; core tools never read it, so
-   `process_channel_message_renders_trailing_tool_receipts_block_when_enabled`
-   fails on a facade turn (the empty-collector guard hides the block, so
-   receipts would vanish silently rather than error). Core needs the
-   signing hook.
+1. **Receipts — SOLVED (iter-645).** `TOOL_LOOP_RECEIPT_CONTEXT` is read
+   by RUNTIME tool execution and core's registry bypasses it, which
+   silently emptied the trailing `Tool receipts:` block on facade turns.
+   `RuntimeToolBridge::execute` now signs: it reads the same task-local
+   and applies the same transform the loop applies (`scrub_credentials`,
+   `(no output)` for empty output, `[receipt: ...]` appended to the
+   content, `<tool>: <receipt>` pushed to the collector). Covered by
+   `runtime_tool_bridge_signs_receipts_into_the_scope_collector`, which
+   asserts both the unscoped (raw content) and scoped (signed + collected)
+   paths. Core's OWN tools still do not sign — they never did, and the
+   channels port registers the caller's runtime tools, so every tool that
+   previously signed keeps signing.
 2. **Failed-turn rollback parity.** On a non-retryable failure the
    orchestrator calls `rollback_orphan_user_turn`, which pops the failed
    user turn from the channel cache AND the JSONL session store. The
