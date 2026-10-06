@@ -472,10 +472,11 @@ pub async fn process_message(
                 ..
             } = event
             {
-                super::run::answer_approval_request(
+                crate::agent::reconciled::answer_pending_approval(
                     &approvals_handle,
                     &approval_manager,
                     false,
+                    "daemon",
                     &request_id,
                     &tool_name,
                     &arguments_summary,

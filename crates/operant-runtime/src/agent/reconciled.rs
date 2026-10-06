@@ -1335,6 +1335,78 @@ fn spawn_event_forwarder(mut rx: mpsc::Receiver<AgentEvent>, bus: FacadeEventBus
     });
 }
 
+/// Answer one parked facade permission request with the policy the old
+/// tool loop applied (W1.8c: moved here from `loop_::run` so every
+/// facade consumer — CLI one-shot, CLI REPL, daemon, and the channels
+/// dispatch leg — shares ONE implementation).
+///
+/// Facade turns park permission requests on the TurnEvent channel; an
+/// unanswered request sits until core's 120s deadline denies it. The
+/// policy is [`crate::approval::ApprovalManager`] verbatim:
+/// `approval_requirement()` decides, and `Prompt` means the terminal
+/// (`interactive`) or denial (no operator on daemon/channel runs).
+/// Decisions flow through `record_decision` so the session allowlist
+/// ("always") and the audit log keep their old behavior; `channel` is the
+/// audit label (`cli` / `daemon` / the channel name).
+pub async fn answer_pending_approval(
+    approvals: &ReconciledApprovals,
+    policy: &crate::approval::ApprovalManager,
+    interactive: bool,
+    channel: &str,
+    request_id: &str,
+    tool_name: &str,
+    arguments_summary: &str,
+) {
+    use crate::approval::{ApprovalRequirement, ApprovalResponse};
+    use operant_api::channel::ChannelApprovalResponse;
+
+    let (response, legacy) = match policy.approval_requirement(tool_name) {
+        ApprovalRequirement::Approved | ApprovalRequirement::NotRequired => {
+            (ChannelApprovalResponse::Approve, ApprovalResponse::Yes)
+        }
+        ApprovalRequirement::Prompt if !interactive => {
+            (ChannelApprovalResponse::Deny, ApprovalResponse::No)
+        }
+        ApprovalRequirement::Prompt => {
+            eprintln!("\n\u{1b}[1m{tool_name}\u{1b}[0m requires approval:\n  {arguments_summary}");
+            // The read runs on a blocking task — an inline `read_line` in
+            // a forwarder arm parks a tokio worker for the user's whole
+            // think-time.
+            let answer = tokio::task::spawn_blocking(|| {
+                let mut line = String::new();
+                std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
+                    .ok()
+                    .map(|_| line.trim().to_string())
+            })
+            .await
+            .unwrap_or(None);
+            match answer.as_deref() {
+                Some("a") | Some("always") => (
+                    ChannelApprovalResponse::AlwaysApprove,
+                    ApprovalResponse::Always,
+                ),
+                Some("y") | Some("yes") => {
+                    (ChannelApprovalResponse::Approve, ApprovalResponse::Yes)
+                }
+                _ => (ChannelApprovalResponse::Deny, ApprovalResponse::No),
+            }
+        }
+    };
+    policy.record_decision(
+        tool_name,
+        &serde_json::Value::String(arguments_summary.to_string()),
+        legacy,
+        channel,
+    );
+    if !approvals.resolve(request_id, response) {
+        tracing::warn!(
+            request_id,
+            tool_name,
+            "approval request expired before answer"
+        );
+    }
+}
+
 /// Long-lived permission pump: core's `ToolPermissionRequest`s (each
 /// carrying the response oneshot the core loop parks on) become
 /// [`TurnEvent::ApprovalRequest`]s on the active sink, and the oneshot is

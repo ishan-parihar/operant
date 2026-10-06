@@ -4240,15 +4240,77 @@ harness); iter-635 (`W1.8b-fix`) repaired the recoverable ones. Status:
     (`tool_loop.rs:1172-1207` semantics): carried to Wave 2's
     identical-result rung on `ToolGuardrailTracker`, not ported.
 
-Also recorded for W1.8c (next leg): `dispatch.rs:682` still runs
-`run_tool_call_loop` — the channels orchestrator owns conversation
-history externally and has no per-session facade (ACP's `AcpSession`
-pattern is the reference); migrating it changes history semantics and
-is its own leg, not a call-site swap. Its call site carries
-`ctx.tools_registry` (runtime `Box<dyn Tool>` — core cannot accept it),
-`ctx.approval_manager` (per-channel, distinct from the answerer
-policy), `ctx.activated_tools`, `ctx.pacing`, `ctx.hooks`, per-channel
-dedup/non_cli exclusions, and `TOOL_LOOP_RECEIPT_CONTEXT` — the last is
-read by RUNTIME tool execution, so on the facade path receipts would
-silently stop being signed; W1.8c must port receipt emission to core
-before switching.
+### W1.8c — the channels dispatch port is BLOCKED on a tool-surface adapter (investigated 2026-10-06, not attempted in this leg)
+
+`dispatch.rs` still runs `run_tool_call_loop` by design. A port was
+prototyped and REVERTED; the blocker is measured, not estimated.
+
+**The blocker.** The facade turn executes core's registry only
+(`register_builtin_tools_with_sub_agent`, operant-core `tools/builtin.rs`).
+Nothing in `from_config_with`/`build_from_config` accepts a caller's tool
+registry, and the types do not line up: channels hands over
+`ctx.tools_registry: Arc<Vec<Box<dyn Tool>>>` (runtime `Tool`) while core
+registers `Arc<dyn OperantTool>`. A diff of the two surfaces shows the
+channel surface is materially missing from core:
+
+- runtime-only, absent from core: `shell` (core has `terminal`, a
+  different tool with its own risk policy), `cron_add` / `cron_remove` /
+  `cron_update` (core has only `cron` + `cron` admin), `cron_run` /
+  `cron_runs`, `file_edit` / `file_write` (core has `patch`),
+  `model_switch`, `read_skill` (core: `skill_view`), `llm_task`,
+  `canvas`, `notion`, `git` operations, `calculator`, `weather`,
+  `text_browser` / `browser_open` (core has `browser` + CDP tools),
+  `glob_search` / `content_search`, `schedule`, `proxy_config`,
+  `model_routing_config`, `security_ops`, `pushover`,
+  `google_workspace`, `jira`, `discord_search`, plus the peripheral and
+  MCP wrappers built in `tools::all_tools_with_runtime`.
+- core-only additions that would silently enter channel turns: the whole
+  browser/CDP family, `code_execution`, `vision_analyze`,
+  `image_generate`, `tts`, `transcribe_audio`, `spotify_*`,
+  `homeassistant`, `feishu_*`, `osv_check`, `session_insights`,
+  `learning_manage`, `checkpoint`, `mcp_management`.
+
+So the port is not a call-site swap: it needs a `Box<dyn Tool>` ->
+`Arc<dyn OperantTool>` adapter (or core-side registration of the runtime
+tools) BEFORE any Telegram/Slack turn can be moved, otherwise channel
+turns silently lose shell/cron/file-write/calendar tools.
+
+**Also required for the port (each measured, not assumed):**
+
+1. **Receipts.** `TOOL_LOOP_RECEIPT_CONTEXT` is read by RUNTIME tool
+   execution; core tools never read it, so
+   `process_channel_message_renders_trailing_tool_receipts_block_when_enabled`
+   fails on a facade turn (the empty-collector guard hides the block, so
+   receipts would vanish silently rather than error). Core needs the
+   signing hook.
+2. **Failed-turn rollback parity.** On a non-retryable failure the
+   orchestrator calls `rollback_orphan_user_turn`, which pops the failed
+   user turn from the channel cache AND the JSONL session store. The
+   facade persists its transcript under a pinned core session id, which
+   nothing rolls back — the poisoned message resurfaces in the next
+   turn. A prototype rotated the pinned session id on rollback and the
+   `e2e_failed_non_retryable_turn_does_not_poison_follow_up_text_turn`
+   test passed; the design needs this plus a decision on whether
+   trimming/normalizing the channel cache (`normalize_cached_channel_turns`,
+   `proactive_trim_turns`, `compress_if_needed`) should also drive the
+   core transcript, or the DB copy becomes a second, diverging history.
+3. **Prompt shape.** Core injects `<workspace_context>` (repo AGENTS.md)
+   as a second system message (`prompting.rs:13-33`, `run.rs:2183`)
+   whenever the caller supplies `AgentConfig.system_prompt`. The channel
+   tests encode "system instruction at top only" as a user-visible
+   contract; injecting the repo's AGENTS.md into a Telegram conversation
+   is a content change, not a wiring detail. Either the facade passes
+   the channel prompt WITHOUT core's context-file injection, or this is
+   an intentional behavior change that needs an explicit opt-in flag on
+   `from_config_with` (default off for channels).
+4. **Model switch.** `model_switch` is a runtime tool (the loop reads
+   `MODEL_SWITCH_REQUEST` between iterations); core has no equivalent, so
+   the mid-turn provider switch channels supports would be lost.
+5. **Approved implementation shape (from the prototype, discarded):**
+   per-turn facade construction (no shared agent — route selection and
+   model switch change provider/model per turn), a pinned core session id
+   per `history_key` (re-minted on `/new` and on failed-turn rollback),
+   `FacadeSink::pair` for the draft stream, and the shared
+   `answer_pending_approval` (iter-640) with `ctx.approval_manager` as
+   policy. The cancel/timeout `select!` and the thread/session/cost
+   task-local scopes wrap the facade turn unchanged.

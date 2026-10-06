@@ -29,79 +29,6 @@ fn facade_overrides(overrides: &RunOverrides) -> crate::agent::reconciled::Facad
     }
 }
 
-/// W1.8b: facade turns park permission requests on the TurnEvent
-/// channel; an unanswered request sits until core's 120s deadline
-/// denies it. The CLI/daemon paths have no transport consumer, so
-/// their drain loops answer every request with the SAME policy the
-/// old tool-loop [`ApprovalManager`] applied: `approval_requirement()`
-/// decides, and `Prompt` means the terminal (interactive run) or
-/// denial (no operator on the daemon paths). Decisions flow through
-/// `record_decision` so the session allowlist ("always") and the audit
-/// log keep their old behavior.
-pub(super) async fn answer_approval_request(
-    approvals: &crate::agent::reconciled::ReconciledApprovals,
-    policy: &ApprovalManager,
-    interactive: bool,
-    request_id: &str,
-    tool_name: &str,
-    arguments_summary: &str,
-) {
-    use crate::approval::ApprovalRequirement;
-    use operant_api::channel::ChannelApprovalResponse;
-
-    let (response, legacy) = match policy.approval_requirement(tool_name) {
-        ApprovalRequirement::Approved | ApprovalRequirement::NotRequired => (
-            ChannelApprovalResponse::Approve,
-            crate::approval::ApprovalResponse::Yes,
-        ),
-        ApprovalRequirement::Prompt if !interactive => (
-            ChannelApprovalResponse::Deny,
-            crate::approval::ApprovalResponse::No,
-        ),
-        ApprovalRequirement::Prompt => {
-            eprintln!("\n\u{1b}[1m{tool_name}\u{1b}[0m requires approval:\n  {arguments_summary}");
-            // W1.8b-fix: the read runs on a blocking task — an inline
-            // `read_line` in the forwarder arm parks a tokio worker for the
-            // user's whole think-time.
-            let answer = tokio::task::spawn_blocking(|| {
-                let mut line = String::new();
-                std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
-                    .ok()
-                    .map(|_| line.trim().to_string())
-            })
-            .await
-            .unwrap_or(None);
-            match answer.as_deref() {
-                Some("a") | Some("always") => (
-                    ChannelApprovalResponse::AlwaysApprove,
-                    crate::approval::ApprovalResponse::Always,
-                ),
-                Some("y") | Some("yes") => (
-                    ChannelApprovalResponse::Approve,
-                    crate::approval::ApprovalResponse::Yes,
-                ),
-                _ => (
-                    ChannelApprovalResponse::Deny,
-                    crate::approval::ApprovalResponse::No,
-                ),
-            }
-        }
-    };
-    policy.record_decision(
-        tool_name,
-        &serde_json::Value::String(arguments_summary.to_string()),
-        legacy,
-        if interactive { "cli" } else { "daemon" },
-    );
-    if !approvals.resolve(request_id, response) {
-        tracing::warn!(
-            request_id,
-            tool_name,
-            "approval request expired before answer"
-        );
-    }
-}
-
 /// Facade construction for the Loop C CLI/daemon adapters
 /// (`loop_::run`, `loop_::process_message`). W1.8b: the turn itself now
 /// runs on the reconciled facade (Loop A under the hood) instead of
@@ -781,10 +708,11 @@ pub async fn run(
                             ..
                         } = event
                         {
-                            answer_approval_request(
+                            crate::agent::reconciled::answer_pending_approval(
                                 &approvals_handle,
                                 &approval_policy,
                                 false,
+                                "daemon",
                                 &request_id,
                                 &tool_name,
                                 &arguments_summary,
@@ -1173,10 +1101,11 @@ pub async fn run(
                                 ..
                             } = event
                             {
-                                answer_approval_request(
+                                crate::agent::reconciled::answer_pending_approval(
                                     &approvals_handle,
                                     &approval_policy,
                                     true,
+                                    "cli",
                                     &request_id,
                                     &tool_name,
                                     &arguments_summary,
@@ -1383,9 +1312,27 @@ mod w18b_tests {
         let approvals = crate::agent::reconciled::ReconciledApprovals::default();
 
         // auto_approve tool: allowed, recorded as Yes on the daemon channel.
-        answer_approval_request(&approvals, &policy, false, "r1", "read_file", "{}").await;
+        crate::agent::reconciled::answer_pending_approval(
+            &approvals,
+            &policy,
+            false,
+            "daemon",
+            "r1",
+            "read_file",
+            "{}",
+        )
+        .await;
         // ask-gated tool: denied (no operator to prompt), recorded as No.
-        answer_approval_request(&approvals, &policy, false, "r2", "deny_gated_tool", "{}").await;
+        crate::agent::reconciled::answer_pending_approval(
+            &approvals,
+            &policy,
+            false,
+            "daemon",
+            "r2",
+            "deny_gated_tool",
+            "{}",
+        )
+        .await;
 
         let log = policy.audit_log();
         assert_eq!(log.len(), 2);
@@ -1403,7 +1350,10 @@ mod w18b_tests {
         let policy = ApprovalManager::for_non_interactive(&cfg);
         let approvals = crate::agent::reconciled::ReconciledApprovals::default();
 
-        answer_approval_request(&approvals, &policy, false, "r1", "shell", "rm -rf /").await;
+        crate::agent::reconciled::answer_pending_approval(
+            &approvals, &policy, false, "daemon", "r1", "shell", "rm -rf /",
+        )
+        .await;
         let log = policy.audit_log();
         assert_eq!(log[0].decision, ApprovalResponse::Yes);
     }
@@ -1437,7 +1387,16 @@ mod w18b_tests {
         let approvals = crate::agent::reconciled::ReconciledApprovals::default();
         // No parked request with this id: resolve() must return false
         // (logged warn in the answerer) and NOT panic.
-        answer_approval_request(&approvals, &policy, false, "nonexistent", "read_file", "{}").await;
+        crate::agent::reconciled::answer_pending_approval(
+            &approvals,
+            &policy,
+            false,
+            "daemon",
+            "nonexistent",
+            "read_file",
+            "{}",
+        )
+        .await;
         // The decision was still recorded (audit honesty): one entry.
         assert_eq!(policy.audit_log().len(), 1);
     }
