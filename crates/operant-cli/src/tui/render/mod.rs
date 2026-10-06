@@ -16,6 +16,7 @@
 // lines, text measurement) plus the async-raster hash cache.
 
 pub(crate) mod cache;
+pub(crate) mod operant_overlays;
 pub(crate) mod selection;
 pub(crate) mod tools;
 pub(crate) mod utils;
@@ -98,6 +99,13 @@ pub fn render_app(frame: &mut Frame, app: &App) {
             crate::tui::background_tasks::now_unix_secs(),
         );
     }
+
+    // ---- operant-only overlays ------------------------------------------
+    // Every dialog, menu and screen the ported jcode chrome does not own.
+    // They lost their invocation at iter-649 (the dispatch table was deleted
+    // with the chrome rows) and the corpus proved it: 60 surfaces stopped
+    // rendering. Painted in the same order as before, on top of the chrome.
+    operant_overlays::draw_operant_overlays(frame, app);
 
     // ---- Async raster producers (operant-only) ---------------------------
     // A mermaid/latex block rasterises on a worker thread, so the picture lands
