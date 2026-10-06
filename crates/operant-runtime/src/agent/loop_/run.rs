@@ -81,17 +81,15 @@ pub(super) async fn build_facade_agent(
             model_name.to_string(),
         )),
         Some(system_prompt.to_string()),
-        temperature,
-        allowed_tools,
-        // W1.9: the CLI/daemon facade turn runs core's registry (the
-        // shipped behavior since W1.8b); `caller_tools` is for consumers
-        // that own runtime tools (channels dispatch, delegate
-        // sub-agents). Wiring the CLI's own registry is tracked in
-        // BUGS.md S8.
-        None,
-        // `max_iterations` from the process config is the CLI/daemon
-        // budget; `None` keeps it.
-        None,
+        // W1.9: the CLI/daemon facade turn runs core's registry (shipped
+        // behavior since W1.8b); `caller_tools` is for consumers that own
+        // runtime tools (channels dispatch, delegate sub-agents). Wiring
+        // the CLI's own registry is tracked in BUGS.md S8.
+        crate::agent::reconciled::FacadeConstruction {
+            temperature,
+            allowed_tools,
+            ..Default::default()
+        },
     )
     .await?;
     if let Some(id) = memory_session_id {

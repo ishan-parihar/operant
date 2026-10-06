@@ -92,6 +92,10 @@ pub struct DelegateTool {
     /// Process config — the agentic sub-agent's facade turn is built from
     /// it (W1.9). `None` only in tests that never reach `execute_agentic`.
     config: Option<Arc<operant_config::schema::Config>>,
+    /// Where the sub-agent facade's stores live. `None` = the process data
+    /// dir (production). Tests point this at a temp dir so a spawn never
+    /// opens — or writes — the user's live database (W1.8c).
+    facade_data_dir: Option<std::path::PathBuf>,
 }
 
 impl DelegateTool {
@@ -127,6 +131,7 @@ impl DelegateTool {
             cancellation_token: CancellationToken::new(),
             memory: None,
             config: None,
+            facade_data_dir: None,
         }
     }
 
@@ -168,6 +173,7 @@ impl DelegateTool {
             cancellation_token: CancellationToken::new(),
             memory: None,
             config: None,
+            facade_data_dir: None,
         }
     }
 
@@ -181,6 +187,14 @@ impl DelegateTool {
     /// built on the reconciled facade (W1.9).
     pub fn with_config(mut self, config: Arc<operant_config::schema::Config>) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    /// Attach an isolated data dir for the sub-agent facade's stores
+    /// (W1.8c). Without this a spawn opens the process database, which
+    /// tests must not do and N concurrent spawns contend on.
+    pub fn with_facade_data_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.facade_data_dir = Some(dir);
         self
     }
 
@@ -673,6 +687,7 @@ impl DelegateTool {
         // W1.9: cloned out of `self` before the spawn, like every other
         // field the inner DelegateTool needs.
         let config = self.config.clone();
+        let facade_data_dir = self.facade_data_dir.clone();
         let task_id_clone = task_id.clone();
         let parent_session_key = current_tool_loop_session_key();
 
@@ -694,6 +709,7 @@ impl DelegateTool {
                     // W1.9: propagate so a nested agentic sub-agent can
                     // also build its facade turn.
                     config: config.clone(),
+                    facade_data_dir: facade_data_dir.clone(),
                 };
 
                 let args_inner = json!({
@@ -852,6 +868,7 @@ impl DelegateTool {
             let cancellation_token = self.cancellation_token.child_token();
             // W1.9: cloned out of `self` before the spawn (sibling site above).
             let config = self.config.clone();
+            let facade_data_dir = self.facade_data_dir.clone();
             let agent_name = agent_name.clone();
             let prompt = prompt.to_string();
             let args_clone = args.clone();
@@ -874,6 +891,7 @@ impl DelegateTool {
                     // W1.9: propagate so a nested agentic sub-agent can
                     // also build its facade turn.
                     config: config.clone(),
+                    facade_data_dir: facade_data_dir.clone(),
                 };
                 let agent_name_for_return = agent_name.clone();
                 let result = scope_delegate_session_key(session_key, async move {
@@ -1275,10 +1293,13 @@ impl DelegateTool {
                         model_name.clone(),
                     )),
                     system_prompt.clone(),
-                    Some(temperature),
-                    Some(sub_tool_names.clone()),
-                    Some(Arc::new(sub_tools.clone())),
-                    Some(max_iterations),
+                    crate::agent::reconciled::FacadeConstruction {
+                        temperature: Some(temperature),
+                        allowed_tools: Some(sub_tool_names.clone()),
+                        caller_tools: Some(Arc::new(sub_tools.clone())),
+                        max_iterations: Some(max_iterations),
+                        data_dir: self.facade_data_dir.clone(),
+                    },
                 )
                 .await?;
                 let approvals = facade.approvals().clone();
@@ -1658,6 +1679,18 @@ mod tests {
         Arc::new(operant_config::schema::Config::default())
     }
 
+    /// An agentic tool wired to an ISOLATED data dir. W1.8c: without this
+    /// the sub-agent facade opens the real `~/.operant` databases — the
+    /// tests wrote to live data, and parallel spawns deadlocked on
+    /// "database is locked". The `TempDir` must outlive the test, so each
+    /// caller keeps it in a local.
+    fn agentic_tool_with(data_dir: std::path::PathBuf, tools: Vec<Arc<dyn Tool>>) -> DelegateTool {
+        DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
+            .with_facade_data_dir(data_dir)
+            .with_parent_tools(Arc::new(RwLock::new(tools)))
+    }
+
     fn agentic_config(allowed_tools: Vec<String>, max_iterations: usize) -> DelegateAgentConfig {
         DelegateAgentConfig {
             provider: "openrouter".to_string(),
@@ -2032,12 +2065,14 @@ mod tests {
     #[tokio::test]
     async fn execute_agentic_runs_tool_call_loop_with_filtered_tools() {
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_config(agentic_process_config())
-            .with_parent_tools(Arc::new(RwLock::new(vec![
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let tool = agentic_tool_with(
+            data_dir.path().to_path_buf(),
+            vec![
                 Arc::new(EchoTool),
                 Arc::new(DelegateTool::new(HashMap::new(), None, test_security())),
-            ])));
+            ],
+        );
 
         let provider = OneToolThenFinalProvider;
         let result = tool
@@ -2080,9 +2115,8 @@ mod tests {
     #[tokio::test]
     async fn execute_agentic_respects_max_iterations() {
         let config = agentic_config(vec!["echo_tool".to_string()], 2);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_config(agentic_process_config())
-            .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let tool = agentic_tool_with(data_dir.path().to_path_buf(), vec![Arc::new(EchoTool)]);
 
         // W1.9 behavior change: the budget is now enforced by core, which
         // STOPS the tool loop and runs a final grace call (the Wave-0 A1
@@ -2123,9 +2157,8 @@ mod tests {
         };
 
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_config(agentic_process_config())
-            .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let tool = agentic_tool_with(data_dir.path().to_path_buf(), vec![Arc::new(EchoTool)]);
 
         let collector: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2187,9 +2220,8 @@ mod tests {
         // must run unsigned and the agent output must not carry a
         // `[receipt: ` trailer.
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_config(agentic_process_config())
-            .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let tool = agentic_tool_with(data_dir.path().to_path_buf(), vec![Arc::new(EchoTool)]);
 
         let provider = OneToolThenFinalProvider;
         let result = tool
@@ -2208,9 +2240,8 @@ mod tests {
     #[tokio::test]
     async fn execute_agentic_propagates_provider_errors() {
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_config(agentic_process_config())
-            .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let tool = agentic_tool_with(data_dir.path().to_path_buf(), vec![Arc::new(EchoTool)]);
 
         let provider = FailingProvider;
         let result = tool
@@ -2304,9 +2335,8 @@ mod tests {
     async fn mcp_tools_included_in_subagent_tool_list() {
         // Build DelegateTool with NO parent tools initially
         let config = agentic_config(vec!["mcp_fake".to_string()], 10);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security())
-            .with_config(agentic_process_config())
-            .with_parent_tools(Arc::new(RwLock::new(Vec::new())));
+        let data_dir = tempfile::tempdir().expect("tempdir");
+        let tool = agentic_tool_with(data_dir.path().to_path_buf(), Vec::new());
 
         // Simulate late MCP tool injection via the shared handle
         let handle = tool.parent_tools_handle();

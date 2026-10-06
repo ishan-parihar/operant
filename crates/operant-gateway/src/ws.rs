@@ -1516,6 +1516,8 @@ mod tests {
             None,
             EvolutionConfig::default(),
             None,
+            std::sync::Arc::new(parking_lot::Mutex::new(None)),
+            operant_core::interrupt::InterruptFlag::new(),
         )
     }
 

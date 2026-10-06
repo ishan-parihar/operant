@@ -4369,3 +4369,49 @@ provider — rather than the old error string.
 `CronDb`/`KanbanDb`, full builtin registration). The cost was not
 measured in this leg; if per-spawn construction proves expensive for
 delegation latency, a cached-per-session facade is the follow-up.
+
+### W1.8c — model_switch landed FACADE-SIDE, not in operant-core (owner ruling was "port it to core")
+
+The owner's decision was to port `model_switch` to core. It is
+implemented in operant-runtime instead (iter-648), because core cannot
+host it: core has no provider factory (constructing a provider is
+operant-providers' job and core does not depend on it), so a core tool
+could record a request but nothing could act on it. The facade keeps
+Loop C's protocol instead — the tool records the request and trips the
+agent's `InterruptFlag`, so the turn aborts exactly where the Loop C
+loop checked between iterations, and the facade returns
+`ModelSwitchRequested`, the error every consumer's retry arm already
+inspects via `is_model_switch_requested`. Those arms were already
+written; they simply could never fire because no facade turn emitted the
+signal.
+
+Recorded here so nobody goes looking in operant-core for it: the anchor
+for the W3 per-turn model hook is `FacadeTurnOverrides::model_override`
+(today warn-only), and this tool is the mid-turn analogue.
+
+**Dual-writer hazard, resolved:** the runtime `ModelSwitchTool` (which
+writes the Loop C global) is still registered by `all_tools_with_runtime`,
+so it reaches facade consumers through `caller_tools` (delegate's
+`sub_tools`). Caller-wins registration would have replaced the facade's
+tool with the Loop C one — a switch that sets a global nobody reads.
+Facade registration now SKIPS a caller tool named `model_switch`; the
+facade's own tool always wins for that name. The Loop C global remains
+for channels `dispatch` until W1.10 removes the engine.
+
+### Every facade construction opens the process databases (W1.8c finding)
+
+`from_config_with` opens `database.db`, `operant_cron.db` and
+`operant_kanban.db` from `~/.operant` on EVERY construction (they come
+from core's `runtime_config()`, which resolves against the real home —
+`OPERANT_CONFIG_DIR` moves the config file, not the data). Two
+consequences, both now measured rather than assumed:
+
+- The agentic delegate builds a facade per spawn, so N sub-agents are N
+  opens of the same files.
+- The delegate TESTS were writing to the live database, and parallel
+  spawns failed with `database is locked`.
+
+`FacadeConstruction.data_dir` (plus `DelegateTool::with_facade_data_dir`)
+is the seam: tests point it at a temp dir, and it is where a future
+"share one set of stores across sub-agent spawns" optimization would
+land.

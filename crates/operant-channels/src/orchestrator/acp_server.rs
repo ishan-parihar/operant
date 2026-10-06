@@ -2141,6 +2141,8 @@ mod tests {
             None,
             operant_runtime::agent::reconciled::EvolutionConfig::default(),
             None,
+            Arc::new(parking_lot::Mutex::new(None)),
+            operant_core::interrupt::InterruptFlag::new(),
         )
     }
 

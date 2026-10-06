@@ -1699,6 +1699,32 @@ pub struct EvolutionConfig {
     pub auto_classify: Option<AutoClassifyConfig>,
 }
 
+/// Construction-time knobs for [`ReconciledAgent::from_config_with`]
+/// (W1.8c). The optional tail used to be six positional args, of which
+/// most callers passed `None` for — arity churn already produced two
+/// mixed-argument bugs this programme, so the tail is one struct.
+#[derive(Clone, Default)]
+pub struct FacadeConstruction {
+    /// Client default temperature. `None` = provider defaults (WS/ACP).
+    pub temperature: Option<f64>,
+    /// Allowlist — every registered tool outside it is disabled at
+    /// construction. `None` = unrestricted.
+    pub allowed_tools: Option<Vec<String>>,
+    /// The caller's own runtime tools, registered through
+    /// [`RuntimeToolBridge`] AFTER core's builtins (caller wins on name,
+    /// except `model_switch`, which the facade owns).
+    pub caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
+    /// Override the iteration budget instead of taking the process cap.
+    pub max_iterations: Option<usize>,
+    /// Where the facade's own stores live (database / cron / kanban).
+    /// `None` = the process data dir (`~/.operant`), the production
+    /// default. W1.8c: every facade construction opens these files, so a
+    /// caller that builds one per spawn (the agentic delegate) pays N
+    /// opens of the same DB — and tests need a place to point that is not
+    /// the user's live data.
+    pub data_dir: Option<PathBuf>,
+}
+
 /// Facade-side per-turn overrides lifted from Loop B's
 /// [`RunOverrides`](super::loop_::RunOverrides). W1.8a maps every field;
 /// fields with no core-bearing equivalent are documented with the trap
@@ -1983,10 +2009,7 @@ impl ReconciledAgent {
             initialize_mcp,
             None,
             None,
-            None,
-            None,
-            None,
-            None,
+            FacadeConstruction::default(),
         )
         .await
     }
@@ -2026,10 +2049,7 @@ impl ReconciledAgent {
         initialize_mcp: bool,
         external_provider: Option<(String, Arc<dyn operant_providers::Provider>, String)>,
         system_prompt: Option<String>,
-        temperature: Option<f64>,
-        allowed_tools: Option<Vec<String>>,
-        caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
-        max_iterations: Option<usize>,
+        construction: FacadeConstruction,
     ) -> Result<Self> {
         Self::build_from_config(
             config,
@@ -2038,10 +2058,7 @@ impl ReconciledAgent {
             initialize_mcp,
             external_provider,
             system_prompt,
-            temperature,
-            allowed_tools,
-            caller_tools,
-            max_iterations,
+            construction,
         )
         .await
     }
@@ -2054,11 +2071,15 @@ impl ReconciledAgent {
         initialize_mcp: bool,
         external_provider: Option<(String, Arc<dyn operant_providers::Provider>, String)>,
         system_prompt: Option<String>,
-        temperature: Option<f64>,
-        allowed_tools: Option<Vec<String>>,
-        caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
-        max_iterations: Option<usize>,
+        construction: FacadeConstruction,
     ) -> Result<Self> {
+        let FacadeConstruction {
+            temperature,
+            allowed_tools,
+            caller_tools,
+            max_iterations,
+            data_dir,
+        } = construction;
         // Provider routing + model resolution — verbatim Loop B inputs,
         // unless the caller already resolved both (the Loop C adapters).
         let fallback_provider_ag = config.providers.fallback_provider();
@@ -2136,16 +2157,22 @@ impl ReconciledAgent {
         // Core-agent assembly — the process's shared on-disk layout comes from
         // the core runtime config (installed at every binary entry point).
         let core_app = operant_core::config::runtime_config();
-        let database = Arc::new(Database::init(core_app.database_path.clone())?);
+        let database_path = data_dir.as_ref().map_or_else(
+            || core_app.database_path.clone(),
+            |dir| dir.join("database.db"),
+        );
+        let database = Arc::new(Database::init(database_path)?);
         let registry = ToolRegistry::new(Duration::from_secs(core_app.tools.registry_timeout_secs));
         // The tool trips THIS agent's interrupt flag so the turn aborts the
         // way the Loop C loop did when it saw the request mid-iteration.
         let model_switch_interrupt = InterruptFlag::new();
-        let db_dir = core_app
-            .database_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let db_dir = data_dir.unwrap_or_else(|| {
+            core_app
+                .database_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."))
+        });
         let cron_db = Arc::new(CronDb::init(db_dir.join("operant_cron.db"))?);
         let kanban_db = Arc::new(KanbanDb::init(db_dir.join("operant_kanban.db"))?);
 
@@ -2214,7 +2241,11 @@ impl ReconciledAgent {
         // entries REPLACE the core builtin (that is the Loop C behavior —
         // the caller's tool of that name is the one that ran before).
         if let Some(tools) = &caller_tools {
-            for tool in tools.iter() {
+            // W1.8c: skip the caller's runtime `model_switch` — the facade
+            // registered its own version above, and a caller-wins replace
+            // here would swap in the LOOP C tool (which writes a global the
+            // facade turn never reads), silently killing mid-turn switching.
+            for tool in tools.iter().filter(|tool| tool.name() != "model_switch") {
                 registry
                     .register(RuntimeToolBridge::new(Arc::clone(tool)))
                     .await?;
@@ -2411,6 +2442,11 @@ impl ReconciledAgent {
             memory_tool_used: false,
         });
         self.interrupt_flag.reset();
+        // W1.8c: drop any switch request the previous turn left behind. The
+        // slot is drained on conversion, but a turn cancelled (Ctrl+C)
+        // right after a `set` would otherwise leave it set — and the NEXT
+        // turn's cancellation would then be misread as a model switch.
+        self.model_switch_request.lock().take();
         let watcher = cancel_token.map(|token| {
             let flag = self.interrupt_flag.clone();
             tokio::spawn(async move {
