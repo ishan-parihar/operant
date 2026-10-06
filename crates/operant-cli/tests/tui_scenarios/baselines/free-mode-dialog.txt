@@ -8,33 +8,33 @@
 
                   ┌──────────────────────────────────────────────────────────────────────────────────┐
                   │ Connect Free (multi-provider — 0/5 keys)                                         │
-                  │ Stack free tiers behind one endpoint.                                            │
-                  │ TIP More keys = better availability and higher caps.                             │
-                  │                                                                                  │
-                  │ ▸ Groq            console.groq.com                                               │
-                  │     paste your API key here..._                                                  │
-                  │   Cerebras        cloud.cerebras.ai                                              │
-                  │     paste your API key here...                                                   │
-                  │   Google Gemini   aistudio.google.com                                            │
-                  │     paste your API key here...                                                   │
-                  │   Mistral         console.mistral.ai                                             │
-                  │     paste your API key here...                                                   │
-                  │   ↓ 1 more                                                                       │
-                  │                                                                                  │
+ jcode · replay   │ Stack free tiers behind one endpoint.                                            │
+ JCode            │ TIP More keys = better availability and higher caps.                             │
+ /model to switch │                                                                                  │
+ v0.2.1           │ ▸ Groq            console.groq.com                                               │
+ /login to add pro│     paste your API key here..._                                                  │
+ ○ anthropic      │   Cerebras        cloud.cerebras.ai                                              │
+ ○ openrouter     │     paste your API key here...                                                   │
+ ○ openai         │   Google Gemini   aistudio.google.com                                            │
+ ○ cursor         │     paste your API key here...                                                   │
+ ○ copilot        │   Mistral         console.mistral.ai                                             │
+ ○ gemini         │     paste your API key here...                                                   │
+ ○ antigravity    │   ↓ 1 more                                                                       │
+ ~                │                                                                                  │
                   │ ↑/↓ next field    paste at least 1 key — as many as you can add is better        │
                   │                                                                                  │
-                  │                                                                                  │
-                  │                                                                                  │
+1>                │                                                                                  │
+                  │                                                                                  │ey Offline Capture
                   │                                                                                  │
                   │                                                                                  │
                   │                                                                                  │
                   │                                                                                  │
                   └──────────────────────────────────────────────────────────────────────Esc to close┘
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

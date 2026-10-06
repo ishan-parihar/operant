@@ -8,33 +8,33 @@
             │/ █                                                                                           │
             │──────────────────────────────────────────────────────────────────────────────────────────────│
             │                                                                                              │
+ jcode · rep│                                                                                              │
+ JCode      │                                                                                              │
+ /model to s│                                                                                              │
+ v0.2.1     │                                                                                              │
+ /login to a│                                                                                              │
+ ○ anthropic│                                                                                              │
+ ○ openroute│                                                                                              │
+ ○ openai   │                                                                                              │
+ ○ cursor   │                                                                                              │
+ ○ copilot  │                                                                                              │
+ ○ gemini   │                                                                                              │
+ ○ antigravi│                                                                                              │
+ ~          │                                                                                              │
+            │                                                                                              │
+            │                                                                                              │
+1>          │                                                                                              │
+            │                                                                                              │line Capture
             │                                                                                              │
             │                                                                                              │
             │                                                                                              │
             │                                                                                              │
             │                                                                                              │
             │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
- offline-cap│Type to search                                                                                │
-────────────└───────────────────────────────────────────────Esc to close  ·  Enter: insert  ·  ↑↓: navigate┘────────────
-❯ ▏
+            │Type to search                                                                                │
+            └───────────────────────────────────────────────Esc to close  ·  Enter: insert  ·  ↑↓: navigate┘
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

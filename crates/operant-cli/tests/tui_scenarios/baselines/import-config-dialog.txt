@@ -8,33 +8,33 @@
                 Import config                                                                       esc
                 Preview the content to import from ~/.claude; Enter to confirm, Esc to cancel.
                  Nothing to import.
+ jcode · repla
+ JCode
+ /model to swi
+ v0.2.1
+ /login to add
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+1>
+                                                                                                          ffline Capture
 
 
 
 
 
                 Enter to import  ·  Esc to cancel
- offline-captu
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

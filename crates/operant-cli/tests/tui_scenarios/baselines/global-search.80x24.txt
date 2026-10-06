@@ -1,24 +1,24 @@
 
 
-
-        ┌──────────────────────────────────────────────────────────────┐
-        │ Search                                                       │
-        │/ █                                                           │
-        │──────────────────────────────────────────────────────────────│
+ jcode · replay
+ JCode  ┌──────────────────────────────────────────────────────────────┐
+ /model │ Search                                                       │
+ v0.2.1 │/ █                                                           │
+ /login │──────────────────────────────────────────────────────────────│
+ ○ anthr│                                                              │
+ ○ openr│                                                              │
+ ○ opena│                                                              │
+ ○ curso│                                                              │
+ ○ copil│                                                              │
+ ○ gemin│                                                              │
+ ○ antig│                                                              │
+ ~      │                                                              │
         │                                                              │
         │                                                              │
-        │                                                              │
-        │                                                              │
-        │                                                              │
-        │                                                              │
-        │                                                              │
-        │                                                              │
-        │                                                              │
-        │                                                              │
- offline│                                                              │
-────────│                                                              │────────
-❯ ▏     │Type to search                                                │
+1>      │                                                              │
+        │                                                              │ Capture
+        │Type to search                                                │
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

@@ -8,33 +8,33 @@
 
 
 
-
-
-
-                           ┌───────────────────────────────────────────────────────────────┐
-                           │ Select model                                                  │
-                           │ Search                                                        │
-                           │                                                               │
-                           │   claude-haiku-4-5-20251001  Anthropic                        │
-                           │   claude-opus-4-20250514  Anthropic                           │
-                           │   claude-opus-4-5-20251101  Anthropic                         │
-                           │   claude-opus-4-6  Anthropic                                  │
-                           │ ● claude-sonnet-4-20250514  ◐ normal  Anthropic               │
-                           │ ● claude-sonnet-4-20250514  Anthropic                         │
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1                    ┌───────────────────────────────────────────────────────────────┐
+ /login to add provider    │ Select model                                                  │
+ ○ anthropic               │ Search                                                        │
+ ○ openrouter              │                                                               │
+ ○ openai                  │   claude-haiku-4-5-20251001  Anthropic                        │
+ ○ cursor                  │   claude-opus-4-20250514  Anthropic                           │
+ ○ copilot                 │   claude-opus-4-5-20251101  Anthropic                         │
+ ○ gemini                  │   claude-opus-4-6  Anthropic                                  │
+ ○ antigravity             │ ● claude-sonnet-4-20250514  ◐ normal  Anthropic               │
+ ~                         │ ● claude-sonnet-4-20250514  Anthropic                         │
                            │   claude-sonnet-4-5-20250929  Anthropic                       │
                            │   claude-sonnet-4-6  Anthropic                                │
-                           │ enter select  ←/→ effort                                      │
-                           └───────────────────────────────────────────────────Esc to close┘
+1>                         │ enter select  ←/→ effort                                      │
+                           └───────────────────────────────────────────────────Esc to close┘   ~ API key Offline Capture
 
 
 
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

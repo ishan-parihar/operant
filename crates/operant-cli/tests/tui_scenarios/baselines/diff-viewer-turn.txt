@@ -8,7 +8,23 @@
 
              No changes were captured for this turn.
 
-             Make an edit this turn, then reopen /changes to see the turn diff.
+ jcode · re  Make an edit this turn, then reopen /changes to see the turn diff.
+ JCode
+ /model to
+ v0.2.1
+ /login to
+ ○ anthropi
+ ○ openrout
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigrav
+ ~
+
+
+1>
+                                                                                                             ine Capture
 
 
 
@@ -18,23 +34,7 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
- offline-ca
-───────────                                                                                                  ───────────
-❯ ▏
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

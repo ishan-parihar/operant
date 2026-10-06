@@ -8,33 +8,33 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
 
 
 Voice mode enabled. Press Alt+V to start recording.
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+1>
+                                                                                               ~ API key Offline Capture
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
+
+
+
+
+
+
+
+
+
 

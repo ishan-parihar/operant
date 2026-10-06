@@ -8,33 +8,33 @@
        │stdio                              ││/ filter tools                                                     │
        │› ○ agentmemory  0 tools  0 res  0 ││                                                                   │
        │                                   ││                                                                   │
+ jcode │                                   ││                                                                   │
+ JCode │                                   ││                                                                   │
+ /mode │                                   ││                                                                   │
+ v0.2. │                                   ││                                                                   │
+ /logi │                                   ││                                                                   │
+ ○ ant │                                   ││                                                                   │
+ ○ ope │                                   ││                                                                   │
+ ○ ope │                                   ││                                                                   │
+ ○ cur │                                   ││                                                                   │
+ ○ cop │                                   ││                                                                   │
+ ○ gem │                                   │└───────────────────────────────────────────────────────────────────┘
+ ○ ant │                                   │┌ Tool Detail ──────────────────────────────────────────────────────┐
+ ~     │                                   ││Select a tool to view details.                                     │
+       │                                   ││                                                                   │
+       │                                   ││                                                                   │
+1>     │                                   ││                                                                   │
+       │                                   ││                                                                   │ apture
        │                                   ││                                                                   │
        │                                   ││                                                                   │
        │                                   ││                                                                   │
        │                                   ││                                                                   │
        │                                   ││                                                                   │
        │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   │└───────────────────────────────────────────────────────────────────┘
-       │                                   │┌ Tool Detail ──────────────────────────────────────────────────────┐
-       │                                   ││Select a tool to view details.                                     │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
-       │                                   ││                                                                   │
- offli └───────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
-──────  Tab switch pane   / filter tools   e error detail   a auth   r reconnect                                  ──────
-❯ ▏
+       └───────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
+        Tab switch pane   / filter tools   e error detail   a auth   r reconnect
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

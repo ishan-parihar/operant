@@ -8,6 +8,23 @@
                                                                                           └────────────────────────────┘
 
 
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
+
+
+1>
+                                                                                               ~ API key Offline Capture
 
 
 
@@ -17,24 +34,7 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

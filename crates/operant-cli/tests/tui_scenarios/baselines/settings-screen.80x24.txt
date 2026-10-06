@@ -1,24 +1,24 @@
 
 
+ jcode ·
+ JCode     Settings — Operant                           Esc to close
+ /model    Type to search settings...
+ v0.2.1
+ /login      ► Max Tokens                              0
+ ○ anthr       Auto-compact                            false
+ ○ openr       Desktop notifications                   false
+ ○ opena       Show turn duration                      false
+ ○ curso       Output Style                            default
+ ○ copil
+ ○ gemin   Maximum tokens per response.
+ ○ antig
+ ~
 
-           Settings — Operant                           Esc to close
-           Type to search settings...
 
-             ► Max Tokens                              0
-               Auto-compact                            false
-               Desktop notifications                   false
-               Show turn duration                      false
-               Output Style                            default
+1>
+                                                                         Capture
 
-           Maximum tokens per response.
-
-
-
-
- offline
-────────                                                                ────────
-❯ ▏
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

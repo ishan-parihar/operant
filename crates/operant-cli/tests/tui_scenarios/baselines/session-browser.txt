@@ -8,33 +8,33 @@
 
 
 
-                         ┌────────────────────────────────────────────────────────────────────┐
-                         │ Sessions                                                           │
-                         │                                                                    │
-                         │  No sessions yet.                                                  │
-                         │  Sessions are saved automatically as you chat.                     │
-                         │                                                                    │
-                         │  ↑↓ navigate  Enter=resume  r=rename  Esc=close                    │
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
+ jcode · replay          ┌────────────────────────────────────────────────────────────────────┐
+ JCode                   │ Sessions                                                           │
+ /model to switch · Offli│                                                                    │
+ v0.2.1                  │  No sessions yet.                                                  │
+ /login to add provider  │  Sessions are saved automatically as you chat.                     │
+ ○ anthropic             │                                                                    │
+ ○ openrouter            │  ↑↓ navigate  Enter=resume  r=rename  Esc=close                    │
+ ○ openai                │                                                                    │
+ ○ cursor                │                                                                    │
+ ○ copilot               │                                                                    │
+ ○ gemini                │                                                                    │
+ ○ antigravity           │                                                                    │
+ ~                       │                                                                    │
                          │                                                                    │
                          │                                                                    │
+1>                       │                                                                    │
+                         │                                                                    │~ API key Offline Capture
                          │                                                                    │
                          │                                                                    │
                          └────────────────────────────────────────────────────────Esc to close┘
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

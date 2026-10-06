@@ -1,24 +1,24 @@
-
-
-
-    Shortcuts & commands                                                esc
-
-    Search shortcuts or commands
-    Keyboard Shortcuts            │ Slash Commands
-                                  │
-    Navigation                    │ Account
-     PageUp / PgDn       Scroll   │  /login           Log in to Operant
-   messages                       │  /logout          Log out of Operant
-     j / k               Scroll   │  /update          Update Operant Agent to
-   one line                       │the latest version
-     Home / End          Top /    │
-   bottom                         │ Context
-                                  │  /compress        Compress conversation
-    Input                         │context (add 'here [N]' to keep recent N
- o   Enter               Submit   │turns)
-── message                        │                                           ──
-❯    Up / Down           Input    │ Diagnostics
+┌ Help  0%  ───────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Commands                                                                    │
+│                                                                              │
+│    /help  Show this help overlay                                             │
+│    /help <command>  Show details for one command                             │
+│    /model  List or switch models                                             │
+│    /model <name>  Switch to a different model                                │
+│    /provider-test-coverage  Show live-test evidence for the current provider/│
+│    /agents  Configure models for agent roles                                 │
+│    /swarm-prompt  Open the active swarm routing prompt in your editor        │
+│    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|│
+│    /fast [on|off|status|default ...]  Toggle fast mode                       │
+│    /transport <mode>  Set connection transport (auto|https|websocket)        │
+│    /alignment [status|centered|left]  Show or persist text alignment preferen│
+│    /compact-notifications [status|on|off]  Collapse swarm/file-activity notif│
+│    /show-agentgrep-output [status|on|off]  Render full agentgrep search outpu│
+│    /config  Show active configuration                                        │
+│    /config init  Create default config file                                  │
+│    /config edit  Open config in $EDITOR                                      │
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
-
+│    /git [status]  Show branch and working tree status for the repo           │
+└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘

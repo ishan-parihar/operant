@@ -8,33 +8,33 @@
 
 
 
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
 
 
+1> /
+/new  Start a new session (fresh session ID + history)
+/redraw  Force a full UI repaint (recovers from terminal drift)
+/history  Show conversation history
+/save  Save the current conversation
+/retry  Retry the last message (resend to agent)
+/undo  Back up N user turns and re-prompt (default 1)
+/title  Set a title for the current session
+/handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.)  +78 more
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ /▏
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-› /new                                     [cmd] Start a new session (fresh session ID + history)
-  /redraw                                  [cmd] Force a full UI repaint (recovers from terminal drift)
-  /history                                 [cmd] Show conversation history
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- 0k/200k  $0.0000
+
 

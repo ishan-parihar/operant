@@ -1,24 +1,24 @@
 
 
-
-
-
-       ┌───────────────────────────────────────────────────────────────┐
-       │ Select model                                                  │
-       │ Search                                                        │
-       │                                                               │
-       │   claude-haiku-4-5-20251001  Anthropic                        │
-       │   claude-opus-4-20250514  Anthropic                           │
-       │   claude-opus-4-5-20251101  Anthropic                         │
-       │   claude-opus-4-6  Anthropic                                  │
-       │ ● claude-sonnet-4-20250514  ◐ normal  Anthropic               │
-       │ ● claude-sonnet-4-20250514  Anthropic                         │
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1┌───────────────────────────────────────────────────────────────┐
+ /login│ Select model                                                  │
+ ○ anth│ Search                                                        │
+ ○ open│                                                               │
+ ○ open│   claude-haiku-4-5-20251001  Anthropic                        │
+ ○ curs│   claude-opus-4-20250514  Anthropic                           │
+ ○ copi│   claude-opus-4-5-20251101  Anthropic                         │
+ ○ gemi│   claude-opus-4-6  Anthropic                                  │
+ ○ anti│ ● claude-sonnet-4-20250514  ◐ normal  Anthropic               │
+ ~     │ ● claude-sonnet-4-20250514  Anthropic                         │
        │   claude-sonnet-4-5-20250929  Anthropic                       │
        │   claude-sonnet-4-6  Anthropic                                │
- offlin│ enter select  ←/→ effort                                      │
-───────└───────────────────────────────────────────────────Esc to close┘────────
-❯ ▏
+1>     │ enter select  ←/→ effort                                      │
+       └───────────────────────────────────────────────────Esc to close┘ Capture
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

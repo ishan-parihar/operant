@@ -1,4 +1,4 @@
-     Error: provider overloaded_error (529): the upstream is╭──────────────────────────────────────────────────────────╮
+                                                            ╭──────────────────────────────────────────────────────────╮
                                                             │  ⚠ Error                                                 │
                                                             │──────────────────────────────────────────────────────────│
                                                             │                                                          │
@@ -8,33 +8,33 @@
                                                             │                                                          │
                                                             │                                                          │
                                                             │                                                          │
+ jcode · replay                                             │                                                          │
+ JCode                                                      │                                                          │
+ /model to switch · Offline Capture                         │                                                          │
+ v0.2.1                                                     │                                                          │
+ /login to add provider                                     │                                                          │
+ ○ anthropic                                                │                                                          │
+ ○ openrouter                                               │                                                          │
+ ○ openai                                                   │                                                          │
+ ○ cursor                                                   │                                                          │
+ ○ copilot                                                  │                                                          │
+ ○ gemini                                                   │                                                          │
+ ○ antigravity                                              │                                                          │
+ ~                                                          │                                                          │
+                                                            │                                                          │
+ Error: provider overloaded_error (529): the upstream is sat│                                                          │
+                                                            │                                                          │
+                                                            │                                                          │
+1>                                                          │                                                          │
                                                             │                                                          │
                                                             │                                                          │
                                                             │                                                          │
                                                             │                                                          │
                                                             │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
- offline-capture · local                                    │ → The provider is degraded — retry in                    │
-────────────────────────────────────────────────────────────│   a moment, or /model to switch route.                   │
-❯ ▏                                                         ╰──────────────────────────────────────────────────────────╯
+                                                            │ → The provider is degraded — retry in                    │
+                                                            │   a moment, or /model to switch route.                   │
+                                                            ╰──────────────────────────────────────────────────────────╯
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000  0:00
+
 

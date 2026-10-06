@@ -1,5 +1,3 @@
-  ▶ Thinking: The user asked a two-part question.Answer the first part, then the secon…
-     First part of the answer. Second part of the answer. That is the whole answer.
 
 
 
@@ -10,31 +8,33 @@
 
 
 
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
+
+ The user asked a two-part question.Answer the first part, then the second.
+
+ First part of the answer. Second part of the answer. That is the whole answer.
+
+
+1>
+                                                                         ~ 19/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-✻ finished for 0s
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000  0:00
+
 

@@ -1,24 +1,24 @@
 
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ Journey — skills + memories                                              │
-  │┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
-  ││ Name                     Category ││No memories stored yet.            ││
-  ││                                   ││                                   ││
-  ││›ai-slop-cleaner                   ││Memories accumulate as you use oper││
-  ││ airtable                          ││Use /memory to manage MEMORY.md dir││
-  ││ architecture-diagram              ││                                   ││
-  ││ arxiv                             ││                                   ││
-  ││ ascii-art                         ││                                   ││
-  ││ ascii-video                       ││                                   ││
-  ││ autonomous-loops                  ││                                   ││
-  ││ axi                               ││                                   ││
+ j┌──────────────────────────────────────────────────────────────────────────┐
+ J│ Journey — skills + memories                                              │
+ /│┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
+ v││ Name                     Category ││No memories stored yet.            ││
+ /││                                   ││                                   ││
+ ○││›ai-slop-cleaner                   ││Memories accumulate as you use oper││
+ ○││ airtable                          ││Use /memory to manage MEMORY.md dir││
+ ○││ architecture-diagram              ││                                   ││
+ ○││ arxiv                             ││                                   ││
+ ○││ ascii-art                         ││                                   ││
+ ○││ ascii-video                       ││                                   ││
+ ○││ autonomous-loops                  ││                                   ││
+ ~││ axi                               ││                                   ││
   ││ baoyu-infographic                 ││                                   ││
   ││ blogwatcher                       ││                                   ││
- o││                                   ││                                   ││
-──││                                   ││                                   ││──
-❯ │└───────────────────────────────────┘└───────────────────────────────────┘│
+1>││                                   ││                                   ││
+  ││                                   ││                                   ││re
+  │└───────────────────────────────────┘└───────────────────────────────────┘│
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

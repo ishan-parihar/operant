@@ -8,33 +8,33 @@
                            │ Search                                                        │
                            │                                                               │
                            │                                                               │
-                           │ Popular                                                       │
-                           │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
-                           │ Custom OpenAI-Compatible Custom URL + API key                 │
-                           │ OpenAI (API key)                                              │
-                           │ Anthropic (API key)                                           │
-                           │ Google AI Studio (API key)                                    │
-                           │ xAI (API key)                                                 │
-                           │ Mistral (API key)                                             │
-                           │ Groq (API key)                                                │
-                           │ DeepSeek (API key)                                            │
-                           │ NVIDIA NIM (API key)                                          │
-                           │ OpenRouter (API key)                                          │
-                           │ Together AI (API key)                                         │
+ jcode · replay            │ Popular                                                       │
+ JCode                     │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
+ /model to switch · Offline│ Custom OpenAI-Compatible Custom URL + API key                 │
+ v0.2.1                    │ OpenAI (API key)                                              │
+ /login to add provider    │ Anthropic (API key)                                           │
+ ○ anthropic               │ Google AI Studio (API key)                                    │
+ ○ openrouter              │ xAI (API key)                                                 │
+ ○ openai                  │ Mistral (API key)                                             │
+ ○ cursor                  │ Groq (API key)                                                │
+ ○ copilot                 │ DeepSeek (API key)                                            │
+ ○ gemini                  │ NVIDIA NIM (API key)                                          │
+ ○ antigravity             │ OpenRouter (API key)                                          │
+ ~                         │ Together AI (API key)                                         │
                            │ Vercel AI Gateway (API key)                                   │
                            │                                                               │
-                           │ International                                                 │
-                           │ Z.AI / GLM (API key)                                          │
+1>                         │ International                                                 │
+                           │ Z.AI / GLM (API key)                                          │   ~ API key Offline Capture
                            │ Kimi / Kimi Coding Plan (API key)                             │
                            │ Kimi / Moonshot (China) (API key)                             │
                            │ Moonshot (API key)                                            │
                            │ StepFun Step Plan (API key)                                   │
                            │ MiniMax (API key)                                             │
                            │ MiniMax (China) (API key)                                     │
- offline-capture · local   │ Alibaba DashScope (API key)                                   │
-───────────────────────────└───────────────────────────────────────────────────Esc to close┘────────────────────────────
-❯ ▏
+                           │ Alibaba DashScope (API key)                                   │
+                           └───────────────────────────────────────────────────Esc to close┘
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

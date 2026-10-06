@@ -1,24 +1,24 @@
 
 
+ jco
+ JCo  Context & usage                                        Esc to close
+ /mo  Token window, rate limits, and session cost.
+ v0.  Context window
+ /lo  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+ ○ a
+ ○ o  Rate limits
+ ○ o  5-hour   no data
+ ○ c  7-day    no data
+ ○ c
+ ○ g  Session cost:  $0.0000
+ ○ a
+ ~
 
-      Context & usage                                        Esc to close
-      Token window, rate limits, and session cost.
-      Context window
-      [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
 
-      Rate limits
-      5-hour   no data
-      7-day    no data
+1>
+                                                                            ture
 
-      Session cost:  $0.0000
-
-
-
-
- off
-────                                                                        ────
-❯ ▏
  Voi  enter/esc close
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

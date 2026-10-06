@@ -1,24 +1,24 @@
 
 
-
-
-
-       Choose a theme                                                esc
-       Applies immediately — the whole TUI repaints in this palette.
-                 Default     Operant default — dark background, cyan accen
-
-                 Dark        High-contrast dark theme
-
-                 Light       Light background with dark text
-
-                 Solarized   Solarized Dark — warm tones with blue accents
-
+ jcode · replay
+ JCode
+ /mod
+ v0.2  Choose a theme                                                esc
+ /log  Applies immediately — the whole TUI repaints in this palette.
+ ○ an            Default     Operant default — dark background, cyan accen
+ ○ op
+ ○ op            Dark        High-contrast dark theme
+ ○ cu
+ ○ co            Light       Light background with dark text
+ ○ ge
+ ○ an            Solarized   Solarized Dark — warm tones with blue accents
+ ~
                  Nord        Nord — cool blue-grey palette
 
- offl            Dracula     Dracula — purple/pink dark theme
-─────  ↑↓ navigate  ·  enter apply  ·  esc cancel                          ─────
-❯ ▏
+1>               Dracula     Dracula — purple/pink dark theme
+       ↑↓ navigate  ·  enter apply  ·  esc cancel                          pture
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

@@ -207,12 +207,22 @@ where
 }
 
 fn disabled_animation_names() -> HashSet<String> {
-    expand_disabled_animation_names(
+    let mut disabled = expand_disabled_animation_names(
         crate::tui::jcode_app::config_shim::config()
             .display
             .disabled_animations
             .iter(),
-    )
+    );
+    // Corpus-only pin: OPERANT_DISABLED_ANIMATIONS merges on top so real users
+    // keep the empty default (all animations on), while the test harness freezes
+    // the decorative idle donut and its variants. Pattern matches PINNED_ENV
+    // (OPERANT_COLOR_DEPTH, etc.).
+    if let Ok(env_val) = std::env::var("OPERANT_DISABLED_ANIMATIONS") {
+        disabled.extend(expand_disabled_animation_names(
+            env_val.split(',').map(str::trim),
+        ));
+    }
+    disabled
 }
 
 fn choose_animation_variant_from_disabled<'a>(

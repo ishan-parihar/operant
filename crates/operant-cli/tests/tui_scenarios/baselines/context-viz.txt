@@ -8,33 +8,33 @@
 
 
 
-
-                          Context & usage                                        Esc to close
-                          Token window, rate limits, and session cost.
-                          Context window
-                          [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
-
-                          Rate limits
-                          5-hour   no data
-                          7-day    no data
-
-                          Session cost:  $0.0000
-
-
-
-
+ jcode · replay
+ JCode                    Context & usage                                        Esc to close
+ /model to switch · Offl  Token window, rate limits, and session cost.
+ v0.2.1                   Context window
+ /login to add provider   [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+ ○ anthropic
+ ○ openrouter             Rate limits
+ ○ openai                 5-hour   no data
+ ○ cursor                 7-day    no data
+ ○ copilot
+ ○ gemini                 Session cost:  $0.0000
+ ○ antigravity
+ ~
 
 
+1>
+                                                                                                 API key Offline Capture
 
                           enter/esc close
 
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

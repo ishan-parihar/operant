@@ -8,33 +8,33 @@
 
 
 
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1                     ┌──────────────────────────────────────────────────────────────┐
+ /login to add provider     │ Connect OpenAI Codex                                         │
+ ○ anthropic                │                                                              │
+ ○ openrouter               │ Requesting device code...                                    │
+ ○ openai                   │                                                              │
+ ○ cursor                   │                                                              │
+ ○ copilot                  │                                                              │
+ ○ gemini                   │                                                              │
+ ○ antigravity              │                                                              │
+ ~                          │                                                              │
+                            │                                                              │
+                            │                                                              │
+1>                          │                                                              │
+                            └──────────────────────────────────────────────────Esc to close┘   ~ API key Offline Capture
 
 
 
-                            ┌──────────────────────────────────────────────────────────────┐
-                            │ Connect OpenAI Codex                                         │
-                            │                                                              │
-                            │ Requesting device code...                                    │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            │                                                              │
-                            └──────────────────────────────────────────────────Esc to close┘
 
 
 
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

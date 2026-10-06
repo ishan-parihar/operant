@@ -1,6 +1,3 @@
-▏
-▏   Which database should I point the migration at?
-▏
 
 
 
@@ -11,30 +8,33 @@
 
 
 
-                               ┌────────────────────────────────────────────────────────┐
-                               │ Question                                               │
-                               │Which database should the migration target?             │
-                               │                                                        │
-                               │▶ 1 sqlite                                              │
-                               │  2 postgres                                            │
-                               │  3 qdrant                                              │
-                               │                                                        │
-                               │  type to fill custom answer…                           │
-                               │                                                        │
+ jcode · replay · perf:reduced
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1                        ┌────────────────────────────────────────────────────────┐
+ /login to add provider        │ Question                                               │
+ ○ anthropic                   │Which database should the migration target?             │
+ ○ openrouter                  │                                                        │
+ ○ openai                      │▶ 1 sqlite                                              │
+ ○ cursor                      │  2 postgres                                            │
+ ○ copilot                     │  3 qdrant                                              │
+ ○ gemini                      │                                                        │
+ ○ antigravity                 │  type to fill custom answer…                           │
+ ~                             │                                                        │
                                │  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
-                               │                                                        │
+ 1› Which database should I poi│                                                        │                              │
                                │                                                        │
                                └────────────────────────────────────────────Esc to close┘
+2>
+                                                                         ~ 11/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 
 
 
-✻ shipped for 0s
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000  0:00
+
 

@@ -8,21 +8,23 @@
 
 
 
-
-
-
-
-
-
-                         ┌────────────────────────────────────────────────────────────────────┐
-                         │ Rewind — Select Message                                            │
-                         │  Select a message to rewind to:                                    │
-                         │                                                                    │
-                         │  (no messages)                                                     │
-                         │                                                                    │
-                         │  ↑↓ navigate  ·  Enter to select                                   │
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter            ┌────────────────────────────────────────────────────────────────────┐
+ ○ openai                │ Rewind — Select Message                                            │
+ ○ cursor                │  Select a message to rewind to:                                    │
+ ○ copilot               │                                                                    │
+ ○ gemini                │  (no messages)                                                     │
+ ○ antigravity           │                                                                    │
+ ~                       │  ↑↓ navigate  ·  Enter to select                                   │
                          └────────────────────────────────────────────────────────Esc to close┘
 
+1>
+                                                                                               ~ API key Offline Capture
 
 
 
@@ -31,10 +33,8 @@
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

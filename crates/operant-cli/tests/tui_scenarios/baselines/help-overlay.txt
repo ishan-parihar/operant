@@ -1,40 +1,40 @@
-
-
-
-            Shortcuts & commands                                                                        esc
-
-            Search shortcuts or commands
-            Keyboard Shortcuts                      │ Slash Commands
-                                                    │
-            Navigation                              │ Account
-             PageUp / PgDn       Scroll messages    │  /login           Log in to Operant
-             j / k               Scroll one line    │  /logout          Log out of Operant
-             Home / End          Top / bottom       │  /update          Update Operant Agent to the latest
-                                                    │version
-            Input                                   │
-             Enter               Submit message     │ Context
-             Up / Down           Input history      │  /compress        Compress conversation context (add
-             Ctrl+R              Search history     │'here [N]' to keep recent N turns)
-             Esc                 Cancel / close     │
-                                                    │ Diagnostics
-            App                                     │  /billing         Manage Nous terminal billing — buy
-             F1 / ?              Toggle help        │credits, auto-reload, limits
-             Ctrl+Shift+A        Model picker       │  /credits         Show Nous credit balance and top up
-           (Ctrl+A)                                 │  /debug           Upload debug report (system info +
-             Ctrl+K              Command palette    │logs) and get shareable links
-             Ctrl+C              Cancel / quit      │  /doctor          Run diagnostics
-             Ctrl+D              Quit (empty input) │  /heapdump        Show debug snapshot
-             Ctrl+L              Clear input line   │  /insights        Show usage insights and analytics
-             t                   (unbound — use     │  /mouse           Show mouse capture info
-           mouse-click to toggle thinking)          │  /pet             Pet the mascot
-                                                    │  /status          Show session, model, token, and
-                                                    │context info
-                                                    │  /terminal-setup  Show terminal capability info
-                                                    │  /time            Show the current time
- offline-c                                          │  /usage           Show token usage and rate limits for
-──────────                                          │the current session                                      ──────────
-❯ ▏                                                 │  /version        (v)  Show Operant Agent version
+┌ Help  0%  ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                      │
+│  Commands                                                                                                            │
+│                                                                                                                      │
+│    /help  Show this help overlay                                                                                     │
+│    /help <command>  Show details for one command                                                                     │
+│    /model  List or switch models                                                                                     │
+│    /model <name>  Switch to a different model                                                                        │
+│    /provider-test-coverage  Show live-test evidence for the current provider/model                                   │
+│    /agents  Configure models for agent roles                                                                         │
+│    /swarm-prompt  Open the active swarm routing prompt in your editor                                                │
+│    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)                             │
+│    /fast [on|off|status|default ...]  Toggle fast mode                                                               │
+│    /transport <mode>  Set connection transport (auto|https|websocket)                                                │
+│    /alignment [status|centered|left]  Show or persist text alignment preference                                      │
+│    /compact-notifications [status|on|off]  Collapse swarm/file-activity notifications to one line                    │
+│    /show-agentgrep-output [status|on|off]  Render full agentgrep search output inline in chat                        │
+│    /config  Show active configuration                                                                                │
+│    /config init  Create default config file                                                                          │
+│    /config edit  Open config in $EDITOR                                                                              │
+│    /voice  Voice input: speak, then send (Ctrl+Space)                                                                │
+│    /dictate  Run configured external dictation                                                                       │
+│    /git [status]  Show branch and working tree status for the repo                                                   │
+│    /context  Show the full session context snapshot                                                                  │
+│    /skills  Show loaded skills and jcode-endorsed recommendations                                                    │
+│    /info  Show session info and token usage                                                                          │
+│    /keys  Show keybinding conflicts with your terminal/OS                                                            │
+│    /reset usage limits openai  Review a banked reset, then confirm or cancel                                         │
+│    /usage  Show connected provider usage limits                                                                      │
+│    /support  Email support with diagnostics prefilled                                                                │
+│    /version  Show version and build details                                                                          │
+│    /changelog  Show recent changes in this build                                                                     │
+│                                                                                                                      │
+│  ─────────────────────────────────────────────────                                                                   │
+│                                                                                                                      │
+│  Session                                                                                                             │
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
-
+│    /compact  Summarize old messages to free context                                                                  │
+└ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────────────────────────┘

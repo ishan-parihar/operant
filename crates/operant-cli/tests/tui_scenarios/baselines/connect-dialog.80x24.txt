@@ -1,24 +1,24 @@
 
 
-
-       ┌───────────────────────────────────────────────────────────────┐
-       │ Connect a provider                                            │
-       │ Search                                                        │
-       │                                                               │
-       │                                                               │
-       │ Popular                                                       │
-       │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
-       │ Custom OpenAI-Compatible Custom URL + API key                 │
-       │ OpenAI (API key)                                              │
-       │ Anthropic (API key)                                           │
-       │ Google AI Studio (API key)                                    │
-       │ xAI (API key)                                                 │
+ jcode · replay
+ JCode ┌───────────────────────────────────────────────────────────────┐
+ /model│ Connect a provider                                            │
+ v0.2.1│ Search                                                        │
+ /login│                                                               │
+ ○ anth│                                                               │
+ ○ open│ Popular                                                       │
+ ○ open│ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
+ ○ curs│ Custom OpenAI-Compatible Custom URL + API key                 │
+ ○ copi│ OpenAI (API key)                                              │
+ ○ gemi│ Anthropic (API key)                                           │
+ ○ anti│ Google AI Studio (API key)                                    │
+ ~     │ xAI (API key)                                                 │
        │ Mistral (API key)                                             │
        │ Groq (API key)                                                │
- offlin│ DeepSeek (API key)                                            │
-───────│ NVIDIA NIM (API key)                                          │────────
-❯ ▏    │ OpenRouter (API key)                                          │
+1>     │ DeepSeek (API key)                                            │
+       │ NVIDIA NIM (API key)                                          │ Capture
+       │ OpenRouter (API key)                                          │
  Voice └───────────────────────────────────────────────────Esc to close┘
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

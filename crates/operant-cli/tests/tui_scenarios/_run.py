@@ -120,6 +120,10 @@ PINNED_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "ANTHROPIC_API_KEY": "offline-capture-not-a-real-key",
+    # Corpus-only pin: freeze decorative animations (donut + variants).
+    # Merged into disabled_animation_names() at render time; real users keep
+    # the empty default (all animations on).
+    "OPERANT_DISABLED_ANIMATIONS": "donut,orbit_rings,gyroscope,black_hole,three_rings",
     # Fixed, not inherited: see the PATH note above for why this is the pin
     # that decides whether the corpus is reproducible at all.
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

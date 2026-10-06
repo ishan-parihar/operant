@@ -62,7 +62,7 @@ const STATUS_THINKING: &str = "thinking";
 const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
 pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
-    app.last_selectable_area.set(size);
+    app.last_selectable_area.set(crate::tui::jcode_ui::message_area());
 
     // The ported jcode chrome (jcode_ui::draw, upstream ui.rs:2659-3624) owns
     // the whole frame: the full-frame clear, every band, and the per-frame

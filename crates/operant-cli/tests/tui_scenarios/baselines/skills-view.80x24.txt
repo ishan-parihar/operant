@@ -1,24 +1,24 @@
 
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ Skills                                                                   │
-  │ #    Name                     Category       Version                     │
-  │                                                                          │
-  │ › 1    ai-slop-cleaner                         0.1.0                     │
-  │   2    airtable                                1.1.0                     │
-  │   3    architecture-diagram                    1.0.0                     │
-  │   4    arxiv                                   1.0.0                     │
-  │   5    ascii-art                               4.0.0                     │
-  │   6    ascii-video                             0.1.0                     │
-  │   7    autonomous-loops                        0.1.0                     │
-  │   8    axi                                     0.1.0                     │
-  │   9    baoyu-infographic                       1.56.1                    │
+ j┌──────────────────────────────────────────────────────────────────────────┐
+ J│ Skills                                                                   │
+ /│ #    Name                     Category       Version                     │
+ v│                                                                          │
+ /│ › 1    ai-slop-cleaner                         0.1.0                     │
+ ○│   2    airtable                                1.1.0                     │
+ ○│   3    architecture-diagram                    1.0.0                     │
+ ○│   4    arxiv                                   1.0.0                     │
+ ○│   5    ascii-art                               4.0.0                     │
+ ○│   6    ascii-video                             0.1.0                     │
+ ○│   7    autonomous-loops                        0.1.0                     │
+ ○│   8    axi                                     0.1.0                     │
+ ~│   9    baoyu-infographic                       1.56.1                    │
   │   10   blogwatcher                             2.0.0                     │
   │   11   briefing                                0.1.0                     │
- o│Clean AI-generated code slop with a regression-safe, deletion-first work… │
-──│ ↑/↓ navigate · Enter inspect · Esc close                                 │──
-❯ │                                                                          │
+1>│Clean AI-generated code slop with a regression-safe, deletion-first work… │
+  │ ↑/↓ navigate · Enter inspect · Esc close                                 │re
+  │                                                                          │
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shor 0k/200k  $0.0000  skills:101
+
 

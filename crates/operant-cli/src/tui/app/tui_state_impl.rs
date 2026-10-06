@@ -441,6 +441,9 @@ impl TuiState for App {
     }
 
     fn client_focused(&self) -> bool {
+        if self.is_simulating {
+            return false; // simulated runs never claim focus; suppresses decorative animations
+        }
         self.client_focused
     }
 

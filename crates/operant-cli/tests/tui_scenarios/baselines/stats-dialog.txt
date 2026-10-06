@@ -8,33 +8,33 @@
                Overview  ·  Daily Tokens  ·  Cost Heatmap  ·  Models
                Total tokens: 0
                  Input:    0
-                 Output:   0
-
-               Total cost: $0.00
-
-               Streak: ● 0 days  (longest: 0 days)
-
-
-
-
-
-
-
-
-
-
+ jcode · repla   Output:   0
+ JCode
+ /model to swi Total cost: $0.00
+ v0.2.1
+ /login to add Streak: ● 0 days  (longest: 0 days)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
 
 
-
-
+1>
+                                                                                                          ffline Capture
 
 
 
 
- offline-captu  tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll
-──────────────                                                                                            ──────────────
-❯ ▏
+
+
+                tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

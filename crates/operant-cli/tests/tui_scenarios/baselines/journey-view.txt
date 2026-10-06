@@ -8,33 +8,33 @@
                ┌────────────────────────────────────────────────────────────────────────────────────────┐
                │ Journey — skills + memories                                                            │
                │┌ Skills (101) ────────────────────────────┐┌ Memories (0) ────────────────────────────┐│
-               ││ Name                     Category       V││No memories stored yet.                   ││
-               ││                                          ││                                          ││
-               ││›ai-slop-cleaner                         0││Memories accumulate as you use operant.   ││
-               ││ airtable                                1││Use /memory to manage MEMORY.md directly. ││
-               ││ architecture-diagram                    1││                                          ││
-               ││ arxiv                                   1││                                          ││
-               ││ ascii-art                               4││                                          ││
-               ││ ascii-video                             0││                                          ││
-               ││ autonomous-loops                        0││                                          ││
-               ││ axi                                     0││                                          ││
-               ││ baoyu-infographic                       1││                                          ││
-               ││ blogwatcher                             2││                                          ││
-               ││ briefing                                0││                                          ││
+ jcode · replay││ Name                     Category       V││No memories stored yet.                   ││
+ JCode         ││                                          ││                                          ││
+ /model to swit││›ai-slop-cleaner                         0││Memories accumulate as you use operant.   ││
+ v0.2.1        ││ airtable                                1││Use /memory to manage MEMORY.md directly. ││
+ /login to add ││ architecture-diagram                    1││                                          ││
+ ○ anthropic   ││ arxiv                                   1││                                          ││
+ ○ openrouter  ││ ascii-art                               4││                                          ││
+ ○ openai      ││ ascii-video                             0││                                          ││
+ ○ cursor      ││ autonomous-loops                        0││                                          ││
+ ○ copilot     ││ axi                                     0││                                          ││
+ ○ gemini      ││ baoyu-infographic                       1││                                          ││
+ ○ antigravity ││ blogwatcher                             2││                                          ││
+ ~             ││ briefing                                0││                                          ││
                ││ calendar                 productivity   1││                                          ││
                ││ claude-code                             2││                                          ││
-               ││ claude-design                           1││                                          ││
-               ││ codebase-inspection                     1││                                          ││
+1>             ││ claude-design                           1││                                          ││
+               ││ codebase-inspection                     1││                                          ││Offline Capture
                ││ codex                                   1││                                          ││
                ││                                          ││                                          ││
                ││                                          ││                                          ││
                │└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
                │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory · 125 edges · 6│
                └────────────────────────────────────────────────────────────────────────────Esc to close┘
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

@@ -8,33 +8,33 @@
 
 
 
-
-
-
-                           Choose a theme                                                esc
-                           Applies immediately — the whole TUI repaints in this palette.
-                                     Default     Operant default — dark background, cyan accen
-
-                                     Dark        High-contrast dark theme
-
-                                     Light       Light background with dark text
-
-                                     Solarized   Solarized Dark — warm tones with blue accents
-
+ jcode · replay
+ JCode
+ /model to switch · Offli
+ v0.2.1                    Choose a theme                                                esc
+ /login to add provider    Applies immediately — the whole TUI repaints in this palette.
+ ○ anthropic                         Default     Operant default — dark background, cyan accen
+ ○ openrouter
+ ○ openai                            Dark        High-contrast dark theme
+ ○ cursor
+ ○ copilot                           Light       Light background with dark text
+ ○ gemini
+ ○ antigravity                       Solarized   Solarized Dark — warm tones with blue accents
+ ~
                                      Nord        Nord — cool blue-grey palette
 
-                                     Dracula     Dracula — purple/pink dark theme
-                           ↑↓ navigate  ·  enter apply  ·  esc cancel
+1>                                   Dracula     Dracula — purple/pink dark theme
+                           ↑↓ navigate  ·  enter apply  ·  esc cancel                          ~ API key Offline Capture
 
 
 
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

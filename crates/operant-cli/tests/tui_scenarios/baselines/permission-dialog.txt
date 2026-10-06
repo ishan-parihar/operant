@@ -1,6 +1,3 @@
-▏
-▏   Delete the build directory.
-▏
 
 
 
@@ -11,30 +8,33 @@
 
 
 
-
-                    ┌──────────────────────────────────────────────────────────────────────────────┐
-                    │ Permission Required                                                          │
-                    │  Tool: bash                                                                  │
-                    │                                                                              │
-                    │  rm -rf ./target                                                             │
-                    │                                                                              │
-                    │  ► [y] Yes, allow once                                                       │
-                    │    [Y] Yes, allow this session                                               │
-                    │    [p] Yes, always allow (persistent)                                        │
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provi┌──────────────────────────────────────────────────────────────────────────────┐
+ ○ anthropic        │ Permission Required                                                          │
+ ○ openrouter       │  Tool: bash                                                                  │
+ ○ openai           │                                                                              │
+ ○ cursor           │  rm -rf ./target                                                             │
+ ○ copilot          │                                                                              │
+ ○ gemini           │  ► [y] Yes, allow once                                                       │
+ ○ antigravity      │    [Y] Yes, allow this session                                               │
+ ~                  │    [p] Yes, always allow (persistent)                                        │
                     │    [n] No, deny                                                              │
-                    │                                                                              │
+ 1› Delete the build│                                                                              │                   │
                     └──────────────────────────────────────────────────────────────────Esc to close┘
 
+2>
+                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 
 
 
-✻ shipped for 0s
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ How can I help you?
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000  0:00
+
 

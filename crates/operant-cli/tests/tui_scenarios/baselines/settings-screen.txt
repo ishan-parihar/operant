@@ -8,33 +8,33 @@
                    Auto-compact                            false
                    Desktop notifications                   false
                    Show turn duration                      false
-                   Output Style                            default
-                   Reduce motion                           false
-                   Terminal progress bar                   false
-                   Verbose logging                         false
-                   Cursor blinking                         false
-                   Auto-copy on highlight                  false
-                   Show current directory                  false
-                   Show git branch                         false
-                   Auto-compact threshold                  0
-
-               Maximum tokens per response.
-
-
-
-
+ jcode · rep       Output Style                            default
+ JCode             Reduce motion                           false
+ /model to s       Terminal progress bar                   false
+ v0.2.1            Verbose logging                         false
+ /login to a       Cursor blinking                         false
+ ○ anthropic       Auto-copy on highlight                  false
+ ○ openroute       Show current directory                  false
+ ○ openai          Show git branch                         false
+ ○ cursor          Auto-compact threshold                  0
+ ○ copilot
+ ○ gemini      Maximum tokens per response.
+ ○ antigravi
+ ~
 
 
-
-
+1>
+                                                                                                            line Capture
 
 
 
 
- offline-cap
-────────────                                                                                                ────────────
-❯ ▏
+
+
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

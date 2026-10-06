@@ -8,33 +8,33 @@
 
 
 
-                        ┌──────────────────────────────────────────────────────────────────────┐
-                        │ Plugins                                                              │
-                        │No plugins installed.                                                 │
-                        │                                                                      │
-                        │Plugins are git repositories cloned into your operant                 │
-                        │plugins directory. Install one with:                                  │
-                        │                                                                      │
-                        │  operant plugins install <git-url>                                   │
-                        │                                                                      │
-                        │Press Esc to close.                                                   │
-                        │                                                                      │
-                        │                                                                      │
-                        │                                                                      │
-                        │                                                                      │
-                        │                                                                      │
+ jcode · replay         ┌──────────────────────────────────────────────────────────────────────┐
+ JCode                  │ Plugins                                                              │
+ /model to switch · Offl│No plugins installed.                                                 │
+ v0.2.1                 │                                                                      │
+ /login to add provider │Plugins are git repositories cloned into your operant                 │
+ ○ anthropic            │plugins directory. Install one with:                                  │
+ ○ openrouter           │                                                                      │
+ ○ openai               │  operant plugins install <git-url>                                   │
+ ○ cursor               │                                                                      │
+ ○ copilot              │Press Esc to close.                                                   │
+ ○ gemini               │                                                                      │
+ ○ antigravity          │                                                                      │
+ ~                      │                                                                      │
                         │                                                                      │
                         │                                                                      │
+1>                      │                                                                      │
+                        │                                                                      │ API key Offline Capture
                         │                                                                      │
                         │                                                                      │
                         └──────────────────────────────────────────────────────────Esc to close┘
 
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 

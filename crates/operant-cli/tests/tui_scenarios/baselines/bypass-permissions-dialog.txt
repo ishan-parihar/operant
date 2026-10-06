@@ -8,33 +8,33 @@
 
 
                         ┌──────────────────────────────────────────────────────────────────────┐
-                        │ WARNING: Bypass Permissions Mode                                     │
-                        │Operant running in Bypass Permissions mode                            │
-                        │                                                                      │
-                        │In Bypass Permissions mode, Operant will NOT ask for your             │
-                        │approval before running potentially dangerous commands.               │
-                        │                                                                      │
-                        │This mode should only be used in a sandboxed container or VM          │
-                        │that has restricted internet access and can easily be restored        │
-                        │if damaged.                                                           │
-                        │                                                                      │
-                        │By proceeding, you accept all responsibility for actions taken        │
-                        │while running in Bypass Permissions mode.                             │
-                        │                                                                      │
+ jcode · replay · perf:r│ WARNING: Bypass Permissions Mode                                     │
+ JCode                  │Operant running in Bypass Permissions mode                            │
+ /model to switch · Offl│                                                                      │
+ v0.2.1                 │In Bypass Permissions mode, Operant will NOT ask for your             │
+ /login to add provider │approval before running potentially dangerous commands.               │
+ ○ anthropic            │                                                                      │
+ ○ openrouter           │This mode should only be used in a sandboxed container or VM          │
+ ○ openai               │that has restricted internet access and can easily be restored        │
+ ○ cursor               │if damaged.                                                           │
+ ○ copilot              │                                                                      │
+ ○ gemini               │By proceeding, you accept all responsibility for actions taken        │
+ ○ antigravity          │while running in Bypass Permissions mode.                             │
+ ~                      │                                                                      │
                         │                                                                      │
                         │  [1] No, exit          [2] Yes, I accept                             │
-                        │                                                                      │
-                        │  ↑↓ or 1/2 to select  ·  Enter to confirm                            │
+1>                      │                                                                      │
+                        │  ↑↓ or 1/2 to select  ·  Enter to confirm                            │ API key Offline Capture
                         │                                                                      │
                         │                                                                      │
                         │                                                                      │
                         └──────────────────────────────────────────────────────────Esc to close┘
 
 
- offline-capture · local
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-❯ ▏
+
+
+
  Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
 
- enter to send · shift+enter newline · ? for shortcuts 0k/200k  $0.0000
+
 
