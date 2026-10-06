@@ -859,6 +859,29 @@ pub(crate) fn invalidate_prepared_caches() {
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = FullPrepCacheState::default();
 }
 
+/// The reader's content position from the last drawn frame, in content
+/// coordinates (which message / raw line was under the reader's top row).
+///
+/// The publisher used to be operant's deleted `render_messages`
+/// (`App::last_render_content_pos`); the ported chrome resolves the anchor
+/// from the prepared frame instead, so it records here and `TuiState::
+/// pending_resize_anchor` reads it back. `None` before the first draw, or when
+/// the top row carries no content identity.
+thread_local! {
+    static RESOLVED_READER_ANCHOR: std::cell::Cell<Option<crate::tui::jcode_model::ContentPos>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Record where the reader sat after this frame's scroll resolve.
+pub(crate) fn record_reader_anchor(pos: Option<crate::tui::jcode_model::ContentPos>) {
+    RESOLVED_READER_ANCHOR.with(|slot| slot.set(pos));
+}
+
+/// The reader's last recorded content position.
+pub(crate) fn resolved_reader_anchor() -> Option<crate::tui::jcode_model::ContentPos> {
+    RESOLVED_READER_ANCHOR.with(|slot| slot.get())
+}
+
 thread_local! {
     /// The messages band's rect from the last `draw`, so operant-only
     /// surfaces that dock into the transcript (the background-task rows) can
