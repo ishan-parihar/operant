@@ -89,6 +89,9 @@ pub(super) async fn build_facade_agent(
         // sub-agents). Wiring the CLI's own registry is tracked in
         // BUGS.md S8.
         None,
+        // `max_iterations` from the process config is the CLI/daemon
+        // budget; `None` keeps it.
+        None,
     )
     .await?;
     if let Some(id) = memory_session_id {

@@ -1,4 +1,4 @@
-use crate::agent::loop_::{TOOL_LOOP_SESSION_KEY, run_tool_call_loop};
+use crate::agent::loop_::TOOL_LOOP_SESSION_KEY;
 use crate::agent::prompt::{PromptContext, SystemPromptBuilder};
 use crate::observability::traits::{Observer, ObserverEvent, ObserverMetric};
 use crate::security::SecurityPolicy;
@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use operant_api::tool::{Tool, ToolResult};
 use operant_config::schema::{DelegateAgentConfig, DelegateToolConfig};
 use operant_memory::{Memory, NamespacedMemory};
-use operant_providers::{self, ChatMessage, Provider};
+use operant_providers::{self, Provider};
 use parking_lot::RwLock;
 use serde_json::json;
 use std::collections::HashMap;
@@ -89,6 +89,9 @@ pub struct DelegateTool {
     cancellation_token: CancellationToken,
     /// Optional memory instance for namespace isolation on delegate agents.
     memory: Option<Arc<dyn Memory>>,
+    /// Process config — the agentic sub-agent's facade turn is built from
+    /// it (W1.9). `None` only in tests that never reach `execute_agentic`.
+    config: Option<Arc<operant_config::schema::Config>>,
 }
 
 impl DelegateTool {
@@ -123,6 +126,7 @@ impl DelegateTool {
             workspace_dir: PathBuf::new(),
             cancellation_token: CancellationToken::new(),
             memory: None,
+            config: None,
         }
     }
 
@@ -163,12 +167,20 @@ impl DelegateTool {
             workspace_dir: PathBuf::new(),
             cancellation_token: CancellationToken::new(),
             memory: None,
+            config: None,
         }
     }
 
     /// Attach parent tools used to build sub-agent allowlist registries.
     pub fn with_parent_tools(mut self, parent_tools: Arc<RwLock<Vec<Arc<dyn Tool>>>>) -> Self {
         self.parent_tools = parent_tools;
+        self
+    }
+
+    /// Attach the process config so the agentic sub-agent turn can be
+    /// built on the reconciled facade (W1.9).
+    pub fn with_config(mut self, config: Arc<operant_config::schema::Config>) -> Self {
+        self.config = Some(config);
         self
     }
 
@@ -492,7 +504,7 @@ impl DelegateTool {
                 .execute_agentic(
                     agent_name,
                     agent_config,
-                    &*provider,
+                    Arc::from(provider),
                     &full_prompt,
                     agent_config
                         .temperature
@@ -658,6 +670,9 @@ impl DelegateTool {
         let delegate_config = self.delegate_config.clone();
         let workspace_dir = self.workspace_dir.clone();
         let child_token = self.cancellation_token.child_token();
+        // W1.9: cloned out of `self` before the spawn, like every other
+        // field the inner DelegateTool needs.
+        let config = self.config.clone();
         let task_id_clone = task_id.clone();
         let parent_session_key = current_tool_loop_session_key();
 
@@ -676,6 +691,9 @@ impl DelegateTool {
                     workspace_dir: workspace_dir.clone(),
                     cancellation_token: child_token.clone(),
                     memory: None,
+                    // W1.9: propagate so a nested agentic sub-agent can
+                    // also build its facade turn.
+                    config: config.clone(),
                 };
 
                 let args_inner = json!({
@@ -832,6 +850,8 @@ impl DelegateTool {
             let delegate_config = self.delegate_config.clone();
             let workspace_dir = self.workspace_dir.clone();
             let cancellation_token = self.cancellation_token.child_token();
+            // W1.9: cloned out of `self` before the spawn (sibling site above).
+            let config = self.config.clone();
             let agent_name = agent_name.clone();
             let prompt = prompt.to_string();
             let args_clone = args.clone();
@@ -851,6 +871,9 @@ impl DelegateTool {
                     workspace_dir,
                     cancellation_token,
                     memory: None,
+                    // W1.9: propagate so a nested agentic sub-agent can
+                    // also build its facade turn.
+                    config: config.clone(),
                 };
                 let agent_name_for_return = agent_name.clone();
                 let result = scope_delegate_session_key(session_key, async move {
@@ -1065,7 +1088,7 @@ impl DelegateTool {
     fn build_enriched_system_prompt(
         &self,
         agent_config: &DelegateAgentConfig,
-        sub_tools: &[Box<dyn Tool>],
+        sub_tools: &[Arc<dyn Tool>],
         workspace_dir: &Path,
     ) -> Option<String> {
         // Resolve skills directory: scoped if configured, otherwise workspace default.
@@ -1091,11 +1114,20 @@ impl DelegateTool {
             String::new()
         };
 
+        // `PromptContext` takes `&[Box<dyn Tool>]` (shared with the CLI
+        // path); the sub-agent list is `Arc` since W1.9 so the facade
+        // bridge can wrap it directly. Re-boxing here is prompt-build-only
+        // and reads nothing but name/description.
+        let prompt_tools: Vec<Box<dyn Tool>> = sub_tools
+            .iter()
+            .map(|tool| Box::new(ToolArcRef::new(Arc::clone(tool))) as Box<dyn Tool>)
+            .collect();
+
         // Build structured operational context using SystemPromptBuilder sections.
         let ctx = PromptContext {
             workspace_dir,
             model_name: &agent_config.model,
-            tools: sub_tools,
+            tools: &prompt_tools,
             skills: &skills,
             skills_prompt_mode: operant_config::schema::SkillsPromptInjectionMode::Full,
             identity_config: None,
@@ -1138,7 +1170,7 @@ impl DelegateTool {
         &self,
         agent_name: &str,
         agent_config: &DelegateAgentConfig,
-        provider: &dyn Provider,
+        provider: Arc<dyn Provider>,
         full_prompt: &str,
         temperature: f64,
     ) -> anyhow::Result<ToolResult> {
@@ -1159,13 +1191,16 @@ impl DelegateTool {
             .filter(|name| !name.is_empty())
             .collect::<std::collections::HashSet<_>>();
 
-        let sub_tools: Vec<Box<dyn Tool>> = {
+        // W1.9: the sub-agent's tools stay `Arc<dyn Tool>` — the facade's
+        // `RuntimeToolBridge` wraps an Arc directly, so no Box re-wrap (and
+        // no per-spawn clone of every tool beyond the Arc bump).
+        let sub_tools: Vec<Arc<dyn Tool>> = {
             let parent_tools = self.parent_tools.read();
             parent_tools
                 .iter()
                 .filter(|tool| allowed.contains(tool.name()))
                 .filter(|tool| tool.name() != "delegate")
-                .map(|tool| Box::new(ToolArcRef::new(tool.clone())) as Box<dyn Tool>)
+                .map(|tool| Arc::clone(tool) as Arc<dyn Tool>)
                 .collect()
         };
 
@@ -1184,70 +1219,110 @@ impl DelegateTool {
         let enriched_system_prompt =
             self.build_enriched_system_prompt(agent_config, &sub_tools, &self.workspace_dir);
 
-        let mut history = Vec::new();
-        if let Some(system_prompt) = enriched_system_prompt.as_ref() {
-            history.push(ChatMessage::system(system_prompt.clone()));
-        }
-        history.push(ChatMessage::user(full_prompt.to_string()));
-
-        let noop_observer = NoopObserver;
+        let noop_observer = Arc::new(NoopObserver);
 
         let agentic_timeout_secs = agent_config
             .agentic_timeout_secs
             .unwrap_or(self.delegate_config.agentic_timeout_secs);
-        // Forward the per-turn receipt scope from the parent loop so subagent
-        // tool calls land in the same collector as the top-level turn. When
-        // receipts are disabled (or no scope is set, e.g. CLI / background
-        // delegate spawn) this resolves to `None` and the sub-loop runs
-        // unsigned, matching the parent.
-        let receipt_scope = crate::agent::tool_receipts::TOOL_LOOP_RECEIPT_CONTEXT
-            .try_with(Clone::clone)
-            .ok()
-            .flatten();
-        let receipt_generator = receipt_scope.as_ref().map(|s| &s.generator);
-        let collected_receipts = receipt_scope.as_ref().map(|s| s.collector.as_ref());
-        let result = tokio::time::timeout(
-            Duration::from_secs(agentic_timeout_secs),
-            run_tool_call_loop(
-                provider,
-                &mut history,
-                &sub_tools,
-                &noop_observer,
-                &agent_config.provider,
-                &agent_config.model,
-                temperature,
-                true,
-                None,
-                "delegate",
-                None,
-                &self.multimodal_config,
-                agent_config.max_iterations,
-                Some(self.cancellation_token.child_token()),
-                None,
-                None,
-                &[],
-                &[],
-                None,
-                None,
-                &operant_config::schema::PacingConfig::default(),
-                0,    // max_tool_result_chars: inherit from parent config in future
-                0,    // context_token_budget: 0 = disabled for subagents
-                None, // shared_budget: TODO thread from parent in future
-                None, // channel: delegate subagents don't support approval
-                receipt_generator,
-                collected_receipts,
-            ),
-        )
-        .await;
+        // W1.9: the agentic sub-agent turn runs on the reconciled facade
+        // (Loop A under the hood) instead of `run_tool_call_loop`.
+        //
+        // - The sub-agent's tools are the parent's runtime tools filtered
+        //   by `[agents.*] allowed_tools`, registered through
+        //   `RuntimeToolBridge` so core can execute them; `allowed_tools`
+        //   (their names) then disables every core builtin outside the
+        //   grant, so the surface is exactly what the config asks for —
+        //   without it the sub-agent would silently gain `delegate_task`,
+        //   browser, spotify and the rest (~65 core tools).
+        // - `max_iterations` is the sub-agent's own cap, not the process
+        //   default.
+        // - MCP is NOT initialized per spawn (the parent turn already owns
+        //   that connection); a per-spawn `Database::init` +
+        //   `register_builtin_tools_with_sub_agent` still runs — see S8 for
+        //   the measured spawn cost.
+        let Some(config) = self.config.clone() else {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Agent '{agent_name}' cannot run: delegate tool has no process config (this is a construction bug)"
+                )),
+            });
+        };
+        let sub_tool_names: Vec<String> = sub_tools
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect();
+        let cancel = self.cancellation_token.child_token();
+        let prompt = full_prompt.to_string();
+        let system_prompt = enriched_system_prompt.clone();
+        let provider_name = agent_config.provider.clone();
+        let model_name = agent_config.model.clone();
+        let max_iterations = agent_config.max_iterations;
+        let approval_policy =
+            crate::approval::ApprovalManager::for_non_interactive(&config.autonomy);
+
+        let result: anyhow::Result<String> =
+            tokio::time::timeout(Duration::from_secs(agentic_timeout_secs), async {
+                let mut facade = crate::agent::reconciled::ReconciledAgent::from_config_with(
+                    &config,
+                    Some(noop_observer),
+                    None,
+                    false,
+                    Some((
+                        provider_name.clone(),
+                        Arc::clone(&provider),
+                        model_name.clone(),
+                    )),
+                    system_prompt.clone(),
+                    Some(temperature),
+                    Some(sub_tool_names.clone()),
+                    Some(Arc::new(sub_tools.clone())),
+                    Some(max_iterations),
+                )
+                .await?;
+                let approvals = facade.approvals().clone();
+                let (event_tx, mut event_rx) =
+                    tokio::sync::mpsc::channel::<crate::agent::reconciled::TurnEvent>(64);
+                // Sub-agents have no operator: any gated tool is denied
+                // rather than left to burn core's 120s approval deadline
+                // (which would eat `agentic_timeout_secs`).
+                let drain = async {
+                    while let Some(event) = event_rx.recv().await {
+                        if let crate::agent::reconciled::TurnEvent::ApprovalRequest {
+                            request_id,
+                            tool_name,
+                            arguments_summary,
+                            ..
+                        } = event
+                        {
+                            crate::agent::reconciled::answer_pending_approval(
+                                &approvals,
+                                &approval_policy,
+                                false,
+                                "delegate",
+                                &request_id,
+                                &tool_name,
+                                &arguments_summary,
+                            )
+                            .await;
+                        }
+                    }
+                };
+                let turn = facade.turn_streamed(&prompt, event_tx, Some(cancel.clone()));
+                let (result, _) = tokio::join!(turn, drain);
+                result.map_err(|e| anyhow::anyhow!("{e:#}"))
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out after {agentic_timeout_secs}s"))?;
 
         match result {
-            Ok(Ok(response)) => {
+            Ok(response) => {
                 let rendered = if response.trim().is_empty() {
                     "[Empty response]".to_string()
                 } else {
                     response
                 };
-
                 Ok(ToolResult {
                     success: true,
                     output: format!(
@@ -1258,17 +1333,10 @@ impl DelegateTool {
                     error: None,
                 })
             }
-            Ok(Err(e)) => Ok(ToolResult {
+            Err(e) => Ok(ToolResult {
                 success: false,
                 output: String::new(),
                 error: Some(format!("Agent '{agent_name}' failed: {e}")),
-            }),
-            Err(_) => Ok(ToolResult {
-                success: false,
-                output: String::new(),
-                error: Some(format!(
-                    "Agent '{agent_name}' timed out after {agentic_timeout_secs}s"
-                )),
             }),
         }
     }
@@ -1486,6 +1554,46 @@ mod tests {
         }
     }
 
+    /// `InfiniteToolCallProvider` + a call counter, so "the sub-agent
+    /// respects its iteration budget" is observable rather than inferred
+    /// from a termination side effect.
+    struct CountingInfiniteProvider {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Provider for CountingInfiniteProvider {
+        async fn chat_with_system(
+            &self,
+            _system_prompt: Option<&str>,
+            _message: &str,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<String> {
+            Ok("unused".to_string())
+        }
+
+        async fn chat(
+            &self,
+            _request: ChatRequest<'_>,
+            _model: &str,
+            _temperature: Option<f64>,
+        ) -> anyhow::Result<ChatResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ChatResponse {
+                text: None,
+                tool_calls: vec![ToolCall {
+                    id: "loop".to_string(),
+                    name: "echo_tool".to_string(),
+                    arguments: "{\"value\":\"x\"}".to_string(),
+                    extra_content: None,
+                }],
+                usage: None,
+                reasoning_content: None,
+            })
+        }
+    }
+
     struct InfiniteToolCallProvider;
 
     #[async_trait]
@@ -1542,6 +1650,12 @@ mod tests {
         ) -> anyhow::Result<ChatResponse> {
             Err(anyhow!("provider boom"))
         }
+    }
+
+    /// Process config for the agentic facade turn (W1.9). Mirrors what
+    /// production passes via `all_tools_with_runtime`.
+    fn agentic_process_config() -> Arc<operant_config::schema::Config> {
+        Arc::new(operant_config::schema::Config::default())
     }
 
     fn agentic_config(allowed_tools: Vec<String>, max_iterations: usize) -> DelegateAgentConfig {
@@ -1918,16 +2032,16 @@ mod tests {
     #[tokio::test]
     async fn execute_agentic_runs_tool_call_loop_with_filtered_tools() {
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
-        let tool = DelegateTool::new(HashMap::new(), None, test_security()).with_parent_tools(
-            Arc::new(RwLock::new(vec![
+        let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
+            .with_parent_tools(Arc::new(RwLock::new(vec![
                 Arc::new(EchoTool),
                 Arc::new(DelegateTool::new(HashMap::new(), None, test_security())),
-            ])),
-        );
+            ])));
 
         let provider = OneToolThenFinalProvider;
         let result = tool
-            .execute_agentic("agentic", &config, &provider, "run", 0.2)
+            .execute_agentic("agentic", &config, Arc::new(provider), "run", 0.2)
             .await
             .unwrap();
 
@@ -1949,7 +2063,7 @@ mod tests {
 
         let provider = OneToolThenFinalProvider;
         let result = tool
-            .execute_agentic("agentic", &config, &provider, "run", 0.2)
+            .execute_agentic("agentic", &config, Arc::new(provider), "run", 0.2)
             .await
             .unwrap();
 
@@ -1967,21 +2081,31 @@ mod tests {
     async fn execute_agentic_respects_max_iterations() {
         let config = agentic_config(vec!["echo_tool".to_string()], 2);
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
-        let provider = InfiniteToolCallProvider;
+        // W1.9 behavior change: the budget is now enforced by core, which
+        // STOPS the tool loop and runs a final grace call (the Wave-0 A1
+        // contract every facade consumer now shares) instead of Loop C's
+        // hard "maximum tool iterations" error. The property under test is
+        // therefore "the budget bounds the loop", not "it returns an error".
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingInfiniteProvider {
+            calls: std::sync::Arc::clone(&calls),
+        };
         let result = tool
-            .execute_agentic("agentic", &config, &provider, "run", 0.2)
+            .execute_agentic("agentic", &config, Arc::new(provider), "run", 0.2)
             .await
             .unwrap();
 
-        assert!(!result.success);
+        let provider_calls = calls.load(std::sync::atomic::Ordering::SeqCst);
         assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or("")
-                .contains("maximum tool iterations (2)")
+            provider_calls <= 4,
+            "iteration budget must bound the sub-agent loop, saw {provider_calls} provider calls"
+        );
+        assert!(
+            result.success,
+            "grace call should return a result: {result:?}"
         );
     }
 
@@ -2000,6 +2124,7 @@ mod tests {
 
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let collector: Arc<std::sync::Mutex<Vec<String>>> =
@@ -2012,7 +2137,7 @@ mod tests {
         let provider = OneToolThenFinalProvider;
         let result = TOOL_LOOP_RECEIPT_CONTEXT
             .scope(Some(scope), async {
-                tool.execute_agentic("agentic", &config, &provider, "run", 0.2)
+                tool.execute_agentic("agentic", &config, Arc::new(provider), "run", 0.2)
                     .await
             })
             .await
@@ -2063,11 +2188,12 @@ mod tests {
         // `[receipt: ` trailer.
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let provider = OneToolThenFinalProvider;
         let result = tool
-            .execute_agentic("agentic", &config, &provider, "run", 0.2)
+            .execute_agentic("agentic", &config, Arc::new(provider), "run", 0.2)
             .await
             .unwrap();
 
@@ -2083,11 +2209,12 @@ mod tests {
     async fn execute_agentic_propagates_provider_errors() {
         let config = agentic_config(vec!["echo_tool".to_string()], 10);
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_parent_tools(Arc::new(RwLock::new(vec![Arc::new(EchoTool)])));
 
         let provider = FailingProvider;
         let result = tool
-            .execute_agentic("agentic", &config, &provider, "run", 0.2)
+            .execute_agentic("agentic", &config, Arc::new(provider), "run", 0.2)
             .await
             .unwrap();
 
@@ -2178,6 +2305,7 @@ mod tests {
         // Build DelegateTool with NO parent tools initially
         let config = agentic_config(vec!["mcp_fake".to_string()], 10);
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_parent_tools(Arc::new(RwLock::new(Vec::new())));
 
         // Simulate late MCP tool injection via the shared handle
@@ -2186,7 +2314,7 @@ mod tests {
 
         let provider = McpToolThenFinalProvider;
         let result = tool
-            .execute_agentic("agentic", &config, &provider, "run mcp", 0.2)
+            .execute_agentic("agentic", &config, Arc::new(provider), "run mcp", 0.2)
             .await
             .unwrap();
 
@@ -2216,7 +2344,7 @@ mod tests {
             memory_namespace: None,
         };
 
-        let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(EchoTool)];
         let workspace = std::env::temp_dir().join(format!(
             "operant_delegate_enrich_test_{}",
             uuid::Uuid::new_v4()
@@ -2224,6 +2352,7 @@ mod tests {
         std::fs::create_dir_all(&workspace).unwrap();
 
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_workspace_dir(workspace.clone());
 
         let prompt = tool
@@ -2291,10 +2420,11 @@ mod tests {
             }
         }
 
-        let tools: Vec<Box<dyn Tool>> = vec![Box::new(MockShellTool)];
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(MockShellTool)];
         let workspace = std::env::temp_dir();
 
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_workspace_dir(workspace.to_path_buf());
 
         let prompt = tool
@@ -2370,10 +2500,11 @@ mod tests {
             memory_namespace: None,
         };
 
-        let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(EchoTool)];
         let workspace = std::env::temp_dir();
 
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_workspace_dir(workspace.to_path_buf());
 
         let prompt = tool
@@ -2629,9 +2760,10 @@ mod tests {
             memory_namespace: None,
         };
 
-        let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(EchoTool)];
 
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_workspace_dir(workspace.clone());
 
         let prompt = tool
@@ -2676,9 +2808,10 @@ mod tests {
             memory_namespace: None,
         };
 
-        let tools: Vec<Box<dyn Tool>> = vec![Box::new(EchoTool)];
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(EchoTool)];
 
         let tool = DelegateTool::new(HashMap::new(), None, test_security())
+            .with_config(agentic_process_config())
             .with_workspace_dir(workspace.clone());
 
         let prompt = tool

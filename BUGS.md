@@ -4336,3 +4336,36 @@ solves.
    `answer_pending_approval` (iter-640) with `ctx.approval_manager` as
    policy. The cancel/timeout `select!` and the thread/session/cost
    task-local scopes wrap the facade turn unchanged.
+
+### W1.9 — the agentic delegate sub-agent is on the facade (LANDED)
+
+`execute_agentic` no longer calls `run_tool_call_loop`. The sub-agent's
+tools are the parent's runtime tools filtered by `[agents.*]
+allowed_tools`, registered through `RuntimeToolBridge` and restricted by
+passing their names as the construction-time `allowed_tools` — without
+that second half the sub-agent would silently gain core's ~65 builtins
+(`delegate_task`, browser, spotify, …), a privilege widening for
+user-authored agent entries. Also threaded:
+
+- `DelegateTool.config` (via `with_config`, wired in
+  `all_tools_with_runtime` and propagated through the recursive
+  sub-agent constructions) — the facade needs the process config.
+- `max_iterations` — the facade gained an explicit override so a
+  sub-agent's own budget is not replaced by the process default.
+- Approvals — a sub-agent has no operator, so the drain answers gated
+  tools with the same non-interactive policy (deny) instead of leaving
+  them to burn core's 120s deadline, which would have eaten
+  `agentic_timeout_secs`.
+- MCP is NOT re-initialized per spawn (the parent owns that connection).
+
+**Behavior change (intended):** exhausting the iteration budget now ends
+the sub-agent turn through core's grace call (the Wave-0 A1 contract every
+facade consumer shares) instead of Loop C's hard "maximum tool iterations"
+error. `execute_agentic_respects_max_iterations` was rewritten to assert
+the real property — the budget BOUNDS the loop, observed via a counting
+provider — rather than the old error string.
+
+**Open carry:** each spawn constructs a facade (`Database::init`,
+`CronDb`/`KanbanDb`, full builtin registration). The cost was not
+measured in this leg; if per-spawn construction proves expensive for
+delegation latency, a cached-per-session facade is the follow-up.

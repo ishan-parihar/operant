@@ -961,6 +961,7 @@ pub fn all_tools_with_runtime(
             provider_runtime_options.clone(),
         )
         .with_parent_tools(Arc::clone(&parent_tools))
+        .with_config(Arc::new(root_config.clone()))
         .with_multimodal_config(root_config.multimodal.clone())
         .with_delegate_config(root_config.delegate.clone())
         .with_workspace_dir(workspace_dir.to_path_buf())

@@ -1845,6 +1845,7 @@ impl ReconciledAgent {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -1887,6 +1888,7 @@ impl ReconciledAgent {
         temperature: Option<f64>,
         allowed_tools: Option<Vec<String>>,
         caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
+        max_iterations: Option<usize>,
     ) -> Result<Self> {
         Self::build_from_config(
             config,
@@ -1898,6 +1900,7 @@ impl ReconciledAgent {
             temperature,
             allowed_tools,
             caller_tools,
+            max_iterations,
         )
         .await
     }
@@ -1913,6 +1916,7 @@ impl ReconciledAgent {
         temperature: Option<f64>,
         allowed_tools: Option<Vec<String>>,
         caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
+        max_iterations: Option<usize>,
     ) -> Result<Self> {
         // Provider routing + model resolution — verbatim Loop B inputs,
         // unless the caller already resolved both (the Loop C adapters).
@@ -2117,6 +2121,12 @@ impl ReconciledAgent {
         let mut agent_config = AgentConfig::from(&core_app.agent);
         agent_config.model = model_name.to_string();
         agent_config.max_iterations = config.agent.max_tool_iterations;
+        // W1.9: a caller with its own iteration budget (the agentic
+        // delegate sub-agent's `[agents.*] max_iterations`) overrides the
+        // process default; inheriting it silently would widen the cap.
+        if let Some(limit) = max_iterations {
+            agent_config.max_iterations = limit;
+        }
         agent_config.approval_allowlist = core_app.command_allowlist.clone();
         agent_config.approval_allowlist_path =
             std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| {
