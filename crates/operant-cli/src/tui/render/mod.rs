@@ -69,6 +69,15 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // stays below are the three passes with no jcode counterpart.
     crate::tui::jcode_ui::draw(frame, app);
 
+    // ---- Publish the ported layout to operant's hit-test/scroll state ----
+    // Three App cells were written by the deleted dispatch table. Each still
+    // has production readers, and a zeroed cell is not a neutral value: the
+    // mouse gates input clicks on a non-empty input rect, and the prepend
+    // correction reconciles against the painted scroll row.
+    app.last_input_area.set(crate::tui::jcode_ui::input_area());
+    app.last_render_scroll_offset
+        .set(crate::tui::jcode_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16);
+
     // ---- Background task rows (operant-only) ---------------------------
     // Docked to the bottom-left of the messages band, so the rows sit above
     // the transcript and below the overlays. The pin test in
@@ -120,6 +129,29 @@ pub fn render_app(frame: &mut Frame, app: &App) {
 
 #[cfg(test)]
 mod tests {
+    /// The ported chrome owns the frame layout, but operant's hit-test and
+    /// scroll state still lives in App cells that production code reads. They
+    /// are republished here from the ported layout; deleting either write
+    /// leaves mouse routing / the prepend correction dead with every other
+    /// test green, so pin the call sites (the same idiom as
+    /// `pinned_images` and `background_tasks`).
+    #[test]
+    fn the_ported_layout_republishes_the_hit_test_cells() {
+        let src = include_str!("mod.rs");
+        for needle in [
+            "last_input_area",
+            "last_render_scroll_offset",
+            "jcode_ui::message_area()",
+        ] {
+            assert!(
+                src.contains(needle),
+                "render/mod.rs no longer publishes `{needle}` from the ported \
+                 layout — mouse routing / scroll correction / the background-task \
+                 rows would go silently dead"
+            );
+        }
+    }
+
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

@@ -890,6 +890,20 @@ thread_local! {
         const { std::cell::Cell::new(Rect::new(0, 0, 0, 0)) };
 }
 
+thread_local! {
+    /// The input band's rect from the last `draw`. `App::last_input_area`
+    /// (the mouse click-routing gate) was written by the operant dispatch
+    /// table the cutover deleted; without this the gate saw a zero-sized rect
+    /// and classified every click as "not the input".
+    static LAST_INPUT_AREA: std::cell::Cell<Rect> =
+        const { std::cell::Cell::new(Rect::new(0, 0, 0, 0)) };
+}
+
+/// The input band from the last drawn frame (zero-sized before the first draw).
+pub(crate) fn input_area() -> Rect {
+    LAST_INPUT_AREA.with(|area| area.get())
+}
+
 /// The messages band from the last drawn frame (zero-sized before the first
 /// draw). Consumers must tolerate a zero height.
 pub(crate) fn message_area() -> Rect {
@@ -3786,6 +3800,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     }
 
     LAST_MESSAGE_AREA.with(|area| area.set(chunks[0]));
+    LAST_INPUT_AREA.with(|area| area.set(chunks[7]));
 
     // Capture layout info for visual debug
     if let Some(capture) = &mut debug_capture {
