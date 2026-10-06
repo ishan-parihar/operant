@@ -423,6 +423,15 @@ pub(super) fn draw_messages(
     // Retain the frame itself: it is the geometry (per-item row ranges), and
     // handlers outside `draw` resolve anchors against it.
     super::set_last_chat_frame(prepared.clone());
+    // Record where the reader ended up in content coordinates. A resize
+    // rewraps the transcript, so the only thing that survives it is "which
+    // message was under the reader", not a line index. (operant's publisher
+    // for this — App::last_render_content_pos — lived in the render chain the
+    // cutover deleted; the reader silently lost its place on resize until this.)
+    super::record_reader_anchor(crate::tui::jcode_model::content_pos_at_row(
+        prepared.as_ref(),
+        scroll,
+    ));
 
     let prompt_preview_lines = if crate::tui::jcode_app::config_shim::config()
         .display
@@ -1638,6 +1647,44 @@ fn compute_max_scroll_with_prompt_preview(
 
 #[cfg(test)]
 mod tests {
+    /// A resize keeps the reader's MESSAGE, not a line index: the chrome
+    /// publishes the reader's content position every frame and `TuiState::
+    /// pending_resize_anchor` hands it back for the post-rewrap resolve (see
+    /// `resolve_content_pos`, whose rewrap math the ported model tests cover).
+    /// Both ends are source-pinned because the whole path is a seam: removing
+    /// either end leaves the code compiling and every other test green while
+    /// resize silently drops the reader back to the tail — which is exactly
+    /// what happened when the old publisher went with the dispatch table.
+    #[test]
+    fn the_resize_anchor_seam_is_wired_at_both_ends() {
+        let viewport = include_str!("ui_viewport.rs");
+        assert!(
+            viewport.contains("record_reader_anchor("),
+            "ui_viewport.rs stopped publishing the reader anchor — a resize would \
+             silently drop the reader back to the tail"
+        );
+        let state_impl = include_str!("../app/tui_state_impl.rs");
+        assert!(
+            state_impl.contains("resolved_reader_anchor()"),
+            "tui_state_impl.rs stopped returning the recorded anchor — \
+             pending_resize_anchor would always be None"
+        );
+    }
+
+    #[test]
+    fn the_reader_anchor_seam_round_trips() {
+        use crate::tui::jcode_model::{Anchor, ContentPos};
+        let pos = ContentPos::Message(Anchor {
+            msg_hash: 0xdead_beef,
+            occurrence: 2,
+            row_within_item: 1,
+        });
+        super::super::record_reader_anchor(Some(pos));
+        assert_eq!(super::super::resolved_reader_anchor(), Some(pos));
+        super::super::record_reader_anchor(None);
+        assert_eq!(super::super::resolved_reader_anchor(), None);
+    }
+
     #[test]
     fn handterm_native_latex_cell_symbol_moves_invokes_and_restores_cursor() {
         assert_eq!(

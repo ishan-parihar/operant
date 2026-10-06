@@ -24,8 +24,79 @@ use tempfile::TempDir;
 fn temp_registry() -> (EmployeeDb, TempDir) {
     let dir = tempfile::tempdir().expect("tempdir failed");
     // The real caller passes the main `database_path`; mirror that.
-    let db = EmployeeDb::init(org_db_path(&dir.path().join("database.db"))).expect("init failed");
+    let db =
+        EmployeeDb::open_at(org_db_path(&dir.path().join("database.db"))).expect("init failed");
     (db, dir)
+}
+
+/// Regression pin for the split-brain registry (red-team audit
+/// `docs/audit/2026-10-06-organism-os-redteam.md` §2).
+///
+/// The defect: `EmployeeDb`'s literal-path constructor was named `init`, the
+/// same name several sibling stores use for their *deriving* constructor. So
+/// `EmployeeDb::init(<main database_path>)` type-checked and opened the MAIN
+/// database while the `org` CLI wrote the kanban sibling — `operant doctor`
+/// reported 11 seats and `operant org check` reported 0, on one machine, with
+/// one binary. Nothing errored; the two sides simply disagreed.
+///
+/// The fix is the type split: `open_at` takes the literal file, `for_app`
+/// takes the main path and derives. This pins the *distinction* — that the two
+/// constructors address different files — so a future merge of the names
+/// cannot silently reintroduce the cross-wiring.
+#[test]
+fn open_at_and_for_app_address_different_files() {
+    let dir = tempfile::tempdir().expect("tempdir failed");
+    let main_path = dir.path().join("database.db");
+
+    let via_for_app = EmployeeDb::for_app(&main_path).expect("for_app opens");
+    let kanban_sibling = org_db_path(&main_path);
+    assert_ne!(
+        main_path, kanban_sibling,
+        "the fix depends on the registry living in the sibling, not the main db"
+    );
+
+    // `for_app` must land in the sibling: seed through it, read through a
+    // literal open of that same sibling.
+    via_for_app
+        .backfill_from_cron_jobs(
+            &[realistic_job("forapp-seat")],
+            "2026-10-06T00:00:00+00:00",
+            BACKFILL_REASON,
+        )
+        .expect("backfill writes");
+    drop(via_for_app);
+
+    let read_back = EmployeeDb::open_at(kanban_sibling.clone()).expect("literal open");
+    let ids: Vec<String> = read_back
+        .list_employees()
+        .expect("list")
+        .into_iter()
+        .map(|e| e.employee_id)
+        .collect();
+    assert_eq!(
+        ids,
+        vec![derive_employee_id("forapp-seat")],
+        "for_app and open_at must agree on the file for_app chose"
+    );
+
+    // And the MAIN database must be untouched by the registry. At the audit's
+    // baseline the daemon held `EmployeeDb::init(database.db)`, so the main db
+    // got an `employees` table with the 11 cast seats in it. `for_app` must
+    // never write there: either the file is absent, or it exists with no
+    // registry table in it.
+    let main_has_registry = rusqlite::Connection::open(&main_path)
+        .ok()
+        .and_then(|c| {
+            c.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='employees'")
+                .map(|mut s| s.exists([]))
+                .unwrap_or(Ok(false))
+                .ok()
+        })
+        .unwrap_or(false);
+    assert!(
+        !main_has_registry,
+        "EmployeeDb::for_app must never create the registry in the main database"
+    );
 }
 
 /// A realistic job: all 31 fields of the live `CronJob`
@@ -523,14 +594,14 @@ fn org_employee_registry_schema_is_idempotent_across_init() {
 
     // Opening the same file twice must be a no-op, not an error — this is
     // what makes the additive tables safe on a live install.
-    let first = EmployeeDb::init(path.clone()).expect("first init ok");
+    let first = EmployeeDb::open_at(path.clone()).expect("first init ok");
     let job = realistic_job("a02e3f692fb0");
     first
         .backfill_from_cron_jobs(&[job], "2026-09-30T12:00:00+00:00", BACKFILL_REASON)
         .expect("backfill ok");
     drop(first);
 
-    let second = EmployeeDb::init(path).expect("second init ok");
+    let second = EmployeeDb::open_at(path).expect("second init ok");
     let emps = second.list_employees().expect("list ok");
     assert_eq!(emps.len(), 1, "existing rows must survive re-init");
     assert_eq!(emps[0].employee_id, "emp-a02e3f692fb0");

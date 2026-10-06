@@ -240,11 +240,12 @@ impl TuiState for App {
     }
 
     fn pending_resize_anchor(&self) -> Option<crate::tui::jcode_model::ContentPos> {
-        // [port-decision] pending_resize_anchor: operant's resize anchor is
-        // `app::scroll_anchor::ContentPos`, a different type from the trait's
-        // `jcode_model::ContentPos`; returns None — wire when the two are
-        // reconciled (the ported `ContentPos` is the target shape).
-        None
+        // The ported chrome records the reader's content position every frame
+        // (jcode_ui::record_reader_anchor, published from the prepared frame's
+        // scroll resolve). The ported ContentPos IS the target shape; operant's
+        // own scroll_anchor::ContentPos was the pre-cutover type and its
+        // publisher died with the dispatch table.
+        crate::tui::jcode_ui::resolved_reader_anchor()
     }
 
     fn pending_history_anchor_lines_from_bottom(&self) -> Option<usize> {

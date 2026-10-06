@@ -172,7 +172,7 @@ fn schema_helper_adds_a_column_to_the_shared_employees_table() {
     use operant_core::org::employee_db::EmployeeDb;
 
     let (path, _dir) = shared_db();
-    let employees = EmployeeDb::init(path.clone()).expect("employee db");
+    let employees = EmployeeDb::open_at(path.clone()).expect("employee db");
     drop(employees);
 
     {

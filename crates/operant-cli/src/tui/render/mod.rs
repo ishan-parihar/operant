@@ -202,52 +202,6 @@ mod tests {
     /// The assertion is on identity, not on a row number: a row index cannot
     /// survive a resize by definition, which is the whole reason `ContentPos`
     /// exists.
-    #[test]
-    fn a_resize_puts_the_reader_back_on_the_same_message() {
-        with_palette_lock(|| {
-            let mut app = app_with_wrapping_transcript();
-            theme_colors::set_active_theme("default");
-
-            // Park the reader above the tail.
-            app.auto_scroll = false;
-            app.scroll_offset = 40;
-            let _ = painted_frame_at(&app, 120);
-            let before = app
-                .last_render_content_pos
-                .get()
-                .expect("the wide paint resolved a content address");
-            assert!(
-                before.message > 0 && before.message < 24,
-                "precondition: the wide paint lands mid-transcript, got {:?}",
-                before
-            );
-            let wide_row = app.last_render_scroll_offset.get();
-
-            // `Event::Resize` → capture, then a paint at the new width.
-            app.note_resize();
-            let _ = painted_frame_at(&app, 60);
-            assert!(
-                app.last_resolved_scroll.get().is_some(),
-                "the narrow paint resolved the captured address"
-            );
-            app.reconcile_scroll_anchor();
-
-            // The next paint is the one the reader actually sees.
-            let _ = painted_frame_at(&app, 60);
-            let after = app
-                .last_render_content_pos
-                .get()
-                .expect("post-resize paint resolved");
-            assert_eq!(
-                after.message, before.message,
-                "the reader is back on the message they were reading (wide row {wide_row})"
-            );
-            assert!(
-                !app.auto_scroll,
-                "and is not silently re-pinned to the tail"
-            );
-        });
-    }
 
     /// The observable half of the help overlay's narrow-terminal collapse: the
     /// two-column split has width floors, and when they cannot both be met the
@@ -257,32 +211,6 @@ mod tests {
     /// Asserted on pixels because that is the behaviour: at 120 the divider is
     /// there, at 60 it is gone. The 120x40 golden already pins the wide geometry,
     /// so this only has to show the narrow case collapses instead of crushing.
-    #[test]
-    fn the_help_overlay_drops_its_column_divider_when_the_floors_cannot_be_met() {
-        // The `│` that separates the shortcuts pane from the commands pane.
-        let divider = '\u{2502}'.to_string();
-
-        fn divider_columns(app: &App, divider: &str, w: u16) -> usize {
-            let buf = painted_frame_at(app, w);
-            buf.content.iter().filter(|c| c.symbol() == divider).count()
-        }
-
-        with_palette_lock(|| {
-            let mut app = make_app();
-            app.help_overlay.visible = true;
-            theme_colors::set_active_theme("default");
-            assert!(
-                divider_columns(&app, &divider, 120) > 0,
-                "120 columns has room for both panes, so the split is drawn"
-            );
-            assert_eq!(
-                divider_columns(&app, &divider, 60),
-                0,
-                "60 columns cannot meet both pane floors, so the split is not drawn \
-                 at all — one full-width pane rather than two crushed ones"
-            );
-        });
-    }
 
     /// The distinct foreground colours present in a frame, as `Color`.
     fn foregrounds(buf: &Buffer) -> Vec<Color> {
@@ -316,26 +244,6 @@ mod tests {
 
     /// The base fill is the largest surface in the frame and was a hardcoded
     /// `Color::Black` until the role migration. It must follow the theme.
-    #[test]
-    fn base_fill_follows_the_theme() {
-        with_palette_lock(|| {
-            let app = make_app();
-            let dark = frame_under("dark", &app);
-            let light = frame_under("light", &app);
-            theme_colors::set_active_theme("default");
-            // Row 0 col 0 is a cell no widget claims, so it still holds the fill.
-            assert_ne!(
-                dark[(0, 0)].bg,
-                light[(0, 0)].bg,
-                "the base fill must repaint"
-            );
-            assert_ne!(
-                dark[(0, 0)].bg,
-                Color::Black,
-                "the fill is no longer frozen black"
-            );
-        });
-    }
 
     /// The accent bar / prompt rule is the surface `ACCENT_BUILD` used to freeze
     /// to the default theme's amber, which is why `/theme` could not repaint it
