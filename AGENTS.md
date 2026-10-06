@@ -67,18 +67,38 @@ git push origin main
 git log origin/main -1 --oneline    # must print your new commit
 
 # 7. Build release binary and deploy to global executable (R&D protocol).
-cargo build --release -p operant-cli
+#    BUILD FROM A CLEAN WORKTREE AT origin/main — NOT the shared tree.
+#    Under fleet conditions those are different artifacts: the shared tree
+#    carries peers' uncommitted WIP, so `cargo build --release` there bakes
+#    their in-flight refactor into the binary you then deploy and restart the
+#    daemon on. Measured 2026-10-06: a shared-tree build emitted warnings from
+#    untracked `tui/jcode_app/info_widget/` files and was NOT origin/main.
+df -h /                                    # a worktree target/ costs ~17G; storage-critical box
+git worktree add --detach ~/worktrees/deploy-<iter> origin/main
+( cd ~/worktrees/deploy-<iter> && git submodule update --init --recursive \
+    && cargo build --release -p operant-cli )
 # Deploy to BOTH install paths (2026-10-05 lesson): the user's PATH and the
-gateway systemd unit resolve ~/.local/bin/operant; /usr/local/bin is the
+# gateway systemd unit resolve ~/.local/bin/operant; /usr/local/bin is the
 # convention target. A running daemon holds the old inode open — `cp` fails
 # with "Text file busy"; rename-over works: build to a temp name, then `mv`.
-cp target/release/operant /usr/local/bin/operant.new && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant
-cp target/release/operant ~/.local/bin/operant.new && mv ~/.local/bin/operant.new ~/.local/bin/operant
+# BOTH the cp AND the mv need sudo: a bare `cp ... /usr/local/bin/...` fails
+# EACCES before the `sudo mv` is ever reached.
+sudo cp ~/worktrees/deploy-<iter>/target/release/operant /usr/local/bin/operant.new \
+  && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant
+cp ~/worktrees/deploy-<iter>/target/release/operant ~/.local/bin/operant.new \
+  && mv ~/.local/bin/operant.new ~/.local/bin/operant
 operant --version   # confirm the deployed binary matches
+# PROVENANCE GATE — run this BEFORE restarting the daemon. A failed build
+# leaves the PREVIOUS target/release/operant on disk, so `cp` cheerfully
+# installs a stale binary and `operant --version` still prints 0.2.1. Observed
+# twice on 2026-10-06. The artifact's mtime must postdate your commit:
+ls --time-style=full-iso target/release/operant; git log -1 --format=%cI
 # Then restart the gateway daemon so it adopts the new inode:
 systemctl --user restart operant-gateway
 # and verify the RUNNING process actually executes the new binary:
 md5sum /proc/$(systemctl --user show -p MainPID --value operant-gateway)/exe
+# (it must equal the md5 of the deployed path, not merely "some binary exists")
+git worktree remove ~/worktrees/deploy-<iter>   # immediately after the artifact is out
 ```
 
 ### R&D Protocol — Deploy After Every Push
