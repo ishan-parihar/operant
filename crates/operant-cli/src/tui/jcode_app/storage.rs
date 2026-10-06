@@ -111,6 +111,13 @@ pub fn write_json_fast<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<
     write_json_inner(path, value, false, false)
 }
 
+/// Durable JSON write (atomic rename + fsync). Ported verbatim from
+/// upstream jcode-storage/src/lib.rs:505 — the durable `true` matters for
+/// permission-decision records, which must survive a power loss mid-decision.
+pub fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<()> {
+    write_json_inner(path, value, true, false)
+}
+
 fn write_json_inner<T: Serialize + ?Sized>(
     path: &Path,
     value: &T,

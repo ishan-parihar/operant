@@ -966,6 +966,10 @@ fn load_sessions_surfaces_external_cursor_transcript() {
 #[test]
 #[ignore = "developer benchmark: times real /resume loading phases"]
 fn benchmark_real_resume_loading_phases() {
+    // [port-test] this test calls load_sessions (which reads JCODE_HOME via the
+    // external-session loader) while sibling picker tests mutate the same env
+    // under lock_test_env; without the guard a parallel mutator makes it flaky.
+    let _env_lock = crate::tui::jcode_app::storage::lock_test_env();
     invalidate_session_list_cache();
 
     let sessions_dir = storage::jcode_dir().expect("jcode dir").join("sessions");
@@ -1088,6 +1092,7 @@ fn benchmark_real_resume_loading_phases() {
 #[test]
 #[ignore = "developer benchmark: scans the real JCODE_HOME session directory"]
 fn benchmark_real_resume_loading_reports_timings() {
+    let _env_lock = crate::tui::jcode_app::storage::lock_test_env();
     invalidate_session_list_cache();
 
     let load_start = std::time::Instant::now();

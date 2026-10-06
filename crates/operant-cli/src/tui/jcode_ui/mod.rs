@@ -33,6 +33,7 @@ use std::hash::{Hash, Hasher};
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[path = "ui_animations.rs"]
 mod animations;
@@ -138,6 +139,33 @@ pub(crate) use frame_metrics::{
     debug_draw_call_history, debug_flicker_frame_history, debug_slow_frame_history,
     recent_flicker_copy_target_for_key, recent_flicker_ui_notice,
 };
+// [port-source] ui.rs:107-120 — diagram_pane child FLIPPED live at the cutover:
+// ui_diagram_pane.rs is on disk (33KB); every symbol below was verified present in it
+// before the flip (draw_pinned_diagram :783, estimate_*_pane_height/width :661/:674,
+// pinned_diagram_preferred_aspect_ratio :260, the two debug-probe entry points, and
+// the cfg(test) helpers :444/:502/:636/:698/:732).
+pub use diagram_pane::{
+    PinnedDiagramLiveDebugSnapshot, PinnedDiagramProbeRect, debug_probe_pinned_diagram,
+};
+#[cfg(test)]
+use diagram_pane::{
+    debug_probe_pinned_diagram_with_font, div_ceil_u32,
+    estimate_pinned_diagram_pane_width_with_font, is_diagram_poor_fit,
+    vcenter_fitted_image_with_font,
+};
+use diagram_pane::{
+    draw_pinned_diagram, estimate_pinned_diagram_pane_height, estimate_pinned_diagram_pane_width,
+    pinned_diagram_preferred_aspect_ratio,
+};
+pub(crate) use diagram_pane::{pinned_diagram_debug_json, reset_pinned_diagram_debug_snapshot};
+// [port-source] ui.rs:143 — see the output_style [port-decision] in the excision block:
+// the child file lives at jcode_app/output_style.rs, so this is a re-rooted re-export.
+pub(crate) use crate::tui::jcode_app::output_style::adapt_buffer_for_emoji_preference;
+// [port-source] ui.rs:144-152 — pinned_ui child FLIPPED live at the cutover:
+// ui_pinned.rs is on disk (45KB); SidePanelDebugStats / SidePanelMermaidProbe /
+// SidePanelMermaidProbeRect / debug_probe_side_panel_mermaid reach the parent through
+// ui_pinned.rs:126-129 (`pub use mermaid_debug_support::{…}`), which was verified before
+// the flip; draw_side_panel_markdown is `pub(super)` at ui_pinned.rs:526.
 pub(crate) use header::capitalize;
 use inline_ui::{draw_inline_ui, inline_ui_height};
 pub(crate) use memory_estimates::{debug_memory_profile, debug_side_panel_memory_profile};
@@ -154,6 +182,15 @@ pub(crate) use messages::{
     render_assistant_message, render_background_task_message, render_reasoning_message,
     render_swarm_message, render_system_message, render_tool_message, render_usage_message,
 };
+use pinned_ui::draw_side_panel_markdown;
+pub use pinned_ui::{
+    SidePanelDebugStats, SidePanelMermaidProbe, SidePanelMermaidProbeRect,
+    debug_probe_side_panel_mermaid,
+};
+pub(crate) use pinned_ui::{
+    clear_side_panel_debug_snapshot, clear_side_panel_render_caches, prewarm_focused_side_panel,
+    reset_side_panel_debug_stats, side_panel_debug_json, side_panel_debug_stats,
+};
 #[cfg(test)]
 use viewport::compute_visible_margins;
 use viewport::draw_messages;
@@ -168,6 +205,14 @@ pub(crate) use viewport::{
 use crate::tui::jcode_app::color_support;
 use crate::tui::jcode_app::color_support::rgb;
 use crate::tui::jcode_app::visual_debug;
+// Capture types the ported draw path populates (upstream ui.rs:2791 FrameCaptureBuilder,
+// :3150 ImageRegionCapture, :3269 MessageCapture, :3424 MarginsCapture, :3600
+// RenderTimingCapture). Upstream reaches them through ui.rs's `use super::*` glob;
+// operant spells them out since the glob is not re-exported here.
+#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
+use crate::tui::jcode_app::visual_debug::{
+    FrameCaptureBuilder, ImageRegionCapture, MarginsCapture, MessageCapture, RenderTimingCapture,
+};
 pub(crate) use crate::tui::jcode_markdown::{CopyTargetKind, RawCopyTarget};
 pub(crate) use crate::tui::jcode_model::{
     CopyTarget, EditToolRange, ImageRegion, MessageBoundary, PreparedChatFrame, PreparedMessages,
@@ -184,26 +229,47 @@ use crate::tui::jcode_app::mermaid;
 use crate::tui::jcode_app::tui_fns::TuiState;
 use crate::tui::jcode_model::DisplayMessage;
 
-// [port-excision] deferred to cutover (un-ported children):
+// [port-excision] deferred to cutover (un-ported children). Each entry below was
+// re-checked against the upstream child file's real existence at the cutover:
+// FLIPPED entries name a child whose file IS on disk and whose `#[path]` decl +
+// use blocks now sit above (diagram_pane, panel_image_preview, pinned_ui,
+// output_style); still-excised entries name a child whose file is NOT in
+// jcode_ui/ (verified by `ls` at the cutover) and whose decl would not compile.
+//
 // [port-excision] debug_capture — `#[path = "ui_debug_capture.rs"] mod debug_capture;` plus its
 //   use block `use debug_capture::{build_info_widget_summary, capture_widget_placements,
 //   rect_within_bounds, rects_overlap, widget_overlaps_content};` (ui.rs :48-49, :103-106).
-// [port-excision] diagram_pane — `#[path = "ui_diagram_pane.rs"] mod diagram_pane;` plus its
-//   pub/cfg(test)/pub(crate) use blocks (ui.rs :50-51, :107-120). Also `use crate::tui::mermaid;`
-//   (ui.rs :93) — mermaid path module not in the batch-3 port map.
+//   NOT FLIPPED at the cutover: `crates/operant-cli/src/tui/jcode_ui/ui_debug_capture.rs` does
+//   not exist. All five symbols live in upstream ui/ui_debug_capture.rs (:5, :18, :77, :88,
+//   :105) and none has a ported home (operant's visual_debug.rs is the type-only partial).
+//   The draw path's `debug_capture` option is therefore hard-wired to `None` there
+//   (see `draw_inner`), so the capture/anomaly recording is inert until W-visual-debug.
 // [port-excision] file_diff_ui — `#[path = "ui_file_diff.rs"] mod file_diff_ui;` plus its use
 //   blocks (ui.rs :52-53, :121-126).
+//   NOT FLIPPED: `ui_file_diff.rs` does not exist in jcode_ui/. Upstream's only two call
+//   sites in the draw path are `draw_file_diff_view` (:3410) and the layout `has_file_diff_edits`
+//   predicate; the draw path's file-diff branch is gated off with a `[port-decision]`.
 // [port-excision] onboarding — `#[path = "ui_onboarding.rs"] mod onboarding;` (ui.rs :72-73).
-// [port-excision] output_style — `mod output_style;` + `pub(crate) use
-//   output_style::adapt_buffer_for_emoji_preference;` (ui.rs :74, :143).
-// [port-excision] panel_image_preview — `#[path = "ui_panel_image_preview.rs"] pub(crate) mod
-//   panel_image_preview;` (ui.rs :77-78).
-// [port-excision] pinned_ui — `#[path = "ui_pinned.rs"] mod pinned_ui;` plus its use/pub use
-//   blocks (ui.rs :79-80, :144-152).
+//   NOT FLIPPED: `ui_onboarding.rs` does not exist in jcode_ui/ (upstream tui/onboarding.rs,
+//   W8 scope). `draw_inner`'s two `onboarding::draw_onboarding_welcome` calls (:3062, :3317)
+//   are gated with a `[port-decision]`; `TuiState::onboarding_welcome_active()` defaults false,
+//   so the takeover branch is unreachable through the trait anyway.
 // [port-excision] smoothness — `#[path = "ui_smoothness.rs"] mod smoothness;` plus the two
 //   pub(crate) re-export lines (ui.rs :83-84, :1388-1390).
+//   NOT FLIPPED: `ui_smoothness.rs` does not exist in jcode_ui/ (upstream tui/ui_smoothness.rs,
+//   W7). `draw_inner`'s `smoothness::observe_frame` (:3568) is gated with a `[port-decision]`;
+//   it is report-only (anchor-stability smoothing telemetry) and draws nothing.
 // [port-excision] transitions — `#[path = "ui_transitions.rs"] mod transitions;` plus cfg(test)
 //   uses `extract_line_text` / `inline_ui_gap_height` (ui.rs :89-90, :153-156).
+//   NOT FLIPPED: `ui_transitions.rs` does not exist in jcode_ui/; both symbols are `#[cfg(test)]`
+//   and have no non-test consumer in the ported surface.
+// [port-excision] `use crate::tui::mermaid;` (ui.rs :93) is FLIPPED: re-rooted to
+//   `use crate::tui::jcode_app::mermaid;` (line 183 above), the ported mermaid shim.
+// [port-decision] output_style FLIPPED as a re-export, not a `mod` decl: upstream's
+//   `mod output_style;` (ui.rs :74) resolves to jcode-tui/src/tui/ui/output_style.rs, which
+//   operant merged into `jcode_app/output_style.rs` (jcode-core's `output_style` plus the
+//   adapter). The decl is therefore `pub(crate) use crate::tui::jcode_app::output_style::…`
+//   (ui.rs :143) rather than a local `mod`.
 // [port-decision] layout_support / status_support / theme_support were initially
 //   deferred as outside the port map, then pulled forward when the children's
 //   super:: refs proved them live dependencies (ModRoot report + integrator
@@ -1901,6 +1967,8 @@ static LAST_COPY_VIEWPORT: OnceLock<Mutex<CopyViewportSnapshots>> = OnceLock::ne
 
 mod profile {
     use std::sync::{Mutex, OnceLock};
+    // Child modules do not inherit the parent's `use` bindings, so the timing
+    // types the ported draw path records are imported here explicitly.
     use std::time::{Duration, Instant};
 
     #[derive(Default)]
@@ -2482,6 +2550,324 @@ pub(crate) fn copy_viewport_line_text(abs_line: usize) -> Option<String> {
     )
 }
 
+// [port-source] ui.rs:2291-2299
+pub(crate) fn copy_viewport_point_from_screen(
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    let point = copy_point_from_screen(column, row)?;
+    (point.pane == crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat).then_some(point)
+}
+
+// [port-source] ui.rs:2300-2306
+#[cfg(test)]
+pub(crate) fn side_pane_point_from_screen(
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    let point = copy_point_from_screen(column, row)?;
+    (point.pane == crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane)
+        .then_some(point)
+}
+
+// [port-source] ui.rs:2318-2321
+pub(crate) fn side_pane_line_text(abs_line: usize) -> Option<String> {
+    copy_pane_line_text(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane,
+        abs_line,
+    )
+}
+
+// [port-source] ui.rs:2322-2325
+pub(crate) fn input_pane_line_text(abs_line: usize) -> Option<String> {
+    copy_pane_line_text(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input,
+        abs_line,
+    )
+}
+
+// [port-source] ui.rs:2326-2341
+fn copy_pane_line_count(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+) -> Option<usize> {
+    Some(copy_snapshot_for_pane(pane)?.wrapped_plain_line_count())
+}
+
+pub(crate) fn copy_viewport_line_count() -> Option<usize> {
+    copy_pane_line_count(crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat)
+}
+
+pub(crate) fn side_pane_line_count() -> Option<usize> {
+    copy_pane_line_count(crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane)
+}
+
+pub(crate) fn input_pane_line_count() -> Option<usize> {
+    copy_pane_line_count(crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input)
+}
+
+// [port-source] ui.rs:2342-2347
+pub(crate) fn copy_viewport_visible_range() -> Option<(usize, usize)> {
+    let snapshot =
+        copy_snapshot_for_pane(crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat)?;
+    Some((snapshot.scroll, snapshot.visible_end))
+}
+
+// [port-source] ui.rs:2348-2351
+#[cfg(test)]
+pub(crate) fn side_pane_visible_range() -> Option<(usize, usize)> {
+    let snapshot =
+        copy_snapshot_for_pane(crate::tui::jcode_ui::copy_selection::CopySelectionPane::SidePane)?;
+    Some((snapshot.scroll, snapshot.visible_end))
+}
+
+// [port-source] ui.rs:2353-2367
+pub(crate) fn copy_pane_first_visible_point(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    let snapshot = copy_snapshot_for_pane(pane)?;
+    if snapshot.scroll >= snapshot.visible_end
+        || snapshot.scroll >= snapshot.wrapped_plain_line_count()
+    {
+        return None;
+    }
+    Some(crate::tui::jcode_ui::copy_selection::CopySelectionPoint {
+        pane,
+        abs_line: snapshot.scroll,
+        column: 0,
+    })
+}
+
+// [port-source] ui.rs:2369-2436
+pub(crate) fn copy_selection_text(
+    range: crate::tui::jcode_ui::copy_selection::CopySelectionRange,
+) -> Option<String> {
+    if range.start.pane != range.end.pane {
+        return None;
+    }
+    let snapshot = copy_snapshot_for_pane(range.start.pane)?;
+    let (start, end) =
+        if (range.start.abs_line, range.start.column) <= (range.end.abs_line, range.end.column) {
+            (range.start, range.end)
+        } else {
+            (range.end, range.start)
+        };
+
+    if start.abs_line >= snapshot.wrapped_plain_line_count()
+        || end.abs_line >= snapshot.wrapped_plain_line_count()
+    {
+        return None;
+    }
+
+    // [port-decision] copy_selection_text_from_raw_lines: no operant equivalent —
+    //   the math-target raw-line fast path (upstream ui/ui/copy_selection.rs:45,
+    //   which prefers the pre-wrap source lines when a selection lines up with
+    //   them) is not ported, so the general per-wrapped-line path below is the
+    //   only path — wire at jcode_ui/ui/copy_selection.rs.
+
+    let selected_lines = end
+        .abs_line
+        .saturating_sub(start.abs_line)
+        .saturating_add(1);
+    let mut out = String::new();
+    for abs_line in start.abs_line..=end.abs_line {
+        if abs_line > start.abs_line {
+            out.push('\n');
+        }
+        let text = snapshot.wrapped_plain_line(abs_line)?;
+        if abs_line != start.abs_line && abs_line != end.abs_line {
+            let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+            if copy_start == 0 {
+                if abs_line == start.abs_line + 1 {
+                    out.reserve(text.len().saturating_mul(selected_lines.min(8)));
+                }
+                out.push_str(text);
+                continue;
+            }
+        }
+        let line_width = line_display_width(text);
+        let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+        let start_col = if abs_line == start.abs_line {
+            clamp_display_col(text, start.column).max(copy_start)
+        } else {
+            copy_start
+        };
+        let end_col = if abs_line == end.abs_line {
+            clamp_display_col(text, end.column).max(copy_start)
+        } else {
+            line_width
+        };
+
+        if end_col < start_col {
+            continue;
+        }
+
+        let slice = display_col_slice(text, start_col, end_col);
+        if abs_line == start.abs_line {
+            out.reserve(slice.len().saturating_mul(selected_lines.min(8)));
+        }
+        out.push_str(slice);
+    }
+
+    Some(out)
+}
+
+/// Compute `(char_count, line_count)` for the current copy selection without
+/// allocating the full joined selection string. Mirrors `copy_selection_text`
+/// so the status line "N chars · M lines" matches what would be copied, but is
+/// allocation-free so it can run cheaply on every render frame / drag move.
+// [port-source] ui.rs:2442-2502
+pub(crate) fn copy_selection_metrics(
+    range: crate::tui::jcode_ui::copy_selection::CopySelectionRange,
+) -> Option<(usize, usize)> {
+    if range.start.pane != range.end.pane {
+        return None;
+    }
+    let snapshot = copy_snapshot_for_pane(range.start.pane)?;
+    let (start, end) =
+        if (range.start.abs_line, range.start.column) <= (range.end.abs_line, range.end.column) {
+            (range.start, range.end)
+        } else {
+            (range.end, range.start)
+        };
+
+    if start.abs_line >= snapshot.wrapped_plain_line_count()
+        || end.abs_line >= snapshot.wrapped_plain_line_count()
+    {
+        return None;
+    }
+
+    // [port-decision] copy_selection_metrics_from_raw_lines: no operant
+    //   equivalent — same un-ported math-target fast path as in
+    //   `copy_selection_text` (ui/ui/copy_selection.rs:187) — wire at
+    //   jcode_ui/ui/copy_selection.rs.
+
+    let mut chars = 0usize;
+    let mut lines = 0usize;
+    for abs_line in start.abs_line..=end.abs_line {
+        if abs_line > start.abs_line {
+            chars += 1; // joining '\n'
+        }
+        lines += 1;
+        let text = snapshot.wrapped_plain_line(abs_line)?;
+        if abs_line != start.abs_line && abs_line != end.abs_line {
+            let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+            if copy_start == 0 {
+                chars += text.chars().count();
+                continue;
+            }
+        }
+        let line_width = line_display_width(text);
+        let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+        let start_col = if abs_line == start.abs_line {
+            clamp_display_col(text, start.column).max(copy_start)
+        } else {
+            copy_start
+        };
+        let end_col = if abs_line == end.abs_line {
+            clamp_display_col(text, end.column).max(copy_start)
+        } else {
+            line_width
+        };
+        if end_col < start_col {
+            continue;
+        }
+        chars += display_col_slice(text, start_col, end_col).chars().count();
+    }
+
+    Some((chars, lines.max(1)))
+}
+
+// [port-source] ui.rs:2209-2267
+/// Terminals report a drag that "leaves" the pane on the boundary row, but a
+/// drag *into the empty space below the last content line* (common with short
+/// transcripts that leave blank rows underneath) lands on a row that maps to no
+/// line at all, so `copy_point_from_screen` returns `None`. Native terminal and
+/// browser selection treat that as "select through the end of the last line".
+/// This mirrors that: dragging below the last visible line snaps to the end of
+/// that line, and dragging above the first visible line snaps to its start, so
+/// the boundary line is fully covered even when there is nothing more to scroll.
+pub(crate) fn copy_pane_drag_point(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+    column: u16,
+    row: u16,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    let snapshot = copy_snapshot_for_pane(pane)?;
+    let area = snapshot.content_area;
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+
+    // A direct hit on a real line wins: precise per-cell selection.
+    if let Some(point) = copy_point_from_snapshot(&snapshot, column, row) {
+        return Some(point);
+    }
+
+    let line_count = snapshot.wrapped_plain_line_count();
+    if line_count == 0 {
+        return None;
+    }
+    let last_line = line_count.saturating_sub(1);
+    let last_visible_line = snapshot.visible_end.saturating_sub(1).min(last_line);
+    let first_visible_line = snapshot.scroll.min(last_line);
+
+    let last_row = area.y.saturating_add(area.height).saturating_sub(1);
+    let clamped_col = column.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
+
+    // Below the visible content: snap to the end of the last visible line.
+    if row >= last_row {
+        let text = snapshot.wrapped_plain_line(last_visible_line).unwrap_or("");
+        return Some(crate::tui::jcode_ui::copy_selection::CopySelectionPoint {
+            pane,
+            abs_line: last_visible_line,
+            column: line_display_width(text),
+        });
+    }
+
+    // Above the visible content: snap to the start of the first visible line.
+    if row <= area.y {
+        return Some(crate::tui::jcode_ui::copy_selection::CopySelectionPoint {
+            pane,
+            abs_line: first_visible_line,
+            column: snapshot
+                .wrapped_copy_offset(first_visible_line)
+                .unwrap_or(0),
+        });
+    }
+
+    // Interior row that maps to no line (e.g. a blank gap row between/after
+    // content within the visible band): fall back to the boundary-clamped point.
+    copy_point_from_snapshot(&snapshot, clamped_col, row.clamp(area.y, last_row)).or(Some(
+        crate::tui::jcode_ui::copy_selection::CopySelectionPoint {
+            pane,
+            abs_line: last_visible_line,
+            column: line_display_width(
+                snapshot.wrapped_plain_line(last_visible_line).unwrap_or(""),
+            ),
+        },
+    ))
+}
+
+// [port-source] ui.rs:2273-2289
+/// Edge point for tick-driven continuous auto-scroll, where there is no live
+/// mouse position. Uses the top/bottom boundary row of the pane and its left
+/// content column so the selection keeps extending to the freshly revealed line.
+pub(crate) fn copy_pane_autoscroll_edge_point(
+    pane: crate::tui::jcode_ui::copy_selection::CopySelectionPane,
+    upward: bool,
+) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionPoint> {
+    let snapshot = copy_snapshot_for_pane(pane)?;
+    let area = snapshot.content_area;
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let edge_row = if upward {
+        area.y
+    } else {
+        area.y.saturating_add(area.height).saturating_sub(1)
+    };
+    copy_point_from_snapshot(&snapshot, area.x, edge_row)
+}
+
 // [port-source] ui.rs:3626-3709
 pub(crate) fn split_native_scrollbar_area(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
     if !enabled || area.width <= 1 {
@@ -2568,4 +2954,1221 @@ pub(crate) fn render_native_scrollbar(
     }
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+// [port-source] ui.rs:2504-2513
+pub(crate) fn link_target_from_screen(column: u16, row: u16) -> Option<String> {
+    let point = copy_point_from_screen(column, row)?;
+    // Clicking a URL you are still composing should reposition the caret, not
+    // open the link; only transcript/side-pane links are click-to-open.
+    if point.pane == crate::tui::jcode_ui::copy_selection::CopySelectionPane::Input {
+        return None;
+    }
+    // [port-decision] link_target_from_snapshot: no operant equivalent — the
+    // OSC-8 link extraction (upstream ui/ui/copy_selection.rs:239 via
+    // ui/url.rs's `link_target_for_display_column` + markdown-link regex) is not
+    // ported, so a screen click resolves to no link target and click-to-open
+    // links are inert — wire at jcode_ui/ui/copy_selection.rs + ui/url.rs.
+    let _ = copy_snapshot_for_pane(point.pane)?;
+    None
+}
+
+// [port-source] ui.rs:2519-2523
+/// If a screen click landed on an inline-image label line, return the image
+/// id so the caller can cycle that image's size. The label line is short and
+/// single purpose (there is no visible expand badge anymore), so the whole
+/// line acts as the click target alongside the image body itself.
+pub(crate) fn inline_image_expand_target_from_screen(column: u16, row: u16) -> Option<u64> {
+    let point = copy_point_from_screen(column, row)?;
+    let snapshot = copy_snapshot_for_pane(point.pane)?;
+    snapshot.inline_image_id_for_label_line(point.abs_line)
+}
+
+// [port-source] ui.rs:2529-2556
+/// If a screen click landed on a collapsed/expanded swarm notification's
+/// `▸ expand` / `▾ collapse` badge, return the transcript message index so the
+/// caller can toggle that notification. Only clicks on the trailing badge
+/// token count, so the tldr text itself stays selectable.
+pub(crate) fn swarm_expand_target_from_screen(column: u16, row: u16) -> Option<usize> {
+    let point = copy_point_from_screen(column, row)?;
+    if point.pane != crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat {
+        return None;
+    }
+    let snapshot = copy_snapshot_for_pane(point.pane)?;
+    let prepared = match &snapshot.data {
+        CopyViewportData::ChatFrame { prepared } => prepared.clone(),
+        CopyViewportData::Dense { .. } => return None,
+    };
+    let text = snapshot.wrapped_plain_line(point.abs_line)?;
+    let trimmed = text.trim_end();
+    let badge_start = [
+        messages::SWARM_EXPAND_BADGE,
+        messages::SWARM_COLLAPSE_BADGE,
+        messages::SWARM_DIFF_EXPAND_BADGE,
+        messages::SWARM_DIFF_COLLAPSE_BADGE,
+    ]
+    .iter()
+    .find_map(|badge| {
+        let prefix = trimmed.strip_suffix(badge)?;
+        Some(line_display_width(prefix))
+    })?;
+    if point.column < badge_start {
+        return None;
+    }
+    prepared.message_index_at_line(point.abs_line)
+}
+
+// [port-source] ui.rs:2566-2600
+/// If a screen click landed on the rendered body of an inline image (its
+/// placeholder rows), return the image id so the caller can cycle that image's
+/// size. Together with the label-line hit-test this makes the whole picture
+/// clickable.
+/// The hit-region is bounded by the image's rendered width (`region.width`,
+/// which includes the 2-cell left border), shifted right when `centered` mode
+/// horizontally centers the drawn pixels, so clicks in empty space beside a
+/// narrow image stay inert.
+pub(crate) fn inline_image_body_target_from_screen(
+    column: u16,
+    row: u16,
+    centered: bool,
+) -> Option<u64> {
+    let point = copy_point_from_screen(column, row)?;
+    let snapshot = copy_snapshot_for_pane(point.pane)?;
+    let prepared = match &snapshot.data {
+        CopyViewportData::ChatFrame { prepared } => prepared,
+        CopyViewportData::Dense { .. } => return None,
+    };
+    let region = prepared.image_regions.iter().find(|region| {
+        region.render == crate::tui::jcode_model::ImageRegionRender::Fit
+            && point.abs_line >= region.abs_line_idx
+            && point.abs_line < region.end_line
+    })?;
+    let area = snapshot.content_area;
+    let rel_col = column.saturating_sub(area.x);
+    // `width == 0` means unknown; treat the rows as fully occupied then.
+    let width = if region.width == 0 {
+        area.width
+    } else {
+        region.width.min(area.width)
+    };
+    // Centered mode draws the border at the left edge but centers the image
+    // pixels; the right edge shifts inward by the leftover space.
+    let right_edge = if centered && width < area.width {
+        (width + (area.width - width) / 2).min(area.width)
+    } else {
+        width
+    };
+    (rel_col < right_edge).then_some(region.hash)
+}
+
+// [port-source] ui.rs:2606-2657
+/// Debug dump of the live chat snapshot's inline-image regions plus the screen
+/// coordinates of each visible label line (the click target that cycles the
+/// image size), so external drivers (debug socket) can compute real click
+/// targets against the running TUI.
+pub(crate) fn debug_chat_image_regions_json() -> String {
+    let Some(snapshot) =
+        copy_snapshot_for_pane(crate::tui::jcode_ui::copy_selection::CopySelectionPane::Chat)
+    else {
+        return "{\"error\":\"no chat snapshot\"}".to_string();
+    };
+    let prepared = match &snapshot.data {
+        CopyViewportData::ChatFrame { prepared } => prepared.clone(),
+        CopyViewportData::Dense { .. } => {
+            return "{\"error\":\"dense snapshot (no image regions)\"}".to_string();
+        }
+    };
+    let area = snapshot.content_area;
+    let regions: Vec<serde_json::Value> = prepared
+        .image_regions
+        .iter()
+        .map(|region| {
+            let label_line = region.abs_line_idx.saturating_sub(1);
+            let label_text = snapshot.wrapped_plain_line(label_line).unwrap_or("");
+            let label_visible = label_line >= snapshot.scroll && label_line < snapshot.visible_end;
+            // The whole label line is clickable now; report its first cell as
+            // the badge coordinate so existing drivers keep working.
+            let badge_screen = label_visible.then(|| {
+                let rel_row = label_line - snapshot.scroll;
+                let left_margin = snapshot.left_margins.get(rel_row).copied().unwrap_or(0);
+                serde_json::json!({
+                    "col": area.x as usize + left_margin as usize,
+                    "row": area.y as usize + rel_row,
+                })
+            });
+            serde_json::json!({
+                "hash": region.hash,
+                "render": format!("{:?}", region.render),
+                "abs_line_idx": region.abs_line_idx,
+                "end_line": region.end_line,
+                "height": region.height,
+                "width": region.width,
+                "label_text": label_text,
+                "badge_screen": badge_screen,
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "scroll": snapshot.scroll,
+        "visible_end": snapshot.visible_end,
+        "content_area": {
+            "x": area.x, "y": area.y, "width": area.width, "height": area.height,
+        },
+        "image_regions": regions,
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+} // [port-source] jcode-tui-render/src/swarm_gallery.rs:63 — upstream's derived
+// constant, inlined because operant's jcode_render/swarm_gallery.rs kept the
+// base const but excised this one (see that file's [port-excision] note: the
+// strip renderers are W7). Same formula, same base const.
+const STRIP_SPINNER_FPS: f32 =
+    1000.0 / crate::tui::jcode_render::swarm_gallery::STRIP_SPINNER_FRAME_MS as f32;
+
+// [port-source] ui.rs:2659-3624 — the App-bound frame draw path, ported at the
+// cutover onto the `TuiState` seam. Upstream already takes `app: &dyn TuiState`
+// (post-W1 upstream refactor), so the bodies are verbatim modulo the re-root map
+// and the four gated children named in the excision block above:
+//
+//   re-root table (upstream → operant)
+//     crate::tui::markdown           → crate::tui::jcode_app::markdown
+//     crate::tui::mermaid            → crate::tui::jcode_app::mermaid
+//     crate::tui::keybind            → crate::tui::jcode_app::keybind
+//     crate::tui::OnboardingWelcomeKind → crate::tui::jcode_app::tui_state::OnboardingWelcomeKind
+//     crate::tui::side_panel_debug_json      → side_panel_debug_json (pinned_ui re-export)
+//     crate::tui::reset_pinned_diagram_debug_snapshot → reset_pinned_diagram_debug_snapshot
+//     crate::tui::clear_side_panel_debug_snapshot     → clear_side_panel_debug_snapshot
+//     crate::config::DiagramDisplayMode    → crate::tui::jcode_app::config_shim::DiagramDisplayMode
+//     crate::config::DiagramPanePosition   → crate::tui::jcode_app::config_shim::DiagramPanePosition
+//     jcode_tui_render::swarm_gallery      → crate::tui::jcode_render::swarm_gallery
+//     jcode_tui_style                      → crate::tui::vendor::style::theme_mode
+//     jcode_tui_messages::ImageRegionRender → crate::tui::jcode_model::ImageRegionRender
+//     crate::logging::warn                 → crate::tui::jcode_app::logging::warn
+//     super::info_widget::swarm_strip_stands_down_for_dock → info_widget::swarm_strip_stands_down_for_dock
+//     super::info_widget::swarm_gallery::  → info_widget::swarm_gallery::
+//     super::idle_donut_active              → idle_donut_active (ported below from
+//                                            upstream tui/redraw_schedule.rs:209)
+//
+// [port-decision] debug_capture is hard-wired to `None`: upstream's
+// `visual_debug::is_enabled()` and the whole ui_debug_capture.rs helper set
+// (capture_widget_placements / build_info_widget_summary / rect_within_bounds /
+// rects_overlap / widget_overlaps_content) have no ported home, so the capture
+// recording below is compiled but inert until W-visual-debug lands the sink.
+// Wiring it back is a one-line change at the `debug_capture` binding: the
+// `capture.*` field writes are all still there.
+pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
+    record_idle_animation_area(None);
+    // Suggestions are read many times while composing one frame. Bump the
+    // epoch here so the memo is scoped to exactly this frame.
+    app.advance_command_suggestions_epoch();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::tui::jcode_app::markdown::with_deferred_mermaid_render_context(|| {
+            draw_inner(frame, app)
+        })
+    })) {
+        Ok(()) => {}
+        // [port-decision] render_recovered_panic_frame: no operant equivalent —
+        // upstream tui/ui/draw_recovery.rs is not ported (it needs
+        // jcode_core::panic_util::panic_payload_to_string, which operant has no
+        // home for), so a recovered frame is left as the partially-drawn buffer
+        // instead of the "rendering error recovered" placeholder — wire at
+        // jcode_ui/ui/draw_recovery.rs.
+        Err(_payload) => {}
+    }
+    // Adapt the finished frame at buffer level so every widget and overlay
+    // follows the same policy. User-configured colors remain exact.
+    // Attribute explicit palette overrides before light-theme contrast repair
+    // can make distinct muted source grays converge to the same rendered ink.
+    crate::tui::vendor::style::theme_mode::adapt_buffer_for_display(frame.buffer_mut());
+    adapt_buffer_for_emoji_preference(frame.buffer_mut());
+    // Cache eviction/clearing can outlive the last visible image. Carry Kitty
+    // deletion commands on any completed frame so terminal-side pixel storage
+    // is reclaimed even when no image widget renders again.
+    // [port-decision] mermaid::render_pending_terminal_image_cleanup: no operant
+    // equivalent — the ported jcode_app/mermaid.rs is the no-engine shim (no
+    // ratatui_image, no Kitty pixel store), so there is nothing to reclaim —
+    // wire at jcode_app::mermaid (upstream jcode-tui-mermaid lib.rs:1581).
+}
+
+fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
+    panel_image_preview::clear_regions();
+    let area = frame.area().intersection(*frame.buffer_mut().area());
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let total_start = Instant::now();
+    reset_frame_perf_stats();
+    begin_frame_resource_sample();
+
+    clear_copy_viewport_snapshot();
+
+    // Clear full frame to prevent stale cells from prior layouts.
+    // This is critical on macOS terminals where ratatui's diff-based updates
+    // can leave outdated content when layout dimensions change between frames
+    // (e.g., diagram pane toggling, streaming text clearing, tool calls finishing).
+    // Uses Color::Reset (terminal default bg) so text selection highlighting works
+    // natively in all terminal emulators.
+    clear_area(frame, area);
+
+    if let Some(hash) = app.panel_image_preview() {
+        panel_image_preview::draw_preview(frame, area, hash);
+        finalize_frame_metrics(
+            app,
+            total_start,
+            Duration::ZERO,
+            total_start.elapsed(),
+            None,
+        );
+        return;
+    }
+
+    if let Some(scroll) = app.changelog_scroll() {
+        overlays::draw_changelog_overlay(frame, area, scroll, app);
+        finalize_frame_metrics(
+            app,
+            total_start,
+            Duration::ZERO,
+            total_start.elapsed(),
+            None,
+        );
+        return;
+    }
+
+    if let Some(scroll) = app.help_scroll() {
+        overlays::draw_help_overlay(frame, area, scroll, app);
+        finalize_frame_metrics(
+            app,
+            total_start,
+            Duration::ZERO,
+            total_start.elapsed(),
+            None,
+        );
+        return;
+    }
+
+    if let Some((scroll, content)) = app.model_status_overlay() {
+        overlays::draw_model_status_overlay(frame, area, scroll, content);
+        finalize_frame_metrics(
+            app,
+            total_start,
+            Duration::ZERO,
+            total_start.elapsed(),
+            None,
+        );
+        return;
+    }
+
+    // [port-decision] session_picker_overlay / login_picker_overlay /
+    //   account_picker_overlay: no operant equivalent — the three overlay
+    //   methods are excised from the ported TuiState trait (see
+    //   jcode_app/tui_fns.rs:18-23: their payload picker modules are unported
+    //   waves), so the three early-return full-screen picker frames cannot be
+    //   reached through the seam — wire at tui_state.rs (:809-816) plus the
+    //   session/login/account picker modules. Anything a picker would have
+    //   covered falls through to the normal frame below.
+    // [port-decision] hard-wired to `None` — see the header note: upstream's
+    // `visual_debug::is_enabled()` and the ui_debug_capture.rs helper set have no
+    // ported home, so every `capture.*` write below is compiled but inert.
+    let mut debug_capture: Option<FrameCaptureBuilder> = None;
+
+    // Initialize visual debug capture if enabled
+    let swarm_page_active = app.swarm_panel_full_page();
+
+    // Check diagram display mode and get active diagrams early so we can
+    // determine the horizontal split before computing input width etc.
+    let diagram_mode = app.diagram_mode();
+    // [port-decision] get_active_diagrams: no operant equivalent — the active
+    //   diagram registry (upstream jcode-tui-mermaid/src/mermaid_active.rs:86)
+    //   is engine-side and the ported jcode_app/mermaid.rs is the no-engine
+    //   shim, so the pinned diagram pane has no candidates this frame —
+    //   wire at jcode_app::mermaid::get_active_diagrams.
+    let diagrams: Vec<info_widget::DiagramInfo> = Vec::new();
+    let diagram_count = diagrams.len();
+    let selected_index = if diagram_count > 0 {
+        app.diagram_index().min(diagram_count - 1)
+    } else {
+        0
+    };
+    let pane_enabled = app.diagram_pane_enabled();
+    let pane_position = app.diagram_pane_position();
+    let has_side_panel_content = !swarm_page_active && app.side_panel().focused_page().is_some();
+    let diff_mode = app.diff_mode();
+    let has_file_diff_edits =
+        !swarm_page_active && diff_mode.is_file() && app.has_display_edit_tool_messages();
+    let has_right_side_pane_content = has_side_panel_content || has_file_diff_edits;
+    // Fullscreen side panel replaces the transcript area; status line and input stay.
+    let side_panel_fullscreen = has_side_panel_content && app.side_panel_fullscreen();
+    // Regular side-panel pages and full-file diffs share the right-hand surface.
+    // Suppress a separate diagram pane to avoid a triple-split layout.
+    let suppress_side_diagram = has_right_side_pane_content;
+    let pinned_diagram = if !swarm_page_active
+        && diagram_mode == crate::tui::jcode_app::config_shim::DiagramDisplayMode::Pinned
+        && pane_enabled
+        && !suppress_side_diagram
+    {
+        diagrams.get(selected_index).cloned()
+    } else {
+        None
+    };
+    let diagram_focus = app.diagram_focus();
+    let (diagram_scroll_x, diagram_scroll_y) = app.diagram_scroll();
+
+    // Compute layout depending on pane position (Side = right column, Top = above chat).
+    let (chat_area, diagram_area) = if let Some(diagram) = pinned_diagram.as_ref() {
+        match pane_position {
+            crate::tui::jcode_app::config_shim::DiagramPanePosition::Side => {
+                const MIN_DIAGRAM_WIDTH: u16 = 24;
+                const MIN_CHAT_WIDTH: u16 = 20;
+                let max_diagram = area.width.saturating_sub(MIN_CHAT_WIDTH);
+                if max_diagram >= MIN_DIAGRAM_WIDTH {
+                    let ratio = app.diagram_pane_ratio().clamp(25, 100) as u32;
+                    let ratio_target = ((area.width as u32 * ratio) / 100) as u16;
+                    let needed =
+                        estimate_pinned_diagram_pane_width(diagram, area.height, MIN_DIAGRAM_WIDTH);
+                    // The configured ratio is the upper bound for the pane so the
+                    // transcript (which still renders the diagram inline) is never
+                    // crushed. Shrink below the ratio when a diagram is narrow
+                    // enough to need less, but do not grow past it: a large/tall
+                    // diagram just scales down to fit the pane instead of eating
+                    // the chat column.
+                    let diagram_width = ratio_target
+                        .min(needed.max(MIN_DIAGRAM_WIDTH))
+                        .max(MIN_DIAGRAM_WIDTH)
+                        .min(max_diagram);
+                    let chat_width = area.width.saturating_sub(diagram_width);
+                    if diagram_width > 0 && chat_width > 0 {
+                        let chat = Rect {
+                            x: area.x,
+                            y: area.y,
+                            width: chat_width,
+                            height: area.height,
+                        };
+                        let diag = Rect {
+                            x: area.x + chat_width,
+                            y: area.y,
+                            width: diagram_width,
+                            height: area.height,
+                        };
+                        (chat, Some(diag))
+                    } else {
+                        (area, None)
+                    }
+                } else {
+                    (area, None)
+                }
+            }
+            crate::tui::jcode_app::config_shim::DiagramPanePosition::Top => {
+                const MIN_DIAGRAM_HEIGHT: u16 = 6;
+                const MIN_CHAT_HEIGHT: u16 = 8;
+                let max_diagram = area.height.saturating_sub(MIN_CHAT_HEIGHT);
+                if max_diagram >= MIN_DIAGRAM_HEIGHT {
+                    let ratio = app.diagram_pane_ratio().clamp(20, 100) as u32;
+                    let ratio_target = ((area.height as u32 * ratio) / 100) as u16;
+                    let needed = estimate_pinned_diagram_pane_height(
+                        diagram,
+                        area.width,
+                        MIN_DIAGRAM_HEIGHT,
+                    );
+                    // Cap the pane at the configured ratio so the transcript keeps
+                    // its rows; shrink below it when the diagram is short. A tall
+                    // diagram scales down to fit rather than swallowing the chat.
+                    let diagram_height = ratio_target
+                        .min(needed.max(MIN_DIAGRAM_HEIGHT))
+                        .max(MIN_DIAGRAM_HEIGHT)
+                        .min(max_diagram);
+                    let chat_height = area.height.saturating_sub(diagram_height);
+                    if diagram_height > 0 && chat_height > 0 {
+                        let diag = Rect {
+                            x: area.x,
+                            y: area.y,
+                            width: area.width,
+                            height: diagram_height,
+                        };
+                        let chat = Rect {
+                            x: area.x,
+                            y: area.y + diagram_height,
+                            width: area.width,
+                            height: chat_height,
+                        };
+                        (chat, Some(diag))
+                    } else {
+                        (area, None)
+                    }
+                } else {
+                    (area, None)
+                }
+            }
+        }
+    } else {
+        (area, None)
+    };
+
+    let needs_side_pane = has_right_side_pane_content && !side_panel_fullscreen;
+
+    let (chat_area, diff_pane_area) = if needs_side_pane {
+        const MIN_DIFF_WIDTH: u16 = 30;
+        const MIN_CHAT_WIDTH: u16 = 20;
+        let effective_ratio = app.diagram_pane_ratio().clamp(25, 100) as u32;
+        let max_diff = chat_area.width.saturating_sub(MIN_CHAT_WIDTH);
+        if max_diff >= MIN_DIFF_WIDTH {
+            let diff_width = (((chat_area.width as u32 * effective_ratio) / 100) as u16)
+                .max(MIN_DIFF_WIDTH)
+                .min(max_diff);
+            let new_chat_width = chat_area.width.saturating_sub(diff_width);
+            let chat = Rect {
+                x: chat_area.x,
+                y: chat_area.y,
+                width: new_chat_width,
+                height: chat_area.height,
+            };
+            let diff = Rect {
+                x: chat_area.x + new_chat_width,
+                y: chat_area.y,
+                width: diff_width,
+                height: chat_area.height,
+            };
+            (chat, Some(diff))
+        } else {
+            (chat_area, None)
+        }
+    } else {
+        (chat_area, None)
+    };
+
+    // Inline swarm strip: when `swarm_spawn_mode = inline` and this session
+    // manages agents, render a compact strip (vertical agent list by default,
+    // see `agents.swarm_strip_layout`) directly above the status line instead
+    // of a big gallery band. When the panel is focused (alt+n), the selected
+    // agent's row expands in place with its live transcript tail and todos;
+    // alt+↑/↓ select, alt+o pops out, alt+shift+p opens the swarm prompt,
+    // esc exits, and plain typing keeps flowing to the chat input. The strip stands
+    // down while the SwarmStatus dock widget (margin HUD) is showing the same
+    // agents, unless the panel is focused (keyboard interaction lives here).
+    // The stand-down is sticky (anchored blinks count as engaged, plus a short
+    // linger after disengagement) because each strip appearance adds a row to
+    // the bottom chrome and shoves the transcript up: reacting to raw
+    // frame-by-frame dock visibility made the strip pop in and out and the
+    // whole screen bounce (flicker).
+    let swarm_strip_lines: Vec<Line<'static>> = if !swarm_page_active
+        && app.inline_swarm_gallery_active()
+        && (app.swarm_panel_focused() || !info_widget::swarm_strip_stands_down_for_dock())
+    {
+        let members = app.inline_swarm_members();
+        if chat_area.width >= 24 {
+            // [port-decision] swarm_panel_focus_key_label: no operant equivalent —
+            //   operant's jcode_app/keybind.rs exposes only side_panel_toggle_key_label
+            //   and diagram_pane_visibility_key_label; the swarm-panel binding is not
+            //   ported, so the strip's focus hint renders with an empty label —
+            //   wire at jcode_app/keybind.rs.
+            let focus_key = String::new();
+            // Use the same smooth cadence as the primary status spinner.
+            let spinner_frame = (app.animation_elapsed() * STRIP_SPINNER_FPS) as usize;
+            // Focused budget: chips + hints + a ~14-line detail viewport, but
+            // never more than a third of the chat column so the transcript
+            // stays usable on short terminals.
+            let focused_budget = ((chat_area.height as usize) / 3).clamp(3, 16);
+            info_widget::swarm_gallery::render_swarm_strip_lines(
+                &members,
+                app.swarm_panel_selected(),
+                app.swarm_panel_focused(),
+                &focus_key,
+                spinner_frame,
+                chat_area.width as usize,
+                focused_budget,
+            )
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    let swarm_strip_height = swarm_strip_lines.len() as u16;
+
+    // Calculate pending messages (queued + interleave) for numbering and layout
+    let pending_count = input_ui::pending_prompt_count(app);
+    let queued_height = pending_count.min(3) as u16;
+
+    // Count user messages to show next prompt number
+    let user_count = app.display_user_message_count();
+    let next_prompt = user_count + 1;
+
+    // Calculate input height based on the same wrapping logic used for rendering
+    // (max 10 lines visible, scrolls if more).
+    let base_input_height =
+        input_ui::wrapped_input_line_count(app, chat_area.width, next_prompt).min(10) as u16;
+    // Add 1 line for command suggestions, shell mode hints, or the Ctrl+Enter hint.
+    let hint_line_height = input_ui::input_hint_line_height(app);
+    let inline_block_height: u16 = inline_ui_height(app);
+    let inline_ui_gap_height: u16 = if inline_block_height > 0 { 1 } else { 0 };
+    let input_height = base_input_height + hint_line_height;
+
+    if let Some(capture) = &mut debug_capture {
+        capture.render_order.push("prepare_messages".to_string());
+    }
+    let prep_start = Instant::now();
+    let chat_left_inset = left_aligned_content_inset(chat_area.width, app.centered_mode());
+    let wide_prepare_width = chat_area.width.saturating_sub(chat_left_inset);
+    let narrow_prepare_width = wide_prepare_width.saturating_sub(1);
+    let pinned_mermaid_aspect_ratio =
+        diagram_area.and_then(|area| pinned_diagram_preferred_aspect_ratio(area, pane_position));
+    let aspect_start = Instant::now();
+    // Aspect-ratio goal for transcript mermaid renders (deferred and
+    // synchronous): the pinned pane's aspect wins when the pane is open so
+    // inline and pane share one cached PNG; otherwise a terminal-friendly
+    // inline goal keeps diagrams within a readable-height budget. Best-effort:
+    // falls back to None (today's 4:3 sizing) when font geometry is
+    // unavailable.
+    // [port-decision] mermaid::transcript_preferred_aspect_ratio: no operant
+    //   equivalent — the font-metric aspect goal
+    //   (upstream jcode-tui-mermaid/src/mermaid_content.rs:159) is engine-side
+    //   and the ported jcode_app/mermaid.rs is the no-engine shim, so the
+    //   transcript mermaid goal is the pinned pane's ratio (or None) instead of a
+    //   terminal-friendly inline goal — wire at jcode_app::mermaid.
+    let transcript_mermaid_aspect_ratio = pinned_mermaid_aspect_ratio;
+    note_prep_aspect(aspect_start.elapsed());
+    let prepare_at = |width: u16| {
+        let started = Instant::now();
+        let prepared =
+            mermaid::with_preferred_aspect_ratio(transcript_mermaid_aspect_ratio, || {
+                prepare::prepare_messages(app, width, chat_area.height)
+            });
+        note_prep_prepare_at(started.elapsed());
+        prepared
+    };
+
+    let onboarding_welcome = app.onboarding_welcome_active();
+
+    // The guided onboarding phases (login import, OpenAI prompt, continue prompt)
+    // are entirely key-driven and own the whole chat column: they render their own
+    // telemetry header, a prominent donut, and the welcome body. Suppress the
+    // normal chat chrome (status line, input box, notification, idle hint) so the
+    // screen stays focused and the donut gets the full height. The resting
+    // Suggestions screen keeps the input box so the user can type to start.
+    let onboarding_takes_over = onboarding_welcome
+        && !matches!(
+            app.onboarding_welcome_kind(),
+            crate::tui::jcode_app::tui_state::OnboardingWelcomeKind::Suggestions
+        );
+    // [port-decision] onboarding::draw_onboarding_welcome: no operant equivalent —
+    //   upstream tui/onboarding.rs is W8 and operant has its own onboarding/connect
+    //   dialogs, so the takeover renders the normal chrome instead of the welcome
+    //   body. `TuiState::onboarding_welcome_active()` defaults false, so an
+    //   implementor that does not opt in never reaches here — wire at
+    //   jcode_ui/ui_onboarding.rs.
+    if onboarding_takes_over {
+        finalize_frame_metrics(
+            app,
+            total_start,
+            prep_start.elapsed(),
+            total_start.elapsed(),
+            None,
+        );
+        return;
+    }
+
+    let show_donut = !onboarding_welcome && idle_donut_active(app);
+    let donut_height: u16 = idle_donut_reserved_height(show_donut, input_height);
+    let notification_height =
+        input_ui::notification_height(app, chat_area.width).min(chat_area.height.saturating_sub(4));
+    // Session status line (dir, branch, context, provider, model), always
+    // pinned directly below the input line.
+    let overscroll_height: u16 = 1;
+    let fixed_height = 1
+        + queued_height
+        + swarm_strip_height
+        + notification_height
+        + inline_block_height
+        + inline_ui_gap_height
+        + input_height
+        + overscroll_height
+        + donut_height; // status + queued + swarm strip + notification + inline UI + gap + input + overscroll + donut
+    let available_height = chat_area.height;
+    let stable_fixed_height = fixed_height;
+    let overflows = |prepared: &PreparedChatFrame| {
+        let started = Instant::now();
+        let result =
+            (prepared.total_wrapped_lines().max(1) as u16) + stable_fixed_height > available_height;
+        note_prep_overflow(started.elapsed());
+        result
+    };
+
+    // Resolving native-scrollbar overflow can require wrapping the transcript at
+    // two different widths (the wide layout, and one column narrower to reserve a
+    // scrollbar column). Preparing both every frame doubles the most expensive work
+    // and thrashes the prep caches on long transcripts during streaming. Use the
+    // previous frame's scrollbar decision as hysteresis so the steady state only
+    // prepares a single width; the second width is only built at a visibility
+    // transition. This is safe because narrow wraps at least as much as wide, so
+    // "narrow fits" implies "wide fits".
+    let scrollbar_enabled = app.chat_native_scrollbar() && chat_area.width > 1;
+    let initial_content_height;
+    let (prepared, chat_scrollbar_visible) = if !scrollbar_enabled {
+        let prepared_wide = prepare_at(wide_prepare_width);
+        initial_content_height = prepared_wide.total_wrapped_lines().max(1) as u16;
+        (prepared_wide, false)
+    } else if last_chat_scrollbar_visible() {
+        // Scrollbar was visible last frame: prepare the narrow (reserved-column)
+        // layout first. If it still overflows we keep it without touching wide.
+        let prepared_narrow = prepare_at(narrow_prepare_width);
+        initial_content_height = prepared_narrow.total_wrapped_lines().max(1) as u16;
+        if overflows(&prepared_narrow) {
+            (prepared_narrow, true)
+        } else {
+            // Content shrank enough to fit even at the narrower width, so the wide
+            // layout (which wraps no more) also fits: drop the scrollbar.
+            (prepare_at(wide_prepare_width), false)
+        }
+    } else {
+        // No scrollbar last frame: prepare the wide layout first. Only when it
+        // overflows do we evaluate the narrow layout to decide on the scrollbar.
+        let prepared_wide = prepare_at(wide_prepare_width);
+        initial_content_height = prepared_wide.total_wrapped_lines().max(1) as u16;
+        if !overflows(&prepared_wide) {
+            (prepared_wide, false)
+        } else {
+            let prepared_narrow = prepare_at(narrow_prepare_width);
+            if overflows(&prepared_narrow) {
+                (prepared_narrow, true)
+            } else {
+                // Reserving a scrollbar column changed the wrapped content enough to
+                // make it fit. Prefer the wide layout without the native scrollbar so
+                // the transcript does not oscillate between layouts across
+                // consecutive frames.
+                (prepared_wide, false)
+            }
+        }
+    };
+    set_last_chat_scrollbar_visible(chat_scrollbar_visible);
+    if let Some(capture) = &mut debug_capture {
+        capture.image_regions = prepared
+            .image_regions
+            .iter()
+            .map(|region| ImageRegionCapture {
+                hash: format!("{:016x}", region.hash),
+                abs_line_idx: region.abs_line_idx,
+                height: region.height,
+            })
+            .collect();
+    }
+    let prep_elapsed = prep_start.elapsed();
+    let content_height = prepared.total_wrapped_lines().max(1) as u16;
+
+    // Terminal-style clear (Ctrl+L): the trailing spacer makes every visible
+    // transcript row blank, so a normal bottom-anchored layout would park the
+    // status line and numbered prompt at the *bottom* of a screenful of
+    // blanks. Collapse the messages area instead, exactly like a terminal
+    // after `clear`: the prompt sits at the top and the history is one scroll
+    // away. Scrolling up, new output, or streaming all end the state (see
+    // `terminal_clear_collapsed`) and restore the normal layout.
+    let terminal_clear_collapsed = !swarm_page_active && app.terminal_clear_collapsed();
+    let content_height = if terminal_clear_collapsed {
+        0
+    } else {
+        content_height
+    };
+
+    // Use packed layout when content fits, scrolling layout otherwise
+    let use_packed = terminal_clear_collapsed
+        || (!swarm_page_active
+            && !side_panel_fullscreen
+            && content_height + fixed_height <= available_height);
+
+    // Layout: messages (includes header), queued, status, notification, inline UI, gap, input, donut
+    // All vertical chunks are within the chat_area (left column).
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(if use_packed {
+            vec![
+                Constraint::Length(if terminal_clear_collapsed {
+                    0
+                } else {
+                    content_height.max(1)
+                }), // 0 Messages (exact height; 0 when terminal-cleared)
+                Constraint::Length(queued_height), // 1 Queued messages (above status)
+                Constraint::Length(swarm_strip_height), // 2 Swarm strip (above status)
+                Constraint::Length(1),             // 3 Status line
+                Constraint::Length(notification_height), // 4 Notification line
+                Constraint::Length(inline_block_height), // 5 Inline UI
+                Constraint::Length(inline_ui_gap_height), // 6 Inline UI/input spacing
+                Constraint::Length(input_height),  // 7 Input
+                Constraint::Length(overscroll_height), // 8 Overscroll status line
+                Constraint::Length(donut_height),  // 9 Donut animation
+            ]
+        } else {
+            vec![
+                Constraint::Min(3),                       // 0 Messages (scrollable)
+                Constraint::Length(queued_height),        // 1 Queued messages (above status)
+                Constraint::Length(swarm_strip_height),   // 2 Swarm strip (above status)
+                Constraint::Length(1),                    // 3 Status line
+                Constraint::Length(notification_height),  // 4 Notification line
+                Constraint::Length(inline_block_height),  // 5 Inline UI
+                Constraint::Length(inline_ui_gap_height), // 6 Inline UI/input spacing
+                Constraint::Length(input_height),         // 7 Input
+                Constraint::Length(overscroll_height),    // 8 Overscroll status line
+                Constraint::Length(donut_height),         // 9 Donut animation
+            ]
+        })
+        .split(chat_area);
+    record_status_area(chunks[3]);
+
+    // Draw the inline swarm strip directly above the status line if present.
+    if swarm_strip_height > 0 {
+        clear_area(frame, chunks[2]);
+        frame.render_widget(Paragraph::new(swarm_strip_lines.clone()), chunks[2]);
+    }
+
+    // Capture layout info for visual debug
+    if let Some(capture) = &mut debug_capture {
+        capture.layout.use_packed = use_packed;
+        capture.layout.estimated_content_height = content_height as usize;
+        capture.layout.messages_area = Some(chunks[0].into());
+        if queued_height > 0 {
+            capture.layout.queued_area = Some(chunks[1].into());
+        }
+        capture.layout.status_area = Some(chunks[3].into());
+        capture.layout.input_area = Some(chunks[7].into());
+        capture.layout.input_lines_raw = app.input().lines().count().max(1);
+        capture.layout.input_lines_wrapped = base_input_height as usize;
+
+        // Capture state snapshot
+        capture.state.is_processing = app.is_processing();
+        capture.state.input_len = app.input().len();
+        capture.state.input_preview = app.input().chars().take(100).collect();
+        capture.state.cursor_pos = app.cursor_pos();
+        capture.state.scroll_offset = app.scroll_offset();
+        capture.state.queued_count = pending_count;
+        capture.state.message_count = app.display_messages().len();
+        capture.state.streaming_text_len = app.streaming_text().len();
+        capture.state.has_suggestions = !app.command_suggestions().is_empty();
+        capture.state.status = format!("{:?}", app.status());
+        capture.state.diagram_mode = Some(format!("{:?}", diagram_mode));
+        capture.state.diagram_focus = diagram_focus;
+        capture.state.diagram_index = selected_index;
+        capture.state.diagram_count = diagram_count;
+        capture.state.diagram_scroll_x = diagram_scroll_x;
+        capture.state.diagram_scroll_y = diagram_scroll_y;
+        capture.state.diagram_pane_ratio = app.diagram_pane_ratio();
+        capture.state.diagram_pane_enabled = app.diagram_pane_enabled();
+        capture.state.diagram_pane_position = Some(format!("{:?}", app.diagram_pane_position()));
+        capture.state.diagram_zoom = app.diagram_zoom();
+
+        // Capture rendered content
+        // Queued messages
+        capture.rendered_text.queued_messages = input_ui::pending_queue_preview(app);
+
+        // Recent display messages (last 5 for context)
+        capture.rendered_text.recent_messages = app
+            .display_messages()
+            .iter()
+            .rev()
+            .take(5)
+            .map(|m| MessageCapture {
+                role: m.role.clone(),
+                content_preview: m.content.chars().take(200).collect(),
+                content_len: m.content.len(),
+            })
+            .collect();
+
+        // Streaming text preview
+        let streaming = app.streaming_text();
+        if !streaming.is_empty() {
+            capture.rendered_text.streaming_text_preview = streaming.chars().take(500).collect();
+        }
+
+        // Status line content
+        capture.rendered_text.status_line = format_status_for_debug(app);
+    }
+
+    if let Some(capture) = &mut debug_capture {
+        capture.render_order.push("draw_messages".to_string());
+    }
+    let draw_start = Instant::now();
+
+    // Messages area is chunks[0] within the chat column (already excludes diagram).
+    let messages_area = chunks[0];
+    let diff_pane_area = if side_panel_fullscreen {
+        Some(messages_area)
+    } else {
+        diff_pane_area
+    };
+    let _ = swarm_strip_height;
+    note_chat_layout(ChatLayoutMetrics {
+        chat_area,
+        messages_area,
+        initial_content_height: initial_content_height as usize,
+        content_height: content_height as usize,
+        chat_scrollbar_visible,
+        use_packed_layout: use_packed,
+        has_side_panel_content,
+        has_file_diff_edits,
+    });
+
+    if let Some(capture) = &mut debug_capture {
+        capture.layout.messages_area = Some(messages_area.into());
+        capture.layout.diagram_area = diagram_area.map(|r| r.into());
+    }
+    record_layout_snapshot(messages_area, diagram_area, diff_pane_area, Some(chunks[7]));
+
+    let margins = if onboarding_welcome {
+        // [port-decision] onboarding::draw_onboarding_welcome — see the
+        //   takeover branch above; the welcome body is not drawn here either.
+        info_widget::Margins {
+            right_widths: Vec::new(),
+            left_widths: Vec::new(),
+            centered: app.centered_mode(),
+            ..Default::default()
+        }
+    } else if swarm_page_active {
+        let members = app.inline_swarm_members();
+        let spinner_frame = (app.animation_elapsed() * STRIP_SPINNER_FPS) as usize;
+        let lines = info_widget::swarm_gallery::render_swarm_page_lines(
+            &members,
+            app.swarm_panel_selected(),
+            spinner_frame,
+            messages_area.width as usize,
+            messages_area.height as usize,
+        );
+        clear_area(frame, messages_area);
+        frame.render_widget(Paragraph::new(lines), messages_area);
+        info_widget::Margins {
+            right_widths: Vec::new(),
+            left_widths: Vec::new(),
+            centered: false,
+            ..Default::default()
+        }
+    } else if terminal_clear_collapsed || side_panel_fullscreen {
+        if side_panel_fullscreen {
+            clear_area(frame, messages_area);
+        }
+        // Collapsed terminal-style clear: the messages chunk is zero-height, so
+        // there is nothing to draw. Deliberately skip `draw_messages` so it does
+        // not publish a zero-height viewport/max-scroll geometry that the scroll
+        // handlers would then resolve against; the last real geometry stays
+        // authoritative until the first scroll-up restores the full layout.
+        info_widget::Margins {
+            right_widths: Vec::new(),
+            left_widths: Vec::new(),
+            centered: app.centered_mode(),
+            ..Default::default()
+        }
+    } else {
+        draw_messages(
+            frame,
+            app,
+            messages_area,
+            prepared.clone(),
+            chat_scrollbar_visible,
+        )
+    };
+
+    reset_pinned_diagram_debug_snapshot();
+    // Render pinned diagram if we have one
+    if let (Some(diagram_info), Some(area)) = (&pinned_diagram, diagram_area) {
+        if let Some(capture) = &mut debug_capture {
+            capture.render_order.push("draw_pinned_diagram".to_string());
+        }
+        draw_pinned_diagram(
+            frame,
+            diagram_info,
+            area,
+            selected_index,
+            diagram_count,
+            diagram_focus,
+            diagram_scroll_x,
+            diagram_scroll_y,
+            app.diagram_zoom(),
+            pane_position,
+            app.diagram_pane_animating(),
+        );
+    }
+
+    clear_side_panel_debug_snapshot();
+    if let Some(diff_area) = diff_pane_area {
+        if has_side_panel_content {
+            if let Some(capture) = &mut debug_capture {
+                capture
+                    .render_order
+                    .push("draw_side_panel_markdown".to_string());
+            }
+            draw_side_panel_markdown(
+                frame,
+                diff_area,
+                app,
+                app.side_panel(),
+                app.diff_pane_scroll(),
+                app.diff_pane_focus(),
+                app.centered_mode(),
+            );
+        } else if has_file_diff_edits {
+            // [port-decision] draw_file_diff_view: no operant equivalent — upstream
+            //   tui/ui_file_diff.rs is not ported (its cache types
+            //   FileDiffCacheKey / FileDiffViewCacheEntry / file_diff_cache have no
+            //   home), so a file-diff session shows the reserved right pane empty
+            //   instead of the whole-file diff — wire at jcode_ui/ui_file_diff.rs.
+            if let Some(capture) = &mut debug_capture {
+                capture.render_order.push("draw_file_diff_view".to_string());
+            }
+        }
+    }
+
+    let messages_draw = draw_start.elapsed();
+
+    if let Some(capture) = &mut debug_capture {
+        capture.layout.margins = Some(MarginsCapture {
+            left_widths: margins.left_widths.clone(),
+            right_widths: margins.right_widths.clone(),
+            centered: margins.centered,
+        });
+    }
+    let chrome_start = Instant::now();
+    if queued_height > 0 {
+        if let Some(capture) = &mut debug_capture {
+            capture.render_order.push("draw_queued".to_string());
+        }
+        input_ui::draw_queued(frame, app, chunks[1], user_count + 1);
+    }
+    if let Some(capture) = &mut debug_capture {
+        capture.render_order.push("draw_status".to_string());
+    }
+    input_ui::draw_status(frame, app, chunks[3], pending_count);
+    if notification_height > 0 {
+        input_ui::draw_notification(frame, app, chunks[4]);
+    }
+    if let Some(capture) = &mut debug_capture {
+        capture.render_order.push("draw_input".to_string());
+    }
+    // Draw inline UI if active
+    if inline_block_height > 0 {
+        draw_inline_ui(frame, app, chunks[5]);
+    }
+
+    let _input_cursor = input_ui::draw_input(
+        frame,
+        app,
+        chunks[7],
+        user_count + pending_count + 1,
+        &mut debug_capture,
+    );
+
+    if overscroll_height > 0 {
+        input_ui::draw_overscroll_status(frame, app, chunks[8]);
+    }
+
+    if donut_height > 0 {
+        animations::draw_idle_animation(frame, app, chunks[9]);
+    }
+    let chrome_elapsed = chrome_start.elapsed();
+
+    // Draw info widget overlays (skip during idle animation - they look out of place)
+    let widget_data_start = Instant::now();
+    let widget_data = app.info_widget_data();
+    let widget_data_elapsed = widget_data_start.elapsed();
+    let mut widget_render_ms: Option<f32> = None;
+    let mut placements: Vec<info_widget::WidgetPlacement> = Vec::new();
+    let widget_bounds = messages_area;
+    if app.info_widget_overlays_enabled()
+        && !widget_data.is_empty()
+        && !show_donut
+        && !swarm_page_active
+        && !side_panel_fullscreen
+    {
+        if let Some(capture) = &mut debug_capture {
+            capture.render_order.push("render_info_widgets".to_string());
+        }
+        placements = info_widget::calculate_placements(widget_bounds, &margins, &widget_data);
+
+        // [port-decision] debug_capture widget-placement capture + the
+        //   overlap/out-of-bounds anomaly checks (upstream ui.rs:3487-3531) are
+        //   inert: capture_widget_placements / build_info_widget_summary /
+        //   rect_within_bounds / rects_overlap / widget_overlaps_content all live
+        //   in the un-ported ui_debug_capture.rs. The render pass below is
+        //   unaffected — wire at jcode_ui/ui_debug_capture.rs.
+        let widget_start = Instant::now();
+        info_widget::render_all(frame, &placements, &widget_data);
+        widget_render_ms = Some(widget_start.elapsed().as_secs_f32() * 1000.0);
+
+        // Optional visual overlay for placements
+    } else {
+        // The widget pass did not run (idle donut takeover or no widget data),
+        // so nothing from the previous frame is on screen anymore. Clear the
+        // remembered placements/anchors so consumers of last-frame state (the
+        // swarm strip stand-down, idle fallback facts) do not keep reacting to
+        // widgets that are no longer drawn.
+        info_widget::note_widget_pass_skipped();
+        if let Some(capture) = &mut debug_capture {
+            capture.info_widgets = None;
+        }
+    }
+
+    if let Some(capture) = &mut debug_capture {
+        if capture.info_widgets.is_none() {
+            capture.info_widgets = None;
+        }
+    }
+
+    if visual_debug_overlay_enabled() {
+        overlays::draw_debug_overlay(frame, &placements, &chunks);
+    }
+
+    // Command-suggestion popover: a late overlay pass so the palette floats
+    // over existing rows (blank space, pinned footer, or the transcript tail)
+    // instead of reserving layout height and shoving everything around.
+    input_ui::draw_command_suggestions_overlay(frame, app, chunks[7]);
+
+    // Ctrl+R reverse prompt-history search overlay (drawn after the command
+    // palette so it wins when both could be visible).
+    input_ui::draw_prompt_history_search_overlay(frame, app, chunks[7]);
+
+    // Observe the rendered messages area for the anchor-stability (smoothness)
+    // report. Runs on the final buffer so it sees exactly what the user sees.
+    // [port-decision] smoothness::observe_frame: no operant equivalent —
+    //   upstream tui/ui_smoothness.rs is not ported (W7); the call is
+    //   report-only telemetry and draws nothing, so the frame is unaffected —
+    //   wire at jcode_ui/ui_smoothness.rs.
+
+    let frame_elapsed = total_start.elapsed();
+    if frame_elapsed >= Duration::from_millis(250) {
+        crate::tui::jcode_app::logging::warn(&format!(
+            "TUI_RENDER_PHASES prepare={}ms messages={}ms chrome={}ms widget_data={}ms widget_render={}ms final={}ms total={}ms",
+            prep_elapsed.as_millis(),
+            messages_draw.as_millis(),
+            chrome_elapsed.as_millis(),
+            widget_data_elapsed.as_millis(),
+            widget_render_ms.unwrap_or_default(),
+            frame_elapsed
+                .saturating_sub(prep_elapsed)
+                .saturating_sub(messages_draw)
+                .saturating_sub(chrome_elapsed)
+                .saturating_sub(widget_data_elapsed)
+                .saturating_sub(Duration::from_secs_f32(
+                    widget_render_ms.unwrap_or_default() / 1000.0,
+                ))
+                .as_millis(),
+            frame_elapsed.as_millis(),
+        ));
+    }
+
+    // Record the frame capture if enabled
+    if let Some(capture) = debug_capture {
+        let total_draw = draw_start.elapsed();
+        let render_timing = RenderTimingCapture {
+            prepare_ms: prep_elapsed.as_secs_f32() * 1000.0,
+            draw_ms: total_draw.as_secs_f32() * 1000.0,
+            total_ms: total_start.elapsed().as_secs_f32() * 1000.0,
+            messages_ms: Some(messages_draw.as_secs_f32() * 1000.0),
+            widgets_ms: widget_render_ms,
+        };
+
+        let mut capture = capture;
+        capture.render_timing = Some(render_timing);
+        // [port-decision] the four debug-stat snapshots (mermaid / side_panel /
+        //   markdown / theme) are part of the inert capture sink: mermaid's
+        //   debug_stats_json is engine-side (un-ported shim) and the rest are
+        //   reached through the debug_capture modules; they are captured by
+        //   `visual_debug::record_frame` once W-visual-debug lands.
+        capture.mermaid = None;
+        capture.side_panel = None;
+        capture.markdown = None;
+        capture.theme = overlays::debug_palette_json();
+        // [port-decision] visual_debug::record_frame: no operant equivalent — the
+        //   capture sink family (buffer capture, sinks, serialization writers —
+        //   upstream jcode-tui-visual-debug lib.rs:308) is the plan's
+        //   visual-debug skip, so the finished capture is dropped here rather
+        //   than written anywhere — wire at jcode_app::visual_debug.
+        let _ = capture.build();
+    }
+
+    finalize_frame_metrics(
+        app,
+        total_start,
+        prep_elapsed,
+        draw_start.elapsed(),
+        Some(messages_draw.as_secs_f64() * 1000.0),
+    );
+}
+
+// [port-decision] visual_debug_overlay_enabled: no operant equivalent — operant's
+//   jcode_app/visual_debug.rs is the type-only partial and does not carry
+//   upstream's `overlay_enabled()` gate (jcode-tui-visual-debug lib.rs:298), so
+//   the placement debug overlay is off — wire at jcode_app::visual_debug.
+fn visual_debug_overlay_enabled() -> bool {
+    false
+}
+
+// [port-source] tui/redraw_schedule.rs:22, :40-52, :209-212 — ported here because
+// `draw_inner` consumes it and upstream reaches it through `super::`. The
+// upstream tui/redraw_schedule.rs module is not part of this port, so its
+// REDRAW_DEEP_IDLE_AFTER const and deep_idle_dormant helper are inlined; the
+// policy/config gates re-root to the ported perf + config_shim modules.
+// [port-decision] display.idle_animation: no operant equivalent — operant's
+//   config_shim::DisplayConfig has no `idle_animation` field (upstream
+//   jcode-config-types/src/display.rs:58), and its default is `false`
+//   (display.rs:141), so the decorative-idle gate resolves to the same value
+//   upstream ships by default — wire at config_shim::DisplayConfig.
+const REDRAW_DEEP_IDLE_AFTER: Duration = Duration::from_secs(30);
+
+fn deep_idle_dormant(state: &dyn TuiState) -> bool {
+    let stream_dormant = state
+        .time_since_activity()
+        .map(|d| d >= REDRAW_DEEP_IDLE_AFTER)
+        .unwrap_or(false);
+    let user_dormant = state
+        .time_since_user_interaction()
+        .map(|d| d >= REDRAW_DEEP_IDLE_AFTER)
+        // No interaction recorded yet: a fresh client that has never been
+        // touched. Fall back to the stream/app clock alone, as before.
+        .unwrap_or(true);
+    stream_dormant && user_dormant
+}
+
+/// Whether the transcript contains any real conversation yet (a user prompt or
+/// an assistant/tool/reasoning reply). A fresh screen that only holds
+/// non-conversational notices (e.g. the "run /login when you're ready" system
+/// message left after onboarding is declined) is still "idle", so the decorative
+/// donut should keep spinning until the user actually starts chatting.
+fn has_started_conversation(state: &dyn TuiState) -> bool {
+    state
+        .display_messages()
+        .iter()
+        .any(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool" | "reasoning"))
+}
+
+fn idle_donut_active_with_policy(
+    state: &dyn TuiState,
+    policy: &crate::tui::jcode_app::perf::TuiPerfPolicy,
+) -> bool {
+    if state.remote_startup_phase_active() {
+        return false;
+    }
+
+    // Decorative animations are purely visual; never spin them while the terminal
+    // window/tab is backgrounded. A swarm of unfocused sessions would otherwise
+    // each render a full-screen 3D scene at animation FPS, saturating every core.
+    if !state.client_focused() {
+        return false;
+    }
+
+    // The onboarding welcome screen is static (no decorative animation), so it
+    // does not need to keep the animation loop running.
+    if state.onboarding_welcome_active() {
+        return false;
+    }
+
+    // The idle donut is decorative.  Leaving many dormant tabs/sessions open
+    // should not keep every TUI repainting forever, especially when those tabs
+    // are hidden behind a terminal multiplexer or kitty single-instance window.
+    if deep_idle_dormant(state) {
+        return false;
+    }
+
+    policy.enable_decorative_animations
+        && policy.tier.idle_animation_enabled()
+        && !has_started_conversation(state)
+        && !state.is_processing()
+        && state.streaming_text().is_empty()
+        && state.queued_messages().is_empty()
+}
+
+pub(crate) fn idle_donut_active(state: &dyn TuiState) -> bool {
+    let policy = crate::tui::jcode_app::perf::tui_policy();
+    idle_donut_active_with_policy(state, &policy)
 }

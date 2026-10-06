@@ -168,11 +168,44 @@ struct SwarmTreeRow<'a> {
 /// Render the dedicated live swarm page. The upper section is a nested,
 /// ownership-aware tree of every managed agent with animated status glyphs.
 /// The lower section is the selected agent's detailed live card.
+/// Swarm page band (upstream `swarm_tiles::render_swarm_page`). [port-decision]
+/// the live-card renderer behind it is the excised swarm_tiles surface
+/// (iter-591); its verbatim body stays under the gate at :171. operant has no
+/// swarm-member source, so the honest degraded answer is the same early return
+/// the body itself produces for an empty member list. Re-activate with the
+/// strip surface.
+pub(crate) fn render_swarm_page_lines(
+    _members: &[SwarmMemberStatus],
+    _selected: usize,
+    _spinner_frame: usize,
+    _width: usize,
+    _max_height: usize,
+) -> Vec<Line<'static>> {
+    Vec::new()
+}
+
+/// Swarm strip band (upstream `swarm_tiles::render_swarm_strip[_vertical]`).
+/// [port-decision] same as above: the strip renderers + `SwarmStripHint` are
+/// excised (iter-591), verbatim body stays under the gate at :545; with no
+/// swarm-member source the band is empty, which is also the early return the
+/// body produces. Re-activate with the strip surface.
+pub(crate) fn render_swarm_strip_lines(
+    _members: &[SwarmMemberStatus],
+    _selected: usize,
+    _focused: bool,
+    _focus_key: &str,
+    _spinner_frame: usize,
+    _width: usize,
+    _max_height: usize,
+) -> Vec<Line<'static>> {
+    Vec::new()
+}
+
 #[cfg(any())]
 // [port-decision] swarm-page surface gated: delegates to the excised
 // swarm_tiles live-card renderer (iter-591); zero live consumers.
 // Re-activate at W7 when the strip surface ports.
-pub(crate) fn render_swarm_page_lines(
+pub(crate) fn render_swarm_page_lines_verbatim(
     members: &[SwarmMemberStatus],
     selected: usize,
     spinner_frame: usize,
@@ -543,8 +576,8 @@ pub(crate) fn render_swarm_panel_lines(
 #[cfg(any())]
 // [port-decision] strip adapter gated: delegates to the excised
 // swarm_tiles render_swarm_strip[_vertical] + SwarmStripHint (iter-591);
-// zero live consumers. Re-activate at W7 when the strip surface ports.
-pub(crate) fn render_swarm_strip_lines(
+// Re-activate at W7 when the strip surface ports.
+pub(crate) fn render_swarm_strip_lines_verbatim(
     members: &[SwarmMemberStatus],
     selected: usize,
     focused: bool,

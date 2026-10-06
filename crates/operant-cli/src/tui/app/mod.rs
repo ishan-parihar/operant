@@ -16,6 +16,7 @@ mod prompt;
 mod providers;
 mod redraw_reason;
 mod scroll_anchor;
+mod tui_state_impl;
 mod turn_state;
 
 pub(crate) use event_coalesce::EventOutcome;

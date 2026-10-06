@@ -63,12 +63,12 @@ fn history_path() -> Result<std::path::PathBuf> {
 
 fn persist_queue(queue: &[PermissionRequest]) -> Result<()> {
     let path = queue_path()?;
-    storage::write_json_fast(&path, queue)
+    storage::write_json(&path, queue)
 }
 
 fn persist_history(history: &[Decision]) -> Result<()> {
     let path = history_path()?;
-    storage::write_json_fast(&path, history)
+    storage::write_json(&path, history)
 }
 
 /// Record a permission decision by directly manipulating the queue/history JSON files.

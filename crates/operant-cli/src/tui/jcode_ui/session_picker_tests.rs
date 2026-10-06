@@ -275,6 +275,9 @@ fn test_session_item_uses_single_primary_title_line() {
 
 #[test]
 fn test_status_inference() {
+    // [port-test] load_sessions reads JCODE_HOME; sibling picker tests mutate
+    // the env under lock_test_env, so this reader takes the same guard.
+    let _env_lock = crate::tui::jcode_app::storage::lock_test_env();
     // Load sessions and ensure status display works
     let sessions = load_sessions().unwrap();
     for session in &sessions {
