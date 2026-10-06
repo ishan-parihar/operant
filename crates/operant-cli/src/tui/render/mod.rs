@@ -10,21 +10,17 @@
 //   footer    — input pane, status row, footer bar, prompt suggestions
 //   dispatch  — the paint-order registry: which surface paints, and in what order
 
+// The ported jcode chrome (jcode_ui::draw) replaced the dispatch registry, the
+// transcript/footer/welcome renderers at iter-648; what stays are the helpers
+// operant-only surfaces still call (selection's copy-badge pool, tool group
+// lines, text measurement) plus the async-raster hash cache.
+
 pub(crate) mod cache;
-pub(crate) mod dispatch;
-pub(crate) mod footer;
-pub(crate) mod messages;
 pub(crate) mod selection;
 pub(crate) mod tools;
 pub(crate) mod utils;
-pub(crate) mod welcome;
 
 pub(crate) use cache::RenderedLineItem;
-pub(crate) use footer::{
-    render_footer, render_input, render_prompt_suggestions, render_status_row,
-    should_render_status_row,
-};
-pub(crate) use messages::render_messages;
 pub(crate) use selection::{
     apply_selection_highlight, cache_selectable_row_text, render_context_menu,
 };
@@ -67,188 +63,59 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
     app.last_selectable_area.set(size);
 
-    // Clear the frame before painting. A cell can only survive from the previous
-    // frame if the terminal's real state has diverged from the buffer ratatui
-    // diffs against; a per-cell reset removes buffer divergence as a candidate.
-    // See `utils::clear_area` for why this is defence-in-depth today rather than
-    // a fix for an observed defect. The out-of-grid writers (pinned graphics, the
-    // OSC 8 overlay) are the remaining divergence source and are handled by
-    // their own passes, not by this one.
-    clear_area(frame, size);
+    // The ported jcode chrome (jcode_ui::draw, upstream ui.rs:2659-3624) owns
+    // the whole frame: the full-frame clear, every band, and the per-frame
+    // colour substitution at its tail. operant's dispatch rows are gone; what
+    // stays below are the three passes with no jcode counterpart.
+    crate::tui::jcode_ui::draw(frame, app);
 
-    // The whole-frame fill is dispatch row 0 (`base_fill`): it must paint before
-    // anything else so the terminal's default (blue on Windows) does not bleed
-    // through cells no widget covers.
-
-    let prompt_focused = app.permission_request.is_none() && !app.history_search_overlay.visible;
-    // Suggestions popup tracks whether the prompt accepts input, not whether
-    // it is the focused widget. Text entry is allowed during streaming so the
-    // user can queue the next message, so the typeahead popup must follow
-    // that same affordance.
-    let suggestions_visible =
-        app.permission_request.is_none() && !app.history_search_overlay.visible;
-    let status_visible = should_render_status_row(app);
-    // One blank separator row above the status/input area when status is active,
-    // matching the visual breathing room in the TS layout.
-    let separator_height: u16 = if status_visible { 1 } else { 0 };
-    let status_height: u16 = if status_visible {
-        if app.is_streaming {
-            // The spinner row is always a short single line.
-            1
-        } else if let Some(text) = app.status_message.as_deref() {
-            // Measure how many terminal rows the message needs so that long
-            // error strings (e.g. "Error: overloaded_error (529): …") wrap
-            // instead of overflowing the input area.  Cap at 3 lines.
-            let usable_width = size.width.max(1) as usize;
-            // Measure display width (not char count) so wide chars (CJK/emoji)
-            // don't undercount rows and overflow the status area.
-            let text_cols = crate::tui::render::display_width(text);
-            text_cols.div_ceil(usable_width).clamp(1, 3) as u16
-        } else {
-            1
-        }
-    } else {
-        0
-    };
-    let suggestions_height = if suggestions_visible && !app.prompt_input.suggestions.is_empty() {
-        app.prompt_input.suggestions.len().min(5) as u16
-    } else {
-        0
-    };
-    // The prompt body width is the terminal width minus the prompt prefix
-    // ("> ") and the right-margin padding used inside `render_prompt_input`.
-    // Keep this in sync with prefix_width=2 + right_pad=2 there.
-    let prompt_text_width = size.width.saturating_sub(4);
-    let mut prompt_height = input_height(&app.prompt_input, prompt_text_width) + 1; // +1 for model/mode status line
-
-    // Clamp prompt_height so the prompt can never push itself (or the footer)
-    // off-screen. The terminal must accommodate:
-    //   - 1 row minimum for the messages area (chunks[0])
-    //   - separator_height (chunks[1])
-    //   - status_height (chunks[2])
-    //   - prompt_height (chunks[3])
-    //   - suggestions_height (chunks[4])
-    //   - 2 rows for the footer (chunks[5])
-    // If the natural prompt_height would overflow, clamp it to whatever
-    // remains. Without this clamp, a multi-line paste or a small terminal
-    // collapses chunks[3] to 0 rows and the input text vanishes — this is
-    // the persistent "input not visible" bug.
-    let reserved: u16 = 1u16 // minimum messages area
-        .saturating_add(separator_height)
-        .saturating_add(status_height)
-        .saturating_add(suggestions_height)
-        .saturating_add(2); // footer
-    let max_prompt_height = size.height.saturating_sub(reserved).max(2);
-    if prompt_height > max_prompt_height {
-        prompt_height = max_prompt_height;
+    // ---- Background task rows (operant-only) ---------------------------
+    // Docked to the bottom-left of the messages band, so the rows sit above
+    // the transcript and below the overlays. The pin test in
+    // background_tasks.rs exists because this wiring is invisible when it
+    // breaks: the module still compiles, still passes its tests, and quietly
+    // shows the user nothing.
+    app.background_tasks.refresh();
+    let bg_rows = app.background_tasks.rows();
+    if !bg_rows.is_empty() {
+        let bg_area = crate::tui::background_tasks::rows_area(
+            crate::tui::jcode_ui::message_area(),
+            bg_rows.len(),
+        );
+        crate::tui::background_tasks::render_rows(
+            frame,
+            bg_area,
+            &bg_rows,
+            crate::tui::background_tasks::now_unix_secs(),
+        );
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(separator_height),
-            Constraint::Length(status_height),
-            Constraint::Length(prompt_height),
-            Constraint::Length(suggestions_height),
-            Constraint::Length(2),
-        ])
-        .split(size);
-
-    // ---- The dispatch table -------------------------------------------------
-    //
-    // Every visible surface paints, in this order, over the top of the one
-    // before it. `dispatch::DISPATCH` is that order as data: a row's `visible`
-    // guard decides whether it paints this frame and its `paint` body delegates
-    // to the surface's own module. There is no first-match-wins here and there
-    // must not be one — `permission_dialog` at row 8 is commented "highest
-    // priority" yet `bypass_permissions_dialog` at row 26 paints over it, and
-    // `ask_user_dialog` at row 27 paints over that.
-    //
-    // chunks[1] is the blank separator between the transcript and the status
-    // row — it is layout, not a surface, and no row paints into it.
-    let mut ctx = dispatch::FrameCtx {
-        size,
-        // Cloned so the post-draw pass can still read `chunks[0]`; `Rc::clone`
-        // is a refcount bump, and `Layout::split` already handed us a shared
-        // slice.
-        chunks: chunks.clone(),
-        prompt_focused,
-        status_height,
-        suggestions_height,
-        bg_rows: Vec::new(),
-        stop: false,
-    };
-    for entry in dispatch::DISPATCH {
-        if !(entry.visible)(app, &mut ctx) {
-            continue;
-        }
-        (entry.paint)(frame, app, &mut ctx);
-        // The error-modal row set this: it owns the rest of the frame.
-        if ctx.stop {
-            break;
-        }
-    }
-    if ctx.stop {
-        // The error modal is the frame's one early exit. The substitution pass
-        // still has to run — see the tail of this fn — and nothing else does.
-        theme_mode::adapt_buffer_for_display(frame.buffer_mut());
-        return;
-    }
-
-    // ---- OSC 8 hyperlink overlay (post-paint pass) ---------------------
-    // Scan the rendered buffer for URLs and emit OSC 8 escape sequences so
-    // terminals that support the protocol (Windows Terminal, iTerm2, WezTerm,
-    // Kitty, etc.) make them Ctrl/Cmd-clickable. This runs after all other
-    // rendering so it sees the final buffer state.
-    let hits = crate::tui::osc8::scan_buffer_for_urls(frame.buffer_mut());
-    if let Err(e) = crate::tui::osc8::emit_hits(&hits) {
-        tracing::debug!("OSC8 hyperlink emission failed: {e}");
-    }
-
-    // ---- Pinned graphics (per-frame pass) ---------------------------------
-    // Terminal graphics protocols (Kitty/Sixel/iTerm2) paint outside ratatui's
-    // cell grid, so nothing in the buffer represents a painted image. The old
-    // pass drained each producer — `pending_inline_images` was emptied and a
-    // mermaid raster consumed — wrote the sequence once, and had nothing left to
-    // restore from, so any redraw touching those cells destroyed the image
-    // permanently. Both producers now go into a persistent registry that
-    // re-emits every graphic EVERY frame at a fixed rect; the queue is still
-    // drained once, because the attachment is consumed, but the graphic it
-    // produced is not. See `tui::pinned_images`.
-    crate::tui::pinned_images::pin_pasted(&app.pinned_images, &app.pending_inline_images);
-
-    // A ```mermaid block rasterises on a worker thread, so the picture lands
-    // here some frames after the transcript first showed the diagram. When a
-    // raster lands the memoized transcript lines are stale — a "rendering…"
-    // placeholder just became the real thing — so drop them and let the next
-    // frame rebuild.
+    // ---- Async raster producers (operant-only) ---------------------------
+    // A mermaid/latex block rasterises on a worker thread, so the picture lands
+    // some frames after the transcript first showed the placeholder. When a
+    // raster lands, the ported prepared-frame caches hold that stale row.
     let mut landed = crate::tui::mermaid::drain_ready_rasters();
-
-    // A ```latex / ```math / ```tex block is the same shape of problem: the
-    // formula rasterises on a worker thread, so its placeholder goes stale on
-    // exactly the same schedule. Both ladders report "a PNG just landed, and the
-    // transcript lines are stale", so there is still exactly ONE registry call —
-    // `pin_rasters` consumes a list of PNG paths, not a producer.
     let formulas = crate::tui::latex::drain_ready_rasters();
     if landed.resolved || formulas.resolved {
-        crate::tui::render::cache::MESSAGE_LINES_CACHE.with(|cache| cache.borrow_mut().take());
+        crate::tui::jcode_ui::invalidate_prepared_caches();
     }
     landed.pngs.extend(formulas.pngs);
     crate::tui::pinned_images::pin_rasters(&app.pinned_images, &landed);
 
-    // Re-emit every pinned graphic, and blank the cells it owns so the flush
-    // ratatui runs after this closure has nothing to rewrite underneath it.
-    crate::tui::pinned_images::prepare_strip(frame.buffer_mut(), &app.pinned_images, chunks[0]);
+    // Pinned graphics re-emit every registered graphic EVERY frame at a fixed
+    // rect (see tui::pinned_images); the queue is still drained once because
+    // the attachment is consumed. [port-decision] the claim area is the whole
+    // frame: the messages-area constraint (chunks[0]) belonged to the deleted
+    // dispatch layout, and the ported chrome does not expose a transcript rect.
+    crate::tui::pinned_images::pin_pasted(&app.pinned_images, &app.pending_inline_images);
+    crate::tui::pinned_images::prepare_strip(frame.buffer_mut(), &app.pinned_images, size);
 
-    // ---- Per-frame colour substitution (the single theming choke point) ----
-    //
-    // Every migrated call site emits a `style::theme::*` role DEFAULT; this pass
-    // rewrites each such cell onto the configured role colour, so one `/theme`
-    // action repaints the whole frame without any widget knowing about it.
-    // It must stay the LAST colour transform in the function — the error-modal
-    // branch above has its own copy of this call because it returns early.
-    theme_mode::adapt_buffer_for_display(frame.buffer_mut());
+    // ---- OSC 8 hyperlink overlay (post-paint pass) ---------------------
+    // Runs after every other render so it sees the final buffer state.
+    let hits = crate::tui::osc8::scan_buffer_for_urls(frame.buffer_mut());
+    if let Err(e) = crate::tui::osc8::emit_hits(&hits) {
+        tracing::debug!("OSC8 hyperlink emission failed: {e}");
+    }
 }
 
 #[cfg(test)]

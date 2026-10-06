@@ -8,18 +8,19 @@ use std::collections::HashMap;
 use ratatui::style::Color;
 
 pub(crate) mod cache;
-mod commands;
 mod helpers;
 mod markdown;
 mod markdown_enhanced;
 mod tools;
-mod transcript;
 
-pub use commands::*;
+// [port-decision] iter-648: commands/transcript (the operant transcript render
+// chain) are deleted — the ported jcode chrome renders the transcript now.
+// These re-exports survive for the operant-only surfaces still on this module:
+// the async raster producers (mermaid/latex hash + preview render), the MCP
+// view's fold labels, and render/tools' summary extractor.
 pub(crate) use helpers::*;
 pub use markdown::render_markdown;
 pub use tools::*;
-pub use transcript::*;
 
 /// Context passed to all renderers.
 pub struct RenderContext {

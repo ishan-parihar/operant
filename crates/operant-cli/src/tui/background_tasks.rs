@@ -706,16 +706,13 @@ mod tests {
     /// shows the user nothing — which is exactly what happened to the
     /// `tasks_overlay` this work replaced. So pin the call site.
     ///
-    /// Both the render pass and the dispatch table are searched: the call site
-    /// used to be `render_app`'s own body and now lives in the table, and either
-    /// is a legal home for it. What must not happen is neither file calling it.
-    /// A rebuild that moves it again has to move this search too.
+    /// The render pass is searched (the dispatch table that used to hold the
+    /// call site was deleted at the jcode cutover, iter-648). What must not
+    /// happen is the render pass not calling it. A rebuild that moves the call
+    /// site again has to move this search too.
     #[test]
     fn render_pass_still_wires_the_registry() {
-        let sites: [(&str, &str); 2] = [
-            ("render/mod.rs", include_str!("render/mod.rs")),
-            ("render/dispatch.rs", include_str!("render/dispatch.rs")),
-        ];
+        let sites: [(&str, &str); 1] = [("render/mod.rs", include_str!("render/mod.rs"))];
         let called_in = |needle: &str| {
             sites
                 .iter()
@@ -724,13 +721,13 @@ mod tests {
         };
         assert!(
             called_in("background_tasks::render_rows").is_some(),
-            "neither render/mod.rs nor render/dispatch.rs calls \
+            "render/mod.rs does not call \
              background_tasks::render_rows — the rows would compile and pass tests \
              while never being shown"
         );
         assert!(
             called_in("background_tasks.refresh()").is_some(),
-            "neither render/mod.rs nor render/dispatch.rs calls \
+            "render/mod.rs does not call \
              background_tasks::refresh() — the registry would never re-read the \
              delegation registry, so rows would freeze at whatever the first frame saw"
         );
