@@ -105,7 +105,13 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // They lost their invocation at iter-649 (the dispatch table was deleted
     // with the chrome rows) and the corpus proved it: 60 surfaces stopped
     // rendering. Painted in the same order as before, on top of the chrome.
-    operant_overlays::draw_operant_overlays(frame, app);
+    if operant_overlays::draw_operant_overlays(frame, app) {
+        // The error modal is the frame's only early exit: every buffer-level
+        // post-pass below (rasters, pinned graphics, OSC 8) paints over it
+        // otherwise, which is what the old dispatch ladder's early return
+        // suppressed. The colour substitution already ran inside the draw.
+        return;
+    }
 
     // ---- Async raster producers (operant-only) ---------------------------
     // A mermaid/latex block rasterises on a worker thread, so the picture lands
@@ -139,23 +145,39 @@ pub fn render_app(frame: &mut Frame, app: &App) {
 mod tests {
     /// The ported chrome owns the frame layout, but operant's hit-test and
     /// scroll state still lives in App cells that production code reads. They
-    /// are republished here from the ported layout; deleting either write
-    /// leaves mouse routing / the prepend correction dead with every other
-    /// test green, so pin the call sites (the same idiom as
-    /// `pinned_images` and `background_tasks`).
+    /// are republished here from the ported layout. Behavioural, not a source
+    /// pin: a text assertion would stay green on an empty band, and empty is
+    /// exactly the failure (mouse routes nothing, the prepend correction
+    /// reconciles against 0). Drawn at two sizes so the packed and unpacked
+    /// layout paths are both covered.
     #[test]
     fn the_ported_layout_republishes_the_hit_test_cells() {
-        let src = include_str!("mod.rs");
-        for needle in [
-            "last_input_area",
-            "last_render_scroll_offset",
-            "jcode_ui::message_area()",
-        ] {
+        for (width, height) in [(120u16, 40u16), (80, 24)] {
+            let app = make_app();
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, height)).expect("test backend");
+            terminal.draw(|f| render_app(f, &app)).expect("draw");
+
+            let input = app.last_input_area.get();
             assert!(
-                src.contains(needle),
-                "render/mod.rs no longer publishes `{needle}` from the ported \
-                 layout — mouse routing / scroll correction / the background-task \
-                 rows would go silently dead"
+                input.width > 0 && input.height > 0,
+                "{width}x{height}: the input band was published empty — every click \
+                 would route as 'not the input' and cursor up/down would compute a \
+                 zero-width cell"
+            );
+            assert!(
+                input.y + input.height <= height,
+                "{width}x{height}: the input band runs past the frame ({input:?})"
+            );
+
+            let painted =
+                crate::tui::jcode_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16;
+            assert_eq!(
+                app.last_render_scroll_offset.get(),
+                painted,
+                "{width}x{height}: the published scroll row does not match the \
+                 ported chrome's resolved scroll — the prepend correction would \
+                 drift the reader"
             );
         }
     }

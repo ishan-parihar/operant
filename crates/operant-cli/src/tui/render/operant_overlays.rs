@@ -694,6 +694,12 @@ fn paint_error_modal(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
             ctx.size,
             notif,
             app.error_modal_scroll_offset,
+            // [port-decision] footer_right_column_area has no producer in the
+            // ported chrome (operant's footer bar was chrome-owned and deleted at
+            // iter-649; the ported bottom band has no right-column concept). A
+            // zero rect is render_error_modal's own documented fallback placement —
+            // half-screen, anchored to the frame's right — not a missing value, so
+            // inventing a column here would move the modal for no reason.
             app.footer_right_column_area.get(),
             is_welcome_screen,
         );
@@ -734,11 +740,13 @@ fn paint_debug_overlay(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 
 /// Paint every operant-owned overlay, top to bottom, over the ported chrome.
 ///
-/// Returns true when the error modal claimed the frame: it is the frame's one
-/// early exit (the ported chrome keeps painting, so "stop" here means "skip the
-/// rows below" — notification banner, selection passes, context menu, debug
-/// overlay — exactly as the old dispatch ladder stopped).
-pub(crate) fn draw_operant_overlays(frame: &mut Frame, app: &App) {
+/// Returns true when the error modal claimed the frame. The error modal is the
+/// frame's one early exit: `render_app` must then skip every buffer-level
+/// post-pass (async rasters, pinned graphics, the OSC 8 hyperlink overlay), or
+/// they paint straight over the modal — exactly what the old dispatch ladder's
+/// early return suppressed. The colour-substitution pass needs no skip: the
+/// ported chrome runs it inside `jcode_ui::draw`.
+pub(crate) fn draw_operant_overlays(frame: &mut Frame, app: &App) -> bool {
     let size = frame.area();
     let mut ctx = FrameCtx { size, stop: false };
     for entry in OVERLAYS {
@@ -750,6 +758,7 @@ pub(crate) fn draw_operant_overlays(frame: &mut Frame, app: &App) {
         }
         (entry.paint)(frame, app, &mut ctx);
     }
+    ctx.stop
 }
 
 #[cfg(test)]

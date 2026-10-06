@@ -3224,6 +3224,12 @@ const STRIP_SPINNER_FPS: f32 =
 // Wiring it back is a one-line change at the `debug_capture` binding: the
 // `capture.*` field writes are all still there.
 pub fn draw(frame: &mut Frame, app: &dyn TuiState) {
+    // Reset the published band rects before anything can skip the layout: a
+    // narrow frame, an early-exit branch or a fullscreen overlay can skip the
+    // band assignment, and a STALE rect would route mouse clicks and cursor
+    // motion against the previous frame's geometry.
+    LAST_MESSAGE_AREA.with(|area| area.set(Rect::new(0, 0, 0, 0)));
+    LAST_INPUT_AREA.with(|area| area.set(Rect::new(0, 0, 0, 0)));
     record_idle_animation_area(None);
     // Suggestions are read many times while composing one frame. Bump the
     // epoch here so the memo is scoped to exactly this frame.
