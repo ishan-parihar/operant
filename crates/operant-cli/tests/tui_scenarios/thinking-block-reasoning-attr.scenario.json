@@ -18,10 +18,9 @@
     "show_reasoning == true"
   ],
   "assert_screen": [
-    "contains:Thinking:",
     "contains:reasoning panel"
   ],
   "baseline": "thinking-block-reasoning-attr.txt",
   "style_baseline": "thinking-block-reasoning-attr.style.txt",
-  "notes": "The same thinking row driven by the OTHER event variant — Reasoning (a live streaming delta) rather than Thinking (a completed block) — and through the /reasoning toggle rather than by default. Two render inputs on one renderer is the point: a regression that collapsed Reasoning into Thinking, or that stopped honouring show_reasoning, would pass with only one of these baselined. The variant presses /reasoning a second time to pin the toggle-off state."
+  "notes": "The same thinking row driven by the OTHER event variant \u2014 Reasoning (a live streaming delta) rather than Thinking (a completed block) \u2014 and through the /reasoning toggle rather than by default. Two render inputs on one renderer is the point: a regression that collapsed Reasoning into Thinking, or that stopped honouring show_reasoning, would pass with only one of these baselined. The variant presses /reasoning a second time to pin the toggle-off state. POST-CUTOVER: the ported chrome renders the reasoning body without operant's 'Thinking:' label prefix; the body assertion remains the content gate."
 }

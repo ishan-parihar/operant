@@ -224,7 +224,7 @@ pub trait TuiState {
         self.elapsed()
     }
     fn status(&self) -> ProcessingStatus;
-    fn command_suggestions(&self) -> Vec<(String, &'static str)>;
+    fn command_suggestions(&self) -> Vec<(String, String)>;
     /// Invalidate any per-frame memo backing [`Self::command_suggestions`].
     ///
     /// Called once at the top of each rendered frame. The suggestion list is

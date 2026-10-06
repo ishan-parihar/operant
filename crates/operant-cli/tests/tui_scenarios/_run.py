@@ -246,7 +246,14 @@ def render(d, run, *, dump_text=None, dump_style=None,
         cmd += ["--accept-baseline"]
     env = tmp.env(d.get("env"))
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env)
+        # Pin the subprocess cwd to the fixture home. The ported chrome's
+        # header renders the working dir (ui_header.rs working_dir row) and the
+        # overscroll renders dir_label_short; inheriting the harness's cwd bakes
+        # an absolute machine path into every frame's golden. With cwd ==
+        # $HOME, abbreviate_home renders `~` and dir_label_short is home-relative
+        # — both machine-independent. Scenarios that need repository context
+        # set their own cwd via env (see diff-viewer-git, nondeterministic).
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env, cwd=tmp.home)
         return p.returncode, (p.stdout + p.stderr)
     finally:
         if fixture is None:

@@ -24,11 +24,10 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Shortcuts & commands",
-    "contains:Keyboard Shortcuts",
-    "contains:Slash Commands"
+    "contains:Show this help overlay",
+    "contains:Esc to close"
   ],
   "baseline": "help-overlay.txt",
   "style_baseline": "help-overlay.style.txt",
-  "notes": "The largest always-available overlay and the one with the most render paths (filter box, two-column shortcut/slash split, scrolling). Also exercises the /help TOGGLE bug class from iter-82: pressing it twice must show the same overlay, not two different ones — hence the close variant, which baselines the Esc path too."
+  "notes": "The largest always-available overlay and the one with the most render paths (filter box, two-column shortcut/slash split, scrolling). Also exercises the /help TOGGLE bug class from iter-82: pressing it twice must show the same overlay, not two different ones \u2014 hence the close variant, which baselines the Esc path too. POST-CUTOVER: operant's help table was deleted with the dispatch; the ported chrome draws its own help (jcode_ui/ui_overlays.rs::draw_help_overlay), whose ground truth is the /help entry line and the scroll footer."
 }

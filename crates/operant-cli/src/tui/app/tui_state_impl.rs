@@ -379,19 +379,15 @@ impl TuiState for App {
         }
     }
 
-    fn command_suggestions(&self) -> Vec<(String, &'static str)> {
-        // [port-decision] command_suggestions: the trait's second tuple
-        // element is `&'static str`, but operant's `TypeaheadSuggestion`
-        // carries an owned `description: String` built per keystroke
-        // (`prompt_input/typeahead.rs:119`). There is no interner and no
-        // `&'static` source for it, so the descriptions are dropped and only
-        // the command text is mapped — the renderer's inline description span
-        // renders empty. Wire by widening the trait element to `String`, or by
-        // interning the slash-command table's `&'static str` descriptions.
+    fn command_suggestions(&self) -> Vec<(String, String)> {
+        // Descriptions are owned (`TypeaheadSuggestion.description`, built per
+        // keystroke in prompt_input/typeahead.rs), so the tuple carries String
+        // rather than &'static str — widening the seam instead of dropping the
+        // descriptions the overlay renders.
         self.prompt_input
             .suggestions
             .iter()
-            .map(|suggestion| (suggestion.text.clone(), ""))
+            .map(|suggestion| (suggestion.text.clone(), suggestion.description.clone()))
             .collect()
     }
 

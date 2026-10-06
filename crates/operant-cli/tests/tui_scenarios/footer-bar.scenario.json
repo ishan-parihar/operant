@@ -9,11 +9,11 @@
     "messages == 1"
   ],
   "assert_screen": [
-    "contains:shortcuts",
-    "contains:1420",
-    "contains:233"
+    "contains:tok/s",
+    "contains:200k",
+    "contains:Offline Capture"
   ],
   "baseline": "footer-bar.txt",
   "style_baseline": "footer-bar.style.txt",
-  "notes": "The footer is the only place the token / cost / turn counters live, and it is rendered from chunk[5] — a fixed 2-row budget that a regression in any of the five sibling chunks can steal. usage.json is what makes the token glyphs non-zero, so this also pins the up/down arrows and their column alignment. ENV: the left third shows model · provider, which come from operant.toml."
+  "notes": "The footer is the only place the token / cost / turn counters live, and it is rendered from chunk[5] \u2014 a fixed 2-row budget that a regression in any of the five sibling chunks can steal. usage.json is what makes the token glyphs non-zero, so this also pins the up/down arrows and their column alignment. ENV: the left third shows model \u00b7 provider, which come from operant.toml. POST-CUTOVER: the ported chrome has no footer token glyphs \u2014 usage metrics moved to the pinned Overview side panel (tok/s) and streaming-time \u2191N \u2193N; 'shortcuts'/'1420'/'233' were the deleted operant footer's text. 200k pins the context counter, Offline Capture pins the config-pinned model\u00b7provider."
 }

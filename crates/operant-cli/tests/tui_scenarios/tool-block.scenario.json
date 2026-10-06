@@ -10,15 +10,15 @@
   ],
   "assert_screen": [
     "contains:read_file",
-    "contains:README.md"
+    "contains:Reading the file."
   ],
   "baseline": "tool-block.txt",
   "style_baseline": "tool-block.style.txt",
   "deterministic": false,
   "nondeterminism": {
-    "reason": "The tool block is a content-sized box, so its border width follows the widest row it draws — and one of those rows carries the Done-path notification banner (`Response complete · /copy to copy · Ctrl+J for line break`, pushed with a 4s TTL by handle_agent_event's AgentEvent::Done arm). notifications.rs drives that banner off `(exp - now).as_millis()`, so a wall-clock read decides how much of the row it occupies, and the ellipsis lands one column earlier or later. Measured over 8 renders: 4/4 split between two shapes, correlated with run duration (the two slow outliers were the short ones). Not reachable by an env pin \u2014 the TTL is computed from a real clock.",
-    "varying_region": "One cell. Text row 2 / style row 3, col 114: the tool block's bottom border is sometimes a `─` and sometimes a trailing space, i.e. the rule is 45 or 46 cells wide, and that cell's fg moves with it (rgb:FFBF00 when the rule reaches it, rgb:CC9B1F when the rule stops short). Every other cell in the grid is stable.",
+    "reason": "The tool block is a content-sized box, so its border width follows the widest row it draws \u2014 and one of those rows carries the Done-path notification banner (`Response complete \u00b7 /copy to copy \u00b7 Ctrl+J for line break`, pushed with a 4s TTL by handle_agent_event's AgentEvent::Done arm). notifications.rs drives that banner off `(exp - now).as_millis()`, so a wall-clock read decides how much of the row it occupies, and the ellipsis lands one column earlier or later. Measured over 8 renders: 4/4 split between two shapes, correlated with run duration (the two slow outliers were the short ones). Not reachable by an env pin \u2014 the TTL is computed from a real clock.",
+    "varying_region": "One cell. Text row 2 / style row 3, col 114: the tool block's bottom border is sometimes a `\u2500` and sometimes a trailing space, i.e. the rule is 45 or 46 cells wide, and that cell's fg moves with it (rgb:FFBF00 when the rule reaches it, rgb:CC9B1F when the rule stops short). Every other cell in the grid is stable.",
     "surface_of_fix": "Give notifications.rs an injected clock (or a frozen one under App::is_simulating) so the fade position is a render input rather than a measurement. That is a production change, so the golden is withheld instead \u2014 and note the trap: the first four-render prove PASSED this scenario by luck, which is exactly why the fourth render exists."
   },
-  "notes": "Tool blocks are a distinct render path (render_tool_items_lines) with four status colours (Queued / Running / Done / Error) and a 3-line output preview \u2014 exactly the kind of thing the style baseline exists for and the text dump cannot see. The script leads with a `user` event because build_transcript_turns starts a turn only at a Role::User message and render_messages partitions tool blocks onto a turn: without it the tool state populates and paints nothing."
+  "notes": "Tool blocks are a distinct render path (render_tool_items_lines) with four status colours (Queued / Running / Done / Error) and a 3-line output preview \u2014 exactly the kind of thing the style baseline exists for and the text dump cannot see. The script leads with a `user` event because build_transcript_turns starts a turn only at a Role::User message and render_messages partitions tool blocks onto a turn: without it the tool state populates and paints nothing. POST-CUTOVER: the ported tool block renders a generated title ('Reading the file.') + tool name + tokens, not the raw argument path; result text remains the content gate."
 }

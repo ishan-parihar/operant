@@ -19,10 +19,25 @@ pub const GIT_HASH: &str = "unknown";
 pub const GIT_DATE: &str = "unknown";
 pub const GIT_TAG: &str = "unknown";
 pub const SEMVER: &str = env!("CARGO_PKG_VERSION");
+// Operant's changelog is deliberately EMPTY (see CHANGELOG const below).
 pub const BASE_SEMVER: &str = env!("CARGO_PKG_VERSION");
-// Operant's changelog lives at docs/CHANGELOG.md (the release pipeline reads it
-// from there); from jcode_app/ that is five `..` then docs/CHANGELOG.md.
-pub const CHANGELOG: &str = include_str!("../../../../../docs/CHANGELOG.md");
+
+// [port-decision] CHANGELOG is deliberately EMPTY. Its only consumer,
+// jcode_ui::ui_changelog::parse_changelog, has a hard format contract: jcode's
+// build.rs emits `hash\x1etag\x1etimestamp\x1esubject` records joined by 0x1F
+// (legacy: `hash:tag:subject`). The original port fed docs/CHANGELOG.md
+// markdown into it; split_once(':') twice on markdown made the WHOLE file
+// parse as one entry whose "subject" started at
+// `//semver.org/spec/...### Changed...` — that garbage printed in the "Updates"
+// box on every fresh-HOME first launch (and in every corpus frame). An empty
+// source degrades through the parser's own paths: no Updates box, /changelog
+// shows "No changelog entries available." — honest, not garbage. Restore real
+// content by EITHER porting jcode's build.rs emitter
+// (`git log -700 --format=%h|%ct|%D|%s` → RS/US records) OR writing a markdown
+// parser over docs/CHANGELOG.md — both need a golden-stability decision first:
+// an emitter's content moves with every commit, reddening every corpus golden
+// that includes the box.
+pub const CHANGELOG: &str = "";
 
 static RUNTIME_RELEASE_SEMVER: OnceLock<Option<String>> = OnceLock::new();
 static RUNTIME_VERSION: OnceLock<Option<String>> = OnceLock::new();

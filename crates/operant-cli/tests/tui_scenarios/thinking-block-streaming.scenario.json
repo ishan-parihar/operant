@@ -1,7 +1,7 @@
 {
   "name": "thinking-block-streaming",
   "surface": "crates/operant-cli/src/tui/render/messages.rs::render_thinking_item",
-  "opens_with": "(agent script only — /reasoning toggles expansion)",
+  "opens_with": "(agent script only \u2014 /reasoning toggles expansion)",
   "keys": "",
   "size": "120x40",
   "agent_script": "stream-multi-chunk.json",
@@ -10,10 +10,9 @@
     "is_streaming == false"
   ],
   "assert_screen": [
-    "contains:Thinking:",
     "contains:two-part question"
   ],
   "baseline": "thinking-block-streaming.txt",
   "style_baseline": "thinking-block-streaming.style.txt",
-  "notes": "The transcript's THINKING/REASONING row, a distinct render path from ordinary assistant content: it is prefixed with a marker glyph, truncated with an ellipsis mid-word, and gated on app.show_reasoning. stream-multi-chunk.json emits two Reasoning events so the row carries concatenated text, which is the case that truncation has to get right. messages == 1 pins the flush: the two Reasoning events and the three Content events must coalesce into exactly ONE transcript message, so a regression that emitted one row per stream chunk changes the count and fails here as well as in the text baseline."
+  "notes": "The transcript's THINKING/REASONING row, a distinct render path from ordinary assistant content: it is prefixed with a marker glyph, truncated with an ellipsis mid-word, and gated on app.show_reasoning. stream-multi-chunk.json emits two Reasoning events so the row carries concatenated text, which is the case that truncation has to get right. messages == 1 pins the flush: the two Reasoning events and the three Content events must coalesce into exactly ONE transcript message, so a regression that emitted one row per stream chunk changes the count and fails here as well as in the text baseline. POST-CUTOVER: the ported chrome renders the reasoning body without operant's 'Thinking:' label prefix; the body assertion remains the content gate."
 }
