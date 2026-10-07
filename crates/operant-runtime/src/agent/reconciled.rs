@@ -1241,6 +1241,13 @@ pub struct RuntimeToolBridge(Arc<dyn operant_api::tool::Tool>);
 
 impl RuntimeToolBridge {
     /// Wrap a runtime tool for core's registry.
+    ///
+    /// Takes `Arc<dyn Tool>`, the shape the registries already hand out:
+    /// `all_tools_with_runtime` returns the same tools both ways (Box for
+    /// the Loop C engine, Arc for facade consumers — an `Arc` cannot be
+    /// recovered from a `Box` without taking it, which a shared registry
+    /// does not allow). One tool can therefore serve many turns and many
+    /// agents with no per-spawn clone.
     pub fn new(tool: Arc<dyn operant_api::tool::Tool>) -> Self {
         Self(tool)
     }
@@ -1286,6 +1293,9 @@ impl operant_core::tools::OperantTool for RuntimeToolBridge {
 
         match self.0.execute(args.clone()).await {
             Ok(result) => {
+                if !result.success {
+                    eprintln!("=== DIAG bridge tool {} failed: {:?}", name, result.error);
+                }
                 let mut content = if result.output.is_empty() {
                     "(no output)".to_string()
                 } else {
@@ -1716,6 +1726,11 @@ pub struct FacadeConstruction {
     pub caller_tools: Option<Arc<Vec<Arc<dyn operant_api::tool::Tool>>>>,
     /// Override the iteration budget instead of taking the process cap.
     pub max_iterations: Option<usize>,
+    /// Loop B parity: pass through `PacingConfig::loop_detection_enabled`.
+    /// `None` keeps core's default (breaker ON). The channels orchestrator
+    /// sets this so an operator disabling loop detection on a channel keeps
+    /// the old loop's behavior (budget governs, breaker stays off).
+    pub loop_detection_enabled: Option<bool>,
     /// Where the facade's own stores live (database / cron / kanban).
     /// `None` = the process data dir (`~/.operant`), the production
     /// default. W1.8c: every facade construction opens these files, so a
@@ -2078,6 +2093,7 @@ impl ReconciledAgent {
             allowed_tools,
             caller_tools,
             max_iterations,
+            loop_detection_enabled,
             data_dir,
         } = construction;
         // Provider routing + model resolution — verbatim Loop B inputs,
@@ -2250,7 +2266,7 @@ impl ReconciledAgent {
                     .register(RuntimeToolBridge::new(Arc::clone(tool)))
                     .await?;
             }
-            tracing::info!(count = tools.len(), "facade: caller tools registered");
+            tracing::info!(offered = tools.len(), "facade: caller tools registered");
         }
 
         // W1.8c: the facade's `model_switch` tool (core has no provider
@@ -2315,6 +2331,11 @@ impl ReconciledAgent {
         // process default; inheriting it silently would widen the cap.
         if let Some(limit) = max_iterations {
             agent_config.max_iterations = limit;
+        }
+        // W1.8c: channel pacing's loop-detection switch (Loop B honored it;
+        // core's R35 breaker defaults ON when the caller doesn't say).
+        if let Some(enabled) = loop_detection_enabled {
+            agent_config.loop_detection_enabled = enabled;
         }
         agent_config.approval_allowlist = core_app.command_allowlist.clone();
         agent_config.approval_allowlist_path =
@@ -3035,6 +3056,7 @@ mod facade_tests {
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
+            loop_detection_enabled: true,
             approval_mode: "off".to_string(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
@@ -3419,7 +3441,10 @@ mod facade_tests {
         let turn = tokio::spawn(async move { fixture.agent.turn_streamed("go", tx, None).await });
 
         // The turn must stop at the approval gate inside the 120s window.
-        let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        // 60s, not 5s: under full-suite CPU saturation the facade build +
+        // first scripted call can exceed a 5s wall-clock window and flake
+        // the round-trip even though the gate behaves correctly.
+        let request_id = tokio::time::timeout(Duration::from_secs(60), async {
             loop {
                 if let Ok(TurnEvent::ApprovalRequest {
                     request_id,
@@ -3737,7 +3762,7 @@ mod w18b_fix_tests {
 
     #[tokio::test]
     async fn runtime_tool_bridge_executes_through_core_registry() {
-        use operant_core::tools::{OperantTool, ToolContext, ToolResult as CoreToolResult};
+        use operant_core::tools::{ToolContext, ToolResult as CoreToolResult};
 
         struct Echo;
         #[async_trait::async_trait]
@@ -3846,7 +3871,7 @@ mod w18b_fix_tests {
         use crate::agent::tool_receipts::{
             ReceiptGenerator, ReceiptScope, TOOL_LOOP_RECEIPT_CONTEXT,
         };
-        use operant_core::tools::{OperantTool, ToolContext};
+        use operant_core::tools::ToolContext;
 
         struct Echo;
         #[async_trait::async_trait]

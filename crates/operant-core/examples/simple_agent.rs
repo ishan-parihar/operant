@@ -174,6 +174,7 @@ Use the echo tool to repeat information and the calculate tool for math."
         max_healing_attempts: 3,
         fallback_models: vec![],
         fallback_on_errors: false,
+        loop_detection_enabled: true,
         approval_mode: "smart".to_string(),
         approval_allowlist: Vec::new(),
         approval_allowlist_path: None,

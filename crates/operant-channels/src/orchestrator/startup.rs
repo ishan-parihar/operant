@@ -118,6 +118,7 @@ pub async fn start_channels(
     let workspace = config.workspace_dir.clone();
     let (
         mut built_tools,
+        facade_tool_arcs,
         delegate_handle_ch,
         reaction_handle_ch,
         _channel_map_handle,
@@ -518,6 +519,7 @@ pub async fn start_channels(
         prompt_config: Arc::new(config.clone()),
         memory: Arc::clone(&mem),
         tools_registry: Arc::clone(&tools_registry),
+        facade_tools: Arc::new(facade_tool_arcs),
         observer,
         system_prompt: Arc::new(system_prompt),
         model: Arc::new(model.clone()),
@@ -620,6 +622,8 @@ pub async fn start_channels(
             None
         },
         show_receipts_in_response: config.agent.tool_receipts.show_in_response,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: None,
     });
 
     // Hydrate in-memory conversation histories from persisted JSONL session files.

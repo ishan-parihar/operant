@@ -855,6 +855,7 @@ impl Agent {
 
         let (
             mut tools,
+            _facade_tool_arcs,
             delegate_handle,
             reaction_handle,
             poll_handle,

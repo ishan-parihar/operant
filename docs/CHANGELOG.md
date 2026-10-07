@@ -31,6 +31,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **W1.8c — channel dispatch runs on the reconciled facade** (the last
+  `run_tool_call_loop` call site): `process_channel_message` now constructs a
+  `ReconciledAgent` per message via `FacadeConstruction` (provider route,
+  system prompt, `temperature`, the channel's `max_tool_iterations`, the
+  Loop-B-parity tool allowlist with non-CLI exclusions and the pacing
+  `loop_detection_enabled` switch), pins a per-conversation core session id
+  (re-minted on `/new` and on rollback), hydrates the fresh session transcript
+  from the orchestrator's sanitized prior turns, and runs the turn through
+  `run_facade_turn` with the old loop's scope chain at the call site
+  (`Box::pin` keeps the large turn future off the polling stack — a 2MB
+  tokio worker overflowed inside `Regex::new` in context-reference
+  preprocessing before this). Cross-crate fixes the migration surfaced:
+  (1) prompt-mode providers now receive tool results as user-role
+  `[Tool results]` text (`operant-api` `Provider::chat` default) — core's
+  role-`tool` JSON was invisible to text-only providers and re-triggered
+  calls until the loop detector tripped; (2) the facade's session store
+  enables `PRAGMA busy_timeout=500` and `BEGIN IMMEDIATE` on its write
+  transactions — concurrent facades (channel turns, cron, sub-agents) died
+  instantly with `SQLITE_BUSY_SNAPSHOT` ("database is locked"); (3) the
+  guardrail duplicate-skip result is success-shaped guidance (`Guardrail: …`,
+  no `[` prefix — the anomaly heuristic treated a bracket prefix as failed
+  JSON and refunded iterations re-asking the model); (4) channels substitute
+  core's empty degenerate grace summaries with a stopped-early notice naming
+  the configured iteration budget, and strip raw tool-call/result JSON
+  artifact lines from final replies; (5) test facades point at per-context
+  temp data dirs instead of the operator's live `~/.operant` (39 contexts
+  contended on one SQLite file). Channels suite: 1045/0.
+
 - `org grant give` / `org grant revoke` (F1, ORGANISM-ARCHITECTURE §6): the
   CLI no longer writes the `authority_grants` ledger directly — every mint
   and revocation goes through the `SeatApprover`, the same grantor-scope

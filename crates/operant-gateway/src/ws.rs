@@ -1481,6 +1481,7 @@ mod tests {
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
+            loop_detection_enabled: true,
             // "smart": bash is permission-gated, so the turn parks on the
             // facade's approval bridge — the exact flow WS clients ride.
             approval_mode: "smart".to_string(),

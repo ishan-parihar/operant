@@ -1676,7 +1676,7 @@ impl OperantAgent {
                             identical_streak = 0;
                         }
                     }
-                    if identical_streak >= 6 {
+                    if self.config.loop_detection_enabled && identical_streak >= 6 {
                         warn!(
                             identical_streak,
                             "Identical tool call repeated across iterations — ending turn"
@@ -1718,7 +1718,7 @@ impl OperantAgent {
                         }
                         return Ok(abort_msg);
                     }
-                    if identical_streak == 4 {
+                    if self.config.loop_detection_enabled && identical_streak == 4 {
                         warn!(
                             identical_streak,
                             "Identical tool call repeated — nudging model to stop"

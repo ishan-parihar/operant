@@ -120,10 +120,17 @@ impl ToolGuardrailTracker {
     }
 }
 
+/// Prefix stamped on synthetic skip results. `run`'s repetition guard keys
+/// on it so guardrail-skipped duplicates never advance the breaker streak.
+pub const SKIP_MESSAGE_PREFIX: &str = "Guardrail: ";
+
 /// Build the synthetic skip result text fed back to the model.
 pub fn build_skip_message(tool_name: &str, count: usize) -> String {
+    // W1.8c: no bracket prefix — a leading `[` makes the anomaly heuristic's
+    // `is_malformed_tool_output` treat this as failed JSON and re-ask the
+    // model, burning the budget (Loop B's skip text was bracketless too).
     format!(
-        "[GUARDRAIL] Tool '{tool_name}' was already called with identical arguments \
+        "{SKIP_MESSAGE_PREFIX}tool '{tool_name}' was already called with identical arguments \
          {count} times this turn. Skipping this duplicate call — do NOT repeat it. \
          If the previous results were insufficient, change the arguments or use a \
          different tool."

@@ -5,11 +5,7 @@ use anyhow::Result;
 use operant_memory;
 use operant_providers::reliable::{scope_provider_fallback, take_last_provider_fallback};
 use operant_providers::{self, ChatMessage, Provider};
-use operant_runtime::agent::loop_::{
-    clear_model_switch_request, get_model_switch_state, is_model_switch_requested,
-    run_tool_call_loop, scope_session_key, scope_thread_id, scrub_credentials,
-};
-use operant_runtime::observability::traits::ObserverEvent;
+use operant_runtime::agent::loop_::{StreamDelta, scrub_credentials};
 use operant_runtime::observability::{Observer, runtime_trace};
 use operant_runtime::security::AutonomyLevel;
 use operant_runtime::util::truncate_with_ellipsis;
@@ -22,6 +18,115 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+
+/// W1.8c parity: Loop B never delivered raw tool-call JSON the model echoed
+/// in its closing text (its parser consumed the call; the remainder shipped).
+/// The facade relays the model's final text verbatim, so strip artifact lines
+/// here: a line is dropped only when it parses as a JSON object AND carries
+/// tool-artifact keys (`name`+`parameters`/`arguments`, or `result`).
+/// Plain JSON answers without those keys survive untouched.
+fn strip_raw_tool_json_artifacts(text: &str) -> String {
+    let mut kept = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let is_artifact = trimmed.starts_with('{')
+            && trimmed.ends_with('}')
+            && serde_json::from_str::<serde_json::Value>(trimmed).is_ok_and(|v| {
+                let is_call_shape = v.get("name").is_some()
+                    && (v.get("parameters").is_some() || v.get("arguments").is_some());
+                let is_result_shape =
+                    v.get("result").is_some() && matches!(v.as_object(), Some(o) if o.len() <= 3);
+                is_call_shape || is_result_shape
+            });
+        if !is_artifact {
+            kept.push(line);
+        }
+    }
+    kept.join("\n")
+}
+
+/// Core session id for this conversation's facade transcript (W1.8c).
+/// Stable per `history_key`, re-minted after `/new` so the next turn starts
+/// from an empty transcript (the tool loop this replaced was stateless, so
+/// this is strictly additive continuity, not a behavior change for prior turns).
+fn channel_session_id(
+    ctx: &ChannelRuntimeContext,
+    history_key: &str,
+    force_fresh_session: bool,
+) -> String {
+    let mut ids = ctx
+        .channel_session_ids
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if force_fresh_session {
+        ids.remove(history_key);
+    }
+    ids.entry(history_key.to_string())
+        .or_insert_with(|| format!("chan-{history_key}-{}", uuid::Uuid::new_v4()))
+        .clone()
+}
+
+/// Drop the pinned core session id so the next turn starts from an empty
+/// facade transcript (W1.8c). Called exactly where the orchestrator
+/// rolls the failed user turn out of its cache and JSONL store
+/// ([`rollback_orphan_user_turn`]) — the facade's DB transcript would
+/// otherwise keep the poisoned turn and resurface it to the model.
+fn rotate_channel_session_id(ctx: &ChannelRuntimeContext, history_key: &str) {
+    ctx.channel_session_ids
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(history_key);
+}
+
+/// W1.8c: run a single facade turn. Simple future — the call site applies
+/// the scope wrappers (thread_id, session_key, cost, receipt, timeout) exactly
+/// as it did for `run_tool_call_loop`. This avoids the massive nested state
+/// machine that overflowed the stack when scopes were inside the function.
+async fn run_facade_turn(
+    facade: &mut operant_runtime::agent::reconciled::ReconciledAgent,
+    msg_content: String,
+    msg_channel: String,
+    approvals: operant_runtime::agent::reconciled::ReconciledApprovals,
+    ctx: Arc<ChannelRuntimeContext>,
+    delta_tx: Option<tokio::sync::mpsc::Sender<StreamDelta>>,
+    cancellation_token: CancellationToken,
+) -> Result<String> {
+    let (event_tx, mut event_rx) =
+        tokio::sync::mpsc::channel::<operant_runtime::agent::reconciled::TurnEvent>(64);
+    let (consumer_tx, mut consumer_rx) = tokio::sync::mpsc::channel(64);
+    let sink = operant_runtime::agent::reconciled::FacadeSink::pair(consumer_tx, delta_tx);
+    // W1.8c: the turn future is large (core run chain); keep its storage off
+    // the polling thread's stack so budget-limited stacks (libtest threads,
+    // 2MB tokio workers) keep headroom for deep synchronous work inside the
+    // turn (e.g. regex compilation in context-reference preprocessing).
+    let turn = Box::pin(facade.turn_streamed(&msg_content, event_tx, Some(cancellation_token)));
+    let (result, _) = tokio::join!(turn, async {
+        while let Some(event) = event_rx.recv().await {
+            if let operant_runtime::agent::reconciled::TurnEvent::ApprovalRequest {
+                request_id,
+                tool_name,
+                arguments_summary,
+                ..
+            } = event
+            {
+                operant_runtime::agent::reconciled::answer_pending_approval(
+                    &approvals,
+                    &ctx.approval_manager,
+                    false,
+                    &msg_channel,
+                    &request_id,
+                    &tool_name,
+                    &arguments_summary,
+                )
+                .await;
+                continue;
+            }
+            sink.send(event).await;
+        }
+    });
+    while consumer_rx.try_recv().is_ok() {}
+    result
+}
 
 pub(crate) async fn process_channel_message(
     ctx: Arc<ChannelRuntimeContext>,
@@ -142,7 +247,7 @@ pub(crate) async fn process_channel_message(
     }
 
     let runtime_defaults = runtime_defaults_snapshot(ctx.as_ref());
-    let mut active_provider =
+    let active_provider =
         match get_or_create_provider(ctx.as_ref(), &route.provider, route.api_key.as_deref()).await
         {
             Ok(provider) => provider,
@@ -337,6 +442,27 @@ pub(crate) async fn process_channel_message(
     if !memory_context.is_empty() {
         let _ = write!(system_prompt, "\n\n{memory_context}");
     }
+    let facade_system_prompt = system_prompt.clone();
+
+    // Loop B parity: non-CLI channels drop operator-excluded tools unless
+    // the channel runs at Full autonomy (same condition the old loop call
+    // used for its excluded_tools argument).
+    let channel_is_privileged = msg.channel == "cli" || ctx.autonomy_level == AutonomyLevel::Full;
+    let channel_tool_names: Vec<String> = ctx
+        .facade_tools
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .filter(|name| {
+            channel_is_privileged
+                || !ctx
+                    .non_cli_excluded_tools
+                    .iter()
+                    .any(|excluded| excluded == name)
+        })
+        .collect();
+
+    let core_session_id = channel_session_id(ctx.as_ref(), &history_key, force_fresh_session);
+
     let mut history = vec![ChatMessage::system(system_prompt)];
     history.extend(prior_turns);
 
@@ -632,10 +758,8 @@ pub(crate) async fn process_channel_message(
 
     enum LlmExecutionResult {
         Completed(Result<Result<String, anyhow::Error>, tokio::time::error::Elapsed>),
-        Cancelled,
     }
 
-    let model_switch_callback = get_model_switch_state();
     let scale_cap = ctx
         .pacing
         .message_timeout_scale_max
@@ -666,112 +790,97 @@ pub(crate) async fn process_channel_message(
             collector: std::sync::Arc::clone(&tool_receipts_collector),
         }
     });
-    let (llm_result, fallback_info) = scope_provider_fallback(async {
-        let llm_result = loop {
-            let loop_result = tokio::select! {
-                () = cancellation_token.cancelled() => LlmExecutionResult::Cancelled,
-                result = tokio::time::timeout(
-                    Duration::from_secs(timeout_budget_secs),
-                    scope_thread_id(
-                        msg.interruption_scope_id.clone()
-                            .or_else(|| msg.thread_ts.clone())
-                            .or_else(|| Some(msg.id.clone())),
-                    scope_session_key(
-                        Some(history_key.clone()),
-                        operant_runtime::agent::loop_::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
-                            cost_tracking_context.clone(),
+    // W1.8c: build the facade ONCE per message, OUTSIDE the nested scopes,
+    // so the deep synchronous construction (DB, registry, MCP) does not
+    // nest under timeout/thread_id/session_key/cost/receipt scopes.
+    let facade_obs: Arc<dyn Observer> = Arc::clone(&ctx.observer);
+    let facade = operant_runtime::agent::reconciled::ReconciledAgent::from_config_with(
+        ctx.prompt_config.as_ref(),
+        Some(facade_obs),
+        None,
+        true,
+        Some((
+            route.provider.clone(),
+            Arc::clone(&active_provider),
+            route.model.clone(),
+        )),
+        Some(facade_system_prompt.clone()),
+        operant_runtime::agent::reconciled::FacadeConstruction {
+            temperature: Some(runtime_defaults.temperature),
+            max_iterations: Some(ctx.max_tool_iterations),
+            // Loop B parity: the old loop took ctx.pacing and honored its
+            // loop_detection_enabled switch for the R35-equivalent guard.
+            loop_detection_enabled: Some(ctx.pacing.loop_detection_enabled),
+            allowed_tools: Some(channel_tool_names.clone()),
+            caller_tools: Some(Arc::clone(&ctx.facade_tools)),
+            data_dir: ctx.facade_data_dir.clone(),
+            ..Default::default()
+        },
+    )
+    .await;
+    if let Err(e) = facade {
+        tracing::error!("facade construction failed: {e:#}");
+        return;
+    }
+    let mut facade = facade.unwrap();
+    facade.core_agent().set_session_id(&core_session_id);
+    // W1.8c: hydrate a fresh DB transcript from the orchestrator's sanitized
+    // prior turns (history[1..] — history[0] is the system prompt, which core
+    // prepends itself every call). The orchestrator's per-sender cache, not
+    // the DB, owns channel history; the session transcript accumulates from
+    // here on. No-ops when the session already has turns (continuity) or the
+    // cache is fresh (/new).
+    facade.seed_history_if_empty(&history[1..]).await;
+
+    // Clone values needed both inside and outside the scope_provider_fallback
+    // block. The inner async move block takes ownership, so these clones
+    // let the post-loop code (drop(delta_tx), msg.channel) keep working.
+    let cancellation_token_for_turn = cancellation_token.clone();
+    let ctx_for_turn = Arc::clone(&ctx);
+    let approvals_for_turn = facade.approvals().clone();
+    let delta_tx_for_turn = delta_tx.clone();
+    let msg_content_for_turn = msg.content.clone();
+    let msg_channel_for_turn = msg.channel.clone();
+    let msg_interruption_scope_id_for_turn = msg.interruption_scope_id.clone();
+    let msg_thread_ts_for_turn = msg.thread_ts.clone();
+    let msg_id_for_turn = msg.id.clone();
+    let cost_tracking_context_for_turn = cost_tracking_context.clone();
+    let receipt_scope_for_turn = receipt_scope.clone();
+    let history_key_for_turn = history_key.clone();
+    // Apply scopes at call site (mirrors original run_tool_call_loop pattern)
+    let (llm_result, fallback_info) = scope_provider_fallback(async move {
+        let turn_result = tokio::time::timeout(
+            Duration::from_secs(timeout_budget_secs),
+            operant_runtime::agent::loop_::scope_thread_id(
+                msg_interruption_scope_id_for_turn
+                    .or_else(|| msg_thread_ts_for_turn)
+                    .or_else(|| Some(msg_id_for_turn)),
+                operant_runtime::agent::loop_::scope_session_key(
+                    Some(history_key_for_turn),
+                    operant_runtime::agent::loop_::TOOL_LOOP_COST_TRACKING_CONTEXT.scope(
+                        cost_tracking_context_for_turn,
                         operant_runtime::agent::tool_receipts::TOOL_LOOP_RECEIPT_CONTEXT.scope(
-                            receipt_scope.clone(),
-                        run_tool_call_loop(
-                        active_provider.as_ref(),
-                        &mut history,
-                        ctx.tools_registry.as_ref(),
-                        notify_observer.as_ref() as &dyn Observer,
-                        route.provider.as_str(),
-                        route.model.as_str(),
-                        runtime_defaults.temperature,
-                        true,
-                        Some(&*ctx.approval_manager),
-                        msg.channel.as_str(),
-                        Some(msg.reply_target.as_str()),
-                        &ctx.multimodal,
-                        ctx.max_tool_iterations,
-                        Some(cancellation_token.clone()),
-                        delta_tx.clone(),
-                        ctx.hooks.as_deref(),
-                        if msg.channel == "cli"
-                            || ctx.autonomy_level == AutonomyLevel::Full
-                        {
-                            &[]
-                        } else {
-                            ctx.non_cli_excluded_tools.as_ref()
-                        },
-                        ctx.tool_call_dedup_exempt.as_ref(),
-                        ctx.activated_tools.as_ref(),
-                        Some(model_switch_callback.clone()),
-                        &ctx.pacing,
-                        ctx.max_tool_result_chars,
-                        ctx.context_token_budget,
-                        None, // shared_budget
-                        target_channel.as_deref(),
-                        ctx.receipt_generator.as_ref(),
-                        // Collector is meaningful only when the generator is
-                        // active. Pass None when receipts are disabled so the
-                        // call site reflects that coupling explicitly.
-                        ctx.receipt_generator
-                            .as_ref()
-                            .map(|_| tool_receipts_collector.as_ref()),
+                            receipt_scope_for_turn,
+                            run_facade_turn(
+                                &mut facade,
+                                msg_content_for_turn,
+                                msg_channel_for_turn,
+                                approvals_for_turn,
+                                ctx_for_turn,
+                                delta_tx_for_turn,
+                                cancellation_token_for_turn,
+                            ),
+                        ),
                     ),
-                    ),
-                    ),
-                    ),
-                    ),
-                ) => LlmExecutionResult::Completed(result),
-            };
+                ),
+            ),
+        )
+        .await;
 
-            // Handle model switch: re-create the provider and retry
-            if let LlmExecutionResult::Completed(Ok(Err(ref e))) = loop_result
-                && let Some((new_provider, new_model)) = is_model_switch_requested(e)
-            {
-                tracing::info!(
-                    "Model switch requested, switching from {} {} to {} {}",
-                    route.provider,
-                    route.model,
-                    new_provider,
-                    new_model
-                );
-
-                match create_resilient_provider_nonblocking(
-                    &new_provider,
-                    ctx.api_key.clone(),
-                    ctx.api_url.clone(),
-                    ctx.reliability.as_ref().clone(),
-                    ctx.provider_runtime_options.clone(),
-                )
-                .await
-                {
-                    Ok(new_prov) => {
-                        active_provider = Arc::from(new_prov);
-                        route.provider = new_provider;
-                        route.model = new_model;
-                        clear_model_switch_request();
-
-                        ctx.observer.record_event(&ObserverEvent::AgentStart {
-                            provider: route.provider.clone(),
-                            model: route.model.clone(),
-                        });
-
-                        continue;
-                    }
-                    Err(err) => {
-                        tracing::error!("Failed to create provider after model switch: {err}");
-                        clear_model_switch_request();
-                        // Fall through with the original error
-                    }
-                }
-            }
-
-            break loop_result;
+        let llm_result = match turn_result {
+            Ok(Ok(response)) => LlmExecutionResult::Completed(Ok(Ok(response))),
+            Ok(Err(e)) => LlmExecutionResult::Completed(Ok(Err(e))),
+            Err(e) => LlmExecutionResult::Completed(Err(e)),
         };
         let fb = take_last_provider_fallback();
         (llm_result, fb)
@@ -816,35 +925,23 @@ pub(crate) async fn process_channel_message(
     };
 
     match llm_result {
-        LlmExecutionResult::Cancelled => {
-            tracing::info!(
-                channel = %msg.channel,
-                sender = %msg.sender,
-                "Cancelled in-flight channel request due to newer message"
-            );
-            runtime_trace::record_event(
-                "channel_message_cancelled",
-                Some(msg.channel.as_str()),
-                Some(route.provider.as_str()),
-                Some(route.model.as_str()),
-                None,
-                Some(false),
-                Some("cancelled due to newer inbound message"),
-                serde_json::json!({
-                    "sender": msg.sender,
-                    "elapsed_ms": started_at.elapsed().as_millis(),
-                }),
-            );
-            if let (Some(channel), Some(draft_id)) =
-                (target_channel.as_ref(), draft_message_id.as_deref())
-                && let Err(err) = channel.cancel_draft(&msg.reply_target, draft_id).await
-            {
-                tracing::debug!("Failed to cancel draft on {}: {err}", channel.name());
-            }
-        }
         LlmExecutionResult::Completed(Ok(Ok(response))) => {
             // ── Hook: on_message_sending (modifying) ─────────
-            let mut outbound_response = response;
+            let mut outbound_response = strip_raw_tool_json_artifacts(&response);
+            if outbound_response.trim().is_empty() {
+                // W1.8c parity: core's grace path returns an empty final
+                // message for degenerate summaries and expects the consumer
+                // to substitute the stopped-early notice (gateway_runner
+                // does the same keyed on the GraceCall exit reason). Loop B
+                // surfaced an explicit budget error; a channel must never
+                // deliver an empty reply.
+                outbound_response = format!(
+                    "⚠️ I stopped early — the tool-iteration limit ({}) hit \
+                     before finishing. Partial work may be complete; reply \
+                     'continue' to resume the task.",
+                    ctx.max_tool_iterations
+                );
+            }
             if let Some(hooks) = &ctx.hooks {
                 match hooks
                     .run_on_message_sending(
@@ -1183,6 +1280,11 @@ pub(crate) async fn process_channel_message(
                         &history_key,
                         ChatMessage::assistant("[Task failed — not continuing this request]"),
                     );
+                } else {
+                    // W1.8c: keep the facade transcript in step with the
+                    // cache rollback, so the failed turn does not reappear
+                    // in the next turn's model-visible context.
+                    rotate_channel_session_id(ctx.as_ref(), &history_key);
                 }
                 if let Some(channel) = target_channel.as_ref() {
                     if let Some(ref draft_id) = draft_message_id {

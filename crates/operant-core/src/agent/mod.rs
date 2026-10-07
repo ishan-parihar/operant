@@ -120,6 +120,11 @@ pub struct AgentConfig {
     pub fallback_models: Vec<String>,
     /// Whether automatic fallback to fallback_models is enabled.
     pub fallback_on_errors: bool,
+    /// Whether core's cross-iteration repetition circuit breaker (identical
+    /// tool-call streak, R35) and its warning nudge are active. Channel
+    /// facades thread Loop B's `PacingConfig::loop_detection_enabled`
+    /// through here so operators keep the old loop's off switch. Default ON.
+    pub loop_detection_enabled: bool,
     /// Approval mode for tool execution: "smart" (default, pattern-based),
     /// "manual" (prompt for every tool), or "off" (no checks).
     pub approval_mode: String,
@@ -175,6 +180,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             max_healing_attempts: settings.max_healing_attempts,
             fallback_models: settings.fallback_models.clone(),
             fallback_on_errors: settings.fallback_on_errors,
+            loop_detection_enabled: true,
             approval_mode: "smart".to_string(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
@@ -2135,6 +2141,7 @@ mod tests {
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
+            loop_detection_enabled: true,
             approval_mode: "off".to_string(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
@@ -2181,6 +2188,7 @@ mod tests {
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
+            loop_detection_enabled: true,
             approval_mode: "off".to_string(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
@@ -2293,6 +2301,7 @@ mod tests {
             max_healing_attempts: 1,
             fallback_models: Vec::new(),
             fallback_on_errors: false,
+            loop_detection_enabled: true,
             approval_mode: "off".to_string(),
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,

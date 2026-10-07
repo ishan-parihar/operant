@@ -8,7 +8,7 @@
 //! reconcile_columns() diffs live columns against DESIRED_SCHEMA_SQL and ADDs
 //! any missing ones. This makes column additions a declarative operation.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -148,9 +148,15 @@ impl Database {
         // include tokens; keep it owner-only even on shared hosts.
         crate::fs_secrets::set_secret_perms(&path)?;
 
-        // Enable WAL mode for better concurrent read/write performance
+        // Enable WAL mode for better concurrent read/write performance.
+        // busy_timeout: concurrent writers (parallel facade turns, cron,
+        // sub-agents) queue on the WAL lock instead of failing instantly
+        // with SQLITE_BUSY ("database is locked"). 500ms is ample — these
+        // transactions are microseconds — while staying well under the
+        // multi-second wait windows approval/permission tests rely on
+        // when the default data dir is shared under parallel test load.
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=500;",
         )
         .unwrap_or_else(|e| {
             warn!(
@@ -756,8 +762,12 @@ impl Database {
         timestamp: &str,
     ) -> Result<()> {
         let mut conn = self.lock_conn()?;
+        // BEGIN IMMEDIATE: take the WAL write lock up front. A deferred txn
+        // that upgrades reader→writer fails instantly with SQLITE_BUSY_SNAPSHOT
+        // ("database is locked") under concurrent writers, and busy_timeout
+        // does not apply to that failure mode.
         let tx = conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
         tx.execute(
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
@@ -781,8 +791,9 @@ impl Database {
     /// Save a message with full Python-compatible fields.
     pub fn save_message_full(&self, message: &MessageData) -> Result<()> {
         let mut conn = self.lock_conn()?;
+        // BEGIN IMMEDIATE — see save_message for the BUSY_SNAPSHOT rationale.
         let tx = conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| Error::Agent(format!("Failed to start transaction: {}", e)))?;
         tx.execute(
             "INSERT INTO messages (
@@ -1094,7 +1105,7 @@ impl Database {
     pub fn delete_session(&self, session_id: &str) -> Result<usize> {
         let mut conn = self.lock_conn()?;
         let tx = conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| Error::Agent(format!("Failed to begin delete tx: {}", e)))?;
         // Collect the full child lineage iteratively (depth-first, arbitrary
         // order). FK messages cascade is automatic per row.

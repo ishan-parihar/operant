@@ -449,7 +449,31 @@ pub trait Provider: Send + Sync {
                     )
                 }
             };
-            let mut modified_messages = request.messages.to_vec();
+            // Loop B parity (W1.8c): prompt-mode providers receive tool
+            // results as user-role "[Tool results]" text — the convention the
+            // legacy loop used. Core sends them as role-"tool" JSON for
+            // native adapters; text-only providers would never recognize
+            // them and would re-emit the tool call until the loop detector
+            // trips.
+            let mut modified_messages: Vec<ChatMessage> = request
+                .messages
+                .iter()
+                .map(|m| {
+                    if m.role != "tool" {
+                        return m.clone();
+                    }
+                    // ChatMessage::tool carries {"tool_call_id": …, "content": …}.
+                    let content = serde_json::from_str::<serde_json::Value>(&m.content)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("content")
+                                .and_then(|c| c.as_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| m.content.clone());
+                    ChatMessage::user(format!("[Tool results]\n{content}"))
+                })
+                .collect();
 
             if let Some(system_message) = modified_messages.iter_mut().find(|m| m.role == "system")
             {

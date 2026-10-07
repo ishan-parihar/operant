@@ -308,6 +308,7 @@ pub fn all_tools(
     canvas_store: Option<CanvasStore>,
 ) -> (
     Vec<Box<dyn Tool>>,
+    Vec<Arc<dyn Tool>>,
     Option<DelegateParentToolsHandle>,
     Option<ChannelMapHandle>,
     ChannelMapHandle,
@@ -355,6 +356,12 @@ pub fn all_tools_with_runtime(
     canvas_store: Option<CanvasStore>,
 ) -> (
     Vec<Box<dyn Tool>>,
+    // W1.9/W1.8c: the same tools as `Arc`s — facade consumers bridge them
+    // into core's registry. RuntimeToolBridge takes an owned
+    // `Box<dyn Tool>`, and an `Arc` cannot be produced from a `Box`
+    // losslessly, so the Arc list is built alongside instead of converted
+    // afterwards (the shared registry hands out references, not values).
+    Vec<Arc<dyn Tool>>,
     Option<DelegateParentToolsHandle>,
     Option<ChannelMapHandle>,
     ChannelMapHandle,
@@ -881,7 +888,8 @@ pub fn all_tools_with_runtime(
                     "microsoft365: client_credentials auth_flow requires a non-empty client_secret"
                 );
                 return (
-                    boxed_registry_from_arcs(tool_arcs),
+                    boxed_registry_from_arcs(tool_arcs.clone()),
+                    tool_arcs,
                     None,
                     Some(reaction_handle),
                     channel_map_handle,
@@ -1066,7 +1074,8 @@ pub fn all_tools_with_runtime(
     }
 
     (
-        boxed_registry_from_arcs(tool_arcs),
+        boxed_registry_from_arcs(tool_arcs.clone()),
+        tool_arcs,
         delegate_handle,
         Some(reaction_handle),
         channel_map_handle,
@@ -1116,7 +1125,7 @@ mod tests {
         let http = operant_config::schema::HttpRequestConfig::default();
         let cfg = test_config(&tmp);
 
-        let (tools, _, _, _, _, _) = all_tools(
+        let (tools, _, _, _, _, _, _) = all_tools(
             Arc::new(Config::default()),
             &security,
             mem,
@@ -1159,7 +1168,7 @@ mod tests {
         let http = operant_config::schema::HttpRequestConfig::default();
         let cfg = test_config(&tmp);
 
-        let (tools, _, _, _, _, _) = all_tools(
+        let (tools, _, _, _, _, _, _) = all_tools(
             Arc::new(Config::default()),
             &security,
             mem,
@@ -1314,7 +1323,7 @@ mod tests {
             },
         );
 
-        let (tools, _, _, _, _, _) = all_tools(
+        let (tools, _, _, _, _, _, _) = all_tools(
             Arc::new(Config::default()),
             &security,
             mem,
@@ -1348,7 +1357,7 @@ mod tests {
         let http = operant_config::schema::HttpRequestConfig::default();
         let cfg = test_config(&tmp);
 
-        let (tools, _, _, _, _, _) = all_tools(
+        let (tools, _, _, _, _, _, _) = all_tools(
             Arc::new(Config::default()),
             &security,
             mem,
@@ -1384,7 +1393,7 @@ mod tests {
         cfg.skills.prompt_injection_mode =
             operant_config::schema::SkillsPromptInjectionMode::Compact;
 
-        let (tools, _, _, _, _, _) = all_tools(
+        let (tools, _, _, _, _, _, _) = all_tools(
             Arc::new(cfg.clone()),
             &security,
             mem,
@@ -1419,7 +1428,7 @@ mod tests {
         let mut cfg = test_config(&tmp);
         cfg.skills.prompt_injection_mode = operant_config::schema::SkillsPromptInjectionMode::Full;
 
-        let (tools, _, _, _, _, _) = all_tools(
+        let (tools, _, _, _, _, _, _) = all_tools(
             Arc::new(cfg.clone()),
             &security,
             mem,

@@ -654,10 +654,19 @@ impl OperantAgent {
                             "Repeated identical tool call — skipping duplicate"
                         );
                         self.metrics.record_guardrail_skip();
-                        early_results[idx] = Some(ToolResult::error(
-                            &tool_call.id,
-                            crate::tool_guardrails::build_skip_message(&name, count),
-                        ));
+                        early_results[idx] = Some(ToolResult {
+                            tool_call_id: tool_call.id.clone(),
+                            name: name.to_string(),
+                            // A deliberate guardrail skip is guidance, not a
+                            // tool failure: success-shaped so the degenerate-
+                            // loop circuit (consecutive failed iterations)
+                            // doesn't count skips as failures and break turns
+                            // whose models merely re-emit calls.
+                            success: true,
+                            content: crate::tool_guardrails::build_skip_message(&name, count),
+                            error: None,
+                            timed_out: false,
+                        });
                         continue;
                     }
                 }

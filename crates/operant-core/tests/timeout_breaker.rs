@@ -347,6 +347,7 @@ fn test_config(max_iterations: usize) -> AgentConfig {
         max_healing_attempts: 1,
         fallback_models: Vec::new(),
         fallback_on_errors: false,
+        loop_detection_enabled: true,
         approval_mode: "off".to_string(),
         approval_allowlist: Vec::new(),
         approval_allowlist_path: None,

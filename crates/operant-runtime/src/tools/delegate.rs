@@ -1296,8 +1296,12 @@ impl DelegateTool {
                     crate::agent::reconciled::FacadeConstruction {
                         temperature: Some(temperature),
                         allowed_tools: Some(sub_tool_names.clone()),
+                        // Box shape for the bridge: the sub-agent's Arcs
+                        // are wrapped, not re-created.
                         caller_tools: Some(Arc::new(sub_tools.clone())),
                         max_iterations: Some(max_iterations),
+                        // Delegate sub-agents keep core's breaker default.
+                        loop_detection_enabled: None,
                         data_dir: self.facade_data_dir.clone(),
                     },
                 )

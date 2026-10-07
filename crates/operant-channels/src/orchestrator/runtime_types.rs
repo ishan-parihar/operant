@@ -122,6 +122,11 @@ pub(crate) struct ChannelRuntimeContext {
     pub(crate) prompt_config: Arc<operant_config::schema::Config>,
     pub(crate) memory: Arc<dyn Memory>,
     pub(crate) tools_registry: Arc<Vec<Box<dyn Tool>>>,
+    /// The same channel tools as `Arc`s (W1.8c) — the facade's
+    /// `RuntimeToolBridge` takes owned tools, and an `Arc<dyn Tool>` cannot
+    /// be produced from a `Box` without taking it, which the shared
+    /// registry does not allow per turn.
+    pub(crate) facade_tools: Arc<Vec<Arc<dyn Tool>>>,
     pub(crate) observer: Arc<dyn Observer>,
     pub(crate) system_prompt: Arc<String>,
     pub(crate) model: Arc<String>,
@@ -172,6 +177,16 @@ pub(crate) struct ChannelRuntimeContext {
     /// `process_channel_message` renders the per-turn collector as a trailing
     /// `Tool receipts:` block sent after the main reply.
     pub(crate) show_receipts_in_response: bool,
+    /// Per-conversation core session id for the facade turn (W1.8c).
+    /// Minted on first use, re-minted after `/new` and when the turn is
+    /// rolled back, so the facade's DB transcript starts clean whenever
+    /// the channel cache does.
+    pub(crate) channel_session_ids: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Where the facade's own stores live (database / cron / kanban).
+    /// `None` = the process data dir, which is what production wants;
+    /// tests point it at a temp dir so a channel turn never opens — or
+    /// writes — the live database.
+    pub(crate) facade_data_dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]

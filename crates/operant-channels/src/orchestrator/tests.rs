@@ -7,6 +7,20 @@ use operant_memory::MEMORY_CONTEXT_OPEN;
 use operant_runtime::approval::ApprovalManager;
 use operant_runtime::i18n;
 use std::sync::Mutex;
+
+/// W1.8c: every channel facade opens a DB at `facade_data_dir`; `None` means
+/// the operator's LIVE `~/.operant`. 39 test contexts used to share it — one
+/// SQLite file under parallel test load — which surfaced as cross-test
+/// "database is locked" failures. Each context now gets its own throwaway
+/// dir under the system temp root instead.
+fn test_facade_data_dir() -> Option<std::path::PathBuf> {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    Some(std::env::temp_dir().join(format!(
+        "operant-facade-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    )))
+}
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -457,6 +471,7 @@ fn compact_sender_history_keeps_recent_truncated_messages() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("system".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -507,6 +522,8 @@ fn compact_sender_history_keeps_recent_truncated_messages() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     };
 
     assert!(compact_sender_history(&ctx, &sender));
@@ -582,6 +599,7 @@ fn append_sender_turn_stores_single_turn_per_call() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("system".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -634,6 +652,8 @@ fn append_sender_turn_stores_single_turn_per_call() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     };
 
     append_sender_turn(&ctx, &sender, ChatMessage::user("hello"));
@@ -669,6 +689,7 @@ fn rollback_orphan_user_turn_removes_only_latest_matching_user_turn() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("system".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -719,6 +740,8 @@ fn rollback_orphan_user_turn_removes_only_latest_matching_user_turn() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     };
 
     assert!(rollback_orphan_user_turn(&ctx, &sender, "pending"));
@@ -772,6 +795,7 @@ fn rollback_orphan_user_turn_also_removes_from_session_store() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("system".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -822,6 +846,8 @@ fn rollback_orphan_user_turn_also_removes_from_session_store() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     };
 
     assert!(rollback_orphan_user_turn(
@@ -1456,6 +1482,7 @@ async fn process_channel_message_executes_tool_calls_instead_of_sending_raw_json
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -1508,6 +1535,8 @@ async fn process_channel_message_executes_tool_calls_instead_of_sending_raw_json
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -1554,6 +1583,9 @@ async fn process_channel_message_scopes_sender_session_key_for_sessions_current_
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(
+            operant_runtime::tools::SessionsCurrentTool::new(Arc::clone(&session_store)),
+        )]),
+        facade_tools: Arc::new(vec![Arc::new(
             operant_runtime::tools::SessionsCurrentTool::new(Arc::clone(&session_store)),
         )]),
         observer: Arc::new(NoopObserver),
@@ -1610,6 +1642,8 @@ async fn process_channel_message_scopes_sender_session_key_for_sessions_current_
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -1656,6 +1690,7 @@ async fn process_channel_message_renders_trailing_tool_receipts_block_when_enabl
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -1719,6 +1754,8 @@ async fn process_channel_message_renders_trailing_tool_receipts_block_when_enabl
         )),
         receipt_generator: Some(operant_runtime::agent::tool_receipts::ReceiptGenerator::new()),
         show_receipts_in_response: true,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -1793,6 +1830,7 @@ async fn process_channel_message_omits_receipts_block_when_disabled() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -1852,6 +1890,8 @@ async fn process_channel_message_omits_receipts_block_when_disabled() {
         )),
         receipt_generator: Some(operant_runtime::agent::tool_receipts::ReceiptGenerator::new()),
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -1901,6 +1941,7 @@ async fn process_channel_message_disabled_receipt_generator_emits_no_receipts_an
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -1956,6 +1997,8 @@ async fn process_channel_message_disabled_receipt_generator_emits_no_receipts_an
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2025,6 +2068,7 @@ async fn process_channel_message_telegram_does_not_persist_tool_summary_prefix()
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -2077,6 +2121,8 @@ async fn process_channel_message_telegram_does_not_persist_tool_summary_prefix()
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2133,6 +2179,7 @@ async fn process_channel_message_strips_unexecuted_tool_json_artifacts_from_repl
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -2177,7 +2224,14 @@ async fn process_channel_message_strips_unexecuted_tool_json_artifacts_from_repl
         )),
         activated_tools: None,
         cost_tracking: None,
-        pacing: operant_config::schema::PacingConfig::default(),
+        // The detector vs Loop B dedup semantics delta is Wave-2 (S6/S7);
+        // this test's subject is reply scrubbing, so scope it like the
+        // respects test: detector off, budget governs, and the scrub must
+        // still strip the raw JSON from the delivered reply.
+        pacing: operant_config::schema::PacingConfig {
+            loop_detection_enabled: false,
+            ..operant_config::schema::PacingConfig::default()
+        },
         max_tool_result_chars: 0,
         context_token_budget: 0,
         debouncer: Arc::new(operant_infra::debounce::MessageDebouncer::new(
@@ -2185,6 +2239,8 @@ async fn process_channel_message_strips_unexecuted_tool_json_artifacts_from_repl
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2226,6 +2282,7 @@ async fn process_channel_message_executes_tool_calls_with_alias_tags() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -2278,6 +2335,8 @@ async fn process_channel_message_executes_tool_calls_with_alias_tags() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2329,6 +2388,7 @@ async fn process_channel_message_handles_models_command_without_llm_call() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -2381,6 +2441,8 @@ async fn process_channel_message_handles_models_command_without_llm_call() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2456,6 +2518,7 @@ async fn process_channel_message_uses_route_override_provider_and_model() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -2508,6 +2571,8 @@ async fn process_channel_message_uses_route_override_provider_and_model() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2561,6 +2626,7 @@ async fn process_channel_message_prefers_cached_default_provider_instance() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -2613,6 +2679,8 @@ async fn process_channel_message_prefers_cached_default_provider_instance() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2678,6 +2746,7 @@ async fn process_channel_message_uses_runtime_default_model_from_store() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("startup-model".to_string()),
@@ -2733,6 +2802,8 @@ async fn process_channel_message_uses_runtime_default_model_from_store() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2786,6 +2857,7 @@ async fn process_channel_message_respects_configured_max_tool_iterations_above_d
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -2841,6 +2913,8 @@ async fn process_channel_message_respects_configured_max_tool_iterations_above_d
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -2864,7 +2938,14 @@ async fn process_channel_message_respects_configured_max_tool_iterations_above_d
     assert!(!sent_messages.is_empty());
     let reply = sent_messages.last().unwrap();
     assert!(reply.starts_with("chat-iter-success:"));
-    assert!(reply.contains("Completed after 11 tool iterations."));
+    // W1.8c facade contract: guardrail duplicate-skips are guidance, not
+    // failures, so the loop survives the provider's scripted re-emission,
+    // runs its 11 iterations inside the channel-configured budget, and the
+    // provider's own completion text reaches the channel.
+    assert!(
+        reply.contains("Completed after 11 tool iterations."),
+        "reply must be the provider's completion text, got: {reply}"
+    );
     assert!(!reply.contains("⚠️ Error:"));
 }
 
@@ -2884,6 +2965,7 @@ async fn process_channel_message_reports_configured_max_tool_iterations_limit() 
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![Box::new(MockPriceTool)]),
+        facade_tools: Arc::new(vec![Arc::new(MockPriceTool)]),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -2939,6 +3021,8 @@ async fn process_channel_message_reports_configured_max_tool_iterations_limit() 
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -3114,6 +3198,7 @@ async fn message_dispatch_processes_messages_in_parallel() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3166,6 +3251,8 @@ async fn message_dispatch_processes_messages_in_parallel() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     let (tx, rx) = tokio::sync::mpsc::channel::<operant_api::channel::ChannelMessage>(4);
@@ -3230,6 +3317,7 @@ async fn message_dispatch_interrupts_in_flight_telegram_request_and_preserves_co
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3282,6 +3370,8 @@ async fn message_dispatch_interrupts_in_flight_telegram_request_and_preserves_co
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     let (tx, rx) = tokio::sync::mpsc::channel::<operant_api::channel::ChannelMessage>(8);
@@ -3365,6 +3455,7 @@ async fn message_dispatch_interrupts_in_flight_slack_request_and_preserves_conte
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3417,6 +3508,8 @@ async fn message_dispatch_interrupts_in_flight_slack_request_and_preserves_conte
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     let (tx, rx) = tokio::sync::mpsc::channel::<operant_api::channel::ChannelMessage>(8);
@@ -3497,6 +3590,7 @@ async fn message_dispatch_interrupt_scope_is_same_sender_same_chat() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3549,6 +3643,8 @@ async fn message_dispatch_interrupt_scope_is_same_sender_same_chat() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     let (tx, rx) = tokio::sync::mpsc::channel::<operant_api::channel::ChannelMessage>(8);
@@ -3607,6 +3703,7 @@ async fn process_channel_message_cancels_scoped_typing_task() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3659,6 +3756,8 @@ async fn process_channel_message_cancels_scoped_typing_task() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -3698,6 +3797,7 @@ async fn process_channel_message_no_reply_precheck_skips_typing_indicator() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3750,6 +3850,8 @@ async fn process_channel_message_no_reply_precheck_skips_typing_indicator() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -3793,6 +3895,7 @@ async fn process_channel_message_precheck_uses_configured_model_override() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("main-route-model".to_string()),
@@ -3845,6 +3948,8 @@ async fn process_channel_message_precheck_uses_configured_model_override() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -3893,6 +3998,7 @@ async fn process_channel_message_precheck_timeout_fails_open_to_reply() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -3945,6 +4051,8 @@ async fn process_channel_message_precheck_timeout_fails_open_to_reply() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     let started = Instant::now();
@@ -4005,6 +4113,7 @@ async fn process_channel_message_adds_and_swaps_reactions() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -4057,6 +4166,8 @@ async fn process_channel_message_adds_and_swaps_reactions() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -5005,6 +5116,7 @@ async fn process_channel_message_restores_per_sender_history_on_follow_ups() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -5057,6 +5169,8 @@ async fn process_channel_message_restores_per_sender_history_on_follow_ups() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -5098,17 +5212,23 @@ async fn process_channel_message_restores_per_sender_history_on_follow_ups() {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].len(), 2);
+    // W1.8c unified prompt shape: [channel system prompt, <workspace_context>
+    // system message, user turn...]. calls[1] replays the session transcript.
+    assert_eq!(calls[0].len(), 3);
     assert_eq!(calls[0][0].0, "system");
-    assert_eq!(calls[0][1].0, "user");
-    assert_eq!(calls[1].len(), 4);
+    assert_eq!(calls[0][1].0, "system");
+    assert!(calls[0][1].1.contains("<workspace_context>"));
+    assert_eq!(calls[0][2].0, "user");
+    assert_eq!(calls[1].len(), 5);
     assert_eq!(calls[1][0].0, "system");
-    assert_eq!(calls[1][1].0, "user");
-    assert_eq!(calls[1][2].0, "assistant");
-    assert_eq!(calls[1][3].0, "user");
-    assert!(calls[1][1].1.contains("hello"));
-    assert!(calls[1][2].1.contains("response-1"));
-    assert!(calls[1][3].1.contains("follow up"));
+    assert_eq!(calls[1][1].0, "system");
+    assert!(calls[1][1].1.contains("<workspace_context>"));
+    assert_eq!(calls[1][2].0, "user");
+    assert_eq!(calls[1][3].0, "assistant");
+    assert_eq!(calls[1][4].0, "user");
+    assert!(calls[1][2].1.contains("hello"));
+    assert!(calls[1][3].1.contains("response-1"));
+    assert!(calls[1][4].1.contains("follow up"));
 }
 
 #[tokio::test]
@@ -5153,6 +5273,7 @@ async fn process_channel_message_refreshes_available_skills_after_new_session() 
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new(initial_system_prompt),
         model: Arc::new("test-model".to_string()),
@@ -5205,6 +5326,8 @@ async fn process_channel_message_refreshes_available_skills_after_new_session() 
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -5343,6 +5466,7 @@ async fn process_channel_message_enriches_current_turn_without_persisting_contex
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(RecallMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -5395,6 +5519,8 @@ async fn process_channel_message_enriches_current_turn_without_persisting_contex
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -5419,13 +5545,22 @@ async fn process_channel_message_enriches_current_turn_without_persisting_contex
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].len(), 2);
+    // W1.8c unified prompt shape: the facade prepends the channel+memory
+    // system prompt, then a <workspace_context> system message, then the
+    // user turn. Pin the shape deliberately so regressions are loud.
+    assert_eq!(calls[0].len(), 3);
     // Memory context is injected into the system prompt, not the user message.
     assert_eq!(calls[0][0].0, "system");
     assert!(calls[0][0].1.contains(MEMORY_CONTEXT_OPEN));
     assert!(calls[0][0].1.contains("Age is 45"));
-    assert_eq!(calls[0][1].0, "user");
-    assert_eq!(calls[0][1].1, "hello");
+    assert_eq!(calls[0][1].0, "system");
+    assert!(
+        calls[0][1].1.contains("<workspace_context>"),
+        "second system message must be the facade's workspace_context injection"
+    );
+    let last = calls[0].last().expect("provider call should have messages");
+    assert_eq!(last.0, "user");
+    assert_eq!(last.1, "hello");
 
     let histories = runtime_ctx
         .conversation_histories
@@ -5465,6 +5600,7 @@ async fn process_channel_message_telegram_keeps_system_instruction_at_top_only()
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -5515,6 +5651,8 @@ async fn process_channel_message_telegram_keeps_system_instruction_at_top_only()
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -5539,13 +5677,17 @@ async fn process_channel_message_telegram_keeps_system_instruction_at_top_only()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].len(), 4);
+    // W1.8c unified prompt shape: [channel system prompt, <workspace_context>
+    // system message, seeded prior turns..., current user]. The stale leading
+    // assistant turn is dropped by the orchestrator's sanitize; the seeded
+    // user/assistant pair replays via the session transcript.
+    assert_eq!(calls[0].len(), 5);
 
     let roles = calls[0]
         .iter()
         .map(|(role, _)| role.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(roles, vec!["system", "user", "assistant", "user"]);
+    assert_eq!(roles, vec!["system", "system", "user", "assistant", "user"]);
     assert!(
         calls[0][0].1.contains("When responding on Telegram:"),
         "telegram channel instructions should be embedded into the system prompt"
@@ -5554,7 +5696,17 @@ async fn process_channel_message_telegram_keeps_system_instruction_at_top_only()
         calls[0][0].1.contains("For media attachments use markers:"),
         "telegram media marker guidance should live in the system prompt"
     );
-    assert!(!calls[0].iter().skip(1).any(|(role, _)| role == "system"));
+    // Channel instructions must live in the top system prompt ONLY. The second
+    // system message is the facade's <workspace_context> injection (unified
+    // prompt shape), which must not carry channel delivery instructions.
+    assert!(calls[0][1].1.contains("<workspace_context>"));
+    assert!(
+        !calls[0]
+            .iter()
+            .skip(1)
+            .any(|(_, content)| content.contains("When responding on Telegram:")),
+        "channel instructions must not leak into history or the workspace context"
+    );
 }
 
 #[test]
@@ -6115,6 +6267,7 @@ async fn e2e_photo_attachment_rejected_by_non_vision_provider() {
         default_provider: Arc::new("dummy".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("You are a helpful assistant.".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -6167,6 +6320,8 @@ async fn e2e_photo_attachment_rejected_by_non_vision_provider() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     // Simulate a photo attachment message with [IMAGE:] marker.
@@ -6215,6 +6370,7 @@ async fn e2e_failed_vision_turn_does_not_poison_follow_up_text_turn() {
         default_provider: Arc::new("dummy".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("You are a helpful assistant.".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -6267,6 +6423,8 @@ async fn e2e_failed_vision_turn_does_not_poison_follow_up_text_turn() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -6349,6 +6507,7 @@ async fn e2e_failed_non_retryable_turn_does_not_poison_follow_up_text_turn() {
         default_provider: Arc::new("dummy".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("You are a helpful assistant.".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -6399,6 +6558,8 @@ async fn e2e_failed_non_retryable_turn_does_not_poison_follow_up_text_turn() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
         media_pipeline: operant_config::schema::MediaPipelineConfig::default(),
         transcription_config: operant_config::schema::TranscriptionConfig::default(),
     });
@@ -6527,6 +6688,7 @@ async fn process_channel_message_applies_query_classification_route() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -6579,6 +6741,8 @@ async fn process_channel_message_applies_query_classification_route() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -6651,6 +6815,7 @@ async fn process_channel_message_classification_disabled_uses_default_route() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -6703,6 +6868,8 @@ async fn process_channel_message_classification_disabled_uses_default_route() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -6767,6 +6934,7 @@ async fn process_channel_message_classification_no_match_uses_default_route() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -6819,6 +6987,8 @@ async fn process_channel_message_classification_no_match_uses_default_route() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -6903,6 +7073,7 @@ async fn process_channel_message_classification_priority_selects_highest() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("default-model".to_string()),
@@ -6955,6 +7126,8 @@ async fn process_channel_message_classification_priority_selects_highest() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     process_channel_message(
@@ -7228,6 +7401,7 @@ async fn message_dispatch_different_threads_do_not_cancel_each_other() {
         default_provider: Arc::new("test-provider".to_string()),
         memory: Arc::new(NoopMemory),
         tools_registry: Arc::new(vec![]),
+        facade_tools: Arc::new(Vec::new()),
         observer: Arc::new(NoopObserver),
         system_prompt: Arc::new("test-system-prompt".to_string()),
         model: Arc::new("test-model".to_string()),
@@ -7280,6 +7454,8 @@ async fn message_dispatch_different_threads_do_not_cancel_each_other() {
         )),
         receipt_generator: None,
         show_receipts_in_response: false,
+        channel_session_ids: Arc::new(Mutex::new(HashMap::new())),
+        facade_data_dir: test_facade_data_dir(),
     });
 
     let (tx, rx) = tokio::sync::mpsc::channel::<operant_api::channel::ChannelMessage>(8);
