@@ -51,20 +51,9 @@ impl App {
     pub(super) fn apply_terminal_event(&mut self, event: Event) -> EventOutcome {
         match event {
             Event::Key(key) => {
-                // On Windows crossterm fires both Press and Release events.
-                // We normally skip non-press events, but when voice PTT mode
-                // is active we need the Release event for the `V` key so we
-                // can stop recording as soon as the user lifts the key.
+                // On Windows crossterm fires both Press and Release events;
+                // only the Press carries meaning here.
                 if key.kind != crossterm::event::KeyEventKind::Press {
-                    // Handle V-key release to stop PTT recording.
-                    if key.kind == crossterm::event::KeyEventKind::Release
-                        && key.code == KeyCode::Char('v')
-                        && key.modifiers == KeyModifiers::NONE
-                        && self.voice_recording
-                        && self.voice_recorder.is_some()
-                    {
-                        self.handle_voice_ptt_stop();
-                    }
                     return EventOutcome::Consumed;
                 }
 

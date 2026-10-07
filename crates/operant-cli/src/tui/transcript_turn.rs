@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::tui::adapter_types::types::{ContentBlock, Message, Role};
 use crate::tui::app::{App, ToolUseBlock, TurnMetadata};
 
@@ -90,6 +92,12 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
     let mut drafts = Vec::new();
     let mut current: Option<DraftTurn> = None;
     let mut ordinal = 0usize;
+    // Message index → owning turn ordinal, built during the same walk: a tool
+    // block's arrival anchor (`after_index`) is a message position, and the
+    // owning turn is the turn that owned the message the block followed
+    // (iter-668 — replaces the block-stamped turn ordinal, which was written
+    // once at ToolStart and went stale whenever the user-turn count shifted).
+    let mut message_turn: HashMap<usize, usize> = HashMap::new();
 
     for (index, message) in app.messages.iter().enumerate() {
         match message.role {
@@ -104,15 +112,21 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
                     end_message_index: index,
                     assistant_indices: Vec::new(),
                 });
+                message_turn.insert(index, ordinal);
                 ordinal += 1;
             }
             Role::Assistant => {
                 if let Some(turn) = current.as_mut() {
                     turn.assistant_indices.push(index);
                     turn.end_message_index = index;
+                    message_turn.insert(index, turn.ordinal);
                 }
             }
-            Role::System => {}
+            Role::System => {
+                if let Some(turn) = current.as_ref() {
+                    message_turn.insert(index, turn.ordinal);
+                }
+            }
         }
     }
 
@@ -145,7 +159,9 @@ pub fn build_transcript_turns(app: &App) -> Vec<TranscriptTurn<'_>> {
 
     for block in &app.tool_use_blocks {
         if let Some(target) = block
-            .turn_index
+            .after_index
+            .checked_sub(1)
+            .and_then(|idx| message_turn.get(&idx).copied())
             .and_then(|ordinal| turns.iter_mut().find(|turn| turn.ordinal == ordinal))
         {
             target.tool_blocks.push(block);

@@ -97,14 +97,7 @@ pub(crate) fn unified_hint(app: &App) -> Option<String> {
         return None;
     }
     // 2. A modal owns the input area.
-    //
-    // `any_modal_open()` is too coarse for this: its overlay list includes
-    // `voice_mode_notice`, which is a dismissible one-line notice rather than a
-    // dialog. It takes no keyboard and does not own the composer, so suppressing
-    // the hint for it left the footer with no keyboard discoverability at all
-    // whenever a voice notice happened to be up — which is the default state on a
-    // host with an audio device. Hence: any modal EXCEPT the notice.
-    if is_modal_open(app) && !app.voice_mode_notice.visible {
+    if is_modal_open(app) {
         return None;
     }
     // 3. Keys are going to the scrollback.

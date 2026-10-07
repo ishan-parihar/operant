@@ -113,9 +113,6 @@ impl App {
         if self.memory_file_selector.visible {
             return Some(DialogPriority::MemoryFileSelector);
         }
-        if self.voice_mode_notice.visible {
-            return Some(DialogPriority::VoiceModeNotice);
-        }
         None
     }
 

@@ -1667,15 +1667,6 @@ pub(super) fn build_notification_spans(app: &dyn TuiState) -> Vec<Span<'static>>
         }
     };
 
-    if let Some((recording, text)) = app.voice_input_status() {
-        let color = if recording {
-            rgb(255, 110, 110)
-        } else {
-            rgb(140, 200, 255)
-        };
-        spans.push(Span::styled(text, Style::default().fg(color).bold()));
-    }
-
     if let Some(selection) = app.copy_selection_status() {
         let pane_label = selection.pane.label();
         let label = if selection.has_action {

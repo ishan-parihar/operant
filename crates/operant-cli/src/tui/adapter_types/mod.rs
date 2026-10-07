@@ -19,7 +19,6 @@ pub mod spinner;
 pub mod tips;
 pub mod tui_app;
 pub mod types;
-pub mod voice;
 
 // Flat re-exports for backward compatibility.
 pub use config::Settings;

@@ -532,10 +532,10 @@ fn test_shift_tab_cycles_permission_mode_not_completions() {
 #[test]
 fn test_alt_v_does_not_toggle_vim_mode() {
     let mut app = make_app();
-    // No voice recorder is configured on a bare App, which is exactly the
-    // condition under which the dispatcher's guard fails. The point of this
-    // test is the negative: Alt+V is catalogued as voice (Custom(6)), NOT as
-    // ToggleVimMode, and must not silently become a vim toggle.
+    // Voice hold-to-talk was purged (iter-668), so Alt+V is bound to nothing
+    // at all. The point of this test is the negative: whatever Alt+V becomes
+    // next, it must not silently become a vim toggle — vim is reached via the
+    // /vim slash command.
     assert!(!app.prompt_input.vim_enabled);
 
     app.handle_key_event(press_key(KeyCode::Char('v'), KeyModifiers::ALT));
@@ -594,15 +594,17 @@ fn test_registry_advertises_no_binding_for_an_unimplemented_action() {
     // dispatch, and the defect was in the catalogue, so re-labelling the entry
     // while leaving dispatch alone would satisfy both. Only a catalogue
     // assertion sees it.
-    let alt_v = registry
-        .get_bindings(BindingContext::Global)
-        .into_iter()
-        .find(|b| b.key == KeyCode::Char('v') && b.modifiers == KeyModifiers::ALT)
-        .expect("Alt+V should still be catalogued — it starts voice recording");
+    //
+    // (2) became an ABSENCE check in iter-668: voice hold-to-talk was purged
+    // with the legacy voice-mode surface, so Alt+V must not be catalogued at
+    // all — the registry must not advertise a chord nothing implements.
     assert!(
-        !matches!(alt_v.action, KeyAction::ToggleVimMode),
-        "Alt+V is catalogued as ToggleVimMode again, but the dispatcher runs \
-         voice hold-to-talk. Vim mode is reached via the /vim slash command."
+        registry
+            .get_bindings(BindingContext::Global)
+            .into_iter()
+            .find(|b| b.key == KeyCode::Char('v') && b.modifiers == KeyModifiers::ALT)
+            .is_none(),
+        "Alt+V is catalogued again, but voice hold-to-talk was purged (iter-668) \n         — /keys must not advertise an action nothing implements"
     );
 
     let shift_tab = registry

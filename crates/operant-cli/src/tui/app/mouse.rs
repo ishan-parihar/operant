@@ -444,8 +444,8 @@ impl App {
     //
     // On Windows Terminal, Ctrl+V causes the terminal emulator to write the
     // clipboard content directly to stdin as raw character events — every
-    // newline becomes an Enter keypress and stray `v` characters trigger
-    // voice PTT.  Because a paste dumps ALL characters into the queue at
+    // newline becomes an Enter keypress and stray `v` characters.
+    // Because a paste dumps ALL characters into the queue at
     // once, a zero-timeout drain immediately after the first character
     // reliably yields 3+ chars for any non-trivial paste, while normal
     // keyboard typing (even at 120 WPM) almost never queues more than one

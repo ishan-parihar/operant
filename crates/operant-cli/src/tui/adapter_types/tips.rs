@@ -20,7 +20,6 @@ pub fn select_tip(seed: u64) -> Option<String> {
         "The /reasoning command toggles whether thinking blocks are expanded by default.",
         "Use /setup to re-run the configuration wizard at any time.",
         "Type /export to save the current session as JSON or Markdown.",
-        "Use /voice to enable voice input (requires a microphone).",
         "Press Esc to interrupt the agent mid-stream — it stops gracefully.",
         "Use /stats to see token usage, cost, and model breakdown across sessions.",
         "Type /yolo to toggle auto-approve mode (use with care — skips all permission prompts).",

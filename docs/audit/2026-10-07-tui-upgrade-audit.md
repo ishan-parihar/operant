@@ -5,6 +5,25 @@
 **Method**: five investigation tracks — rebrand inventory (full grep census), voice/boot artifact mapping, selection-engine comparison (operant vs jcode source), transcript-ordering root-cause trace, UI-UX contrast vs jcode + parity-plan ledger (`docs/JCODE-VISUAL-PARITY-PLAN.md`)
 **Input**: user report of six problem areas; `parent-projects/jcode` @ `0a9dc7805` as behavior reference
 
+## 0. Supersedes / reconciles — prior TUI documents
+
+This audit is the single authority for the TUI upgrade (2026-10-07). Prior docs map as follows:
+
+| Prior document | Status |
+|---|---|
+| `docs/audit/2026-07-11-tui-fragmentation-audit-and-refactor-plan.md` | **superseded** — fragmentation concerns (tui/mod.rs split) already executed; its open items are subsumed by W5 here |
+| `docs/audits/TUI_AUDIT_REPORT.md` | **superseded** — input-box/interaction gaps; remaining live items live in §3 and W5 |
+| `docs/audits/BACKEND_TUI_AUDIT.md` | **superseded for ordering** — its message-flow concerns are closed by the W1 arrival-anchor fix; seam survey folded into §3.4 |
+| `docs/audits/UX_AUDIT_REPORT.md` | **superseded** — P0/P1 UX findings folded into §3 and the W5 ledger |
+| `docs/superpowers/plans/2026-07-11-tui-debugging-and-refactor-plan.md` | **executed & stale** — debugging infrastructure shipped (`cmd_tui_debug`, scenario corpus); nothing open |
+| `docs/TUI_AUDIT_AND_REFACTOR_PLAN.md` | **superseded** — pre-jcode-port audit; all findings either landed or re-measured here |
+| `docs/PLAN-TUI-OVERHAUL.md` + `-v1.md` | **superseded** — jcode-parity overhaul plans; parity ledger now measured in `JCODE-VISUAL-PARITY-PLAN.md` and sequenced here |
+| `docs/TUI-PORT-NEXT-OUTLINE.md` | **superseded** — sequencing only; subsumed by §7 |
+| `docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md` | **subsumed as reference** — LOC budgets quoted in §3 |
+| `docs/JCODE-VISUAL-PARITY-PLAN.md` | **still authoritative** — for the measured parity ledger (§3 quotes its Tier 1/2 tables); NOT for sequencing or the six fixes |
+| `docs/ROADMAP-TUI-FLEET.md` | **partially live** — Waves 3–6 fleet coordination still apply; wave content flows from this audit |
+
+
 Every finding below carries file:line evidence or is labeled `[CANDIDATE — verify during execution]`.
 
 ---

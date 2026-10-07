@@ -136,7 +136,6 @@ pub mod mermaid;
 pub mod theme_colors;
 pub mod theme_screen;
 pub mod usage_overlay;
-pub mod voice_mode_notice;
 
 pub use adapter_types::LaunchMode;
 pub use adapter_types::TuiApp;

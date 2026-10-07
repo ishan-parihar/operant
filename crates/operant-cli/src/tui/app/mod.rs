@@ -351,8 +351,6 @@ pub struct App {
     /// Read-only hooks configuration browser.
     pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
-    /// Voice mode availability notice.
-    pub voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState,
     /// Desktop app upsell startup dialog.
     /// Startup error dialog for malformed settings.json or AGENTS.md.
     /// Memory update notification banner.
@@ -450,15 +448,6 @@ pub struct App {
     pub auto_compact_enabled: bool,
     /// Guard to prevent re-triggering auto-compact while one is in flight.
 
-    // ---- Voice hold-to-talk ------------------------------------------------
-
-    /// The global voice recorder, Some when voice is enabled in config.
-    pub voice_recorder: Option<Arc<Mutex<crate::tui::adapter_types::voice::VoiceRecorder>>>,
-    /// True while recording is active (Alt+V toggled on).
-    pub voice_recording: bool,
-    /// Receiver for VoiceEvent messages produced by the recorder task.
-    pub voice_event_rx:
-        Option<tokio::sync::mpsc::Receiver<crate::tui::adapter_types::voice::VoiceEvent>>,
     /// Receiver for AgentEvent messages from the agent. (iter-114 — was
     /// QueryEvent via the bridge; now receives AgentEvent directly, eliminating
     /// the bridge layer and its translation bugs.)
@@ -952,9 +941,6 @@ impl App {
             // finishes, without requiring a keystroke. (iter-326 —
             // tick-based status drain.)
             self.drain_mcp_reconnect_status();
-
-            // Drain voice transcription events (non-blocking).
-            self.drain_voice_events();
 
             // Drain query events from the agent bridge task.
             self.drain_agent_events();

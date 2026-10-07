@@ -174,7 +174,6 @@ impl App {
             plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
             journey_view: crate::tui::journey_view::JourneyViewState::new(),
             hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
-            voice_mode_notice: crate::tui::voice_mode_notice::VoiceModeNoticeState::new(),
             model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
             session_branching: crate::tui::session_branching::SessionBranchingState::new(),
@@ -243,34 +242,6 @@ impl App {
                 crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)
             }),
             auto_compact_enabled: false,
-            voice_recorder: {
-                // Check whether voice input has been enabled via the /voice command
-                // (stored in ~/.operant/ui-settings.json).  We also accept
-                // OPERANT_VOICE_ENABLED=1 as an override for easier testing.
-                let voice_on = std::env::var("OPERANT_VOICE_ENABLED")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false)
-                    || {
-                        let path = crate::tui::adapter_types::config::Settings::config_dir()
-                            .join("ui-settings.json");
-                        std::fs::read_to_string(&path)
-                            .ok()
-                            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                            .and_then(|v| v["voice_enabled"].as_bool())
-                            .unwrap_or(false)
-                    };
-                if voice_on {
-                    let recorder = crate::tui::adapter_types::voice::global_voice_recorder();
-                    if let Ok(mut r) = recorder.lock() {
-                        r.set_enabled(true);
-                    }
-                    Some(recorder)
-                } else {
-                    None
-                }
-            },
-            voice_recording: false,
-            voice_event_rx: None,
             agent_event_rx: None,
             permission_rx: None,
             pending_permission_response_tx: None,

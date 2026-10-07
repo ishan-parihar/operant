@@ -82,7 +82,6 @@ use crate::tui::settings_screen::render_settings_screen;
 use crate::tui::stats_dialog::render_stats_dialog;
 use crate::tui::theme_screen::render_theme_screen;
 use crate::tui::usage_overlay::{UsageMetrics, render_usage_overlay};
-use crate::tui::voice_mode_notice::render_voice_mode_notice;
 
 // Helpers re-exported by the parent `render` module. (The base-chrome
 // renderers — transcript, input, status, suggestions, footer — are NOT here:
@@ -191,7 +190,6 @@ overlay_visible_guards!(
     is_visible_plugins_hub => plugins_hub,
     is_visible_journey_view => journey_view,
     is_visible_hooks_config_menu => hooks_config_menu,
-    is_visible_voice_mode_notice => voice_mode_notice,
     is_visible_import_config_dialog => import_config_dialog,
     is_visible_bypass_permissions_dialog => bypass_permissions_dialog,
     is_visible_ask_user_dialog => ask_user_dialog,
@@ -315,12 +313,6 @@ const OVERLAYS: &[Entry] = &[
         name: "hooks_config_menu",
         visible: is_visible_hooks_config_menu,
         paint: paint_hooks_config_menu,
-        sink: Sink::Buffer,
-    },
-    Entry {
-        name: "voice_mode_notice",
-        visible: is_visible_voice_mode_notice,
-        paint: paint_voice_mode_notice,
         sink: Sink::Buffer,
     },
     Entry {
@@ -581,22 +573,6 @@ fn paint_hooks_config_menu(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_hooks_config_menu(&app.hooks_config_menu, ctx.size, frame.buffer_mut());
 }
 
-/// Painted above the input box, two lines up from the bottom — NOT at the top of
-/// the screen, which is where it used to be (iter-118, user-reported).
-fn paint_voice_mode_notice(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    let notice_h = app.voice_mode_notice.height();
-    if ctx.size.height > notice_h + 4 {
-        let notice_y = ctx.size.y + ctx.size.height.saturating_sub(notice_h + 2);
-        let notice_area = Rect {
-            x: ctx.size.x,
-            y: notice_y,
-            width: ctx.size.width,
-            height: notice_h,
-        };
-        render_voice_mode_notice(&app.voice_mode_notice, notice_area, frame.buffer_mut());
-    }
-}
-
 fn paint_import_config_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_import_config_dialog(frame, &app.import_config_dialog, ctx.size);
 }
@@ -786,7 +762,6 @@ mod tests {
         ("plugins_hub", Sink::Frame),
         ("journey_view", Sink::Frame),
         ("hooks_config_menu", Sink::Buffer),
-        ("voice_mode_notice", Sink::Buffer),
         ("import_config_dialog", Sink::Frame),
         ("bypass_permissions_dialog", Sink::Frame),
         ("ask_user_dialog", Sink::Buffer),

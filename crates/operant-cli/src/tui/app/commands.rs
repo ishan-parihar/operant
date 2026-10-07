@@ -35,7 +35,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 34] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 33] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -55,7 +55,6 @@ impl App {
             ("plugins_hub", self.plugins_hub.visible),
             ("journey_view", self.journey_view.visible),
             ("hooks_config_menu", self.hooks_config_menu.visible),
-            ("voice_mode_notice", self.voice_mode_notice.visible),
             ("model_picker", self.model_picker.visible),
             ("session_browser", self.session_browser.visible),
             ("session_branching", self.session_branching.visible),
@@ -759,40 +758,6 @@ impl App {
                 // Open the picker dialog so users can pick an effort level
                 // visually instead of cycling/typing the level (issue #149).
                 self.effort_picker.open(self.effort_level);
-                true
-            }
-            "voice" => {
-                let was_on = self.voice_recorder.is_some();
-                if was_on {
-                    // Stop any active recording before disabling.
-                    if self.voice_recording {
-                        self.voice_recording = false;
-                        self.voice_event_rx = None;
-                        if let Some(ref recorder_arc) = self.voice_recorder {
-                            let recorder = recorder_arc.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Ok(mut r) = recorder.lock() {
-                                    tokio::runtime::Handle::current()
-                                        .block_on(r.stop_recording())
-                                        .ok();
-                                }
-                            });
-                        }
-                    }
-                    self.voice_recorder = None;
-                    self.voice_mode_notice.dismiss();
-                    self.status_message = Some("Voice mode disabled.".to_string());
-                } else {
-                    let recorder = crate::tui::adapter_types::voice::global_voice_recorder();
-                    if let Ok(mut r) = recorder.lock() {
-                        r.set_enabled(true);
-                    }
-                    self.voice_recorder = Some(recorder);
-                    self.voice_mode_notice =
-                        crate::tui::voice_mode_notice::VoiceModeNoticeState::new();
-                    self.status_message =
-                        Some("Voice mode enabled. Press Alt+V to start recording.".to_string());
-                }
                 true
             }
             "doctor" => false,
@@ -1604,7 +1569,7 @@ impl App {
     // NOTE (iter-237 / Phase B1): intentionally NOT derived from
     // `overlay_flags()`. This is a deliberate *subset* of the overlay set
     // (it omits permission_request, rewind_flow, help_overlay,
-    // history_search_overlay, global_search, voice_mode_notice,
+    // history_search_overlay, global_search,
     // effort_picker, mcp_approval, bypass_permissions_dialog, ask_user_dialog)
     // and uses `.dismiss()` for export_dialog rather than `.close()`. Unifying
     // it with a loop would change behavior, so it's left explicit; migrate it

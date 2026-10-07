@@ -99,17 +99,19 @@ impl App {
                     self.flush_streamed_assistant_message();
                 }
 
-                let turn_index = self.current_user_turn_index();
+                let after_index = self.messages.len();
                 let tool_id = tool_call_id.clone();
                 let tool_name = name.clone();
                 let input_json = arguments;
                 // The first ToolStart for an id only means "parsed"; the agent
                 // re-announces it once it holds a worker permit. So: a new
                 // block is Queued, an existing one transitions to Running.
+                // The arrival anchor is stamped once at creation and never
+                // re-stamped: the row must stay where the call happened in the
+                // stream, not follow later messages down the transcript.
                 let started = if let Some(existing) =
                     self.tool_use_blocks.iter_mut().find(|b| b.id == tool_id)
                 {
-                    existing.turn_index = turn_index;
                     existing.status = ToolStatus::Running;
                     existing.output_preview = None;
                     existing.input_json = input_json;
@@ -121,7 +123,7 @@ impl App {
                     self.tool_use_blocks.push(ToolUseBlock {
                         id: tool_id.clone(),
                         name: tool_name.clone(),
-                        turn_index,
+                        after_index,
                         status: ToolStatus::Queued,
                         output_preview: None,
                         input_json,

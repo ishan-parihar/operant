@@ -364,13 +364,6 @@ impl TuiApp {
         let metrics = std::sync::Arc::new(operant_core::runtime_metrics::RuntimeMetrics::new());
         app.retry_metrics = std::sync::Arc::clone(&metrics);
 
-        // Wire the voice-mode notice: if audio input is available (e.g. not
-        // an SSH session, ffmpeg/arecord installed) and the user hasn't
-        // enabled voice mode yet, show a one-time hint on startup.
-        let audio_env = operant_core::voice::detect_audio_environment();
-        app.voice_mode_notice
-            .show_if_available(audio_env.available, false);
-
         // First-run onboarding: if no credentials and onboarding hasn't been
         // completed, auto-open the connect dialog so the user is guided to
         // set up a provider. (P0-2 from UX audit — was silently dropping the

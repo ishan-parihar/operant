@@ -72,10 +72,6 @@ pub enum TuiEvent {
         msg_count: usize,
         at: f64,
     },
-    VoiceEvent {
-        variant: String,
-        at: f64,
-    },
 
     // ── TUI-internal ─────────────────────────────────────────────────
     SlashCommand {
@@ -156,7 +152,6 @@ impl TuiEvent {
             } => {
                 format!("SessionLoad({session_id}: {msg_count} msgs)")
             }
-            Self::VoiceEvent { variant, .. } => format!("VoiceEvent({variant})"),
             Self::SlashCommand {
                 name, args_preview, ..
             } => {

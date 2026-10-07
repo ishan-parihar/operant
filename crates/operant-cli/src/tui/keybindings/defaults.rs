@@ -74,18 +74,11 @@ impl KeyBindingRegistry {
                 context: BindingContext::Global,
                 description: "Global search",
             },
-            // Not a vim action. The dispatcher (app/key_handling.rs:1064)
-            // starts/stops VOICE hold-to-talk, and only when a voice recorder
-            // is configured (`self.voice_recorder.is_some()`), so on a machine
-            // without one this chord does nothing at all. Vim mode is real but
-            // is reached through the `/vim` slash command, not this chord.
-            DefaultBinding {
-                key: KeyCode::Char('v'),
-                modifiers: KeyModifiers::ALT,
-                action: KeyAction::Custom(6),
-                context: BindingContext::Global,
-                description: "Toggle voice recording (needs a voice recorder)",
-            },
+            // Not a vim action. Vim mode is reached through the `/vim` slash
+            // command, not this chord. Voice hold-to-talk was purged with the
+            // rest of the legacy voice-mode surface (iter-668); the chord is
+            // deliberately left uncatalogued rather than re-bound, so the
+            // registry never advertises an action nothing implements.
             DefaultBinding {
                 key: KeyCode::Char('m'),
                 modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,

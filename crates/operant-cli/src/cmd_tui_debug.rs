@@ -93,12 +93,6 @@ pub enum TuiSubcommand {
 
     /// Open the user keybindings file in $EDITOR (parity gap #10).
     Keybindings,
-
-    /// Show voice-mode status (parity gap #9).
-    /// Voice mode can't be toggled from the CLI because it requires the TUI's
-    /// audio recorder + crossterm event loop; this command surfaces the
-    /// current availability so the user knows whether /voice will work.
-    Voice,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -259,7 +253,6 @@ pub async fn handle_tui_command(config: &AppConfig, cmd: TuiSubcommand) -> Resul
         TuiSubcommand::Theme { cmd } => handle_theme(config, cmd).await,
         TuiSubcommand::Vim { state } => handle_vim(config, state).await,
         TuiSubcommand::Keybindings => handle_keybindings(config).await,
-        TuiSubcommand::Voice => handle_voice(config).await,
     }
 }
 
@@ -1033,40 +1026,6 @@ async fn handle_keybindings(_config: &AppConfig) -> Result<()> {
     if !status.success() {
         anyhow::bail!("Editor exited with non-zero status");
     }
-    Ok(())
-}
-
-/// `operant tui voice` — show voice-mode availability.
-/// Voice mode can't be toggled from the CLI (requires the TUI's audio
-/// recorder + crossterm event loop), but we can surface whether the
-/// recorder is available so the user knows whether /voice will work.
-async fn handle_voice(_config: &AppConfig) -> Result<()> {
-    println!("=== Voice Mode Status ===");
-    println!();
-
-    // Check if the voice recorder feature is compiled in.
-    let recorder = crate::tui::adapter_types::voice::global_voice_recorder();
-    let is_available = if let Ok(r) = recorder.lock() {
-        r.is_available()
-    } else {
-        false
-    };
-
-    println!(
-        "Voice recorder available: {}",
-        if is_available { "yes" } else { "no" }
-    );
-    if !is_available {
-        println!();
-        println!("Voice mode requires:");
-        println!("  - A working microphone (arecord / rec / ffmpeg)");
-        println!("  - The 'voice' cargo feature compiled in");
-        println!("  - An audio output device for TTS playback");
-    } else {
-        println!();
-        println!("To enable voice mode, run `operant chat` and press /voice.");
-    }
-
     Ok(())
 }
 

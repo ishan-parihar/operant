@@ -16,7 +16,7 @@
 //! | `ContentBlock::SystemAPIError` | `error(message)` |
 //! | `ContentBlock::ToolUse` | `tool("", ToolCall{id, name, input})` — calls carry no output text in operant |
 //! | `ContentBlock::ToolResult` | `tool_text(extracted text)` |
-//! | `App::tool_use_blocks` entry (side registry) | `tool(output_preview.unwrap_or_default(), ToolCall{id, name, input: parse(input_json)})`, placed after its turn's last message (fallback: after the last message) |
+//! | `App::tool_use_blocks` entry (side registry) | `tool(output_preview.unwrap_or_default(), ToolCall{id, name, input: parse(input_json)})`, placed at its arrival anchor: after message `after_index - 1`, before message `after_index` (so a call that ran between two assistant messages renders between them) |
 //! | `SystemAnnotation` | `system(text)`, interleaved at its `after_index` |
 //! | `App::streaming_thinking` / `streaming_text` | trailing `reasoning` / `assistant` rows while non-empty |
 //!
@@ -44,14 +44,14 @@
 //!   explicit so the first live construction is a visible decision point.
 //! * `DisplayMessage::tool_calls` (per-row call summaries): operant cannot
 //!   attribute a tool call to a specific assistant row (`ToolUseBlock`
-//!   carries only `turn_index`), and the dedicated tool rows already carry
+//!   carries only its arrival anchor), and the dedicated tool rows already carry
 //!   full `tool_data`. Left empty.
 //! * `DisplayMessage::title`: jcode's renderer derives titles from
 //!   `tool_data.name`; the adapter does not pre-render.
 //!
-//! Ordering note: within a turn, operant cannot express text↔tool
-//! interleaving (tools live in a side registry keyed by turn ordinal), so
-//! tool rows attach after their turn's last assistant message. This walks
+//! Ordering note (iter-668): tool rows splice at their arrival anchor —
+//! after the message that preceded the call — so text↔tool interleaving
+//! renders in true stream order. This walks
 //! `App::messages` directly rather than reusing
 //! `transcript_turn::build_transcript_turns`, because turns drop
 //! `Role::System` messages and orphan tool blocks when no turn exists; this
@@ -73,36 +73,26 @@ use crate::tui::app::{App, SystemAnnotation, ToolUseBlock};
 
 /// Flatten operant's transcript state into the jcode message model.
 pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
-    // Which message index each user turn ends at (mirrors the grouping policy
-    // of `transcript_turn::build_transcript_turns`: a turn opens at each User
-    // message and extends through following Assistant messages).
-    let mut turn_end: HashMap<usize, usize> = HashMap::new();
-    let mut ordinal = 0usize;
-    for (index, message) in app.messages.iter().enumerate() {
-        match message.role {
-            Role::User => ordinal += 1,
-            Role::Assistant => {
-                turn_end.insert(ordinal.saturating_sub(1), index);
-            }
-            Role::System => {}
-        }
-    }
-
     let last_index = app.messages.len().saturating_sub(1);
     let mut tool_rows_after: HashMap<usize, Vec<DisplayMessage>> = HashMap::new();
+    let mut tool_rows_before: Vec<DisplayMessage> = Vec::new();
     let mut trailing_tool_rows: Vec<DisplayMessage> = Vec::new();
     for block in &app.tool_use_blocks {
         let row = display_message_from_tool_block(block);
-        // Same placement policy as the turn builder: a known turn's rows
-        // follow its last message; anything unresolvable follows the last
-        // message (or the very end when the transcript is empty).
-        let anchor = block
-            .turn_index
-            .and_then(|turn| turn_end.get(&turn).copied())
-            .or((!app.messages.is_empty()).then_some(last_index));
-        match anchor {
-            Some(index) => tool_rows_after.entry(index).or_default().push(row),
-            None => trailing_tool_rows.push(row),
+        // Arrival anchoring (iter-668): a block created when `after_index`
+        // messages existed renders after message `after_index - 1` — i.e.
+        // exactly where the call happened in the stream. `after_index == 0`
+        // renders before the first message; a block created after the last
+        // message (running tool, streaming turn) trails it.
+        if app.messages.is_empty() {
+            trailing_tool_rows.push(row);
+        } else if block.after_index == 0 {
+            tool_rows_before.push(row);
+        } else {
+            tool_rows_after
+                .entry(block.after_index.min(last_index + 1) - 1)
+                .or_default()
+                .push(row);
         }
     }
 
@@ -120,6 +110,7 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     if let Some(annotations) = annotations_after.remove(&0) {
         out.extend(annotations.into_iter().map(system_annotation_row));
     }
+    out.extend(tool_rows_before);
     for (index, message) in app.messages.iter().enumerate() {
         out.extend(expand_message(message));
         if let Some(rows) = tool_rows_after.remove(&index) {
@@ -271,11 +262,11 @@ mod tests {
     use crate::tui::app::{SystemMessageStyle, ToolStatus};
     use serde_json::json;
 
-    fn tool_block(id: &str, name: &str, turn_index: Option<usize>) -> ToolUseBlock {
+    fn tool_block(id: &str, name: &str, after_index: usize) -> ToolUseBlock {
         ToolUseBlock {
             id: id.to_string(),
             name: name.to_string(),
-            turn_index,
+            after_index,
             status: ToolStatus::Done,
             output_preview: Some("done".to_string()),
             input_json: r#"{"file_path":"a.rs"}"#.to_string(),
@@ -338,7 +329,7 @@ mod tests {
         let mut app = make_app();
         app.messages.push(Message::user("run it".to_string()));
         app.messages.push(Message::assistant("working".to_string()));
-        app.tool_use_blocks.push(tool_block("t1", "read", Some(0)));
+        app.tool_use_blocks.push(tool_block("t1", "read", 2));
 
         let rows = display_messages(&app);
         assert_eq!(rows.len(), 3);
@@ -354,7 +345,7 @@ mod tests {
     #[test]
     fn invalid_tool_input_json_maps_to_null_not_panic() {
         let mut app = make_app();
-        let mut block = tool_block("t1", "read", None);
+        let mut block = tool_block("t1", "read", 0);
         block.input_json = "not json".to_string();
         app.tool_use_blocks.push(block);
 
@@ -363,42 +354,62 @@ mod tests {
     }
 
     #[test]
-    fn tool_rows_attach_after_their_turns_last_message() {
+    fn tool_row_stays_between_the_messages_it_ran_between() {
         let mut app = make_app();
-        app.messages.push(Message::user("first".to_string()));
-        app.messages.push(Message::assistant("one".to_string()));
-        app.messages.push(Message::user("second".to_string()));
-        app.messages.push(Message::assistant("two".to_string()));
-        app.tool_use_blocks.push(tool_block("t1", "read", Some(0)));
+        app.messages.push(Message::user("go".to_string()));
+        app.messages
+            .push(Message::assistant("let me look".to_string()));
+        // The tool started when two messages existed (after "let me look",
+        // before the final answer was streamed) …
+        app.tool_use_blocks.push(tool_block("t1", "read", 2));
+        // … and the turn then finished with a final assistant message.
+        app.messages
+            .push(Message::assistant("the answer".to_string()));
 
         let rows = display_messages(&app);
         let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
-        assert_eq!(roles, ["user", "assistant", "tool", "user", "assistant"]);
-        // The tool row belongs to turn 0, i.e. after message index 1.
+        // iter-668 regression: the tool row renders BETWEEN the two assistant
+        // messages, not after the turn's last one.
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant"]);
         assert_eq!(rows[2].tool_data.as_ref().unwrap().id, "t1");
     }
 
     #[test]
-    fn orphan_tool_blocks_attach_after_the_last_message() {
+    fn tool_row_from_a_older_turn_stays_in_place_across_later_turns() {
         let mut app = make_app();
-        app.messages.push(Message::user("hi".to_string()));
-        let mut orphan = tool_block("t9", "read", Some(42)); // stale turn
-        orphan.turn_index = None;
-        app.tool_use_blocks.push(orphan);
+        app.messages.push(Message::user("first".to_string()));
+        app.messages.push(Message::assistant("one".to_string()));
+        // Tool anchored in turn 0 (arrived after "one").
+        app.tool_use_blocks.push(tool_block("t1", "read", 2));
+        app.messages.push(Message::user("second".to_string()));
+        app.messages.push(Message::assistant("two".to_string()));
 
         let rows = display_messages(&app);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[1].role, "tool");
+        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
+        assert_eq!(roles, ["user", "assistant", "tool", "user", "assistant"]);
     }
 
     #[test]
     fn tool_blocks_with_no_messages_still_emit() {
         let mut app = make_app();
-        app.tool_use_blocks.push(tool_block("t1", "read", None));
+        app.tool_use_blocks.push(tool_block("t1", "read", 0));
 
         let rows = display_messages(&app);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].role, "tool");
+    }
+
+    #[test]
+    fn stale_after_index_beyond_the_end_clamps_to_the_last_message() {
+        let mut app = make_app();
+        app.messages.push(Message::user("hi".to_string()));
+        app.messages.push(Message::assistant("hello".to_string()));
+        // Session-clear style staleness: the anchor points past every message.
+        app.tool_use_blocks.push(tool_block("t9", "read", 42));
+
+        let rows = display_messages(&app);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[2].role, "tool");
     }
 
     #[test]

@@ -134,8 +134,6 @@ pub enum KeyContext {
     JourneyView,
     /// Hooks config menu
     HooksConfig,
-    /// Voice mode notice
-    VoiceModeNotice,
 }
 
 /// Dialog priority for key routing.
@@ -205,8 +203,6 @@ pub enum DialogPriority {
     JourneyView = 300,
     /// Hooks config menu
     HooksConfig = 310,
-    /// Voice mode notice
-    VoiceModeNotice = 320,
     /// Theme picker. Gated inline in key_handling.rs but absent from
     /// dialog_priority() until now; see docs/ROADMAP-TUI-FLEET.md 6.1.
     ThemeScreen = 330,
@@ -310,7 +306,12 @@ impl TurnState {
 pub struct ToolUseBlock {
     pub id: String,
     pub name: String,
-    pub turn_index: Option<usize>,
+    /// Arrival anchor: `App::messages.len()` at the moment the call started.
+    /// The row renders after message `after_index - 1` and before message
+    /// `after_index`, so a tool that ran between two assistant messages stays
+    /// between them — turn-end anchoring put it after the turn's last message
+    /// (the "tool calls after the final answer" bug, iter-668).
+    pub after_index: usize,
     pub status: ToolStatus,
     pub output_preview: Option<String>,
     /// JSON-serialised input for the tool call (populated from the API stream).

@@ -13,8 +13,8 @@
 // `App::run` calls them in this order:
 //
 //   1. session_list        2. model_fetch         3. session_load
-//   4. user_questions      5. mcp_reconnect       6. voice_events
-//   7. agent_events        8. permission_requests 9. run_complete
+//   4. user_questions      5. mcp_reconnect       6. agent_events
+//   7. permission_requests 8. run_complete
 //
 // and the sequence is not alphabetical or numeric for a reason:
 //
@@ -36,9 +36,6 @@
 //     `/mcp r` dispatch immediately above it (iter-326): the dispatch arms the
 //     channel, and this is the first frame that can read it. Moving it earlier
 //     would drain a channel the dispatch has not written yet.
-//   * `voice_events` (6) after `mcp_reconnect` (5) and before `agent_events`
-//     (7) so a transcription lands in the prompt *before* the turn it may
-//     submit with is drained.
 //
 // Each method returns `true` when it changed something the next frame will
 // render. That is the signal `App::redraw_reason` reads, so "changed" has to
@@ -204,80 +201,6 @@ impl App {
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => false,
         }
-    }
-
-    /// 6. Drain voice transcription events (non-blocking).
-    /// When the background recording/transcription task emits a
-    /// TranscriptReady event we insert the text directly into the
-    /// prompt so the user can review and submit it.
-    pub(super) fn drain_voice_events(&mut self) -> bool {
-        use crate::tui::adapter_types::voice::VoiceEvent;
-        let mut events = Vec::new();
-        if let Some(ref mut rx) = self.voice_event_rx {
-            while let Ok(ev) = rx.try_recv() {
-                events.push(ev);
-            }
-        }
-        let drained = !events.is_empty();
-        for ev in events {
-            self.debug_hub
-                .publish(crate::tui::debug::TuiEvent::VoiceEvent {
-                    variant: format!("{ev:?}"),
-                    at: crate::tui::debug::event_bus::now_secs(),
-                });
-            match ev {
-                VoiceEvent::RecordingStarted => {
-                    self.voice_recording = true;
-                    self.status_message =
-                        Some("Recording\u{2026} (Alt+V or Esc to stop)".to_string());
-                }
-                VoiceEvent::RecordingStopped => {
-                    self.voice_recording = false;
-                    self.status_message = Some("Transcribing\u{2026}".to_string());
-                }
-                VoiceEvent::Transcription(text) => {
-                    if !text.is_empty() {
-                        if !self.prompt_input.text.is_empty()
-                            && !self.prompt_input.text.ends_with(' ')
-                        {
-                            self.prompt_input.paste(" ");
-                        }
-                        self.prompt_input.paste(&text);
-                        self.refresh_prompt_input();
-                        self.status_message =
-                            Some(format!("Transcribed: {}", &text[..text.len().min(60)]));
-                    }
-                    self.voice_event_rx = None;
-                }
-                VoiceEvent::TranscriptReady(text) => {
-                    if !text.is_empty() {
-                        // Append to existing prompt text with a space separator
-                        // so the user can combine voice + typed input.
-                        if !self.prompt_input.text.is_empty()
-                            && !self.prompt_input.text.ends_with(' ')
-                        {
-                            self.prompt_input.paste(" ");
-                        }
-                        self.prompt_input.paste(&text);
-                        self.refresh_prompt_input();
-                        self.status_message =
-                            Some(format!("Transcribed: {}", &text[..text.len().min(60)]));
-                    }
-                    // Clear the channel once we have the result.
-                    self.voice_event_rx = None;
-                }
-                VoiceEvent::Error(msg) => {
-                    self.voice_recording = false;
-                    self.voice_event_rx = None;
-                    self.push_notification(
-                        NotificationKind::Warning,
-                        format!("Voice: {}", msg),
-                        Some(8),
-                    );
-                }
-            }
-        }
-        drained
     }
 
     /// 7. Drain query events from the agent bridge task.

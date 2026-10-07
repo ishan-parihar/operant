@@ -52,12 +52,7 @@ const REDRAW_REASONS: &[&str] = &[
     "user_question_pending",
     // A background recording/transcription task posts state and prompt text
     // asynchronously.
-    "voice_events_pending",
-    // A notification with a TTL is on screen. `notifications.tick()` retires
-    // it on the wall clock, so an unexpired notice needs a tick to disappear.
     "notification_ttl",
-    // The footer shows the live "Recording…" row.
-    "voice_recording",
     // The footer renders `turn_started_at.elapsed()`, so the displayed seconds
     // advance with no input at all.
     "turn_timer",
@@ -108,12 +103,8 @@ impl App {
             "permission_pending"
         } else if self.user_question_rx.is_some() {
             "user_question_pending"
-        } else if self.voice_event_rx.is_some() {
-            "voice_events_pending"
         } else if !self.notifications.is_empty() {
             "notification_ttl"
-        } else if self.voice_recording {
-            "voice_recording"
         } else if self.turn_started_at.is_some() {
             "turn_timer"
         } else if self.stall_start.is_some() {
@@ -192,20 +183,10 @@ mod tests {
                 }),
             ),
             (
-                "voice_events_pending",
-                Box::new(|a: &mut App| {
-                    a.voice_event_rx = Some(tokio::sync::mpsc::channel(1).1);
-                }),
-            ),
-            (
                 "notification_ttl",
                 Box::new(|a: &mut App| {
                     a.push_notification(NotificationKind::Info, "hi".to_string(), Some(5));
                 }),
-            ),
-            (
-                "voice_recording",
-                Box::new(|a: &mut App| a.voice_recording = true),
             ),
             (
                 "turn_timer",

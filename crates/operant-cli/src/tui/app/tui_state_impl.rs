@@ -525,11 +525,6 @@ impl TuiState for App {
         self.status_message.clone()
     }
 
-    fn voice_input_status(&self) -> Option<(bool, String)> {
-        self.voice_recording
-            .then(|| (true, "Recording".to_string()))
-    }
-
     fn time_since_user_interaction(&self) -> Option<Duration> {
         App::since(self.last_activity)
     }
@@ -551,9 +546,8 @@ impl TuiState for App {
     }
 
     fn dictation_key_label(&self) -> Option<String> {
-        // [port-decision] dictation_key_label: operant binds dictation through
-        // its keybinding registry with no configured external label on App;
-        // returns None — wire from the voice binding config.
+        // [port-decision] dictation_key_label: no built-in dictation surface
+        // exists after the voice-mode purge (iter-668); no label to show.
         None
     }
 
