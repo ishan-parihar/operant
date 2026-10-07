@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Unblock main: `PathBuf` inline format capture in the cron seat-memory
+  prompt** (`operant-core/src/cronjobs/scheduler.rs`): `{path}` →
+  `path.display()` — committed in 5464764d, broke every `cargo check/test
+  -p operant-core` build.
+
+### Removed
+
+- **iter-664 — the dead channels dispatch orchestrator (audit-r2 plan §2,
+  Option A)**: `start_channels` (the only pub entry), the dispatch chain
+  (`run_message_dispatch_loop` → `dispatch_worker` →
+  `process_channel_message`), and every sibling consumed only by that chain —
+  `commands`, `consts`, `dispatch`, `factory`, `health`, `history`,
+  `identity`, `memory_ctx`, `media_pipeline`, `prompts`, `routing`,
+  `runtime_types`, `sanitize`, `supervision`, `startup`, and the
+  orchestrator-level `tests.rs` (~167 tests) — plus the dead
+  `orchestrator::deliver_announcement` registry variant and
+  `ChannelNotifyObserver`. Audit trail: the shipped CLI gateway never
+  called any of it (live paths are `gateway_runner.rs` + `operant-gateway`;
+  LTO stripped the cluster from every deployed binary since iter-628), the
+  only external `channels::orchestrator::` consumer is `acp_server`, and no
+  production caller of `register_delivery_fn` exists. The one live helper
+  the cluster exported, `strip_tool_call_tags`, moved verbatim to
+  `telegram::helpers`. `acp_server` and the feature-gated `mqtt` listener
+  remain. Five-crate gate re-baselined: 5443 passed / 0 failed across 44
+  binaries.
+
 ### Added
 
 - **Mouse injection for `operant tui debug simulate` (`--mouse`)**: the headless
