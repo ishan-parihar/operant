@@ -9,6 +9,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::agent::OperantAgent;
 use crate::cronjobs::db::{CronDb, CronJob};
+
+/// iter-669: total transient retries armed per job between successes.
+const MAX_TRANSIENT_RETRIES: u8 = 2;
+/// iter-669: backoff per retry attempt, seconds. The 60s tick loop bounds
+/// the effective latency — a 30s re-arm lands within the next tick.
+const TRANSIENT_RETRY_BACKOFFS_SECS: [u64; 2] = [30, 120];
 use crate::error::Error;
 use crate::org::decisions_db::RunKind;
 use crate::org::identity_gate::{GateBlock, GateDecision, IdentityGate};
@@ -55,6 +61,11 @@ pub struct CronScheduler {
     /// seat's MEMORY.md (`<root>/org/employees/<seat>/MEMORY.md`,
     /// iter-666). `None` disables injection — prompt byte-identical.
     seat_memory_root: Option<std::path::PathBuf>,
+    /// iter-669: transient-retry attempts used per job id, in-memory.
+    /// A restart resets the budget — the documented ceiling: a crashing
+    /// loop can never arm more than [`MAX_TRANSIENT_RETRIES`] per success,
+    /// and a restart is itself a fresh cadence.
+    transient_retries: Arc<std::sync::Mutex<std::collections::HashMap<String, u8>>>,
 }
 
 impl CronScheduler {
@@ -67,6 +78,7 @@ impl CronScheduler {
             write_barrier: None,
             employee_db: None,
             seat_memory_root: None,
+            transient_retries: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -124,6 +136,39 @@ impl CronScheduler {
             .as_ref()
             .and_then(|db| db.employee_for_job(&job.id).ok().flatten())
             .unwrap_or_else(|| derived_session_id.to_string())
+    }
+
+    /// iter-669: the bounded transient-retry budget. A transient provider
+    /// failure (5xx / stream death — `Error::is_transient`) misses its
+    /// cycle today and waits the full cadence tick; at hourly cadence that
+    /// is a lost hour for one 503. Instead the job is re-armed
+    /// [`TRANSIENT_RETRY_BACKOFFS_SECS`] after now (bounded attempts, the
+    /// serial 60s tick loop is never blocked — the retry rides the next
+    /// normal tick) and the budget resets on success.
+    ///
+    /// Returns the backoff to arm, or None when the budget is spent (the
+    /// caller then falls back to the normal cadence).
+    fn transient_retry_backoff(&self, job_id: &str) -> Option<u64> {
+        let Ok(mut budget) = self.transient_retries.lock() else {
+            // Lock-poison recovery mirrors the codebase pattern: a poisoned
+            // budget degrades to NO retry (fail toward the normal cadence,
+            // the already-correct behavior), never to unbounded retries.
+            return None;
+        };
+        let used = budget.get(job_id).copied().unwrap_or(0);
+        if used >= MAX_TRANSIENT_RETRIES {
+            return None;
+        }
+        let backoff = TRANSIENT_RETRY_BACKOFFS_SECS[used as usize];
+        budget.insert(job_id.to_string(), used + 1);
+        Some(backoff)
+    }
+
+    /// Reset a job's retry budget after a successful run.
+    fn transient_retry_reset(&self, job_id: &str) {
+        if let Ok(mut budget) = self.transient_retries.lock() {
+            budget.remove(job_id);
+        }
     }
 
     pub async fn start(&self) {
@@ -247,7 +292,7 @@ impl CronScheduler {
             return self.record_gate_block(job, block);
         }
 
-        let (success, _output, final_response, error_msg) = if job.no_agent {
+        let (success, _output, final_response, error_msg, transient) = if job.no_agent {
             self.run_script_job(job).await
         } else {
             self.run_agent_job(job).await
@@ -259,21 +304,42 @@ impl CronScheduler {
         // Skipping mark_job_run on the final run (as an earlier draft did)
         // lost the final run's status/error and left repeat_completed at
         // times-1.
-        self.db.mark_job_run(
-            &job.id,
-            success,
-            error_msg.clone(),
-            None,
-            self.compute_next_run(job),
-        )?;
+        // iter-669: a transient provider failure (5xx / stream death) re-arms
+        // the job shortly instead of losing the whole cadence tick — bounded
+        // by the retry budget, riding the normal 60s tick (the serial loop is
+        // never blocked by a sleep). Non-transient failures and successes
+        // keep the normal cadence.
+        let retry_backoff = if !success && transient {
+            self.transient_retry_backoff(&job.id)
+        } else {
+            None
+        };
+        if success {
+            self.transient_retry_reset(&job.id);
+        }
+        let next_run = match retry_backoff {
+            Some(secs) => Some(chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
+                .map(|t| t.to_rfc3339()),
+            None => self.compute_next_run(job),
+        };
+
+        self.db
+            .mark_job_run(&job.id, success, error_msg.clone(), None, next_run)?;
 
         // iter-668: append the run-attempt history row. The audit layer —
         // a write failure warns and the run's already-recorded outcome
         // stands; history must never fail a run.
-        if let Err(e) =
-            self.db
-                .record_cron_run(&job.id, &run_started_at, success, error_msg, "scheduled")
-        {
+        if let Err(e) = self.db.record_cron_run(
+            &job.id,
+            &run_started_at,
+            success,
+            error_msg,
+            if retry_backoff.is_some() {
+                "retry-armed"
+            } else {
+                "scheduled"
+            },
+        ) {
             warn!(
                 "cron run history write failed for {}: {e} (outcome already recorded)",
                 job.id
@@ -311,7 +377,7 @@ impl CronScheduler {
         clippy::expect_used,
         reason = "invariant guaranteed by surrounding validation"
     )]
-    async fn run_script_job(&self, job: &CronJob) -> (bool, String, String, Option<String>) {
+    async fn run_script_job(&self, job: &CronJob) -> (bool, String, String, Option<String>, bool) {
         debug!("Running script job {}: {}", job.id, job.name);
 
         let script = job.script.as_ref().ok_or_else(|| {
@@ -325,6 +391,7 @@ impl CronScheduler {
                 String::new(),
                 "No script defined".into(),
                 Some("No script defined".into()),
+                false,
             );
         }
 
@@ -351,16 +418,17 @@ impl CronScheduler {
                     stdout,
                     final_res,
                     if success { None } else { Some(stderr) },
+                    false,
                 )
             }
             Err(e) => {
                 let err_msg = format!("Failed to execute script: {}", e);
-                (false, String::new(), err_msg.clone(), Some(err_msg))
+                (false, String::new(), err_msg.clone(), Some(err_msg), false)
             }
         }
     }
 
-    async fn run_agent_job(&self, job: &CronJob) -> (bool, String, String, Option<String>) {
+    async fn run_agent_job(&self, job: &CronJob) -> (bool, String, String, Option<String>, bool) {
         debug!("Running agent job {}: {}", job.id, job.name);
 
         // Point the agent at THIS job's session before running.
@@ -411,14 +479,31 @@ impl CronScheduler {
                 if let Err(e) = self.apply_write_barrier(job, &session_id, &message.content) {
                     let err_msg = e.to_string();
                     error!("Write barrier failed for job {}: {}", job.id, err_msg);
-                    (false, String::new(), err_msg.clone(), Some(err_msg))
+                    (false, String::new(), err_msg.clone(), Some(err_msg), false)
                 } else {
-                    (true, "Agent run completed".into(), message.content, None)
+                    (
+                        true,
+                        "Agent run completed".into(),
+                        message.content,
+                        None,
+                        false,
+                    )
                 }
             }
             Err(e) => {
+                // iter-669: surface the transient classification so run_job
+                // can arm a bounded retry (5xx / stream death — the
+                // chat_admission_busy 503 and stream-death class observed
+                // live on the first cast runs).
+                let transient = e.is_transient();
                 let err_msg = format!("Agent run failed: {}", e);
-                (false, String::new(), err_msg.clone(), Some(err_msg))
+                (
+                    false,
+                    String::new(),
+                    err_msg.clone(),
+                    Some(err_msg),
+                    transient,
+                )
             }
         }
     }
@@ -590,6 +675,7 @@ fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> boo
 #[cfg(test)]
 mod tests {
     use super::{repeat_limit_reached, seat_memory_prompt};
+    use std::sync::Arc;
 
     #[test]
     fn repeat_limit_reached_when_completed_reaches_times() {
@@ -659,6 +745,55 @@ mod tests {
         assert!(
             out.ends_with("charter body"),
             "the charter still terminates the prompt"
+        );
+    }
+
+    // ── iter-669: transient-retry budget ──
+
+    #[test]
+    fn transient_retry_budget_is_bounded_and_resets_on_success() {
+        // Real scheduler over a real agent (unreachable default client — the
+        // agent is never invoked; the budget helpers touch only the map).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db =
+            Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
+        let agent = Arc::new(crate::agent::OperantAgent::new(
+            crate::agent::AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            db,
+        ));
+        let cron_db =
+            Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
+        let scheduler = super::CronScheduler::new(Arc::clone(&cron_db), agent);
+
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_a"),
+            Some(30),
+            "first retry arms 30s"
+        );
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_a"),
+            Some(120),
+            "second arms 120s"
+        );
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_a"),
+            None,
+            "third is refused — budget spent"
+        );
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_b"),
+            Some(30),
+            "budgets are per job"
+        );
+        scheduler.transient_retry_reset("job_a");
+        assert_eq!(
+            scheduler.transient_retry_backoff("job_a"),
+            Some(30),
+            "success resets the budget"
         );
     }
 }
