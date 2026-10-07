@@ -46,6 +46,11 @@ pub struct CronScheduler {
     /// installed via [`CronScheduler::with_write_barrier`] — the same merge
     /// discipline as [`Self::org_gate`] above.
     write_barrier: Option<WriteBarrier>,
+    /// The org employee registry, mounted so a scheduled run can resolve
+    /// its REAL seat (§3.1.1's `employee_cron_jobs` join, reversed) before
+    /// the write barrier attributes the row. `None` keeps the pre-661
+    /// claim: the §3.1.1 derived session id.
+    employee_db: Option<Arc<crate::org::employee_db::EmployeeDb>>,
 }
 
 impl CronScheduler {
@@ -56,6 +61,7 @@ impl CronScheduler {
             delivery_tx: None,
             org_gate: None,
             write_barrier: None,
+            employee_db: None,
         }
     }
 
@@ -84,6 +90,15 @@ impl CronScheduler {
     /// the mount dark-mergeable exactly like [`Self::with_org_gate`].
     pub fn with_write_barrier(mut self, barrier: WriteBarrier) -> Self {
         self.write_barrier = Some(barrier);
+        self
+    }
+
+    /// Mount the employee registry for worklog attribution. Fail-open by
+    /// design: without it (or when the lookup errors) the barrier falls back
+    /// to the §3.1.1 derived id — the pre-661 claim — so an org-store fault
+    /// degrades attribution, never the scheduled run itself.
+    pub fn with_employee_db(mut self, db: Arc<crate::org::employee_db::EmployeeDb>) -> Self {
+        self.employee_db = Some(db);
         self
     }
 
@@ -385,6 +400,19 @@ impl CronScheduler {
         let result_truncated = result.len() > RESULT_SUMMARY_LIMIT;
         let result_summary =
             crate::agent::safe_truncate_str(result, RESULT_SUMMARY_LIMIT).to_string();
+        // §3.1.1 attribution, fixed in iter-661: the session id is the
+        // DERIVED employee id (`emp-<job prefix>`), which matches the
+        // registry only for legacy cron-derived employees. Seeded cast jobs
+        // carry the REAL seat on `employee_cron_jobs`; resolve that join so
+        // the worklog row names the seat. Unlinked jobs and lookup failures
+        // fall back to the derived id — the pre-fix claim, never a blocked
+        // run: attribution is the audit layer.
+        let employee_claim = self
+            .employee_db
+            .as_ref()
+            .and_then(|db| db.employee_for_job(&job.id).ok().flatten())
+            .unwrap_or_else(|| session_id.to_string());
+
         let request = WriteBarrierRequest::from_turn_end(TurnEnd {
             // No bus minted this event; a per-bus monotonic id is meaningless
             // at this seam, and `0` matches the `operator_entry` precedent.
@@ -408,7 +436,7 @@ impl CronScheduler {
             turn_errored: false,
             last_status_clean: true,
         })
-        .with_employee(session_id)
+        .with_employee(employee_claim)
         .with_run_kind(RunKind::Cron)
         .with_job_id(Some(job.id.clone()));
 

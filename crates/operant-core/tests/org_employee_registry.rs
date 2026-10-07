@@ -808,3 +808,51 @@ fn org_employee_backfill_trims_the_reason() {
         .expect("must exist");
     assert_eq!(emp.reason, "onboard the new platform team");
 }
+
+/// iter-661 regression: the §3.1.1 join in reverse — a linked job must
+/// resolve to the REAL seat id (not the derived `emp-<prefix>`), and an
+/// unlinked job must read `None` so the caller falls back to the derived
+/// id instead of the lookup inventing an attribution.
+#[test]
+fn employee_for_job_resolves_the_linked_seat_and_none_for_unlinked() {
+    let (db, _dir) = temp_registry();
+
+    // The link table FKs employees(employee_id) — seat first, then the link,
+    // exactly the order the cast seed uses.
+    let seat = Employee {
+        employee_id: "dispatcher".to_string(),
+        name: "Dispatcher".to_string(),
+        role: DEFAULT_ROLE.to_string(),
+        department: None,
+        skills: vec!["queue-review".to_string()],
+        agent_type: None,
+        persona: None,
+        system_prompt: None,
+        status: STATUS_ACTIVE.to_string(),
+        reason: BACKFILL_REASON.to_string(),
+        created_at: "2026-09-01T00:00:00+00:00".to_string(),
+        updated_at: "2026-10-07T00:00:00+00:00".to_string(),
+    };
+    assert!(db.insert_ignore(&seat).expect("insert ok"));
+
+    db.upsert_link("dispatcher", "cron_cast_dispatcher", "hourly", true)
+        .expect("link ok");
+
+    let seat = db
+        .employee_for_job("cron_cast_dispatcher")
+        .expect("lookup ok")
+        .expect("linked job must resolve");
+    assert_eq!(seat, "dispatcher");
+    assert_ne!(
+        seat,
+        derive_employee_id("cron_cast_dispatcher"),
+        "the join must win over the derived id — this is the bug the fix closes"
+    );
+
+    assert!(
+        db.employee_for_job("cron_never_linked")
+            .expect("unlinked lookup ok")
+            .is_none(),
+        "an unlinked job must read None, not a fabricated seat"
+    );
+}

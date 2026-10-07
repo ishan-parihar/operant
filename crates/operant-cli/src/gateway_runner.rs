@@ -3604,12 +3604,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         ) {
             Ok(barrier) => operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
                 .with_write_barrier(barrier)
+                .with_employee_db(employee_registry.clone())
                 .with_delivery(cron_tx),
             Err(e) => {
                 tracing::warn!(
                     "org write barrier unavailable — cron runs will not write worklog rows: {e}"
                 );
                 operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+                    .with_employee_db(employee_registry.clone())
                     .with_delivery(cron_tx)
             }
         };

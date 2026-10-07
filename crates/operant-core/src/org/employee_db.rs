@@ -602,6 +602,28 @@ impl EmployeeDb {
         })?;
         Ok(())
     }
+
+    /// The employee linked to a cron job — §3.1.1's join in reverse.
+    ///
+    /// `None` when the job is unlinked. The caller's fallback for that case
+    /// is the §3.1.1 derived id (`emp-<job prefix>`), which is exactly the id
+    /// unlinked legacy jobs registered under, so `None` plus that fallback
+    /// reproduces the pre-lookup claim instead of inventing one.
+    pub fn employee_for_job(&self, cron_job_id: &str) -> Result<Option<String>, Error> {
+        let conn = self.lock_conn()?;
+        match conn.query_row(
+            "SELECT employee_id FROM employee_cron_jobs WHERE cron_job_id = ?1",
+            params![cron_job_id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(employee_id) => Ok(Some(employee_id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Error::Agent(format!(
+                "Failed to look up employee for cron job {}: {}",
+                cron_job_id, e
+            ))),
+        }
+    }
 }
 
 /// Map an `employees` row. Named columns (not positional) — the
