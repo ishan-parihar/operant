@@ -77,41 +77,33 @@ graph LR
   body; tests still pin the message contract.
 - **Effort**: S. **Blockers**: time (data window only).
 
-### 4. DECISION (owner call, not code I should pre-empt): D-2 unattended posture
-- **Problem**: unattended cron runs of governed seats CAN ask and be granted
-  dangerous-tool approval; fail-closed-by-default for unattended is not
-  expressible by today's config (BUGS.md D-2: "a deliberate code change —
-  no config value expresses it today").
-- **Options**: (a) ratify status quo — governed-seat policy rows bind
-  (iter-672), yolo seats stay yolo by owner's standing directive;
-  (b) unattended runs fail closed on dangerous tools unless the seat's
-  policy row explicitly scopes them. I recommend (b) as a one-seam change
-  at the guard (`stream.rs` unattended arm) once you ratify — it changes no
-  interactive session.
-- **Effort**: S once decided. **Blockers**: owner decision only.
+### 4. ~~DECISION: D-2 unattended posture~~ — DECIDED 2026-10-08 (owner ruling)
+- **Ruling**: the unattended posture is managed by the **governance
+  configuration itself** — the seat's policy row (`seat_policies`) with a
+  `[genome].unattended_posture` global fallback — the same surface that
+  manages tool permissions, and only that surface. No separate seam, no
+  hardcoded behavior. The existing mode ladder expresses it (yolo stays
+  yolo even unattended per standing directive; lockdown fails closed;
+  scoped allows only scoped tools; standard fails closed on dangerous
+  tools when unattended). Implementation = a consult at the existing
+  guard reading the policy row / global default.
+- **Effort**: S. **Blockers**: none — implementation can proceed.
 
 ## Wave B — owner feature directives (design-doc-first, per approved pattern)
 
 ### 5. Platform DM/feed context injection (owner directive)
-- **Problem**: gateway adapters are OUTBOUND-only today. Seats cannot READ
-  their platform inbox/mentions/feeds at runtime — inbound exists solely as
-  turn triggers, so a seat's cycle prompt is blind to what the platform
-  said since last cycle.
-- **Approach** (design doc first — this outline is NOT the design):
-  1. Per-platform read inventory (Telegram getUpdates/getChat, Discord
-     channel history, Slack conversations.history) → normalized items
-     (author, time, text, reply-context, read-marker).
-  2. Adapter trait extension: `read_inbox(since)` / `read_feed(since)`
-     behind the existing platform registry.
-  3. Runtime injection: cycle-start pull of unread items as a bounded
-     context section; overflow handled by existing tiered eviction (T3).
-  4. Governance: reads consume the seat's budget envelope (pairs with gap
-     1's consult); scoped seats read only what their scopes allow.
-- **Acceptance**: design doc approved by owner → then implementation wave
-  measured per-platform. A configured seat's cycle prompt includes its
-  platform's recent DMs/mentions.
-- **Effort**: design M; implementation L (per-platform adapters).
-- **Blockers**: design doc + owner approval (ordered next after this plan).
+- **Design doc delivered 2026-10-08**:
+  `plan-2026-10-08-dm-feed-context-injection.md` — seven-stage pipeline
+  (collect→normalize→dedup→rank→quota→render→inject), per-aspect
+  character quotas (dm/global/dept/self, `seat_context_quotas` mirroring
+  `seat_budgets`), re-ranking across the four classes (recency +
+  lexical + authority + thread, in-process, no new deps), watermarks as
+  the nonredundancy backbone, append-only `context_items` store.
+  Phase 1 (org-internal sources) fully unblocked; phase 2 = platform read
+  adapters; phase 3 = socialization rides it.
+- **Effort**: phase 1 M, phase 2 L (per-platform).
+- **Blockers**: none for phase 1 — implementation may proceed on the
+  owner's go.
 
 ### 6. Daily socialization sessions (owner directive)
 - **Problem**: seats run isolated cycles; the owner wants hierarchy-aware
@@ -175,10 +167,11 @@ graph LR
   iter-669/673 retries cover the flake class, not the capacity.
 
 ## Suggested order
-1. Gap 2 (S–M, unblocked, closes a wake-the-owner bug class).
+1. Gap 4 implementation (decided; S) + gap 2 (S–M, closes the wake-the-owner
+   bug class).
 2. Gap 1's instrumented run (discovery, hours) → gap 1 implementation.
-3. Gap 4 decision from owner (one-line answer) → optional seam change.
-4. Design docs for gaps 5 and 6 (both docs-first; 5's inventory work starts
-   the moment it's approved).
+3. Gap 5 phase 1 on the owner's go (design doc in hand,
+   `plan-2026-10-08-dm-feed-context-injection.md`).
+4. Design doc for gap 6 (socialization; rides gap 5's substrate).
 5. Gap 7 the moment the peer's `cmd_org.rs` lands → gap 8.
 6. Gap 3 on the data window's evidence, any time after ~2026-10-11.
