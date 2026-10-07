@@ -2117,14 +2117,26 @@ impl OperantAgent {
             // the model sees the real-time guidance on the next iteration.
             // This mirrors hermes-agent's /steer drain which injects into
             // the last tool-role message to preserve role alternation.
-            if let Some(steer_text) = self.drain_steers().await {
-                info!(steer = %steer_text, "Injecting steer directive");
-                let steer_msg = Message::user(format!(
-                    "[STEER] {}\n\nPlease adjust your approach based on this guidance.",
-                    steer_text
-                ));
-                messages.push(steer_msg.clone());
-                self.add_message(steer_msg).await;
+            let steer_commands = self.drain_steers().await;
+            for command in steer_commands {
+                match command {
+                    builders::SteeringCommand::Message(steer_text) => {
+                        info!(steer = %steer_text, "Injecting steer directive");
+                        let steer_msg = Message::user(format!(
+                            "[STEER] {}\n\nPlease adjust your approach based on this guidance.",
+                            steer_text
+                        ));
+                        messages.push(steer_msg.clone());
+                        self.add_message(steer_msg).await;
+                    }
+                    // Same machinery Ctrl-C drives: the flag makes every
+                    // boundary check + `call_with_loop_timeout` bail next.
+                    builders::SteeringCommand::RequestStop => {
+                        info!("Steer request-stop — triggering interrupt flag");
+                        self.interrupt_flag.trigger();
+                        break;
+                    }
+                }
             }
         }
     }

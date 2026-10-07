@@ -2668,6 +2668,56 @@ mod tests {
         assert!(msg.contains("aborted"), "got: {msg}");
     }
 
+    // ── Wave-3 steering vocabulary (iter-670) ────────────────────────
+
+    #[test]
+    fn steer_parse_bare_stop_variants() {
+        use builders::{SteeringCommand, parse_steer_command};
+        for s in ["/stop", "/STOP", " /abort ", "/cancel"] {
+            assert_eq!(parse_steer_command(s), SteeringCommand::RequestStop);
+        }
+    }
+
+    #[test]
+    fn steer_parse_everything_else_stays_guidance() {
+        use builders::{SteeringCommand, parse_steer_command};
+        assert_eq!(
+            parse_steer_command("focus on the failing test"),
+            SteeringCommand::Message("focus on the failing test".to_string())
+        );
+        // A sentence mentioning stop is NOT a stop — the parser must
+        // never eat user prose.
+        assert_eq!(
+            parse_steer_command("/stop because the user changed the plan"),
+            SteeringCommand::Message("/stop because the user changed the plan".to_string())
+        );
+        // Model switching stays free-form until the interior-cell model
+        // swap lands (Wave-3 deferred rung).
+        assert_eq!(
+            parse_steer_command("/model fast-model"),
+            SteeringCommand::Message("/model fast-model".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn steer_queue_drains_commands_in_order() {
+        let agent = test_agent_with_request_timeout(30);
+        agent.steer("/stop").await;
+        agent.steer("keep going on the report").await;
+        agent.steer("/abort").await;
+        let drained = agent.drain_steers().await;
+        assert_eq!(
+            drained,
+            vec![
+                builders::SteeringCommand::RequestStop,
+                builders::SteeringCommand::Message("keep going on the report".to_string()),
+                builders::SteeringCommand::RequestStop,
+            ]
+        );
+        // Second drain is empty — the queue is spent.
+        assert!(agent.drain_steers().await.is_empty());
+    }
+
     #[tokio::test]
     async fn call_with_loop_timeout_untouched_when_flag_clear() {
         let agent = test_agent_with_request_timeout(5);

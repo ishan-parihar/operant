@@ -14,6 +14,35 @@ use tracing::{debug, info, warn};
 
 use super::*;
 
+/// Steering command (Wave-3 vocabulary — iter-670).
+///
+/// A `/steer` string is free-form guidance; a bare `/stop` (or
+/// `/abort`/`/cancel`) is a control action. The run loop drains queued
+/// steers between iterations and acts on each command in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SteeringCommand {
+    /// Free-form guidance: injected as a user-role `[STEER]` message,
+    /// same as every steer before this iteration.
+    Message(String),
+    /// Operator request to abort this turn. Triggers the agent's
+    /// `InterruptFlag` so every existing boundary check bails at the
+    /// next check (the same machinery Ctrl-C drives).
+    RequestStop,
+}
+
+/// Parse a raw queued steer string into a command. Matching is
+/// deliberately strict: only a bare `/stop`/`/abort`/`/cancel` line is a
+/// control action; everything else — including `/stop because ...` —
+/// remains plain guidance (the parser must never eat a user sentence).
+pub(crate) fn parse_steer_command(raw: &str) -> SteeringCommand {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "/stop" | "/abort" | "/cancel" => SteeringCommand::RequestStop,
+        _ => SteeringCommand::Message(trimmed.to_string()),
+    }
+}
+
 impl OperantAgent {
     /// True when `tool_name` is covered by the session or persistent allowlist
     /// (hermes `is_approved(session_key, pattern_key)` parity). Both sets are
@@ -532,15 +561,22 @@ impl OperantAgent {
 
     /// Drain pending steer directives. Returns the steers as a single
     /// concatenated string, or None if no steers are pending.
-    pub(crate) async fn drain_steers(&self) -> Option<String> {
+    /// Drain all queued steers as parsed commands (order preserved).
+    ///
+    /// `/stop`, `/abort`, and `/cancel` become [`SteeringCommand::RequestStop`];
+    /// everything else stays [`SteeringCommand::Message`]. The old signature
+    /// joined the queue into a single string — that forced every steer into
+    /// the message channel and made control directives impossible to express
+    /// without a second side channel. The calling site (the run loop's
+    /// iteration boundary) now acts on each command in order.
+    pub(crate) async fn drain_steers(&self) -> Vec<SteeringCommand> {
         let mut queue = self.steer_queue.lock().await;
-        if queue.is_empty() {
-            return None;
+        let raw: Vec<String> = queue.drain(..).collect();
+        if raw.is_empty() {
+            return Vec::new();
         }
-        let steers: Vec<String> = queue.drain(..).collect();
-        let combined = steers.join("\n");
-        debug!(steer = %combined, "Draining steer directives");
-        Some(combined)
+        debug!(count = raw.len(), "Draining steer directives");
+        raw.iter().map(|s| parse_steer_command(s)).collect()
     }
 
     /// Enable trajectory recording for this agent. When enabled, each `run()`
