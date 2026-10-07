@@ -119,6 +119,18 @@ impl App {
             // suppression, and key routing.
             "usage_overlay": self.usage_overlay.visible,
             "debug_overlay": self.debug_hub.overlay_visible(),
+            // Selection state — the scenario corpus asserts on these to prove
+            // a simulated drag actually anchored/focused a range instead of
+            // goldenning an unpainted screen (selection-highlight scenario).
+            "selection_anchor": self.selection_anchor.map(|(c, r)| format!("{c},{r}")),
+            "selection_focus": self.selection_focus.map(|(c, r)| format!("{c},{r}")),
+            "selection_anchor_row": self.selection_anchor.map(|(_, r)| r),
+            "selection_focus_row": self.selection_focus.map(|(_, r)| r),
+            "selection_area_x": self.last_selectable_area.get().x,
+            "selection_area_y": self.last_selectable_area.get().y,
+            "selection_area_w": self.last_selectable_area.get().width,
+            "selection_area_h": self.last_selectable_area.get().height,
+            "selection_text": self.selection_text.borrow().clone()
         })
     }
 

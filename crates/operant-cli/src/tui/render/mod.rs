@@ -62,7 +62,6 @@ const STATUS_THINKING: &str = "thinking";
 const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
 pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
-    app.last_selectable_area.set(crate::tui::jcode_ui::message_area());
 
     // The ported jcode chrome (jcode_ui::draw, upstream ui.rs:2659-3624) owns
     // the whole frame: the full-frame clear, every band, and the per-frame
@@ -75,6 +74,14 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // has production readers, and a zeroed cell is not a neutral value: the
     // mouse gates input clicks on a non-empty input rect, and the prepend
     // correction reconciles against the painted scroll row.
+    //
+    // last_selectable_area MUST publish after jcode_ui::draw, not before:
+    // message_area() reads the thread-local the draw just updated, so a
+    // pre-draw copy is one frame stale — zero-rect on the first frame, which
+    // silently drops the first mouse click after startup (a simulated
+    // scenario's opening Down lands exactly there).
+    app.last_selectable_area
+        .set(crate::tui::jcode_ui::message_area());
     app.last_input_area.set(crate::tui::jcode_ui::input_area());
     app.last_render_scroll_offset
         .set(crate::tui::jcode_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16);

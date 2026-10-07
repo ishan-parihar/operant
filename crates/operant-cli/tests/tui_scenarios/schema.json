@@ -241,6 +241,18 @@
     ],
     "notes": "Slash commands are typed literally: `/help<enter>` is 5 chars + Enter = 6 key events."
   },
+  "mouse_syntax": {
+    "grammar": "A --mouse string is a sequence of `<action,x,y>` tokens, whitespace-free, parsed by parse_mouse_sequence() in cmd_tui_debug.rs. x/y are viewport u16 column/row.",
+    "named_tokens": [
+      "<left,x,y> — MouseEventKind::Down(MouseButton::Left) — anchors a selection / opens the context menu",
+      "<right,x,y> — Down(Right) — opens the context menu at x,y",
+      "<middle,x,y> — Down(Middle)",
+      "<up,x,y> | <release,x,y> — Up(Left) — ends a drag; takes the auto-copy branch when a selection exists, so scenarios must not end with it headless unless auto_copy is off",
+      "<drag,x,y> — Drag(Left) — extends selection_focus, clamped to the selectable area",
+      "<scroll_up,x,y> / <scroll_down,x,y> — ScrollUp / ScrollDown"
+    ],
+    "notes": "Unknown action names are skipped (token consumed, no event). Coordinates outside the selectable area are clamped by the drag handler; a Down outside it sets no anchor. Keys replay before mouse; the run stops when BOTH queues are empty (or the frame cap hits)."
+  },
   "assertion_syntax": {
     "operators": [
       "==",
@@ -444,7 +456,6 @@
       "tool_start/tool_complete/tool_error only paint a tool block if the script leads with a `user` event \u2014 see the `user` variant above.",
       "`error` paints the error modal only while it is the LAST event; see `done` above.",
       "The `mcp_approval` dialog cannot be produced by any script, because `McpApprovalDialogState::show` has no call site anywhere in the workspace (it is `#[allow(dead_code)]`). That is a product gap, not a harness one \u2014 see excluded.json.",
-      "`apply_selection_highlight` cannot be produced: its only state writer is the mouse handler, and `App::run` drives a `Vec<KeyEvent>` with no mouse source. See excluded.json.",
       "Setting agent_script sets is_mock, which SKIPS load_models_dev(). The model picker's list is therefore empty on the mock path \u2014 a model-picker scenario that wants a populated list must run without an agent_script and accept the network dependency."
     ],
     "library_entries": {

@@ -39,6 +39,7 @@ operant tui debug simulate --keys <sequence> [flags]
 | Flag | Purpose |
 |------|---------|
 | `--keys <seq>` | Keystroke sequence to replay (required). |
+| `--mouse <seq>` | Mouse events to replay after the keys (`<action,x,y>` tokens; see [Mouse sequence vocabulary](#mouse-sequence-vocabulary)). Empty = none. |
 | `--assert <clauses>` | State assertions against `App::debug_snapshot()` (comma-separated). |
 | `--assert-screen <clauses>` | Screen-content assertions (comma-separated). |
 | `--dump-screen <path>` | Write the final rendered screen (one text row per line). |
@@ -93,6 +94,37 @@ multi-character `<ctrl+key>` forms like `<ctrl+backspace>`.
 
 Examples: `--keys "/model<enter><down><down><enter>"`, `--keys "<f8>"`,
 `--keys "/voice<enter><ctrl+shift+m>"`.
+
+### Mouse sequence vocabulary (`--mouse`)
+
+`--mouse` takes a sequence of `<action,x,y>` tokens with no whitespace —
+coordinates are viewport **column,row, 0-based** (the same crossterm
+coordinates `handle_mouse_event` receives). Mouse events replay **after**
+every key event, one per loop wake, and a simulated run now stops only when
+**both** queues are empty.
+
+```
+<left,c,r>    Down(Left)   — anchors a selection; outside the selectable
+                             area it sets no anchor (silent, like the real UI)
+<right,c,r>   Down(Right)  — opens the context menu at c,r
+<middle,c,r>  Down(Middle)
+<drag,c,r>    Drag(Left)   — extends selection_focus; clamped to the area
+<up,c,r>      Up(Left)      — also <release,c,r>: ends the drag and takes the
+                             auto-copy branch when a selection exists
+<scroll_up,c,r> <scroll_down,c,r>  — ScrollUp / ScrollDown
+```
+
+Unknown action names consume their token and emit nothing. A `--dump-style`
+--golden pair is the only way to gate a selection scenario: the pass is
+style-only by design, so `--assert`/`--assert-screen` clauses can never see
+it (though `selection_anchor_row`/`selection_focus_row`/`selection_text`
+are now assertable via `debug_snapshot`). Don't end a headless scenario with
+`<release>` while `auto_copy` is on — the clipboard write can block without
+a real display.
+
+Example: `--mouse "<left,5,24><drag,30,24>"` selects across the seeded
+assistant message (row 24 on the 120x40 boot layout) — see the
+`selection-highlight` scenario.
 
 ### State assertions (`--assert`)
 
@@ -531,7 +563,6 @@ Current `excluded.json` entries (3 of 53 surfaces):
 |---------|-----|
 | `mcp-approval` | **Product gap.** `McpApprovalDialogState::show` (`tui/dialogs/mcp_approval.rs:88`) has no call site anywhere in the workspace and is `#[allow(dead_code)]`. The dialog is fully built — render, key handling, Z-order branch, `dialog_priority` entry, `overlay_flags` entry — but nothing in operant ever opens it, so there is no real event sequence a scenario could reproduce. |
 | `mcp-approval-dialog` | The same product gap, kept as a separate entry so the 1:1 surface mapping stays complete: `render_app` has its own `if app.mcp_approval.visible` branch and this is that branch. |
-| `selection-highlight` | Two independent blockers. `apply_selection_highlight` returns unless both `selection_anchor` and `selection_focus` are set, and the only writer is the mouse handler — `App::run` drives a `Vec<KeyEvent>`, so this needs a new mouse source in the event pump. But even with that, the pass is style-only by design: the text is unchanged, so no `--assert` or `--assert-screen` clause can detect it. Only the style baseline can, and that is out of scope while `baselines/` is empty. |
 
 `reachability: "blocked"` on a scenario file is a *temporary* marker for
 something being unblocked in the current iteration — the runner prints its

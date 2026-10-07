@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mouse injection for `operant tui debug simulate` (`--mouse`)**: the headless
+  simulator can replay mouse events after the key sequence —
+  `<action,x,y>` tokens (`left`, `right`, `middle`, `drag`, `up`/`release`,
+  `scroll_up`, `scroll_down`; 0-based viewport coordinates). This un-parks the
+  `selection-highlight` surface: `apply_selection_highlight` is mouse-written
+  and style-only, so no scenario could reach it before. The corpus gains a
+  `selection-highlight` scenario (120x40 + 80x24) whose style golden pins the
+  58% accent background blend and the 32% white foreground blend. Five
+  defects were fixed on the way, two of them live-UI bugs: (1) `render_app`
+  published `last_selectable_area` *before* `jcode_ui::draw`, one frame stale
+  and a zero-rect on the first frame — the first mouse click after startup was
+  silently dropped; (2) a token-advance off-by-one in the `--mouse` parser
+  hung any sequence of two or more tokens; (3) the simulation exit check
+  ignored the mouse queue, exiting at frame one before any mouse event was
+  consumed; (4) no closing draw on the simulation exit path — `terminal.draw`
+  runs before the event pump, so the last event's state never reached the
+  dumped buffer; (5) `App::debug_snapshot()` now exposes `selection_anchor`,
+  `selection_focus`, `selection_text` plus comma-free row fields, so drag state
+  is assertable from scenarios.
+
 ### Changed
 
 - `org grant give` / `org grant revoke` (F1, ORGANISM-ARCHITECTURE §6): the

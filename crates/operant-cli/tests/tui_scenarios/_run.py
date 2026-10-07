@@ -200,6 +200,7 @@ def runs_of(d):
         "text": d["baseline"],
         "style": d["style_baseline"],
         "keys": d["keys"],
+        "mouse": d.get("mouse", ""),
         "size": d["size"],
         "assert": d["assert"],
         "assert_screen": d.get("assert_screen"),
@@ -214,6 +215,7 @@ def runs_of(d):
             "text": f"{stem}.{size}.txt",
             "style": f"{style_stem}.{size}.txt",
             "keys": v.get("keys", d["keys"]),
+            "mouse": v.get("mouse", d.get("mouse", "")),
             "size": size,
             "assert": v.get("assert", d["assert"]),
             "assert_screen": v.get("assert_screen", d.get("assert_screen")),
@@ -223,6 +225,8 @@ def runs_of(d):
 def command(d, run):
     cmd = [BIN, "-c", "@CONFIG@", "tui", "debug", "simulate",
            "--keys", run["keys"], "--size", run["size"]]
+    if run.get("mouse"):
+        cmd += ["--mouse", run["mouse"]]
     cmd += d.get("flags") or []
     if run["assert"]:
         cmd += ["--assert", ",".join(run["assert"])]

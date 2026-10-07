@@ -776,6 +776,7 @@ impl TuiApp {
     pub async fn run_headless(
         mut self,
         keys: Vec<crossterm::event::KeyEvent>,
+        mouse: Vec<crossterm::event::MouseEvent>,
         agent_script: Option<Vec<crate::cmd_tui_debug::MockAgentEvent>>,
         size: (u16, u16),
         max_frames: Option<u64>,
@@ -787,10 +788,10 @@ impl TuiApp {
         Option<(Vec<u64>, Vec<u64>)>,
         String,
     )> {
+        self.app.simulated_mouse = mouse;
         let (agent_tx, agent_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::AgentEvent>(256);
         self.app.agent_event_rx = Some(agent_rx);
-
         let (permission_tx, permission_rx) =
             tokio::sync::mpsc::channel::<operant_core::agent::ToolPermissionRequest>(4);
         self.app.permission_rx = Some(permission_rx);

@@ -68,6 +68,7 @@ impl App {
             project_dir: std::env::current_dir().ok(),
             is_simulating: false,
             simulated_keys: Vec::new(),
+            simulated_mouse: Vec::new(),
             simulation_max_frames: None,
             cost_tracker,
             debug_hub: crate::tui::debug::TuiDebugHub::new_from_env(),

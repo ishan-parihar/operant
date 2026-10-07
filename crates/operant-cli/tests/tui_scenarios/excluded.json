@@ -16,14 +16,6 @@
       "style_baseline": "mcp-approval-dialog.style.txt",
       "reason": "Same product gap as mcp-approval, which is the state-level alias of it. Kept as a separate entry so the 1:1 surface-to-scenario mapping in _validate.py's SURFACES ledger stays complete: render_app has its own `if app.mcp_approval.visible` branch and this is that branch.",
       "unblock_when": "Same as mcp-approval."
-    },
-    {
-      "name": "selection-highlight",
-      "surface": "crates/operant-cli/src/tui/render/selection.rs::apply_selection_highlight",
-      "baseline": "selection-highlight.txt",
-      "style_baseline": "selection-highlight.style.txt",
-      "reason": "Two independent blockers, and the first alone is not worth clearing on its own. (1) apply_selection_highlight returns immediately unless BOTH selection_anchor and selection_focus are Some; the only writer is the mouse handler (tui/app/mouse.rs) and App::run drives a Vec<KeyEvent>, so mouse injection would mean a new App field and a new branch in the event pump. (2) Even with that, the pass is style-only by design — the text is unchanged — so no --assert or --assert-screen clause can detect it. The style baseline this scenario actually needs is out of scope while tui_scenarios/baselines/ is intentionally empty.",
-      "unblock_when": "A mouse-injection seam on the simulated-event pump AND the style baseline. Text assertions can never cover this surface."
     }
   ]
 }

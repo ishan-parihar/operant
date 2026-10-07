@@ -78,6 +78,7 @@ pub struct App {
     pub project_dir: Option<std::path::PathBuf>,
     pub is_simulating: bool,
     pub simulated_keys: Vec<crossterm::event::KeyEvent>,
+    pub simulated_mouse: Vec<crossterm::event::MouseEvent>,
     /// Headless-simulation frame cap. When simulating, the run loop exits
     /// once `frame_count` reaches this, so a scenario that never stops
     /// streaming can't hang the test suite. `None` = no cap (interactive).
@@ -842,7 +843,11 @@ impl App {
         B::Error: Send + Sync + 'static,
     {
         loop {
-            if self.is_simulating && self.simulated_keys.is_empty() && !self.is_streaming {
+            if self.is_simulating
+                && self.simulated_keys.is_empty()
+                && self.simulated_mouse.is_empty()
+                && !self.is_streaming
+            {
                 self.should_exit = true;
             }
             // Frame-cap guard: a headless scenario that never stops streaming
@@ -854,6 +859,15 @@ impl App {
                 self.should_exit = true;
             }
             if self.should_exit {
+                // A simulated run's screen/style dump must reflect the LAST
+                // applied event: `terminal.draw` happens before the event
+                // pump, so the final event's state never reaches the buffer
+                // the harness dumps after run() returns. Paint one closing
+                // frame — sim runs only; the live TUI exits via the same path
+                // and is untouched.
+                if self.is_simulating {
+                    let _ = terminal.draw(|f| render::render_app(f, self));
+                }
                 self.run_exit_teardown();
                 return Ok(None);
             }
@@ -1030,11 +1044,12 @@ impl App {
             // Replay a key that was saved by try_detect_paste_burst in a
             // previous iteration (e.g. a modifier key that terminated a burst).
             let pending = self.pending_key.take();
-            let has_simulated = !self.simulated_keys.is_empty();
+            let has_simulated_key = !self.simulated_keys.is_empty();
+            let has_simulated_mouse = !self.simulated_mouse.is_empty();
 
             // Poll for events with an adaptive timeout based on performance tier and
             // activity state. This reduces CPU usage by 5-10x on idle terminals.
-            let got_event = pending.is_some() || has_simulated || {
+            let got_event = pending.is_some() || has_simulated_key || has_simulated_mouse || {
                 if self.is_simulating {
                     false
                 } else {
@@ -1067,8 +1082,10 @@ impl App {
                         first = false;
                         if let Some(k) = pending {
                             Event::Key(k)
-                        } else if has_simulated {
+                        } else if has_simulated_key {
                             Event::Key(self.simulated_keys.remove(0))
+                        } else if has_simulated_mouse {
+                            Event::Mouse(self.simulated_mouse.remove(0))
                         } else {
                             event::read()?
                         }

@@ -1,0 +1,21 @@
+{
+  "name": "selection-highlight",
+  "surface": "crates/operant-cli/src/tui/render/selection.rs::apply_selection_highlight",
+  "opens_with": "(agent script seeds a message, then simulated down+drag selects it)",
+  "keys": "",
+  "mouse": "<left,5,24><drag,30,24>",
+  "size": "120x40",
+  "agent_script": "assistant-simple.json",
+  "variants": [
+    {
+      "size": "80x24",
+      "mouse": "<left,5,16><drag,30,16>"
+    }
+  ],
+  "assert": [
+    "messages == 1"
+  ],
+  "baseline": "selection-highlight.txt",
+  "style_baseline": "selection-highlight.style.txt",
+  "notes": "The boot screen has no selectable transcript (the offline placeholder is not the message area), so assistant-simple.json seeds one assistant message first; the drag then anchors (col 5, row 25) and extends to (col 30) across it \u2014 apply_selection_highlight paints the range with the 58% accent bg blend (SELECTION_BLEND=0.58, selection.rs:56) and 32% white fg blend (SELECTION_FG_BLEND=0.32, selection.rs:59). The style golden is the blend guard: any change to either constant shifts every painted cell's bg/fg and fails verify. Deliberately no <release> token \u2014 the Up handler takes the auto-copy branch when anchor != focus and a headless clipboard write could block; that path is outside this surface."
+}

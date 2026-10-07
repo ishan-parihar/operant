@@ -1,0 +1,24 @@
+
+
+ jcode · replay
+ JCode
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
+ ~
+
+ Hello from the mock agent.
+
+Chat selection · 22 chars · 26 lines · Enter/Y copy · Esc exit
+1>
+ Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
+
+

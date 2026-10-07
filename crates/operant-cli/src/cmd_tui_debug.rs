@@ -153,6 +153,11 @@ pub enum TuiDebugSubcommand {
         #[arg(long)]
         keys: String,
 
+        /// Optional mouse event sequence to replay (e.g. "<left,10,10><drag,15,10><release,15,10>").
+        /// Format: `<action,x,y>` where action is left/right/middle/up/drag/scroll_up/scroll_down.
+        #[arg(long, default_value = "")]
+        mouse: String,
+
         /// Optional JSON output file path to write the simulation log.
         #[arg(long)]
         output: Option<std::path::PathBuf>,
@@ -274,6 +279,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
         TuiDebugSubcommand::Cost => debug_cost(config).await,
         TuiDebugSubcommand::Simulate {
             keys,
+            mouse,
             output,
             assert,
             dump_screen,
@@ -293,6 +299,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
                 config,
                 SimulateArgs {
                     keys,
+                    mouse,
                     output,
                     assert_str: assert,
                     dump_screen,
@@ -1208,6 +1215,53 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
     events
 }
 
+/// Parse a mouse event sequence (e.g. "<left,10,20><drag,30,20><release,30,20>").
+/// Format: `<action,x,y>` where action is one of:
+///   left, right, middle, down, up, drag, scroll_up, scroll_down
+/// Coordinates are viewport-relative u16.
+fn parse_mouse_sequence(seq: &str) -> Vec<crossterm::event::MouseEvent> {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut events = Vec::new();
+    let chars: Vec<char> = seq.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '<'
+            && let Some(close_idx) = chars[i..].iter().position(|&c| c == '>')
+        {
+            let name: String = chars[i + 1..i + close_idx].iter().collect();
+            let parts: Vec<&str> = name.split(',').collect();
+            if parts.len() >= 3 {
+                let action = parts[0].to_lowercase();
+                let x: u16 = parts[1].trim().parse().unwrap_or(0);
+                let y: u16 = parts[2].trim().parse().unwrap_or(0);
+                let kind = match action.as_str() {
+                    "left" => MouseEventKind::Down(MouseButton::Left),
+                    "right" => MouseEventKind::Down(MouseButton::Right),
+                    "middle" => MouseEventKind::Down(MouseButton::Middle),
+                    "up" | "release" => MouseEventKind::Up(MouseButton::Left),
+                    "drag" => MouseEventKind::Drag(MouseButton::Left),
+                    "scroll_up" => MouseEventKind::ScrollUp,
+                    "scroll_down" => MouseEventKind::ScrollDown,
+                    _ => {
+                        i += close_idx + 1;
+                        continue;
+                    }
+                };
+                events.push(MouseEvent {
+                    kind,
+                    column: x,
+                    row: y,
+                    modifiers: crossterm::event::KeyModifiers::NONE,
+                });
+            }
+            i += close_idx + 1;
+        } else {
+            i += 1;
+        }
+    }
+    events
+}
+
 /// Evaluate comma-separated state assertions against `App::debug_snapshot()`.
 /// Each clause is `path OP value`, where OP is `==`, `!=`, or `contains` and
 /// `path` is a dot-path into the snapshot JSON (e.g. `overlays.model_picker`,
@@ -1452,6 +1506,7 @@ impl MockAgentEvent {
 /// stable signature as the harness grows more capture/diff flags.
 struct SimulateArgs {
     keys: String,
+    mouse: String,
     output: Option<std::path::PathBuf>,
     assert_str: Option<String>,
     dump_screen: Option<std::path::PathBuf>,
@@ -1474,7 +1529,12 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
 
     println!("Starting headless TUI simulation...");
     let parsed_keys = parse_key_sequence(&args.keys);
-    println!("Parsed {} key events.", parsed_keys.len());
+    let parsed_mouse = parse_mouse_sequence(&args.mouse);
+    println!(
+        "Parsed {} key events, {} mouse events.",
+        parsed_keys.len(),
+        parsed_mouse.len()
+    );
 
     // Parse --size WxH (default 120x40).
     let dims = match args.size.as_deref() {
@@ -1540,7 +1600,14 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
     )
     .await?;
     let (events, app, screen, capture_status, style_dump) = tui_app
-        .run_headless(parsed_keys, script, dims, frame_cap, frame_capture)
+        .run_headless(
+            parsed_keys,
+            parsed_mouse,
+            script,
+            dims,
+            frame_cap,
+            frame_capture,
+        )
         .await?;
 
     println!("Simulation completed. Analyzing events...");
@@ -1938,6 +2005,29 @@ fn evaluate_screen_assertions(screen: &[String], assertions_str: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for the token-advance off-by-one: `close_idx` is relative to
+    /// `chars[i..]`, so the old `i = close_idx + 1` only advanced the FIRST
+    /// token and reprocessed the second forever (2+ token --mouse sequences
+    /// hung the simulation before "Parsed…" ever printed).
+    #[test]
+    fn mouse_sequence_parses_every_token_and_terminates() {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let evs = parse_mouse_sequence("<left,25,10><drag,55,12><scroll_up,3,4>");
+        assert_eq!(evs.len(), 3);
+        assert!(matches!(
+            evs[0].kind,
+            MouseEventKind::Down(MouseButton::Left)
+        ));
+        assert_eq!((evs[0].column, evs[0].row), (25, 10));
+        assert!(matches!(
+            evs[1].kind,
+            MouseEventKind::Drag(MouseButton::Left)
+        ));
+        assert_eq!((evs[1].column, evs[1].row), (55, 12));
+        assert!(matches!(evs[2].kind, MouseEventKind::ScrollUp));
+        assert!(parse_mouse_sequence("").is_empty());
+    }
 
     fn screen(rows: &[&str]) -> Vec<String> {
         rows.iter().map(|r| r.to_string()).collect()
