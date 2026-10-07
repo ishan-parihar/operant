@@ -198,6 +198,46 @@ impl SeatBudgetDb {
             .map_err(|e| Error::Agent(format!("Failed to read seat budget: {e}")))?;
         Ok(row)
     }
+
+    /// Remove a seat's override row entirely — the seat then inherits the
+    /// `[genome].budget` default. Deleting a nonexistent row is a no-op.
+    pub fn delete(&self, employee_id: &str) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "DELETE FROM seat_budgets WHERE employee_id = ?1",
+            params![employee_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to delete seat budget: {e}")))?;
+        Ok(())
+    }
+
+    /// Every override row, ordered by seat id — the `operant budget list`
+    /// surface.
+    pub fn list_all(&self) -> Result<Vec<SeatBudget>> {
+        let conn = self.lock()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT employee_id, basis, window, cap, mode
+                 FROM seat_budgets ORDER BY employee_id",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare seat budget list: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SeatBudget {
+                    employee_id: row.get(0)?,
+                    basis: row.get(1)?,
+                    window: row.get(2)?,
+                    cap: row.get(3)?,
+                    mode: row.get(4)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to list seat budgets: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Agent(format!("Failed to read seat budget row: {e}")))?);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -221,6 +261,51 @@ mod tests {
         assert_eq!(effective.window, "daily");
         assert_eq!(effective.cap, 100_000.0);
         assert_eq!(effective.mode, "hard");
+    }
+
+    // ── iter-670: the write-path fns behind `operant budget` ──
+
+    fn budget(id: &str, cap: f64) -> SeatBudget {
+        SeatBudget {
+            employee_id: id.to_string(),
+            basis: Some("tokens".to_string()),
+            window: Some("daily".to_string()),
+            cap,
+            mode: Some("hard".to_string()),
+        }
+    }
+
+    #[test]
+    fn delete_removes_the_row_and_is_a_noop_for_a_missing_one() {
+        let db = SeatBudgetDb::from_connection(conn()).unwrap();
+        db.upsert(&budget("dispatcher", 50_000.0)).unwrap();
+        assert_eq!(
+            db.list_all().unwrap().len(),
+            1,
+            "upserted row must list"
+        );
+        db.delete("dispatcher").unwrap();
+        assert!(
+            db.get("dispatcher").unwrap().is_none(),
+            "deleted row must not resolve"
+        );
+        db.delete("dispatcher")
+            .expect("deleting a missing row must be a no-op, not an error");
+    }
+
+    #[test]
+    fn list_all_orders_by_seat_id() {
+        let db = SeatBudgetDb::from_connection(conn()).unwrap();
+        assert!(db.list_all().unwrap().is_empty());
+        db.upsert(&budget("premiere", 10.0)).unwrap();
+        db.upsert(&budget("dispatcher", 5.0)).unwrap();
+        let rows = db.list_all().unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.employee_id.as_str()).collect::<Vec<_>>(),
+            vec!["dispatcher", "premiere"],
+            "ordered by seat id, cap material preserved"
+        );
+        assert_eq!(rows[1].cap, 10.0);
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod cmd_completion;
 mod cmd_config;
 mod cmd_context;
 mod cmd_cookies;
+mod cmd_budget;
 mod cmd_cron;
 mod cmd_curator;
 mod cmd_dashboard;
@@ -321,6 +322,14 @@ enum Commands {
     Org {
         #[command(subcommand)]
         cmd: cmd_org::OrgSubcommand,
+    },
+    /// Provisional top-level while cmd_org.rs is mid-flight in a peer's
+    /// working tree; folds into `operant org budget` once it lands
+    /// (iter-670 body has the full rationale). Per-seat budget overrides
+    /// (Wave 4 / ORGANISM-ARCHITECTURE §5).
+    Budget {
+        #[command(subcommand)]
+        cmd: cmd_budget::BudgetSubcommand,
     },
     /// Manage gateway
     Gateway {
@@ -2921,6 +2930,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Org { cmd }) => {
             cmd_org::handle_org_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Budget { cmd }) => {
+            cmd_budget::handle_budget_command(&loaded.config, cmd.clone()).await?;
         }
         Some(Commands::Gateway { cmd, json }) => {
             cmd_gateway::handle_gateway_command(&loaded.config, cmd.clone(), *json).await?;
