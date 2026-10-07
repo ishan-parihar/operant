@@ -508,11 +508,7 @@ impl CronScheduler {
                 }
             }
             Err(e) => {
-                // iter-669: surface the transient classification so run_job
-                // can arm a bounded retry (5xx / stream death — the
-                // chat_admission_busy 503 and stream-death class observed
-                // live on the first cast runs).
-                let transient = e.is_transient();
+                let transient = should_arm_transient_retry(&e);
                 let err_msg = format!("Agent run failed: {}", e);
                 (
                     false,
@@ -682,6 +678,20 @@ fn seat_memory_prompt(org_root: &std::path::Path, seat_id: &str, prompt: &str) -
     )
 }
 
+/// iter-673: whether a failed agent run is worth a bounded re-arm. The
+/// global classifier's exclusion of `StreamDied` is about the IN-STREAM
+/// ladder (a spent per-turn retry budget must not invite another ladder
+/// — the scheduler's stream retry budget); the cron cadence seam is a
+/// different knob: a dead stream that exhausted the in-turn ladder is,
+/// at cadence granularity, a flake that recovers (observed live: 20:09
+/// warden and 20:31 dispatcher stream-deaths each recovered on the next
+/// scheduled tick — a missed cycle is a missed deliverable, while a
+/// re-armed retry would have delivered ~60s late). The 2-per-success
+/// budget (iter-669) caps the ladder risk here.
+fn should_arm_transient_retry(e: &crate::error::Error) -> bool {
+    e.is_transient() || matches!(e, crate::error::Error::StreamDied { .. })
+}
+
 fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> bool {
     match repeat_times {
         Some(times) if times > 0 => repeat_completed + 1 >= times,
@@ -691,7 +701,7 @@ fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> boo
 
 #[cfg(test)]
 mod tests {
-    use super::{repeat_limit_reached, seat_memory_prompt};
+    use super::{repeat_limit_reached, seat_memory_prompt, should_arm_transient_retry};
     use std::sync::Arc;
 
     #[test]
@@ -811,6 +821,30 @@ mod tests {
             scheduler.transient_retry_backoff("job_a"),
             Some(30),
             "success resets the budget"
+        );
+    }
+
+    // ── iter-673: stream-death is retryable at the cadence seam ──
+
+    #[test]
+    fn stream_death_arms_a_retry_but_a_permanent_error_does_not() {
+        let died = crate::error::Error::StreamDied {
+            cause: "error decoding response body: buffer error while streaming".into(),
+            attempts: 3,
+            elapsed_secs: 0,
+        };
+        assert!(
+            should_arm_transient_retry(&died),
+            "a spent in-stream ladder is a cadence-level flake — retry it"
+        );
+        let permanent = crate::error::Error::Provider {
+            status: 400,
+            body: "bad request".into(),
+            retry_after: None,
+        };
+        assert!(
+            !should_arm_transient_retry(&permanent),
+            "a 400 is the model's answer, not a flake — do not invite it again"
         );
     }
 }
