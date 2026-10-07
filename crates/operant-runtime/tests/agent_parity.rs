@@ -65,20 +65,16 @@ use operant_core::client::{
 use operant_core::database::Database;
 use operant_core::error::{Error, Result};
 use operant_core::schema::ToolSchema;
-use operant_core::tools::todo_tool::{TODO_INJECTION_HEADER, TodoTool, todo_injection_for_session};
+use operant_core::tools::todo_tool::{TODO_INJECTION_HEADER, TodoTool};
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry, ToolResult};
 
 // ── Loops B & C: operant-runtime + operant-providers ────────────
-use operant_config::schema::{
-    AgentConfig as RtAgentConfig, MemoryConfig, MultimodalConfig, PacingConfig,
-};
+use operant_config::schema::{AgentConfig as RtAgentConfig, MemoryConfig};
 use operant_memory::Memory;
 use operant_providers::{
-    ChatMessage, ChatRequest as RtChatRequest, ChatResponse as RtChatResponse, Provider, ToolCall,
+    ChatRequest as RtChatRequest, ChatResponse as RtChatResponse, Provider, ToolCall,
 };
 use operant_runtime::agent::dispatcher::{NativeToolDispatcher, ToolDispatcher};
-use operant_runtime::agent::loop_::run_tool_call_loop;
-use operant_runtime::agent::reconciled::{PreflightConfig, compress_if_needed};
 use operant_runtime::agent::{Agent, TurnEvent};
 use operant_runtime::observability::{NoopObserver, Observer};
 use operant_runtime::tools::{Tool, ToolResult as RtToolResult};
@@ -510,60 +506,6 @@ async fn rt_turn(agent: &mut Agent, message: &str) -> anyhow::Result<String> {
     agent.turn_streamed(message, tx, None).await
 }
 
-/// Loop C: direct-drive `run_tool_call_loop` with minimal args — the exact
-/// pattern from `operant-runtime/src/agent/loop_/tests.rs:1225`.
-async fn rt_tool_loop(
-    provider: &RtScriptedProvider,
-    history: &mut Vec<ChatMessage>,
-    tools: &[Box<dyn Tool>],
-    max_tool_iterations: usize,
-    context_token_budget: usize,
-) -> anyhow::Result<String> {
-    let observer = NoopObserver;
-    let multimodal = MultimodalConfig::default();
-    let pacing = PacingConfig::default();
-    run_tool_call_loop(
-        provider,
-        history,
-        tools,
-        &observer,
-        "scripted",
-        "demo",
-        0.0,
-        true,
-        None,
-        "cli",
-        None,
-        &multimodal,
-        max_tool_iterations,
-        None,
-        None,
-        None,
-        &[],
-        &[],
-        None,
-        None,
-        &pacing,
-        0,
-        context_token_budget,
-        None,
-        None,
-        None,
-        None,
-    )
-    .await
-}
-
-/// Writes one in-progress todo into core's process-global todo store.
-async fn seed_todo(session: &str, content: &str) {
-    let args = serde_json::json!({
-        "todos": [{"id": "p1", "content": content, "status": "in_progress"}],
-        "sessionId": session,
-    });
-    let result = TodoTool.execute(args, ToolContext::default()).await;
-    assert!(result.success, "todo write failed: {result:?}");
-}
-
 // ═════════════════════════════════════════════════════════════════
 // Scenario 1 — empty ×3 → answer: the shared retry ladder
 // ═════════════════════════════════════════════════════════════════
@@ -615,38 +557,6 @@ async fn s1_empty_recovery_loop_b() {
 }
 
 #[tokio::test]
-async fn s1_empty_recovery_loop_c() {
-    let provider = RtScriptedProvider::new(vec![
-        Step::Empty,
-        Step::Empty,
-        Step::Empty,
-        Step::Text(S1_ANSWER),
-    ]);
-    let mut history = vec![ChatMessage::user("say something".to_string())];
-    let tools: Vec<Box<dyn Tool>> = Vec::new();
-
-    let out = rt_tool_loop(&provider, &mut history, &tools, 8, 0)
-        .await
-        .unwrap();
-
-    assert_eq!(out, S1_ANSWER);
-    assert_eq!(provider.request_count(), 4, "three empties + one answer");
-    // The ladder nudged by appending the model's own empty replies.
-    assert_eq!(
-        history
-            .iter()
-            .filter(|m| m.role == "assistant" && m.content.is_empty())
-            .count(),
-        3,
-        "each empty turn must be appended so the model sees its own silence"
-    );
-}
-
-// ═════════════════════════════════════════════════════════════════
-// Scenario 2 — empty ×4: the exhausted ladder's terminal shape
-// ═════════════════════════════════════════════════════════════════
-
-#[tokio::test]
 async fn s2_empty_exhaustion_loop_a() {
     let temp = tempfile::tempdir().unwrap();
     let client = CoreScriptedClient::new(vec![Step::Empty; 4]);
@@ -692,26 +602,8 @@ async fn s2_empty_exhaustion_loop_b() {
     assert_eq!(provider.request_count(), 4);
 }
 
-#[tokio::test]
-async fn s2_empty_exhaustion_loop_c() {
-    let provider = RtScriptedProvider::new(vec![Step::Empty; 4]);
-    let mut history = vec![ChatMessage::user("say something".to_string())];
-    let tools: Vec<Box<dyn Tool>> = Vec::new();
-
-    // PIN (same terminal shape as Loops A/B): Ok("") after the refunded
-    // ladder runs out (EMPTY_RESPONSE_MAX_RETRIES = 3, shared constant).
-    let out = rt_tool_loop(&provider, &mut history, &tools, 8, 0)
-        .await
-        .unwrap();
-
-    assert_eq!(out, "");
-    assert_eq!(provider.request_count(), 4);
-}
-
-// ═════════════════════════════════════════════════════════════════
 // Scenario 3 — budget exhaustion (tool rounds with VARYING args so no
 // repeat guardrail fires; repeat behavior is scenario 4's subject)
-// ═════════════════════════════════════════════════════════════════
 
 const S3_GRACE: &str = "grace summary: partial work completed before the budget ran out";
 
@@ -780,42 +672,7 @@ async fn s3_budget_exhaustion_loop_b() {
     assert_eq!(provider.request_count(), 3);
 }
 
-#[tokio::test]
-async fn s3_budget_exhaustion_loop_c() {
-    let provider = RtScriptedProvider::new(vec![
-        Step::Tool(PROBE, r#"{"i":1}"#),
-        Step::Tool(PROBE, r#"{"i":2}"#),
-        Step::Text(S3_GRACE),
-    ]);
-    let (tools, probe_calls) = rt_probe_tools();
-    let mut history = vec![ChatMessage::user("do some work".to_string())];
-
-    // PINNED DIVERGENCE (Wave 1): Loop C falls through to a final summary
-    // LLM call WITHOUT tools and returns the accumulated text — a third
-    // distinct exhaustion shape (A: grace call; B: hard bail; C: summary).
-    let out = rt_tool_loop(&provider, &mut history, &tools, 2, 0)
-        .await
-        .unwrap();
-
-    assert_eq!(out, S3_GRACE, "the summary text is the whole answer");
-    assert_eq!(
-        provider.request_count(),
-        3,
-        "2 tool rounds + 1 summary call"
-    );
-    assert_eq!(probe_calls.load(Ordering::Relaxed), 2);
-    // The summary request really is the exhaustion prompt, tools stripped.
-    let last = provider.messages_of(2);
-    assert!(
-        last.iter()
-            .any(|m| m.contains("maximum number of tool iterations")),
-        "the summary call must carry the exhaustion prompt"
-    );
-}
-
-// ═════════════════════════════════════════════════════════════════
 // Scenario 4 — identical tool call ×3 (repeat guardrails)
-// ═════════════════════════════════════════════════════════════════
 
 const S4_FINAL: &str = "done after three identical probes";
 const S4_ARGS: &str = r#"{"x":1}"#;
@@ -907,40 +764,6 @@ async fn s4_repeat_guardrail_loop_b() {
     }
 }
 
-#[tokio::test]
-async fn s4_repeat_guardrail_loop_c() {
-    let provider = RtScriptedProvider::new(vec![
-        Step::Tool(PROBE, S4_ARGS),
-        Step::Tool(PROBE, S4_ARGS),
-        Step::Tool(PROBE, S4_ARGS),
-        Step::Text(S4_FINAL),
-    ]);
-    let (tools, probe_calls) = rt_probe_tools();
-    let mut history = vec![ChatMessage::user("probe repeatedly".to_string())];
-
-    // PINNED DIVERGENCE (Wave 1): Loop C's repeat protection is the
-    // LoopDetector — on the 3rd identical call it merges a
-    // "[Loop Detection] …" system message into the conversation history
-    // (the tool still executes), where Loop A warns in the event feed and
-    // Loop B does nothing.
-    let out = rt_tool_loop(&provider, &mut history, &tools, 4, 0)
-        .await
-        .unwrap();
-
-    assert_eq!(out, S4_FINAL);
-    assert_eq!(probe_calls.load(Ordering::Relaxed), 3);
-    assert_eq!(provider.request_count(), 4);
-    let fourth = provider.messages_of(3);
-    assert!(
-        fourth.iter().any(|m| m.contains("[Loop Detection]")),
-        "the warned repeat must be visible to the next model call, got: {fourth:?}"
-    );
-}
-
-// ═════════════════════════════════════════════════════════════════
-// Scenario 5 — context overflow / compression + todo re-injection
-// ═════════════════════════════════════════════════════════════════
-
 const S5_AFTER: &str = "answer served after the compression retry";
 const S5_TODO_ARGS: &str = r#"{"todos":[{"id":"p1","content":"parity probe todo","status":"in_progress"}],"sessionId":"default"}"#;
 
@@ -1003,100 +826,4 @@ async fn s5_compression_loop_b() {
         "actual: {err}"
     );
     assert_eq!(provider.request_count(), 1);
-}
-
-#[tokio::test]
-async fn s5_compression_loop_c() {
-    // Part 1 — the loop proper: preemptive deterministic trim.
-    // `run_tool_call_loop` trims oversized old tool results when the
-    // estimated tokens exceed the caller's budget (fast_trim_tool_results,
-    // history.rs:211) BEFORE the provider call — no LLM compression, no
-    // extra round-trip.
-    let provider = RtScriptedProvider::new(vec![Step::Text(S5_AFTER)]);
-    let (tools, _probe_calls) = rt_probe_tools();
-    // History shapes follow the tool_use/tool_result pairing contract the
-    // loop enforces (history_pruner.rs): an assistant message claiming a
-    // structured tool_calls array, and a tool message as
-    // `{"content": …, "tool_call_id": …}` JSON — otherwise the orphan
-    // cleanup (#5743) drops the tool result before the trim is observable.
-    let big = serde_json::json!({
-        "content": "x".repeat(20_000),
-        "tool_call_id": "call_big",
-    })
-    .to_string();
-    let mut history = vec![
-        ChatMessage::user("start".to_string()),
-        ChatMessage::assistant(serde_json::json!({"tool_calls": [{"id": "call_big"}]}).to_string()),
-        ChatMessage::tool(big),
-        ChatMessage::user("f1".to_string()),
-        ChatMessage::user("f2".to_string()),
-        ChatMessage::user("f3".to_string()),
-        ChatMessage::user("f4".to_string()),
-    ];
-    // Estimated tokens: ~5000 from the big tool result; budget 2500 → the
-    // fast-trim must fire; trimmed to 2000 chars (~500 tokens) the history
-    // is back under budget, so the deeper history pruner stays out.
-    let out = rt_tool_loop(&provider, &mut history, &tools, 8, 2500)
-        .await
-        .unwrap();
-
-    assert_eq!(out, S5_AFTER);
-    assert_eq!(provider.request_count(), 1);
-    let first = provider.messages_of(0);
-    let trimmed = first
-        .iter()
-        .find(|m| m.contains("characters truncated"))
-        .expect("the oversized tool result must be trimmed with a marker");
-    assert!(trimmed.len() < 20_000);
-    assert!(
-        trimmed.contains("call_big"),
-        "the trimmed tool result must keep its pairing identity"
-    );
-
-    // Part 2 — W1.4 CONSCIOUS PIN UPDATE: the runtime compressor is gone;
-    // the reconciled facade drives the core pair, which folds the active
-    // todo list back in after any effective compression (previously a
-    // Loop-A-only behavior). Same global todo store, same active todo:
-    // the facade now re-injects it like Loop A does — the divergence this
-    // cell pinned is retired by the consolidation.
-    seed_todo("parity-c", "parity compressor divergence probe").await;
-    assert!(
-        todo_injection_for_session("parity-c").is_some(),
-        "precondition: the todo store really holds an active todo"
-    );
-    let mut big_history: Vec<ChatMessage> = (0..9)
-        .map(|i| ChatMessage::user(format!("history turn {i}")))
-        .collect();
-    big_history.insert(
-        4,
-        ChatMessage::tool(
-            serde_json::json!({
-                "content": "y".repeat(8_000),
-                "tool_call_id": "call_y",
-            })
-            .to_string(),
-        ),
-    );
-    let result = compress_if_needed(
-        &mut big_history,
-        provider.as_ref(),
-        "demo",
-        &PreflightConfig::default(),
-        100,
-        None,
-        Some("parity-c"),
-    )
-    .await
-    .unwrap();
-
-    assert!(
-        result.compressed,
-        "the facade must actually compress the oversized history"
-    );
-    assert!(
-        big_history
-            .iter()
-            .any(|m| m.content.contains(TODO_INJECTION_HEADER)),
-        "the reconciled facade must re-inject todos (W1.4: converged with Loop A)"
-    );
 }

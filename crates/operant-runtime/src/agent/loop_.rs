@@ -4,14 +4,10 @@ pub mod context;
 pub mod messages;
 pub mod run;
 pub mod streaming;
-pub mod tool_loop;
-pub mod turn;
 pub use context::*;
 pub use messages::*;
 pub use run::*;
 pub use streaming::*;
-pub use tool_loop::*;
-pub use turn::*;
 
 pub static CLI_CHANNEL_FN: std::sync::OnceLock<
     Box<dyn Fn() -> Box<dyn operant_api::channel::Channel> + Send + Sync>,
@@ -41,30 +37,24 @@ static PERIPHERAL_TOOLS_FN: std::sync::OnceLock<PeripheralToolsFn> = std::sync::
 pub fn register_peripheral_tools_fn(f: PeripheralToolsFn) {
     let _ = PERIPHERAL_TOOLS_FN.set(f);
 }
-use crate::cost::types::BudgetCheck;
-use crate::observability::{self, Observer, ObserverEvent, runtime_trace};
+use crate::observability::{self, Observer, ObserverEvent};
 use crate::platform;
 use crate::security::{AutonomyLevel, SecurityPolicy};
 use crate::tools::{self, Tool};
-use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use futures_util::StreamExt;
-use operant_api::channel::Channel;
 use operant_api::provider::StreamEvent;
 use operant_config::schema::Config;
 use operant_memory::{
     self, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN, Memory, MemoryCategory, decay,
 };
-use operant_providers::multimodal;
-use operant_providers::{
-    self, ChatMessage, ChatRequest, Provider, ProviderCapabilityError, ToolCall,
-};
+use operant_providers::{self, ChatMessage, ChatRequest, Provider, ToolCall};
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -74,14 +64,8 @@ pub use super::cost::{
     check_tool_loop_budget, record_tool_loop_cost_usage,
 };
 
-/// Minimum characters per chunk when relaying LLM text to a streaming draft.
-const STREAM_CHUNK_MIN_CHARS: usize = 80;
 /// Rolling window size for detecting streamed tool-call payload markers.
 const STREAM_TOOL_MARKER_WINDOW_CHARS: usize = 512;
-
-/// Default maximum agentic tool-use iterations per user message to prevent runaway loops.
-/// Used as a safe fallback when `max_tool_iterations` is unset or configured as zero.
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 10;
 
 // History management moved to `super::history`.
 pub use super::history::{

@@ -145,13 +145,11 @@ pub(crate) struct ChannelRuntimeContext {
     pub(crate) workspace_dir: Arc<PathBuf>,
     pub(crate) message_timeout_secs: u64,
     pub(crate) interrupt_on_new_message: InterruptOnNewMessageConfig,
-    pub(crate) multimodal: operant_config::schema::MultimodalConfig,
     pub(crate) media_pipeline: operant_config::schema::MediaPipelineConfig,
     pub(crate) transcription_config: operant_config::schema::TranscriptionConfig,
     pub(crate) hooks: Option<Arc<operant_runtime::hooks::HookRunner>>,
     pub(crate) non_cli_excluded_tools: Arc<Vec<String>>,
     pub(crate) autonomy_level: AutonomyLevel,
-    pub(crate) tool_call_dedup_exempt: Arc<Vec<String>>,
     pub(crate) model_routes: Arc<Vec<operant_config::schema::ModelRouteConfig>>,
     pub(crate) query_classification: operant_config::schema::QueryClassificationConfig,
     pub(crate) ack_reactions: bool,
@@ -162,11 +160,8 @@ pub(crate) struct ChannelRuntimeContext {
     /// `[autonomy]` config; auto-denies tools that would need interactive
     /// approval since no operator is present on channel runs.
     pub(crate) approval_manager: Arc<ApprovalManager>,
-    pub(crate) activated_tools:
-        Option<std::sync::Arc<std::sync::Mutex<operant_runtime::tools::ActivatedToolSet>>>,
     pub(crate) cost_tracking: Option<ChannelCostTrackingState>,
     pub(crate) pacing: operant_config::schema::PacingConfig,
-    pub(crate) max_tool_result_chars: usize,
     pub(crate) context_token_budget: usize,
     pub(crate) debouncer: Arc<operant_infra::debounce::MessageDebouncer>,
     /// HMAC receipt generator. `Some` when `[agent.tool_receipts] enabled = true`.

@@ -153,9 +153,6 @@ pub async fn start_channels(
     // When `deferred_loading` is enabled, MCP tools are NOT added eagerly.
     // Instead, a `tool_search` built-in is registered for on-demand loading.
     let mut deferred_section = String::new();
-    let mut ch_activated_handle: Option<
-        std::sync::Arc<std::sync::Mutex<operant_runtime::tools::ActivatedToolSet>>,
-    > = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
         tracing::info!(
             "Initializing MCP client — {} server(s) configured",
@@ -179,7 +176,6 @@ pub async fn start_channels(
                     let activated = std::sync::Arc::new(std::sync::Mutex::new(
                         operant_runtime::tools::ActivatedToolSet::new(),
                     ));
-                    ch_activated_handle = Some(std::sync::Arc::clone(&activated));
                     built_tools.push(Box::new(operant_runtime::tools::ToolSearchTool::new(
                         deferred_set,
                         activated,
@@ -552,7 +548,6 @@ pub async fn start_channels(
             mattermost: interrupt_on_new_message_mattermost,
             matrix: interrupt_on_new_message_matrix,
         },
-        multimodal: config.multimodal.clone(),
         media_pipeline: config.media_pipeline.clone(),
         transcription_config: config.transcription.clone(),
         hooks: if config.hooks.enabled {
@@ -575,7 +570,6 @@ pub async fn start_channels(
         },
         non_cli_excluded_tools: Arc::new(config.autonomy.non_cli_excluded_tools.clone()),
         autonomy_level: config.autonomy.level,
-        tool_call_dedup_exempt: Arc::new(config.agent.tool_call_dedup_exempt.clone()),
         model_routes: Arc::new(config.providers.model_routes.clone()),
         query_classification: config.query_classification.clone(),
         ack_reactions: config.channels.ack_reactions,
@@ -601,7 +595,6 @@ pub async fn start_channels(
             None
         },
         approval_manager: Arc::new(ApprovalManager::for_non_interactive(&config.autonomy)),
-        activated_tools: ch_activated_handle,
         cost_tracking: operant_runtime::cost::CostTracker::get_or_init_global(
             config.cost.clone(),
             &config.workspace_dir,
@@ -611,7 +604,6 @@ pub async fn start_channels(
             prices: Arc::new(config.combined_pricing()),
         }),
         pacing: config.pacing.clone(),
-        max_tool_result_chars: config.agent.max_tool_result_chars,
         context_token_budget: config.agent.max_context_tokens,
         debouncer: Arc::new(operant_infra::debounce::MessageDebouncer::new(
             Duration::from_millis(config.channels.debounce_ms),

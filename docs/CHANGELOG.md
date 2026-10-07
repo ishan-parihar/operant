@@ -324,6 +324,22 @@ D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
   60s timeout records `Expired`.
 - `/approve` mints first, then answers; `/deny` resolves the queue row.
 
+### Removed
+
+- **W1.10 — Loop B engine deleted**: `run_tool_call_loop`
+  (`loop_/tool_loop.rs`), the `agent_turn` legacy wrapper (`loop_/turn.rs`),
+  and their 35 unit tests, fixtures, and the five `*_loop_c`
+  direct-drive parity tests go away with zero remaining production callers
+  (channel dispatch has run on the reconciled facade since iter-662;
+  `loop_detector.rs` was already harvested into `core::tool_guardrails` in
+  Wave 1). `agent_parity` keeps the core↔Loop C pairs (10 tests).
+  `ChannelRuntimeContext` drops the fields only the engine consumed —
+  `multimodal`, `tool_call_dedup_exempt`, `activated_tools` (the
+  context copy; the tool-registry's own `ActivatedToolSet` handle stays),
+  and `max_tool_result_chars` — from the struct, startup wiring, and all 39
+  test contexts. Re-baseline: runtime lib 1654/0, parity 10/10; five-crate
+  gate 5610 passed / 0 failed across 44 binaries.
+
 ## [0.2.1] - 2026-09-30
 
 Foundation for post-turn features (reflection / advisor / dreaming).

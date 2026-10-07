@@ -1579,7 +1579,7 @@ mod tests {
         }
     }
 
-    /// `InfiniteToolCallProvider` + a call counter, so "the sub-agent
+    /// `CountingInfiniteProvider` + a call counter, so "the sub-agent
     /// respects its iteration budget" is observable rather than inferred
     /// from a termination side effect.
     struct CountingInfiniteProvider {
@@ -1605,40 +1605,6 @@ mod tests {
             _temperature: Option<f64>,
         ) -> anyhow::Result<ChatResponse> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(ChatResponse {
-                text: None,
-                tool_calls: vec![ToolCall {
-                    id: "loop".to_string(),
-                    name: "echo_tool".to_string(),
-                    arguments: "{\"value\":\"x\"}".to_string(),
-                    extra_content: None,
-                }],
-                usage: None,
-                reasoning_content: None,
-            })
-        }
-    }
-
-    struct InfiniteToolCallProvider;
-
-    #[async_trait]
-    impl Provider for InfiniteToolCallProvider {
-        async fn chat_with_system(
-            &self,
-            _system_prompt: Option<&str>,
-            _message: &str,
-            _model: &str,
-            _temperature: Option<f64>,
-        ) -> anyhow::Result<String> {
-            Ok("unused".to_string())
-        }
-
-        async fn chat(
-            &self,
-            _request: ChatRequest<'_>,
-            _model: &str,
-            _temperature: Option<f64>,
-        ) -> anyhow::Result<ChatResponse> {
             Ok(ChatResponse {
                 text: None,
                 tool_calls: vec![ToolCall {
