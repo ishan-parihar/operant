@@ -169,6 +169,7 @@ pub async fn run(
     };
     let (
         mut tools_registry,
+        _facade_tool_arcs,
         delegate_handle,
         _reaction_handle,
         _channel_map_handle,

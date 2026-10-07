@@ -40,6 +40,7 @@ pub async fn process_message(
     };
     let (
         mut tools_registry,
+        _facade_tool_arcs,
         delegate_handle_pm,
         _reaction_handle_pm,
         _channel_map_handle_pm,
