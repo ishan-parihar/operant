@@ -47,6 +47,14 @@ pub enum CronSubcommand {
         /// Cron job ID
         id: String,
     },
+    /// Show a job's recent run history (iter-668 cron_runs)
+    History {
+        /// Cron job ID
+        id: String,
+        /// How many recent runs to show (default 20)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Update a cron job
     Update {
         /// Cron job ID
@@ -127,6 +135,7 @@ pub async fn handle_cron_command(
             .await
         }
         CronSubcommand::Get { id } => cmd_get(config, &id).await,
+        CronSubcommand::History { id, limit } => cmd_history(config, &id, limit).await,
         CronSubcommand::Update {
             id,
             name,
@@ -670,5 +679,36 @@ async fn cmd_blueprint(
     );
     println!("   To delete:       operant cron delete {}", id);
 
+    Ok(())
+}
+
+/// iter-668: `operant cron history <id>` — the per-run forensics surface
+/// over the cron_runs table. Failures used to vanish when the next ok
+/// cleared last_error; history keeps every attempt.
+async fn cmd_history(config: &AppConfig, id: &str, limit: Option<usize>) -> Result<()> {
+    let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
+    let runs = db
+        .list_recent_runs(id, limit.unwrap_or(20))
+        .context("Failed to list cron run history")?;
+
+    if runs.is_empty() {
+        println!("No recorded runs for '{id}'.");
+        return Ok(());
+    }
+
+    println!("Recent runs for '{id}' (newest first):");
+    println!(
+        "{:<26} {:<9} {:<11} {}",
+        "FINISHED AT", "OUTCOME", "ORIGIN", "ERROR"
+    );
+    for run in runs {
+        println!(
+            "{:<26} {:<9} {:<11} {}",
+            run.finished_at,
+            if run.success { "ok" } else { "error" },
+            run.origin,
+            run.error.unwrap_or_default()
+        );
+    }
     Ok(())
 }

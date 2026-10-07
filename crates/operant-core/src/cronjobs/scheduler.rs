@@ -200,6 +200,7 @@ impl CronScheduler {
     /// own `operant cron list` output names the job and the missing fields
     /// without the operator reading logs.
     fn record_gate_block(&self, job: &CronJob, block: GateBlock) -> Result<(), Error> {
+        let started_at = chrono::Utc::now().to_rfc3339();
         let message = block.message();
         // error!, not warn! — §3.2 rule 1. A blocked job is a fault, not a
         // notice, and warn! is what a "not a warning" acceptance means.
@@ -216,15 +217,26 @@ impl CronScheduler {
         self.db.mark_job_run(
             &job.id,
             false,
-            Some(message),
+            Some(message.clone()),
             None,
             self.compute_next_run(job),
         )?;
+
+        // iter-668: a blocked run is a run attempt — history records it
+        // with its own origin so gate blocks are forensically distinct
+        // from dispatch failures. Audit layer: warn on write failure.
+        if let Err(e) =
+            self.db
+                .record_cron_run(&job.id, &started_at, false, Some(message), "gate_block")
+        {
+            warn!("cron run history write failed for {}: {e}", job.id);
+        }
         Ok(())
     }
 
     async fn run_job(&self, job: &CronJob) -> Result<(), Error> {
         info!("Executing cron job {}: {}", job.id, job.name);
+        let run_started_at = chrono::Utc::now().to_rfc3339();
 
         // ── Wave 1 fail-closed org identity gate (WAVE1-DECISIONS §3.2) ──
         // Runs immediately before dispatch, not at schedule time, so the check
@@ -250,10 +262,23 @@ impl CronScheduler {
         self.db.mark_job_run(
             &job.id,
             success,
-            error_msg,
+            error_msg.clone(),
             None,
             self.compute_next_run(job),
         )?;
+
+        // iter-668: append the run-attempt history row. The audit layer —
+        // a write failure warns and the run's already-recorded outcome
+        // stands; history must never fail a run.
+        if let Err(e) =
+            self.db
+                .record_cron_run(&job.id, &run_started_at, success, error_msg, "scheduled")
+        {
+            warn!(
+                "cron run history write failed for {}: {e} (outcome already recorded)",
+                job.id
+            );
+        }
 
         // Repeat-limit enforcement (hermes parity — hermes cron/jobs.py marks a
         // finite-repeat job as terminal when completed >= times). Previously

@@ -104,6 +104,16 @@ pub struct CronDb {
     conn: Arc<Mutex<Connection>>,
 }
 
+/// One run-attempt row in the `cron_runs` history (iter-668).
+pub struct CronRun {
+    pub job_id: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub success: bool,
+    pub error: Option<String>,
+    pub origin: String,
+}
+
 impl CronDb {
     /// Lock the SQLite connection, converting mutex poisoning into a
     /// recoverable error instead of panicking (same pattern as database.rs).
@@ -153,7 +163,8 @@ impl CronDb {
     /// entries remain idempotent at the SQL level (a crash between
     /// the SQL batch and the user_version bump is recoverable by
     /// re-running migrate()).
-    const MIGRATIONS: &[&str] = &[r#"
+    const MIGRATIONS: &[&str] = &[
+        r#"
             CREATE TABLE IF NOT EXISTS cron_jobs (
                 id                   TEXT PRIMARY KEY,
                 name                 TEXT NOT NULL,
@@ -189,7 +200,27 @@ impl CronDb {
             );
             CREATE INDEX IF NOT EXISTS idx_cron_next_run ON cron_jobs(next_run_at);
             CREATE INDEX IF NOT EXISTS idx_cron_enabled ON cron_jobs(enabled);
-    "#];
+    "#,
+        // v2 (iter-668): per-run history. `cron_jobs.last_*` holds only the
+        // LATEST run's outcome — every failure is overwritten by the next
+        // success, so a bad cycle left no forensic trace (the F6 audit
+        // finding: the dispatcher's original 503 and the identity-warden's
+        // stream death both vanished on the next ok). One row per run
+        // ATTEMPT, append-only, deliberately no FK to cron_jobs so history
+        // outlives job deletion.
+        r#"
+            CREATE TABLE IF NOT EXISTS cron_runs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id      TEXT NOT NULL,
+                started_at  TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                success     INTEGER NOT NULL,
+                error       TEXT,
+                origin      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, id);
+    "#,
+    ];
 
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -660,6 +691,63 @@ impl CronDb {
         Ok(())
     }
 
+    /// Append one history row per run attempt. History is the audit layer:
+    /// a write failure must degrade to a warn at the caller, never fail a
+    /// run whose outcome is already recorded.
+    pub fn record_cron_run(
+        &self,
+        job_id: &str,
+        started_at: &str,
+        success: bool,
+        error: Option<String>,
+        origin: &str,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO cron_runs (job_id, started_at, finished_at, success, error, origin)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                job_id,
+                started_at,
+                chrono::Utc::now().to_rfc3339(),
+                i64::from(success),
+                error,
+                origin
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record cron run: {}", e)))?;
+        Ok(())
+    }
+
+    /// The most recent run rows for one job, newest first — the
+    /// `operant cron history <id>` surface.
+    pub fn list_recent_runs(&self, job_id: &str, limit: usize) -> Result<Vec<CronRun>, Error> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT job_id, started_at, finished_at, success, error, origin
+                 FROM cron_runs WHERE job_id = ?1 ORDER BY id DESC LIMIT ?2",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare cron run history: {}", e)))?;
+        let rows = stmt
+            .query_map(params![job_id, limit as i64], |row| {
+                Ok(CronRun {
+                    job_id: row.get(0)?,
+                    started_at: row.get(1)?,
+                    finished_at: row.get(2)?,
+                    success: row.get::<_, i64>(3)? != 0,
+                    error: row.get(4)?,
+                    origin: row.get(5)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to list cron run history: {}", e)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| Error::Agent(format!("Failed to read cron run: {}", e)))?);
+        }
+        Ok(out)
+    }
+
     pub fn set_next_run(&self, id: &str, next_run_at: Option<String>) -> Result<(), Error> {
         let conn = self.lock_conn()?;
         conn.execute(
@@ -1032,5 +1120,49 @@ mod tests {
         assert!(!job.enabled);
         assert_eq!(job.state, "completed");
         assert_eq!(job.next_run_at, None);
+    }
+
+    /// iter-668: every attempt lands in history, newest first, and a
+    /// failure is NOT overwritten by a later success — the exact F6
+    /// finding this table closes.
+    #[test]
+    fn cron_run_history_keeps_failures_after_a_later_success() {
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, None);
+
+        db.record_cron_run(
+            &id,
+            "2026-10-07T01:00:00+00:00",
+            false,
+            Some("503 busy".into()),
+            "scheduled",
+        )
+        .unwrap();
+        db.record_cron_run(&id, "2026-10-07T02:00:00+00:00", true, None, "scheduled")
+            .unwrap();
+
+        let runs = db.list_recent_runs(&id, 10).unwrap();
+        assert_eq!(runs.len(), 2, "both attempts must survive");
+        assert!(runs[0].success, "newest first — the ok run leads");
+        assert!(!runs[1].success);
+        assert_eq!(runs[1].error.as_deref(), Some("503 busy"));
+        assert_eq!(runs[1].origin, "scheduled");
+    }
+
+    #[test]
+    fn cron_run_history_limit_and_empty_job() {
+        let (db, _dir) = test_db();
+        let id = create_repeat_job(&db, None);
+        for i in 0..5 {
+            db.record_cron_run(&id, "2026-10-07T00:0{i}:00+00:00", true, None, "scheduled")
+                .unwrap();
+        }
+        assert_eq!(db.list_recent_runs(&id, 3).unwrap().len(), 3, "limit binds");
+        assert!(
+            db.list_recent_runs("cron_never_ran", 10)
+                .unwrap()
+                .is_empty(),
+            "unknown job reads empty, not an error"
+        );
     }
 }
