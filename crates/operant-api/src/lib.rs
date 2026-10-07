@@ -17,6 +17,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 pub mod agent;
 pub mod channel;
+pub mod glob;
 pub mod media;
 pub mod memory_traits;
 pub mod observability_traits;

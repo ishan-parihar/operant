@@ -146,69 +146,10 @@ impl WebhookAuditHook {
 }
 
 /// Simple glob matching: `*` matches any sequence of characters.
+/// One implementation behind the local name: this gates the webhook tool
+/// allowlist, so the *-only dialect is frozen — see operant_api::glob.
 fn glob_matches(pattern: &str, text: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if !pattern.contains('*') {
-        return pattern == text;
-    }
-
-    let parts: Vec<&str> = pattern.split('*').collect();
-
-    // Edge case: pattern is just "*" (already handled above) or multiple stars
-    let mut pos = 0usize;
-
-    // The first segment must match the beginning of the text (unless pattern starts with *)
-    if !pattern.starts_with('*') {
-        let first = parts[0];
-        if !text.starts_with(first) {
-            return false;
-        }
-        pos = first.len();
-    }
-
-    // The last segment must match the end of the text (unless pattern ends with *)
-    if !pattern.ends_with('*') {
-        let last = parts[parts.len() - 1];
-        if !text.ends_with(last) {
-            return false;
-        }
-        // Ensure no overlap with the prefix we already consumed
-        if text.len() < pos + last.len() {
-            // Check for overlap case: e.g. pattern "ab*b" text "ab"
-            // pos would be 2 (after "ab"), last is "b", text.len()=2, 2 < 2+1=3 -> false
-            return false;
-        }
-    }
-
-    // Now check that the middle segments appear in order between pos and
-    // the end boundary.
-    let end_boundary = if pattern.ends_with('*') {
-        text.len()
-    } else {
-        text.len() - parts[parts.len() - 1].len()
-    };
-
-    let start_idx = if pattern.starts_with('*') { 0 } else { 1 };
-    let end_idx = if pattern.ends_with('*') {
-        parts.len()
-    } else {
-        parts.len() - 1
-    };
-
-    for part in &parts[start_idx..end_idx] {
-        if part.is_empty() {
-            continue;
-        }
-        if let Some(found) = text[pos..end_boundary].find(part) {
-            pos += found + part.len();
-        } else {
-            return false;
-        }
-    }
-
-    true
+    operant_api::glob::star_match(pattern, text)
 }
 
 /// Returns true if `tool` matches any of the given glob patterns.

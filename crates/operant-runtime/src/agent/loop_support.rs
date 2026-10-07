@@ -18,16 +18,9 @@ pub use operant_api::TOOL_LOOP_SESSION_KEY;
 pub use operant_api::TOOL_LOOP_THREAD_ID;
 
 pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
-    match pattern.find('*') {
-        None => pattern == name,
-        Some(star) => {
-            let prefix = &pattern[..star];
-            let suffix = &pattern[star + 1..];
-            name.starts_with(prefix)
-                && name.ends_with(suffix)
-                && name.len() >= prefix.len() + suffix.len()
-        }
-    }
+    // One implementation behind two names: this gates MCP tool-group
+    // exposure, so the *-only dialect is frozen — see operant_api::glob.
+    operant_api::glob::star_match(pattern, name)
 }
 
 /// Returns the subset of `tool_specs` that should be sent to the LLM for this turn.
