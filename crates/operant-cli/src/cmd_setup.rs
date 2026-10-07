@@ -332,6 +332,9 @@ pub async fn run_setup_wizard(
         Some("agent") => {
             step_agent_settings(&mut updated, true).await?;
         }
+        Some("governance") => {
+            step_governance(&mut updated).await?;
+        }
         None => {
             // Full wizard
             println!();
@@ -378,6 +381,11 @@ pub async fn run_setup_wizard(
 
                 // Step 6: Agent behaviour settings
                 step_agent_settings(&mut updated, false).await?;
+
+                // Step 7: Governance — seat policy + budgets (iter-671).
+                // Last because it only matters once seats exist, and a
+                // user racing through setup can accept the defaults.
+                step_governance(&mut updated).await?;
             }
         }
         Some(other) => {
@@ -1319,4 +1327,91 @@ fn provider_name_for_url(base_url: &str) -> &'static str {
 /// Map a base URL to a provider key (for status display).
 fn provider_key_for_url(base_url: &str) -> &'static str {
     provider_from_url(base_url).map(|p| p.name).unwrap_or("")
+}
+
+/// iter-671 — the governance onboarding section (the owner's directive:
+/// new users configure seat policy and budgets at setup instead of
+/// inheriting uncovered seats blindly). YOLO stays the DEFAULT — the
+/// wizard makes the knobs visible and reconfigurable, never removed
+/// (the owner's explicit call: "I do not want yolo mode to be gone, but
+/// it can be the default unless users reconfigure it").
+async fn step_governance(config: &mut AppConfig) -> Result<()> {
+    print_page_header("Governance — seat policy and budgets");
+    print_info("These knobs govern the cron-driven autonomous seats and the /grant");
+    print_info("command's default posture. Accept the defaults to stay fully");
+    print_info("autonomous (yolo, no budget) — or tighten them now.");
+    println!();
+    print_info("Seat policy modes for NEW seats:");
+    println!("    yolo      No gate: seats run fully autonomous (the default)");
+    println!("    standard  Routine tools allowed; risky tools need the operator");
+    println!("    scoped    Only allow-listed tools (see operant cron create --help)");
+    println!("    lockdown  Nothing dispatches without an explicit policy row");
+    println!();
+
+    let modes = ["yolo", "standard", "scoped", "lockdown"];
+    let current = modes
+        .iter()
+        .position(|m| *m == config.genome.unrestricted_default)
+        .unwrap_or(0);
+    let sel = prompt_select("Default seat policy for new seats", &modes, current)?;
+    config.genome.unrestricted_default = modes[sel].to_string();
+    println!();
+
+    let budget = &mut config.genome.budget;
+    let cap_str = prompt_text(
+        &format!(
+            "Autonomous-seat budget cap per {} (0 = ungoverned, the default)",
+            budget.window
+        ),
+        format!("{}", budget.cap),
+    )?;
+    if let Ok(cap) = cap_str.trim().parse::<f64>() {
+        budget.cap = cap.max(0.0);
+    } else {
+        print_info("Not a number — keeping the current cap.");
+    }
+
+    if budget.cap > 0.0 {
+        let bases = ["tokens", "usd"];
+        let sel = prompt_select(
+            "What the cap counts",
+            &bases,
+            usize::from(budget.basis != "usd"),
+        )?;
+        budget.basis = bases[sel].to_string();
+
+        let windows = ["daily", "weekly", "monthly"];
+        let sel = prompt_select(
+            "Budget rollup window (UTC boundaries)",
+            &windows,
+            windows
+                .iter()
+                .position(|w| *w == budget.window)
+                .unwrap_or(0),
+        )?;
+        budget.window = windows[sel].to_string();
+
+        let modes = ["soft", "hard"];
+        let sel = prompt_select("At the cap", &modes, usize::from(budget.mode != "soft"))?;
+        budget.mode = modes[sel].to_string();
+    }
+
+    println!();
+    print_info(&format!(
+        "Governance set: seat policy '{}'{}.",
+        config.genome.unrestricted_default,
+        if config.genome.budget.cap > 0.0 {
+            format!(
+                ", budget {} {} per {} ({})",
+                config.genome.budget.cap,
+                config.genome.budget.basis,
+                config.genome.budget.window,
+                config.genome.budget.mode
+            )
+        } else {
+            ", no budget (ungoverned)".to_string()
+        }
+    ));
+    print_info("Per-seat overrides: operant budget set <seat> --cap N [--mode hard]");
+    Ok(())
 }

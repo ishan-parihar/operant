@@ -6,13 +6,13 @@ mod cmd_acp;
 mod cmd_architecture;
 mod cmd_auth;
 mod cmd_backup;
+mod cmd_budget;
 mod cmd_channel;
 mod cmd_checkpoints;
 mod cmd_completion;
 mod cmd_config;
 mod cmd_context;
 mod cmd_cookies;
-mod cmd_budget;
 mod cmd_cron;
 mod cmd_curator;
 mod cmd_dashboard;
@@ -513,7 +513,8 @@ enum Commands {
     },
     /// Interactive setup wizard
     Setup {
-        /// Optional setup section (provider, terminal, tts, gateway, agent)
+        /// Optional setup section (provider, terminal, tts, gateway, agent,
+        /// governance)
         section: Option<String>,
         #[arg(long)]
         non_interactive: bool,
