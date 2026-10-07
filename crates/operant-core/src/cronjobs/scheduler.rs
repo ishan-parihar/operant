@@ -447,11 +447,28 @@ impl CronScheduler {
         let session_id = crate::org::employee::derive_employee_id(&job.id);
         self.agent.set_session_id(session_id.clone());
 
+        // iter-672: bind the run to its SEAT, mirroring the gateway's DM
+        // path (gateway_runner.rs:967-975). The dangerous-tool guard
+        // (stream.rs:811) consults seat_authority keyed by seat_id with a
+        // derived-id fallback — without this binding, a governed seat's
+        // policy row never binds its own cron runs: they resolve as the
+        // derived id, which has no row, i.e. ungoverned. Charter comes from
+        // the registry like the gateway does (None for cron is fine — the
+        // job's prompt already IS the charter).
+        let seat_id = self.resolve_seat_id(job, &session_id);
+        self.agent.set_seat_id(seat_id.clone());
+        let charter = self.employee_db.as_ref().and_then(|db| {
+            db.get_employee(&seat_id)
+                .ok()
+                .flatten()
+                .and_then(|emp| emp.system_prompt.clone())
+        });
+        self.agent.set_charter(charter);
+
         // iter-666: the seat's curated MEMORY.md rides in ahead of the
         // charter (docs/plan-2026-10-07-two-tier-memory-hybrid). Absent
         // file (cold start), unlinked job, or no mounted root → the
         // prompt is the job's own, byte-identical.
-        let seat_id = self.resolve_seat_id(job, &session_id);
         let prompt = match self.seat_memory_root.as_deref() {
             Some(root) => seat_memory_prompt(root, &seat_id, &job.prompt),
             None => job.prompt.clone(),
