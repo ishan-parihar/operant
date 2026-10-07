@@ -419,6 +419,25 @@ impl OperantAgent {
         Ok((content, reasoning, tool_calls, finish_reason, usage_tokens))
     }
 
+    /// Wave-2 harvest: feed real executed results to the guardrail
+    /// tracker's no-progress rung (identical-result streaks arm a
+    /// next-call skip). Synthetic guardrail skips are excluded — their text
+    /// is identical by construction and would fake an identical-result streak.
+    fn observe_guardrail_results(&self, results: &[ToolResult]) {
+        let mut g = self
+            .tool_guardrails
+            .lock()
+            .expect("tool_guardrails lock poisoned");
+        for r in results {
+            if r.content
+                .starts_with(crate::tool_guardrails::SKIP_MESSAGE_PREFIX)
+            {
+                continue;
+            }
+            g.observe_result(&r.name, &r.content);
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "invariant guaranteed by surrounding validation"
@@ -615,43 +634,35 @@ impl OperantAgent {
             // preventing repeated mutations.
             {
                 use crate::tool_guardrails::GuardrailDecision;
-                let decision = {
+                let (decision, pattern) = {
                     let mut g = self
                         .tool_guardrails
                         .lock()
                         .expect("tool_guardrails lock poisoned");
-                    g.observe(&name, &args_str)
+                    let d = g.observe(&name, &args_str);
+                    (d, g.last_pattern())
                 };
                 match decision {
                     GuardrailDecision::Allow => {}
                     GuardrailDecision::Warn => {
-                        let count = self
-                            .tool_guardrails
-                            .lock()
-                            .expect("tool_guardrails lock poisoned")
-                            .count_of(&name, &args_str);
                         warn!(
                             tool = %name,
-                            count,
-                            "Repeated identical tool call — warning model"
+                            pattern = ?pattern,
+                            "Repetitive tool-call pattern — warning model"
                         );
                         self.emit(AgentEvent::Content {
-                            text: format!(
-                                "⚠ Tool '{name}' has been called with identical arguments {count} times this turn."
+                            text: crate::tool_guardrails::pattern_warning_message(
+                                &name,
+                                pattern.as_ref(),
                             ),
                         })
                         .await;
                     }
                     GuardrailDecision::Skip => {
-                        let count = self
-                            .tool_guardrails
-                            .lock()
-                            .expect("tool_guardrails lock poisoned")
-                            .count_of(&name, &args_str);
                         warn!(
                             tool = %name,
-                            count,
-                            "Repeated identical tool call — skipping duplicate"
+                            pattern = ?pattern,
+                            "Repetitive tool-call pattern — skipping duplicate"
                         );
                         self.metrics.record_guardrail_skip();
                         early_results[idx] = Some(ToolResult {
@@ -663,7 +674,10 @@ impl OperantAgent {
                             // doesn't count skips as failures and break turns
                             // whose models merely re-emit calls.
                             success: true,
-                            content: crate::tool_guardrails::build_skip_message(&name, count),
+                            content: crate::tool_guardrails::build_pattern_skip_message(
+                                &name,
+                                pattern.as_ref(),
+                            ),
                             error: None,
                             timed_out: false,
                         });
@@ -983,7 +997,8 @@ impl OperantAgent {
             // All tools were handled in pre-flight (errors/blocked/denied)
             // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
             // future was cancelled. Use flatten() to gracefully skip None.)
-            let results = early_results.into_iter().flatten().collect();
+            let results: Vec<ToolResult> = early_results.into_iter().flatten().collect();
+            self.observe_guardrail_results(&results);
             return Ok(results);
         }
 
@@ -1182,7 +1197,8 @@ impl OperantAgent {
         // Collect results in original order
         // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
         // future was cancelled. Use flatten() to gracefully skip None.)
-        let results = early_results.into_iter().flatten().collect();
+        let results: Vec<ToolResult> = early_results.into_iter().flatten().collect();
+        self.observe_guardrail_results(&results);
         Ok(results)
     }
 

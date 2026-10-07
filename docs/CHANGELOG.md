@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **iter-669 — Wave-2 guardrail harvest: ping-pong and no-progress rungs
+  live on the one engine.** `ToolGuardrailTracker` absorbed the three
+  patterns from the runtime's dead `loop_detector.rs` (its only consumer
+  was the deleted Loop B engine; thresholds verbatim): **ping-pong** — two
+  distinct tools alternating 4 complete cycles warn, 5 skip pre-execution
+  (20-name sliding window); **no-progress** — a tool returning the
+  identical result 5× warns, 6× arms a next-call skip regardless of
+  arguments (the varied-args backstop the identical-args rung could never
+  catch), fed by a new post-execution `observe_result` hook in
+  `execute_tools` (synthetic guardrail skips excluded — identical by
+  construction); and the **exemption port** — `with_exempt_tools`
+  bypasses every repeat/loop rung and survives `reset` (the W1.8c-dropped
+  `tool_call_dedup_exempt`). Skip/warn copy is pattern-aware and every
+  skip variant keeps the `Guardrail: ` prefix so R35 never counts guardrail
+  skips. `loop_detector.rs` deleted. Gate re-baseline: 5441 passed /
+  0 failed (−15 runtime tests, +13 ported pattern tests).
+
 ### Fixed
 
 - **Unblock main: `PathBuf` inline format capture in the cron seat-memory

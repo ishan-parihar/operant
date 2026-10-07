@@ -74,17 +74,17 @@ A is the OpenHuman lesson applied: one dispatch per concern, no parallel engine.
 
 | Gap | Verdict | Work |
 |---|---|---|
-| Ping-pong pattern (A,B,A,B alternating calls) | MISSING from live path — stranded in dead `loop_detector.rs:169-220` | HARVEST into `ToolGuardrailTracker`, delete `loop_detector.rs` |
-| Identical-result pattern (same tool+args, same result ≥5) | MISSING from live path — stranded in dead `loop_detector.rs` | HARVEST into tracker |
-| No-progress ladder (varied-args backstop: same tool, different args, no progress) | MISSING from live path (openhuman `no_progress/` semantics absent from core) | Port into tracker with thresholds 6-halt/4-nudge |
+| Ping-pong pattern (A,B,A,B alternating calls) | **EXECUTED iter-669** — 4-cycle warn / 5-cycle skip in `ToolGuardrailTracker`, 20-name window | done |
+| Identical-result pattern (same tool+args, same result ≥5) | **EXECUTED iter-669** — 5× warn / 6× armed next-call skip; args may vary | done |
+| No-progress ladder (varied-args backstop: same tool, different args, no progress) | **EXECUTED iter-669** — armed skip ignores arguments | done |
 | Successful-repeat guard (`successful_repeat.rs`, 165 LOC) | MISSING | Port into tracker |
 | Per-tool consecutive-failure counting (any error class, thresholds 8/12) | PARTIAL — only timeout-class counted (S2) | Extend counter to all tool-attempt failure classes; `ClassifiedError` (error_classifier.rs:122) covers provider errors; add tool-attempt classes |
 | Hard-reject halt threshold (2) | MISSING | Add to tracker |
 | Halt verdicts with `failure_copy` (root-cause summary) | MISSING | Add copy table; wire into stop paths |
-| Exemption list (`is_repeat_call_exempt`; fills the W1.8c-dropped `tool_call_dedup_exempt`) | MISSING | Add per-tool opt-out on the tracker |
+| Exemption list (`is_repeat_call_exempt`; fills the W1.8c-dropped `tool_call_dedup_exempt`) | **PARTIAL iter-669** — `with_exempt_tools` API live on the tracker, survives reset | AgentConfig/config-schema wiring pending |
 | Per-tool activation gating on the facade path (beyond CLI exclusions) | MISSING | Add to `FacadeConstruction` |
 | Ingestion-time tool-result offload + artifact TOC | MISSING — `ArtifactIndex`/`toc`/`offload` = no matches anywhere; `max_tool_result_chars` (config, default 50000) has ZERO consumers: dead knob | Wire-or-drop the dead knob; add ingestion-time offload+TOC |
-| Port openhuman's 486-LOC `no_progress/mod_tests.rs` adversarial suite | MISSING | Port as fault-injection tests |
+| Port openhuman's 486-LOC `no_progress/mod_tests.rs` adversarial suite | PARTIAL — 13 pattern tests ported from the runtime loop_detector (iter-669) | openhuman fault-injection suite still to port |
 
 **OpenHuman thresholds verified at source** (vendor commits in transcript): identical-halt 3 /
 nudge 2; no-progress halt 6 / nudge 4; hard-reject halt 2; recoverable-repeat-failure 8;

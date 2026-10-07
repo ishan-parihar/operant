@@ -7,7 +7,6 @@ pub mod eval;
 pub mod history;
 pub mod history_pruner;
 pub mod loop_;
-pub mod loop_detector;
 pub mod loop_support;
 pub mod memory_loader;
 pub mod personality;
