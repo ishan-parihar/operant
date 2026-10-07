@@ -89,9 +89,9 @@ pub const SEED_REASON: &str = "org cast seed (ORGANISM-ARCHITECTURE §1 cold-sta
 /// them through unchanged and `next_run_from_schedule` parses them directly.
 pub fn cadence_to_schedule(cadence: &str) -> Result<&'static str, Error> {
     Ok(match cadence {
-        "daily" => "0 0 9 * * *",    // 09:00 daily
-        "hourly" => "0 */2 * * * *", // every 2h
-        "weekly" => "0 0 9 * * 1",   // 09:00 Mondays
+        "daily" => "0 0 9 * * *",  // 09:00 daily
+        "hourly" => "0 0 * * * *", // top of every hour
+        "weekly" => "0 0 9 * * 1", // 09:00 Mondays
         "continuous (existing)" => {
             return Err(Error::Agent(
                 "cast cadence 'continuous (existing)' has no scheduled job — skip the seat"

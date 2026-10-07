@@ -301,8 +301,13 @@ impl CronDb {
 
     /// Seed the cold-start cast's default cron jobs (ORGANISM-ARCHITECTURE
     /// §1 self-operationalization). Idempotent: each job uses a deterministic
-    /// `cron_cast_<seat_id>` id, so re-seeds hit the primary key and are
-    /// skipped by `INSERT OR IGNORE`.
+    /// `cron_cast_<seat_id>` id, and `cron_cast_*` is a seed-owned namespace —
+    /// the manifest is the one authority for its schedule. An existing row
+    /// is healed in place: `schedule`/`schedule_display` take the manifest
+    /// value, and `next_run_at` is re-armed only when the schedule actually
+    /// changed. `enabled`/paused state, `name`, and `prompt` are never
+    /// touched — those are operator acts, and a paused job must not be
+    /// resurrected by a reboot.
     ///
     /// `dp-the-program` is skipped — its "continuous (existing)"
     /// cadence is a long-running execution engine, not a scheduled job.
@@ -334,13 +339,19 @@ impl CronDb {
             let schedule_display = seat.cron.cadence.to_string();
 
             conn.execute(
-                "INSERT OR IGNORE INTO cron_jobs (
+                "INSERT INTO cron_jobs (
                     id, name, prompt, schedule, schedule_display, repeat_times, repeat_completed,
                     deliver, origin_platform, origin_chat_id, origin_thread_id, skill, skills,
                     model, provider, base_url, script, context_from, enabled_toolsets, workdir,
                     no_agent, enabled, state, created_at, next_run_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, NULL, NULL, NULL, NULL, NULL,
-                          NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?8, 1, 'scheduled', ?9, ?10)",
+                          NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?8, 1, 'scheduled', ?9, ?10)
+                ON CONFLICT(id) DO UPDATE SET
+                    schedule         = excluded.schedule,
+                    schedule_display = excluded.schedule_display,
+                    next_run_at = CASE WHEN cron_jobs.schedule != excluded.schedule
+                                       THEN excluded.next_run_at
+                                       ELSE cron_jobs.next_run_at END",
                 params![
                     job_id,
                     seat.cron.role,
