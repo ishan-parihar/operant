@@ -1654,6 +1654,47 @@ impl OperantAgent {
                     // fails (guardrail skip / malformed args / execution
                     // error), the model is in a repetition loop: nudging once,
                     // then force-ending the turn with partial results.
+                    //
+                    // iter-664: the breaker told the operator HOW MANY
+                    // iterations degenerated but never WHICH tool or WHY —
+                    // and tool_name is not persisted on tool messages, so
+                    // the transcript could not answer either. This closure
+                    // summarizes the current iteration's calls (for an
+                    // identical-streak abort those ARE the repeated calls)
+                    // into one line the abort notice, the warn log, and —
+                    // via the worklog's result_summary — the seat's row
+                    // all carry.
+                    let degenerate_detail = |results: &[ToolResult]| -> String {
+                        if results.is_empty() {
+                            return "no captured results".to_string();
+                        }
+                        let mut names: Vec<&str> = Vec::new();
+                        for r in results {
+                            if !names.contains(&r.name.as_str()) {
+                                names.push(r.name.as_str());
+                            }
+                        }
+                        let names_str = if names.len() > 5 {
+                            format!("{} …", names[..5].join(", "))
+                        } else {
+                            names.join(", ")
+                        };
+                        let failure = results
+                            .iter()
+                            .rev()
+                            .find_map(|r| r.error.clone())
+                            .or_else(|| {
+                                results
+                                    .iter()
+                                    .rev()
+                                    .find(|r| !r.success)
+                                    .map(|r| r.content.clone())
+                            })
+                            .or_else(|| results.last().map(|r| r.content.clone()))
+                            .unwrap_or_else(|| "no error text captured".to_string());
+                        let failure = crate::agent::safe_truncate_str(&failure, 140).to_string();
+                        format!("tools: {names_str} — last result: {failure}")
+                    };
                     if !tool_results.is_empty() && tool_results.iter().all(|r| !r.success) {
                         consecutive_failed_iters += 1;
                     } else {
@@ -1677,14 +1718,16 @@ impl OperantAgent {
                         }
                     }
                     if self.config.loop_detection_enabled && identical_streak >= 6 {
+                        let detail = degenerate_detail(&tool_results);
                         warn!(
                             identical_streak,
+                            detail = %detail,
                             "Identical tool call repeated across iterations — ending turn"
                         );
                         let abort_msg = Message::assistant(format!(
                             "⚠️ I stopped early: I repeated the same tool call {} times in a \
-                             row. Partial work may be complete — ask me to continue if needed.",
-                            identical_streak
+                             row ({}). Partial work may be complete — ask me to continue if needed.",
+                            identical_streak, detail
                         ));
                         self.add_message(abort_msg.clone()).await;
                         // S5: stamp the real exit reason — the operator must
@@ -1745,15 +1788,17 @@ impl OperantAgent {
                         messages.push(nudge.clone());
                         self.add_message(nudge).await;
                     } else if consecutive_failed_iters >= 6 {
+                        let detail = degenerate_detail(&tool_results);
                         warn!(
                             consecutive_failed_iters,
+                            detail = %detail,
                             "Degenerate tool-call loop persists — ending turn with partial results"
                         );
                         let abort_msg = Message::assistant(format!(
                             "⚠️ I stopped early: my last {} tool iterations kept failing or \
-                             repeating identically. Partial work may be complete — ask me to \
+                             repeating identically ({}). Partial work may be complete — ask me to \
                              continue if needed.",
-                            consecutive_failed_iters
+                            consecutive_failed_iters, detail
                         ));
                         self.add_message(abort_msg.clone()).await;
                         // S5: stamp the real exit reason — the operator must

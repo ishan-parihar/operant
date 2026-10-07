@@ -399,6 +399,15 @@ async fn r35_identical_call_guard_aborts_the_turn() {
         "expected the R35 identical-call abort, got: {}",
         result.content
     );
+    // iter-664: the abort must now name the tools in the loop — the
+    // operator-readable answer to "WHICH tool degenerated", which the
+    // pre-664 notice (and the tool-role transcript, which never persists
+    // tool_name) could not provide.
+    assert!(
+        result.content.contains("tools: "),
+        "the R35 abort must carry the degenerate-loop tool detail, got: {}",
+        result.content
+    );
     // The R35 branch is checked FIRST (run.rs:1332, before the degenerate
     // branch at 1359), so seeing its body proves which one won.
     assert!(
@@ -451,6 +460,13 @@ async fn degenerate_all_failure_breaker_aborts_the_turn() {
     assert!(
         result.content.contains(DEGENERATE_ABORT_FRAGMENT),
         "expected the degenerate all-failure abort, got: {}",
+        result.content
+    );
+    // iter-664: same observability contract on the all-failure branch —
+    // the failing tool and its last error text must ride the notice.
+    assert!(
+        result.content.contains("tools: fail_probe"),
+        "the degenerate abort must name the failing tool, got: {}",
         result.content
     );
     // Varying the arguments kept R35 at streak 1, so it cannot have fired.
