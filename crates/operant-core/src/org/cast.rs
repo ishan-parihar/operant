@@ -111,6 +111,21 @@ pub fn cadence_to_schedule(cadence: &str) -> Result<&'static str, Error> {
 ///
 /// Only `dp-the-program` is skipped — its `continuous (existing)` cadence is a
 /// long-running engine, not a cron job. Every other cast seat gets exactly one.
+/// The seat-memory postscript every seeded charter carries
+/// (docs/plan-2026-10-07-two-tier-memory-hybrid.md, wiring §2). The
+/// runtime injects the file's contents at each cycle start; the seat —
+/// not the runtime — curates the file, with its own file tools.
+pub const SEAT_MEMORY_POSTSCRIPT: &str = "
+
+## Seat memory
+You keep a private memory file. At every cycle start its contents are \
+injected above your charter as a block headed \"## Your seat memory\". At \
+the end of a cycle, update the file with your file tools: keep what still \
+holds, revise what changed, add what you learned. It is yours alone — no \
+other seat reads or writes it. If the injected block is absent, create and \
+maintain the file once you know your seat's directory (the injected header \
+names its path).";
+
 /// The job id is `cron_cast_<seat_id>` so re-seeds are idempotent: the
 /// primary-key collision lets `CronDb::seed_cast_jobs` use `INSERT OR IGNORE`.
 pub fn cast_cron_job_for(seat: &CastSeat) -> Option<(String, String)> {

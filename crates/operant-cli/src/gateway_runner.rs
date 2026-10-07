@@ -3605,6 +3605,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             Ok(barrier) => operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
                 .with_write_barrier(barrier)
                 .with_employee_db(employee_registry.clone())
+                .with_seat_memory_root(
+                    app_config
+                        .database_path
+                        .parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| app_config.database_path.clone()),
+                )
                 .with_delivery(cron_tx),
             Err(e) => {
                 tracing::warn!(
@@ -3612,6 +3619,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 );
                 operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
                     .with_employee_db(employee_registry.clone())
+                    .with_seat_memory_root(
+                        app_config
+                            .database_path
+                            .parent()
+                            .map(std::path::Path::to_path_buf)
+                            .unwrap_or_else(|| app_config.database_path.clone()),
+                    )
                     .with_delivery(cron_tx)
             }
         };

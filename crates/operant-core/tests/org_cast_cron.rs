@@ -72,6 +72,10 @@ fn seed_writes_eight_jobs_with_every_column_bound() {
         premiere.prompt.contains("premiere"),
         "the job's prompt is the seat's charter"
     );
+    assert!(
+        premiere.prompt.contains("## Seat memory"),
+        "iter-666: the seeded prompt must carry the seat-memory postscript"
+    );
     assert_eq!(premiere.deliver, "local");
     assert!(!premiere.no_agent);
     assert!(premiere.enabled);

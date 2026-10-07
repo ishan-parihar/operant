@@ -338,6 +338,18 @@ impl CronDb {
             let next_run_at = crate::cronjobs::schedule::next_run_from_schedule(&schedule);
             let schedule_display = seat.cron.cadence.to_string();
 
+            // iter-666: the seeded prompt is the charter plus the seat-memory
+            // postscript (docs/plan-2026-10-07-two-tier-memory-hybrid §wiring
+            // 2). The ON CONFLICT arm never touches `prompt` — it stays
+            // operator-owned, so this composition applies to cold starts
+            // only; live seats are bootstrapped through their MEMORY.md
+            // (the file carries its own maintenance instruction).
+            let prompt = format!(
+                "{}{}",
+                seat.charter,
+                crate::org::cast::SEAT_MEMORY_POSTSCRIPT
+            );
+
             conn.execute(
                 "INSERT INTO cron_jobs (
                     id, name, prompt, schedule, schedule_display, repeat_times, repeat_completed,
@@ -355,7 +367,7 @@ impl CronDb {
                 params![
                     job_id,
                     seat.cron.role,
-                    seat.charter,
+                    prompt,
                     schedule,
                     schedule_display,
                     None::<i32>,

@@ -51,6 +51,10 @@ pub struct CronScheduler {
     /// the write barrier attributes the row. `None` keeps the pre-661
     /// claim: the §3.1.1 derived session id.
     employee_db: Option<Arc<crate::org::employee_db::EmployeeDb>>,
+    /// The operant root (the directory holding the org dbs), for the
+    /// seat's MEMORY.md (`<root>/org/employees/<seat>/MEMORY.md`,
+    /// iter-666). `None` disables injection — prompt byte-identical.
+    seat_memory_root: Option<std::path::PathBuf>,
 }
 
 impl CronScheduler {
@@ -62,6 +66,7 @@ impl CronScheduler {
             org_gate: None,
             write_barrier: None,
             employee_db: None,
+            seat_memory_root: None,
         }
     }
 
@@ -100,6 +105,25 @@ impl CronScheduler {
     pub fn with_employee_db(mut self, db: Arc<crate::org::employee_db::EmployeeDb>) -> Self {
         self.employee_db = Some(db);
         self
+    }
+
+    /// Mount the operant root for seat-memory injection (iter-666). Without
+    /// it the run path never reads a seat file — prompts stay
+    /// byte-identical, dark-mergeable like the org gate.
+    pub fn with_seat_memory_root(mut self, root: std::path::PathBuf) -> Self {
+        self.seat_memory_root = Some(root);
+        self
+    }
+
+    /// The seat a job belongs to: the §3.1.1 `employee_cron_jobs` join when
+    /// the job is linked, else the derived id — the pre-661 claim. Shared
+    /// by worklog attribution and seat-memory injection so the two always
+    /// agree on which seat a run is.
+    fn resolve_seat_id(&self, job: &CronJob, derived_session_id: &str) -> String {
+        self.employee_db
+            .as_ref()
+            .and_then(|db| db.employee_for_job(&job.id).ok().flatten())
+            .unwrap_or_else(|| derived_session_id.to_string())
     }
 
     pub async fn start(&self) {
@@ -330,6 +354,16 @@ impl CronScheduler {
         let session_id = crate::org::employee::derive_employee_id(&job.id);
         self.agent.set_session_id(session_id.clone());
 
+        // iter-666: the seat's curated MEMORY.md rides in ahead of the
+        // charter (docs/plan-2026-10-07-two-tier-memory-hybrid). Absent
+        // file (cold start), unlinked job, or no mounted root → the
+        // prompt is the job's own, byte-identical.
+        let seat_id = self.resolve_seat_id(job, &session_id);
+        let prompt = match self.seat_memory_root.as_deref() {
+            Some(root) => seat_memory_prompt(root, &seat_id, &job.prompt),
+            None => job.prompt.clone(),
+        };
+
         // NOTE: the memory-graph session boundary that `clear_history` fired
         // (events.rs:193-197, `submit_session_end` / `on_session_end`) is NOT
         // reproduced here, because no provider implements it usefully:
@@ -340,7 +374,7 @@ impl CronScheduler {
         // than papered over. `notify_session_switch` therefore still has zero
         // callers.
 
-        match self.agent.run(job.prompt.clone()).await {
+        match self.agent.run(prompt).await {
             Ok(message) => {
                 // ── Wave 1 write barrier, outline §3 step B′ ──────────────
                 // The §7.1 postcondition: a completed scheduled run must
@@ -407,11 +441,7 @@ impl CronScheduler {
         // the worklog row names the seat. Unlinked jobs and lookup failures
         // fall back to the derived id — the pre-fix claim, never a blocked
         // run: attribution is the audit layer.
-        let employee_claim = self
-            .employee_db
-            .as_ref()
-            .and_then(|db| db.employee_for_job(&job.id).ok().flatten())
-            .unwrap_or_else(|| session_id.to_string());
+        let employee_claim = self.resolve_seat_id(job, session_id);
 
         let request = WriteBarrierRequest::from_turn_end(TurnEnd {
             // No bus minted this event; a per-bus monotonic id is meaningless
@@ -492,6 +522,39 @@ impl CronScheduler {
 /// `repeat_times` semantics match hermes: `None` or `<= 0` means infinite.
 /// `repeat_completed` is the count BEFORE this run; the run itself pushes it
 /// to `repeat_completed + 1`.
+/// iter-666 (docs/plan-2026-10-07-two-tier-memory-hybrid.md): the seat's
+/// curated MEMORY.md — its continuity thread — read at cycle start. No
+/// file (the cold-start state) returns the prompt byte-identical, so
+/// the wiring is dark-mergeable: upgrading operant cannot change a
+/// job's prompt until a seat actually has a memory file.
+fn seat_memory_path(org_root: &std::path::Path, seat_id: &str) -> std::path::PathBuf {
+    org_root
+        .join("org")
+        .join("employees")
+        .join(seat_id)
+        .join("MEMORY.md")
+}
+
+/// Prepend the seat's memory under a fixed, self-describing header — the
+/// header names the file's path so the seat can find it with its file
+/// tools, and the file itself stays the seat's alone.
+fn seat_memory_prompt(org_root: &std::path::Path, seat_id: &str, prompt: &str) -> String {
+    let path = seat_memory_path(org_root, seat_id);
+    let Ok(memory) = std::fs::read_to_string(&path) else {
+        return prompt.to_string();
+    };
+    let memory = memory.trim();
+    if memory.is_empty() {
+        return prompt.to_string();
+    }
+    format!(
+        "## Your seat memory — injected at cycle start from {}\
+         \nUpdate that file (yours alone) to change what you remember.\
+         \n\n{memory}\n\n--- end of seat memory ---\n\n{prompt}",
+        path.display()
+    )
+}
+
 fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> bool {
     match repeat_times {
         Some(times) if times > 0 => repeat_completed + 1 >= times,
@@ -501,7 +564,7 @@ fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> boo
 
 #[cfg(test)]
 mod tests {
-    use super::repeat_limit_reached;
+    use super::{repeat_limit_reached, seat_memory_prompt};
 
     #[test]
     fn repeat_limit_reached_when_completed_reaches_times() {
@@ -520,5 +583,57 @@ mod tests {
         assert!(!repeat_limit_reached(None, 9999));
         assert!(!repeat_limit_reached(Some(0), 9999));
         assert!(!repeat_limit_reached(Some(-5), 9999));
+    }
+
+    // ── iter-666 seat-memory injection (two-tier hybrid §wiring 1) ──
+
+    #[test]
+    fn seat_memory_injection_is_byte_identical_without_a_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = "charter body";
+        assert_eq!(
+            seat_memory_prompt(dir.path(), "dispatcher", prompt),
+            prompt,
+            "cold start (no file) must not alter the prompt"
+        );
+    }
+
+    #[test]
+    fn seat_memory_blank_file_is_also_byte_identical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_dir = dir.path().join("org").join("employees").join("dispatcher");
+        std::fs::create_dir_all(&seat_dir).expect("mkdir");
+        std::fs::write(seat_dir.join("MEMORY.md"), "   \n\t").expect("write");
+        assert_eq!(
+            seat_memory_prompt(dir.path(), "dispatcher", "charter body"),
+            "charter body",
+            "a whitespace-only memory file is the cold-start state"
+        );
+    }
+
+    #[test]
+    fn seat_memory_injection_prepends_a_self_describing_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_dir = dir.path().join("org").join("employees").join("dispatcher");
+        std::fs::create_dir_all(&seat_dir).expect("mkdir");
+        std::fs::write(seat_dir.join("MEMORY.md"), "learned: X").expect("write");
+
+        let out = seat_memory_prompt(dir.path(), "dispatcher", "charter body");
+        assert!(
+            out.starts_with("## Your seat memory"),
+            "the injected block must lead the prompt"
+        );
+        assert!(
+            out.contains("learned: X"),
+            "the file's contents must ride inside the block"
+        );
+        assert!(
+            out.contains(seat_dir.join("MEMORY.md").to_str().expect("utf8 path")),
+            "the header must name the file's path so the seat can update it"
+        );
+        assert!(
+            out.ends_with("charter body"),
+            "the charter still terminates the prompt"
+        );
     }
 }
