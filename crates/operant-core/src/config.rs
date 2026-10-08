@@ -71,6 +71,9 @@ pub struct AppConfig {
     /// later slices — see `GenomeSettings` for exactly which.
     #[serde(default)]
     pub genome: GenomeSettings,
+    /// DM/feed context injection (`[context_injection]`, gap 5 phase 1).
+    #[serde(default)]
+    pub context_injection: ContextInjectionSettings,
 }
 
 impl Default for AppConfig {
@@ -100,6 +103,7 @@ impl Default for AppConfig {
             checkpoints: CheckpointsSettings::default(),
             harness: HarnessSettings::default(),
             genome: GenomeSettings::default(),
+            context_injection: ContextInjectionSettings::default(),
             pk: PkSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
@@ -164,6 +168,51 @@ pub struct GenomeSettings {
     /// overrides live in the `seat_budgets` table (data, not config) so
     /// hrmaster can fine-tune one seat without a config edit + restart.
     pub budget: BudgetSettings,
+}
+
+/// `[context_injection]` — the DM/feed context-injection quotas and
+/// ranking weights (plan-2026-10-08-dm-feed-context-injection.md, owner
+/// rulings 2026-10-08). Phase 1 reads org-internal sources only; every
+/// knob here governs the four aspect classes the owner named.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ContextInjectionSettings {
+    /// Master switch. `false` = every prompt byte-identical (dark-mergeable).
+    pub enabled: bool,
+    /// Hard ceiling for the whole rendered section, chars.
+    pub total_char_cap: usize,
+    /// Per-aspect char quotas (the MEMORY.md budget model, per aspect).
+    pub dm_quota: usize,
+    pub global_quota: usize,
+    pub dept_quota: usize,
+    pub self_quota: usize,
+    /// Recency decay half-lives (hours): feeds go stale faster than DMs.
+    pub recency_halflife_hours_feed: f64,
+    pub recency_halflife_hours_dm: f64,
+    /// Ranking weights: recency + lexical affinity + author authority.
+    /// (Thread participation is the design doc's fourth component; phase-1
+    /// items carry no thread refs, so it applies to zero until phase 2.)
+    pub weight_recency: f64,
+    pub weight_lexical: f64,
+    pub weight_authority: f64,
+}
+
+impl Default for ContextInjectionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            total_char_cap: 2000,
+            dm_quota: 800,
+            global_quota: 500,
+            dept_quota: 400,
+            self_quota: 300,
+            recency_halflife_hours_feed: 24.0,
+            recency_halflife_hours_dm: 168.0,
+            weight_recency: 1.0,
+            weight_lexical: 1.0,
+            weight_authority: 0.5,
+        }
+    }
 }
 
 /// `[genome].budget` — Wave 4. Basis is `tokens` or `usd` (metering has

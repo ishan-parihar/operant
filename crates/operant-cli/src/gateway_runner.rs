@@ -3774,16 +3774,37 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // rollup reads, and the seat-budget resolution (overrides +
         // [genome].budget default). All dark-mergeable: cap 0 = ungoverned
         // keeps every run byte-identical until an operator sets a cap.
+        // iter-679 (gap 5, phase 1): the DM/feed context injector over the
+        // app db (worklog reads + the context_watermarks cursors).
+        // Fail-open: an injector that cannot open degrades to no injection
+        // (prompts byte-identical) — injection must never block a boot.
+        let context_injector: Option<
+            Arc<operant_core::org::context_injection::ContextInjector>,
+        > = operant_core::org::context_injection::ContextInjector::open(
+            &app_config.database_path,
+            app_config.context_injection.clone(),
+        )
+        .ok()
+        .map(Arc::new);
+        if context_injector.is_none() {
+            tracing::warn!(
+                "context injection unavailable — seat prompts stay byte-identical"
+            );
+        }
         let mut scheduler = scheduler;
         if let Some(store) = persistent_session_store.clone() {
             scheduler = scheduler.with_usage_store(store);
         }
-        let scheduler = scheduler
+        let mut scheduler = scheduler
             .with_usage_meter(cron_usage_meter.clone())
             .with_budgets(
                 Arc::clone(&seat_budget_store),
                 app_config.genome.budget.clone(),
             );
+        if let Some(injector) = context_injector {
+            scheduler = scheduler.with_context_injection(injector);
+        }
+        let scheduler = scheduler;
         tokio::spawn(async move { scheduler.start().await });
 
         // Delivery receiver — sends cron results to platforms

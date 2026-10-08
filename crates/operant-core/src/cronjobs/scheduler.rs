@@ -83,6 +83,9 @@ pub struct CronScheduler {
     /// iter-678: the org-wide budget default (`[genome].budget`), resolved
     /// per seat via `resolve_budget` when `seat_budgets` is mounted.
     default_budget: crate::config::BudgetSettings,
+    /// iter-679 (gap 5, phase 1): the DM/feed context injector. `None` =
+    /// no injection, prompts byte-identical (dark-mergeable).
+    context_injection: Option<Arc<crate::org::context_injection::ContextInjector>>,
 }
 
 impl CronScheduler {
@@ -100,6 +103,7 @@ impl CronScheduler {
             usage_store: None,
             seat_budgets: None,
             default_budget: crate::config::BudgetSettings::default(),
+            context_injection: None,
         }
     }
 
@@ -178,6 +182,17 @@ impl CronScheduler {
     ) -> Self {
         self.seat_budgets = Some(seat_budgets);
         self.default_budget = default_budget;
+        self
+    }
+
+    /// iter-679: mount the DM/feed context injector. Renders the bounded,
+    /// deduplicated, ranked context section (org feeds + DMs) ahead of the
+    /// seat's prompt; absent/empty → byte-identical.
+    pub fn with_context_injection(
+        mut self,
+        injector: Arc<crate::org::context_injection::ContextInjector>,
+    ) -> Self {
+        self.context_injection = Some(injector);
         self
     }
 
@@ -649,7 +664,7 @@ impl CronScheduler {
                 .flatten()
                 .and_then(|emp| emp.system_prompt.clone())
         });
-        self.agent.set_charter(charter);
+        self.agent.set_charter(charter.clone());
 
         // iter-666: the seat's curated MEMORY.md rides in ahead of the
         // charter (docs/plan-2026-10-07-two-tier-memory-hybrid). Absent
@@ -658,6 +673,15 @@ impl CronScheduler {
         let prompt = match self.seat_memory_root.as_deref() {
             Some(root) => seat_memory_prompt(root, &seat_id, &job.prompt),
             None => job.prompt.clone(),
+        };
+
+        // iter-679 (gap 5, phase 1): the bounded, deduplicated, ranked
+        // context section — org feeds + DMs since the seat's last cycle.
+        // The charter is the lexical-affinity corpus. Absent/empty/disabled
+        // → byte-identical (the iter-666 contract, extended).
+        let prompt = match self.context_injection.as_ref() {
+            Some(injector) => injector.render_section(&seat_id, charter.as_deref(), &prompt),
+            None => prompt,
         };
 
         // ── iter-678: budget posture (gap 1) ──────────────────────────
