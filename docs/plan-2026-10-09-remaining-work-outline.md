@@ -165,3 +165,42 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
   the subset in use. Defer to a standing note, revisit if deterministic
   procedures become a real demand.
 - **Landlock plugin sandbox** — only if operant adopts a plugin model. Defer.
+
+## §8 Terrain survey + canonical-home map (2026-10-09, post-red-team)
+
+> **Standing rule (owner, 2026-10-09):** every policy gate for employee seats
+> lives in the governance layer — the `org/authority.rs` predicates
+> (`can_post_to` L353, `can_accept_decision` L424, `resolve_actor_scope` L464,
+> `live_grants_for` L496) are the canonical consult companions. No new row may
+> introduce a parallel gate; each extends an existing seam and consults
+> governance where a seat decision is involved.
+
+### Verified terrain (file:line evidence)
+
+| Seam | State today | Implication for the candidate rows |
+|---|---|---|
+| **Approval gate** | `operant-core/src/approval.rs`: `ApprovalGuard` with Off/Manual/Smart modes, hardline regex blocklist, dangerous-pattern `RiskLevel`, blast-radius gate, justification rules; wired at `stream.rs:879-901`; plus seat policy P1/P2 slices at `stream.rs:908+` | Row 3 NARROWS: smart mode exists but is pattern-based. Remaining: the unattended-context fail-closed matrix (the DECIDED D-2 policy-row consult IS the matrix surface) and an optional guardian-LLM ESCALATE arm inside `ApprovalGuard` — not a new gate |
+| **Delegation** | `operant-runtime/src/tools/delegate.rs`: `DelegateTool` with per-agent configs, depth limits, readonly/rate-limit blocks, allowed-tools filtering, background/parallel tasks; `async_delegation.rs` records; NO governance consult anywhere on this path | Row 1 stands, canonical home found: add a `can_delegate` consult in `org/authority.rs` and call it from the existing DelegateTool gate — modes map to `forbidden`/`bounded` (consult-gated)/`independent` (today's behavior) |
+| **Cron: TWO PARALLEL STACKS** | Stack A `operant-core/src/cronjobs` (dispatcher's `operant_cron.db`): full schema incl. `last_delivery_error`, `paused_reason`, `no_agent`, `cron_runs` history with `origin` (`scheduled`/`retry-armed`/`gate_block`), transient-retry budget (in-memory, reset on restart). Stack B `operant-runtime/src/cron`: leaner schema, NO delivery columns, NO run-history table, NO persisted retry | NEW ROW (consolidation): the two stacks have diverged schemas + retry semantics — same class as the §2 dispatch ruling. The ledger row must pick Stack A's `cron_runs` as canonical and the stacks must be reconciled or explicitly scoped apart first |
+| **Delivery hop** | Stack A `deliver_result` → `CronDelivery` on an unbounded mpsc: no ack, no persistence, no tombstone, no replay; `ObserverEvent` has no cron/delivery variant | Row 2 stands: extend `cron_runs` with delivery fields + add `ObserverEvent::CronDelivery` variants; hermes' tombstone/stale-claim-reclaim shape is the pattern |
+| **Micro-compaction seam** | Turn-end writes: `save_turn_state_exit` + `upsert_summary` (rolling string replace, `gateway_session.rs:1231`); `turn_end::TurnEndBus` is an in-memory broadcast, no durable folding hook | Row 4 stands: a `TurnEndBus` subscriber (or compaction step on `upsert_summary`) is the seam; folding must stay below the frozen prefix (PromptCacheGuard fires by design) |
+| **No-agent cron** | Stack A `CronJob.no_agent` column already exists (db.rs:67/189) + `run_script_job` | Row 5 RETIRED — already shipped; verify delivery-of-stdout only if the dispatcher ever needs it |
+
+### Corrected candidate rows (post-survey)
+
+1. **Delegation policy via governance consult** — new `can_delegate`
+   predicate in `org/authority.rs`, called from the existing DelegateTool
+   gate; forbidden/bounded/independent as the policy row's modes. Med.
+2. **Cron-stack consolidation ruling first, then delivery ledger** — pick
+   Stack A `cron_runs` as the durable artifact (it already carries the
+   `origin` discriminator); add delivery columns + `ObserverEvent`
+   variants; hermes tombstone/stale-claim shape. Consolidation ruling =
+   the same pattern as the §2 dispatch ruling. Med.
+3. **Unattended approval matrix + optional guardian-LLM tier** — the D-2
+   ruling already names the surface (seat policy row consult at the
+   approval guard); the guardian-LLM ESCALATE arm extends `ApprovalGuard`
+   in place. Small-Med.
+4. **Micro-compaction (opt-in)** — TurnEndBus/`upsert_summary` seam,
+   below-prefix constraint documented. Small.
+
+Removed: no-agent cron mode (already shipped as `no_agent`).
