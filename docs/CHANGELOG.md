@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-688 (record_output port) — output-side successful-repeat guard:**
+  `ToolGuardrailTracker::observe_output` (openhuman parity): identical
+  narration+batch signature — captured in run.rs before `tool_calls` moves
+  into `execute_tools` — warns at 4 (`OUTPUT_REPEAT_WARN`), arms a
+  skip-next-call backstop at 5 (`OUTPUT_REPEAT_SKIP`); failed/exempt batches
+  reset the streak; synthetic skip results excluded via
+  `stream.rs::observe_iteration_output`. Warn/skip, never halt (iter-682
+  deviation). 7 ladder tests.
+- **iter-689 — SwitchModel steer variant:** `/model <name>` parses to
+  `SteeringCommand::SwitchModel` (strict prefix, case-preserved arg); the
+  drain arm retargets via the interior-cell `set_model` with the iteration
+  budget refunded, mirroring the fallback chain.
+- **iter-690 — notice-board READ side wired:** `operant org notice inbox
+  --for-employee <id>` (`--pending-only`, `--limit`, `--json`) and the seat
+  prompt's pending-notices block in `bind_seat_run` — ack-is-the-watermark:
+  pending `ack_required` notices re-render each seat prompt until acked,
+  fail-open if the seat is not a registered employee.
+- **iter-691 — startup reaper CLOSE + turn-exit journal columns:** pending
+  turn-state rows flip terminal at detection time (close no longer gated on
+  channel-notice delivery — kills the "still in-flight after restart"
+  loop); `.turn_state` gains `exit_code`/`exit_reason` on every terminal;
+  `TurnExitReason` classifier with trinity-#904 kill-marker precedence (a
+  signal death is never auth).
+- **fix(channels) — telegram `strip_tool_call_tags` underscore alias:** the
+  iter-664 sanitize relocation dropped the `<tool_call>` tag form from the open-tag array and close-tag match, leaking raw tool-call JSON
+  into user-visible Telegram replies; pre-existing, surfaced when the gate
+  grew `-p operant-cli` (feature unification compiles the telegram tests).
 - **iter-688 — gap 7: authority predicates enforced + `org budget`/`org
   cast`/`org audit`:** `org notice post` consults `can_post_to` per
   recipient (§2.3.1) — employee senders gated on scope/dept/grants,

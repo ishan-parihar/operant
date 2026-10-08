@@ -83,6 +83,7 @@ A is the OpenHuman lesson applied: one dispatch per concern, no parallel engine.
 | Halt verdicts with `failure_copy` (root-cause summary) | **EXECUTED iter-682** — `GuardrailDecision::Halt(String)` from the tracker's copy fns; `observe_guardrail_results` (now async two-phase) triggers the interrupt flag and surfaces the summary as final content; 12-test adversarial port of `mod_tests.rs` semantics in `ladder_tests` | done |
 | Exemption list (`is_repeat_call_exempt`; fills the W1.8c-dropped `tool_call_dedup_exempt`) | **EXECUTED iter-684** — `AgentConfig.guardrail_exempt_tools` seeds the tracker in both constructors; `add_exempt_tools`/`is_exempt` on the tracker; config-schema row still pending (config file under concurrent edit) | config-schema wiring remains |
 | Per-tool activation gating on the facade path (beyond CLI exclusions) | **EXECUTED iter-684** — `FacadeConstruction.guardrail_exempt_tools` threads caller exemptions into `build_from_config` (adds to the process seed) | done |
+| Output-side successful-repeat guard (openhuman `record_output`) | **EXECUTED iter-688** — `ToolGuardrailTracker::observe_output`: identical narration+batch signature (captured pre-execution in run.rs) warns at 4, arms skip-next-call at 5; failed/exempt batches reset the streak; fed via `stream.rs::observe_iteration_output` (synthetic skip results excluded); warn/skip, never halt (iter-682 deviation) | done |
 | Ingestion-time tool-result offload + artifact TOC | MISSING — `ArtifactIndex`/`toc`/`offload` = no matches anywhere; `max_tool_result_chars` (config, default 50000) has ZERO consumers: dead knob | Wire-or-drop the dead knob; add ingestion-time offload+TOC |
 | Port openhuman's 486-LOC `no_progress/mod_tests.rs` adversarial suite | PARTIAL — 13 pattern tests ported from the runtime loop_detector (iter-669) | openhuman fault-injection suite still to port |
 
@@ -99,9 +100,9 @@ it once.
 | Gap | Verdict | Work |
 |---|---|---|
 | Token threaded into core `run()` | MISSING — core has only `interrupt_flag` checks between batches (`run.rs:600-603`, `751-754`, `851-853`, `973-976`); facade driver has full select! | Thread `CancellationToken` into `run()`; `select!` at `execute_tools` (run.rs:1455-1473) and `request_approval` (run.rs:1258); bridge `interrupt_flag` |
-| Steer vocabulary: model-switch (pacing.switch_model) + request-stop | PARTIAL — queued-message variant done | Two variants; wire preference-sync on switch |
-| Per-turn journal rows with exit_reason/halt_verdict columns + event journal | PARTIAL — `.turn_state` rows exist with terminal status only | Extend schema; write verbose/verdict/reason on close |
-| Startup reaper that CLOSES non-terminal runs as Cancelled | PARTIAL — sweep detects/notifies/rewrites-to-interrupted, never closes | Add close path; kill the "still in-flight after restart" retry bug |
+| Steer vocabulary: model-switch (pacing.switch_model) + request-stop | **EXECUTED iter-689** — `/model <name>` parses to `SteeringCommand::SwitchModel` (strict prefix, case-preserved arg); drain arm retargets via the iter-162 interior-cell `set_model` with the iteration budget refunded, mirroring the fallback chain; request-stop remains the queued-message arm | done |
+| Per-turn journal rows with exit_reason/halt_verdict columns + event journal | **EXECUTED iter-691** — `.turn_state` rows gain `exit_code` (`TurnExitReason`: Complete/Interrupted/Auth/Timeout/RateLimit/AgentError via `classify_turn_error`, kill-marker precedence per trinity #904 — a signal death is never auth) + `exit_reason` written on every terminal arm by `save_turn_state_exit` | done |
+| Startup reaper that CLOSES non-terminal runs as Cancelled | **EXECUTED iter-691** — the startup sweep closes each pending row to `status=interrupted, exit_code=Interrupted` at detection time (close no longer gated on channel-notice delivery; the deferred notice is best-effort), killing the "still in-flight after restart" retry bug | done |
 | Mid-turn steering on the live gateway path (vs cancel-and-replace) | MISSING — ware session lock serializes, new message cancels previous turn | Route new-message through `steer()` queue when same conversation |
 | Cron trigger cancellation/steering surface | MISSING (fire-and-forget) | Optional: expose token in the cron session |
 
@@ -119,7 +120,7 @@ it once.
 
 | Gap | Verdict | Work |
 |---|---|---|
-| Notice-board READ wiring | PARTIAL — `NoticeBoard::inbox`/`query_inbox` + resolver built (`notice_db.rs:302/320`, `resolver.rs:1-47`), **zero production callers** | Wire `org notice inbox` CLI + prompt/tool consumption; do NOT rebuild the resolver |
+| Notice-board READ wiring | **EXECUTED iter-690** — `org notice inbox --for-employee <id>` CLI (`--pending-only`, `--limit`, `--json`; `[PENDING]/[acked]/[info]` states) + the seat prompt's pending-notices block in `bind_seat_run` (ack-is-the-watermark: re-renders until acked, fail-open), resolver reused as-built | done |
 | Cross-department worklog scope enforcement | PARTIAL — `WorklogDb::list` reads any department unfiltered (`worklog_db.rs:278`, CLI cmd_org.rs:1742) | Add authority/scope gate |
 | Feed/DM read adapters | MISSING — adapters are outbound-push only | Build read/poll surface |
 | IdentityGate on the run path | DEAD (tests only) | Wire or delete |
