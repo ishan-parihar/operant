@@ -110,9 +110,9 @@ it once.
 
 | Gap | Verdict | Work |
 |---|---|---|
-| Ordered preflight ladder summarizer → decay → wrap-up → TOC/trim in `build_messages` | PARTIAL — preflight decay + reactive summarizer exist; no explicit ordering, no wrap-up rung, no TOC rung | Rework `build_messages` into the ordered ladder; summarize-before-evict; final-call wrap-up copy |
-| Prompt-cache guard middleware (protect frozen prefix) | MISSING (frozen/volatile split exists at run.rs:2100-2116, no guard) | Add guard middleware (PromptCacheGuard port) |
-| Turn-wall-clock env override | MISSING (`TURN_WALL_CLOCK_LIMIT_SECS` hardcoded `run.rs:391`) | Add `HERMES_TURN_TIMEOUT`-style override; document turn-vs-call split |
+| Ordered preflight ladder summarizer → decay → wrap-up → TOC/trim in `build_messages` | **EXECUTED iter-697** — explicit ordered rungs in `build_messages`: TOC/trim (`fast_trim_tool_results` — its first production caller) → decay → LLM summarize-before-evict (`preflight_llm_summarize`, same reactive guards, no deterministic fallback) → evict; each rung gated on still-over-threshold; wrap-up rung appends final-call copy when the ladder fired (rides the built list only, never the stored conversation); 2 property tests | done |
+| Prompt-cache guard middleware (protect frozen prefix) | **EXECUTED iter-698** — `context_management::prompt_cache_guard`: snapshots the head system run when the ladder fires and verifies it byte-identical after the evict rung (warn in release, debug_assert in tests); 3 tests | done |
+| Turn-wall-clock env override | **EXECUTED iter-698** — `HERMES_TURN_TIMEOUT` (seconds) on the turn ceiling; malformed/non-positive falls back to the 20-minute default; sibling of `HERMES_REQUEST_TIMEOUT` (one call) and `HERMES_MAX_ITERATIONS` | done |
 | Vision routing on the facade path | DROPPED in migration — `multimodal` field deleted iter-663; `with_multimodal`/`with_vision_route` only reachable via tests + ACP direct construction | Decide: port per-iteration vision routing to facade, or formally accept single-provider vision at construction |
 | Wave-4 preflight entry on the live path | Depends on §2 | If A: preflight already lives in core `build_messages` — no move needed |
 

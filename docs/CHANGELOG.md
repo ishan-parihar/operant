@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-697 — Wave-4 ordered preflight ladder:** `build_messages` now
+  runs explicit ordered rungs when the estimate exceeds the 80% preflight
+  threshold — TOC/trim (`fast_trim_tool_results`, its first production
+  caller) → deterministic decay → LLM summarize-before-evict
+  (`preflight_llm_summarize`: same reactive guards — `should_compress` +
+  anti-thrash cooldown — with NO deterministic fallback) → evict — each
+  gated on still-over-threshold. Wrap-up rung appends final-call copy when
+  the ladder fired, riding the built list only so it cannot accumulate
+  across turns. 2 ladder property tests.
+- **iter-698 — PromptCacheGuard + `HERMES_TURN_TIMEOUT`:** the frozen-prefix
+  invariant becomes checked — `prompt_cache_guard` snapshots the head
+  system run when the ladder fires and verifies it byte-identical after
+  the evict rung (warn in release, debug_assert in tests), so a future rung
+  edit cannot silently tax every prompt-cache hit in a session. The turn
+  wall-clock ceiling gains the `HERMES_TURN_TIMEOUT` env override (seconds;
+  malformed or non-positive input keeps the 20-minute default), the
+  sibling of `HERMES_REQUEST_TIMEOUT` (one call) and `HERMES_MAX_ITERATIONS`
+  (iteration count). 3 guard tests.
 - **iter-695 — socialization phase 2: session outcomes post to the board:**
   the senior's close-out notice is the only board write outside the CLI,
   gated by the same §2.3.1 consult (identity fail-closed, consult before

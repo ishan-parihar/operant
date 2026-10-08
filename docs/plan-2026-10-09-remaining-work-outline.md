@@ -22,16 +22,10 @@
 
 ## §2 Next slices (agreed order, core track)
 
-1. **Wave-4 ordered preflight ladder** — rework `build_messages` into the
-   explicit order summarizer → decay → wrap-up → TOC/trim; summarize-before-
-   evict; final-call wrap-up rung. (run.rs:2097/2213-2257/2270-2292.)
-2. **PromptCacheGuard** — protect the frozen prefix (frozen/volatile split at
-   run.rs:2100-2116; guard middleware MISSING).
-3. **`TURN_WALL_CLOCK_LIMIT_SECS` env override** — hardcoded at run.rs:391;
-   add `HERMES_TURN_TIMEOUT`-style override + document turn-vs-call split.
-4. **Vision-routing ruling** — `multimodal` deleted iter-663; `with_multimodal`
-   `/`with_vision_route` tests+ACP only. Decide: port per-iteration vision
-   routing to facade, or formally accept single-provider vision at construction.
+1. ~~**Wave-4 ordered preflight ladder**~~ **EXECUTED iter-697** — ordered rungs TOC/trim → decay → summarize → evict in `build_messages`, each gated on still-over-threshold; wrap-up rung appends final-call copy; `fast_trim_tool_results` gains its first production caller.
+2. ~~**PromptCacheGuard**~~ **EXECUTED iter-698** — `prompt_cache_guard` verifies the frozen prefix byte-identical after the ladder (warn in release, debug_assert in tests).
+3. ~~**`TURN_WALL_CLOCK_LIMIT_SECS` env override**~~ **EXECUTED iter-698** — `HERMES_TURN_TIMEOUT` (seconds), default 20 min kept on malformed input.
+4. **Vision-routing ruling** — `multimodal` deleted iter-663; `with_multimodal` `/`with_vision_route` tests+ACP only. Decide: port per-iteration vision routing to facade, or formally accept single-provider vision at construction.
 5. **`max_tool_result_chars` wire-or-drop + ingestion-time offload/TOC** —
    dead knob (default 50000, zero consumers); `ArtifactIndex`/`toc`/`offload`
    absent.
