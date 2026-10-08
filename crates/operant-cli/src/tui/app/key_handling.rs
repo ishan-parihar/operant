@@ -1138,6 +1138,17 @@ impl App {
             return false;
         }
 
+        // ---- Ctrl+L — terminal-style clear (jcode parity) --------------------
+        // Collapse the chat like a terminal `clear`: nothing is deleted, the
+        // transcript chunk just renders zero-height (see
+        // `terminal_clear_collapsed`). Scrolling up, new output, or streaming
+        // ends it; `/clear` drops context instead. No side pane claims plain
+        // Ctrl+L today (copy mode's bare `l` is cursor-right, not this).
+        if key.code == KeyCode::Char('l') && ctrl {
+            self.clear_view_terminal_style();
+            return false;
+        }
+
         // ---- Focus state machine: transcript mode --------------------------
         // When the transcript pane has focus, intercept Escape and scroll keys.
         // Printable characters switch focus back to Input and fall through so the

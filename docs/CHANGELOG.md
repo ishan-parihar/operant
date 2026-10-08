@@ -117,6 +117,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-694 — W5 Tier-2: Ctrl+L terminal-style clear (jcode parity).** The
+  confirmed Tier-2 gap from JCODE-VISUAL-PARITY-PLAN.md item 17: the
+  layout-side collapse was already ported (operant_ui renders a zero-height
+  messages chunk when `terminal_clear_collapsed()` holds), but nothing could
+  set the state. App now captures the `transcript_version` at Ctrl+L
+  (`terminal_clear_version`); the state is live only while that version still
+  matches and the same idle conditions jcode derives hold (not scrolled up,
+  not streaming, no streaming text) — so any new output, streaming, or
+  scroll-up immediately restores the full layout, no reset points to hunt.
+  `clear_view_terminal_style()` snaps the scroll to the bottom; the chord
+  binds next to the paste handlers. Nothing is deleted (contrast `/clear`).
+  Also found while wiring: `/cls` is registered but has no execution arm —
+  pre-existing, left for its owner. New corpus scenario `terminal-clear`
+  (golden: cleared frame contains none of the transcript text). Label note:
+  origin/main carries two iter-691-labeled commits (W5a palette sweep + the
+  concurrent reaper line), and iters 692-693 (chief-of-staff gap-8 slice + its docs)
+  were taken mid-prove — append-only history, all stay.
 - **iter-691 — W5 palette/dead-code sweep, sub-wave 1: the transcript's last
   hardcoded grays route through the palette, and a dead helpers stratum goes.**
   `messages/tools.rs` paints tool-row summaries with `theme::dim_color()`

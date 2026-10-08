@@ -233,10 +233,10 @@ impl TuiState for App {
     }
 
     fn terminal_clear_collapsed(&self) -> bool {
-        // [port-decision] terminal_clear_collapsed: operant has no Ctrl+L
-        // cleared-screen flag; returns false — wire when the terminal-clear
-        // state lands on App (scroll_memory is the natural home).
-        false
+        // Derived: see `App::terminal_clear_state_live` (messaging.rs). The
+        // layout side (zero-height messages chunk, packed layout) is already
+        // ported — operant_ui reads this predicate directly.
+        self.terminal_clear_state_live()
     }
 
     fn pending_resize_anchor(&self) -> Option<crate::tui::operant_model::ContentPos> {

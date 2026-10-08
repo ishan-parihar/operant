@@ -3002,3 +3002,61 @@ fn the_behavioural_harness_can_observe_a_binding_firing() {
          pass for every binding if no key ever reached the dispatch chain"
     );
 }
+
+// ── Ctrl+L terminal-style clear (jcode parity) ─────────────────────────────
+
+#[test]
+fn ctrl_l_collapses_until_new_content_arrives() {
+    let mut app = make_app();
+    app.add_message(Role::User, "hello".to_string());
+    app.clear_view_terminal_style();
+    assert!(
+        app.terminal_clear_state_live(),
+        "Ctrl+L with no transcript change must collapse the view"
+    );
+    app.add_message(Role::Assistant, "world".to_string());
+    assert!(
+        !app.terminal_clear_state_live(),
+        "new content bumps transcript_version, which must end the cleared state"
+    );
+}
+
+#[test]
+fn ctrl_l_ends_on_scroll_up() {
+    let mut app = make_app();
+    app.clear_view_terminal_style();
+    assert!(app.terminal_clear_state_live());
+    app.auto_scroll = false; // what scrolling up does
+    assert!(
+        !app.terminal_clear_state_live(),
+        "scrolling up must restore the full layout"
+    );
+}
+
+#[test]
+fn ctrl_l_holds_while_streaming_then_recollapses() {
+    let mut app = make_app();
+    app.clear_view_terminal_style();
+    // Streaming text arrives without bumping the transcript version yet:
+    // the predicate must defer to the live stream.
+    app.is_streaming = true;
+    app.streaming_text = "partial".to_string();
+    assert!(!app.terminal_clear_state_live());
+    // Stream settles with no committed content: version unchanged, so the
+    // cleared view returns once the idle conditions hold again.
+    app.is_streaming = false;
+    app.streaming_text.clear();
+    assert!(app.terminal_clear_state_live());
+}
+
+#[test]
+fn ctrl_l_keybinding_collapses_the_view() {
+    let mut app = make_app();
+    app.add_message(Role::User, "hello".to_string());
+    assert!(!app.terminal_clear_state_live());
+    app.handle_key_event(press_key(KeyCode::Char('l'), KeyModifiers::CONTROL));
+    assert!(
+        app.terminal_clear_state_live(),
+        "the Ctrl+L chord must reach clear_view_terminal_style"
+    );
+}

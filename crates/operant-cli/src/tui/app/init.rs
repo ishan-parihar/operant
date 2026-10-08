@@ -131,6 +131,7 @@ impl App {
             last_turn_verb: None,
             turn_metadata: Vec::new(),
             transcript_version: Cell::new(0),
+            terminal_clear_version: Cell::new(None),
             help_overlay: {
                 let mut overlay = HelpOverlay::new();
                 overlay.populate_from_commands(help_overlay_entries());

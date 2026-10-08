@@ -96,6 +96,7 @@ impl App {
         serde_json::json!({
             "should_exit": self.should_exit,
             "is_streaming": self.is_streaming,
+            "terminal_clear_collapsed": self.terminal_clear_state_live(),
             "is_simulating": self.is_simulating,
             "plan_mode": self.plan_mode,
             "show_help": self.show_help,

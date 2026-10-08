@@ -232,6 +232,11 @@ pub struct App {
     /// Incremented whenever transcript-visible state changes so rendering can
     /// reuse cached layout between keystrokes.
     pub transcript_version: Cell<u64>,
+    /// Transcript version captured when Ctrl+L last cleared the view.
+    /// `Some(v)` with `v == transcript_version` means the terminal-clear
+    /// state is still live (nothing transcript-visible changed since the
+    /// clear); any version bump ends it. `None` = never cleared.
+    pub terminal_clear_version: Cell<Option<u64>>,
 
     // ---- New overlay / notification fields --------------------------------
     /// Full-screen help overlay (? / F1).

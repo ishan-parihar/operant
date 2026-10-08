@@ -1,0 +1,19 @@
+{
+  "name": "terminal-clear",
+  "surface": "crates/operant-cli/src/tui/app/key_handling.rs (Ctrl+L) + operant_ui terminal_clear_collapsed layout branch",
+  "opens_with": "Ctrl+L after a settled conversation",
+  "keys": "<ctrl+l>",
+  "size": "120x40",
+  "agent_script": "assistant-simple.json",
+  "assert": [
+    "terminal_clear_collapsed == true",
+    "is_streaming == false",
+    "messages == 1"
+  ],
+  "assert_screen": [
+    "not-contains:Hello from the mock agent"
+  ],
+  "baseline": "terminal-clear.txt",
+  "style_baseline": "terminal-clear.style.txt",
+  "notes": "Ctrl+L terminal-style clear (jcode parity): the mock script's content settles first (all events buffer before the run loop drains, then keys replay), so the cleared frame must show a zero-height transcript chunk with the composer at top and NONE of the transcript text. Nothing is deleted: any new output (transcript-version bump), streaming, or scrolling up ends the state and restores the full layout."
+}

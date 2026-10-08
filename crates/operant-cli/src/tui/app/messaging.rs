@@ -61,6 +61,31 @@ impl App {
         self.on_new_message();
     }
 
+    /// Terminal-style clear (Ctrl+L, jcode parity): collapse the chat like a
+    /// terminal after `clear` — the transcript chunk renders zero-height and
+    /// the composer sits at the top. Nothing is deleted: any new output
+    /// (which bumps `transcript_version`), streaming, or scrolling up
+    /// immediately restores the full layout. Contrast `/clear`, which drops
+    /// context entirely.
+    pub fn clear_view_terminal_style(&mut self) {
+        self.terminal_clear_version.set(Some(self.transcript_version.get()));
+        // Snap to the bottom so the collapsed frame shows the composer at top.
+        self.scroll_offset = 0;
+        self.auto_scroll = true;
+        self.new_messages_while_scrolled = 0;
+    }
+
+    /// Whether the terminal-clear state is live right now. Derived the way
+    /// jcode derives its spacer-tail check, adapted to operant's
+    /// version-keyed display cache: the clear holds only while the version
+    /// captured at Ctrl+L still matches and the same idle conditions hold.
+    pub fn terminal_clear_state_live(&self) -> bool {
+        self.terminal_clear_version.get() == Some(self.transcript_version.get())
+            && self.auto_scroll
+            && !self.is_streaming
+            && self.streaming_text.is_empty()
+    }
+
     /// Push a synthetic system annotation into the conversation pane.
     /// It will appear after the current last message.
     /// Push a notification and, for Error-kind notifications, reset the error
