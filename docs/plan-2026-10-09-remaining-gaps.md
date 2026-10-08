@@ -20,47 +20,31 @@
   `~/.operant/logs/gateway.log` @ 22:35Z.
 - **Outbound is healthy; inbound *capture* is not** — two bugs below.
 
-## 1. Telegram offset store is not keyed by bot (found live; S)
+## 1. Telegram offset store is not keyed by bot (found live; S) — FIXED iter-704 `0373bb15`
 
-- **Bug**: `get_offset_path()` (`gateway/telegram.rs:410`) returns
-  `telegram_offset.txt` in the daemon's cwd — one global offset, no bot id.
-  Swapping the token made the new bot inherit the old bot's offset
-  (`505536029`); a fresh bot's update ids start near 1, so
-  `getUpdates?offset=505536029` **silently skipped every inbound DM**. This is
-  why the gateway saw nothing for ~8 minutes today.
 - **Operational patch (applied)**: reset `~/.operant/telegram_offset.txt` to 0
   and restarted the daemon (`Loaded saved offset: 0` in the log).
-- **Code fix owed**: derive the offset filename from the bot id (token segment
-  before `:`), e.g. `telegram_offset.<bot_id>.txt`. One seam change + a unit
-  test asserting distinct tokens map to distinct paths. Also documents the
-  operational hazard: swapping bots without resetting the offset file drops
-  all inbound until offset catches up (never, for a fresh bot).
-- **Effort**: S. Files: `crates/operant-core/src/gateway/telegram.rs`.
+- **Code fix (deployed 2026-10-09)**: `get_offset_path_for(bot_id)` keys the
+  cursor `telegram_offset.<bot_id>.txt`; unit test
+  `offset_paths_are_keyed_per_bot` pins distinct bots to distinct paths.
+  Live-verified: the daemon writes `telegram_offset.8916661121.txt`.
 
-## 2. Gateway session entry is never created for a Telegram DM → DM tap and metering both miss (found live; S–M)
+## 2. Gateway session entry is never created for a Telegram DM → DM tap and metering both miss (found live; S–M) — FIXED iter-704 `0373bb15`
 
-- **Bug**: the iter-684 capture-at-inbound tap (`gateway_runner.rs:1069-1073`)
-  fires only when the persistent session store has an entry for the session
-  key (`telegram:5297486612:5297486612`) so `bound_employee` resolves. Live
-  test: two DMs → agent replied to both → `context_items` stayed at **0**.
-  The Wave-4 metering write failed with `Session not found:
-  telegram:5297486612:5297486612` — proof no entry exists even *after* a
-  completed turn.
-- **Contract conflict**: the `/session` command tells the user "it will bind
-  to `premiere` on first message" (`gateway_commands.rs:830`), but no code
-  path creates the entry on a first turn. The `entry_for_source` predicate
-  (`gateway_session.rs:1505`) requires `origin.user_id`/`chat_id` — the
-  turn-end `save_session` call (`gateway_runner.rs:935`) does not carry the
-  platform origin, so DM sessions never land in `entries`.
-- **Fix shape** (pick one, cheap): (a) persist the session entry with platform
-  origin at gateway turn end, making the `/session` promise true and feeding
-  the tap + metering; or (b) have the tap default-bind to `premiere` when no
-  entry exists (matching the documented default) and let the first turn
-  create the entry. (a) is the root-cause fix; (b) is the smaller diff.
-- **Acceptance**: an E2E test — inbound DM on a fresh session → second DM →
-  `context_items` gains a `Dm` row with `seat_hint=premiere` (or the bound
-  seat); metering warning gone.
-- **Effort**: S–M. Files: `gateway_runner.rs`, `gateway_session.rs`.
+- **Root cause (sharper than first filed)**: key-namespace split. The store
+  files every session under `build_session_key` (`agent:main:telegram:dm:…`),
+  while the turn path looked rows up by its turn-lease key
+  (`telegram:5297486612:5297486612`) — structurally never a match, so the
+  Wave-2 employee binding, the iter-684 DM tap, and Wave-4 metering were
+  ALL dead for platform chats from the start. Live evidence: agent replied
+  fine but `context_items` stayed 0 and metering logged `Session not found`.
+- **Fix (deployed, live-verified)**: the turn path resolves through
+  `entry_for_source` — the same origin-triple seam `/session` uses — and
+  carries the canonical key to the metering drain. Regression pin:
+  `wave2_store_files_dm_sessions_not_under_the_turn_lease_key`.
+- **Live proof 2026-10-09**: two test DMs → two `dm` rows, `seat_hint=premiere`,
+  author `ishan_parihar`; the metering warn is gone post-restart; the
+  `premiere|dm` watermark advanced.
 
 ## 3. Feed class: channel/group posts → `context_items` (phase-2 remainder; M)
 
