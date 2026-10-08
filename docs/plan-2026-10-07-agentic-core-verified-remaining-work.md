@@ -77,10 +77,10 @@ A is the OpenHuman lesson applied: one dispatch per concern, no parallel engine.
 | Ping-pong pattern (A,B,A,B alternating calls) | **EXECUTED iter-669** — 4-cycle warn / 5-cycle skip in `ToolGuardrailTracker`, 20-name window | done |
 | Identical-result pattern (same tool+args, same result ≥5) | **EXECUTED iter-669** — 5× warn / 6× armed next-call skip; args may vary | done |
 | No-progress ladder (varied-args backstop: same tool, different args, no progress) | **EXECUTED iter-669** — armed skip ignores arguments | done |
-| Successful-repeat guard (`successful_repeat.rs`, 165 LOC) | MISSING | Port into tracker |
-| Per-tool consecutive-failure counting (any error class, thresholds 8/12) | PARTIAL — only timeout-class counted (S2) | Extend counter to all tool-attempt failure classes; `ClassifiedError` (error_classifier.rs:122) covers provider errors; add tool-attempt classes |
-| Hard-reject halt threshold (2) | MISSING | Add to tracker |
-| Halt verdicts with `failure_copy` (root-cause summary) | MISSING | Add copy table; wire into stop paths |
+| Successful-repeat guard (`successful_repeat.rs`, 165 LOC) | **EXECUTED iter-682** — run-wide `(tool, result-hash)` recurrence ledger catches A, B(reset), A cycles the consecutive streak can never see; same 5/6 warn/arm escalation (warn/skip, never halts a successful turn — deliberate deviation from openhuman's halt) | done |
+| Per-tool consecutive-failure counting (any error class, thresholds 8/12) | **EXECUTED iter-682** — `failure_streaks` per tool, warn 8 / Halt 12, reset on that tool's success; S2's 3-strike timeout mask stays on top | done |
+| Hard-reject halt threshold (2) | **EXECUTED iter-682** — second consecutive `Blocked by security policy` result halts; shared `HARD_REJECT_PREFIX` const so classifier and blocked arm cannot drift; seat-policy denials excluded (a minted grant can make them succeed) | done |
+| Halt verdicts with `failure_copy` (root-cause summary) | **EXECUTED iter-682** — `GuardrailDecision::Halt(String)` from the tracker's copy fns; `observe_guardrail_results` (now async two-phase) triggers the interrupt flag and surfaces the summary as final content; 12-test adversarial port of `mod_tests.rs` semantics in `ladder_tests` | done |
 | Exemption list (`is_repeat_call_exempt`; fills the W1.8c-dropped `tool_call_dedup_exempt`) | **PARTIAL iter-669** — `with_exempt_tools` API live on the tracker, survives reset | AgentConfig/config-schema wiring pending |
 | Per-tool activation gating on the facade path (beyond CLI exclusions) | MISSING | Add to `FacadeConstruction` |
 | Ingestion-time tool-result offload + artifact TOC | MISSING — `ArtifactIndex`/`toc`/`offload` = no matches anywhere; `max_tool_result_chars` (config, default 50000) has ZERO consumers: dead knob | Wire-or-drop the dead knob; add ingestion-time offload+TOC |

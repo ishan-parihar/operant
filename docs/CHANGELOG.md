@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-682 — Wave-2 ladder completion: per-tool failure rungs, hard-reject
+  halt, successful-repeat recurrence ledger.** `ToolGuardrailTracker`
+  gains the remaining openhuman `no_progress/` semantics: a per-tool
+  consecutive-failure ladder (any error class — warn at 8, `Halt` at 12 with
+  root-cause `failure_copy`, reset by that tool's next success; S2's
+  3-strike timeout mask stays on top); a hard-reject halt at the second
+  consecutive `Blocked by security policy` result (shared prefix constant
+  so the classifier and stream.rs's blocked arm cannot drift; seat-policy
+  denials deliberately excluded — a minted grant can make those succeed);
+  and a run-wide `(tool, result-hash)` recurrence ledger that catches
+  A, B(reset), A cycles the consecutive-identical-result rung can never
+  see, at the same 5/6 warn/arm escalation (deliberate deviation: operant
+  warns/skips, never halts a turn for repeated successes).
+  `GuardrailDecision::Halt(String)` is a new variant; `observe_guardrail_results`
+  becomes async two-phase (lock dropped before await), surfaces the Warn
+  verdicts it previously discarded, and on Halt triggers the interrupt
+  flag (same machinery as steer request-stop) with the summary as final
+  content. 12-test adversarial port of openhuman's `mod_tests.rs` ladder
+  semantics lands as `tool_guardrails::ladder_tests`.
+
 - **iter-672 — W2 selection: scroll-stable content-space selection points
   + jcode-parity keyboard copy mode.** `selection_anchor`/`selection_focus`
   become `(col, content_line)` — the scroll-stable rendered-line index — so a
