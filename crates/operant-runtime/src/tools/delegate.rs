@@ -1303,6 +1303,7 @@ impl DelegateTool {
                         // Delegate sub-agents keep core's breaker default.
                         loop_detection_enabled: None,
                         data_dir: self.facade_data_dir.clone(),
+                        guardrail_exempt_tools: None,
                     },
                 )
                 .await?;

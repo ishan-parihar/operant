@@ -82,6 +82,7 @@ impl OperantAgent {
         let max_iter = config.max_iterations;
         let nudge = config.skill_nudge_interval;
         let mem_interval = config.memory_review_interval;
+        let guardrail_exempt = config.guardrail_exempt_tools.clone();
         let persistent_allowlist = approval_allowlist_from_config(&config);
         let sessions = Arc::new(crate::session::SessionStore::new(Arc::clone(&database)));
         Self {
@@ -112,9 +113,11 @@ impl OperantAgent {
             charter: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
-            tool_guardrails: std::sync::Mutex::new(
-                crate::tool_guardrails::ToolGuardrailTracker::new(),
-            ),
+            tool_guardrails: std::sync::Mutex::new({
+                let mut tracker = crate::tool_guardrails::ToolGuardrailTracker::new();
+                tracker.add_exempt_tools(guardrail_exempt);
+                tracker
+            }),
             timeout_streaks: std::sync::Mutex::new(std::collections::HashMap::new()),
             masked_tools: std::sync::Mutex::new(std::collections::HashSet::new()),
             session_activity_last_stamp: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -155,6 +158,7 @@ impl OperantAgent {
         let max_iter = config.max_iterations;
         let nudge = config.skill_nudge_interval;
         let mem_interval = config.memory_review_interval;
+        let guardrail_exempt = config.guardrail_exempt_tools.clone();
         let persistent_allowlist = approval_allowlist_from_config(&config);
         let sessions = Arc::new(crate::session::SessionStore::new(Arc::clone(&database)));
         Self {
@@ -165,8 +169,7 @@ impl OperantAgent {
             harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
             sessions,
-            event_tx: Some(event_tx),
-            permission_tx: None,
+            event_tx: Some(event_tx),            permission_tx: None,
             seat_authority: None,
             unattended: false,
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
@@ -185,9 +188,11 @@ impl OperantAgent {
             charter: Arc::new(std::sync::RwLock::new(None)),
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
-            tool_guardrails: std::sync::Mutex::new(
-                crate::tool_guardrails::ToolGuardrailTracker::new(),
-            ),
+            tool_guardrails: std::sync::Mutex::new({
+                let mut tracker = crate::tool_guardrails::ToolGuardrailTracker::new();
+                tracker.add_exempt_tools(guardrail_exempt);
+                tracker
+            }),
             timeout_streaks: std::sync::Mutex::new(std::collections::HashMap::new()),
             masked_tools: std::sync::Mutex::new(std::collections::HashSet::new()),
             session_activity_last_stamp: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -448,6 +453,16 @@ impl OperantAgent {
     /// Convenience check: has the interrupt flag been triggered?
     pub fn interrupt_triggered(&self) -> bool {
         self.interrupt_flag.is_triggered()
+    }
+
+    /// `true` when `tool_name` sits on the guardrail exemption list
+    /// (seeded from `AgentConfig::guardrail_exempt_tools`, iter-683): the
+    /// tool bypasses every repeat/loop rung in the tracker.
+    pub fn is_guardrail_exempt(&self, tool_name: &str) -> bool {
+        self.tool_guardrails
+            .lock()
+            .map(|g| g.is_exempt(tool_name))
+            .unwrap_or(false)
     }
 
     /// /steer directive (iter-65). Queue a steer message that will be

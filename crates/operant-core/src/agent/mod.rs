@@ -154,6 +154,13 @@ pub struct AgentConfig {
     /// model-visible tools array by the `tool_search`/`tool_describe`/
     /// `tool_call` bridge. See `tools/tool_search.rs`.
     pub tool_search: crate::config::ToolSearchSettings,
+    /// Guardrail exemption list (openhuman `is_repeat_call_exempt`,
+    /// iter-683): tools whose contract is legitimate identical
+    /// re-invocation (polling, status checks). Exempt tools bypass every
+    /// repeat/loop rung in `ToolGuardrailTracker`. Seeded empty from
+    /// `BehaviorSettings` — the config-schema wiring is a pending row; the
+    /// facade threads it via `FacadeConstruction` today.
+    pub guardrail_exempt_tools: Vec<String>,
 }
 
 /// Cap on truncation-continuation retries per turn (hermes
@@ -189,6 +196,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
             tool_search: crate::config::ToolSearchSettings::default(),
+            guardrail_exempt_tools: Vec::new(),
         }
     }
 }
@@ -1186,6 +1194,28 @@ mod tests {
     }
 
     #[test]
+    fn guardrail_exempt_tools_from_config_reach_the_tracker() {
+        // iter-683: AgentConfig.guardrail_exempt_tools seeds the tracker at
+        // construction — the exemption rung's config path (facade threads it
+        // via FacadeConstruction; config-schema wiring is the pending row).
+        let db = Database::init(std::env::temp_dir().join("test_guardrail_exempt.sqlite")).unwrap();
+        let mut config = AgentConfig::default();
+        assert!(config.guardrail_exempt_tools.is_empty());
+        config.guardrail_exempt_tools = vec!["poll_status".to_string(), "datetime".to_string()];
+        let agent = OperantAgent::new(
+            config,
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        assert!(agent.is_guardrail_exempt("poll_status"));
+        assert!(agent.is_guardrail_exempt("datetime"));
+        assert!(!agent.is_guardrail_exempt("terminal"));
+    }
+
+    #[test]
     fn wave2_charter_rides_the_frozen_prefix_and_none_keeps_it_byte_identical() {
         // Wave 2 (ORGANISM-ARCHITECTURE §2): the bound employee's charter is
         // appended to the frozen prefix inside an explicit marker so the
@@ -2151,6 +2181,7 @@ mod tests {
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
             record_trajectories: false,
+            guardrail_exempt_tools: Vec::new(),
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
@@ -2198,6 +2229,7 @@ mod tests {
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
             record_trajectories: false,
+            guardrail_exempt_tools: Vec::new(),
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,
@@ -2311,6 +2343,7 @@ mod tests {
             approval_allowlist: Vec::new(),
             approval_allowlist_path: None,
             record_trajectories: false,
+            guardrail_exempt_tools: Vec::new(),
             skill_nudge_interval: 0,
             memory_review_interval: 0,
             max_retries: 3,

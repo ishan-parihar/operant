@@ -1738,6 +1738,12 @@ pub struct FacadeConstruction {
     /// opens of the same DB — and tests need a place to point that is not
     /// the user's live data.
     pub data_dir: Option<PathBuf>,
+    /// Guardrail exemption list (openhuman `is_repeat_call_exempt`,
+    /// iter-683): tools whose contract is legitimate identical
+    /// re-invocation (polling, status checks). Threaded into the agent's
+    /// `ToolGuardrailTracker` at construction; ADDS to whatever the process
+    /// config seeds. `None` = process default only.
+    pub guardrail_exempt_tools: Option<Vec<String>>,
 }
 
 /// Facade-side per-turn overrides lifted from Loop B's
@@ -2095,6 +2101,7 @@ impl ReconciledAgent {
             max_iterations,
             loop_detection_enabled,
             data_dir,
+            guardrail_exempt_tools,
         } = construction;
         // Provider routing + model resolution — verbatim Loop B inputs,
         // unless the caller already resolved both (the Loop C adapters).
@@ -2349,6 +2356,12 @@ impl ReconciledAgent {
             tool_search.enabled = "off".to_string();
         }
         agent_config.tool_search = tool_search;
+        // iter-683: the caller's guardrail exemptions ADD to the process
+        // config's seed (facade-side per-tool activation of the exemption
+        // rung — beyond CLI exclusions, which disable tools outright).
+        if let Some(exempt) = guardrail_exempt_tools {
+            agent_config.guardrail_exempt_tools.extend(exempt);
+        }
         // The Loop C adapters assemble their own system prompt (workspace
         // MD files, tool descriptions, autonomy mode, native-tool
         // instructions) and hand it to the turn. Core's frozen prefix is

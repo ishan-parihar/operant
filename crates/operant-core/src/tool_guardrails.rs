@@ -366,6 +366,21 @@ impl ToolGuardrailTracker {
         self
     }
 
+    /// Adds exempt tools to a live tracker — the mutable complement to
+    /// [`Self::with_exempt_tools`], used at construction time when
+    /// `AgentConfig::guardrail_exempt_tools` is non-empty (iter-683).
+    pub fn add_exempt_tools(
+        &mut self,
+        exempt: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        self.exempt_tools.extend(exempt.into_iter().map(Into::into));
+    }
+
+    /// `true` when `tool_name` is exempt from every repeat/loop rung.
+    pub fn is_exempt(&self, tool_name: &str) -> bool {
+        self.exempt_tools.contains(tool_name)
+    }
+
     /// Number of times this exact (tool, args) pair has been observed.
     pub fn count_of(&self, tool_name: &str, args: &str) -> usize {
         let key = (tool_name.to_string(), Self::normalize_args(args));
@@ -826,8 +841,7 @@ mod pattern_tests {
 
     #[test]
     fn exempt_tools_bypass_every_rung() {
-        let mut t = ToolGuardrailTracker::new().with_exempt_tools(["terminal", "tool_a", "tool_b"]);
-        for _ in 0..8 {
+        let mut t = ToolGuardrailTracker::new().with_exempt_tools(["terminal", "tool_a", "tool_b"]);        for _ in 0..8 {
             assert_eq!(t.observe("terminal", "{}"), GuardrailDecision::Allow);
             assert_eq!(
                 t.observe_result("terminal", "same", true),
@@ -1150,6 +1164,22 @@ mod ladder_tests {
                 fail(&mut t, "terminal", "Blocked by security policy: denied"),
                 GuardrailDecision::Allow
             );
+        }
+    }
+
+    #[test]
+    fn add_exempt_tools_extends_a_live_tracker() {
+        // iter-683: the construction-time path — a tracker built plain, then
+        // extended from AgentConfig::guardrail_exempt_tools.
+        let mut t = ToolGuardrailTracker::new();
+        assert!(!t.is_exempt("poll_status"));
+        t.add_exempt_tools(["poll_status"]);
+        assert!(t.is_exempt("poll_status"));
+        // The full rung surface stays bypassed, identical to
+        // `with_exempt_tools`.
+        for _ in 0..10 {
+            assert_eq!(t.observe("poll_status", "{}"), GuardrailDecision::Allow);
+            assert_eq!(ok(&mut t, "poll_status", "same"), GuardrailDecision::Allow);
         }
     }
 }
