@@ -104,3 +104,64 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
   means the module is not in the binary.
 - Solo-green after a full-gate failure = load flake (recipe), unless the test
   reproduces at the prior commit under unified features (real, pre-existing).
+
+## §7 Parent-project red-team (zeroclaw `9f3601516`, hermes-agent `28af0872b8` — 2026-10-09)
+
+> Both parent clones were mid-rebase; rebases aborted, trees reset to pristine
+> remote tips (the 3 discarded local commits per repo were cosmetic chores,
+> preserved in reflog). Two read-only scouts briefed each tip against this
+> outline. Verdicts below are post-verification — several scout "gaps" were
+> already live in operant.
+
+### Rows validated (no change)
+
+- **Trinity table maps cleanly onto hermes' shipped equivalents**: P1-A
+  dispatch breaker ≙ hermes' denial breaker on the approval path; P2-A
+  lease/retry redelivery + poison-park ≙ hermes' `deliveries.db` ledger
+  (tombstones, terminal-state cleanup, stale-claim reclaim `max(3×timeout, 2h)`);
+  P1-C canary invariants ≙ hermes' observer-hooks telemetry contract. The
+  outline already tracks all three — hermes confirms they're buildable patterns,
+  not speculation.
+- **Core track rows 1–4 untouched** — neither parent obsoletes the vision
+  ruling, the offload/TOC row, the adversarial suite, or the dispatch ruling.
+
+### New candidate rows (ranked)
+
+1. **Runtime delegation policy + peer allowlists** (zeroclaw `peers.rs` /
+   `delegation_policy: forbidden|bounded|independent`, self-loop drop).
+   Operant HAS `delegate` + `async_delegation` records — the missing piece is
+   the policy gate (who may hand to whom, per-mode) and per-channel peer
+   resolution. Natural fit beside the identity-audit seat. Med.
+2. **Cron delivery ledger durability** = trinity P2-A made concrete: adopt
+   hermes' tombstone + stale-claim-reclaim + replay-after-unblock shape for
+   the Zeroclaw hop so a future channel outage queues instead of drops.
+   Small-Med; rides any P2-A work.
+3. **Unattended approval matrix + optional guardian-LLM tier** (hermes
+   `approval_smart.py`): operant HAS the approval gate (request_approval,
+   120s deny, permission gate) — missing is the unattended-context fail-closed
+   matrix (composes with the DECIDED D-2 posture ruling: the policy row
+   consult IS the matrix) and the auxiliary-LLM APPROVE/DENY/ESCALATE tier.
+   Small-Med.
+4. **Micro-compaction, opt-in off-by-default** (hermes): fold the oldest
+   un-absorbed exchange into a running summary per turn — continuous bills
+   vs. our batch preflight. Constraint from iter-698: folding must stay
+   below the frozen prefix or the PromptCacheGuard fires by design. Needs the
+   trade-off note before enabling. Small.
+5. **No-agent cron mode** (hermes): script-only scheduled runs, stdout
+   delivered verbatim, zero LLM — a one-gate complement to seat routing for
+   jobs that need no seat. Small.
+
+### Rejected with evidence
+
+- **"Cost ledger + seat budgets" import (zeroclaw scout's #2)** — already
+  live in operant (iter-633 envelope, 670–672 provisioning/policy, 688
+  `org budget` fold; usd-basis budgets shipped). No row.
+- **Desktop app / Bot Mode / plugin catalog / Agent Plugins v1 / desktop SDK**
+  (hermes) — no GUI or plugin-packaging roadmap in operant; different product
+  bet. No row.
+- **ZeroRelay/fleet** (zeroclaw) — architectural surface for multi-host
+  ambition operant does not have. Defer.
+- **SOP engine** (zeroclaw) — strategic but High; operant's cron+skills covers
+  the subset in use. Defer to a standing note, revisit if deterministic
+  procedures become a real demand.
+- **Landlock plugin sandbox** — only if operant adopts a plugin model. Defer.
