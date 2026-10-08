@@ -75,16 +75,18 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
 | D-2 test debt: verify `cron_session_isolation` pins the scheduler session-id derivation | small, opportunistic |
 | 4 lib-test warnings from the 679 build | small, opportunistic |
 | `packet-e-wt-wip-20261007.tar.gz` cleanup | awaits owner sign-off |
-| Gap 5 phase 2: platform read adapters (Telegram/Discord/Slack history → `Dm` class) | **BLOCKED on credentials** — `TELEGRAM_BOT_TOKEN` empty, discord/slack disabled+unset; building now = unverifiable dead code; inbound DMs already land via the iter-679 tap |
+| Gap 5 phase 2: platform read adapters (Telegram/Discord/Slack history → `Dm` class) | **SUPERSEDED by `plan-2026-10-09-remaining-gaps.md`** — owner supplied a live Telegram token (Zeroclaw, 2026-10-09): delivery hop CLOSED, two inbound bugs found live (offset store not keyed by bot; DM session entry never created — tap + metering miss); feed-class capture is the phase-2 remainder; discord/slack still credential-blocked |
 | Gaps 1/2/4/7/8 (envelope metering, clarify fail-fast, D-2 posture, budget fold + predicates + read surfaces, synthesis + amendments) | **DONE** (iters 677/678/688/692/695) |
 
 ## §5 Config/ops hygiene
 
 - **Config-schema exemption wiring** — `guardrail_exempt_tools` config-file
   surface; BLOCKED on the peer's `config.rs` ownership.
-- **Telegram bot-auth credential** — `TELEGRAM_BOT_TOKEN` empty; the only
-  delivery-hop blocker AND the org phase-2 read-adapter blocker (discord/slack
-  also disabled + unset); operator action, not code.
+- **~~Telegram bot-auth credential~~ RETIRED 2026-10-09** — owner supplied
+  a live token (Zeroclaw): `getMe`/`getChat`/`sendMessage` all 200; delivery
+  hop CLOSED. The live remainder (offset keying, DM session entry, feed
+  class) is owned by `plan-2026-10-09-remaining-gaps.md`; discord/slack
+  adapters stay credential-blocked.
 - **Cron hygiene** — ephemeral test regs to archive post-smoke-test; DUE-job
   backlog.
 - **LTO marker rule** — shipped-binary marker checks must be
