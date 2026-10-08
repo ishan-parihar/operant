@@ -65,8 +65,8 @@ Blueprint: `services/credential_encryption.py`: AES-256-GCM archive of credentia
 **Wave-3 — steering/cancellation/journal** (§4 of the core plan):
 1. Startup reaper CLOSE — now with the trinity blueprint (P0-A): grace window, CAS-guarded write, two-store reconcile.
 2. `CancellationToken` threaded into core `run()`; bridge `interrupt_flag`; select! at `execute_tools` + `request_approval`.
-3. `SwitchModel` steer — needs the interior-cell `self.model` refactor (~24 direct reads) as its own iteration.
-4. Per-turn journal rows: exit_reason/halt_verdict columns.
+3. ~~`SwitchModel` steer — needs the interior-cell `self.model` refactor~~ **RESOLVED 2026-10-08: the interior-cell swap already landed at iter-162** — `OperantAgent::set_model` is `&self` via `RwLock<Option<String>>`, gateway applies session-metadata overrides through it, and the fallback chain switches models mid-run (run.rs:1227 + budget refund). The plan doc's "~24 direct reads" premise is obsolete. Remaining work is a small slice: `SwitchModel(String)` variant on `SteeringCommand`, `/model <name>` parse (strict-prefix so `/modeling tips` stays guidance), drain arm calling `set_model` + refunding the iteration budget. ~30 lines + tests, rides with any Wave-3 slice.
+4. Per-turn journal rows: exit_reason/halt_verdict columns + the error-code enum (P0-B) in the same slice.
 5. Mid-turn steering on live gateway path (route same-conversation new messages through `steer()`).
 
 **Wave-4 — context ladder** (§5): ordered preflight ladder (summarizer→decay→wrap-up→TOC) in `build_messages`; PromptCacheGuard; `TURN_WALL_CLOCK_LIMIT_SECS` env override (run.rs:391); vision-routing ruling; ingestion-time offload+TOC + wire-or-drop the dead `max_tool_result_chars` knob.
@@ -75,8 +75,8 @@ Blueprint: `services/credential_encryption.py`: AES-256-GCM archive of credentia
 
 **New ports from this audit** (interleave by size): P0-B error codes (small, do with Wave-3 journal columns) → P1-A channel dispatch breaker (fixes the Telegram hammering) → P1-B effect idempotency on sends → P1-C canary invariants (start E-01/E-02/E-06) → P2 items as capacity allows.
 
-**Org layer** (§6 of organism plan, unchanged): notice-board read wiring, worklog scope gate, feed/DM read adapters, IdentityGate wire-or-delete, seat-budget provisioning CLI, two-tier memory, org loop guard, teams table, recipient Team path, CEO loop, AD-RG.
+**Org layer** (§6 of organism plan): notice-board READ wiring (the only genuinely unwired surface — resolver doc confirms zero production inbox callers; wire `org notice inbox` CLI + seat-prompt/tool consumption), worklog scope gate, feed/DM read adapters, seat-budget provisioning CLI, two-tier memory, org loop guard, teams table, recipient Team path, CEO loop, AD-RG. **IdentityGate: HOLD** — verified 2026-10-08 it is finished, tested, and deliberately unmounted (dark-mergeable seatbelt, one-line mount); do NOT delete; decide the mount as an explicit org-layer-default policy when that layer stabilizes.
 
-**Config/ops hygiene**: config-schema exemption wiring (blocked on peer's config.rs ownership); `register_delivery_fn` at gateway startup (scheduler.rs:602-620); Telegram bot-auth credential blocker (token empty — never inject delivery); ephemeral cron registrations archive post-smoke-test.
+**Config/ops hygiene**: config-schema exemption wiring (blocked on peer's config.rs ownership); ~~`register_delivery_fn`~~ **RESOLVED 2026-10-08: delivery is already wired** — `CronScheduler::with_delivery(cron_tx)` is mounted in gateway_runner.rs:3799/3813 with the CronDelivery channel; the R39 warn is about jobs created *without origin fields*, and the Telegram credential remains the only delivery blocker; ephemeral cron registrations archive post-smoke-test.
 
 **Gate hygiene** (from this session's evidence): future gate worktrees should use an **isolated target dir** — the shared symlinked target is the proven source of governance-suite load flakes (3× green solo whenever the peer's builds go quiet).
