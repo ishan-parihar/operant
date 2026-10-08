@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-692 — gap 8: chief-of-staff synthesis (Slice 9) + decision→charter
+  amendment (Slice 10):** `operant org synthesize [--window-hours N]
+  [--dry-run]` composes the org digest over a window (recent notices,
+  proposed/accepted decisions, worklog), retains it to the **org memory
+  bank** (bank `org` in the same memory_wire.sqlite), and posts it as a
+  chief-of-staff broadcast notice. Amendments: `org decision propose
+  --amend-seat <SEAT> --amend-charter <TEXT>` stores the pair
+  (both-or-neither); `org decision accept` applies it BEFORE the status
+  transition (a failed amendment leaves the decision proposed);
+  `EmployeeDb::amend_charter` is the only sanctioned charter write besides
+  the cast seeder; `org audit <seat>` shows the charter posture. Pre-692
+  decision files migrate via a PRAGMA-probe ALTER.
 - **iter-688 (record_output port) — output-side successful-repeat guard:**
   `ToolGuardrailTracker::observe_output` (openhuman parity): identical
   narration+batch signature — captured in run.rs before `tool_calls` moves

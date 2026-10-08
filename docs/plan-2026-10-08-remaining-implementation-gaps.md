@@ -143,16 +143,34 @@ graph LR
 - **Effort**: M. **Blockers**: peer `cmd_org.rs` lands. Coordinate via
   `agent://<peer>` before touching anything adjacent.
 
-### 8. Slices 9/10 (chief-of-staff synthesis + identitarian evolution)
-- **Problem**: no synthesis loop (notices → org memory bank + seat notices)
+### 8. Slices 9/10 (chief-of-staff synthesis + identitarian evolution) — DONE iter-692 `3b2eadfd`
+- **Landed**: `operant org synthesize [--window-hours N] [--dry-run]`
+  (new `org/synthesis.rs`) composes the org digest over a window,
+  retains it to the **org memory bank** (bank `org` in the same
+  memory_wire.sqlite), and posts it as a chief-of-staff broadcast
+  notice (broadcast is the §3.2 global tier — `can_post_to` allows it
+  at any scope, no grant needed). Mechanical/deterministic by design:
+  the org layer keeps its no-tool-surface rule, every write an
+  auditable CLI seam.
+- `org_decisions` gained `amend_seat`/`amend_charter` (with a
+  PRAGMA-probe ALTER migration for pre-692 files); `org decision
+  propose --amend-seat <SEAT> --amend-charter <TEXT>` stores the pair
+  (both-or-neither); `org decision accept` applies the amendment BEFORE
+  the status transition — a failed amendment leaves the decision
+  proposed. `EmployeeDb::amend_charter` is the only sanctioned charter
+  write besides the cast seeder. `org audit <seat>` shows the charter
+  posture (present + fingerprint + last-touched).
+- **Verified live**: synthesis retained+posted against the real org
+  state; a full propose→accept cycle re-ratified dispatcher's charter.
+- **Problem** (original): no synthesis loop (notices → org memory bank + seat notices)
   and no decision→amendment path (seats can't evolve charters through
   ratified decisions).
 - **Approach**: implement after 7 — synthesis rides the predicates and
   read surfaces; amendments ride the decision-accept seam.
 - **Acceptance**: chief-of-staff daily digest writes org bank + routes
   notices; a ratified decision amends the seat's charter and shows in the
-  registry.
-- **Effort**: M–L. **Blockers**: 7.
+  registry. ✓ both met.
+- **Effort**: M–L. **Blockers**: 7 (cleared by iter-688).
 
 ## Debts & housekeeping (not features)
 - **Test debt (verify, maybe stale)**: BUGS.md D-2 note (:73-75) claims no
@@ -233,7 +251,7 @@ flight in the same tree). Fold `operant budget` → `org budget`, wire
 `can_post_to`/`can_accept_decision` at the notice seams, add the
 `org cast`/`org audit` read surfaces. The moment their files land.
 
-### Item 6 — Gap 8: slices 9/10 (M–L, blocked on 5)
+### Item 6 — Gap 8: slices 9/10 (M–L, blocked on 5) — DONE iter-692
 Chief-of-staff synthesis (notices → org bank + seat notices) and the
 decision→charter amendment path. Depends on 5's predicates and read
 surfaces. Socialization phases 2/3 ride the same unblock.
