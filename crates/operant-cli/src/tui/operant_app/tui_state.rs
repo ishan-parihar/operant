@@ -524,7 +524,7 @@ pub trait TuiState {
         false
     }
     /// Whether to render the dedicated first-run onboarding welcome screen
-    /// (gray telemetry header, prominent donut, welcome text, and the login
+    /// (gray telemetry header, prominent animation, welcome text, and the login
     /// prompt). True for brand-new installs / unauthenticated users, or when
     /// previewing onboarding.
     fn onboarding_welcome_active(&self) -> bool {

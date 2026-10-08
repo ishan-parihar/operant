@@ -10,7 +10,7 @@ use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-const IDLE_VARIANTS: &[&str] = &["donut", "orbit_rings"];
+const IDLE_VARIANTS: &[&str] = &["signal"];
 
 /// Where (if anywhere) the decorative idle animation rendered on the last full
 /// frame, so the run loop can repaint only those rows on animation ticks.
@@ -167,8 +167,7 @@ pub(crate) fn render_idle_animation_into(buf: &mut Buffer, area: Rect, elapsed: 
 // builds. They are imported under their original names so the call sites and
 // tests below are unchanged.
 use crate::tui::operant_anim::{
-    hsv_to_rgb, sample_black_hole, sample_donut, sample_gyroscope, sample_orbit_rings,
-    shape_char_3x3,
+    hsv_to_rgb, sample_signal, shape_char_3x3,
 };
 
 fn animation_seed() -> u64 {
@@ -190,18 +189,10 @@ where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
-    let mut disabled: HashSet<String> = names
+    let disabled: HashSet<String> = names
         .into_iter()
         .map(|name| normalized_animation_name(name.as_ref()))
         .collect();
-
-    if disabled.contains("three_rings") || disabled.contains("three-rings") {
-        disabled.insert("three_rings".to_string());
-        disabled.insert("gyroscope".to_string());
-    }
-    if disabled.contains("gyroscope") {
-        disabled.insert("three_rings".to_string());
-    }
 
     disabled
 }
@@ -215,7 +206,7 @@ fn disabled_animation_names() -> HashSet<String> {
     );
     // Corpus-only pin: OPERANT_DISABLED_ANIMATIONS merges on top so real users
     // keep the empty default (all animations on), while the test harness freezes
-    // the decorative idle donut and its variants. Pattern matches PINNED_ENV
+    // the decorative idle animation. Pattern matches PINNED_ENV
     // (OPERANT_COLOR_DEPTH, etc.).
     if let Ok(env_val) = std::env::var("OPERANT_DISABLED_ANIMATIONS") {
         disabled.extend(expand_disabled_animation_names(
@@ -289,20 +280,20 @@ thread_local! {
     static IDLE_BUF: RefCell<IdleBuffers> = RefCell::new(IdleBuffers::new());
 }
 
-/// Rows reserved below the input for the decorative idle donut.
+/// Rows reserved below the input for the decorative idle animation.
 ///
-/// The donut only shows on an (effectively) empty idle screen, which means it
-/// is pure negative space. When the composer grows past its resting one-row
+/// The animation only shows on an (effectively) empty idle screen, which means
+/// it is pure negative space. When the composer grows past its resting one-row
 /// height (multi-line input, or the `/` command menu adding suggestion rows),
-/// take that growth out of the donut's reservation instead of shrinking the
-/// transcript above: this keeps the header/tips text and info widgets
-/// perfectly still when the slash menu opens on a fresh session. The donut
+/// take that growth out of the animation's reservation instead of shrinking
+/// the transcript above: this keeps the header/tips text and info widgets
+/// perfectly still when the slash menu opens on a fresh session. The animation
 /// simply renders shorter for as long as the composer is expanded.
-pub(crate) fn idle_donut_reserved_height(show_donut: bool, input_height: u16) -> u16 {
-    const IDLE_DONUT_HEIGHT: u16 = 14;
-    if show_donut {
+pub(crate) fn idle_animation_reserved_height(show_animation: bool, input_height: u16) -> u16 {
+    const IDLE_ANIMATION_HEIGHT: u16 = 14;
+    if show_animation {
         let composer_growth = input_height.saturating_sub(1);
-        IDLE_DONUT_HEIGHT.saturating_sub(composer_growth)
+        IDLE_ANIMATION_HEIGHT.saturating_sub(composer_growth)
     } else {
         0
     }
@@ -341,40 +332,15 @@ pub(crate) fn render_idle_animation(buf: &mut Buffer, area: Rect, elapsed: f32) 
         let bufs = &mut *bufs;
 
         let variant = idle_animation_variant();
-        match variant {
-            "donut" => sample_donut(
-                elapsed,
-                sw,
-                sh,
-                &mut bufs.hit,
-                &mut bufs.lum_map,
-                &mut bufs.z_buf,
-            ),
-            "orbit_rings" => sample_orbit_rings(
-                elapsed,
-                sw,
-                sh,
-                &mut bufs.hit,
-                &mut bufs.lum_map,
-                &mut bufs.z_buf,
-            ),
-            "black_hole" => sample_black_hole(
-                elapsed,
-                sw,
-                sh,
-                &mut bufs.hit,
-                &mut bufs.lum_map,
-                &mut bufs.z_buf,
-            ),
-            _ => sample_gyroscope(
-                elapsed,
-                sw,
-                sh,
-                &mut bufs.hit,
-                &mut bufs.lum_map,
-                &mut bufs.z_buf,
-            ),
-        }
+        debug_assert!(variant == "signal", "unknown idle variant {variant}");
+        sample_signal(
+            elapsed,
+            sw,
+            sh,
+            &mut bufs.hit,
+            &mut bufs.lum_map,
+            &mut bufs.z_buf,
+        );
 
         let hit = &bufs.hit;
         let lum_map = &bufs.lum_map;
@@ -541,12 +507,7 @@ mod tests {
     #[test]
     fn direct_blit_matches_paragraph() {
         type Sampler = fn(f32, usize, usize, &mut [bool], &mut [f32], &mut [f32]);
-        let samplers: &[(&str, Sampler)] = &[
-            ("donut", sample_donut),
-            ("orbit_rings", sample_orbit_rings),
-            ("gyroscope", sample_gyroscope),
-            ("black_hole", sample_black_hole),
-        ];
+        let samplers: &[(&str, Sampler)] = &[("signal", sample_signal)];
 
         for &(cw, chh) in &[(40u16, 16u16), (80, 30), (120, 40), (57, 23)] {
             const SUB_X: usize = 3;
@@ -668,6 +629,11 @@ mod tests {
     fn idle_variants_exclude_retired_variants() {
         assert!(!IDLE_VARIANTS.contains(&"knot"));
         assert!(!IDLE_VARIANTS.contains(&"black_hole"));
+        // Retired by the W4 animation swap: the four vendored samplers are
+        // gone, so their names must never reappear in the variant list.
+        assert!(!IDLE_VARIANTS.contains(&"donut"));
+        assert!(!IDLE_VARIANTS.contains(&"orbit_rings"));
+        assert!(!IDLE_VARIANTS.contains(&"gyroscope"));
     }
 
     /// The published animation rectangle is packed into a single atomic word so
@@ -697,38 +663,30 @@ mod tests {
     }
 
     #[test]
-    fn idle_variants_keep_normal_donut_and_exclude_cube() {
-        assert!(IDLE_VARIANTS.contains(&"donut"));
+    fn idle_variants_are_the_original_signal_animation() {
+        assert!(IDLE_VARIANTS.contains(&"signal"));
         assert!(!IDLE_VARIANTS.contains(&"pulse_donut"));
-        assert!(IDLE_VARIANTS.contains(&"orbit_rings"));
         assert!(!IDLE_VARIANTS.contains(&"three_rings"));
         assert!(!IDLE_VARIANTS.contains(&"cube"));
     }
 
     #[test]
-    fn disabling_three_rings_also_disables_gyroscope_alias() {
-        let disabled = expand_disabled_animation_names(["three_rings"]);
-        assert!(disabled.contains("three_rings"));
-        assert!(disabled.contains("gyroscope"));
-    }
-
-    #[test]
-    fn variant_selection_avoids_disabled_entries_when_possible() {
-        let disabled = expand_disabled_animation_names(["donut", "three_rings"]);
+    fn disabling_the_only_variant_falls_back_to_the_full_pool() {
+        // choose_animation_variant_from_disabled falls back to the whole list
+        // when every entry is disabled: an empty animation area would render
+        // nothing at all, which is worse than showing a disabled animation.
+        let disabled = expand_disabled_animation_names(["signal"]);
         let variant = choose_animation_variant_from_disabled(IDLE_VARIANTS, 7, &disabled);
-        assert_ne!(variant, "donut");
-        assert_ne!(variant, "three_rings");
+        assert_eq!(variant, "signal");
     }
 
     #[test]
-    fn idle_animation_samplers_avoid_heavy_border_clipping() {
-        assert_idle_sampler_avoids_heavy_border_clipping("donut", sample_donut);
-        assert_idle_sampler_avoids_heavy_border_clipping("three_rings", sample_gyroscope);
-        assert_idle_sampler_avoids_heavy_border_clipping("orbit_rings", sample_orbit_rings);
+    fn signal_sampler_avoids_heavy_border_clipping() {
+        assert_idle_sampler_avoids_heavy_border_clipping("signal", sample_signal);
     }
 
     #[test]
-    fn three_rings_fit_small_viewports_without_touching_border() {
-        assert_idle_sampler_stays_off_border_on_small_viewports("three_rings", sample_gyroscope);
+    fn signal_fits_small_viewports_without_touching_border() {
+        assert_idle_sampler_stays_off_border_on_small_viewports("signal", sample_signal);
     }
 }

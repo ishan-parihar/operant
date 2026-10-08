@@ -762,7 +762,7 @@ pub(super) fn draw_debug_overlay(
     render_overlay_box(frame, chunks[3], "picker", Color::Magenta);
     render_overlay_box(frame, chunks[4], "input", Color::Green);
     if chunks.len() > 5 && chunks[5].height > 0 {
-        render_overlay_box(frame, chunks[5], "donut", Color::Blue);
+        render_overlay_box(frame, chunks[5], "animation", Color::Blue);
     }
 
     for placement in placements {

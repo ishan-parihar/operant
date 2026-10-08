@@ -1128,7 +1128,7 @@ pub(crate) fn swarm_strip_stands_down_for_dock() -> bool {
 }
 
 /// Forget the per-frame placement/anchor state because the widget render pass
-/// was skipped this frame (idle donut takeover, or no widget data at all).
+/// was skipped this frame (idle animation takeover, or no widget data at all).
 /// Without this, `state.placements` keeps reporting widgets from the last
 /// widget-bearing frame: the swarm strip would stand down for a dock that is
 /// no longer drawn, leaving the managed agents visible nowhere.

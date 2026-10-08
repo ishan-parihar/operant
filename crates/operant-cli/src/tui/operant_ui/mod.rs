@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 mod animations;
 #[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 pub(crate) use animations::{
-    idle_animation_debug_json, idle_donut_reserved_height, last_idle_animation_area,
+    idle_animation_debug_json, idle_animation_reserved_height, last_idle_animation_area,
     note_idle_animation_fast_path_blocked, note_idle_animation_full_repaint,
     note_idle_animation_partial_repaint, record_idle_animation_area, render_idle_animation_into,
 };
@@ -3213,7 +3213,7 @@ const STRIP_SPINNER_FPS: f32 =
 //     crate::logging::warn                 → crate::tui::operant_app::logging::warn
 //     super::info_widget::swarm_strip_stands_down_for_dock → info_widget::swarm_strip_stands_down_for_dock
 //     super::info_widget::swarm_gallery::  → info_widget::swarm_gallery::
-//     super::idle_donut_active              → idle_donut_active (ported below from
+//     super::idle_animation_active              → idle_animation_active (ported below from
 //                                            upstream tui/redraw_schedule.rs:209)
 //
 // [port-decision] debug_capture is hard-wired to `None`: upstream's
@@ -3628,9 +3628,9 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
 
     // The guided onboarding phases (login import, OpenAI prompt, continue prompt)
     // are entirely key-driven and own the whole chat column: they render their own
-    // telemetry header, a prominent donut, and the welcome body. Suppress the
+    // telemetry header, a prominent animation, and the welcome body. Suppress the
     // normal chat chrome (status line, input box, notification, idle hint) so the
-    // screen stays focused and the donut gets the full height. The resting
+    // screen stays focused and the animation gets the full height. The resting
     // Suggestions screen keeps the input box so the user can type to start.
     let onboarding_takes_over = onboarding_welcome
         && !matches!(
@@ -3654,8 +3654,8 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         return;
     }
 
-    let show_donut = !onboarding_welcome && idle_donut_active(app);
-    let donut_height: u16 = idle_donut_reserved_height(show_donut, input_height);
+    let show_animation = !onboarding_welcome && idle_animation_active(app);
+    let animation_height: u16 = idle_animation_reserved_height(show_animation, input_height);
     let notification_height =
         input_ui::notification_height(app, chat_area.width).min(chat_area.height.saturating_sub(4));
     // Session status line (dir, branch, context, provider, model), always
@@ -3669,7 +3669,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         + inline_ui_gap_height
         + input_height
         + overscroll_height
-        + donut_height; // status + queued + swarm strip + notification + inline UI + gap + input + overscroll + donut
+        + animation_height; // status + queued + swarm strip + notification + inline UI + gap + input + overscroll + idle animation
     let available_height = chat_area.height;
     let stable_fixed_height = fixed_height;
     let overflows = |prepared: &PreparedChatFrame| {
@@ -3761,7 +3761,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
             && !side_panel_fullscreen
             && content_height + fixed_height <= available_height);
 
-    // Layout: messages (includes header), queued, status, notification, inline UI, gap, input, donut
+    // Layout: messages (includes header), queued, status, notification, inline UI, gap, input, idle animation
     // All vertical chunks are within the chat_area (left column).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -3780,7 +3780,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 Constraint::Length(inline_ui_gap_height), // 6 Inline UI/input spacing
                 Constraint::Length(input_height),  // 7 Input
                 Constraint::Length(overscroll_height), // 8 Overscroll status line
-                Constraint::Length(donut_height),  // 9 Donut animation
+                Constraint::Length(animation_height),  // idle animation
             ]
         } else {
             vec![
@@ -3793,7 +3793,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 Constraint::Length(inline_ui_gap_height), // 6 Inline UI/input spacing
                 Constraint::Length(input_height),         // 7 Input
                 Constraint::Length(overscroll_height),    // 8 Overscroll status line
-                Constraint::Length(donut_height),         // 9 Donut animation
+                Constraint::Length(animation_height),         // idle animation
             ]
         })
         .split(chat_area);
@@ -4045,7 +4045,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         input_ui::draw_overscroll_status(frame, app, chunks[8]);
     }
 
-    if donut_height > 0 {
+    if animation_height > 0 {
         animations::draw_idle_animation(frame, app, chunks[9]);
     }
     let chrome_elapsed = chrome_start.elapsed();
@@ -4059,7 +4059,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     let widget_bounds = messages_area;
     if app.info_widget_overlays_enabled()
         && !widget_data.is_empty()
-        && !show_donut
+        && !show_animation
         && !swarm_page_active
         && !side_panel_fullscreen
     {
@@ -4080,7 +4080,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
 
         // Optional visual overlay for placements
     } else {
-        // The widget pass did not run (idle donut takeover or no widget data),
+        // The widget pass did not run (idle-animation takeover or no widget data),
         // so nothing from the previous frame is on screen anymore. Clear the
         // remembered placements/anchors so consumers of last-frame state (the
         // swarm strip stand-down, idle fallback facts) do not keep reacting to
@@ -4216,7 +4216,7 @@ fn deep_idle_dormant(state: &dyn TuiState) -> bool {
 /// an assistant/tool/reasoning reply). A fresh screen that only holds
 /// non-conversational notices (e.g. the "run /login when you're ready" system
 /// message left after onboarding is declined) is still "idle", so the decorative
-/// donut should keep spinning until the user actually starts chatting.
+/// animation should keep playing until the user actually starts chatting.
 fn has_started_conversation(state: &dyn TuiState) -> bool {
     state
         .display_messages()
@@ -4224,7 +4224,7 @@ fn has_started_conversation(state: &dyn TuiState) -> bool {
         .any(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool" | "reasoning"))
 }
 
-fn idle_donut_active_with_policy(
+fn idle_animation_active_with_policy(
     state: &dyn TuiState,
     policy: &crate::tui::operant_app::perf::TuiPerfPolicy,
 ) -> bool {
@@ -4245,7 +4245,7 @@ fn idle_donut_active_with_policy(
         return false;
     }
 
-    // The idle donut is decorative.  Leaving many dormant tabs/sessions open
+    // The idle animation is decorative.  Leaving many dormant tabs/sessions open
     // should not keep every TUI repainting forever, especially when those tabs
     // are hidden behind a terminal multiplexer or kitty single-instance window.
     if deep_idle_dormant(state) {
@@ -4260,7 +4260,7 @@ fn idle_donut_active_with_policy(
         && state.queued_messages().is_empty()
 }
 
-pub(crate) fn idle_donut_active(state: &dyn TuiState) -> bool {
+pub(crate) fn idle_animation_active(state: &dyn TuiState) -> bool {
     let policy = crate::tui::operant_app::perf::tui_policy();
-    idle_donut_active_with_policy(state, &policy)
+    idle_animation_active_with_policy(state, &policy)
 }

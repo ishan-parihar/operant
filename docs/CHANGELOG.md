@@ -68,6 +68,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-687 — W4 animation: the original radar-pulse `signal` replaces the
+  four vendored samplers.** `sample_donut`, `sample_gyroscope`, `sample_black_hole`
+  and `sample_orbit_rings` (with their angle-table LUT machinery and their
+  jcode-parity bit-identical tests) are deleted; the idle animation is now
+  `sample_signal`, original operant code: a beam sweeps the unit disk leaving a
+  rational-falloff afterglow, three staggered rings expand from the center, and
+  a bright core pulses at the origin. Determinism is pinned by a
+  bit-identical-across-calls test at four sizes × eight elapsed values
+  (determinism replaces parity as the guarantee — the code is no longer a
+  jcode port); `beam_head_leads_the_trail` and `sweeps_over_time` pin the
+  physics. Exactly two transcendentals per subpixel (`sqrt` + `atan2`), no
+  LUTs, vs the donut's ~142k `cos`/`sin` per frame. `IDLE_VARIANTS` becomes
+  `["signal"]`, the `idle_donut_*` identifiers rename to `idle_animation_*`,
+  the `three_rings`/`gyroscope` disabled-name aliases are deleted with their
+  samplers, and the corpus pin `OPERANT_DISABLED_ANIMATIONS` follows the new
+  name. `shape_char_3x3` and `hsv_to_rgb` stay vendored verbatim (the blit
+  path is sampler-agnostic).
+
 - **iter-686 — W3 rebrand: the vendored TUI layer stops saying jcode.** The
   seven vendored module trees rename on disk (`tui/jcode_{anim,app,markdown,
   model,render,render_core,ui}` → `tui/operant_*`), every `jcode_`/`JCODE_`

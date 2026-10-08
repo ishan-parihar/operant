@@ -107,7 +107,7 @@ impl PerformanceTier {
         }
     }
 
-    /// Whether decorative animations (idle donut, etc.) are enabled.
+    /// Whether decorative animations (idle animation, etc.) are enabled.
     pub fn animations_enabled(&self) -> bool {
         *self != Self::Minimal
     }
