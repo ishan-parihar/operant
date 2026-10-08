@@ -1,7 +1,7 @@
 # Operant
 
 ![Rust](https://img.shields.io/badge/Rust-1.89+-orange?logo=rust)
-![LOC](https://img.shields.io/badge/LOC-548K-informational?style=flat-square)
+![LOC](https://img.shields.io/badge/LOC-711K-informational?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 [![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
 ![Edition](https://img.shields.io/badge/Edition-2024-blueviolet)
@@ -9,7 +9,7 @@
 ![MCP](https://img.shields.io/badge/MCP-1.0-orange?logo=modelcontextprotocol)
 ![Local](https://img.shields.io/badge/local--first-34d399)
 
-**Your terminal-native AI agent.** Persistent memory, 60+ JSON-schema tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
+**Your terminal-native AI agent.** Persistent memory, 70+ JSON-schema tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
 
 ![Operant hero](assets/readme/hero.svg)
 
@@ -80,7 +80,10 @@ operant
 │   ├── operant-channels     channel orchestrator
 │   ├── operant-runtime      autonomous runtime agent
 │   ├── operant-config       config schema · validation · defaults
-│   └── …                    api · infra · macros · eval · hardware · robot-kit
+│   ├── operant-harness      unified harness (persistence seam + config)
+│   ├── operant-tool-call-parser   tool-call stream parsing
+│   ├── operant-tool-planning       tool planning
+│   └── …                    api · infra · macros · hardware (17 crates total)
 ```
 
 ---
@@ -90,7 +93,7 @@ operant
 | Capability | Implementation |
 |---|---|
 | **Memory** | `memory-wire` in-process hybrid semantic memory (BM25 + token-overlap), panic-guarded; or `builtin` file memory (`MEMORY.md` / `USER.md`) |
-| **Tools** | 60+ JSON-schema tools: fs, git, web (sourcehound search/scrape/extract/crawl), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
+| **Tools** | 70+ JSON-schema tools: fs, git, web (sourcehound search/scrape/extract/crawl), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
 | **Browser** | Stealth **sourcehound** — the engine's own profile cookie jar and DevTools endpoint, driven over MCP and shared with the web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
 | **Models** | Any OpenAI-compatible endpoint (`base_url`), local llama.cpp, Ollama; fallback chains + token-bucket rate limiting |
@@ -118,7 +121,7 @@ skills/                                 ~/.operant/skills/
 ├── github/                             ├── systematic-debugging/  # a direct
 ├── mcp/                                ├── test-driven-development/ # subdir
 ├── productivity/                       ├── …
-├── research/                           └── <105 skills total>
+├── research/                           └── <107 skills in the repo pool>
 ├── security/
 ├── software-development/
 ├── workspace-lint/
@@ -261,12 +264,36 @@ See [`operant.example.toml`](operant.example.toml) for the full reference — ev
 
 ## Development
 
+This repo is developed in a strict **iteration model**: one change = one
+iteration = one commit pushed to `origin/main`, labeled `<type>(iter-N)`.
+Read [`AGENTS.md`](AGENTS.md) top-to-bottom before your first change — it is
+the single source of truth for the protocol (iteration numbering, parallel-agent
+coordination, deploy procedure).
+
 ```bash
+source scripts/dev-env.sh           # libclang / ONNX Runtime / bindgen env
+
+# Scope every check to the crate you touched — a full workspace build is 10+ min:
+./scripts/check.sh check -p operant-core --lib
+cargo test -p operant-core --lib -- <filter>
+
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-./scripts/self-test.sh       # full pre-PR validation
+bash scripts/clippy-warning-gate.sh  # incremental gate: fails only on NEW warnings
+
+# Final verification before push (slow):
+./scripts/check.sh check --workspace
+./scripts/check.sh test  --workspace
+./scripts/self-test.sh               # full pre-push sweep
 ```
+
+Development conventions enforced by the gate: no `.unwrap()`/`.expect()` in
+production code (justified sites carry `#[expect(..., reason)]`), typed errors
+in library crates (`thiserror`-style; `anyhow` only in binaries), and scoped
+compilation to keep iteration cycles fast.
+
+Work is planned in dated docs (`docs/plan-YYYY-MM-DD-*.md`) with executed rows
+marked in place, and every user-visible change lands in
+[`docs/CHANGELOG.md`](docs/CHANGELOG.md) in the same iteration.
 
 Architecture, porting notes, and parity decisions live in [`AGENTS.md`](AGENTS.md) and [`docs/`](docs/) (audits, BUGS, CHANGELOG, TODO).
 

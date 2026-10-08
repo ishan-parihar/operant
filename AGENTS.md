@@ -626,6 +626,111 @@ When touching memory code: return the typed `Error`, not `anyhow`; never add
 
 ---
 
+## Rust Code Standards (baseline for every new/edited Rust in this repo)
+
+This project follows the Apollo GraphQL Rust best-practices handbook (the
+`rust-best-practices` skill is the working copy of these rules). The gate
+scripts already enforce part of it mechanically; the rest is reviewer
+expectation. Read this section before writing code, not after.
+
+### Ownership & borrowing
+
+- Prefer `&T` over `.clone()`; clone only when ownership genuinely transfers.
+- Function parameters: `&str` not `String`, `&[T]` not `Vec<T>`, `&Option<T>`
+  when the callee only reads. Small `Copy` types (≤ 24 bytes — ids, flags,
+  small enums) pass by value.
+- `Cow<'_, T>` where ownership is genuinely ambiguous (read-mostly hot paths
+  like prompt/context assembly).
+- **Never clone inside a loop.** `.iter()` + borrow, or hoist the clone out.
+  `clippy::redundant_clone` is part of the warning set the gate watches.
+
+### Error handling
+
+- Fallible operations return `Result<T, E>`; never `panic!` in production
+  paths. The clippy gate enforces `-D clippy::unwrap_used -D
+  clippy::expect_used` — justified invariant sites carry
+  `#[expect(clippy::unwrap_used, reason = "...")]` + `python3
+  scripts/expect-annotate.py crates/`.
+- Library crates return **typed errors** (`thiserror`-style, like
+  `operant-memory::Error`); `anyhow` is for binaries (`operant-cli`) only.
+  Cross-crate seams go through `operant-api` type aliases (`MemoryResult`,
+  …) with `From` conversions — see "Memory error handling" above.
+- Use `?` for propagation, not `match` chains. Classify newly-introduced
+  failure paths into the existing `ClassifiedError` taxonomy (12 classes in
+  the agent loop) rather than inventing parallel error enums.
+- Degrade, don't die, at subsystem seams: memory/provider/tool failures must
+  turn into a logged miss or a helpful tool error, never a dead turn.
+
+### Performance
+
+- Always measure with `--release` (`cargo clippy` perf hints:
+  `-D clippy::perf`). No perf claim without a measurement on a representative
+  input — record profile + commit SHA with any timing number.
+- Prefer iterators over manual loops; drop needless intermediate
+  `.collect()` (`clippy::needless_collect`); watch
+  `clippy::large_enum_variant` on message/event enums (box the fat variant).
+- Hot paths in the agent loop (token estimation, `build_messages`, context
+  eviction) allocate per turn — zero new allocations there without evidence.
+- Never tune a threshold against the test suite that measures it. Constants
+  derived from observing tests are `provisional:` in source; separate dev
+  tuning from test verification, and never chase a delta inside the
+  run-to-run noise floor (three repeats minimum).
+
+### Generics vs. dispatch
+
+- Generic (static) dispatch for performance-critical, single-impl code;
+  `dyn Trait` only for heterogeneous collections (the tool registry,
+  providers, memory backends are legitimately dynamic).
+- `Box` at API boundaries, not internally — don't leak `Box<dyn …>` into
+  call sites that could stay generic.
+
+### Types as documentation
+
+- Encode invalid states out of existence (type-state, newtypes over raw
+  `String` ids / paths / statuses) when a value could otherwise be used in
+  the wrong phase. Existing precedent: seat policies, turn-exit reasons,
+  grant states.
+- `enum`s over `bool` parameters when the meaning isn't obvious at the call
+  site.
+
+### Comments & documentation
+
+- `//` explains **why** (safety argument, workaround, measured rationale —
+  this repo's comments routinely cite the incident that forced the code);
+  `///` documents **what** public items do. Do not narrate what the code
+  plainly says.
+- Every `TODO` carries a tracker link (`BUGS.md` row or issue id) — bare
+  `TODO:` with no owner is debt the next agent cannot act on.
+- Public API additions get doc comments; library crates keep
+  `#![deny(missing_docs)]` green.
+
+### Testing
+
+- Descriptive names (`session_entry_should_be_created_on_first_dm`), one
+  behavior per test where practical; follow existing patterns: inline
+  `#[cfg(test)]` for units, `crates/<crate>/tests/*.rs` for integration,
+  property tests for ladders/invariants (see the iter-697 ladder tests).
+- Tests may use `unwrap` (test targets are exempt from the gate) but should
+  still fail loudly with `expect("context")`.
+- Every fix ships a regression test that fails without the fix — cite it in
+  the commit body.
+- Run tests scoped to the changed crate; `tools::kernel::*` tests only pass
+  in the main tree (see fleet rule 6).
+
+### The canonical lint command
+
+The gate is the authority in this repo (see "The clippy gate"); the
+underlying full command it approximates is:
+
+```bash
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+```
+
+Never weaken the gate (`--update` exists only to prune warnings you FIXED,
+never to hide new ones).
+
+---
+
 ## Known Gaps (from hermes-agent contrast audit)
 
 **All hermes-agent gaps closed.** The operant project now has feature parity
@@ -1122,5 +1227,8 @@ model = "gpt-4"       # Default model (override in user config)
     sourcehound browser/web tools, 7 platforms in the gateway registry (the
     `operant-channels` crate separately default-enables 21 `channel-*`
     features). Do not "improve" them.
-10. **When in doubt, ask.** Pushing back is welcome; silently doing the wrong
+10. **Follow "Rust Code Standards"** — borrow before clone, typed errors in
+    library crates, no `unwrap` in production, measure before claiming
+    performance, regression test for every fix.
+11. **When in doubt, ask.** Pushing back is welcome; silently doing the wrong
     thing is not.
