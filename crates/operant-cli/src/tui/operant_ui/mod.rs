@@ -249,11 +249,11 @@ use crate::tui::operant_model::DisplayMessage;
 //   NOT FLIPPED: `ui_file_diff.rs` does not exist in operant_ui/. Upstream's only two call
 //   sites in the draw path are `draw_file_diff_view` (:3410) and the layout `has_file_diff_edits`
 //   predicate; the draw path's file-diff branch is gated off with a `[port-decision]`.
-// [port-excision] onboarding — `#[path = "ui_onboarding.rs"] mod onboarding;` (ui.rs :72-73).
-//   NOT FLIPPED: `ui_onboarding.rs` does not exist in operant_ui/ (upstream tui/onboarding.rs,
-//   W8 scope). `draw_inner`'s two `onboarding::draw_onboarding_welcome` calls (:3062, :3317)
-//   are gated with a `[port-decision]`; `TuiState::onboarding_welcome_active()` defaults false,
-//   so the takeover branch is unreachable through the trait anyway.
+// [port-excised 2026-10-09] onboarding — `#[path = "ui_onboarding.rs"] mod onboarding;`
+//   (ui.rs :72-73): upstream tui/onboarding.rs was never vendored (W8 scope,
+//   operant ships its own connect-dialog onboarding), so the module path, the
+//   welcome-takeover gate, the test-only draw hook, and the trait methods that
+//   drove them are excised. See the 2026-10-09 visual-layer audit.
 // [port-excision] smoothness — `#[path = "ui_smoothness.rs"] mod smoothness;` plus the two
 //   pub(crate) re-export lines (ui.rs :83-84, :1388-1390).
 //   NOT FLIPPED: `ui_smoothness.rs` does not exist in operant_ui/ (upstream tui/ui_smoothness.rs,
@@ -1901,25 +1901,10 @@ fn clear_test_render_state_locked() {
     });
 }
 
-// [port-source] ui.rs:1605-1616
-/// Test-only: render just the onboarding welcome screen into `area`, using the
-/// exact same code path the live UI uses. Lets onboarding golden/snapshot tests
-/// capture the rendered copy without reaching into the private `onboarding`
-/// submodule.
-#[cfg(test)]
-// [port-decision] onboarding welcome draw gated: upstream's onboarding module
-// (tui/onboarding.rs) is W8-cut scope — operant has its own onboarding/connect
-// dialogs. The test-only hook below stays verbatim under the gate for the
-// W8 reversal (if ever); nothing else in the ported surface calls it.
-#[cfg(any())]
-pub(crate) fn draw_onboarding_welcome_for_tests(
-    frame: &mut ratatui::Frame,
-    app: &dyn crate::tui::operant_app::tui_fns::TuiState,
-    area: ratatui::layout::Rect,
-) {
-    onboarding::draw_onboarding_welcome(frame, app, area);
-}
-
+// [port-source] ui.rs:1605-1616 — the upstream test-only onboarding draw hook
+// (draw_onboarding_welcome_for_tests) was excised with the onboarding module
+// path (see the [port-excised] note at the file head): it called a module that
+// was never vendored and compiled under `#[cfg(any())]`.
 // [port-source] ui.rs:1618-1727
 #[derive(Clone)]
 enum CopyViewportData {
@@ -3624,37 +3609,15 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         prepared
     };
 
-    let onboarding_welcome = app.onboarding_welcome_active();
+    // [port-excised 2026-10-09] onboarding welcome takeover: upstream gates a
+    // first-run welcome screen on `onboarding_welcome_active()`, but the
+    // upstream onboarding module (tui/onboarding.rs) was never vendored and
+    // no implementor ever opted in — the gate was constant-false dead logic
+    // guarding a phantom. Removed with its trait methods and the
+    // OnboardingWelcomeKind/LoginImport* type stratum (tui_state.rs).
+    // Operant's onboarding is its own connect-dialog flow.
 
-    // The guided onboarding phases (login import, OpenAI prompt, continue prompt)
-    // are entirely key-driven and own the whole chat column: they render their own
-    // telemetry header, a prominent animation, and the welcome body. Suppress the
-    // normal chat chrome (status line, input box, notification, idle hint) so the
-    // screen stays focused and the animation gets the full height. The resting
-    // Suggestions screen keeps the input box so the user can type to start.
-    let onboarding_takes_over = onboarding_welcome
-        && !matches!(
-            app.onboarding_welcome_kind(),
-            crate::tui::operant_app::tui_state::OnboardingWelcomeKind::Suggestions
-        );
-    // [port-decision] onboarding::draw_onboarding_welcome: no operant equivalent —
-    //   upstream tui/onboarding.rs is W8 and operant has its own onboarding/connect
-    //   dialogs, so the takeover renders the normal chrome instead of the welcome
-    //   body. `TuiState::onboarding_welcome_active()` defaults false, so an
-    //   implementor that does not opt in never reaches here — wire at
-    //   operant_ui/ui_onboarding.rs.
-    if onboarding_takes_over {
-        finalize_frame_metrics(
-            app,
-            total_start,
-            prep_start.elapsed(),
-            total_start.elapsed(),
-            None,
-        );
-        return;
-    }
-
-    let show_animation = !onboarding_welcome && idle_animation_active(app);
+    let show_animation = idle_animation_active(app);
     let animation_height: u16 = idle_animation_reserved_height(show_animation, input_height);
     let notification_height =
         input_ui::notification_height(app, chat_area.width).min(chat_area.height.saturating_sub(4));
@@ -3900,16 +3863,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     }
     record_layout_snapshot(messages_area, diagram_area, diff_pane_area, Some(chunks[7]));
 
-    let margins = if onboarding_welcome {
-        // [port-decision] onboarding::draw_onboarding_welcome — see the
-        //   takeover branch above; the welcome body is not drawn here either.
-        info_widget::Margins {
-            right_widths: Vec::new(),
-            left_widths: Vec::new(),
-            centered: app.centered_mode(),
-            ..Default::default()
-        }
-    } else if swarm_page_active {
+    let margins = if swarm_page_active {
         let members = app.inline_swarm_members();
         let spinner_frame = (app.animation_elapsed() * STRIP_SPINNER_FPS) as usize;
         let lines = info_widget::swarm_gallery::render_swarm_page_lines(
@@ -4236,12 +4190,6 @@ fn idle_animation_active_with_policy(
     // window/tab is backgrounded. A swarm of unfocused sessions would otherwise
     // each render a full-screen 3D scene at animation FPS, saturating every core.
     if !state.client_focused() {
-        return false;
-    }
-
-    // The onboarding welcome screen is static (no decorative animation), so it
-    // does not need to keep the animation loop running.
-    if state.onboarding_welcome_active() {
         return false;
     }
 

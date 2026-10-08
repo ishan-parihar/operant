@@ -143,6 +143,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-707 — Clean-sweep 2: onboarding welcome-takeover phantom excised.**
+  The ported draw carried a constant-false gate for a first-run welcome
+  takeover (`onboarding_welcome_active` → early-return that suppresses all
+  chat chrome), plus its ~140-line support stratum: the two trait methods,
+  `OnboardingWelcomeKind` (4 variants), `LoginImportPrompt`, `ImportSummaryPill`,
+  `TelemetryChoice`, `LoginImportRow`, a `#[cfg(any())]` test draw hook, and
+  the onboarding margins branch. The upstream onboarding module
+  (tui/onboarding.rs) was never vendored and no implementor ever opted in —
+  the gate guarded a phantom. `onboarding_preview_mode` and
+  `suggestion_prompts` stay (live empty-state seam). Behavior identical:
+  constant-false branches removed. Corpus verify 0 drift; suite green.
+
 - **iter-703 — Clean-sweep 1: live credential status fixes the stuck
   "/login to add provider" header.** Root cause of the 2026-10-09 visual-audit
   complaint 2: the jcode persistent header is auth-driven, and operant's

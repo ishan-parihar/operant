@@ -8,9 +8,11 @@
 //! trait itself (:387 doc, :395-916) — every method, default impl and doc
 //! comment verbatim (incl. the docs/TUISTATE_TRAIT_DECOMPOSITION.md reference),
 //! imports re-rooted to the operant_app/operant_ui homes verified on disk.
-//! OnboardingWelcomeKind (:1168) with its LoginImportPrompt (:1210),
-//! ImportSummaryPill (:1238), TelemetryChoice (:1251) and LoginImportRow
-//! (:1262) closure, and is_ssh_remote (:1791) are ported here beside the
+//! OnboardingWelcomeKind with its LoginImportPrompt, ImportSummaryPill,
+//! TelemetryChoice and LoginImportRow closure — excised 2026-10-09 with the
+//! welcome-takeover gate (upstream onboarding module was never vendored;
+//! operant ships its own connect-dialog onboarding). is_ssh_remote (:1791) is
+//! ported here beside the
 //! trait, mirroring the upstream layout: they live in tui/mod.rs next to
 //! TuiState upstream, and their natural operant home file (tui_fns.rs, the
 //! mod.rs port) is not modifiable in this batch.
@@ -523,19 +525,9 @@ pub trait TuiState {
     fn onboarding_preview_mode(&self) -> bool {
         false
     }
-    /// Whether to render the dedicated first-run onboarding welcome screen
-    /// (gray telemetry header, prominent animation, welcome text, and the login
-    /// prompt). True for brand-new installs / unauthenticated users, or when
-    /// previewing onboarding.
-    fn onboarding_welcome_active(&self) -> bool {
-        self.onboarding_preview_mode()
-    }
-    /// What the onboarding welcome screen should render in its body. Returns
-    /// `Suggestions` by default (the starter cards); the guided flow overrides
-    /// this to drive the model-select and continue-prompt phases.
-    fn onboarding_welcome_kind(&self) -> OnboardingWelcomeKind {
-        OnboardingWelcomeKind::Suggestions
-    }
+    // [port-excised 2026-10-09] onboarding_welcome_active + onboarding_welcome_kind:
+    //   fed only the never-vendored welcome-takeover gate (operant_ui draw);
+    //   removed with the OnboardingWelcomeKind/LoginImport* stratum below.
     /// Suggestion prompts for new users (shown in initial empty state).
     /// Returns (label, prompt_text) pairs. Empty if user is experienced or not authenticated.
     fn suggestion_prompts(&self) -> Vec<(String, String)>;
@@ -607,113 +599,10 @@ pub trait TuiState {
         }
         false
     }
-}
-
-/// What the first-run onboarding welcome screen should render in its body,
-/// driven by the active onboarding flow phase. `Suggestions` is the default
-/// resting state (the starter prompt cards).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OnboardingWelcomeKind {
-    /// Ask the user to log in first. Shown on a fresh install that booted
-    /// without working credentials.
-    ///
-    /// When `import` is `Some`, we detected importable external logins and are
-    /// walking the user through them one at a time (a yes/no prompt per login).
-    /// When `None` and `importing` is false, there was nothing to import and the
-    /// card points the user at the provider picker. When `None` and `importing`
-    /// is true, the user just committed the import and it is running, so the card
-    /// shows an "Importing your logins..." progress state. When `error` is
-    /// `Some`, a prior import failed and the recovery copy explains what went
-    /// wrong plus the concrete next step.
-    Login {
-        import: Option<LoginImportPrompt>,
-        importing: bool,
-        error: Option<String>,
-        /// When a prior import failed and we detected a coding agent the user
-        /// recently used, its display label (e.g. "Codex"). The recovery screen
-        /// offers "Press H to have <label> help fix this". `None` hides that
-        /// option.
-        repair_agent_label: Option<String>,
-    },
-    /// Ask the user whether to log in to OpenAI (no detected imports). A
-    /// highlightable Yes/No selector; `yes_highlighted` reflects the current
-    /// choice. Yes starts the OpenAI sign-in, No skips login and finishes
-    /// onboarding (the user can run `/login` later).
-    LoginOpenAi { yes_highlighted: bool },
-    /// "Continue where you left off in <cli>?" with a highlightable Yes/No
-    /// selector and a live decision countdown (seconds remaining).
-    ContinuePrompt {
-        cli_label: String,
-        yes_highlighted: bool,
-        seconds_left: u64,
-    },
-    /// The starter prompt-suggestion cards (default).
-    Suggestions,
-}
-
-/// Render-friendly snapshot of the single-screen login-import checkbox list.
-/// Carries every detected login plus which ones are checked and which row the
-/// cursor is on, so the welcome card can draw the whole list at once.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoginImportPrompt {
-    /// One entry per detected login, in display order.
-    pub rows: Vec<LoginImportRow>,
-    /// Index of the row the cursor is currently on.
-    pub cursor: usize,
-    /// When `true`, the navigable "Continue" pill is focused. On the summary
-    /// screen this is the preselected default; in choose mode it means focus is
-    /// on the pill rather than a login row, so Enter commits the import.
-    pub continue_focused: bool,
-    /// `false` = the default summary screen (detected logins listed read-only,
-    /// with Continue / Choose pills). `true` = the per-login checkbox list.
-    pub choosing: bool,
-    /// Which summary pill is focused (only meaningful when `choosing` is false).
-    pub summary_pill: ImportSummaryPill,
-    /// `Some` while the telemetry settings sub-page is open, holding the
-    /// highlighted choice.
-    pub telemetry: Option<TelemetryChoice>,
-    /// Whether the environment (OPERANT_NO_TELEMETRY / DO_NOT_TRACK) already
-    /// forces telemetry off, so the sub-page should say so.
-    pub telemetry_env_forced_off: bool,
-    /// How many rows are currently checked for import.
-    pub checked_count: usize,
-    /// Seconds left before the screen auto-imports all checked logins.
-    pub seconds_left: u64,
-}
-
-/// The actions on the import summary screen, left to right.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportSummaryPill {
-    /// Import everything we detected (default).
-    Continue,
-    /// Sign in with a Jcode subscription instead of importing.
-    Subscription,
-    /// Open the per-login checkbox list to import fewer logins.
-    ImportLess,
-    /// Open the telemetry settings sub-page.
-    Telemetry,
-}
-
-/// The highlighted option on the telemetry settings sub-page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TelemetryChoice {
-    /// Usage stats plus prompt/transcript content.
-    Everything,
-    /// Usage stats and crash reports only.
-    NoContent,
-    /// Nothing at all.
-    Nothing,
-}
-
-/// One row in the login-import checkbox list.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoginImportRow {
-    /// Human-readable provider summary (e.g. "OpenAI/Codex").
-    pub provider_summary: String,
-    /// Where the credentials came from (e.g. "Codex auth.json").
-    pub source_name: String,
-    /// Whether this login is checked for import.
-    pub checked: bool,
+// [port-excised 2026-10-09] the OnboardingWelcomeKind enum, LoginImportPrompt,
+// ImportSummaryPill, TelemetryChoice, and LoginImportRow stratum: they fed only
+// the never-vendored welcome-takeover gate in the ported draw (see the excision
+// note above the trait). Nothing else in the workspace referenced them.
 }
 
 pub(crate) fn is_ssh_remote() -> bool {
