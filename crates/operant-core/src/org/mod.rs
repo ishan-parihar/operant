@@ -59,6 +59,7 @@
 
 pub mod authority;
 pub mod cast;
+pub mod context_injection;
 pub mod decisions_db;
 pub mod department_db;
 pub mod dm_thread;
@@ -68,7 +69,6 @@ pub mod identity_gate;
 pub mod notice;
 pub mod notice_db;
 pub mod pending_requests;
-pub mod context_injection;
 pub mod socialization;
 // RESTORED BY PACKET D — packet A temporarily disabled these because of a
 // compile error in worklog_db.rs. That error is fixed (the `named_params!`
@@ -79,6 +79,7 @@ pub mod seat_authority;
 pub mod seat_budgets;
 pub mod seat_policy;
 pub mod seat_policy_db;
+pub mod synthesis;
 pub mod worklog;
 pub mod worklog_db;
 pub mod write_barrier;

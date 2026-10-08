@@ -154,6 +154,8 @@ pub const SCHEMA: &str = r#"
         target_dept    TEXT,                    -- NULL for org-wide
         decided_by     TEXT NOT NULL,           -- employee id
         rationale      TEXT NOT NULL,           -- required, non-blank (§8.2)
+        amend_seat     TEXT,                    -- Slice 10: seat whose charter this amends; NULL = not an amendment
+        amend_charter   TEXT,                    -- Slice 10: the full replacement charter text
         dissent        TEXT NOT NULL DEFAULT '[]',  -- JSON array of {employee_id, position, reason}
         binding        INTEGER NOT NULL DEFAULT 1,   -- bool, see §8.3 Q3
         status         TEXT NOT NULL DEFAULT 'proposed',  -- proposed|accepted|rejected|expired|superseded
@@ -171,9 +173,10 @@ pub const SCHEMA: &str = r#"
 "#;
 
 /// Columns selected by every read, in [`OrgDecision`] field order.
+/// `amend_seat`/`amend_charter` sit after `rationale`, mirroring the DDL.
 const DECISION_COLUMNS: &str = "decision_id, subject, scope, target_dept, decided_by, \
-     rationale, dissent, binding, status, expires_at, review_due, correlation_id, \
-     artifact_ids, reason, created_at, updated_at";
+     rationale, amend_seat, amend_charter, dissent, binding, status, expires_at, review_due, \
+     correlation_id, artifact_ids, reason, created_at, updated_at";
 
 /// Columns selected by every subjective read, in [`SubjectiveEntry`] field
 /// order.
@@ -447,6 +450,14 @@ pub struct OrgDecision {
     pub review_due: Option<String>,
     /// The meeting or thread that produced it.
     pub correlation_id: Option<String>,
+    /// **Slice 10 (identitarian evolution):** the seat whose charter this
+    /// decision amends, if it is a charter-amendment decision. `None` on an
+    /// ordinary decision. The amendment is applied **at accept time** by the
+    /// CLI accept path — a proposal mutates nothing.
+    pub amend_seat: Option<String>,
+    /// The full replacement charter text. `Some` iff [`Self::amend_seat`] is
+    /// `Some`; the pair is validated as both-or-neither at the CLI seam.
+    pub amend_charter: Option<String>,
     /// Artifacts the decision rests on.
     pub artifact_ids: Vec<String>,
     /// The reason for the write that created this row. Required, non-blank.
@@ -485,11 +496,25 @@ impl OrgDecision {
             expires_at: None,
             review_due: None,
             correlation_id: None,
+            amend_seat: None,
+            amend_charter: None,
             artifact_ids: Vec::new(),
             reason: reason.into(),
             created_at: now.clone(),
             updated_at: now,
         }
+    }
+
+    /// **Slice 10:** mark this decision as a charter amendment for `seat`.
+    ///
+    /// The pair is stored, not applied — [`DecisionsDb::propose`] writes the
+    /// row in `proposed` like any other, and the mutation of the registry
+    /// happens at accept time in the CLI accept path (the only writer the
+    /// authority predicate gates).
+    pub fn with_amendment(mut self, seat: impl Into<String>, charter: impl Into<String>) -> Self {
+        self.amend_seat = Some(seat.into());
+        self.amend_charter = Some(charter.into());
+        self
     }
 }
 
@@ -545,7 +570,30 @@ impl DecisionsDb {
     fn ensure_schema(&self) -> Result<(), Error> {
         let conn = self.lock_conn()?;
         conn.execute_batch(SCHEMA)
-            .map_err(|e| Error::Agent(format!("decisions db: schema: {e}")))
+            .map_err(|e| Error::Agent(format!("decisions db: schema: {e}")))?;
+        // Slice 10: `amend_seat`/`amend_charter` joined the DDL after the
+        // first live deployments, so a file created by an older binary lacks
+        // the pair. `CREATE TABLE IF NOT EXISTS` cannot add columns to an
+        // existing table, so add them explicitly when absent. There is no
+        // `user_version` on this file (see module docs), so the probe is a
+        // `PRAGMA table_info` check — idempotent and cheap.
+        for col in ["amend_seat", "amend_charter"] {
+            let present = conn
+                .prepare(&format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('org_decisions') WHERE name = '{col}'"
+                ))
+                .and_then(|mut stmt| stmt.query_row([], |r| r.get::<_, i64>(0)))
+                .map(|n| n > 0)
+                .map_err(|e| Error::Agent(format!("decisions db: column probe: {e}")))?;
+            if !present {
+                conn.execute(
+                    &format!("ALTER TABLE org_decisions ADD COLUMN {col} TEXT"),
+                    [],
+                )
+                .map_err(|e| Error::Agent(format!("decisions db: add {col}: {e}")))?;
+            }
+        }
+        Ok(())
     }
 
     // -------------------------------------------------------- subjective_log
@@ -681,9 +729,9 @@ impl DecisionsDb {
         conn.execute(
             "INSERT INTO org_decisions (
                  decision_id, subject, scope, target_dept, decided_by, rationale,
-                 dissent, binding, status, expires_at, review_due, correlation_id,
-                 artifact_ids, reason, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                 amend_seat, amend_charter, dissent, binding, status, expires_at, review_due,
+                 correlation_id, artifact_ids, reason, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 decision.decision_id,
                 decision.subject,
@@ -691,6 +739,8 @@ impl DecisionsDb {
                 decision.target_dept,
                 decision.decided_by,
                 decision.rationale,
+                decision.amend_seat,
+                decision.amend_charter,
                 dissent,
                 decision.binding,
                 decision.status.as_str(),
@@ -947,8 +997,8 @@ fn row_to_entry(row: &Row<'_>) -> rusqlite::Result<SubjectiveEntry> {
 }
 
 fn row_to_decision(row: &Row<'_>) -> rusqlite::Result<OrgDecision> {
-    let dissent: String = row.get(6)?;
-    let artifact_ids: String = row.get(12)?;
+    let dissent: String = row.get(8)?;
+    let artifact_ids: String = row.get(14)?;
     Ok(OrgDecision {
         decision_id: row.get(0)?,
         subject: row.get(1)?,
@@ -956,17 +1006,19 @@ fn row_to_decision(row: &Row<'_>) -> rusqlite::Result<OrgDecision> {
         target_dept: row.get(3)?,
         decided_by: row.get(4)?,
         rationale: row.get(5)?,
+        amend_seat: row.get(6)?,
+        amend_charter: row.get(7)?,
         dissent: serde_json::from_str(&dissent).unwrap_or_default(),
-        binding: row.get::<_, i64>(7)? != 0,
-        status: DecisionStatus::parse(&row.get::<_, String>(8)?)
+        binding: row.get::<_, i64>(9)? != 0,
+        status: DecisionStatus::parse(&row.get::<_, String>(10)?)
             .unwrap_or(DecisionStatus::Proposed),
-        expires_at: row.get(9)?,
-        review_due: row.get(10)?,
-        correlation_id: row.get(11)?,
+        expires_at: row.get(11)?,
+        review_due: row.get(12)?,
+        correlation_id: row.get(13)?,
         artifact_ids: serde_json::from_str(&artifact_ids).unwrap_or_default(),
-        reason: row.get(13)?,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        reason: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
     })
 }
 
@@ -1016,6 +1068,76 @@ mod tests {
             "the platform team cannot ship both stacks this quarter",
             "recorded from the 2026-09-30 alignment meeting",
         )
+    }
+
+    #[test]
+    fn amendment_fields_round_trip() {
+        let (_dir, db) = temp_db();
+        let d = decision("amend the dispatcher charter").with_amendment(
+            "emp-dispatcher",
+            "You are dispatcher — now with routing oversight.",
+        );
+        db.propose(&d).expect("propose");
+        let got = db.get(&d.decision_id).expect("get").expect("row");
+        assert_eq!(got.amend_seat.as_deref(), Some("emp-dispatcher"));
+        assert_eq!(
+            got.amend_charter.as_deref(),
+            Some("You are dispatcher — now with routing oversight.")
+        );
+    }
+
+    #[test]
+    fn a_decision_without_amendment_reads_none_none() {
+        let (_dir, db) = temp_db();
+        let d = decision("ordinary decision");
+        assert_eq!(d.amend_seat, None);
+        assert_eq!(d.amend_charter, None);
+        db.propose(&d).expect("propose");
+        let got = db.get(&d.decision_id).expect("get").expect("row");
+        assert_eq!(got.amend_seat, None);
+        assert_eq!(got.amend_charter, None);
+    }
+
+    #[test]
+    fn legacy_file_gains_amendment_columns() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("operant_decisions.db");
+        {
+            // A pre-Slice-10 file: the org_decisions table without the
+            // amend_seat/amend_charter pair, holding one legacy row.
+            let conn = Connection::open(&path).expect("open legacy");
+            conn.execute_batch(
+                "CREATE TABLE org_decisions (
+                     decision_id TEXT PRIMARY KEY, subject TEXT NOT NULL,
+                     scope TEXT NOT NULL, target_dept TEXT, decided_by TEXT NOT NULL,
+                     rationale TEXT NOT NULL, dissent TEXT NOT NULL DEFAULT '[]',
+                     binding INTEGER NOT NULL DEFAULT 1,
+                     status TEXT NOT NULL DEFAULT 'proposed', expires_at TEXT,
+                     review_due TEXT, correlation_id TEXT,
+                     artifact_ids TEXT NOT NULL DEFAULT '[]', reason TEXT NOT NULL,
+                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                 )",
+            )
+            .expect("legacy schema");
+            conn.execute(
+                "INSERT INTO org_decisions (decision_id, subject, scope, decided_by, \
+                 rationale, reason, created_at, updated_at) \
+                 VALUES ('d-old', 'legacy', 'Org', 'user', 'r', 'r', 't', 't')",
+                [],
+            )
+            .expect("legacy row");
+        }
+        // Opening through the store runs ensure_schema, which must ALTER the
+        // legacy table into shape without touching its rows.
+        let db = DecisionsDb::init(path).expect("open legacy file");
+        let got = db.get("d-old").expect("get").expect("legacy row survives");
+        assert_eq!(got.subject, "legacy");
+        assert_eq!(got.amend_seat, None, "legacy rows read as non-amendments");
+        // And a fresh amendment write lands on the migrated table.
+        let d = decision("post-migration amendment").with_amendment("emp-x", "c");
+        db.propose(&d).expect("propose after migration");
+        let got = db.get(&d.decision_id).expect("get").expect("row");
+        assert_eq!(got.amend_seat.as_deref(), Some("emp-x"));
     }
 
     fn entry(employee: &str, ts: i64) -> SubjectiveEntry {

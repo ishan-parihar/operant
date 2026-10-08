@@ -496,6 +496,52 @@ impl EmployeeDb {
         Ok(written > 0)
     }
 
+    /// **Slice 10 (identitarian evolution):** replace one employee's charter.
+    ///
+    /// The mutation behind a ratified charter-amendment decision — evidence
+    /// → proposal → ratification (the predicate-gated accept) → mutation,
+    /// once per cycle. This is deliberately the *only* charter write besides
+    /// the cast seeder: [`Self::insert_ignore`] refuses to converge an
+    /// existing row, so an amendment is the single sanctioned way a live
+    /// charter ever changes, and it carries a non-blank `reason` for the
+    /// audit trail like every other org mutation.
+    ///
+    /// Errors — rather than silently no-oping — when the employee is not
+    /// registered: an amendment naming an unknown seat is a bug in the
+    /// proposal, not a state to half-apply.
+    pub fn amend_charter(
+        &self,
+        employee_id: &str,
+        new_charter: &str,
+        reason: &str,
+    ) -> Result<(), Error> {
+        super::require_non_blank(new_charter, || {
+            "a charter amendment requires the full replacement charter text: a \
+             blank charter is an unseating, not an amendment"
+                .to_string()
+        })?;
+        super::require_non_blank(reason, || {
+            "charter amendments require a non-empty reason: identity changes are \
+             deliberate acts with an audit trail, never silent drift"
+                .to_string()
+        })?;
+        let now = crate::org::notice::rfc3339(chrono::Utc::now());
+        let conn = self.lock_conn()?;
+        let written = conn
+            .execute(
+                "UPDATE employees SET system_prompt = ?2, updated_at = ?3 WHERE employee_id = ?1",
+                params![employee_id, new_charter, now],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to amend charter: {}", e)))?;
+        if written == 0 {
+            return Err(Error::Agent(format!(
+                "charter amendment names unknown employee '{employee_id}': only a registered \
+                 seat can have its charter amended"
+            )));
+        }
+        Ok(())
+    }
+
     /// Read one employee, or `None` if the id is not registered.
     pub fn get_employee(&self, employee_id: &str) -> Result<Option<Employee>, Error> {
         let conn = self.lock_conn()?;

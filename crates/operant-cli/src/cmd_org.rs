@@ -213,6 +213,14 @@ pub enum OrgDecisionAction {
         /// CEO/head decisions binding by default, so pass this to opt out)
         #[arg(long, action = clap::ArgAction::SetTrue)]
         non_binding: bool,
+        /// **Slice 10:** seat whose charter this decision amends on
+        /// acceptance (requires --amend-charter)
+        #[arg(long, value_name = "SEAT")]
+        amend_seat: Option<String>,
+        /// **Slice 10:** the full replacement charter text (requires
+        /// --amend-seat)
+        #[arg(long, value_name = "TEXT")]
+        amend_charter: Option<String>,
         /// Why this decision is being proposed (required)
         #[arg(long, value_name = "REASON")]
         reason: String,
@@ -441,6 +449,18 @@ pub enum OrgSubcommand {
     Audit {
         /// Employee/seat id
         employee_id: String,
+    },
+
+    /// Slice 9: chief-of-staff synthesis — compose the org digest over a
+    /// window, retain it to the org memory bank, and post it as a broadcast
+    /// notice
+    Synthesize {
+        /// Window in hours covered by the digest
+        #[arg(long, default_value_t = 24)]
+        window_hours: i64,
+        /// Compose and print the digest without retaining or posting
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        dry_run: bool,
     },
 }
 
@@ -809,7 +829,40 @@ pub async fn handle_org_command(config: &AppConfig, cmd: OrgSubcommand) -> Resul
         OrgSubcommand::Budget(cmd) => crate::cmd_budget::handle_budget_command(config, cmd).await,
         OrgSubcommand::Cast => cmd_cast(config),
         OrgSubcommand::Audit { employee_id } => cmd_audit(config, &employee_id),
+        OrgSubcommand::Synthesize {
+            window_hours,
+            dry_run,
+        } => handle_synthesis(config, window_hours, dry_run),
     }
+}
+
+/// Slice 9: compose the org synthesis, retain it to the org memory bank,
+/// and post it from chief-of-staff as a broadcast notice.
+fn handle_synthesis(config: &AppConfig, window_hours: i64, dry_run: bool) -> Result<()> {
+    let report = operant_core::org::synthesis::synthesize(
+        std::path::Path::new(&config.database_path),
+        &operant_core::platform::operant_home(),
+        window_hours,
+        dry_run,
+    )
+    .context("org synthesis failed")?;
+    match &report.notice_id {
+        Some(id) => println!(
+            "synthesis posted as {id}: {notices} notices in window ({total} on file), \
+             {proposed} proposed / {accepted} accepted decisions, {worklog} worklog entries \
+             in window — retained to the org bank",
+            notices = report.notices,
+            total = report.notices_total,
+            proposed = report.decisions_proposed,
+            accepted = report.decisions_accepted,
+            worklog = report.worklog_entries,
+        ),
+        None => println!("dry run — nothing written"),
+    }
+    if dry_run {
+        println!("--\ndigest:\n{}", report.digest);
+    }
+    Ok(())
 }
 
 /// Resolve an actor label into an authority scope (Slice 4, §2.3.1/§2.3.3
@@ -843,12 +896,11 @@ fn resolve_actor_scope(conn: &OrgConn, actor: &str) -> Result<(AuthorityScope, O
     let is_org_lead = grants
         .iter()
         .any(|g| g.capability == PREMIERE_GRANT_CAPABILITY && g.is_live_at(&now));
-    let departments = operant_core::org::department_db::DepartmentDb::from_shared_connection(
-        conn.clone(),
-    )
-    .context("Failed to open department store")?
-    .list()
-    .context("Failed to read departments")?;
+    let departments =
+        operant_core::org::department_db::DepartmentDb::from_shared_connection(conn.clone())
+            .context("Failed to open department store")?
+            .list()
+            .context("Failed to read departments")?;
     let is_dept_head = departments
         .iter()
         .any(|d| d.head_employee_id() == Some(actor));
@@ -1020,9 +1072,23 @@ fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> 
             decided_by,
             rationale,
             non_binding,
+            amend_seat,
+            amend_charter,
             reason,
         } => {
             let reason = require_reason("org decision propose", &reason)?;
+            // Slice 10: an amendment carries the seat and the replacement
+            // charter as a pair — one without the other is a CLI typo, not a
+            // decision, and half a pair would poison the accept path.
+            let amend = match (amend_seat, amend_charter) {
+                (None, None) => None,
+                (Some(seat), Some(charter)) => Some((seat, charter)),
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "--amend-seat and --amend-charter are a pair: pass both or neither"
+                    ));
+                }
+            };
             let mut decision = operant_core::org::decisions_db::OrgDecision::new(
                 new_id("d"),
                 subject,
@@ -1035,12 +1101,21 @@ fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> 
             // visible dissent, so binding is the default and --non-binding is
             // the explicit opt-out.
             decision.binding = !non_binding;
+            if let Some((seat, charter)) = amend {
+                decision = decision.with_amendment(seat, charter);
+            }
             db.propose(&decision)
                 .context("Failed to propose decision")?;
-            println!(
-                "decision {} proposed: {} (binding={})",
-                decision.decision_id, decision.subject, decision.binding
-            );
+            match &decision.amend_seat {
+                Some(seat) => println!(
+                    "decision {} proposed: {} (binding={}) — charter amendment for '{seat}', applies on acceptance",
+                    decision.decision_id, decision.subject, decision.binding
+                ),
+                None => println!(
+                    "decision {} proposed: {} (binding={})",
+                    decision.decision_id, decision.subject, decision.binding
+                ),
+            }
         }
         OrgDecisionAction::Accept {
             decision_id,
@@ -1063,20 +1138,37 @@ fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> 
             if acceptor != "user" && acceptor != "system" {
                 let conn = open_org_db(config)?;
                 let (scope, _) = resolve_actor_scope(&conn, &acceptor)?;
-                let target: AuthorityScope = decision
-                    .scope
-                    .parse()
-                    .with_context(|| {
-                        format!(
-                            "decision '{decision_id}' carries unknown scope '{}'",
-                            decision.scope
-                        )
-                    })?;
+                let target: AuthorityScope = decision.scope.parse().with_context(|| {
+                    format!(
+                        "decision '{decision_id}' carries unknown scope '{}'",
+                        decision.scope
+                    )
+                })?;
                 can_accept_decision(scope, target)
                     .into_result()
                     .with_context(|| {
                         format!("acceptor '{acceptor}' may not accept decision '{decision_id}'")
                     })?;
+            }
+            // Slice 10: a charter amendment applies at accept time, BEFORE
+            // the status transition — a failed amendment (unknown seat, blank
+            // charter) must leave the decision `proposed`, never bind a
+            // decision whose mutation did not land. The two writes touch two
+            // files (registry vs decisions), so there is no cross-file
+            // transaction; amendment-first is the fail-closed order.
+            if let (Some(seat), Some(charter)) = (&decision.amend_seat, &decision.amend_charter) {
+                let conn = open_org_db(config)?;
+                let registry = EmployeeDb::from_shared_connection(conn)
+                    .context("Failed to open employee registry")?;
+                registry
+                    .amend_charter(seat, charter, reason)
+                    .with_context(|| {
+                        format!(
+                            "charter amendment for '{seat}' failed — decision \
+                             '{decision_id}' stays proposed"
+                        )
+                    })?;
+                println!("charter of '{seat}' amended by decision {decision_id}");
             }
             db.accept(&decision_id, reason)
                 .context("Failed to accept decision")?;
@@ -1548,6 +1640,25 @@ fn cmd_audit(config: &AppConfig, employee_id: &str) -> Result<()> {
         employee.role,
         employee.department.as_deref().unwrap_or("—")
     );
+    // Slice 10: the charter is the seat's identity — show its posture (present
+    // + fingerprint + last-touched) so a ratified amendment is visible in the
+    // registry surface without dumping the whole prompt.
+    match &employee.system_prompt {
+        Some(c) => {
+            let digest = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                c.hash(&mut h);
+                format!("{:016x}", h.finish())
+            };
+            println!(
+                "charter: present, {} chars, sha:{digest}, last touched {}",
+                c.chars().count(),
+                employee.updated_at
+            );
+        }
+        None => println!("charter: none (cron-backfilled row)"),
+    }
 
     // Grants held: live vs revoked, the containment picture.
     let now = chrono::Utc::now().to_rfc3339();
@@ -1555,9 +1666,14 @@ fn cmd_audit(config: &AppConfig, employee_id: &str) -> Result<()> {
         .context("Failed to open grant store")?
         .list_for_grantee(employee_id)
         .with_context(|| format!("Failed to read grants for '{employee_id}'"))?;
-    let (live, dead): (Vec<_>, Vec<_>) =
-        grants.iter().partition(|g| g.is_live_at(&now) && !g.is_revoked());
-    println!("\nGRANTS: {} live, {} lapsed/revoked", live.len(), dead.len());
+    let (live, dead): (Vec<_>, Vec<_>) = grants
+        .iter()
+        .partition(|g| g.is_live_at(&now) && !g.is_revoked());
+    println!(
+        "\nGRANTS: {} live, {} lapsed/revoked",
+        live.len(),
+        dead.len()
+    );
     for g in &live {
         println!(
             "  {} ({} scope{})",
@@ -1571,10 +1687,9 @@ fn cmd_audit(config: &AppConfig, employee_id: &str) -> Result<()> {
     }
 
     // Decisions this seat has on record, every status.
-    let decisions = operant_core::org::decisions_db::DecisionsDb::for_app(Path::new(
-        &config.database_path,
-    ))
-    .context("Failed to open decision store")?;
+    let decisions =
+        operant_core::org::decisions_db::DecisionsDb::for_app(Path::new(&config.database_path))
+            .context("Failed to open decision store")?;
     use operant_core::org::decisions_db::DecisionStatus;
     let mut mine = Vec::new();
     for status in [
@@ -1602,8 +1717,8 @@ fn cmd_audit(config: &AppConfig, employee_id: &str) -> Result<()> {
     }
 
     // Budget posture + metered spend in the current window.
-    let budgets = SeatBudgetDb::init(&config.database_path)
-        .context("Failed to open seat budget database")?;
+    let budgets =
+        SeatBudgetDb::init(&config.database_path).context("Failed to open seat budget database")?;
     let row = budgets
         .get(employee_id)
         .context("Failed to read budget row")?;
@@ -1613,7 +1728,10 @@ fn cmd_audit(config: &AppConfig, employee_id: &str) -> Result<()> {
         Some(b) => {
             let since = window_start(&b.window);
             let (tokens, usd) = operant_core::PersistentSessionStore::open(
-                config.database_path.to_str().context("non-utf8 database path")?,
+                config
+                    .database_path
+                    .to_str()
+                    .context("non-utf8 database path")?,
             )
             .and_then(|s| s.employee_window_usage(employee_id, &since))
             .context("Failed to read metered usage")?;
@@ -1659,10 +1777,7 @@ async fn handle_notice(config: &AppConfig, action: OrgNoticeAction) -> Result<()
                     can_post_to(scope, actor_dept.as_deref(), target, &grants)
                         .into_result()
                         .with_context(|| {
-                            format!(
-                                "notice from '{sender}' to '{}' refused",
-                                target.selector()
-                            )
+                            format!("notice from '{sender}' to '{}' refused", target.selector())
                         })?;
                 }
             }
@@ -2451,7 +2566,7 @@ mod tests {
 
     // ------------------------------------------- F2: authority predicates (Slice 4)
 
-    use operant_core::org::decisions_db::{DecisionsDb, DecisionStatus};
+    use operant_core::org::decisions_db::{DecisionStatus, DecisionsDb};
     use operant_core::org::department_db::{Department, DepartmentDb};
 
     /// Seed `emp-worker` in department `platform`, plus a second department
@@ -2573,6 +2688,8 @@ mod tests {
                 decided_by: "user".to_string(),
                 rationale: "test".to_string(),
                 non_binding: false,
+                amend_seat: None,
+                amend_charter: None,
                 reason: "slice4 test".to_string(),
             },
         )
@@ -2615,6 +2732,8 @@ mod tests {
                 decided_by: "user".to_string(),
                 rationale: "test".to_string(),
                 non_binding: false,
+                amend_seat: None,
+                amend_charter: None,
                 reason: "slice4 test".to_string(),
             },
         )
@@ -2639,5 +2758,179 @@ mod tests {
             db.get(&id).expect("get").expect("row").status,
             DecisionStatus::Accepted
         );
+    }
+
+    // --------------------------------------- F4: Slice 9/10 — synthesis + amendments
+
+    fn charter_of(config: &AppConfig, employee: &str) -> Option<String> {
+        let conn = open_org_db(config).expect("reopen org db");
+        conn.lock()
+            .expect("conn")
+            .query_row(
+                "SELECT system_prompt FROM employees WHERE employee_id = ?1",
+                [employee],
+                |r| r.get(0),
+            )
+            .expect("read charter")
+    }
+
+    fn propose_amendment(config: &AppConfig, seat: &str, charter: &str) -> String {
+        handle_decision(
+            config,
+            OrgDecisionAction::Propose {
+                subject: format!("amend the charter of {seat}"),
+                scope: "org".to_string(),
+                decided_by: "user".to_string(),
+                rationale: "the seat's mandate grew".to_string(),
+                non_binding: false,
+                amend_seat: Some(seat.to_string()),
+                amend_charter: Some(charter.to_string()),
+                reason: "slice10 test".to_string(),
+            },
+        )
+        .expect("propose amendment");
+        let db = DecisionsDb::for_app(Path::new(&config.database_path)).expect("decisions db");
+        db.list_by_status(DecisionStatus::Proposed)
+            .expect("list proposed")[0]
+            .decision_id
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn charter_amendment_accept_applies_the_new_charter() {
+        let (config, _dir) = scope_fixture();
+        let new_charter = "You are worker — now with synthesis duties.";
+        let id = propose_amendment(&config, "emp-worker", new_charter);
+
+        // The §2.3.3 predicate still gates an amendment: a department-scoped
+        // seat cannot ratify an org-scoped charter change.
+        let err = handle_decision(
+            &config,
+            OrgDecisionAction::Accept {
+                decision_id: id.clone(),
+                acceptor: "emp-worker".to_string(),
+                reason: "slice10 test".to_string(),
+            },
+        )
+        .expect_err("an out-of-scope acceptor must be refused");
+        assert!(err.to_string().contains("may not accept"), "{err}");
+        assert_eq!(
+            charter_of(&config, "emp-worker"),
+            None,
+            "a refused acceptance must not have touched the charter"
+        );
+
+        // The operator root accepts: the amendment applies and the status flips.
+        handle_decision(
+            &config,
+            OrgDecisionAction::Accept {
+                decision_id: id.clone(),
+                acceptor: "user".to_string(),
+                reason: "ratified in the test cycle".to_string(),
+            },
+        )
+        .expect("accept");
+        let db = DecisionsDb::for_app(Path::new(&config.database_path)).expect("decisions db");
+        assert_eq!(
+            db.get(&id).expect("get").expect("row").status,
+            DecisionStatus::Accepted
+        );
+        assert_eq!(
+            charter_of(&config, "emp-worker"),
+            Some(new_charter.to_string()),
+            "the ratified charter must land in the registry"
+        );
+    }
+
+    #[tokio::test]
+    async fn amendment_of_unknown_seat_leaves_the_decision_proposed() {
+        let (config, _dir) = scope_fixture();
+        let id = propose_amendment(&config, "emp-ghost", "text for a seat that does not exist");
+
+        let err = handle_decision(
+            &config,
+            OrgDecisionAction::Accept {
+                decision_id: id.clone(),
+                acceptor: "user".to_string(),
+                reason: "slice10 test".to_string(),
+            },
+        )
+        .expect_err("an unknown seat must fail the amendment");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("emp-ghost"), "{msg}");
+        assert!(msg.contains("stays proposed"), "{msg}");
+
+        let db = DecisionsDb::for_app(Path::new(&config.database_path)).expect("decisions db");
+        assert_eq!(
+            db.get(&id).expect("get").expect("row").status,
+            DecisionStatus::Proposed,
+            "a failed amendment must not bind the decision"
+        );
+    }
+
+    #[tokio::test]
+    async fn amend_flags_must_come_as_a_pair() {
+        let (config, _dir) = scope_fixture();
+        let err = handle_decision(
+            &config,
+            OrgDecisionAction::Propose {
+                subject: "half an amendment".to_string(),
+                scope: "org".to_string(),
+                decided_by: "user".to_string(),
+                rationale: "r".to_string(),
+                non_binding: false,
+                amend_seat: Some("emp-worker".to_string()),
+                amend_charter: None,
+                reason: "slice10 test".to_string(),
+            },
+        )
+        .expect_err("half a pair must be refused");
+        assert!(err.to_string().contains("pair"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn org_synthesis_reaches_the_board_from_chief_of_staff() {
+        let (config, _dir) = scope_fixture();
+        // Seed real content: one notice and one proposed decision.
+        handle_notice(&config, post("user", "broadcast"))
+            .await
+            .expect("seed post");
+        handle_decision(
+            &config,
+            OrgDecisionAction::Propose {
+                subject: "quarterly posture".to_string(),
+                scope: "org".to_string(),
+                decided_by: "user".to_string(),
+                rationale: "r".to_string(),
+                non_binding: false,
+                amend_seat: None,
+                amend_charter: None,
+                reason: "slice9 test".to_string(),
+            },
+        )
+        .expect("propose");
+
+        let mem = tempfile::tempdir().expect("mem dir");
+        let report = operant_core::org::synthesis::synthesize(
+            Path::new(&config.database_path),
+            mem.path(),
+            24,
+            false,
+        )
+        .expect("synthesize");
+        assert_eq!(report.notices, 1, "the seeded notice is in window");
+        assert_eq!(report.decisions_proposed, 1);
+        assert!(
+            report.digest.contains("quarterly posture"),
+            "the digest must carry the proposed decision: {}",
+            report.digest
+        );
+        assert_eq!(
+            notice_count(&config),
+            2,
+            "seed + one chief-of-staff synthesis broadcast"
+        );
+        // The org-bank retain itself is pinned by the core module's tests;
+        // this CLI-side test pins the board routing.
     }
 }
