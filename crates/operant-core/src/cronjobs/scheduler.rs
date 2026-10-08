@@ -1469,6 +1469,22 @@ mod tests {
         seat_memory_append(None, "x", "h", "t");
     }
 
+    #[test]
+    fn bind_seat_run_retargets_the_shared_agent_not_clears_it() {
+        // BUGS.md D-1's owed verification, pinned iter-684: the scheduler
+        // must retarget the shared agent's session via `set_session_id`
+        // (the non-destructive swap the 548 substrate built), never the
+        // global `clear_history`. A regression back to clear_history
+        // fails here: it sets no id, so both asserts below trip.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scheduler =
+            scheduler_with_budgets(dir.path(), crate::config::BudgetSettings::default(), None);
+        let prompt = scheduler.bind_seat_run("identity-warden", "emp-warden-1", "BASE PROMPT");
+        assert_eq!(scheduler.agent.session_id().as_deref(), Some("emp-warden-1"));
+        assert_eq!(scheduler.agent.seat_id().as_deref(), Some("identity-warden"));
+        assert_eq!(prompt, "BASE PROMPT", "no memory/injection mounted → byte-identical");
+    }
+
     // ── iter-669: transient-retry budget ──
 
     #[test]

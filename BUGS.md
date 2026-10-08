@@ -74,6 +74,11 @@ gone and cannot be recovered.
   passes when it is replaced. As of this entry **no test covers this** — the
   existing `tests/agent_session_isolation.rs` tests the substrate, not this
   crosstalk.
+  > **PINNED (iter-684)**: `bind_seat_run_retargets_the_shared_agent_not_clears_it`
+  > now asserts the scheduler retargets the shared agent via `set_session_id`
+  > (id + seat both flip; a `clear_history` regression sets neither and fails
+  > both asserts). The substrate's swap-preservation remains covered by
+  > `agent_session_isolation`.
 
 ### D-1b — Cron tool calls permanently allowlist dangerous tools for the interactive user (FIXED iter-571 — see correction note under D-1)
 

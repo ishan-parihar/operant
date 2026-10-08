@@ -1060,6 +1060,19 @@ impl MessageHandler for GatewayMessageHandler {
             }
         }
 
+        // iter-684 (gap 5 phase 2, capture-at-inbound): tap this DM into the
+        // seat's durable context store — the seat's LATER cycles (cron and
+        // socialization) then see what the human asked, ranked under the Dm
+        // quota. This turn itself never sees it echoed back: the transcript
+        // check excludes the inbound message's content hash. Fail-open.
+        if let (Some(injector), Some(seat)) = (
+            self.context_injection.as_ref(),
+            bound_employee.as_ref(),
+        ) {
+            injector.record_inbound_dm(seat, &message.username, &message.content);
+        }
+
+
         // Wave 3 (ORGANISM-ARCHITECTURE §3): a CONTINUATION begins from the
         // bound employee's rolling summary. Only when the transcript
         // actually reloaded (restart, session switch, /resume) — a live

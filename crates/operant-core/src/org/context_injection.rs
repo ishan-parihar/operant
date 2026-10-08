@@ -48,6 +48,26 @@ pub const CONTEXT_WATERMARKS_SCHEMA: &str = r#"
     );
 "#;
 
+/// The durable landing for CAPTURED inbound items (phase 2, design doc §5).
+/// The Telegram Bot API has no history-read for bots — a DM can be seen
+/// exactly once, at the moment the gateway receives it — so phase 2's DM
+/// class is capture-at-inbound, not pull: the gateway taps each inbound
+/// message into this table, and the Dm collector reads it like any other
+/// source. Append-only; the watermarks govern re-reads.
+pub const CONTEXT_ITEMS_SCHEMA: &str = r#"
+    CREATE TABLE IF NOT EXISTS context_items (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        class        TEXT NOT NULL,   -- dm (future: feed sources)
+        author       TEXT NOT NULL,   -- platform username / sender label
+        ts           INTEGER NOT NULL,  -- unix seconds
+        content_hash INTEGER NOT NULL,   -- cross-class dedup key
+        seat_hint    TEXT NOT NULL,   -- the seat the item is addressed to
+        text         TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_context_items_seat_class_ts
+        ON context_items(seat_hint, class, ts);
+"#;
+
 /// The four aspect classes (the owner's list, in render order).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextClass {
@@ -213,6 +233,8 @@ impl ContextInjector {
             .map_err(|e| Error::Agent(format!("context injection: open: {e}")))?;
         conn.execute_batch(CONTEXT_WATERMARKS_SCHEMA)
             .map_err(|e| Error::Agent(format!("context injection: schema: {e}")))?;
+        conn.execute_batch(CONTEXT_ITEMS_SCHEMA)
+            .map_err(|e| Error::Agent(format!("context injection: items schema: {e}")))?;
         Ok(Self {
             app_db: org_sibling,
             settings,
@@ -306,6 +328,34 @@ impl ContextInjector {
         Ok(items)
     }
 
+    /// Phase 2 (design doc §5, capture-at-inbound realization): record an
+    /// inbound DM addressed to a seat — the gateway taps every inbound
+    /// message here. Fail-open: a failed capture never fails the turn.
+    pub fn record_inbound_dm(&self, seat_id: &str, author: &str, text: &str) {
+        if !self.settings.enabled {
+            return;
+        }
+        let Ok(conn) = Connection::open(&self.app_db) else {
+            return;
+        };
+        let text = crate::agent::safe_truncate_str(text.trim(), 800);
+        if text.is_empty() {
+            return;
+        }
+        if let Err(e) = conn.execute(
+            "INSERT INTO context_items (class, author, ts, content_hash, seat_hint, text)\n             VALUES ('dm', ?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                author,
+                chrono::Utc::now().timestamp(),
+                content_hash(text) as i64,
+                seat_id,
+                text
+            ],
+        ) {
+            tracing::warn!("context injection: inbound DM capture failed: {e} (fail-open)");
+        }
+    }
+
     fn collect_class(
         &self,
         conn: &Connection,
@@ -314,9 +364,30 @@ impl ContextInjector {
         watermark: i64,
     ) -> Result<Vec<ContextItem>> {
         match class {
-            // Phase 1: the org layer stores no DM bodies — reserved for the
-            // phase-2 platform read adapters and the socialization sessions.
-            ContextClass::Dm => Ok(Vec::new()),
+            // Phase 2 (capture-at-inbound): the durable store the gateway
+            // taps inbound DMs into — the design doc's §5 landing, realized
+            // here because the Bot API gives a bot exactly one look at a DM.
+            ContextClass::Dm => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT author, ts, text FROM context_items \
+                         WHERE class = 'dm' AND seat_hint = ?1 AND ts > ?2 \
+                         ORDER BY ts DESC LIMIT 20",
+                    )
+                    .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
+                let rows = stmt
+                    .query_map(params![seat_id, watermark], |row| {
+                        Ok(ContextItem {
+                            class,
+                            author: row.get(0)?,
+                            ts: row.get(1)?,
+                            text: row.get(2)?,
+                            hash: 0,
+                        })
+                    })
+                    .map_err(|e| Error::Agent(format!("context injection: query: {e}")))?;
+                Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            }
             ContextClass::Global => {
                 let mut stmt = conn
                     .prepare(
@@ -755,6 +826,36 @@ mod tests {
         assert!(
             r > i,
             "affinity must rank the relevant item higher: {r} vs {i}"
+        );
+    }
+
+    #[test]
+    fn captured_inbound_dm_reaches_the_seat_and_not_others() {
+        let (_dir, injector) = db_with_worklog();
+        injector.record_inbound_dm(
+            "identity-warden",
+            "ishan",
+            "Please check the registry binding tonight",
+        );
+        let warden = injector.render_section("identity-warden", None, "PROMPT", &[]);
+        assert!(
+            warden.contains("registry binding"),
+            "the captured DM must reach its seat: {warden}"
+        );
+        assert!(
+            warden.contains("DMs addressed to you"),
+            "it renders under the Dm class: {warden}"
+        );
+        assert!(
+            !injector
+                .render_section("dispatcher", None, "PROMPT", &[])
+                .contains("registry binding"),
+            "another seat's DM must not leak"
+        );
+        // The watermark holds: a consumed DM never re-renders.
+        assert_eq!(
+            injector.render_section("identity-warden", None, "PROMPT", &[]),
+            "PROMPT"
         );
     }
 
