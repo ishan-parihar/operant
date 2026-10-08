@@ -8,8 +8,8 @@
                            │ Search                                                        │
                            │                                                               │
                            │                                                               │
- jcode · replay            │ Popular                                                       │
- JCode                     │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
+ operant · replay          │ Popular                                                       │
+ operant                   │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
  /model to switch · Offline│ Custom OpenAI-Compatible Custom URL + API key                 │
  v0.2.1                    │ OpenAI (API key)                                              │
  /login to add provider    │ Anthropic (API key)                                           │
@@ -34,7 +34,7 @@
                            │ Alibaba DashScope (API key)                                   │
                            └───────────────────────────────────────────────────Esc to close┘
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

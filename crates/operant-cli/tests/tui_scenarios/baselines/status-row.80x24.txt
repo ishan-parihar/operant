@@ -1,7 +1,7 @@
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
@@ -18,7 +18,7 @@
  (untitled) · messages: 0 · tokens: 0 · cost: $0.0000 · idle
 
 1>
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+                                                       ~ API key Offline Capture
 
 
 

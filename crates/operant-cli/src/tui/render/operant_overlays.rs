@@ -721,7 +721,7 @@ fn paint_debug_overlay(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 /// post-pass (async rasters, pinned graphics, the OSC 8 hyperlink overlay), or
 /// they paint straight over the modal — exactly what the old dispatch ladder's
 /// early return suppressed. The colour-substitution pass needs no skip: the
-/// ported chrome runs it inside `jcode_ui::draw`.
+/// ported chrome runs it inside `operant_ui::draw`.
 pub(crate) fn draw_operant_overlays(frame: &mut Frame, app: &App) -> bool {
     let size = frame.area();
     let mut ctx = FrameCtx { size, stop: false };

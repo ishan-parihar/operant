@@ -1,15 +1,15 @@
 
+                                                                  ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
+                                                                  ▌ ───────────────────────────────────────────────  ▐
+                                                                  ▌                                                  ▐
 
 
 
 
 
 
-
-
-
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
@@ -23,9 +23,9 @@
  ~
 
  Trying a tool that will fail.
+   ✓ shell · 3 tok
 
  The shell command exited 3.
-   ✓ shell · 3 tok
 
 Tool error: exit status 3
 1>
@@ -34,7 +34,7 @@ Tool error: exit status 3
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

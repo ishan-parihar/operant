@@ -8,8 +8,8 @@
 
 
                         ┌──────────────────────────────────────────────────────────────────────┐
- jcode · replay · perf:r│ WARNING: Bypass Permissions Mode                                     │
- JCode                  │Operant running in Bypass Permissions mode                            │
+ operant · replay       │ WARNING: Bypass Permissions Mode                                     │
+ operant                │Operant running in Bypass Permissions mode                            │
  /model to switch · Offl│                                                                      │
  v0.2.1                 │In Bypass Permissions mode, Operant will NOT ask for your             │
  /login to add provider │approval before running potentially dangerous commands.               │
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

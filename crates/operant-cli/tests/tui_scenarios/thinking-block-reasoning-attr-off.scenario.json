@@ -1,0 +1,20 @@
+{
+  "name": "thinking-block-reasoning-attr-off",
+  "surface": "crates/operant-cli/src/tui/render/messages.rs::render_thinking_item",
+  "opens_with": "/reasoning twice (toggle off)",
+  "keys": "/reasoning<enter>/reasoning<enter>",
+  "size": "120x40",
+  "agent_script": "reasoning-then-answer.json",
+  "assert": [
+    "show_reasoning == false"
+  ],
+  "baseline": "thinking-block-reasoning-attr-off.txt",
+  "style_baseline": "thinking-block-reasoning-attr-off.style.txt",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "The toggle-off render of the live Reasoning delta collapses the thinking frame to its border row, and one border cell alternates between `─` and `_` across renders (style diff at the same cell: -@\u2581 vs -@\u2500, text diff one column of frame width, measured in the 2026-10-08 full-corpus prove). The frame edge follows a clock-derived streaming indicator on the live-delta path, so its phase differs per render. thinking-block-reasoning-attr (toggle-on, same surface) is fully deterministic and keeps its golden; only the collapsed-frame render is withheld.",
+    "varying_region": "Row 2, col 114 — the last border cell of the collapsed thinking frame, in both dumps.",
+    "surface_of_fix": "Freeze the streaming-indicator phase under App::is_simulating (derive from the simulated frame index, not a real clock), the same freeze pattern the corpus asks of debug-overlay and footer-bar. Production change made for a test, so the golden is withheld; the show_reasoning == false assertion still guards the toggle-off state machine."
+  },
+  "notes": "Split out of thinking-block-reasoning-attr, whose 120x40 variant this is. That scenario's notes explain the two-render-input design: a regression collapsing Reasoning into Thinking or ignoring the /reasoning toggle is caught by the parent's golden plus this assertion."
+}

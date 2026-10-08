@@ -8,8 +8,8 @@
 
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1                    ┌───────────────────────────────────────────────────────────────┐
  /login to add provider    │ Select model                                                  │
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

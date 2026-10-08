@@ -1,7 +1,7 @@
                                                             ╭──────────────────────────────────────────────────────────╮
                                                             │  ⚠ Error                                                 │
- jcode · replay                                             │──────────────────────────────────────────────────────────│
- JCode                                                      │                                                          │
+ operant · replay                                           │──────────────────────────────────────────────────────────│
+ operant                                                    │                                                          │
  /model to switch · Offline Capture                         │ Error: provider overloaded_error (529): the upstream is  │
  v0.2.1                                                     │ saturated, retry shortly                                 │
  /login to add provider                                     │                                                          │
@@ -18,7 +18,7 @@
                                                             │ → The provider is degraded — retry in                    │
                                                             │   a moment, or /model to switch route.                   │
 1>                                                          ╰──────────────────────────────────────────────────────────╯
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+                                                                         ~ 20/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

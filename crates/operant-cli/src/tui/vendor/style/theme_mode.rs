@@ -1,6 +1,6 @@
-// Vendored from jcode (crates/jcode-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
-// Adapted for operant: `crate::` paths rewritten to `super::`; jcode-specific
-// doc references (the OSC 11 query source, `JCODE_THEME`, the "jcode palette")
+// Vendored from jcode (crates/operant-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
+// Adapted for operant: `crate::` paths rewritten to `super::`; operant-specific
+// doc references (the OSC 11 query source, `OPERANT_THEME`, the "jcode palette")
 // rewritten generically. The substitution algorithm, contrast target, and every
 // test assertion are unchanged.
 

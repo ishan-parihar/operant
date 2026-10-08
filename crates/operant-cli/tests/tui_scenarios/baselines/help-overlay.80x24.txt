@@ -18,7 +18,7 @@
 │    /config  Show active configuration                                        │
 │    /config init  Create default config file                                  │
 │    /config edit  Open config in $EDITOR                                      │
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
-
+│    /voice  Voice input: speak, then send (Ctrl+Space)                        │
+│    /dictate  Run configured external dictation                               │
 │    /git [status]  Show branch and working tree status for the repo           │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘

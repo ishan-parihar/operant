@@ -1,7 +1,7 @@
 //! Copy-target detection over RENDERED lines.
 //!
-//! Ported from jcode `crates/jcode-tui-markdown/src/markdown_render_support.rs:10-129`
-//! and `crates/jcode-tui-markdown/src/markdown_types.rs:27-33`.
+//! Ported from jcode `crates/operant-tui-markdown/src/markdown_render_support.rs:10-129`
+//! and `crates/operant-tui-markdown/src/markdown_types.rs:27-33`.
 //!
 //! # Why rendered shape, not source
 //!
@@ -36,7 +36,7 @@ use ratatui::text::Line;
 
 /// Mnemonic keys handed to copy badges, in assignment order.
 ///
-/// Ported verbatim from jcode `crates/jcode-tui/src/tui/ui.rs:557-559`. The
+/// Ported verbatim from jcode `crates/operant-tui/src/tui/ui.rs:557-559`. The
 /// pool already excludes `h`/`j`/`k`/`l` so a badge can never shadow a
 /// vi-style motion key; keep it that way if the pool is ever extended.
 pub const COPY_BADGE_KEYS: [char; 12] =
@@ -57,7 +57,7 @@ const MATH_LABEL: &str = "math";
 /// jcode recovers the real placeholder through
 /// `mermaid::parse_inline_image_placeholder`; operant has no such parser, so the
 /// prefix is matched directly. It is the shape operant's own emitters already
-/// produce - see `image_paste.rs`. The W2 markdown port of `jcode-tui-markdown`
+/// produce - see `image_paste.rs`. The W2 markdown port of `operant-tui-markdown`
 /// (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md §2) is the future renderer
 /// whose rasterised-formula output must keep this `[image` prefix for this
 /// constant to keep matching.

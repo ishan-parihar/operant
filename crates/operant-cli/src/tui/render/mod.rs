@@ -10,7 +10,7 @@
 //   footer    — input pane, status row, footer bar, prompt suggestions
 //   dispatch  — the paint-order registry: which surface paints, and in what order
 
-// The ported jcode chrome (jcode_ui::draw) replaced the dispatch registry, the
+// The ported jcode chrome (operant_ui::draw) replaced the dispatch registry, the
 // transcript/footer/welcome renderers at iter-648; what stays are the helpers
 // operant-only surfaces still call (selection's copy-badge pool, tool group
 // lines, text measurement) plus the async-raster hash cache.
@@ -63,11 +63,11 @@ const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
 pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
-    // The ported jcode chrome (jcode_ui::draw, upstream ui.rs:2659-3624) owns
+    // The ported jcode chrome (operant_ui::draw, upstream ui.rs:2659-3624) owns
     // the whole frame: the full-frame clear, every band, and the per-frame
     // colour substitution at its tail. operant's dispatch rows are gone; what
     // stays below are the three passes with no jcode counterpart.
-    crate::tui::jcode_ui::draw(frame, app);
+    crate::tui::operant_ui::draw(frame, app);
 
     // ---- Publish the ported layout to operant's hit-test/scroll state ----
     // Three App cells were written by the deleted dispatch table. Each still
@@ -75,16 +75,16 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // mouse gates input clicks on a non-empty input rect, and the prepend
     // correction reconciles against the painted scroll row.
     //
-    // last_selectable_area MUST publish after jcode_ui::draw, not before:
+    // last_selectable_area MUST publish after operant_ui::draw, not before:
     // message_area() reads the thread-local the draw just updated, so a
     // pre-draw copy is one frame stale — zero-rect on the first frame, which
     // silently drops the first mouse click after startup (a simulated
     // scenario's opening Down lands exactly there).
     app.last_selectable_area
-        .set(crate::tui::jcode_ui::message_area());
-    app.last_input_area.set(crate::tui::jcode_ui::input_area());
+        .set(crate::tui::operant_ui::message_area());
+    app.last_input_area.set(crate::tui::operant_ui::input_area());
     app.last_render_scroll_offset
-        .set(crate::tui::jcode_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16);
+        .set(crate::tui::operant_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16);
 
     // ---- Background task rows (operant-only) ---------------------------
     // Docked to the bottom-left of the messages band, so the rows sit above
@@ -96,7 +96,7 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     let bg_rows = app.background_tasks.rows();
     if !bg_rows.is_empty() {
         let bg_area = crate::tui::background_tasks::rows_area(
-            crate::tui::jcode_ui::message_area(),
+            crate::tui::operant_ui::message_area(),
             bg_rows.len(),
         );
         crate::tui::background_tasks::render_rows(
@@ -127,7 +127,7 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     let mut landed = crate::tui::mermaid::drain_ready_rasters();
     let formulas = crate::tui::latex::drain_ready_rasters();
     if landed.resolved || formulas.resolved {
-        crate::tui::jcode_ui::invalidate_prepared_caches();
+        crate::tui::operant_ui::invalidate_prepared_caches();
     }
     landed.pngs.extend(formulas.pngs);
     crate::tui::pinned_images::pin_rasters(&app.pinned_images, &landed);
@@ -178,7 +178,7 @@ mod tests {
             );
 
             let painted =
-                crate::tui::jcode_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16;
+                crate::tui::operant_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16;
             assert_eq!(
                 app.last_render_scroll_offset.get(),
                 painted,

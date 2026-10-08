@@ -8,8 +8,8 @@
                       Hooks — Select Event                                           Esc to close
                       Review configured hook events and matchers.
 
- jcode · replay        No hooks configured.
- JCode                 Edit ~/.operant/settings.json to add hooks.
+ operant · replay      No hooks configured.
+ operant               Edit ~/.operant/settings.json to add hooks.
  /model to switch ·
  v0.2.1
  /login to add provi
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

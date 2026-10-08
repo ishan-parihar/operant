@@ -1034,7 +1034,7 @@ impl App {
                 KeyCode::Char('c') if ctrl => {
                     self.copy_current_selection();
                 }
-                // ---- jcode-parity keyboard navigation (iter-672) ----------
+                // ---- operant-parity keyboard navigation (iter-672) ----------
                 // Cursor = selection focus (falling back to the anchor, then
                 // the first visible line). Plain moves collapse the selection
                 // onto the new cursor; SHIFT moves extend from the anchor.

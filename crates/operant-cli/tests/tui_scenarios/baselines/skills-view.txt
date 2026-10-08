@@ -8,8 +8,8 @@
 
                     ┌──────────────────────────────────────────────────────────────────────────────┐
                     │ Skills                                                                       │
- jcode · replay     │ #    Name                     Category       Version                         │
- JCode              │                                                                              │
+ operant · replay   │ #    Name                     Category       Version                         │
+ operant            │                                                                              │
  /model to switch · │ › 1    ai-slop-cleaner                         0.1.0                         │
  v0.2.1             │   2    airtable                                1.1.0                         │
  /login to add provi│   3    architecture-diagram                    1.0.0                         │
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

@@ -1,9 +1,9 @@
 // The cutover App-seam: `impl TuiState for App`.
 //
 // Operant's own code — not a port. The trait in
-// `crate::tui::jcode_app::tui_state` is the verbatim jcode port; this file is
+// `crate::tui::operant_app::tui_state` is the verbatim jcode port; this file is
 // the field mapping that makes it live over operant's real `App`. It follows
-// the seam discipline of `tui/jcode_model/adapter.rs`: every method below is a
+// the seam discipline of `tui/operant_model/adapter.rs`: every method below is a
 // mapping onto operant's own state, and where operant has no field to feed a
 // ported widget, the trait's honest default is returned with a
 // `// [port-decision]` line naming what would have to feed it. Nothing here
@@ -14,7 +14,7 @@
 // * `display_messages` / `display_messages_version` — operant's transcript is
 //   `Vec<Message>` + `Vec<ToolUseBlock>` + `Vec<SystemAnnotation>`, and the
 //   flattening into `DisplayMessage` is owned by
-//   `tui/jcode_model/adapter.rs` (`jcode_model::display_messages`). The trait
+//   `tui/operant_model/adapter.rs` (`operant_model::display_messages`). The trait
 //   wants `&[DisplayMessage]`, i.e. a cached row buffer. Operant has no such
 //   field (all `App` fields are constructed in `app/init.rs`, which this
 //   batch may not touch), so the cache lives in a `thread_local!` keyed on
@@ -29,20 +29,20 @@
 
 use super::{App, TurnState};
 use crate::tui::adapter_types::types::{ContentBlock, Message, MessageContent, Role};
-use crate::tui::jcode_app::app::ProcessingStatus;
-use crate::tui::jcode_app::auth::{AuthState, AuthStatus, ProviderAuth};
-use crate::tui::jcode_app::config_shim::{
+use crate::tui::operant_app::app::ProcessingStatus;
+use crate::tui::operant_app::auth::{AuthState, AuthStatus, ProviderAuth};
+use crate::tui::operant_app::config_shim::{
     DiagramDisplayMode, DiagramPanePosition, DiffDisplayMode,
 };
-use crate::tui::jcode_app::info_widget::{AuthMethod, InfoWidgetData};
-use crate::tui::jcode_app::prompt::ContextInfo;
-use crate::tui::jcode_app::side_panel::SidePanelSnapshot;
-use crate::tui::jcode_app::tui_fns::{
+use crate::tui::operant_app::info_widget::{AuthMethod, InfoWidgetData};
+use crate::tui::operant_app::prompt::ContextInfo;
+use crate::tui::operant_app::side_panel::SidePanelSnapshot;
+use crate::tui::operant_app::tui_fns::{
     BackgroundTaskRow, CacheTtlInfo, ContextSnapshot, PromptHistorySearchView,
 };
-use crate::tui::jcode_app::tui_state::TuiState;
-use crate::tui::jcode_model::DisplayMessage;
-use crate::tui::jcode_model::vendor_types::ToolCall;
+use crate::tui::operant_app::tui_state::TuiState;
+use crate::tui::operant_model::DisplayMessage;
+use crate::tui::operant_model::vendor_types::ToolCall;
 use ratatui::text::Line;
 use std::time::{Duration, Instant};
 
@@ -108,7 +108,7 @@ impl App {
             cache.rows.clear();
             cache
                 .rows
-                .extend(crate::tui::jcode_model::display_messages(self));
+                .extend(crate::tui::operant_model::display_messages(self));
             cache.version = version;
         }
         &cache.rows
@@ -146,10 +146,10 @@ impl TuiState for App {
     fn has_display_edit_tool_messages(&self) -> bool {
         self.tool_use_blocks
             .iter()
-            .any(|block| crate::tui::jcode_model::tool_display::is_edit_tool_name(&block.name))
+            .any(|block| crate::tui::operant_model::tool_display::is_edit_tool_name(&block.name))
     }
 
-    fn side_pane_images(&self) -> Vec<crate::tui::jcode_app::session::RenderedImage> {
+    fn side_pane_images(&self) -> Vec<crate::tui::operant_app::session::RenderedImage> {
         // [port-decision] side_pane_images: operant's `PinnedImageRegistry`
         // stores terminal escape sequences, not the media payloads
         // `RenderedImage` carries, so there is nothing to map; returns empty —
@@ -239,13 +239,13 @@ impl TuiState for App {
         false
     }
 
-    fn pending_resize_anchor(&self) -> Option<crate::tui::jcode_model::ContentPos> {
+    fn pending_resize_anchor(&self) -> Option<crate::tui::operant_model::ContentPos> {
         // The ported chrome records the reader's content position every frame
-        // (jcode_ui::record_reader_anchor, published from the prepared frame's
+        // (operant_ui::record_reader_anchor, published from the prepared frame's
         // scroll resolve). The ported ContentPos IS the target shape; operant's
         // own scroll_anchor::ContentPos was the pre-cutover type and its
         // publisher died with the dispatch table.
-        crate::tui::jcode_ui::resolved_reader_anchor()
+        crate::tui::operant_ui::resolved_reader_anchor()
     }
 
     fn pending_history_anchor_lines_from_bottom(&self) -> Option<usize> {
@@ -429,7 +429,7 @@ impl TuiState for App {
             .map(|(name, status)| format!("{name}: {status}"))
     }
 
-    fn batch_progress(&self) -> Option<crate::tui::jcode_app::bus::BatchProgress> {
+    fn batch_progress(&self) -> Option<crate::tui::operant_app::bus::BatchProgress> {
         // [port-decision] batch_progress: operant executes tools on its own
         // worker pool and never emits a batch sub-call event; returns None —
         // wire when a batch-tool event exists.
@@ -694,7 +694,7 @@ impl TuiState for App {
     }
 
     fn render_streaming_markdown(&self, width: usize) -> Vec<Line<'static>> {
-        crate::tui::jcode_app::markdown::render_markdown_with_width(
+        crate::tui::operant_app::markdown::render_markdown_with_width(
             &self.streaming_text,
             Some(width),
         )
@@ -835,7 +835,7 @@ impl TuiState for App {
 
     fn inline_interactive_state(
         &self,
-    ) -> Option<&crate::tui::jcode_app::tui_fns::InlineInteractiveState> {
+    ) -> Option<&crate::tui::operant_app::tui_fns::InlineInteractiveState> {
         // [port-decision] inline_interactive_state: operant's pickers are
         // separate overlay structs (`model_picker`, `agents_menu`,
         // `skills_view`), not the ported unified picker; returns None — wire
@@ -874,7 +874,7 @@ impl TuiState for App {
 
     // ---- Copy selection ----
 
-    fn copy_badge_ui(&self) -> crate::tui::jcode_app::app::CopyBadgeUiState {
+    fn copy_badge_ui(&self) -> crate::tui::operant_app::app::CopyBadgeUiState {
         // [port-decision] copy_badge_ui: operant's copy feedback is a plain
         // status message, with no badge pulse timers; returns default — wire
         // when the copy badge's Alt/Shift/key pulses land.
@@ -887,8 +887,8 @@ impl TuiState for App {
 
     fn copy_selection_range(
         &self,
-    ) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionRange> {
-        use crate::tui::jcode_ui::copy_selection::{
+    ) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionRange> {
+        use crate::tui::operant_ui::copy_selection::{
             CopySelectionPane, CopySelectionPoint, CopySelectionRange,
         };
         // Selection points are `(col, content_line)` in scroll-stable content
@@ -908,8 +908,8 @@ impl TuiState for App {
 
     fn copy_selection_status(
         &self,
-    ) -> Option<crate::tui::jcode_ui::copy_selection::CopySelectionStatus> {
-        use crate::tui::jcode_ui::copy_selection::{CopySelectionPane, CopySelectionStatus};
+    ) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionStatus> {
+        use crate::tui::operant_ui::copy_selection::{CopySelectionPane, CopySelectionStatus};
         self.copy_selection_mode().then(|| CopySelectionStatus {
             pane: CopySelectionPane::Chat,
             has_action: !self.selection_text.borrow().is_empty(),

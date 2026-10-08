@@ -8,15 +8,15 @@
                    Auto-compact                            false
                    Desktop notifications                   false
                    Show turn duration                      false
- jcode · rep       Output Style                            default
- JCode             Reduce motion                           false
+ operant · r       Output Style                            default
+ operant           Reduce motion                           false
  /model to s       Terminal progress bar                   false
  v0.2.1            Verbose logging                         false
  /login to a       Cursor blinking                         false
- ○ anthropic       Auto-copy on highlight                  false
- ○ openroute       Show current directory                  false
- ○ openai          Show git branch                         false
- ○ cursor          Auto-compact threshold                  0
+ ○ anthropic       Show current directory                  false
+ ○ openroute       Show git branch                         false
+ ○ openai          Auto-compact threshold                  0
+ ○ cursor          Auto-commits                            false
  ○ copilot
  ○ gemini      Maximum tokens per response.
  ○ antigravi
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+                                       ↑↓ navigate   Enter toggle/edit   Esc close
 
 
 

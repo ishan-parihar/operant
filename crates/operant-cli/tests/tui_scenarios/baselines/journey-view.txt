@@ -8,8 +8,8 @@
                ┌────────────────────────────────────────────────────────────────────────────────────────┐
                │ Journey — skills + memories                                                            │
                │┌ Skills (101) ────────────────────────────┐┌ Memories (0) ────────────────────────────┐│
- jcode · replay││ Name                     Category       V││No memories stored yet.                   ││
- JCode         ││                                          ││                                          ││
+ operant · repl││ Name                     Category       V││No memories stored yet.                   ││
+ operant       ││                                          ││                                          ││
  /model to swit││›ai-slop-cleaner                         0││Memories accumulate as you use operant.   ││
  v0.2.1        ││ airtable                                1││Use /memory to manage MEMORY.md directly. ││
  /login to add ││ architecture-diagram                    1││                                          ││
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

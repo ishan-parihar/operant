@@ -8,8 +8,8 @@
                     │                                                                              │
                     │                                                                              │
                     │                                                                              │
- jcode · replay     │                                                                              │
- JCode              │                                                                              │
+ operant · replay   │                                                                              │
+ operant            │                                                                              │
  /model to switch · │                                                                              │
  v0.2.1             │                                                                              │
  /login to add provi│                                                                              │
@@ -34,7 +34,7 @@
                     │                                                                              │
                     │                                                                              │
                     │        ↑↓: navigate | Enter: switch | N: new | D: delete | Esc: close        │
- Voice mode off — Al│                                                                              │
+                    │                                                                              │
                     └──────────────────────────────────────────────────────────────────Esc to close┘
 
 

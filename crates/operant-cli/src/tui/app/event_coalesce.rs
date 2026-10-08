@@ -20,7 +20,7 @@ use super::*;
 /// How many *additional* already-buffered events one frame may absorb, on top
 /// of the one it woke for.
 ///
-/// 32 matches jcode's `MAX_DRAINED_EVENTS_PER_WAKE` (`jcode-tui/src/tui/app/
+/// 32 matches jcode's `MAX_DRAINED_EVENTS_PER_WAKE` (`operant-tui/src/tui/app/
 /// local.rs`), and the cap is load-bearing in both places. Draining without one
 /// is unbounded work in a single frame: a paste arrives as hundreds of raw
 /// character events, and a repaint storm from a slow remote peer can queue

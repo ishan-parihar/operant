@@ -1,7 +1,7 @@
 
 
- j┌──────────────────────────────────────────────────────────────────────────┐
- J│ Journey — skills + memories                                              │
+ o┌──────────────────────────────────────────────────────────────────────────┐
+ o│ Journey — skills + memories                                              │
  /│┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
  v││ Name                     Category ││No memories stored yet.            ││
  /││                                   ││                                   ││
@@ -18,7 +18,7 @@
 1>││                                   ││                                   ││
   ││                                   ││                                   ││re
   │└───────────────────────────────────┘└───────────────────────────────────┘│
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
-
+  │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory ·│
+  └──────────────────────────────────────────────────────────────Esc to close┘
 
 

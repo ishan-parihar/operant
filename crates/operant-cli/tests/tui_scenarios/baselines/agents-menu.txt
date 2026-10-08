@@ -8,8 +8,8 @@
                 0 active  ·  0 definitions
                 [+ Create new agent]  Create a reusable workspace agent
 
- jcode · repla
- JCode
+ operant · rep
+ operant
  /model to swi
  v0.2.1
  /login to add
@@ -34,7 +34,7 @@
                 enter open  ·  esc close
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

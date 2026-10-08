@@ -1,7 +1,7 @@
 
 
- jcode · replay
- JCode ┌───────────────────────────────────────────────────────────────┐
+ operant · replay
+ operan┌───────────────────────────────────────────────────────────────┐
  /model│ Connect a provider                                            │
  v0.2.1│ Search                                                        │
  /login│                                                               │
@@ -18,7 +18,7 @@
 1>     │ DeepSeek (API key)                                            │
        │ NVIDIA NIM (API key)                                          │ Capture
        │ OpenRouter (API key)                                          │
- Voice └───────────────────────────────────────────────────Esc to close┘
+       └───────────────────────────────────────────────────Esc to close┘
 
 
 

@@ -1,4 +1,4 @@
-// Vendored from jcode (crates/jcode-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
+// Vendored from jcode (crates/operant-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
 // Adapted for operant: `crate::color` / `crate::palette` paths rewritten to
 // `super::`; the 22 role accessors are otherwise unchanged (they resolve
 // against the same `Role` enum in `super::palette`).

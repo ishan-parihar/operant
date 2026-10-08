@@ -1,4 +1,4 @@
-// Vendored from jcode (crates/jcode-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
+// Vendored from jcode (crates/operant-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
 // Adapted for operant: `crate::` paths rewritten to `super::`; the `harmony`
 // module is out of scope, so `role_for_rendered` (which existed only to feed
 // Oklab family matching) and its `FAMILY_RADIUS` constant were dropped, and the

@@ -1,7 +1,7 @@
 
 
- jco
- JCo  MCP — 1 servers · 0 tools                              Esc to close
+ ope
+ ope  MCP — 1 servers · 0 tools                              Esc to close
  /mo ┌ Servers ──────────────┐┌ Tools ────────────────────────────────────┐
  v0. │stdio                  ││/ filter tools                             │
  /lo │› ○ agentmemory  0 tool││                                           │
@@ -18,7 +18,7 @@
 1>   │                       ││                                           │
      └───────────────────────┘└───────────────────────────────────────────┘ ture
       Tab switch pane   / filter tools   e error detail   a auth   r reconn
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

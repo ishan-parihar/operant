@@ -384,7 +384,7 @@ pub fn modal_frame_buf(buf: &mut Buffer, area: Rect, spec: &ModalSpec<'_>) -> Mo
     // rect, draw a bordered block, render content into `block.inner()`.
     //
     // The erase is `Clear`, which is operant's name for jcode's `clear_area`
-    // (`jcode-tui-render/src/chrome.rs:4-10` -- a full cell `.reset()`, so the
+    // (`operant-tui-render/src/chrome.rs:4-10` -- a full cell `.reset()`, so the
     // terminal's own background shows through).
     //
     // Two things this deliberately does NOT do, because jcode does not do them:
@@ -393,11 +393,11 @@ pub fn modal_frame_buf(buf: &mut Buffer, area: Rect, spec: &ModalSpec<'_>) -> Mo
     // A tinted dialog body was operant inventing a surface concept that jcode
     // does not have; jcode has no Surface/elevation/opacity at all, so a panel is
     // an erased rect plus a border and nothing else. Both helpers remain
-    // available for `settings_screen`, which is not a jcode-shaped surface.
+    // available for `settings_screen`, which is not a operant-shaped surface.
     Clear.render(layout.dialog_area, buf);
 
     // Square `Borders::ALL`, which is jcode's default (20 of 22 uses; the only
-    // rounded borders in jcode are hand-rolled per-widget in jcode-tui-render).
+    // rounded borders in jcode are hand-rolled per-widget in operant-tui-render).
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(spec.border_fg))
@@ -1087,7 +1087,7 @@ mod tests {
 
         // Square corners, not rounded: jcode's modal border is plain
         // `Borders::ALL` (20 of 22 uses across jcode). The only rounded borders
-        // in jcode are hand-rolled per-widget in `jcode-tui-render`, and this
+        // in jcode are hand-rolled per-widget in `operant-tui-render`, and this
         // dialog is not one of them.
         assert_eq!(buf.cell((d.x, d.y)).map(|c| c.symbol()), Some("┌"));
         assert_eq!(

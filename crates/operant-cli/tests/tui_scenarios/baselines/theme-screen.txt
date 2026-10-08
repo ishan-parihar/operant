@@ -8,8 +8,8 @@
 
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offli
  v0.2.1                    Choose a theme                                                esc
  /login to add provider    Applies immediately — the whole TUI repaints in this palette.
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

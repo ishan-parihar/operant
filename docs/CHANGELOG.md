@@ -68,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **iter-684 — W3 rebrand: the vendored TUI layer stops saying jcode.** The
+- **iter-686 — W3 rebrand: the vendored TUI layer stops saying jcode.** The
   seven vendored module trees rename on disk (`tui/jcode_{anim,app,markdown,
   model,render,render_core,ui}` → `tui/operant_*`), every `jcode_`/`JCODE_`
   identifier and env var with them (`JCODE_HOME` → `OPERANT_HOME`, etc.),

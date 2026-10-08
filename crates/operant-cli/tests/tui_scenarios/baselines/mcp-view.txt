@@ -8,8 +8,8 @@
        │stdio                              ││/ filter tools                                                     │
        │› ○ agentmemory  0 tools  0 res  0 ││                                                                   │
        │                                   ││                                                                   │
- jcode │                                   ││                                                                   │
- JCode │                                   ││                                                                   │
+ opera │                                   ││                                                                   │
+ opera │                                   ││                                                                   │
  /mode │                                   ││                                                                   │
  v0.2. │                                   ││                                                                   │
  /logi │                                   ││                                                                   │
@@ -34,7 +34,7 @@
        └───────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
         Tab switch pane   / filter tools   e error detail   a auth   r reconnect
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

@@ -8,8 +8,8 @@
                 Import config                                                                       esc
                 Preview the content to import from ~/.claude; Enter to confirm, Esc to cancel.
                  Nothing to import.
- jcode · repla
- JCode
+ operant · rep
+ operant
  /model to swi
  v0.2.1
  /login to add
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

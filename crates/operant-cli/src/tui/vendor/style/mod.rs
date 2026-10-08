@@ -1,7 +1,7 @@
-// Vendored from jcode (crates/jcode-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
+// Vendored from jcode (crates/operant-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
 // Adapted for operant: dropped the `harmony` module and its re-exports (Oklab palette
 // scoring, out of scope per docs/PLAN-TUI-OVERHAUL.md §2(d)); replaced
-// `jcode_logging::warn` with operant-cli's `tracing::warn`.
+// `operant_logging::warn` with operant-cli's `tracing::warn`.
 //
 // Upstream this file is `lib.rs` (it was a standalone crate root); it is `mod.rs`
 // here so a plain `pub mod style;` in `tui/vendor/mod.rs` resolves to it.
@@ -15,7 +15,7 @@
 // annotated separately so real unused imports elsewhere in the module still warn.
 #![allow(dead_code)]
 
-// jcode-tui-style: the TUI design system's module root.
+// operant-tui-style: the TUI design system's module root.
 //
 // Depend on it as `crate::tui::vendor::style` (or `super::style` from a sibling
 // under `tui/vendor/`). The four public surfaces are:

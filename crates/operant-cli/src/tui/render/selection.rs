@@ -60,7 +60,7 @@ const SELECTION_FG_BLEND: f32 = 0.32;
 
 /// Resolve a ratatui colour to 24-bit RGB.
 ///
-/// Ported from jcode `jcode-tui-style/src/theme.rs:145-167`. Indexed colours go
+/// Ported from jcode `operant-tui-style/src/theme.rs:145-167`. Indexed colours go
 /// through operant's vendored xterm-256 table; a *named* colour carries no RGB
 /// value of its own, so it falls back to neutral grey rather than being
 /// silently treated as black.

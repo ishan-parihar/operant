@@ -1,4 +1,4 @@
-// Vendored from jcode (crates/jcode-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
+// Vendored from jcode (crates/operant-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
 // Adapted for operant: header only. The literal list is upstream's; operant's own
 // literals are swept into it once operant surfaces are rebuilt on these roles.
 

@@ -8,8 +8,8 @@
                Overview  ·  Daily Tokens  ·  Cost Heatmap  ·  Models
                Total tokens: 0
                  Input:    0
- jcode · repla   Output:   0
- JCode
+ operant · rep   Output:   0
+ operant
  /model to swi Total cost: $0.00
  v0.2.1
  /login to add Streak: ● 0 days  (longest: 0 days)
@@ -34,7 +34,7 @@
                 tab/←/→ switch tabs  ·  r cycle range  ·  ↑↓ scroll
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

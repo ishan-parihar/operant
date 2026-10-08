@@ -1,7 +1,7 @@
 
 
- j┌──────────────────────────────────────────────────────────────────────────┐
- J│ Skills                                                                   │
+ o┌──────────────────────────────────────────────────────────────────────────┐
+ o│ Skills                                                                   │
  /│ #    Name                     Category       Version                     │
  v│                                                                          │
  /│ › 1    ai-slop-cleaner                         0.1.0                     │
@@ -18,7 +18,7 @@
 1>│Clean AI-generated code slop with a regression-safe, deletion-first work… │
   │ ↑/↓ navigate · Enter inspect · Esc close                                 │re
   │                                                                          │
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
-
+  │                                                                          │
+  └──────────────────────────────────────────────────────────────Esc to close┘
 
 

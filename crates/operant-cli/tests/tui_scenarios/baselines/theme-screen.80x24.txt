@@ -1,7 +1,7 @@
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /mod
  v0.2  Choose a theme                                                esc
  /log  Applies immediately — the whole TUI repaints in this palette.
@@ -18,7 +18,7 @@
 1>               Dracula     Dracula — purple/pink dark theme
        ↑↓ navigate  ·  enter apply  ·  esc cancel                          pture
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

@@ -58,7 +58,7 @@ pub mod input_history;
     not(test),
     expect(dead_code, reason = "lands before its cutover wiring (W5 animations)")
 )]
-pub mod jcode_anim;
+pub mod operant_anim;
 #[cfg_attr(
     not(test),
     expect(
@@ -66,7 +66,7 @@ pub mod jcode_anim;
         reason = "lands before its cutover wiring (App-seam adaptation)"
     )
 )]
-pub mod jcode_app;
+pub mod operant_app;
 #[cfg_attr(
     not(test),
     expect(
@@ -74,17 +74,17 @@ pub mod jcode_app;
         reason = "lands before its W3 transcript-renderer consumers"
     )
 )]
-pub mod jcode_markdown;
+pub mod operant_markdown;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "lands before its W3 renderer consumers")
 )]
-pub mod jcode_model;
+pub mod operant_model;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "lands before its W3/W5 renderer consumers")
 )]
-pub mod jcode_render;
+pub mod operant_render;
 #[cfg_attr(
     not(test),
     expect(
@@ -92,7 +92,7 @@ pub mod jcode_render;
         reason = "lands before its W3 transcript-renderer consumers"
     )
 )]
-pub mod jcode_render_core;
+pub mod operant_render_core;
 #[cfg_attr(
     not(test),
     expect(
@@ -100,7 +100,7 @@ pub mod jcode_render_core;
         reason = "lands before its cutover wiring (App-seam adaptation)"
     )
 )]
-pub mod jcode_ui;
+pub mod operant_ui;
 pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;

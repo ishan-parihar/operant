@@ -1,7 +1,7 @@
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
@@ -18,7 +18,7 @@
 1> /
                                                        ~ API key Offline Capture
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

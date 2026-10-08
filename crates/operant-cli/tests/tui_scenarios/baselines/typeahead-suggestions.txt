@@ -8,8 +8,8 @@
 
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
@@ -34,7 +34,7 @@
 /handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.)  +78 more
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

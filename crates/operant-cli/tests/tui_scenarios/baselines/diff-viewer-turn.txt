@@ -8,8 +8,8 @@
 
              No changes were captured for this turn.
 
- jcode · re  Make an edit this turn, then reopen /changes to see the turn diff.
- JCode
+ operant ·   Make an edit this turn, then reopen /changes to see the turn diff.
+ operant
  /model to
  v0.2.1
  /login to
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

@@ -2,13 +2,13 @@
 //!
 //! This module was copied from `parent-projects/jcode/crates/` so that operant's TUI can adopt
 //! jcode's visual design system without adopting jcode's application core, which is welded to
-//! ~289k LOC of `jcode-app-core` + `jcode-base` and could not be lifted.
+//! ~289k LOC of `operant-app-core` + `operant-base` and could not be lifted.
 //!
 //! Per-crate provenance, adaptations, and licence detail live in `style/VENDOR.md`.
 //!
 //! | module | upstream crate | LOC | purpose |
 //! |---|---|---|---|
-//! | [`style`] | `jcode-tui-style` | ~2.7k | 22 semantic colour roles, frozen default palette, buffer-level substitution |
+//! | [`style`] | `operant-tui-style` | ~2.7k | 22 semantic colour roles, frozen default palette, buffer-level substitution |
 //!
 //! # Why modules and not workspace crates
 //!

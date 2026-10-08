@@ -1,6 +1,6 @@
-// Vendored from jcode (crates/jcode-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
+// Vendored from jcode (crates/operant-tui-style), MIT License, Copyright (c) 2025 Jeremy Huang.
 // Adapted for operant: rewrote two doc comments that named the jcode app-core
-// module (`jcode_app_core::perf`) to describe the TUI app layer instead.
+// module (`operant_app_core::perf`) to describe the TUI app layer instead.
 // Wave 0 (docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md item 3): deleted the
 // vendored color-capability detector (`ColorCapability`, `color_capability`,
 // `detect_color_capability`, `detect_raw_color_capability`,
@@ -11,7 +11,7 @@
 // negotiation, so `rgb()` now always returns `Color::Rgb`; terminals with
 // less colour get their quantization from `color_depth::quantize_palette`
 // on the operant theme (`set_active_theme`), never here. This also removes
-// the `JCODE_GLYPH_SAFE_MODE` env var (upstream issue #330's glyph-atlas
+// the `OPERANT_GLYPH_SAFE_MODE` env var (upstream issue #330's glyph-atlas
 // downgrade), which is jcode residue: nothing in operant set or read it.
 // The xterm-256 quantizer helpers went with it; `indexed_to_rgb` survives
 // because `theme_mode::color_rgb` maps indexed and named terminal colours

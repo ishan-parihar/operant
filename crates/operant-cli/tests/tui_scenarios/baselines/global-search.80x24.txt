@@ -1,7 +1,7 @@
 
 
- jcode · replay
- JCode  ┌──────────────────────────────────────────────────────────────┐
+ operant · replay
+ operant┌──────────────────────────────────────────────────────────────┐
  /model │ Search                                                       │
  v0.2.1 │/ █                                                           │
  /login │──────────────────────────────────────────────────────────────│
@@ -18,7 +18,7 @@
 1>      │                                                              │
         │                                                              │ Capture
         │Type to search                                                │
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+        └───────────────Esc to close  ·  Enter: insert  ·  ↑↓: navigate┘
 
 
 

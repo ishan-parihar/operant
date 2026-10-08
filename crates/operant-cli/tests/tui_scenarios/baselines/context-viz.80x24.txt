@@ -1,7 +1,7 @@
 
 
- jco
- JCo  Context & usage                                        Esc to close
+ ope
+ ope  Context & usage                                        Esc to close
  /mo  Token window, rate limits, and session cost.
  v0.  Context window
  /lo  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
@@ -18,7 +18,7 @@
 1>
                                                                             ture
 
- Voi  enter/esc close
+      enter/esc close
 
 
 

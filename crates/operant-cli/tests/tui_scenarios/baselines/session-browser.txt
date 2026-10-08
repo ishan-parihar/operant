@@ -8,8 +8,8 @@
 
 
 
- jcode · replay          ┌────────────────────────────────────────────────────────────────────┐
- JCode                   │ Sessions                                                           │
+ operant · replay        ┌────────────────────────────────────────────────────────────────────┐
+ operant                 │ Sessions                                                           │
  /model to switch · Offli│                                                                    │
  v0.2.1                  │  No sessions yet.                                                  │
  /login to add provider  │  Sessions are saved automatically as you chat.                     │
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

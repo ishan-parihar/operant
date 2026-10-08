@@ -8,8 +8,8 @@
             │/ █                                                                                           │
             │──────────────────────────────────────────────────────────────────────────────────────────────│
             │                                                                                              │
- jcode · rep│                                                                                              │
- JCode      │                                                                                              │
+ operant · r│                                                                                              │
+ operant    │                                                                                              │
  /model to s│                                                                                              │
  v0.2.1     │                                                                                              │
  /login to a│                                                                                              │
@@ -34,7 +34,7 @@
             │Type to search                                                                                │
             └───────────────────────────────────────────────Esc to close  ·  Enter: insert  ·  ↑↓: navigate┘
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

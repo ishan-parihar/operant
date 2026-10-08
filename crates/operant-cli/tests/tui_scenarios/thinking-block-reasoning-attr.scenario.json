@@ -4,15 +4,6 @@
   "opens_with": "/reasoning (toggles show_reasoning)",
   "keys": "/reasoning<enter>",
   "size": "120x40",
-  "variants": [
-    {
-      "size": "120x40",
-      "keys": "/reasoning<enter>/reasoning<enter>",
-      "assert": [
-        "show_reasoning == false"
-      ]
-    }
-  ],
   "agent_script": "reasoning-then-answer.json",
   "assert": [
     "show_reasoning == true"

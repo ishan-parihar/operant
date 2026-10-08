@@ -8,8 +8,8 @@
 
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
@@ -22,10 +22,10 @@
  ○ antigravity
  ~
 
+ Command /voice is not yet wired to a handler. Description: Toggle voice mode
 
 1>
                                                                                                ~ API key Offline Capture
-
 
 
 

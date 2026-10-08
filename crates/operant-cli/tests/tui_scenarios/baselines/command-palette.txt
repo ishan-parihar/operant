@@ -8,8 +8,8 @@
                            │ Search                                                        │
                            │                                                               │
                            │                                                               │
- jcode · replay            │ Other                                                         │
- JCode                     │ /new Start a new session (fresh session ID + history)         │
+ operant · replay          │ Other                                                         │
+ operant                   │ /new Start a new session (fresh session ID + history)         │
  /model to switch · Offline│ /redraw Force a full UI repaint (recovers from terminal drift)│
  v0.2.1                    │                                                               │
  /login to add provider    │ Review & History                                              │
@@ -34,7 +34,7 @@
                            │ Context                                                       │
                            └───────────────────────────────────────────────────Esc to close┘
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

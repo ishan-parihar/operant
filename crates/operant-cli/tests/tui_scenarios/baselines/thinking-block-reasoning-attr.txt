@@ -1,15 +1,15 @@
 
+                                                                  ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
+                                                                  ▌ ───────────────────────────────────────────────  ▐
+                                                                  ▌                                                  ▐
 
 
 
 
 
 
-
-
-
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
@@ -34,7 +34,7 @@ Reasoning blocks expanded by default.
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

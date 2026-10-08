@@ -1,7 +1,7 @@
 
 
- jcode ·
- JCode     Settings — Operant                           Esc to close
+ operant
+ operant   Settings — Operant                           Esc to close
  /model    Type to search settings...
  v0.2.1
  /login      ► Max Tokens                              0
@@ -18,7 +18,7 @@
 1>
                                                                          Capture
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+                   ↑↓ navigate   Enter toggle/edit   Esc close
 
 
 

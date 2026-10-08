@@ -3,7 +3,7 @@
 // One doubling ladder and nothing else: no type scale, no token struct, no
 // builder. `XXS * 2 == XS`, `XS * 2 == S`, and so on up to `XL`.
 //
-// Deliberately a *local* addition. `jcode-tui` ships no spacing scale at all
+// Deliberately a *local* addition. `operant-tui` ships no spacing scale at all
 // (zero `Margin::`/`Padding::`/`theme::space` across the crate), so this is not
 // a port of anything — it exists because every modal-sizing call site re-typed
 // the same four numbers as `-2`, `-4`, or nothing at all. One ladder is the fix;

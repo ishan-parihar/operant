@@ -1,7 +1,7 @@
 
 
- jcode · replay
- JCode
+ operant · replay
+ operant
  /model to switch · Offline Capture
  v0.2.1┌───────────────────────────────────────────────────────────────┐
  /login│ Select model                                                  │
@@ -18,7 +18,7 @@
 1>     │ enter select  ←/→ effort                                      │
        └───────────────────────────────────────────────────Esc to close┘ Capture
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

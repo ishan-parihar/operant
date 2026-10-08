@@ -8,8 +8,8 @@
 
                   ┌──────────────────────────────────────────────────────────────────────────────────┐
                   │ Connect Free (multi-provider — 0/5 keys)                                         │
- jcode · replay   │ Stack free tiers behind one endpoint.                                            │
- JCode            │ TIP More keys = better availability and higher caps.                             │
+ operant · replay │ Stack free tiers behind one endpoint.                                            │
+ operant          │ TIP More keys = better availability and higher caps.                             │
  /model to switch │                                                                                  │
  v0.2.1           │ ▸ Groq            console.groq.com                                               │
  /login to add pro│     paste your API key here..._                                                  │
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

@@ -8,8 +8,8 @@
 
 
 
- jcode · replay         ┌──────────────────────────────────────────────────────────────────────┐
- JCode                  │ Plugins                                                              │
+ operant · replay       ┌──────────────────────────────────────────────────────────────────────┐
+ operant                │ Plugins                                                              │
  /model to switch · Offl│No plugins installed.                                                 │
  v0.2.1                 │                                                                      │
  /login to add provider │Plugins are git repositories cloned into your operant                 │
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

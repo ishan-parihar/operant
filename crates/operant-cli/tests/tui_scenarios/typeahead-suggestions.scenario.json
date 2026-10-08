@@ -1,6 +1,6 @@
 {
   "name": "typeahead-suggestions",
-  "surface": "crates/operant-cli/src/tui/jcode_ui/ui_input.rs::draw_command_suggestions_overlay",
+  "surface": "crates/operant-cli/src/tui/operant_ui/ui_input.rs::draw_command_suggestions_overlay",
   "opens_with": "/",
   "keys": "/",
   "size": "120x40",

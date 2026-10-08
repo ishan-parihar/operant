@@ -8,8 +8,8 @@
 
 
 
- jcode · replay
- JCode                    Context & usage                                        Esc to close
+ operant · replay
+ operant                  Context & usage                                        Esc to close
  /model to switch · Offl  Token window, rate limits, and session cost.
  v0.2.1                   Context window
  /login to add provider   [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
@@ -34,7 +34,7 @@
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

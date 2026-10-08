@@ -15,5 +15,11 @@
   ],
   "baseline": "footer-bar.txt",
   "style_baseline": "footer-bar.style.txt",
+  "deterministic": false,
+  "nondeterminism": {
+    "reason": "The footer's token rate (`⏱ N tok/s`) is a live wall-clock metric: streamed tokens divided by real elapsed seconds, so the same scenario renders 13876 tok/s on one run and 15208 tok/s on the next under load (measured in the 2026-10-08 full-corpus prove; the style diff lands on the same cell because the italic marker sits over the rate digits). No env pin reaches it — the divisor is a real Instant.",
+    "varying_region": "Row 23, col 84 — the four rate digits in the `⏱ N tok/s` group, in both dumps.",
+    "surface_of_fix": "Derive the rate from the simulated frame index when App::is_simulating is set (same freeze pattern the corpus asks of debug-overlay), or expose an OPERANT_FROZEN_TOKS_PER_SEC the footer reads. Production change made for a test, so the golden is withheld; the assert_screen needles still pin the tok/s label, the 200k context counter, and the config-pinned model string."
+  },
   "notes": "The footer is the only place the token / cost / turn counters live, and it is rendered from chunk[5] \u2014 a fixed 2-row budget that a regression in any of the five sibling chunks can steal. usage.json is what makes the token glyphs non-zero, so this also pins the up/down arrows and their column alignment. ENV: the left third shows model \u00b7 provider, which come from operant.toml. POST-CUTOVER: the ported chrome has no footer token glyphs \u2014 usage metrics moved to the pinned Overview side panel (tok/s) and streaming-time \u2191N \u2193N; 'shortcuts'/'1420'/'233' were the deleted operant footer's text. 200k pins the context counter, Offline Capture pins the config-pinned model\u00b7provider."
 }

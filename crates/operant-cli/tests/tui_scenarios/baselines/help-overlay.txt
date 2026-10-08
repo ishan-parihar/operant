@@ -22,7 +22,7 @@
 │    /dictate  Run configured external dictation                                                                       │
 │    /git [status]  Show branch and working tree status for the repo                                                   │
 │    /context  Show the full session context snapshot                                                                  │
-│    /skills  Show loaded skills and jcode-endorsed recommendations                                                    │
+│    /skills  Show loaded skills and operant-endorsed recommendations                                                  │
 │    /info  Show session info and token usage                                                                          │
 │    /keys  Show keybinding conflicts with your terminal/OS                                                            │
 │    /reset usage limits openai  Review a banked reset, then confirm or cancel                                         │
@@ -34,7 +34,7 @@
 │  ─────────────────────────────────────────────────                                                                   │
 │                                                                                                                      │
 │  Session                                                                                                             │
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
-
+│                                                                                                                      │
+│    /clear  Clear conversation and start fresh                                                                        │
 │    /compact  Summarize old messages to free context                                                                  │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────────────────────────┘
