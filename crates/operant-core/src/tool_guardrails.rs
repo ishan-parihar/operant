@@ -69,8 +69,30 @@ pub const NO_PROGRESS_MIN_CALLS: usize = 5;
 /// regardless of arguments — the varied-args backstop.
 pub const NO_PROGRESS_SKIP_CALLS: usize = 6;
 
-/// Guardrail decision for one observed tool call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// ── Wave-2 remainder (iter-681): per-tool failure ladder, hard-reject
+// halt, and the successful-repeat recurrence ledger, ported from openhuman
+// `no_progress/` (`mod.rs` ladder semantics + `successful_repeat.rs`).
+/// Per-tool consecutive failures (any error class) before the model is
+/// warned. The S2 timeout breaker masks after 3 timeouts; this is the
+/// slower cross-class backstop beneath it.
+pub const FAILURE_WARN_THRESHOLD: usize = 8;
+/// Per-tool consecutive failures before the turn halts with a root-cause
+/// summary (openhuman's any-failure backstop, per-tool at the 8/12
+/// thresholds from the port plan).
+pub const FAILURE_HALT_THRESHOLD: usize = 12;
+/// Consecutive hard policy rejections before halting — a blocked call
+/// re-issued unchanged can never succeed (openhuman
+/// `HARD_REJECT_HALT_THRESHOLD`). Seat-policy denials are deliberately NOT
+/// hard rejects: a standing grant minted between ticks can make them
+/// succeed.
+pub const HARD_REJECT_HALT: usize = 2;
+/// Result-content prefix that marks a hard security/approval rejection.
+/// stream.rs's blocked arm constructs its message from this constant so
+/// the classifier and the message cannot drift apart.
+pub const HARD_REJECT_PREFIX: &str = "Blocked by security policy";
+
+/// Guardrail decision for one observed tool call or result.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardrailDecision {
     /// Proceed with execution.
     Allow,
@@ -80,6 +102,10 @@ pub enum GuardrailDecision {
     /// Skip execution and return a synthetic result telling the model to
     /// stop repeating this exact call.
     Skip,
+    /// Halt the whole turn and surface this root-cause summary
+    /// (`failure_copy`) as the final content. Only the post-result rungs
+    /// (per-tool failure ladder, hard-reject) produce it.
+    Halt(String),
 }
 
 /// Which repetition pattern produced a guardrail decision.
@@ -93,8 +119,11 @@ pub enum RepeatPattern {
         tool_b: String,
         cycles: usize,
     },
-    /// One tool returning the identical result `calls` times in a row.
+    /// One tool returning the identical result `calls` times this turn
+    /// (consecutive streak or run-wide recurrence ledger).
     NoProgress { tool: String, calls: usize },
+    /// One tool failing `count` times in a row this turn, any error class.
+    Failures { tool: String, count: usize },
 }
 
 /// Per-turn tracker of identical tool-call repeats.
@@ -113,6 +142,18 @@ pub struct ToolGuardrailTracker {
     /// Tools whose identical-result streak tripped [`NO_PROGRESS_SKIP_CALLS`]:
     /// their next call is skipped regardless of args.
     no_progress_armed: HashMap<String, usize>,
+    /// Per-tool consecutive failures (any error class), reset by that
+    /// tool's next success. Warns at [`FAILURE_WARN_THRESHOLD`], halts at
+    /// [`FAILURE_HALT_THRESHOLD`].
+    failure_streaks: HashMap<String, usize>,
+    /// Per-tool consecutive hard policy rejections (content prefix
+    /// [`HARD_REJECT_PREFIX`]), reset by any other result. Halts at
+    /// [`HARD_REJECT_HALT`].
+    hard_reject_streaks: HashMap<String, usize>,
+    /// Run-wide `(tool, result-hash)` → times that identical successful
+    /// result was observed this turn (openhuman `recurrences`): catches
+    /// A, B(reset), A cycles the consecutive streak rung can never see.
+    recurrences: HashMap<(String, u64), usize>,
     /// `is_repeat_call_exempt` port (the W1.8c-dropped `tool_call_dedup_exempt`):
     /// tools exempt from every repeat/loop rung. Survives [`Self::reset`].
     exempt_tools: HashSet<String>,
@@ -202,16 +243,88 @@ impl ToolGuardrailTracker {
         }
     }
 
-    /// Feed one executed tool result to the no-progress rung: a tool that
-    /// returns the identical result [`NO_PROGRESS_SKIP_CALLS`] times in a
-    /// row (arguments may vary — the varied-args backstop) is armed so its
-    /// NEXT call skips pre-execution. Call once per real executed result;
-    /// never feed synthetic guardrail skips (identical by construction).
-    pub fn observe_result(&mut self, tool_name: &str, result: &str) -> GuardrailDecision {
+    /// Feed one executed tool result to the post-execution rungs: the
+    /// no-progress identical-result ladder (streak + run-wide recurrence
+    /// ledger), the per-tool failure ladder (warn [`FAILURE_WARN_THRESHOLD`],
+    /// halt [`FAILURE_HALT_THRESHOLD`]), and the hard-reject halt
+    /// ([`HARD_REJECT_HALT`]). Call once per real executed result, with its
+    /// success flag; never feed synthetic guardrail skips (identical by
+    /// construction, excluded upstream).
+    pub fn observe_result(
+        &mut self,
+        tool_name: &str,
+        result: &str,
+        success: bool,
+    ) -> GuardrailDecision {
         if self.exempt_tools.contains(tool_name) {
             return GuardrailDecision::Allow;
         }
+
+        // ── Hard policy rejection: a blocked call re-issued unchanged can
+        // never succeed — halt at the second one (openhuman
+        // HARD_REJECT_HALT_THRESHOLD).
+        if !success && result.starts_with(HARD_REJECT_PREFIX) {
+            let streak = self
+                .hard_reject_streaks
+                .entry(tool_name.to_string())
+                .or_insert(0);
+            *streak += 1;
+            if *streak >= HARD_REJECT_HALT {
+                // Self-reset so a resumed turn does not insta-trip.
+                self.hard_reject_streaks.remove(tool_name);
+                self.last_pattern = None;
+                return GuardrailDecision::Halt(hard_reject_halt_summary(
+                    tool_name,
+                    result,
+                ));
+            }
+            self.last_pattern = None;
+            return GuardrailDecision::Allow;
+        }
+
+        // ── Per-tool failure ladder (any error class). A success on the
+        // same tool resets the streak below.
+        if !success {
+            let streak = self
+                .failure_streaks
+                .entry(tool_name.to_string())
+                .or_insert(0);
+            *streak += 1;
+            let count = *streak;
+            if count >= FAILURE_HALT_THRESHOLD {
+                self.failure_streaks.remove(tool_name);
+                self.last_pattern = None;
+                return GuardrailDecision::Halt(failure_halt_summary(tool_name, count));
+            }
+            if count >= FAILURE_WARN_THRESHOLD {
+                self.last_pattern = Some(RepeatPattern::Failures {
+                    tool: tool_name.to_string(),
+                    count,
+                });
+                return GuardrailDecision::Warn;
+            }
+            self.last_pattern = None;
+            return GuardrailDecision::Allow;
+        }
+
+        // ── Success: the failure ladders reset for this tool…
+        self.failure_streaks.remove(tool_name);
+        self.hard_reject_streaks.remove(tool_name);
+
+        // ── …and the result feeds the no-progress rungs. The consecutive
+        // streak (`result_streaks`) plus the run-wide recurrence ledger
+        // (`recurrences`): a repeat after a streak-resetting different
+        // result still counts, so A, B(reset), A cycles trip at the same
+        // 5/6 thresholds as back-to-back repeats.
         let hash = hash_str(result);
+        let ledger = {
+            let rec = self
+                .recurrences
+                .entry((tool_name.to_string(), hash))
+                .or_insert(0);
+            *rec += 1;
+            *rec
+        };
         let entry = self
             .result_streaks
             .entry(tool_name.to_string())
@@ -221,7 +334,7 @@ impl ToolGuardrailTracker {
         } else {
             *entry = (Some(hash), 1);
         }
-        let calls = entry.1;
+        let calls = entry.1.max(ledger);
 
         if calls >= NO_PROGRESS_MIN_CALLS {
             self.last_pattern = Some(RepeatPattern::NoProgress {
@@ -266,6 +379,9 @@ impl ToolGuardrailTracker {
         self.name_window.clear();
         self.result_streaks.clear();
         self.no_progress_armed.clear();
+        self.failure_streaks.clear();
+        self.hard_reject_streaks.clear();
+        self.recurrences.clear();
         self.last_pattern = None;
     }
 }
@@ -304,6 +420,26 @@ fn ping_pong_cycles(window: &VecDeque<String>) -> Option<(String, String, usize)
 /// EVERY guardrail skip variant must carry it.
 pub const SKIP_MESSAGE_PREFIX: &str = "Guardrail: ";
 
+/// Halt copy for the second consecutive hard policy rejection (the
+/// `failure_copy` port — root-cause summaries instead of a generic cap
+/// error). `last` is the blocked result the classifier matched on.
+fn hard_reject_halt_summary(tool_name: &str, last: &str) -> String {
+    format!(
+        "Stopping: the `{tool_name}` call is blocked by the security policy and was re-issued \
+         unchanged — it can never succeed this way. Reason:\n{last}\n\nDo not repeat this \
+         call; use an allowed alternative or report that it can't be done here."
+    )
+}
+
+/// Halt copy for the per-tool failure ladder exhausting its budget.
+fn failure_halt_summary(tool_name: &str, count: usize) -> String {
+    format!(
+        "Stopping: `{tool_name}` has failed {count} times in a row this turn with no progress. \
+         Repeating variations of the same approach cannot finish the task — report this back \
+         instead of retrying."
+    )
+}
+
 /// Pattern-aware skip text for the synthetic ToolResult. `None` (defensive —
 /// a Skip always carries a pattern) falls back to a generic copy.
 pub fn build_pattern_skip_message(tool_name: &str, pattern: Option<&RepeatPattern>) -> String {
@@ -320,8 +456,12 @@ pub fn build_pattern_skip_message(tool_name: &str, pattern: Option<&RepeatPatter
         ),
         Some(RepeatPattern::NoProgress { tool, calls }) => format!(
             "{SKIP_MESSAGE_PREFIX}tool '{tool}' has returned the identical result \
-             {calls} times in a row this turn regardless of arguments. Repeating it \
+             {calls} times this turn regardless of arguments. Repeating it \
              cannot produce new information — stop calling it or change approach."
+        ),
+        Some(RepeatPattern::Failures { tool, count }) => format!(
+            "{SKIP_MESSAGE_PREFIX}tool '{tool}' has failed {count} times in a row this turn \
+             without progress — a different approach is required."
         ),
         None => format!(
             "{SKIP_MESSAGE_PREFIX}repetitive tool-call pattern detected — this call was skipped."
@@ -344,8 +484,12 @@ pub fn pattern_warning_message(tool_name: &str, pattern: Option<&RepeatPattern>)
              complete cycles this turn — this is a stuck pattern."
         ),
         Some(RepeatPattern::NoProgress { tool, calls }) => format!(
-            "⚠ Tool '{tool}' has returned the identical result {calls} times in a row \
+            "⚠ Tool '{tool}' has returned the identical result {calls} times \
              this turn regardless of arguments."
+        ),
+        Some(RepeatPattern::Failures { tool, count }) => format!(
+            "⚠ Tool '{tool}' has failed {count} times in a row this turn without \
+             making progress — change approach before it exhausts the turn."
         ),
         None => format!("⚠ Tool '{tool_name}' is repeating itself without progress."),
     }
@@ -620,13 +764,13 @@ mod pattern_tests {
         let mut t = ToolGuardrailTracker::new();
         for i in 0..4 {
             assert_eq!(
-                t.observe_result("tool_x", "identical"),
+                t.observe_result("tool_x", "identical", true),
                 GuardrailDecision::Allow,
                 "call {i}"
             );
         }
         assert_eq!(
-            t.observe_result("tool_x", "identical"),
+            t.observe_result("tool_x", "identical", true),
             GuardrailDecision::Warn
         );
     }
@@ -635,7 +779,7 @@ mod pattern_tests {
     fn no_progress_arms_skip_on_sixth_regardless_of_args() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..6 {
-            t.observe_result("tool_x", "identical");
+            t.observe_result("tool_x", "identical", true);
         }
         // Varied-args backstop: the NEXT call of the armed tool skips even
         // with fresh arguments — the rung the identical-args guard could
@@ -654,25 +798,30 @@ mod pattern_tests {
     fn no_progress_streak_resets_on_different_result() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..4 {
-            t.observe_result("tool_x", "same");
+            t.observe_result("tool_x", "same", true);
         }
         assert_eq!(
-            t.observe_result("tool_x", "different"),
+            t.observe_result("tool_x", "different", true),
             GuardrailDecision::Allow
         );
-        assert_eq!(t.observe_result("tool_x", "same"), GuardrailDecision::Allow);
-        assert_eq!(t.observe_result("tool_x", "same"), GuardrailDecision::Allow);
+        // The consecutive streak restarted, but the run-wide recurrence
+        // ledger still holds the four earlier identical results: the next
+        // "same" is the fifth recurrence and warns (iter-681).
+        assert_eq!(
+            t.observe_result("tool_x", "same", true),
+            GuardrailDecision::Warn
+        );
     }
 
     #[test]
     fn no_progress_tracks_tools_independently() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..5 {
-            t.observe_result("tool_x", "same");
-            t.observe_result("tool_y", "same");
+            t.observe_result("tool_x", "same", true);
+            t.observe_result("tool_y", "same", true);
         }
-        assert_eq!(t.observe_result("tool_x", "same"), GuardrailDecision::Warn);
-        assert_eq!(t.observe_result("tool_y", "same"), GuardrailDecision::Warn);
+        assert_eq!(t.observe_result("tool_x", "same", true), GuardrailDecision::Warn);
+        assert_eq!(t.observe_result("tool_y", "same", true), GuardrailDecision::Warn);
     }
 
     #[test]
@@ -681,7 +830,7 @@ mod pattern_tests {
         for _ in 0..8 {
             assert_eq!(t.observe("terminal", "{}"), GuardrailDecision::Allow);
             assert_eq!(
-                t.observe_result("terminal", "same"),
+                t.observe_result("terminal", "same", true),
                 GuardrailDecision::Allow
             );
         }
@@ -735,5 +884,272 @@ mod pattern_tests {
             .starts_with(SKIP_MESSAGE_PREFIX)
         );
         assert!(build_pattern_skip_message("t", None).starts_with(SKIP_MESSAGE_PREFIX));
+    }
+}
+
+#[cfg(test)]
+mod ladder_tests {
+    //! Wave-2 remainder (iter-681): adversarial ports of openhuman's
+    //! `no_progress/mod_tests.rs` suite, adapted to operant's decision
+    //! vocabulary (Warn/Skip/Halt instead of Nudge/Halt): the per-tool
+    //! failure ladder, the hard-reject halt, and the successful-repeat
+    //! recurrence ledger.
+
+    use super::*;
+
+    /// Distinct tool names for the cycle-length test.
+    const CYCLE_TOOLS: [&str; 4] = ["tool_a", "tool_b", "tool_c", "tool_d"];
+
+    fn fail(t: &mut ToolGuardrailTracker, tool: &str, err: &str) -> GuardrailDecision {
+        t.observe_result(tool, err, false)
+    }
+
+    fn ok(t: &mut ToolGuardrailTracker, tool: &str, result: &str) -> GuardrailDecision {
+        t.observe_result(tool, result, true)
+    }
+
+    #[test]
+    fn a_hard_rejection_halts_on_the_second_consecutive_one() {
+        let mut t = ToolGuardrailTracker::new();
+        assert_eq!(
+            fail(&mut t, "send_email", "Blocked by security policy: no email tool"),
+            GuardrailDecision::Allow
+        );
+        match fail(&mut t, "send_email", "Blocked by security policy: no email tool") {
+            GuardrailDecision::Halt(msg) => {
+                assert!(msg.contains("security policy"), "{msg}");
+                assert!(msg.contains("send_email"), "{msg}");
+                assert!(msg.contains("can never succeed"), "{msg}");
+            }
+            other => panic!("expected a halt on the second hard reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hard_reject_streak_resets_on_a_non_blocked_result() {
+        let mut t = ToolGuardrailTracker::new();
+        fail(&mut t, "shell", "Blocked by security policy: dangerous");
+        // A success in between means the next blocked call is a first again.
+        assert_eq!(ok(&mut t, "shell", "done"), GuardrailDecision::Allow);
+        assert_eq!(
+            fail(&mut t, "shell", "Blocked by security policy: dangerous"),
+            GuardrailDecision::Allow
+        );
+    }
+
+    #[test]
+    fn only_the_security_policy_prefix_is_a_hard_reject() {
+        let mut t = ToolGuardrailTracker::new();
+        // Seat-policy denials and ordinary errors must feed the (slower)
+        // failure ladder, never the hard-reject halt.
+        for i in 0..3 {
+            assert_eq!(
+                fail(&mut t, "write_file", &format!("declined by seat policy ({i})")),
+                GuardrailDecision::Allow
+            );
+        }
+        assert_ne!(
+            fail(&mut t, "write_file", "declined by seat policy (4)"),
+            GuardrailDecision::Halt("x".into())
+        );
+    }
+
+    #[test]
+    fn varied_failures_warn_at_eight_and_halt_at_twelve() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 1..=7 {
+            assert_eq!(
+                fail(&mut t, "terminal", &format!("error variant {i}")),
+                GuardrailDecision::Allow,
+                "call {i}"
+            );
+        }
+        assert_eq!(
+            fail(&mut t, "terminal", "error variant 8"),
+            GuardrailDecision::Warn
+        );
+        for i in 9..=11 {
+            assert_eq!(
+                fail(&mut t, "terminal", &format!("error variant {i}")),
+                GuardrailDecision::Warn,
+                "call {i}"
+            );
+        }
+        match fail(&mut t, "terminal", "error variant 12") {
+            GuardrailDecision::Halt(msg) => {
+                assert!(msg.contains("12 times"), "{msg}");
+                assert!(msg.contains("terminal"), "{msg}");
+                assert!(msg.contains("report this back"), "{msg}");
+            }
+            other => panic!("expected a halt at the twelfth failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_success_resets_the_failure_ladder() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 1..=11 {
+            let _ = fail(&mut t, "search", &format!("boom {i}"));
+        }
+        assert_eq!(ok(&mut t, "search", "found it"), GuardrailDecision::Allow);
+        // The ladder restarted: seven more failures stay quiet, and the
+        // eighth warns instead of halting.
+        for i in 1..=7 {
+            assert_eq!(
+                fail(&mut t, "search", &format!("boom again {i}")),
+                GuardrailDecision::Allow,
+                "call {i}"
+            );
+        }
+        assert_eq!(
+            fail(&mut t, "search", "boom again 8"),
+            GuardrailDecision::Warn
+        );
+    }
+
+    #[test]
+    fn failure_ladders_track_tools_independently() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 0..7 {
+            assert_eq!(
+                fail(&mut t, "tool_a", &format!("a{i}")),
+                GuardrailDecision::Allow
+            );
+            assert_eq!(
+                fail(&mut t, "tool_b", &format!("b{i}")),
+                GuardrailDecision::Allow
+            );
+        }
+        assert_eq!(fail(&mut t, "tool_a", "a8"), GuardrailDecision::Warn);
+        assert_eq!(fail(&mut t, "tool_b", "b8"), GuardrailDecision::Warn);
+    }
+
+    #[test]
+    fn failure_halts_self_reset_so_a_resumed_turn_does_not_insta_trip() {
+        let mut t = ToolGuardrailTracker::new();
+        // Calls 1-7 stay quiet, 8-11 warn, 12 halts.
+        for i in 1..=7 {
+            assert_eq!(
+                fail(&mut t, "lookup", &format!("err{i}")),
+                GuardrailDecision::Allow
+            );
+        }
+        for i in 8..=11 {
+            assert_eq!(
+                fail(&mut t, "lookup", &format!("err{i}")),
+                GuardrailDecision::Warn
+            );
+        }
+        assert!(matches!(
+            fail(&mut t, "lookup", "err12"),
+            GuardrailDecision::Halt(_)
+        ));
+        // The halt cleared the streak: the next failure is a first again.
+        assert_eq!(fail(&mut t, "lookup", "err13"), GuardrailDecision::Allow);
+    }
+
+    #[test]
+    fn recurrence_ledger_catches_cycles_for_any_cycle_length() {
+        // openhuman `cycling_identical_calls_halt_for_any_cycle_length`:
+        // the streak rung never sees two identical results in a row inside
+        // a cycle, but the run-wide ledger does — adapted to operant's
+        // warn-at-5 / arm-at-6 escalation.
+        for cycle_len in 2..=4 {
+            let mut t = ToolGuardrailTracker::new();
+            let tools: Vec<&str> = (0..cycle_len).map(|i| CYCLE_TOOLS[i]).collect();
+            let mut warned_at = None;
+            for step in 0..cycle_len * 7 {
+                let tool = tools[step % cycle_len];
+                if ok(&mut t, tool, "same result") == GuardrailDecision::Warn {
+                    warned_at = Some(step);
+                    break;
+                }
+            }
+            assert_eq!(
+                warned_at,
+                Some(cycle_len * 4),
+                "a {cycle_len}-tool cycle with identical results must warn on the first tool's fifth recurrence"
+            );
+        }
+    }
+
+    #[test]
+    fn a_changed_result_is_not_a_recurrence() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 0..10 {
+            assert_eq!(
+                ok(&mut t, "read_status", &format!("status-{i}")),
+                GuardrailDecision::Allow,
+                "a re-read whose result changed is progress, not a repeat"
+            );
+        }
+    }
+
+    #[test]
+    fn failures_do_not_feed_the_recurrence_ledger() {
+        let mut t = ToolGuardrailTracker::new();
+        ok(&mut t, "read_doc", "doc");
+        // Failing sibling calls between the identical successes must not
+        // hide the recurrence (openhuman: failed batches don't clear the
+        // ledger — here they also don't feed it).
+        let _ = fail(&mut t, "read_doc", "boom");
+        ok(&mut t, "read_doc", "doc");
+        let _ = fail(&mut t, "read_doc", "boom again");
+        assert_eq!(
+            ok(&mut t, "read_doc", "doc"),
+            GuardrailDecision::Allow,
+            "two successes + two failures is only the third recurrence"
+        );
+        assert_eq!(
+            ok(&mut t, "read_doc", "doc"),
+            GuardrailDecision::Allow,
+            "fourth recurrence: still below the warn threshold"
+        );
+        assert_eq!(
+            ok(&mut t, "read_doc", "doc"),
+            GuardrailDecision::Warn,
+            "fifth recurrence of (read_doc, doc) warns even though the streak kept resetting"
+        );
+    }
+
+    #[test]
+    fn recurrence_ledger_arms_the_varied_args_backstop() {
+        let mut t = ToolGuardrailTracker::new();
+        for _ in 0..6 {
+            let _ = ok(&mut t, "poll", "same");
+        }
+        assert_eq!(
+            t.observe("poll", "{\"fresh_args\":true}"),
+            GuardrailDecision::Skip,
+            "six run-wide identical results arm the next-call skip"
+        );
+    }
+
+    #[test]
+    fn reset_clears_the_failure_ladders_and_ledger() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 0..11 {
+            let _ = fail(&mut t, "lookup", &format!("e{i}"));
+        }
+        ok(&mut t, "other", "same");
+        ok(&mut t, "other", "same");
+        t.reset();
+        assert_eq!(fail(&mut t, "lookup", "e12"), GuardrailDecision::Allow);
+        assert_eq!(ok(&mut t, "other", "same"), GuardrailDecision::Allow);
+    }
+
+    #[test]
+    fn exempt_tools_bypass_the_failure_and_hard_reject_rungs() {
+        let mut t = ToolGuardrailTracker::new().with_exempt_tools(["terminal"]);
+        for i in 0..15 {
+            assert_eq!(
+                fail(&mut t, "terminal", &format!("boom {i}")),
+                GuardrailDecision::Allow
+            );
+            assert_eq!(
+                fail(&mut t, "terminal", "Blocked by security policy: denied"),
+                GuardrailDecision::Allow
+            );
+        }
     }
 }

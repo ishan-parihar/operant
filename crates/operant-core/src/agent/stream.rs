@@ -437,21 +437,71 @@ impl OperantAgent {
     }
 
     /// Wave-2 harvest: feed real executed results to the guardrail
-    /// tracker's no-progress rung (identical-result streaks arm a
-    /// next-call skip). Synthetic guardrail skips are excluded — their text
-    /// is identical by construction and would fake an identical-result streak.
-    fn observe_guardrail_results(&self, results: &[ToolResult]) {
-        let mut g = self
-            .tool_guardrails
-            .lock()
-            .expect("tool_guardrails lock poisoned");
-        for r in results {
-            if r.content
-                .starts_with(crate::tool_guardrails::SKIP_MESSAGE_PREFIX)
-            {
-                continue;
+    /// tracker's post-execution rungs — the no-progress ladder (identical-
+    /// result streak + run-wide recurrence ledger), the per-tool failure
+    /// ladder (warn 8 / halt 12), and the hard-reject halt (2). Synthetic
+    /// guardrail skips are excluded — their text is identical by
+    /// construction and would fake an identical-result streak. A Halt
+    /// verdict triggers the interrupt flag and surfaces the root-cause
+    /// summary as final content.
+    async fn observe_guardrail_results(&self, results: &[ToolResult]) {
+        use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
+
+        // Phase 1 (sync, under the lock): classify every result. The lock
+        // is dropped before any await so no other arm can block on it.
+        let mut notices: Vec<(String, GuardrailDecision, Option<RepeatPattern>)> = Vec::new();
+        {
+            let mut g = self
+                .tool_guardrails
+                .lock()
+                .expect("tool_guardrails lock poisoned");
+            for r in results {
+                if r.content
+                    .starts_with(crate::tool_guardrails::SKIP_MESSAGE_PREFIX)
+                {
+                    continue;
+                }
+                let decision = g.observe_result(&r.name, &r.content, r.success);
+                let is_halt = matches!(decision, GuardrailDecision::Halt(_));
+                let pattern = g.last_pattern();
+                notices.push((r.name.clone(), decision, pattern));
+                if is_halt {
+                    break;
+                }
             }
-            g.observe_result(&r.name, &r.content);
+        }
+
+        // Phase 2 (async, lock-free): surface warnings and halts.
+        for (name, decision, pattern) in notices {
+            match decision {
+                GuardrailDecision::Allow | GuardrailDecision::Skip => {}
+                GuardrailDecision::Warn => {
+                    warn!(
+                        tool = %name,
+                        pattern = ?pattern,
+                        "Post-result guardrail ladder — warning model"
+                    );
+                    self.emit(AgentEvent::Content {
+                        text: crate::tool_guardrails::pattern_warning_message(
+                            &name,
+                            pattern.as_ref(),
+                        ),
+                    })
+                    .await;
+                }
+                GuardrailDecision::Halt(summary) => {
+                    warn!(
+                        tool = %name,
+                        "Guardrail ladder exhausted — halting the turn: {summary}"
+                    );
+                    // Same machinery as a user Ctrl-C / steer request-stop:
+                    // the loop's interrupt checks stop the turn after this
+                    // iteration; the summary lands as the final content.
+                    self.interrupt_flag.trigger();
+                    self.emit(AgentEvent::Content { text: summary }).await;
+                    return;
+                }
+            }
         }
     }
 
@@ -661,6 +711,9 @@ impl OperantAgent {
                 };
                 match decision {
                     GuardrailDecision::Allow => {}
+                    // observe() (pre-execution) never returns Halt — only the
+                    // post-result rungs do; handled in observe_guardrail_results.
+                    GuardrailDecision::Halt(_) => {}
                     GuardrailDecision::Warn => {
                         warn!(
                             tool = %name,
@@ -778,7 +831,8 @@ impl OperantAgent {
                         early_results[idx] = Some(ToolResult::error(
                             &tool_call.id,
                             format!(
-                                "Blocked by security policy: {}",
+                                "{}: {}",
+                                crate::tool_guardrails::HARD_REJECT_PREFIX,
                                 approval_result
                                     .reason
                                     .unwrap_or_else(|| "blocked".to_string())
@@ -1018,7 +1072,7 @@ impl OperantAgent {
             // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
             // future was cancelled. Use flatten() to gracefully skip None.)
             let results: Vec<ToolResult> = early_results.into_iter().flatten().collect();
-            self.observe_guardrail_results(&results);
+            self.observe_guardrail_results(&results).await;
             return Ok(results);
         }
 
@@ -1209,7 +1263,7 @@ impl OperantAgent {
         // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
         // future was cancelled. Use flatten() to gracefully skip None.)
         let results: Vec<ToolResult> = early_results.into_iter().flatten().collect();
-        self.observe_guardrail_results(&results);
+        self.observe_guardrail_results(&results).await;
         Ok(results)
     }
 
