@@ -1694,9 +1694,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     // Attach persistent session store for cross-restart session tracking
     let session_db_path = app_config.database_path.clone();
-    if let Ok(store) = operant_core::PersistentSessionStore::open(session_db_path.to_str().unwrap())
-    {
-        gateway = gateway.with_persistent_sessions(std::sync::Arc::new(store));
+    // iter-678 (gap 1): hoist the handle — the cron scheduler's usage drain
+    // writes through the SAME store the budget rollup reads.
+    let persistent_session_store: Option<
+        std::sync::Arc<operant_core::PersistentSessionStore>,
+    > = operant_core::PersistentSessionStore::open(
+        session_db_path.to_str().unwrap(),
+    )
+    .ok()
+    .map(std::sync::Arc::new);
+    if let Some(store) = persistent_session_store.clone() {
+        gateway = gateway.with_persistent_sessions(store);
     }
 
     let mcp_manager = McpManager::new();
@@ -1888,12 +1896,48 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // dangerous call before denying, so that stalls every job instead of failing
     // closed. A real fail-closed path needs deny-without-prompting (new code).
     let cron_mcp_manager = operant_core::mcp::McpManager::new();
+    // iter-678 (gap 1, metering): the cron agent gets its OWN event channel.
+    // Sharing the gateway's had two defects: usage events accumulated under
+    // the *current DM channel's* key and drained into a stranger's rollup
+    // (the wave-4 trap — cron spend was invisible to every seat's budget),
+    // and tool-progress previews from a 03:00 job landed in whatever human
+    // chat happened to be active (the D-1b class). This drain task folds only
+    // Usage/Cost into the scheduler's meter — the serial tick loop's
+    // pre/post snapshots turn it into per-run deltas. Everything else drops.
+    let (cron_event_tx, mut cron_event_rx) = mpsc::channel::<AgentEvent>(256);
+    let cron_usage_meter = Arc::new(std::sync::Mutex::new(
+        operant_core::org::worklog::UsageAccumulator::new(),
+    ));
+    {
+        let meter = cron_usage_meter.clone();
+        tokio::spawn(async move {
+            while let Some(event) = cron_event_rx.recv().await {
+                match event {
+                    AgentEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                        ..
+                    } => {
+                        if let Ok(mut acc) = meter.lock() {
+                            acc.record(input_tokens, output_tokens);
+                        }
+                    }
+                    AgentEvent::Cost { cost_usd, .. } => {
+                        if let (Some(cost), Ok(mut acc)) = (cost_usd, meter.lock()) {
+                            acc.record_cost(cost);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
     let cron_agent = Arc::new(
         crate::create_runtime_agent_with(
             app_config,
             &app_config.agent,
             None,
-            event_tx.clone(),
+            cron_event_tx,
             &cron_mcp_manager,
             &app_config.skills.root_dir,
             None,
@@ -3725,6 +3769,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     .with_delivery(cron_tx)
             }
         };
+        // iter-678 (gap 1): mount the cron budget envelope — the usage meter
+        // (fed by the cron agent's own event channel), the session store the
+        // rollup reads, and the seat-budget resolution (overrides +
+        // [genome].budget default). All dark-mergeable: cap 0 = ungoverned
+        // keeps every run byte-identical until an operator sets a cap.
+        let mut scheduler = scheduler;
+        if let Some(store) = persistent_session_store.clone() {
+            scheduler = scheduler.with_usage_store(store);
+        }
+        let scheduler = scheduler
+            .with_usage_meter(cron_usage_meter.clone())
+            .with_budgets(
+                Arc::clone(&seat_budget_store),
+                app_config.genome.budget.clone(),
+            );
         tokio::spawn(async move { scheduler.start().await });
 
         // Delivery receiver — sends cron results to platforms

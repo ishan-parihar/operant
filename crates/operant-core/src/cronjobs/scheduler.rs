@@ -19,6 +19,7 @@ use crate::error::Error;
 use crate::org::decisions_db::RunKind;
 use crate::org::identity_gate::{GateBlock, GateDecision, IdentityGate};
 use crate::org::worklog::OutcomeSignals;
+use crate::org::worklog::UsageAccumulator;
 use crate::org::write_barrier::{WriteBarrier, WriteBarrierRequest};
 use crate::turn_end::{RESULT_SUMMARY_LIMIT, TurnEnd};
 
@@ -66,6 +67,22 @@ pub struct CronScheduler {
     /// loop can never arm more than [`MAX_TRANSIENT_RETRIES`] per success,
     /// and a restart is itself a fresh cadence.
     transient_retries: Arc<std::sync::Mutex<std::collections::HashMap<String, u8>>>,
+    /// iter-678 (gap 1, metering): the accumulator fed by the cron agent's
+    /// OWN event channel (the gateway's receiver never sees cron usage —
+    /// that was the misattribution root). `None` = no metering, runs stay
+    /// un-drained exactly like before (dark-mergeable).
+    usage_meter: Option<Arc<std::sync::Mutex<UsageAccumulator>>>,
+    /// iter-678: the persistent session store the scheduler drains into —
+    /// the same store the gateway's budget rollup reads
+    /// (`employee_window_usage`). `None` = no drain (dark-mergeable).
+    usage_store: Option<Arc<crate::gateway_session::PersistentSessionStore>>,
+    /// iter-678 (gap 1, consult): per-seat budget overrides. `None` = no
+    /// seat is budget-governed on the cron path (the default; `[genome].budget`
+    /// cap 0 = ungoverned keeps everything dark-mergeable).
+    seat_budgets: Option<Arc<crate::org::seat_budgets::SeatBudgetDb>>,
+    /// iter-678: the org-wide budget default (`[genome].budget`), resolved
+    /// per seat via `resolve_budget` when `seat_budgets` is mounted.
+    default_budget: crate::config::BudgetSettings,
 }
 
 impl CronScheduler {
@@ -79,6 +96,10 @@ impl CronScheduler {
             employee_db: None,
             seat_memory_root: None,
             transient_retries: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            usage_meter: None,
+            usage_store: None,
+            seat_budgets: None,
+            default_budget: crate::config::BudgetSettings::default(),
         }
     }
 
@@ -124,6 +145,39 @@ impl CronScheduler {
     /// byte-identical, dark-mergeable like the org gate.
     pub fn with_seat_memory_root(mut self, root: std::path::PathBuf) -> Self {
         self.seat_memory_root = Some(root);
+        self
+    }
+
+    /// iter-678: mount the cron agent's usage accumulator (fed by its own
+    /// event channel) so runs meter. Without it no drain happens —
+    /// dark-mergeable.
+    pub fn with_usage_meter(
+        mut self,
+        meter: Arc<std::sync::Mutex<UsageAccumulator>>,
+    ) -> Self {
+        self.usage_meter = Some(meter);
+        self
+    }
+
+    /// iter-678: mount the persistent session store runs drain their usage
+    /// into (the store `employee_window_usage` reads for budget rollups).
+    pub fn with_usage_store(
+        mut self,
+        store: Arc<crate::gateway_session::PersistentSessionStore>,
+    ) -> Self {
+        self.usage_store = Some(store);
+        self
+    }
+
+    /// iter-678: mount per-seat budget overrides + the org-wide default for
+    /// the cron-path budget envelope (resolve → turn-start gate → envelope).
+    pub fn with_budgets(
+        mut self,
+        seat_budgets: Arc<crate::org::seat_budgets::SeatBudgetDb>,
+        default_budget: crate::config::BudgetSettings,
+    ) -> Self {
+        self.seat_budgets = Some(seat_budgets);
+        self.default_budget = default_budget;
         self
     }
 
@@ -292,6 +346,16 @@ impl CronScheduler {
             return self.record_gate_block(job, block);
         }
 
+        // ── iter-678: cron-path budget gate (gap 1) ────────────────────
+        // Mirrors the gateway's turn-start gate: a run that would START
+        // over a HARD cap is refused with an actionable message and never
+        // dispatched. Soft mode never refuses (it self-economizes via the
+        // injection in `run_agent_job`); ungoverned (cap <= 0, the
+        // default) is `None` — byte-identical.
+        if let Some(reason) = self.budget_gate_block(job) {
+            return self.record_budget_block(job, reason);
+        }
+
         let (success, _output, final_response, error_msg, transient) = if job.no_agent {
             self.run_script_job(job).await
         } else {
@@ -428,6 +492,128 @@ impl CronScheduler {
         }
     }
 
+    /// iter-678: the effective budget + window usage for a seat, when the
+    /// budget stores are mounted. `None` = ungoverned (no budget consulted
+    /// at all) — the dark-mergeable default. Store errors degrade to
+    /// ungoverned (fail-open, the genome invariant: metering must never
+    /// refuse a run because the meter could not be read).
+    fn seat_budget_state(
+        &self,
+        seat_id: &str,
+    ) -> Option<(
+        crate::org::seat_budgets::EffectiveBudget,
+        (i64, f64),
+    )> {
+        let budgets = self.seat_budgets.as_ref()?;
+        let store = self.usage_store.as_ref()?;
+        let seat_override = budgets.get(seat_id).ok().flatten();
+        let effective =
+            crate::org::seat_budgets::resolve_budget(seat_override.as_ref(), &self.default_budget)?;
+        let since = crate::org::seat_budgets::window_start(&effective.window);
+        let usage = store.employee_window_usage(seat_id, &since).ok()?;
+        Some((effective, usage))
+    }
+
+    /// iter-678: the budget gate decision for `job`, as a refusal reason.
+    /// `None` = the run may proceed. A hard cap already blown at run start
+    /// refuses — the run was never going to fit the window.
+    fn budget_gate_block(&self, job: &CronJob) -> Option<String> {
+        let derived = crate::org::employee::derive_employee_id(&job.id);
+        let seat_id = self.resolve_seat_id(job, &derived);
+        let (budget, (tokens_used, usd_used)) = self.seat_budget_state(&seat_id)?;
+        let (used, remaining, unit) = if budget.basis == "usd" {
+            (usd_used, budget.cap - usd_used, "USD")
+        } else {
+            (tokens_used as f64, budget.cap - tokens_used as f64, "tokens")
+        };
+        if remaining > 0.0 || budget.mode != "hard" {
+            return None;
+        }
+        Some(format!(
+            "budget cap reached for seat `{}` — {:.0} of {:.0} {} used this {}; \
+             the run was not executed. Raise the `seat_budgets` cap, or wait \
+             for the window to roll",
+            seat_id, used, budget.cap, unit, budget.window
+        ))
+    }
+
+    /// iter-678: fail-open side effect for a budget refusal — the gate's
+    /// mirror of [`Self::record_gate_block`]: persist the block on the job
+    /// row, append the history row with its own forensically distinct
+    /// `budget_block` origin, advance `next_run_at` (no busy-spin), and
+    /// return without executing.
+    fn record_budget_block(&self, job: &CronJob, reason: String) -> Result<(), Error> {
+        let started_at = chrono::Utc::now().to_rfc3339();
+        error!("Cron job {} blocked by the budget gate: {}", job.id, reason);
+        self.db.mark_job_run(
+            &job.id,
+            false,
+            Some(reason.clone()),
+            None,
+            self.compute_next_run(job),
+        )?;
+        if let Err(e) = self
+            .db
+            .record_cron_run(&job.id, &started_at, false, Some(reason), "budget_block")
+        {
+            warn!("cron run history write failed for {}: {e}", job.id);
+        }
+        Ok(())
+    }
+
+    /// iter-678 (gap 1, metering): fold this run's meter delta into the
+    /// persistent session store under the seat — the exact write
+    /// `employee_window_usage` (the rollup the envelope consult reads)
+    /// sums. Runs are serial in the tick loop, so the delta between the
+    /// pre-run snapshot and the post-run read is this run's usage alone.
+    /// Fail-open (genome invariant): a metering write never fails a run.
+    fn drain_run_usage(
+        &self,
+        job: &CronJob,
+        seat_id: &str,
+        meter_before: Option<(u64, u64, f64)>,
+    ) {
+        let (Some(meter), Some(store)) = (self.usage_meter.as_ref(), self.usage_store.as_ref())
+        else {
+            return;
+        };
+        let Some((b_in, b_out, b_cost)) = meter_before else {
+            return;
+        };
+        let Ok(acc) = meter.lock() else {
+            return; // poisoned meter = no drain, fail-open
+        };
+        let in_delta = acc.input_tokens().saturating_sub(b_in);
+        let out_delta = acc.output_tokens().saturating_sub(b_out);
+        let cost_delta = (acc.cost_usd() - b_cost).max(0.0);
+        drop(acc);
+        if in_delta == 0 && out_delta == 0 && cost_delta == 0.0 {
+            return;
+        }
+        let source = crate::gateway_session::SessionSource {
+            platform: "cron".to_string(),
+            chat_id: job.id.clone(),
+            chat_name: Some(job.name.clone()),
+            chat_type: "cron".to_string(),
+            ..Default::default()
+        };
+        match store.get_or_create_session(&source, false) {
+            Ok(entry) => {
+                if let Err(e) = store.bind_employee(&entry.session_key, seat_id) {
+                    warn!("cron usage bind failed for {}: {e} (fail-open)", job.id);
+                }
+                if let Err(e) =
+                    store.update_tokens(&entry.session_key, in_delta, out_delta, 0, 0, cost_delta)
+                {
+                    warn!("cron usage drain failed for {}: {e} (fail-open)", job.id);
+                }
+            }
+            Err(e) => {
+                warn!("cron usage session create failed for {}: {e} (fail-open)", job.id)
+            }
+        }
+    }
+
     async fn run_agent_job(&self, job: &CronJob) -> (bool, String, String, Option<String>, bool) {
         debug!("Running agent job {}: {}", job.id, job.name);
 
@@ -474,6 +660,52 @@ impl CronScheduler {
             None => job.prompt.clone(),
         };
 
+        // ── iter-678: budget posture (gap 1) ──────────────────────────
+        // Mirrors the gateway's turn-start construction
+        // (gateway_runner.rs:1040-1126): a HARD token cap the run still
+        // fits under arms the mid-flight envelope (the loop stops at its
+        // next iteration boundary once spend crosses the window line);
+        // every governed run gets the remaining-budget injection so it
+        // self-economizes BEFORE the cap. The hard refuse itself already
+        // ran in `run_job` — this is the in-run half. Ungoverned seats:
+        // `None`, prompt byte-identical.
+        let mut seat_envelope: Option<crate::agent::SeatBudgetEnvelope> = None;
+        let prompt = match self.seat_budget_state(&seat_id) {
+            None => prompt,
+            Some((budget, (tokens_used, usd_used))) => {
+                let (used, remaining, unit) = if budget.basis == "usd" {
+                    (usd_used, budget.cap - usd_used, "USD")
+                } else {
+                    (tokens_used as f64, budget.cap - tokens_used as f64, "tokens")
+                };
+                if budget.mode == "hard" && budget.basis == "tokens" && remaining > 0.0 {
+                    seat_envelope = Some(crate::agent::SeatBudgetEnvelope {
+                        cap_tokens: budget.cap,
+                        used_at_turn_start: tokens_used as f64,
+                    });
+                }
+                let posture = if remaining <= 0.0 {
+                    "OVER the cap (soft mode: continue, but say so)".to_string()
+                } else {
+                    format!("{remaining:.0} of {:.0} {unit} remain", budget.cap)
+                };
+                format!(
+                    "<budget_state>\nSeat `{seat_id}` budget — {} window {}, mode {}: {posture}. \
+                     Be mindful of consumption; prefer efficient tool use and concise \
+                     reasoning while the budget is tight.\n</budget_state>\n\n{prompt}",
+                    budget.basis, budget.window, budget.mode
+                )
+            }
+        };
+
+        // iter-678: snapshot the meter before the run — the tick loop is
+        // serial, so the post-run delta is this run's usage alone.
+        let meter_before = self.usage_meter.as_ref().and_then(|m| {
+            m.lock()
+                .ok()
+                .map(|acc| (acc.input_tokens(), acc.output_tokens(), acc.cost_usd()))
+        });
+
         // NOTE: the memory-graph session boundary that `clear_history` fired
         // (events.rs:193-197, `submit_session_end` / `on_session_end`) is NOT
         // reproduced here, because no provider implements it usefully:
@@ -484,9 +716,25 @@ impl CronScheduler {
         // than papered over. `notify_session_switch` therefore still has zero
         // callers.
 
-        match self.agent.run(prompt).await {
+        // iter-678: the envelope-scoped run — ungoverned runs take the
+        // byte-identical legacy call.
+        let run_result = match seat_envelope {
+            Some(envelope) => {
+                crate::agent::SEAT_BUDGET_ENVELOPE
+                    .scope(envelope, self.agent.run(prompt))
+                    .await
+            }
+            None => self.agent.run(prompt).await,
+        };
+
+        // iter-678 (gap 1, metering): drain the run's usage into the seat's
+        // rollup BEFORE the outcome arms — error runs are metered too, the
+        // same order the gateway drains at turn end.
+        self.drain_run_usage(job, &seat_id, meter_before);
+
+        match run_result {
             Ok(message) => {
-                // ── Wave 1 write barrier, outline §3 step B′ ──────────────
+                // ── Wave 1 write barrier, outline §3 step B′ ─────────────────
                 // The §7.1 postcondition: a completed scheduled run must
                 // leave its three artifact rows, and a barrier write failure
                 // fails the run regardless of the agent's answer. Only a
@@ -773,6 +1021,188 @@ mod tests {
             out.ends_with("charter body"),
             "the charter still terminates the prompt"
         );
+    }
+
+    // ── iter-678 (gap 1): cron-path budget gate + metering drain ──
+
+    /// A real scheduler over a real (uninvoked) agent, with the budget
+    /// stores mounted. Mirrors `transient_retry_budget_is_bounded...`'s
+    /// construction: the helpers never invoke the agent.
+    fn scheduler_with_budgets(
+        dir: &std::path::Path,
+        default_budget: crate::config::BudgetSettings,
+        seat_budget: Option<crate::org::seat_budgets::SeatBudget>,
+    ) -> super::CronScheduler {
+        let db = Arc::new(
+            crate::database::Database::init(dir.join("agent.sqlite")).expect("db"),
+        );
+        let agent = Arc::new(crate::agent::OperantAgent::new(
+            crate::agent::AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            db,
+        ));
+        let cron_db = Arc::new(super::CronDb::init(dir.join("cron.sqlite")).expect("cron db"));
+        let seat_budgets = Arc::new(
+            crate::org::seat_budgets::SeatBudgetDb::init(&dir.join("org.sqlite")).expect("budgets"),
+        );
+        if let Some(budget) = seat_budget {
+            seat_budgets.upsert(&budget).expect("upsert budget");
+        }
+        let store = Arc::new(
+            crate::gateway_session::PersistentSessionStore::open(
+                dir.join("sessions.sqlite").to_str().expect("utf-8 path"),
+            )
+            .expect("session store"),
+        );
+        super::CronScheduler::new(Arc::clone(&cron_db), agent)
+            .with_budgets(seat_budgets, default_budget)
+            .with_usage_store(store)
+    }
+
+    fn test_job() -> crate::cronjobs::db::CronJob {
+        crate::cronjobs::db::CronJob {
+            id: "job_budget_probe".to_string(),
+            name: "budget probe".to_string(),
+            prompt: "probe".to_string(),
+            schedule: "0 0 * * * *".to_string(),
+            schedule_display: "hourly".to_string(),
+            repeat_times: None,
+            repeat_completed: 0,
+            deliver: "none".to_string(),
+            origin_platform: None,
+            origin_chat_id: None,
+            origin_thread_id: None,
+            skill: None,
+            skills: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            script: None,
+            context_from: None,
+            enabled_toolsets: None,
+            workdir: None,
+            no_agent: false,
+            enabled: true,
+            state: "scheduled".to_string(),
+            paused_at: None,
+            paused_reason: None,
+            created_at: String::new(),
+            next_run_at: None,
+            last_run_at: None,
+            last_status: None,
+            last_error: None,
+            last_delivery_error: None,
+        }
+    }
+
+    fn spend_window_for(scheduler: &super::CronScheduler, seat_id: &str, tokens: u64) {
+        let store = scheduler.usage_store.clone().expect("store");
+        let source = crate::gateway_session::SessionSource {
+            platform: "cron".to_string(),
+            chat_id: "job_budget_probe".to_string(),
+            chat_type: "cron".to_string(),
+            ..Default::default()
+        };
+        let entry = store
+            .get_or_create_session(&source, false)
+            .expect("session");
+        store
+            .bind_employee(&entry.session_key, seat_id)
+            .expect("bind");
+        store
+            .update_tokens(&entry.session_key, tokens, 0, 0, 0, 0.0)
+            .expect("spend");
+    }
+
+    #[test]
+    fn budget_gate_ungoverned_keeps_the_run_byte_identical() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No seat row + cap 0 default = ungoverned — the dark-mergeable path.
+        let scheduler =
+            scheduler_with_budgets(dir.path(), crate::config::BudgetSettings::default(), None);
+        assert!(
+            scheduler.budget_gate_block(&test_job()).is_none(),
+            "ungoverned seats must not be budget-gated"
+        );
+    }
+
+    #[test]
+    fn budget_gate_refuses_a_hard_cap_already_blown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_id = crate::org::employee::derive_employee_id("job_budget_probe");
+        let scheduler = scheduler_with_budgets(
+            dir.path(),
+            crate::config::BudgetSettings::default(),
+            Some(crate::org::seat_budgets::SeatBudget {
+                employee_id: seat_id.clone(),
+                basis: None,
+                window: None,
+                cap: 50.0,
+                mode: Some("hard".to_string()),
+            }),
+        );
+        // Pre-spend the window: a session row bound to the seat with 60
+        // tokens already drained — exactly what the metering wire writes.
+        spend_window_for(&scheduler, &seat_id, 60);
+
+        let Some(reason) = scheduler.budget_gate_block(&test_job()) else {
+            panic!("a blown hard cap must refuse");
+        };
+        assert!(reason.contains("budget cap reached"), "got: {reason}");
+    }
+
+    #[test]
+    fn budget_gate_soft_mode_never_refuses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_id = crate::org::employee::derive_employee_id("job_budget_probe");
+        let scheduler = scheduler_with_budgets(
+            dir.path(),
+            crate::config::BudgetSettings::default(),
+            Some(crate::org::seat_budgets::SeatBudget {
+                employee_id: seat_id.clone(),
+                basis: None,
+                window: None,
+                cap: 50.0,
+                mode: Some("soft".to_string()),
+            }),
+        );
+        spend_window_for(&scheduler, &seat_id, 999);
+        assert!(
+            scheduler.budget_gate_block(&test_job()).is_none(),
+            "soft mode must never refuse at the gate"
+        );
+    }
+
+    #[test]
+    fn drain_run_usage_writes_the_seat_rollup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_id = crate::org::employee::derive_employee_id("job_budget_probe");
+        let scheduler =
+            scheduler_with_budgets(dir.path(), crate::config::BudgetSettings::default(), None);
+        // The meter saw a run's usage after the snapshot: 120 in / 45 out
+        // + $0.01 cost — the delta the drain must fold into the seat's
+        // rollup.
+        let meter = Arc::new(std::sync::Mutex::new(
+            crate::org::worklog::UsageAccumulator::new(),
+        ));
+        {
+            let mut acc = meter.lock().expect("meter");
+            acc.record(120, 45);
+            acc.record_cost(0.01);
+        }
+        let scheduler = scheduler.with_usage_meter(meter);
+        scheduler.drain_run_usage(&test_job(), &seat_id, Some((0, 0, 0.0)));
+
+        let store = scheduler.usage_store.clone().expect("store");
+        let since = crate::org::seat_budgets::window_start("daily");
+        let (tokens, usd) = store
+            .employee_window_usage(&seat_id, &since)
+            .expect("rollup");
+        assert_eq!(tokens, 165, "in+out must land in the seat's rollup");
+        assert!((usd - 0.01).abs() < 1e-9, "cost must land too, got {usd}");
     }
 
     // ── iter-669: transient-retry budget ──

@@ -324,10 +324,16 @@ impl KaizenProposal {
 /// The accumulator takes plain token counts rather than an `&AgentEvent` so
 /// this module has no dependency on the `agent` module and stays unit-
 /// testable on its own.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UsageAccumulator {
     input_tokens: u64,
     output_tokens: u64,
+    /// Cumulative models_dev-estimated cost (`AgentEvent::Cost`), USD.
+    /// iter-678: folded by the cron scheduler's usage meter — usd-basis
+    /// budget envelopes need it, and the future TurnEnd wiring inherits
+    /// the field for free. (`Eq` dropped from the derive: f64 is only
+    /// `PartialEq`.)
+    cost_usd: f64,
     /// How many `AgentEvent::Usage` events were folded in. Diagnostic only:
     /// a turn that ran but recorded zero usage events is a real, visible
     /// state rather than a silent zero.
@@ -350,6 +356,16 @@ impl UsageAccumulator {
         self.input_tokens = self.input_tokens.saturating_add(u64::from(input_tokens));
         self.output_tokens = self.output_tokens.saturating_add(u64::from(output_tokens));
         self.usage_events = self.usage_events.saturating_add(1);
+    }
+
+    /// Fold one `AgentEvent::Cost` estimate in (USD).
+    pub fn record_cost(&mut self, cost_usd: f64) {
+        self.cost_usd += cost_usd;
+    }
+
+    /// Cumulative estimated cost in USD.
+    pub fn cost_usd(&self) -> f64 {
+        self.cost_usd
     }
 
     /// Total input tokens across the turn.
