@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-688 — gap 7: authority predicates enforced + `org budget`/`org
+  cast`/`org audit`:** `org notice post` consults `can_post_to` per
+  recipient (§2.3.1) — employee senders gated on scope/dept/grants,
+  unregistered senders refused fail-closed, `user`/`system` keep the
+  operator-root surface; `org decision accept` takes `--as <actor>` and
+  consults `can_accept_decision` (§2.3.3) — closing the iter-642 finding
+  that ratification was structurally open. New read surfaces: `org cast`
+  (nine-seat topology + registry state) and `org audit <seat>` (grants,
+  decisions, budget posture + metered window spend). `operant budget`
+  folds into `org budget`; the top-level namespace is gone.
 - **iter-684/685 — guardrail exemption threading (openhuman
   `is_repeat_call_exempt`):** `AgentConfig.guardrail_exempt_tools` seeds
   the live `ToolGuardrailTracker` in both `OperantAgent` constructors

@@ -117,7 +117,18 @@ graph LR
 
 ## Wave C — blocked on the peer's `cmd_org.rs` WIP (still dirty in-tree)
 
-### 7. Budget fold + Slices 4/5 (authority predicates + read surfaces)
+### 7. Budget fold + Slices 4/5 (authority predicates + read surfaces) — DONE iter-688 `a5766fb1`
+- **Landed in a detached worktree at origin/main** (owner ruling, 2026-10-08):
+  the peer's tree carried uncommitted rustfmt residue on `cmd_org.rs`/
+  `cmd_budget.rs` plus 3 unpushed iter-685 commits at execution time, making
+  the shared tree unpublishable; the worktree never touched their state.
+- `can_post_to` enforced at the notice-post seam (per-recipient consult,
+  fail-closed identity: unregistered senders refused; `user`/`system` =
+  operator root, not gated); `can_accept_decision` enforced at the accept
+  seam via a new `--as` actor arg; `org budget` fold (top-level namespace
+  gone); `org cast` + `org audit <seat>` read surfaces live.
+- Also annotated six accumulated clippy deny sites in operant-core
+  (gate restored on the crate; two remain in the peer's fresh TUI).
 - **Problem**: `operant budget` lives as a top-level namespace only because
   `cmd_org.rs` is peer-dirty (iter-670's recorded intent: fold into
   `org budget`). Slices 4/5 of the org plan are unwired: authority
