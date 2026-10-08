@@ -71,9 +71,11 @@ gone and cannot be recovered.
   `scheduler.rs:277` with `set_session_id(derive_employee_id(&job.id))`. See
   D-2 for the two costs that make that not a trivial change.
 - **Verification owed**: a test that fails when `scheduler.rs:277` is present and
-  passes when it is replaced. As of this entry **no test covers this** — the
-  existing `tests/agent_session_isolation.rs` tests the substrate, not this
-  crosstalk.
+   passes when it is replaced.
+   > **CLOSED (2026-10-09)**: `tests/cron_session_isolation.rs` (6/6 at tip)
+   > pins the derivation directly — distinct job ids derive distinct, stable
+   > session ids, and the shared-agent retarget is proven safe. Together with
+   > the iter-684 pin below, the "no test covers this" claim is retired.
   > **PINNED (iter-684)**: `bind_seat_run_retargets_the_shared_agent_not_clears_it`
   > now asserts the scheduler retargets the shared agent via `set_session_id`
   > (id + seat both flip; a `clear_history` regression sets neither and fails

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-695 — socialization phase 2: session outcomes post to the board:**
+  the senior's close-out notice is the only board write outside the CLI,
+  gated by the same §2.3.1 consult (identity fail-closed, consult before
+  write, refusal = skipped post). `resolve_actor_scope`/`live_grants_for`
+  moved to `org/authority.rs` as the canonical consult companions shared
+  by the CLI seams and the scheduler-side writer. Phase 3 holds by
+  construction: outcomes ride the phase-2 notice + worklog into `org
+  synthesize`'s org-bank digest.
 - **iter-692 — gap 8: chief-of-staff synthesis (Slice 9) + decision→charter
   amendment (Slice 10):** `operant org synthesize [--window-hours N]
   [--dry-run]` composes the org digest over a window (recent notices,

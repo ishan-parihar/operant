@@ -72,16 +72,26 @@ graph LR
   the interactive session never sees a scheduled job's question.
 - **Effort**: S–M. **Blockers**: none.
 
-### 3. Breaker threshold tuning (iter-664 follow-up)
-- **Problem**: degenerate-abort thresholds held at 6/6 (identical-streak /
+### 3. Breaker threshold tuning (iter-664 follow-up) — DECIDED 2026-10-09: HOLD 6/6
+- **Data note (2026-10-09, day 4 of the window)**: 0 degenerate/identical
+  aborts across 87 cron runs since 10-05 (71 success, 16 failure —
+  every failure is provider-capacity class: 9 stream deaths, 5 HTTP
+  503, 1 HTTP 400, 1 interruption). The 6/6 thresholds never fired, so
+  they cost nothing, and the real failure mode (provider capacity) is
+  the retry-covered flake class (iter-669/673), not a degenerate loop —
+  lowering to 2–3 would risk aborting legitimate retries under the
+  exact provider flakiness the box sees daily. No threshold change, no
+  test change; revisit only if a degenerate fire ever appears in
+  `cron_runs`.
+- **Problem** (original): degenerate-abort thresholds held at 6/6 (identical-streak /
   all-failure) — chosen observability-first; real distribution unknown now
   that `degenerate_detail` records actual tool names + last failure.
 - **Approach**: collect 3–7 days of live `degenerate_detail` data; tune on
   evidence (2–3 vs 6); if changed, update the pinned contract tests in the
   same iteration.
 - **Acceptance**: any threshold change carries a data note in the commit
-  body; tests still pin the message contract.
-- **Effort**: S. **Blockers**: time (data window only).
+  body; tests still pin the message contract. ✓ (no change → no test change)
+- **Effort**: S. **Blockers**: none (decided early — the data was one-sided).
 
 ### 4. ~~DECISION: D-2 unattended posture~~ — DECIDED 2026-10-08 (owner ruling)
 - **Ruling**: the unattended posture is managed by the **governance
@@ -111,7 +121,20 @@ graph LR
 - **Blockers**: none for phase 1 — implementation may proceed on the
   owner's go.
 
-### 6. Daily socialization sessions (owner directive)
+### 6. Daily socialization sessions (owner directive) — phases 1 DONE (iter-679/684); 2 DONE (iter-695); 3 DONE BY CONSTRUCTION
+- **Phase 2 (iter-695 `784a92de`)**: the senior's session close-out posts
+  to the board through the same §2.3.1 consult the CLI seams run —
+  `resolve_actor_scope`/`live_grants_for` moved into
+  `org/authority.rs` as the canonical consult companions (one resolver,
+  CLI + scheduler callers), `post_session_outcome` writes the
+  fail-closed-identity, consult-gated notice, and the scheduler treats
+  a refusal as a skipped post (fail-open — both MEMORY.md files already
+  carry the outcome).
+- **Phase 3**: satisfied by construction — session outcomes reach the
+  board (phase-2 notice) and the worklog (seat-attributed turn rows),
+  both of which `org synthesize` (iter-692) digests into the org bank.
+- Still dark: `[socialization] enabled=false` — the owner flips it to
+  arm the 09:30 sessions.
 - **Design doc delivered 2026-10-08**: `plan-2026-10-08-socialization-sessions.md` — adjacency pairing as data (7 pairs, senior initiates), power dynamics via grants (decisions flow down, information flows up, junior voice is an exceptional grant), the `dm_threads` 3-turn envelope, MEMORY.md densification on close, sessions meter under the seats' budget envelopes. Phase 1 = the socializer cast; phases 2/3 wait on wave C.
 - **Effort**: phase 1 M. **Blockers**: owner approval of the design.
 
@@ -256,12 +279,22 @@ Chief-of-staff synthesis (notices → org bank + seat notices) and the
 decision→charter amendment path. Depends on 5's predicates and read
 surfaces. Socialization phases 2/3 ride the same unblock.
 
-### Item 7 — Gap 5 phase 2: platform read adapters (L per-platform, last)
+### Item 7 — Gap 5 phase 2: platform read adapters (L per-platform, last) — BLOCKED on credentials
 Telegram `getUpdates`/`getChat`, Discord channel history, Slack
 `conversations.history` → the `Dm` class through the same collectors;
 the durable `context_items` store lands here (design doc §5 deferred
 from phase 1 — pull-once reads need a landing). Order after 1b so the
-DM class renders on both seams at once. No blockers, just size.
+DM class renders on both seams at once.
+- **Blocker (verified 2026-10-09)**: there is nothing to read from.
+  `TELEGRAM_BOT_TOKEN` is empty/unset (the standing delivery-hop blocker
+  — `getMe` 404s; a `getUpdates` read adapter would fail the same
+  way), `discord_enabled = false`, `slack_enabled = false`, and
+  DISCORD/SLACK tokens are unset. Building L-effort adapters now would
+  be unverifiable dead code behind broken credentials. Inbound DMs
+  already land in `context_items` through the iter-679 gateway tap, so
+  the moment the Telegram credential closes, the read adapter is the
+  only remaining piece. **Owner action needed**: a working bot token
+  (or a decision to defer platform monitoring permanently).
 
 ### Execution order
 0 → 1 → 2 → 3/4 (when the window/prompt suits) → 5 → 6 → 7.
