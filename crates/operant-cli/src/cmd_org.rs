@@ -79,7 +79,8 @@ use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 
 use operant_core::org::authority::{
-    AuthorityScope, Grant, GrantDb, can_accept_decision, can_post_to, resolve_scope,
+    AuthorityScope, Grant, GrantDb, can_accept_decision, can_post_to, live_grants_for,
+    resolve_actor_scope, resolve_scope,
 };
 use operant_core::org::cast::{CAST, PREMIERE_GRANT_CAPABILITY, cast_cron_job_for};
 use operant_core::org::employee_db::EmployeeDb;
@@ -865,63 +866,15 @@ fn handle_synthesis(config: &AppConfig, window_hours: i64, dry_run: bool) -> Res
     Ok(())
 }
 
-/// Resolve an actor label into an authority scope (Slice 4, §2.3.1/§2.3.3
-/// consults). `'user'`/`'system'` are the operator root — the standing
-/// Org-scope grant is the root of every delegation (owner ruling), so they
-/// consult as Org and are not subject to the predicates. An employee resolves
-/// through their designation: org-lead = a live capability-`org` grant;
-/// department head = any department naming them as head. An **unknown
-/// sender is a refusal** (fail-closed): the registry is the only source of
-/// identity, and an unregistered "sender" must not reach a write path.
-fn resolve_actor_scope(conn: &OrgConn, actor: &str) -> Result<(AuthorityScope, Option<String>)> {
-    if actor == "user" || actor == "system" {
-        return Ok((AuthorityScope::Org, None));
-    }
-    let employees = EmployeeDb::from_shared_connection(conn.clone())
-        .context("Failed to open employee registry")?;
-    let employee = employees
-        .get_employee(actor)
-        .with_context(|| format!("Failed to read employee '{actor}'"))?
-        .with_context(|| {
-            format!(
-                "unknown actor '{actor}' — only registered employees, 'user', or 'system' \
-                 can act here (fail-closed)"
-            )
-        })?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let grants = GrantDb::from_shared_connection(conn.clone())
-        .context("Failed to open grant store")?
-        .list_for_grantee(actor)
-        .with_context(|| format!("Failed to read grants for '{actor}'"))?;
-    let is_org_lead = grants
-        .iter()
-        .any(|g| g.capability == PREMIERE_GRANT_CAPABILITY && g.is_live_at(&now));
-    let departments =
-        operant_core::org::department_db::DepartmentDb::from_shared_connection(conn.clone())
-            .context("Failed to open department store")?
-            .list()
-            .context("Failed to read departments")?;
-    let is_dept_head = departments
-        .iter()
-        .any(|d| d.head_employee_id() == Some(actor));
-    Ok((
-        resolve_scope(is_dept_head, is_org_lead),
-        employee.department.clone(),
-    ))
-}
-
-/// Slice 4 (§2.3.1): the live grants an actor holds right now — the only
-/// currency `can_post_to` accepts for a cross-department post.
-fn live_grants_for(conn: &OrgConn, actor: &str) -> Result<Vec<Grant>> {
-    let now = chrono::Utc::now().to_rfc3339();
-    Ok(GrantDb::from_shared_connection(conn.clone())
-        .context("Failed to open grant store")?
-        .list_for_grantee(actor)
-        .with_context(|| format!("Failed to read grants for '{actor}'"))?
-        .into_iter()
-        .filter(|g| g.is_live_at(&now))
-        .collect())
-}
+/// Resolve an actor label into an authority scope — delegated to
+/// [`operant_core::org::authority::resolve_actor_scope`] since socialization
+/// phase 2 gave the scheduler-side writer the same consult; one resolver,
+/// two callers, no drift about what a designation means.
+///
+/// Slice 4 (§2.3.1/§2.3.3 consults). `'user'`/`'system'` are the operator
+/// root; an **unknown sender is a refusal** (fail-closed): the registry is
+/// the only source of identity, and an unregistered "sender" must not
+/// reach a write path.
 
 fn handle_department(config: &AppConfig, action: OrgDepartmentAction) -> Result<()> {
     use operant_core::org::department_db::{Department, DepartmentDb};
@@ -1875,19 +1828,19 @@ fn cmd_notice_inbox(
     json: bool,
 ) -> Result<()> {
     let conn = open_org_db(config)?;
-    let employees = operant_core::org::employee_db::EmployeeDb::from_shared_connection(
-        conn.clone(),
-    )
-    .context("Failed to open the employee registry")?;
+    let employees =
+        operant_core::org::employee_db::EmployeeDb::from_shared_connection(conn.clone())
+            .context("Failed to open the employee registry")?;
     let employee = employees
         .get_employee(employee_id)?
         .with_context(|| format!("Employee '{employee_id}' not found in the registry"))?;
     let identity = operant_core::org::resolver::identity_for(&employee, &[], &[]);
-    let mut query = operant_core::org::resolver::inbox_query_for(&identity, None, limit.or(Some(20)));
+    let mut query =
+        operant_core::org::resolver::inbox_query_for(&identity, None, limit.or(Some(20)));
     query.pending_only = pending_only;
     query.reader_id = Some(employee.employee_id.clone());
-    let board = NoticeBoard::from_shared_connection(conn)
-        .context("Failed to open the notice board")?;
+    let board =
+        NoticeBoard::from_shared_connection(conn).context("Failed to open the notice board")?;
     let notices = board
         .query_inbox(&query)
         .context("Failed to read the inbox")?;
@@ -1918,7 +1871,10 @@ fn cmd_notice_inbox(
     } else {
         println!("Inbox for '{}' ({} notice(s)):", employee_id, notices.len());
         for n in &notices {
-            let subject = n.subject.clone().unwrap_or_else(|| "(no subject)".to_string());
+            let subject = n
+                .subject
+                .clone()
+                .unwrap_or_else(|| "(no subject)".to_string());
             let state = if n.ack_required {
                 if n.acked_by.contains(&employee.employee_id) {
                     "[acked  ]"

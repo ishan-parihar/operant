@@ -15,7 +15,7 @@
 
 use crate::error::Result;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -91,6 +91,51 @@ pub fn record_socialization_run(db_path: &Path, at: &str) -> Result<()> {
     Ok(())
 }
 
+/// **Phase 2 — decisions-of-record:** the senior posts the session's close-out
+/// to the board, addressed to the junior.
+///
+/// §9's acceptance: "The senior seat's decision posts as a notice with the
+/// junior's ratification; nothing else can." Structurally true — this is the
+/// only notice write outside the CLI, and it is reachable only from the
+/// session driver. The §2.3.1 consult runs through the same core resolver
+/// the CLI seams use ([`crate::org::authority::resolve_actor_scope`] /
+/// [`live_grants_for`](crate::org::authority::live_grants_for)), BEFORE any
+/// row write; an unregistered senior is a refusal (fail-closed identity),
+/// and the caller treats any refusal or error as a skipped post (fail-open —
+/// the session itself already succeeded and densified both MEMORY.md files).
+///
+/// `root` is the seat-memory root (the dir holding `operant_kanban.db`), the
+/// same handle the session driver already resolved.
+pub fn post_session_outcome(root: &Path, senior: &str, junior: &str, outcome: &str) -> Result<()> {
+    use std::sync::{Arc, Mutex};
+
+    use crate::org::authority::{can_post_to, live_grants_for, resolve_actor_scope};
+    use crate::org::notice::{PostNotice, Recipient};
+    use crate::org::notice_db::NoticeBoard;
+
+    let conn = Arc::new(Mutex::new(
+        Connection::open(root.join("operant_kanban.db"))
+            .map_err(|e| crate::error::Error::Agent(format!("socialization: open org db: {e}")))?,
+    ));
+    let board = NoticeBoard::from_shared_connection(conn.clone())?;
+    // Fail-closed identity + the §2.3.1 consult, before any row write.
+    let (scope, dept) = resolve_actor_scope(&conn, senior)?;
+    let grants = live_grants_for(&conn, senior)?;
+    let target = Recipient::Agent(junior.to_string());
+    can_post_to(scope, dept.as_deref(), &target, &grants)
+        .into_result()
+        .map_err(|e| crate::error::Error::Agent(e.to_string()))?;
+
+    let post = PostNotice::new(
+        senior,
+        vec![target],
+        format!("Session outcome with {junior}: {outcome}"),
+        format!("socialization session {senior}-{junior} close-out"),
+    );
+    board.post(&post)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +171,72 @@ mod tests {
             last_socialization_run(&db).unwrap().as_deref(),
             Some("2026-10-08T09:30:00Z")
         );
+    }
+
+    // ------------------------------------------ phase 2: outcome posting
+
+    use crate::org::employee_db::EmployeeDb;
+    use crate::org::notice_db::NoticeBoard;
+    use std::sync::{Arc, Mutex};
+
+    /// A root dir with a seeded registered senior. The employees schema
+    /// comes up via `EmployeeDb::from_shared_connection`; the row lands via
+    /// raw SQL (the registry has no insert-in-tests API — same pattern as
+    /// the CLI's cmd_org test fixtures).
+    fn seeded_root(senior: &str, register: bool) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let org_db = dir.path().join("operant_kanban.db");
+        let conn = Arc::new(Mutex::new(
+            rusqlite::Connection::open(&org_db).expect("open"),
+        ));
+        let employees = EmployeeDb::from_shared_connection(conn.clone()).expect("schema");
+        let _ = employees; // schema ensured; the row goes in over the same handle
+        if register {
+            conn.lock()
+                .expect("conn")
+                .execute(
+                    "INSERT OR REPLACE INTO employees (
+                         employee_id, name, role, department, skills, agent_type,
+                         persona, system_prompt, status, reason, created_at, updated_at
+                     ) VALUES (?1, ?1, 'tester', 'crew', '[]', NULL, NULL, NULL, 'active',
+                               'phase2 fixture', '2026-10-08T00:00:00Z',
+                               '2026-10-08T00:00:00Z')",
+                    rusqlite::params![senior],
+                )
+                .expect("seed senior");
+        }
+        (dir, org_db)
+    }
+
+    #[test]
+    fn outcome_posts_from_a_registered_senior_to_the_junior() {
+        let (dir, org_db) = seeded_root("emp-senior", true);
+        post_session_outcome(dir.path(), "emp-senior", "emp-junior", "we agreed to ship")
+            .expect("a registered senior may post its session outcome");
+        let conn = rusqlite::Connection::open(&org_db).expect("reopen");
+        let (sender, recipients): (String, String) = conn
+            .query_row("SELECT sender, recipients FROM notices", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .expect("one notice row");
+        assert_eq!(sender, "emp-senior");
+        assert!(
+            recipients.contains("emp-junior"),
+            "the outcome must be addressed to the junior: {recipients}"
+        );
+        let body: String = conn
+            .query_row("SELECT body FROM notices", [], |r| r.get(0))
+            .expect("body");
+        assert!(body.contains("we agreed to ship"), "{body}");
+    }
+
+    #[test]
+    fn outcome_from_an_unregistered_senior_is_refused_and_writes_nothing() {
+        let (dir, org_db) = seeded_root("emp-ghost", false);
+        let err = post_session_outcome(dir.path(), "emp-ghost", "emp-junior", "x")
+            .expect_err("an unregistered senior must be refused");
+        assert!(err.to_string().contains("unknown actor"), "{err}");
+        let board = NoticeBoard::init(org_db).expect("board");
+        assert_eq!(board.count().expect("count"), 0);
     }
 }

@@ -439,6 +439,73 @@ pub fn can_accept_decision(actor: AuthorityScope, decision_scope: AuthorityScope
 }
 
 // =====================================================================
+// Consult companions (DB-touching)
+// =====================================================================
+//
+// The three predicates above stay pure; these two functions are the
+// impure companions every consult caller needs first — resolve WHO the
+// actor is (scope + department) and WHAT grants it holds right now.
+// They live here so the CLI seams and the scheduler-side socialization
+// writer consult through the exact same resolution logic and cannot
+// drift about what an actor's designation means.
+
+/// Resolve an actor label into `(scope, department)` for a §2.3 consult.
+///
+/// `'user'`/`'system'` are the operator root — the standing Org-scope grant
+/// is the root of every delegation (owner ruling), so they consult as
+/// [`AuthorityScope::Org`] and are not subject to the predicates. An
+/// employee resolves through their designation: org-lead = a live
+/// capability-`org` grant ([`PREMIERE_GRANT_CAPABILITY`]); department head
+/// = any department naming them as head ([`resolve_scope`]'s precedence).
+///
+/// An **unknown actor is a refusal** (fail-closed): the registry is the
+/// only source of identity, and an unregistered label must not reach a
+/// write path.
+pub fn resolve_actor_scope(
+    conn: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    actor: &str,
+) -> Result<(AuthorityScope, Option<String>), crate::error::Error> {
+    if actor == "user" || actor == "system" {
+        return Ok((AuthorityScope::Org, None));
+    }
+    let employees = super::employee_db::EmployeeDb::from_shared_connection(conn.clone())?;
+    let employee = employees.get_employee(actor)?.ok_or_else(|| {
+        crate::error::Error::Agent(format!(
+            "unknown actor '{actor}' — only registered employees, 'user', or 'system' \
+             can act here (fail-closed)"
+        ))
+    })?;
+    let grants = live_grants_for(conn, actor)?;
+    let is_org_lead = grants
+        .iter()
+        .any(|g| g.capability == super::cast::PREMIERE_GRANT_CAPABILITY);
+    let departments =
+        super::department_db::DepartmentDb::from_shared_connection(conn.clone())?.list()?;
+    let is_dept_head = departments
+        .iter()
+        .any(|d| d.head_employee_id() == Some(actor));
+    Ok((
+        resolve_scope(is_dept_head, is_org_lead),
+        employee.department.clone(),
+    ))
+}
+
+/// The live grants an actor holds right now — the only currency
+/// [`can_post_to`] accepts for a cross-department post. Revoked and
+/// expired rows are filtered here, once, so no consult caller can forget.
+pub fn live_grants_for(
+    conn: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    actor: &str,
+) -> Result<Vec<Grant>, crate::error::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    Ok(GrantDb::from_shared_connection(conn.clone())?
+        .list_for_grantee(actor)?
+        .into_iter()
+        .filter(|g| g.is_live_at(&now))
+        .collect())
+}
+
+// =====================================================================
 // Grant
 // =====================================================================
 

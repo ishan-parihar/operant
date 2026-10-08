@@ -733,6 +733,18 @@ impl CronScheduler {
                 &heading,
                 &format!("Session with {senior}: {outcome}"),
             );
+            // Phase 2 (socialization design §8): the senior's decision-of-record
+            // posts to the board through the same §2.3.1 consult the CLI seam
+            // runs — fail-open here: the session already succeeded and both
+            // MEMORY.md files carry the outcome, so a refusal or a failed consult
+            // skips the post, never the tick.
+            if let Err(e) =
+                crate::org::socialization::post_session_outcome(root, senior, junior, outcome)
+            {
+                warn!(
+                    "socialization: outcome notice {senior}->{junior} skipped: {e} (fail-open)"
+                );
+            }
         }
         Ok(())
     }
