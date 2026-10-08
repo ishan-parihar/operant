@@ -164,32 +164,30 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
         return;
     }
 
-    // Validate selection is within selectable bounds
-    if anchor.0 < selectable_area.x
-        || anchor.0 >= selectable_area.x.saturating_add(selectable_area.width)
-        || anchor.1 < selectable_area.y
-        || anchor.1 >= selectable_area.y.saturating_add(selectable_area.height)
-    {
-        return;
-    }
+    // Selection points are scroll-stable content lines `(col, line)`
+    // (iter-672). Project them onto the current viewport before painting —
+    // the same way jcode resolves its `CopySelectionPoint`s against the
+    // rendered viewport — so a selection made before a scroll stays glued
+    // to its text instead of sliding off it.
+    let scroll = app.last_render_scroll_offset.get() as usize;
+    let first_visible = scroll;
+    // Exclusive end of the visible content-line range.
+    let visible_end = scroll.saturating_add(selectable_area.height as usize);
 
-    let max_row = selectable_area
-        .y
-        .saturating_add(selectable_area.height)
-        .saturating_sub(1);
     let max_col = selectable_area
         .x
         .saturating_add(selectable_area.width)
         .saturating_sub(1);
 
-    // Clamp anchor and focus to selectable bounds
+    // Clamp columns into the frame; clamp lines into the visible window so a
+    // partially offscreen selection paints (and copies) its visible part.
     let anchor = (
         anchor.0.clamp(selectable_area.x, max_col),
-        anchor.1.clamp(selectable_area.y, max_row),
+        anchor.1.clamp(first_visible, visible_end.saturating_sub(1)),
     );
     let focus = (
         focus.0.clamp(selectable_area.x, max_col),
-        focus.1.clamp(selectable_area.y, max_row),
+        focus.1.clamp(first_visible, visible_end.saturating_sub(1)),
     );
 
     // Normalise so start ≤ end (row-major order).
@@ -201,14 +199,15 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
 
     let buf = frame.buffer_mut();
     let mut text = String::new();
-    let last_row = end.1.min(max_row);
-    for row in start.1..=last_row {
-        let col_from = if row == start.1 {
+    let last_line = end.1;
+    for line in start.1..=last_line {
+        let row = selectable_area.y + (line - scroll) as u16;
+        let col_from = if line == start.1 {
             start.0
         } else {
             selectable_area.x
         };
-        let col_to = if row == end.1 { end.0 } else { max_col };
+        let col_to = if line == end.1 { end.0 } else { max_col };
         // A drag boundary landing inside a double-width glyph would otherwise
         // paint half of it; pull the whole glyph in first.
         let (col_from, col_to) =
@@ -234,7 +233,7 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
                 cell.set_style(new_style);
             }
         }
-        if row < last_row {
+        if line < last_line {
             // Trim trailing spaces from line before newline
             while text.ends_with(' ') {
                 text.pop();

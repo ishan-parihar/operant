@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-672 — W2 selection: scroll-stable content-space selection points
+  + jcode-parity keyboard copy mode.** `selection_anchor`/`selection_focus`
+  become `(col, content_line)` — the scroll-stable rendered-line index — so a
+  selection stays glued to its text across viewport scrolls instead of sliding
+  off the screen row it was made on (jcode's `CopySelectionPoint` model,
+  projected through `last_resolved_chat_scroll` exactly like jcode's
+  `copy_point_from_screen`). Ctrl+T copy mode gains the full jcode keyboard
+  set: h/l/j/k + arrows (SHIFT extends from the anchor, plain moves collapse
+  the selection onto the cursor), Home/End line edges, PageUp/PageDown,
+  g/G viewport top/bottom, plain A select-all-visible, Ctrl+A copies the
+  cursor ± 4 lines of context (jcode's `COPY_VIEWPORT_CONTEXT_LINES`) and
+  exits, Enter/Y copy. Edge autoscroll now drives NORMAL drags too, not just
+  copy mode (jcode autoscrolls on any edge drag).
+
+### Fixed
+
+- **iter-672 — selection release semantics and two pre-existing count bugs.**
+  A finalized drag selection now ALWAYS copies on release — the
+  `auto_copy_enabled` setting (default **false**, which is exactly why
+  copy-on-highlight appeared broken) is gone along with its settings-screen
+  row: jcode has no opt-out and neither does operant now. The highlight stays
+  visible until the next click (already jcode behavior, now documented).
+  `copy_selection_range` read the `(col, row)` tuple as `(row, col)` — the
+  jcode-adapter range pointed at the wrong cell; and `copy_selection_status`
+  counted COLUMNS as "selected lines" — both fixed with the content-space
+  semantics.
+
+### Changed
+
+- **iter-671 — W1 of the TUI upgrade**: tool rows splice at their arrival
+  anchor (`after_index` — the message count when the call started, immutable)
+  instead of after their turn's last assistant message, so a tool that ran
+  between two assistant messages renders between them (the "tool calls and
+  final message messed up" bug); transcript turns attach tool blocks via a
+  message-index→ordinal map. The legacy voice-mode surface is fully purged
+  (~530 LOC): notice overlay + recorder + PTT key handling + `/voice` command
+  + `tui voice` subcommand + keybinding catalogue entry (Alt+V deliberately
+  uncatalogued — the registry must not advertise what nothing implements).
+  Core voice/TTS and gateway `/voice` untouched.
+
 - **iter-669 — Wave-2 guardrail harvest: ping-pong and no-progress rungs
   live on the one engine.** `ToolGuardrailTracker` absorbed the three
   patterns from the runtime's dead `loop_detector.rs` (its only consumer

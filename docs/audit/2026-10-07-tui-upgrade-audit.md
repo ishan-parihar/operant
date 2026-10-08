@@ -154,22 +154,17 @@ Purge = delete notice module + recorder wiring + command + debug subcommand; run
 
 **Architecture delta**: jcode's selection stack = 1,332 LOC (`app/copy_selection.rs` 681 state machine + `ui/copy_selection.rs` 359 render + `ui/selection_highlight.rs` 84 + `app/helpers/clipboard_helper.rs` 208). Operant's port = 530 LOC (`render/selection.rs` — buffer-scrape row cache + post-render blend + context menu) + `app/mouse.rs` drag/copy-mode handling. **40% of the engine.**
 
-Verified behaviors in operant (from iter-661 work):
-- Mouse drag within `last_selectable_area` sets anchor/focus; post-render pass blends 58% accent bg / 32% white fg and extracts text into `selection_text`.
-- Mouse **Up takes an auto-copy branch when anchor≠focus** (`app/mouse.rs` ~:876) — copies on every drag release, even accidental 1-cell drags. [CANDIDATE bug: jcode's copy trigger to verify — likely explicit copy key/context menu, not every release]
-- Clipboard: `tui/clipboard.rs` 5-mechanism chain (Arboard/pbcopy/clip → wl-copy → xclip → xsel → OSC52). jcode's helper (`clipboard_helper.rs:41`) polls 150ms then treats a live child as success — **non-blocking by construction**. Operant's chain must be verified to inherit the non-blocking poll: a blocking write stalls the UI thread and, in headless scenario runs, hangs the sim (documented in iter-661: scenarios must not end with `<release>`).
-- Single click clears selection (`app/mouse.rs` ~:891).
+**Correction after source read (was [CANDIDATE] in the first draft)**: jcode DOES copy on mouse release in normal mode (preserving highlight) — `copy_current_selection_preserving_highlight` on Up. Operant's copy-on-release was already jcode-shaped; the real bug was the `auto_copy_enabled` setting defaulting to **false**, so release silently copied nothing.
 
-`[CANDIDATE — verify during execution]` divergences to close for "same as jcode" (read `app/copy_selection.rs` line-by-line in W2):
-- double-click word select / triple-click line select
-- keyboard selection (shift+arrows / copy-mode navigation)
-- drag beyond viewport → auto-scroll-while-selecting
-- selection across wrapped long lines (row cache must span virtual lines)
-- selection persistence across resize/re-render
-- anchor/focus inversion on backwards drags (drag up-left)
-- explicit copy keybinding + context-menu copy parity
+**Landed in iter-672 (W2)**:
+- Selection state moves to scroll-stable content space: `(col, content_line)` anchored via `last_resolved_chat_scroll`, projected per frame by the blend pass — a selection survives viewport scroll (the screen-row model was the actual "very buggy" root: scroll shifted content under a fixed screen coordinate).
+- Keyboard copy mode (jcode's full key set): h/l/j/k/arrows, SHIFT-extend, Home/End, PageUp/PageDown, g/G, A select-all-visible, Ctrl+A viewport-context copy (±4 lines), Enter/Y copy.
+- Edge autoscroll in NORMAL drags (was copy-mode only).
+- Release ALWAYS copies (setting + settings row removed; highlight preserved until next click).
+- Two latent tuple-order bugs fixed: `copy_selection_range` read `(col,row)` as `(row,col)`; `copy_selection_status` counted columns as lines.
+- Clipboard: `tui/clipboard.rs` 5-mechanism chain retained; jcode's non-blocking 150ms poll noted as a follow-up if the chain ever blocks a headless write (documented in iter-661: scenarios must not end with `<release>`).
 
-**Minimal parity spec**: jcode's event→state machine ported 1:1 (anchor/focus/active tri-state, drag clamp math, auto-scroll), clipboard via the existing 5-mechanism chain with jcode's non-blocking poll, copy on explicit trigger (not every release), regression scenario goldens for drag/word/line/copy paths. Reuse `selection-highlight` scenario (iter-661) as the base and extend.
+**Still open for W2 follow-up** (verify during corpus re-prove): double/triple-click row-cache reach after the projection change; `selection-highlight` golden regeneration (content-space coords change the pinned numbers).
 
 ---
 

@@ -91,7 +91,6 @@ pub struct Settings {
     pub reduce_motion: bool,
     pub show_cwd: bool,
     pub auto_compact: bool,
-    pub auto_copy_on_highlight: bool,
     pub compact_threshold: Option<usize>,
     pub notifications: bool,
     pub show_turn_duration: bool,
@@ -100,7 +99,6 @@ pub struct Settings {
     pub config: InnerConfig,
     pub providers: HashMap<String, ProviderEntry>,
     pub has_completed_onboarding: bool,
-    pub auto_copy_enabled: bool,
 }
 
 impl Settings {

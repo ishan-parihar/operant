@@ -353,9 +353,9 @@ pub struct CopyMode {
     /// clipboard.
     pub active: bool,
     /// The selection that was live before copy mode was entered.
-    pub saved_anchor: Option<(u16, u16)>,
+    pub saved_anchor: Option<(u16, usize)>,
     /// The selection focus that was live before copy mode was entered.
-    pub saved_focus: Option<(u16, u16)>,
+    pub saved_focus: Option<(u16, usize)>,
     /// The selection text that was live before copy mode was entered.
     pub saved_selection_text: String,
     /// Scroll position before entry; dragging past the viewport edge moves it,
@@ -399,8 +399,8 @@ pub fn copy_mode_active() -> bool {
 
 /// Turn copy mode on, remembering the state it is about to take over.
 pub fn enter_copy_mode(
-    anchor: Option<(u16, u16)>,
-    focus: Option<(u16, u16)>,
+    anchor: Option<(u16, usize)>,
+    focus: Option<(u16, usize)>,
     selection_text: &str,
     scroll_offset: usize,
     auto_scroll: bool,

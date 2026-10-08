@@ -1023,6 +1023,7 @@ impl App {
         // handling because the gate is the only thing that took it away.
         if self.copy_mode_active() {
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
             match key.code {
                 KeyCode::Esc => {
                     self.exit_copy_mode();
@@ -1031,6 +1032,55 @@ impl App {
                     self.exit_copy_mode();
                 }
                 KeyCode::Char('c') if ctrl => {
+                    self.copy_current_selection();
+                }
+                // ---- jcode-parity keyboard navigation (iter-672) ----------
+                // Cursor = selection focus (falling back to the anchor, then
+                // the first visible line). Plain moves collapse the selection
+                // onto the new cursor; SHIFT moves extend from the anchor.
+                KeyCode::Char('h') | KeyCode::Left => {
+                    self.move_copy_cursor(-1, 0, shift);
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    self.move_copy_cursor(1, 0, shift);
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.move_copy_cursor(0, 1, shift);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.move_copy_cursor(0, -1, shift);
+                }
+                KeyCode::Home => {
+                    self.move_copy_cursor_to_edge(false, shift);
+                }
+                KeyCode::End => {
+                    self.move_copy_cursor_to_edge(true, shift);
+                }
+                KeyCode::PageUp => {
+                    let page = self.copy_cursor_page();
+                    self.move_copy_cursor(0, -(page as i64), shift);
+                }
+                KeyCode::PageDown => {
+                    let page = self.copy_cursor_page();
+                    self.move_copy_cursor(0, page as i64, shift);
+                }
+                KeyCode::Char('g') => {
+                    self.move_copy_cursor_to_line_edge(false, shift);
+                }
+                KeyCode::Char('G') => {
+                    self.move_copy_cursor_to_line_edge(true, shift);
+                }
+                // Select everything currently on screen.
+                KeyCode::Char('a') if !ctrl => {
+                    self.copy_select_all_visible();
+                }
+                // Copy the cursor ± 4 lines of context (jcode's
+                // COPY_VIEWPORT_CONTEXT_LINES) and exit the mode.
+                KeyCode::Char('a') if ctrl => {
+                    self.copy_viewport_context_and_exit();
+                }
+                // Enter/Y: copy the selection.
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.copy_current_selection();
                 }
                 _ => {}

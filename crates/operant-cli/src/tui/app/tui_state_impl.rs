@@ -891,16 +891,18 @@ impl TuiState for App {
         use crate::tui::jcode_ui::copy_selection::{
             CopySelectionPane, CopySelectionPoint, CopySelectionRange,
         };
-        let (anchor_row, anchor_col) = self.selection_anchor?;
-        let (focus_row, focus_col) = self.selection_focus?;
-        let point = |row: u16, col: u16| CopySelectionPoint {
+        // Selection points are `(col, content_line)` in scroll-stable content
+        // space (iter-672) — exactly jcode's `(abs_line, column)` model.
+        let (anchor_col, anchor_line) = self.selection_anchor?;
+        let (focus_col, focus_line) = self.selection_focus?;
+        let point = |line: usize, col: u16| CopySelectionPoint {
             pane: CopySelectionPane::Chat,
-            abs_line: row as usize,
+            abs_line: line,
             column: col as usize,
         };
         Some(CopySelectionRange {
-            start: point(anchor_row, anchor_col),
-            end: point(focus_row, focus_col),
+            start: point(anchor_line, anchor_col),
+            end: point(focus_line, focus_col),
         })
     }
 
@@ -913,8 +915,8 @@ impl TuiState for App {
             has_action: !self.selection_text.borrow().is_empty(),
             selected_chars: self.selection_text.borrow().chars().count(),
             selected_lines: match (self.selection_anchor, self.selection_focus) {
-                (Some((start, _)), Some((end, _))) => {
-                    (end as usize).saturating_sub(start as usize) + 1
+                (Some((_, start_line)), Some((_, end_line))) => {
+                    end_line.max(start_line).saturating_sub(end_line.min(start_line)) + 1
                 }
                 _ => 0,
             },

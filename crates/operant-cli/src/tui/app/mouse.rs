@@ -119,6 +119,26 @@ impl App {
         *self.selection_text.borrow_mut() = String::new();
     }
 
+    // ---- Content-space selection points (iter-672) ------------------------
+    //
+    // `selection_anchor`/`selection_focus` store `(col, content_line)`, where
+    // `content_line` is the scroll-stable rendered-line index — the same line
+    // keeps its index as the viewport scrolls, so a selection made mid-drag
+    // stays anchored to its text instead of to a screen row the text has
+    // already scrolled away from (the jcode `CopySelectionPoint` model).
+    // Projection goes through the last rendered scroll, exactly like jcode's
+    // `copy_point_from_screen`.
+
+    /// Screen row inside the selectable area → scroll-stable content line.
+    /// Returns the input row as-is when the area is empty (unselectable state).
+    pub(super) fn content_line_of_screen_row(&self, screen_row: u16) -> usize {
+        let area = self.last_selectable_area.get();
+        if area.width == 0 || area.height == 0 || screen_row < area.y {
+            return screen_row as usize;
+        }
+        screen_row.saturating_sub(area.y) as usize + self.last_render_scroll_offset.get() as usize
+    }
+
     // ---- Drag-select copy mode (Ctrl+T) ----------------------------------
     //
     // Copy mode does not model a selection of its own: it reuses the
@@ -200,6 +220,135 @@ impl App {
             }
         }
         false
+    }
+
+    // ---- Copy-mode keyboard navigation (jcode parity, iter-672) ----------
+
+    /// The keyboard copy cursor: the selection focus, else the anchor, else
+    /// the first visible line.
+    pub(super) fn copy_cursor_point(&self) -> (u16, usize) {
+        let area = self.last_selectable_area.get();
+        let scroll = self.last_render_scroll_offset.get() as usize;
+        if let Some((c, l)) = self.selection_focus.or(self.selection_anchor) {
+            return (c, l);
+        }
+        (area.x, scroll)
+    }
+
+    /// One page for PageUp/PageDown in copy mode.
+    pub(super) fn copy_cursor_page(&self) -> usize {
+        (self.last_selectable_area.get().height.saturating_sub(2)).max(1) as usize
+    }
+
+    /// Move the copy cursor by `(dcol, dline)` within the visible window.
+    /// A plain move collapses the selection onto the cursor; `extend` keeps
+    /// the anchor and moves the focus (jcode's SHIFT semantics).
+    pub(super) fn move_copy_cursor(&mut self, dcol: i32, dline: i64, extend: bool) {
+        let area = self.last_selectable_area.get();
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let scroll = self.last_render_scroll_offset.get() as usize;
+        let (col, line) = self.copy_cursor_point();
+        let max_col = area.x.saturating_add(area.width).saturating_sub(1);
+        let new_col = (col as i32)
+            .saturating_add(dcol)
+            .clamp(area.x as i32, max_col as i32) as u16;
+        let first = scroll;
+        let last = scroll + area.height as usize - 1;
+        let new_line = (line as i64)
+            .saturating_add(dline)
+            .clamp(first as i64, last as i64) as usize;
+        if extend {
+            self.selection_focus = Some((new_col, new_line));
+        } else {
+            self.selection_anchor = Some((new_col, new_line));
+            self.selection_focus = Some((new_col, new_line));
+        }
+    }
+
+    /// Home/End: cursor to the start/end of its line (columns only).
+    pub(super) fn move_copy_cursor_to_edge(&mut self, end: bool, extend: bool) {
+        let area = self.last_selectable_area.get();
+        if area.width == 0 {
+            return;
+        }
+        let max_col = area.x.saturating_add(area.width).saturating_sub(1);
+        let col = if end { max_col } else { area.x };
+        let line = self.copy_cursor_point().1;
+        if extend {
+            self.selection_focus = Some((col, line));
+        } else {
+            self.selection_anchor = Some((col, line));
+            self.selection_focus = Some((col, line));
+        }
+    }
+
+    /// g/G: cursor to the first/last visible line.
+    pub(super) fn move_copy_cursor_to_line_edge(&mut self, bottom: bool, extend: bool) {
+        let area = self.last_selectable_area.get();
+        if area.height == 0 {
+            return;
+        }
+        let scroll = self.last_render_scroll_offset.get() as usize;
+        let line = if bottom {
+            scroll + area.height as usize - 1
+        } else {
+            scroll
+        };
+        let col = self.copy_cursor_point().0;
+        if extend {
+            self.selection_focus = Some((col, line));
+        } else {
+            self.selection_anchor = Some((col, line));
+            self.selection_focus = Some((col, line));
+        }
+    }
+
+    /// Plain A: select everything currently on screen.
+    pub(super) fn copy_select_all_visible(&mut self) {
+        let area = self.last_selectable_area.get();
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let scroll = self.last_render_scroll_offset.get() as usize;
+        let max_col = area.x.saturating_add(area.width).saturating_sub(1);
+        self.selection_anchor = Some((area.x, scroll));
+        self.selection_focus = Some((max_col, scroll + area.height as usize - 1));
+    }
+
+    /// Ctrl+A: copy the cursor's line ± 4 lines of context (jcode's
+    /// `COPY_VIEWPORT_CONTEXT_LINES`) and exit copy mode.
+    pub(super) fn copy_viewport_context_and_exit(&mut self) {
+        const CONTEXT: usize = 4;
+        let area = self.last_selectable_area.get();
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let scroll = self.last_render_scroll_offset.get() as usize;
+        let (_, line) = self.copy_cursor_point();
+        let first = line.saturating_sub(CONTEXT).max(scroll);
+        let last = (line + CONTEXT).min(scroll + area.height as usize - 1);
+        let mut text = String::new();
+        let cache = self.last_row_text.borrow();
+        for l in first..=last {
+            let row = area.y + (l - scroll) as u16;
+            if let Some(t) = cache.get(&row) {
+                text.push_str(t.trim_end());
+                text.push('\n');
+            }
+        }
+        drop(cache);
+        let trimmed = text.trim_end();
+        let ok = !trimmed.is_empty() && crate::tui::clipboard::copy(trimmed).is_copied();
+        self.status_message = Some(
+            if ok {
+                "Copied viewport context".to_string()
+            } else {
+                "Failed to copy viewport context".to_string()
+            },
+        );
+        self.exit_copy_mode();
     }
 
     // Show context menu at the given position.
@@ -799,16 +948,21 @@ impl App {
                             if let Some((start_row, end_row, end_col)) =
                                 self.find_paragraph_boundaries(current_pos.1)
                             {
-                                self.selection_anchor = Some((selectable_area.x, start_row));
-                                self.selection_focus = Some((end_col, end_row));
+                                self.selection_anchor =
+                                    Some((selectable_area.x, self.content_line_of_screen_row(start_row)));
+                                self.selection_focus =
+                                    Some((end_col, self.content_line_of_screen_row(end_row)));
                             } else {
-                                self.selection_anchor = Some((selectable_area.x, current_pos.1));
+                                self.selection_anchor = Some((
+                                    selectable_area.x,
+                                    self.content_line_of_screen_row(current_pos.1),
+                                ));
                                 self.selection_focus = Some((
                                     selectable_area
                                         .x
                                         .saturating_add(selectable_area.width)
                                         .saturating_sub(1),
-                                    current_pos.1,
+                                    self.content_line_of_screen_row(current_pos.1),
                                 ));
                             }
                             self.click_count = 0; // Reset for next click sequence
@@ -817,15 +971,17 @@ impl App {
                             if let Some((start, end)) =
                                 self.find_word_boundaries(current_pos.0, current_pos.1)
                             {
-                                self.selection_anchor = Some((start, current_pos.1));
-                                self.selection_focus = Some((end, current_pos.1));
+                                let line = self.content_line_of_screen_row(current_pos.1);
+                                self.selection_anchor = Some((start, line));
+                                self.selection_focus = Some((end, line));
                             }
                         }
                     } else {
                         // Single click or new click sequence
                         self.click_count = 1;
-                        self.selection_anchor = Some(current_pos);
-                        self.selection_focus = Some(current_pos);
+                        let line = self.content_line_of_screen_row(current_pos.1);
+                        self.selection_anchor = Some((current_pos.0, line));
+                        self.selection_focus = Some((current_pos.0, line));
                         *self.selection_text.borrow_mut() = String::new();
                     }
 
@@ -845,13 +1001,13 @@ impl App {
                 if self.selection_anchor.is_some() {
                     let selectable_area = self.last_selectable_area.get();
                     if selectable_area.width > 0 && selectable_area.height > 0 {
-                        // Copy mode scrolls when the drag leaves the viewport,
-                        // so the selection can reach text that is not on screen.
+                        // Edge autoscroll: a drag held past the viewport edge
+                        // scrolls so the selection can reach text that is not
+                        // currently on screen — in copy mode AND in normal
+                        // drags (jcode autoscrolls on any edge drag).
                         // Done before the clamp below, which would otherwise
                         // throw the out-of-bounds row away.
-                        if self.copy_mode_active() {
-                            self.copy_mode_edge_autoscroll(mouse_event.row);
-                        }
+                        self.copy_mode_edge_autoscroll(mouse_event.row);
                         let clamped_col = mouse_event.column.max(selectable_area.x).min(
                             selectable_area
                                 .x
@@ -864,7 +1020,7 @@ impl App {
                                 .saturating_add(selectable_area.height)
                                 .saturating_sub(1),
                         );
-                        self.selection_focus = Some((clamped_col, clamped_row));
+                        self.selection_focus = Some((clamped_col, self.content_line_of_screen_row(clamped_row)));
                         self.click_count = 0; // Reset on drag to prevent further double-clicks
                         // Stream the selection to the clipboard as it grows.
                         // `selection_text` is filled by the renderer from the
@@ -891,8 +1047,11 @@ impl App {
                 // Clear if no actual drag (single click = no selection)
                 if self.selection_anchor == self.selection_focus {
                     self.clear_selection();
-                } else if self.settings_screen.auto_copy_enabled {
-                    // Auto-copy finalized selection to clipboard.
+                } else {
+                    // jcode parity (iter-672): a finalized drag selection ALWAYS
+                    // copies on release — there is no opt-out setting — and the
+                    // highlight stays visible until the next click, so a
+                    // successful copy does not look like it failed.
                     let sel_text = self.selection_text.borrow().clone();
                     if !sel_text.is_empty() {
                         let outcome = crate::tui::clipboard::copy(&sel_text);

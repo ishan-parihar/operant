@@ -25,7 +25,6 @@ impl SettingsScreen {
             terminal_progress_bar: true,
             verbose: false,
             cursor_blink_enabled: false,
-            auto_copy_enabled: false,
             show_cwd: false,
             show_git_branch: false,
             compact_threshold: "95".to_string(),
@@ -58,7 +57,6 @@ impl SettingsScreen {
         self.terminal_progress_bar = self.settings_snapshot.terminal_progress_bar;
         self.verbose = self.settings_snapshot.config.verbose;
         self.cursor_blink_enabled = self.settings_snapshot.config.cursor_blink_enabled;
-        self.auto_copy_enabled = self.settings_snapshot.auto_copy_on_highlight;
         self.show_cwd = self.settings_snapshot.show_cwd;
         self.show_git_branch = self.settings_snapshot.show_git_branch;
         self.compact_threshold = self.settings_snapshot.config.compact_threshold.to_string();
@@ -310,18 +308,6 @@ pub(crate) fn all_entries(screen: &SettingsScreen) -> Vec<SettingsEntry> {
             description: "Enable cursor blinking in the chat prompt.",
             kind: SettingKind::Bool,
             value: if screen.cursor_blink_enabled {
-                "true"
-            } else {
-                "false"
-            }
-            .to_string(),
-        },
-        SettingsEntry {
-            key: "auto_copy_enabled",
-            label: "Auto-copy on highlight",
-            description: "Automatically copy highlighted text to clipboard. Ctrl+T enters drag-select copy mode.",
-            kind: SettingKind::Bool,
-            value: if screen.auto_copy_enabled {
                 "true"
             } else {
                 "false"

@@ -1,7 +1,7 @@
 
-
-
-
+                                                                  ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
+                                                                  ▌ ───────────────────────────────────────────────  ▐
+                                                                  ▌                                                  ▐
 
 
 
@@ -34,7 +34,7 @@ Chat selection · 22 chars · 26 lines · Enter/Y copy · Esc exit
 
 
 
- Voice mode off — Alt+V to record · /voice to configure  [Esc dismiss]
+
 
 
 

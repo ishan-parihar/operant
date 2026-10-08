@@ -54,7 +54,6 @@ pub struct SettingsScreen {
     pub terminal_progress_bar: bool,
     pub verbose: bool,
     pub cursor_blink_enabled: bool,
-    pub auto_copy_enabled: bool,
     pub show_cwd: bool,
     pub show_git_branch: bool,
     pub compact_threshold: String,

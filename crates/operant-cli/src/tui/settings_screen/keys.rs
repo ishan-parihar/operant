@@ -140,11 +140,6 @@ fn toggle_or_cycle_current(screen: &mut SettingsScreen) {
                         screen.settings_snapshot.config.cursor_blink_enabled = new_value;
                         let _ = screen.settings_snapshot.save_sync();
                     }
-                    "auto_copy_enabled" => {
-                        screen.auto_copy_enabled = new_value;
-                        screen.settings_snapshot.auto_copy_on_highlight = new_value;
-                        let _ = screen.settings_snapshot.save_sync();
-                    }
                     "show_cwd" => {
                         screen.show_cwd = new_value;
                         screen.settings_snapshot.show_cwd = new_value;

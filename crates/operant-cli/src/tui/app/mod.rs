@@ -549,10 +549,12 @@ pub struct App {
     pub last_resolved_scroll: Cell<Option<usize>>,
 
     // ---- Text selection state --------------------------------------------
-    /// Selection drag anchor (col, row) — set on mouse-down.
-    pub selection_anchor: Option<(u16, u16)>,
-    /// Selection drag focus (col, row) — updated on mouse-drag / mouse-up.
-    pub selection_focus: Option<(u16, u16)>,
+    /// Selection drag anchor `(col, content_line)` — set on mouse-down. The
+    /// line index is scroll-stable (rendered-line index, not a screen row),
+    /// so the selection stays glued to its text across viewport scrolls.
+    pub selection_anchor: Option<(u16, usize)>,
+    /// Selection drag focus `(col, content_line)` — updated on drag/release.
+    pub selection_focus: Option<(u16, usize)>,
     /// Text extracted from the current selection (updated each render frame).
     pub selection_text: RefCell<String>,
     /// Cache of row -> rendered text within the selectable area, refreshed
