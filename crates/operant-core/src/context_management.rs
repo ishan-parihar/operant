@@ -467,6 +467,33 @@ pub async fn semantic_compaction_cutoff(
 /// This is a port of magic-context's tiered target-headroom eviction,
 /// simplified to a single pass (magic-context uses idempotence latches
 /// + multi-pass; we don't need that for a first implementation).
+/// Wave-4 PromptCacheGuard: the frozen prefix (leading run of system
+/// messages) must survive every preflight rung byte-identical so
+/// provider prompt caches keep hitting across a session's calls.
+/// `decay_render` and `evict_to_budget` already preserve system
+/// messages by construction; this guard converts that implicit
+/// invariant into a checked one — drift from a future rung edit
+/// surfaces as a loud warning instead of a silent cache-bust tax.
+///
+/// Returns `true` when the prefix survived. Drift logs a warning in
+/// release and trips a `debug_assert` in test builds.
+pub fn prompt_cache_guard(prefix: &[Message], after: &[Message]) -> bool {
+    let prefix_len = prefix.len();
+    let ok = after.len() >= prefix_len
+        && prefix
+            .iter()
+            .zip(after.iter())
+            .all(|(b, a)| b.role == a.role && b.content == a.content);
+    if !ok {
+        tracing::warn!(
+            prefix_len,
+            "PromptCacheGuard: frozen prefix drifted across the preflight ladder — provider prompt cache will miss"
+        );
+        debug_assert!(false, "frozen prefix drifted across the ladder");
+    }
+    ok
+}
+
 pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
     let total = estimate_total_tokens(&messages);
     if total <= budget_tokens {
@@ -830,6 +857,44 @@ mod tests {
         assert_eq!(estimate_tokens("hello world"), 3); // 11 chars / 4 = 2.75 -> 3
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("a"), 1); // 1 char / 4 = 0.25 -> 1 (rounded up)
+    }
+
+    #[test]
+    fn prompt_cache_guard_passes_identical_prefix() {
+        let prefix = vec![
+            make_msg(Role::System, "frozen head"),
+            make_msg(Role::System, "frozen skills"),
+        ];
+        let after = vec![
+            make_msg(Role::System, "frozen head"),
+            make_msg(Role::System, "frozen skills"),
+            make_msg(Role::User, "question"),
+        ];
+        assert!(prompt_cache_guard(&prefix, &after));
+    }
+
+    #[test]
+    #[should_panic(expected = "frozen prefix drifted")]
+    fn prompt_cache_guard_catches_content_drift() {
+        let prefix = vec![make_msg(Role::System, "frozen head")];
+        let after = vec![
+            make_msg(Role::System, "mutated head"),
+            make_msg(Role::User, "question"),
+        ];
+        assert!(!prompt_cache_guard(&prefix, &after));
+    }
+
+    #[test]
+    #[should_panic(expected = "frozen prefix drifted")]
+    fn prompt_cache_guard_catches_truncated_prefix() {
+        let prefix = vec![
+            make_msg(Role::System, "frozen head"),
+            make_msg(Role::System, "frozen skills"),
+        ];
+        assert!(!prompt_cache_guard(
+            &prefix,
+            &[make_msg(Role::User, "question")],
+        ));
     }
 
     #[test]

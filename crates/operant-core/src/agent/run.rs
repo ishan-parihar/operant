@@ -389,7 +389,16 @@ impl OperantAgent {
         // channel open indefinitely. 20 minutes is far beyond any legitimate
         // tool-using turn observed here (the longest was 33s) and well under
         // the point where a user gives up.
-        const TURN_WALL_CLOCK_LIMIT_SECS: u64 = 20 * 60;
+        //
+        // Env override: `HERMES_TURN_TIMEOUT` (seconds) caps the WHOLE turn —
+        // sibling of `HERMES_REQUEST_TIMEOUT` (one model call) and
+        // `HERMES_MAX_ITERATIONS` (iteration count). Malformed or
+        // non-positive values keep the 20-minute default.
+        let turn_wall_clock_limit_secs: u64 = std::env::var("HERMES_TURN_TIMEOUT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .filter(|secs| *secs > 0)
+            .unwrap_or(20 * 60);
 
         // ── Memory provider: on_turn_start ──────────────────────────────
         // Notify the memory provider of the new turn so it can do per-turn
@@ -526,10 +535,10 @@ impl OperantAgent {
             // errors the user sees only "Still working..." heartbeats.
             // Checked per iteration so the bound is enforced between calls.
             let turn_elapsed = turn_start.elapsed().as_secs();
-            if turn_elapsed >= TURN_WALL_CLOCK_LIMIT_SECS {
+            if turn_elapsed >= turn_wall_clock_limit_secs {
                 warn!(
                     turn_elapsed,
-                    limit_secs = TURN_WALL_CLOCK_LIMIT_SECS,
+                    limit_secs = turn_wall_clock_limit_secs,
                     "Turn wall-clock limit reached — attempting grace call"
                 );
                 return self
@@ -2320,8 +2329,16 @@ impl OperantAgent {
         let mut estimated_tokens = self.estimate_current_tokens(&messages);
         let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
         let mut ladder_fired = false;
+        let mut frozen_prefix: Vec<Message> = Vec::new();
         if estimated_tokens > preflight_threshold {
             ladder_fired = true;
+            // PromptCacheGuard (Wave-4): snapshot the frozen prefix before
+            // any rung can touch it; verified after the evict rung below.
+            frozen_prefix = messages
+                .iter()
+                .take_while(|m| m.role == crate::client::Role::System)
+                .cloned()
+                .collect();
             info!(
                 estimated = estimated_tokens,
                 threshold = preflight_threshold,
@@ -2414,6 +2431,14 @@ impl OperantAgent {
             // Standard eviction: remove oldest messages within tiers until
             // the total fits within the effective budget.
             messages = crate::context_management::evict_to_budget(messages, effective_budget);
+        }
+
+        // ── PromptCacheGuard (Wave-4): verify the frozen prefix survived ──
+        // Byte-identical prefix = provider prompt caches keep hitting
+        // across this session's calls. Warns on drift (cache-bust) so a
+        // future rung edit cannot silently tax every call in the session.
+        if ladder_fired && !frozen_prefix.is_empty() {
+            crate::context_management::prompt_cache_guard(&frozen_prefix, &messages);
         }
 
         // Both eviction paths above keep a head and a recency tail rather than a
