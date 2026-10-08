@@ -2729,12 +2729,52 @@ mod tests {
             parse_steer_command("/stop because the user changed the plan"),
             SteeringCommand::Message("/stop because the user changed the plan".to_string())
         );
-        // Model switching stays free-form until the interior-cell model
-        // swap lands (Wave-3 deferred rung).
+    }
+
+    #[test]
+    fn steer_parse_model_switch_variants() {
+        use builders::{SteeringCommand, parse_steer_command};
+        // iter-688: the interior-cell model swap landed at iter-162, so the
+        // `/model <name>` steer vocabulary is now a real command.
         assert_eq!(
-            parse_steer_command("/model fast-model"),
-            SteeringCommand::Message("/model fast-model".to_string())
+            parse_steer_command("/model gpt-5-mini"),
+            SteeringCommand::SwitchModel("gpt-5-mini".to_string())
         );
+        // Case-insensitive directive, case-preserved argument.
+        assert_eq!(
+            parse_steer_command("  /MODEL Claude-Opus-4.6  "),
+            SteeringCommand::SwitchModel("Claude-Opus-4.6".to_string())
+        );
+        // Strict-prefix: a sentence about modeling stays guidance.
+        assert_eq!(
+            parse_steer_command("/modeling tips would help here"),
+            SteeringCommand::Message("/modeling tips would help here".to_string())
+        );
+        // A bare /model with no argument stays guidance too.
+        assert_eq!(
+            parse_steer_command("/model"),
+            SteeringCommand::Message("/model".to_string())
+        );
+        assert_eq!(
+            parse_steer_command("/model   "),
+            SteeringCommand::Message("/model".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn steer_model_switch_drains_in_order_with_other_commands() {
+        let agent = test_agent_with_request_timeout(30);
+        agent.steer("/model fast-model").await;
+        agent.steer("/abort").await;
+        let drained = agent.drain_steers().await;
+        assert_eq!(
+            drained,
+            vec![
+                builders::SteeringCommand::SwitchModel("fast-model".to_string()),
+                builders::SteeringCommand::RequestStop,
+            ]
+        );
+        assert!(agent.drain_steers().await.is_empty());
     }
 
     #[tokio::test]

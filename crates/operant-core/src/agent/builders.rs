@@ -28,15 +28,32 @@ pub enum SteeringCommand {
     /// `InterruptFlag` so every existing boundary check bails at the
     /// next check (the same machinery Ctrl-C drives).
     RequestStop,
+    /// Operator request to switch the model mid-turn (iter-688): the
+    /// `/model <name>` steer variant. Applied through
+    /// [`OperantAgent::set_model`] — the interior-cell runtime override
+    /// from iter-162 — at the iteration boundary, with the iteration
+    /// budget refunded so the switch costs no work.
+    SwitchModel(String),
 }
 
 /// Parse a raw queued steer string into a command. Matching is
 /// deliberately strict: only a bare `/stop`/`/abort`/`/cancel` line is a
-/// control action; everything else — including `/stop because ...` —
-/// remains plain guidance (the parser must never eat a user sentence).
+/// control action, and only a `/model <name>` line with a non-empty
+/// argument is a model switch; everything else — including `/stop
+/// because ...` and `/modeling tips` — remains plain guidance (the
+/// parser must never eat a user sentence).
 pub(crate) fn parse_steer_command(raw: &str) -> SteeringCommand {
     let trimmed = raw.trim();
     let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("/model ") {
+        // The argument is taken from the ORIGINAL (case-preserved) line so
+        // a model id with capitals survives; only the directive itself is
+        // matched case-insensitively.
+        let original_arg = trimmed["/model ".len()..].trim();
+        if !original_arg.is_empty() {
+            return SteeringCommand::SwitchModel(original_arg.to_string());
+        }
+    }
     match lower.as_str() {
         "/stop" | "/abort" | "/cancel" => SteeringCommand::RequestStop,
         _ => SteeringCommand::Message(trimmed.to_string()),
