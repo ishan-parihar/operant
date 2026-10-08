@@ -25,7 +25,7 @@ graph LR
 
 ## Wave A — unblocked, substrate live
 
-### 1. Cron-path budget envelope (recorded follow-up of iter-672)
+### 1. Cron-path budget envelope (recorded follow-up of iter-672) — DONE iter-678 `25ec77ce`
 - **Problem**: seat budget provisioning (670/671) and policy binding (672)
   are live, but cron-run SPEND doesn't meter — a capped seat's cron jobs
   spend unmetered. Cron Usage events flow to the gateway receiver (shared
@@ -49,7 +49,7 @@ graph LR
   auditable `cron_runs` row; cron spend visible in the budget surfaces.
 - **Effort**: M. **Blockers**: none.
 
-### 2. Cron `clarify` fail-fast (BUGS.md D-6 tail)
+### 2. Cron `clarify` fail-fast (BUGS.md D-6 tail) — DONE iter-677 `adbf45cb`
 - **Problem**: `USER_QUESTION_TX` (`user_question.rs:39`) is process-global,
   set once by `start_gateway` (`gateway_runner.rs:1066`). A cron agent
   calling `clarify`/AskUser routes into a HUMAN's chat — a scheduled job at
@@ -91,7 +91,7 @@ graph LR
 
 ## Wave B — owner feature directives (design-doc-first, per approved pattern)
 
-### 5. Platform DM/feed context injection (owner directive)
+### 5. Platform DM/feed context injection (owner directive) — phase 1 DONE iter-679 `8727449a`
 - **Design doc delivered 2026-10-08**:
   `plan-2026-10-08-dm-feed-context-injection.md` — seven-stage pipeline
   (collect→normalize→dedup→rank→quota→render→inject), per-aspect
@@ -106,24 +106,8 @@ graph LR
   owner's go.
 
 ### 6. Daily socialization sessions (owner directive)
-- **Problem**: seats run isolated cycles; the owner wants hierarchy-aware
-  daily seat-to-seat sessions with power dynamics. Substrate already live:
-  `org dm open/spend/close` threads with shared turn budgets (§10.3), seat
-  `MEMORY.md` as the densification ledger, grants/authority model.
-- **Approach** (design doc first):
-  1. Topology: who talks to whom daily and WHO INITIATES (power dynamics via
-     grants — premiere↔chief-of-staff vs crew↔hrmaster are different
-     directions of authority).
-  2. Scheduling: pair threads following the 09:00 daily digest; a
-     socializer seat or per-pair cron casts.
-  3. Context: each seat enters with its own MEMORY.md + the counterpart's
-     public notice board (read surface = gap 7's `org cast`).
-  4. Memory: outcomes append to both seats' MEMORY.md (densification);
-     decisions of record post notices via the 4/5 predicates.
-- **Acceptance**: design doc approved → then implementation.
-- **Effort**: design M; implementation M–L.
-- **Blockers**: design doc; shares read primitives with 5; notice-posting
-  outcomes need 7's predicates.
+- **Design doc delivered 2026-10-08**: `plan-2026-10-08-socialization-sessions.md` — adjacency pairing as data (7 pairs, senior initiates), power dynamics via grants (decisions flow down, information flows up, junior voice is an exceptional grant), the `dm_threads` 3-turn envelope, MEMORY.md densification on close, sessions meter under the seats' budget envelopes. Phase 1 = the socializer cast; phases 2/3 wait on wave C.
+- **Effort**: phase 1 M. **Blockers**: owner approval of the design.
 
 ## Wave C — blocked on the peer's `cmd_org.rs` WIP (still dirty in-tree)
 
@@ -166,12 +150,12 @@ graph LR
 - Provider capacity (503s/stream deaths) remains the growth constraint;
   iter-669/673 retries cover the flake class, not the capacity.
 
-## Suggested order
-1. Gap 4 implementation (decided; S) + gap 2 (S–M, closes the wake-the-owner
-   bug class).
-2. Gap 1's instrumented run (discovery, hours) → gap 1 implementation.
-3. Gap 5 phase 1 on the owner's go (design doc in hand,
-   `plan-2026-10-08-dm-feed-context-injection.md`).
-4. Design doc for gap 6 (socialization; rides gap 5's substrate).
-5. Gap 7 the moment the peer's `cmd_org.rs` lands → gap 8.
+## Suggested order (updated 2026-10-08 after the execution stretch 677-679)
+1. ~~Gap 4 implementation (decided; S) + gap 2 (S–M)~~ — DONE iter-677.
+2. ~~Gap 1: instrumented run → implementation~~ — DONE iter-678.
+3. ~~Gap 5 phase 1~~ — DONE iter-679; phase 1b (gateway turn-start seam)
+   and phase 2 (platform read adapters) remain, per the design doc §7.
+4. ~~Gap 6 design doc~~ — DELIVERED; implementation on owner approval.
+5. Gap 7 the moment the peer's `cmd_org.rs` lands → gap 8 → socialization
+   phases 2/3.
 6. Gap 3 on the data window's evidence, any time after ~2026-10-11.
