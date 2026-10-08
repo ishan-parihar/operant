@@ -278,6 +278,7 @@ fn test_config(model: &str, max_iterations: usize) -> AgentConfig {
         memory_review_interval: 0,
         max_retries: 3,
         tool_search: Default::default(),
+        guardrail_exempt_tools: Vec::new(),
     }
 }
 

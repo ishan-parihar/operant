@@ -290,6 +290,7 @@ fn test_config() -> AgentConfig {
         // per tick and desyncing the three-tick script.
         max_retries: 0,
         tool_search: Default::default(),
+        guardrail_exempt_tools: Vec::new(),
     }
 }
 
