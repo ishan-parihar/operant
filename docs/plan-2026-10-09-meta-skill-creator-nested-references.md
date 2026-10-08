@@ -46,11 +46,11 @@ canonical, 2026-08-15, 16 298 B) and `~/.agents/skills/meta-skill-creator/`
 
 | # | Finding | Evidence |
 |---|---------|----------|
-| C1 | **7 trees already built to this contract** — 269 nested child SKILL.md, ≈23 900 lines, all carrying `_build/`, `_map.md`, `_registry.yaml`: human-conversation **140**, mental-model-atlas **49**, website-design **26**, linkedin-marketing **24**, agent-interface **17**, cognitive-kernel **7**, perfect-github-readme **6**. | `find ~/.agents/skills -name SKILL.md` nested count |
-| C2 | Repo `skills/` (634 tracked files, 107 SKILL.md) has one nested tree: `skills/creative/website-design/components` (6 nodes). | nested-count sweep |
+| C1 | **7 trees already built to this contract** — 269 SKILL.md total (262 nested children + the 7 roots), 24 119 lines, all roots carrying `_build/`, `_map.md`, `_registry.yaml`: human-conversation **140**, mental-model-atlas **49**, website-design **26**, linkedin-marketing **24**, agent-interface **17**, cognitive-kernel **7**, perfect-github-readme **6**. | `find ~/.agents/skills -name SKILL.md` nested count |
+| C2 | Repo `skills/` (634 tracked files, 107 SKILL.md) has one nested tree, and it is **orphaned**: `skills/creative/website-design` holds 8 tracked SKILL.md (`briefing/` + `components/` subtree) with **no root SKILL.md — never tracked** (`git log -- …/website-design/SKILL.md` empty, porcelain clean). This is exactly the orphan-SKILL.md ERROR class both validators flag; the live copy does have the root. | `git ls-files` + `find` + `git log` |
 | C3 | **The routing contract has a Rust lockstep copy**: `skills_tool.rs:35` "meta-skill-creator registry.py parity" budgets; `collect_tree_validation` / `validate_skill_tree` / `collect_skill_children` / `skill_manage generate_map` (30 refs); `operant skills audit` tree gate (`cmd_skills.rs`, 4 refs); the always-on agent prompt block (`agent/mod.rs:71` — "regenerate the map… unreachable children, name/dir mismatches…"); the node-routing hint `skill_view(name='<parent>/<child>')` (`skills_tool.rs:1097`). | code search |
 | C4 | **Operant already natively supports the target model.** Discovery registers only top-level dirs (`skills.rs:74`); `skill_view(file_path=…)` loads supporting files under `ALLOWED_SUBDIRS = ["references","templates","scripts","assets"]` with nested paths allowed and **no frontmatter validation below root** (`skills_tool.rs:75`, `validate_file_path`). Child SKILL.md are therefore second-class: registered nowhere, loadable only via the parent/child name hack. | code read |
-| C5 | ≈60 top-level skills contain cross-skill routing prose ("load the X skill" / `skill_view(name=…)`) — inventory captured, sweep deferred (§5). | rg sweep over `**/SKILL.md` |
+| C5 | 53 top-level skills contain cross-skill routing prose ("load the X skill" / `skill_view(name=…)`) — inventory captured, sweep deferred (§5). | rg sweep over `**/SKILL.md` |
 | C6 | Hygiene: **92 dangling symlinks** in `~/.claude/skills` (incl. writing-skills, writing-great-skills, skill-consolidation, resume-skills, operant-skill-authoring), `.bak` debris (`meta-skill-creator.bak`, `cognitive-kernel.bak`, `context7-mcp.bak`, `browserclaw.bak`), `.codex-marketplace/` nesting inside linkedin-marketing. | `find -L ~/.claude/skills -type l` |
 
 ---
@@ -123,7 +123,7 @@ trading-systems/
 | **2** | **Rewrite meta-skill-creator** (canonical, repo) | `skills/software-development/meta-skill-creator/SKILL.md`, `references/templates.md`, new `references/writing-guide.md`, `scripts/registry.py` |
 | **3** | **Rust lockstep** | `crates/operant-core/src/tools/skills_tool.rs`, `crates/operant-cli/src/cmd_skills.rs`, `crates/operant-core/src/agent/mod.rs` (prompt block), tests, `CHANGELOG.md` |
 | **4** | **Migration script + pilot tree** | new `scripts/migrate_to_references.py`, `skills/creative/website-design/**` |
-| **5** | **Migrate the 7 live trees** (269 nodes) | `~/.agents/skills/{human-conversation,mental-model-atlas,website-design,linkedin-marketing,agent-interface,cognitive-kernel,perfect-github-readme}/**` (script committed in iter 4) |
+| **5** | **Migrate the 7 live trees** (262 nodes) | `~/.agents/skills/{human-conversation,mental-model-atlas,website-design,linkedin-marketing,agent-interface,cognitive-kernel,perfect-github-readme}/**` (script committed in iter 4) |
 | **6** | Verification sweep + sync + tracker updates | sync copy → live, `BUGS.md` rows for §5, `CHANGELOG.md` if audit UX changed |
 
 ### Iter 2 detail — the rewrite itself
@@ -201,7 +201,9 @@ tolerated by foreign harnesses and skipped by registry.py) and `diff -r` clean.
 5. **content-preservation assertion**: body lines before == after (minus
    frontmatter + blank separator) — the migration must not rewrite prose.
 
-Pilot on the repo tree (`skills/creative/website-design`, 6 nodes) in iter 4;
+Pilot on the repo tree (`skills/creative/website-design`, 8 nodes) in iter 4 — the
+pilot first **restores the missing root `SKILL.md`** (copy from the live copy,
+which has it; fixes the C2 orphan), then migrates the 8 nodes;
 then the 7 live trees in iter 5 (human-conversation 140 → … → perfect-github-
 readme 6), each validated **twice**: new `registry.py --check` (0 errors) and,
 after iter 3, `operant skills audit <tree>` (0 errors). Per-tree before/after
@@ -235,7 +237,7 @@ skip already exists).
 
 ## §5 Deferred (separate iterations, owner-approved later)
 
-1. **C5 cross-skill routing sweep** — ≈60 skills carry "load the X skill"
+1. **C5 cross-skill routing sweep** — 53 skills (rg sweep pattern) carry "load the X skill"
    prose; convert *hard* dependencies to nested references (or downgrade to
    discovery-only mentions), one family per iteration. Inventory is reproducible
    with the rg pattern in the audit.
