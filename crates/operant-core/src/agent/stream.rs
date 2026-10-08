@@ -444,6 +444,7 @@ impl OperantAgent {
     /// construction and would fake an identical-result streak. A Halt
     /// verdict triggers the interrupt flag and surfaces the root-cause
     /// summary as final content.
+    #[expect(clippy::expect_used, reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition")]
     async fn observe_guardrail_results(&self, results: &[ToolResult]) {
         use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
 

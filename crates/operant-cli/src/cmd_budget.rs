@@ -6,11 +6,10 @@
 //! `[genome].budget` + per-seat rows) shipped before any operator could
 //! write a row — this is the missing provisioning path.
 //!
-//! Namespace note: this is top-level `operant budget` instead of
-//! `operant org budget` because `cmd_org.rs` is mid-flight in a peer's
-//! working tree (fleet rule 3: never sweep a peer's staged file into
-//! another commit). When that WIP lands, this module moves under the org
-//! namespace with the handlers unchanged.
+//! Namespace note: this module lives under `operant org budget` (the
+//! iter-670 top-level namespace was provisional while `cmd_org.rs` was
+//! mid-flight in a peer's tree; folded once it landed). The handlers are
+//! unchanged — only the clap routing moved.
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;

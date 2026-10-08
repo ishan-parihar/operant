@@ -539,7 +539,10 @@ fn org_reason_repeated_ack_is_idempotent() {
             "post",
             "please review the deploy",
             "--sender",
-            "emp-ceo01",
+            // 'user' (the operator root) rather than an ad-hoc employee id:
+            // the Slice-4 §2.3.1 consult fails closed on unregistered senders
+            // at the post seam, and this test's subject is ack idempotence.
+            "user",
             "--recipients",
             "agent:emp-eng01",
             "--correlation-id",

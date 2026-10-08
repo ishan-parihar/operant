@@ -1279,6 +1279,7 @@ impl PersistentSessionStore {
         Ok(row)
     }
 
+    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned session-entries write lock is a programmer error, not a runtime condition")]
     pub fn bind_employee(
         &self,
         session_key: &str,
@@ -1521,6 +1522,7 @@ impl PersistentSessionStore {
             .cloned()
     }
 
+    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned session-entries read lock is a programmer error, not a runtime condition")]
     pub fn find_session(
         &self,
         platform: &str,

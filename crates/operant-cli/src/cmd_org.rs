@@ -78,6 +78,15 @@ use operant_core::org::notice_db::NoticeBoard;
 use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 
+use operant_core::org::authority::{
+    AuthorityScope, Grant, GrantDb, can_accept_decision, can_post_to, resolve_scope,
+};
+use operant_core::org::cast::{CAST, PREMIERE_GRANT_CAPABILITY, cast_cron_job_for};
+use operant_core::org::employee_db::EmployeeDb;
+use operant_core::org::seat_budgets::{SeatBudgetDb, resolve_budget, window_start};
+
+use crate::cmd_budget::BudgetSubcommand;
+
 /// Reject a reason that is present but is not a reason.
 ///
 /// §3.5 makes `--reason` required at the clap layer, which catches a
@@ -213,6 +222,11 @@ pub enum OrgDecisionAction {
     Accept {
         /// Decision id
         decision_id: String,
+        /// Who is accepting (employee_id, 'user', or 'system') — the
+        /// §2.3.3 consult gates an employee's acceptance on their scope
+        /// containing the decision's target scope
+        #[arg(long, default_value = "user")]
+        acceptor: String,
         /// Why it is being accepted (required)
         #[arg(long, value_name = "REASON")]
         reason: String,
@@ -408,6 +422,25 @@ pub enum OrgSubcommand {
         /// Output as JSON (for scripting/CI)
         #[arg(long)]
         json: bool,
+    },
+
+    /// Per-seat budget overrides (Wave 4 / ORGANISM-ARCHITECTURE §5) — the
+    /// provisioning surface for the enforcement machinery. Lives under
+    /// `org` because the seat registry is the org layer (the iter-670
+    /// top-level namespace was provisional while this file was
+    /// mid-flight in a peer's tree).
+    #[command(subcommand)]
+    Budget(BudgetSubcommand),
+
+    /// The cold-start cast: nine seats, their departments and cron jobs
+    /// (read-only topology — ORGANISM-ARCHITECTURE §1)
+    Cast,
+
+    /// Per-seat audit: decisions, grants, and spend for one employee
+    /// (read-only — §6.4's "what did this seat decide, grant, and spend")
+    Audit {
+        /// Employee/seat id
+        employee_id: String,
     },
 }
 
@@ -756,7 +789,69 @@ pub async fn handle_org_command(config: &AppConfig, cmd: OrgSubcommand) -> Resul
         OrgSubcommand::Import { path, reason } => cmd_import(config, &path, &reason),
         OrgSubcommand::Check => cmd_check(config),
         OrgSubcommand::List { json } => cmd_employee_list(config, json),
+        OrgSubcommand::Budget(cmd) => crate::cmd_budget::handle_budget_command(config, cmd).await,
+        OrgSubcommand::Cast => cmd_cast(config),
+        OrgSubcommand::Audit { employee_id } => cmd_audit(config, &employee_id),
     }
+}
+
+/// Resolve an actor label into an authority scope (Slice 4, §2.3.1/§2.3.3
+/// consults). `'user'`/`'system'` are the operator root — the standing
+/// Org-scope grant is the root of every delegation (owner ruling), so they
+/// consult as Org and are not subject to the predicates. An employee resolves
+/// through their designation: org-lead = a live capability-`org` grant;
+/// department head = any department naming them as head. An **unknown
+/// sender is a refusal** (fail-closed): the registry is the only source of
+/// identity, and an unregistered "sender" must not reach a write path.
+fn resolve_actor_scope(conn: &OrgConn, actor: &str) -> Result<(AuthorityScope, Option<String>)> {
+    if actor == "user" || actor == "system" {
+        return Ok((AuthorityScope::Org, None));
+    }
+    let employees = EmployeeDb::from_shared_connection(conn.clone())
+        .context("Failed to open employee registry")?;
+    let employee = employees
+        .get_employee(actor)
+        .with_context(|| format!("Failed to read employee '{actor}'"))?
+        .with_context(|| {
+            format!(
+                "unknown actor '{actor}' — only registered employees, 'user', or 'system' \
+                 can act here (fail-closed)"
+            )
+        })?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let grants = GrantDb::from_shared_connection(conn.clone())
+        .context("Failed to open grant store")?
+        .list_for_grantee(actor)
+        .with_context(|| format!("Failed to read grants for '{actor}'"))?;
+    let is_org_lead = grants
+        .iter()
+        .any(|g| g.capability == PREMIERE_GRANT_CAPABILITY && g.is_live_at(&now));
+    let departments = operant_core::org::department_db::DepartmentDb::from_shared_connection(
+        conn.clone(),
+    )
+    .context("Failed to open department store")?
+    .list()
+    .context("Failed to read departments")?;
+    let is_dept_head = departments
+        .iter()
+        .any(|d| d.head_employee_id() == Some(actor));
+    Ok((
+        resolve_scope(is_dept_head, is_org_lead),
+        employee.department.clone(),
+    ))
+}
+
+/// Slice 4 (§2.3.1): the live grants an actor holds right now — the only
+/// currency `can_post_to` accepts for a cross-department post.
+fn live_grants_for(conn: &OrgConn, actor: &str) -> Result<Vec<Grant>> {
+    let now = chrono::Utc::now().to_rfc3339();
+    Ok(GrantDb::from_shared_connection(conn.clone())
+        .context("Failed to open grant store")?
+        .list_for_grantee(actor)
+        .with_context(|| format!("Failed to read grants for '{actor}'"))?
+        .into_iter()
+        .filter(|g| g.is_live_at(&now))
+        .collect())
 }
 
 fn handle_department(config: &AppConfig, action: OrgDepartmentAction) -> Result<()> {
@@ -932,12 +1027,43 @@ fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> 
         }
         OrgDecisionAction::Accept {
             decision_id,
+            acceptor,
             reason,
         } => {
             let reason = require_reason("org decision accept", &reason)?;
+            // Slice 4 (§2.3.3): acceptance consults `can_accept_decision` —
+            // the actor's scope must contain the decision's target scope
+            // (the iter-642 finding: ratification was structurally open
+            // because the accept path never called the predicate).
+            // 'user'/'system' consult as the operator root and keep the
+            // pre-slice operator surface; an employee is gated, fail-closed
+            // — a department-scoped seat cannot ratify an org-wide decision
+            // it cannot see the whole of.
+            let decision = db
+                .get(&decision_id)
+                .with_context(|| format!("Failed to read decision '{decision_id}'"))?
+                .with_context(|| format!("no decision '{decision_id}'"))?;
+            if acceptor != "user" && acceptor != "system" {
+                let conn = open_org_db(config)?;
+                let (scope, _) = resolve_actor_scope(&conn, &acceptor)?;
+                let target: AuthorityScope = decision
+                    .scope
+                    .parse()
+                    .with_context(|| {
+                        format!(
+                            "decision '{decision_id}' carries unknown scope '{}'",
+                            decision.scope
+                        )
+                    })?;
+                can_accept_decision(scope, target)
+                    .into_result()
+                    .with_context(|| {
+                        format!("acceptor '{acceptor}' may not accept decision '{decision_id}'")
+                    })?;
+            }
             db.accept(&decision_id, reason)
                 .context("Failed to accept decision")?;
-            println!("decision {decision_id} accepted");
+            println!("decision {decision_id} accepted by '{acceptor}'");
         }
         OrgDecisionAction::Reject {
             decision_id,
@@ -1356,6 +1482,132 @@ async fn handle_employee(config: &AppConfig, action: OrgEmployeeAction) -> Resul
     }
 }
 
+/// Slice 5: `org cast` — the topology the organism boots with, made
+/// legible from the CLI (the redteam audit's §3.5: "the nine-seat cast is
+/// a core concept but `operant org cast` is `unrecognized subcommand'").
+/// Read-only: the static cast plus a live registry check per seat.
+fn cmd_cast(config: &AppConfig) -> Result<()> {
+    let conn = open_org_db(config)?;
+    let employees =
+        EmployeeDb::from_shared_connection(conn).context("Failed to open employee registry")?;
+    println!(
+        "{:<18} {:<14} {:<12} {:<11} {}",
+        "SEAT", "ROLE", "DEPARTMENT", "CRON JOB", "REGISTERED"
+    );
+    for seat in CAST {
+        let cron = cast_cron_job_for(seat)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| "—".to_string());
+        let registered = if employees.get_employee(seat.id)?.is_some() {
+            "yes"
+        } else {
+            "MISSING"
+        };
+        println!(
+            "{:<18} {:<14} {:<12} {:<11} {}",
+            seat.id, seat.role, seat.department, cron, registered
+        );
+    }
+    println!("{} seats in the cold-start cast.", CAST.len());
+    Ok(())
+}
+
+/// Slice 5: `org audit <seat>` — "what did this seat decide, grant, and
+/// spend", the post-mortem surface the redteam audit asked for (§6.4:
+/// "1,311 logged decisions read by nobody"). Read-only.
+fn cmd_audit(config: &AppConfig, employee_id: &str) -> Result<()> {
+    let conn = open_org_db(config)?;
+    let employees = EmployeeDb::from_shared_connection(conn.clone())
+        .context("Failed to open employee registry")?;
+    let employee = employees
+        .get_employee(employee_id)
+        .with_context(|| format!("Failed to read employee '{employee_id}'"))?
+        .with_context(|| format!("no employee '{employee_id}' in the registry"))?;
+    println!(
+        "employee {} — {} (role: {}) dept: {}",
+        employee.employee_id,
+        employee.name,
+        employee.role,
+        employee.department.as_deref().unwrap_or("—")
+    );
+
+    // Grants held: live vs revoked, the containment picture.
+    let now = chrono::Utc::now().to_rfc3339();
+    let grants = GrantDb::from_shared_connection(conn.clone())
+        .context("Failed to open grant store")?
+        .list_for_grantee(employee_id)
+        .with_context(|| format!("Failed to read grants for '{employee_id}'"))?;
+    let (live, dead): (Vec<_>, Vec<_>) =
+        grants.iter().partition(|g| g.is_live_at(&now) && !g.is_revoked());
+    println!("\nGRANTS: {} live, {} lapsed/revoked", live.len(), dead.len());
+    for g in &live {
+        println!(
+            "  {} ({} scope{})",
+            g.capability,
+            g.scope,
+            g.target_dept
+                .as_deref()
+                .map(|d| format!(", dept:{d}"))
+                .unwrap_or_default()
+        );
+    }
+
+    // Decisions this seat has on record, every status.
+    let decisions = operant_core::org::decisions_db::DecisionsDb::for_app(Path::new(
+        &config.database_path,
+    ))
+    .context("Failed to open decision store")?;
+    use operant_core::org::decisions_db::DecisionStatus;
+    let mut mine = Vec::new();
+    for status in [
+        DecisionStatus::Proposed,
+        DecisionStatus::Accepted,
+        DecisionStatus::Rejected,
+        DecisionStatus::Expired,
+        DecisionStatus::Superseded,
+    ] {
+        for d in decisions
+            .list_by_status(status)
+            .context("Failed to list decisions")?
+        {
+            if d.decided_by == employee_id {
+                mine.push(d);
+            }
+        }
+    }
+    println!("\nDECISIONS ON RECORD: {}", mine.len());
+    for d in &mine {
+        println!(
+            "  {} [{}] {} (scope {})",
+            d.decision_id, d.subject, d.binding, d.scope
+        );
+    }
+
+    // Budget posture + metered spend in the current window.
+    let budgets = SeatBudgetDb::init(&config.database_path)
+        .context("Failed to open seat budget database")?;
+    let row = budgets
+        .get(employee_id)
+        .context("Failed to read budget row")?;
+    let effective = resolve_budget(row.as_ref(), &config.genome.budget);
+    match &effective {
+        None => println!("\nBUDGET: ungoverned (cap 0 / unset)"),
+        Some(b) => {
+            let since = window_start(&b.window);
+            let (tokens, usd) = operant_core::PersistentSessionStore::open(
+                config.database_path.to_str().context("non-utf8 database path")?,
+            )
+            .and_then(|s| s.employee_window_usage(employee_id, &since))
+            .context("Failed to read metered usage")?;
+            println!(
+                "\nBUDGET: cap {} {} per {} ({} mode) — spent {} tokens (${:.4}) since {since}",
+                b.cap, b.basis, b.window, b.mode, tokens, usd
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn handle_notice(config: &AppConfig, action: OrgNoticeAction) -> Result<()> {
     match action {
         OrgNoticeAction::Post {
@@ -1373,6 +1625,29 @@ async fn handle_notice(config: &AppConfig, action: OrgNoticeAction) -> Result<()
         } => {
             let reason = validated_reason("org notice post", &reason)?;
             let conn = open_org_db(config)?;
+            // Slice 4 (§2.3.1): the post seam consults `can_post_to` — the
+            // pure predicate from `authority.rs`, called by the write path
+            // that holds the employee/grant context (the iter-642 redteam
+            // finding was that the containment rules were pure predicates
+            // with NO enforcement point). 'user'/'system' consult as the
+            // operator root and are not gated; an employee is gated per
+            // recipient, fail-closed. Rejected by `into_result` BEFORE any
+            // row is written.
+            if sender != "user" && sender != "system" {
+                let (scope, actor_dept) = resolve_actor_scope(&conn, &sender)?;
+                let grants = live_grants_for(&conn, &sender)?;
+                let recipients = parse_recipients(&recipients)?;
+                for target in &recipients {
+                    can_post_to(scope, actor_dept.as_deref(), target, &grants)
+                        .into_result()
+                        .with_context(|| {
+                            format!(
+                                "notice from '{sender}' to '{}' refused",
+                                target.selector()
+                            )
+                        })?;
+                }
+            }
             let board = NoticeBoard::from_shared_connection(conn)
                 .context("Failed to open the notice board")?;
             // Through `NoticeBoard::post`, never a hand-written INSERT. An
@@ -2076,5 +2351,197 @@ mod tests {
         assert_eq!(grant.scope, AuthorityScope::Org);
         assert_eq!(grant.target_dept, None);
         assert_eq!(grant.expires_at, None, "an org lead mints standing");
+    }
+
+    // ------------------------------------------- F2: authority predicates (Slice 4)
+
+    use operant_core::org::decisions_db::{DecisionsDb, DecisionStatus};
+    use operant_core::org::department_db::{Department, DepartmentDb};
+
+    /// Seed `emp-worker` in department `platform`, plus a second department
+    /// `other` the worker holds no grant into — the §2.3.1 shapes.
+    fn scope_fixture() -> (AppConfig, tempfile::TempDir) {
+        let (config, dir) = grant_fixture();
+        let conn = open_org_db(&config).expect("open org db");
+        conn.lock()
+            .expect("conn")
+            .execute(
+                "INSERT OR REPLACE INTO employees (
+                     employee_id, name, role, department, skills, agent_type,
+                     persona, status, reason, created_at, updated_at
+                 ) VALUES ('emp-worker', 'emp-worker', 'tester', 'platform',
+                           '[\"probe\"]', NULL, NULL, 'active',
+                           'slice4 fixture', '2026-10-01T00:00:00Z',
+                           '2026-10-01T00:00:00Z')",
+                [],
+            )
+            .expect("seed employee");
+        let depts = DepartmentDb::from_shared_connection(conn.clone()).expect("dept store");
+        depts
+            .upsert(&Department::new("platform", "Platform", "slice4 fixture"))
+            .expect("seed platform");
+        depts
+            .upsert(&Department::new("other", "Other", "slice4 fixture"))
+            .expect("seed other");
+        (config, dir)
+    }
+
+    fn post(sender: &str, recipients: &str) -> OrgNoticeAction {
+        OrgNoticeAction::Post {
+            body: "slice4 test".to_string(),
+            sender: sender.to_string(),
+            recipients: recipients.to_string(),
+            subject: None,
+            from_dept: None,
+            tags: String::new(),
+            correlation_id: None,
+            ack_required: false,
+            pinned: false,
+            ttl_expires_at: None,
+            reason: "slice4 test".to_string(),
+        }
+    }
+
+    fn notice_count(config: &AppConfig) -> i64 {
+        let conn = open_org_db(config).expect("reopen org db");
+        conn.lock()
+            .expect("conn")
+            .query_row("SELECT COUNT(*) FROM notices", [], |r| r.get(0))
+            .expect("count notices")
+    }
+
+    #[tokio::test]
+    async fn notice_post_to_own_dept_is_allowed() {
+        let (config, _dir) = scope_fixture();
+        handle_notice(&config, post("emp-worker", "dept:platform"))
+            .await
+            .expect("own-dept post must pass the §2.3.1 consult");
+        assert_eq!(notice_count(&config), 1, "the post must have landed");
+    }
+
+    #[tokio::test]
+    async fn notice_post_cross_dept_without_a_grant_is_refused() {
+        let (config, _dir) = scope_fixture();
+        // §2.1: crossing a department boundary requires an explicit
+        // capability grant; `emp-worker` holds none, so the consult must
+        // refuse BEFORE any row is written.
+        let err = handle_notice(&config, post("emp-worker", "dept:other"))
+            .await
+            .expect_err("a grantless cross-dept post must be refused");
+        // `{:#}` renders the full anyhow chain — the §2.1 deny reason lives
+        // in the `into_result` cause, under the CLI's refusal context.
+        let msg = format!("{err:#}");
+        assert!(msg.contains("refused"), "{msg}");
+        assert!(msg.contains("dept:other"), "must name the target: {msg}");
+        assert!(msg.contains("grant"), "must name the §2.1 rule: {msg}");
+        assert_eq!(
+            notice_count(&config),
+            0,
+            "a refused post must write nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn notice_post_from_an_unregistered_sender_is_refused() {
+        let (config, _dir) = scope_fixture();
+        let err = handle_notice(&config, post("emp-ghost", "broadcast"))
+            .await
+            .expect_err("an unregistered sender must not reach a write path");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown actor"),
+            "fail-closed on identity: {msg}"
+        );
+        assert_eq!(notice_count(&config), 0);
+    }
+
+    #[tokio::test]
+    async fn user_sender_is_the_operator_root_and_is_not_gated() {
+        let (config, _dir) = scope_fixture();
+        // 'user' has no employee row and no grants; the operator root still
+        // posts cross-dept — preserved pre-slice behavior, by design.
+        handle_notice(&config, post("user", "dept:other"))
+            .await
+            .expect("the operator root is not subject to §2.3.1");
+        assert_eq!(notice_count(&config), 1);
+    }
+
+    #[tokio::test]
+    async fn decision_accept_out_of_scope_is_refused_and_writes_nothing() {
+        let (config, _dir) = scope_fixture();
+        handle_decision(
+            &config,
+            OrgDecisionAction::Propose {
+                subject: "org-wide posture".to_string(),
+                scope: "org".to_string(),
+                decided_by: "user".to_string(),
+                rationale: "test".to_string(),
+                non_binding: false,
+                reason: "slice4 test".to_string(),
+            },
+        )
+        .expect("propose");
+        let db = DecisionsDb::for_app(Path::new(&config.database_path)).expect("decisions db");
+        let id = db
+            .list_by_status(DecisionStatus::Proposed)
+            .expect("list proposed")[0]
+            .decision_id
+            .clone();
+
+        // `emp-worker` resolves to Peers — it cannot see the whole of an
+        // org-scoped decision, so §2.3.3 refuses the acceptance.
+        let err = handle_decision(
+            &config,
+            OrgDecisionAction::Accept {
+                decision_id: id.clone(),
+                acceptor: "emp-worker".to_string(),
+                reason: "slice4 test".to_string(),
+            },
+        )
+        .expect_err("an out-of-scope acceptance must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("may not accept"), "{msg}");
+        assert_eq!(
+            db.get(&id).expect("get").expect("row").status,
+            DecisionStatus::Proposed,
+            "a refused acceptance must leave the decision unbound"
+        );
+    }
+
+    #[tokio::test]
+    async fn decision_accept_by_the_operator_root_still_binds() {
+        let (config, _dir) = scope_fixture();
+        handle_decision(
+            &config,
+            OrgDecisionAction::Propose {
+                subject: "org-wide posture".to_string(),
+                scope: "org".to_string(),
+                decided_by: "user".to_string(),
+                rationale: "test".to_string(),
+                non_binding: false,
+                reason: "slice4 test".to_string(),
+            },
+        )
+        .expect("propose");
+        let db = DecisionsDb::for_app(Path::new(&config.database_path)).expect("decisions db");
+        let id = db
+            .list_by_status(DecisionStatus::Proposed)
+            .expect("list proposed")[0]
+            .decision_id
+            .clone();
+
+        handle_decision(
+            &config,
+            OrgDecisionAction::Accept {
+                decision_id: id.clone(),
+                acceptor: "user".to_string(),
+                reason: "slice4 test".to_string(),
+            },
+        )
+        .expect("the operator root may accept anything");
+        assert_eq!(
+            db.get(&id).expect("get").expect("row").status,
+            DecisionStatus::Accepted
+        );
     }
 }

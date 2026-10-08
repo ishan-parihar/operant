@@ -354,6 +354,7 @@ impl OperantAgent {
     /// seat a chat session runs under is its bound employee's id, not the
     /// `gw_<hash>` conversation id. `None` keeps today's behavior (consult
     /// on the session id, which is what cron runs already key on).
+    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned seat_id lock is a programmer error, not a runtime condition")]
     pub fn seat_id(&self) -> Option<String> {
         self.seat_id
             .read()
@@ -374,6 +375,7 @@ impl OperantAgent {
 
     /// The bound employee's charter (org system prompt), if the gateway set
     /// one. Appended to the frozen prefix — see [`Self::build_frozen_prefix`].
+    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned charter lock is a programmer error, not a runtime condition")]
     pub fn charter(&self) -> Option<String> {
         self.charter
             .read()

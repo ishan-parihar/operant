@@ -81,6 +81,7 @@ impl OperantAgent {
     ///
     /// The cost is one extra `get_schemas()` read of the shared RwLock per
     /// request; negligible next to the LLM round-trip it precedes.
+    #[expect(clippy::expect_used, reason = "mutex poison recovery — a poisoned masked_tools lock is a programmer error, not a runtime condition")]
     pub(crate) async fn tools_for_turn(
         &self,
         messages: &[Message],
