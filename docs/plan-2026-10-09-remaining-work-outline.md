@@ -1,12 +1,14 @@
 # Remaining-work outline (reconciled, 2026-10-09)
 
-> **Baseline:** `477d9841` — iters 688–691 (record_output, SwitchModel, notice
-> inbox, reaper CLOSE + exit columns) and the channels strip-alias fix landed,
-> gated green (6-package, 7446 passed / 0 failed at `10b139ac`), pushed.
+> **Baseline:** `7a997c0c` — iters 688–691 (record_output, SwitchModel, notice
+> inbox, reaper CLOSE + exit columns), the channels strip-alias fix, iters
+> 697/698 (preflight ladder, PromptCacheGuard, `HERMES_TURN_TIMEOUT`) landed,
+> gated green (6-package, 7468 passed / 0 failed at `f7d06d47`), pushed.
 > **Sources:** `plan-2026-10-07-agentic-core-verified-remaining-work.md` (audit
-> r2, rows updated by iters 688–691) + `plan-2026-10-08-trinity-audit-and-
-> remaining-outline.md` (port candidates). This doc is the single ordered
-> ledger of what is left; the two parents remain the evidence record.
+> r2, rows updated by iters 688–691/697/698) + `plan-2026-10-08-trinity-audit-
+> and-remaining-outline.md` (port candidates) + `plan-2026-10-08-remaining-
+> implementation-gaps.md` (org programme queue). This doc is the single ordered
+> ledger of what is left; the parents remain the evidence record.
 
 ---
 
@@ -19,21 +21,20 @@
 | Notice-board READ wiring (CLI + seat prompt) | iter-690 `5b0b5f9b` |
 | Reaper CLOSE-at-detection + `exit_code`/`exit_reason` + `TurnExitReason` classifier (trinity P0-B) | iter-691 `bb29854b` |
 | Telegram `strip_tool_call_tags` underscore-alias fix | `10b139ac` |
+| Wave-4 ordered preflight ladder (TOC/trim → decay → summarize → evict + wrap-up rung) | iter-697 `65aba584` |
+| PromptCacheGuard (frozen-prefix invariant checked) + `HERMES_TURN_TIMEOUT` override | iter-698 `f7d06d47` |
 
 ## §2 Next slices (agreed order, core track)
 
-1. ~~**Wave-4 ordered preflight ladder**~~ **EXECUTED iter-697** — ordered rungs TOC/trim → decay → summarize → evict in `build_messages`, each gated on still-over-threshold; wrap-up rung appends final-call copy; `fast_trim_tool_results` gains its first production caller.
-2. ~~**PromptCacheGuard**~~ **EXECUTED iter-698** — `prompt_cache_guard` verifies the frozen prefix byte-identical after the ladder (warn in release, debug_assert in tests).
-3. ~~**`TURN_WALL_CLOCK_LIMIT_SECS` env override**~~ **EXECUTED iter-698** — `HERMES_TURN_TIMEOUT` (seconds), default 20 min kept on malformed input.
-4. **Vision-routing ruling** — `multimodal` deleted iter-663; `with_multimodal` `/`with_vision_route` tests+ACP only. Decide: port per-iteration vision routing to facade, or formally accept single-provider vision at construction.
-5. **`max_tool_result_chars` wire-or-drop + ingestion-time offload/TOC** —
+1. **Vision-routing ruling** — `multimodal` deleted iter-663; `with_multimodal` `/`with_vision_route` tests+ACP only. Decide: port per-iteration vision routing to facade, or formally accept single-provider vision at construction.
+2. **`max_tool_result_chars` wire-or-drop + ingestion-time offload/TOC** —
    dead knob (default 50000, zero consumers); `ArtifactIndex`/`toc`/`offload`
    absent.
-6. **openhuman adversarial suite port** — 486-LOC `no_progress/mod_tests.rs`
+3. **openhuman adversarial suite port** — 486-LOC `no_progress/mod_tests.rs`
    fault-injection suite; 13 pattern tests already ported (iter-669).
-7. **§2 dispatch-consolidation ruling** (gates Wave-4 entry formally; option A
-   recommended) → then §7 deletions: `Agent::turn` (agent.rs:1516),
-   `loop_::run` (loop_/run.rs:102), `loop_detector.rs` (post-§3 harvest).
+4. **§2 dispatch-consolidation ruling** (option A recommended) → then §7
+   deletions: `Agent::turn` (agent.rs:1516), `loop_::run` (loop_/run.rs:102),
+   `loop_detector.rs` (post-§3 harvest).
 
 **Deferred by dependency:** `CancellationToken` into core `run()` (§4 row 102),
 mid-turn steering on the live gateway path (§4 row 106), cron trigger
@@ -64,12 +65,26 @@ org check exit codes → CEO loop → AD-RG → `retention_gc` wire-or-delete.
 **IdentityGate: HOLD** — finished, tested, deliberately unmounted; decide the
 mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
 
+**Org-programme queue (from the gaps doc — their doc owns the detail):**
+
+| Item | Status |
+|---|---|
+| Gap 5 phase 1b: gateway turn-start injection seam (DM turns see feeds; no self-echo) | unblocked, next org build |
+| Gap 6 phase 1: socializer cast (10th registry row, 09:30 sessions, `enabled=false` default) | approved design, unblocked — owner flips `[socialization] enabled` to arm |
+| Gap 3: breaker threshold tuning | **DECIDED HOLD 6/6** (0 degenerate fires in 87 runs; revisit only on a live fire) |
+| D-2 test debt: verify `cron_session_isolation` pins the scheduler session-id derivation | small, opportunistic |
+| 4 lib-test warnings from the 679 build | small, opportunistic |
+| `packet-e-wt-wip-20261007.tar.gz` cleanup | awaits owner sign-off |
+| Gap 5 phase 2: platform read adapters (Telegram/Discord/Slack history → `Dm` class) | **BLOCKED on credentials** — `TELEGRAM_BOT_TOKEN` empty, discord/slack disabled+unset; building now = unverifiable dead code; inbound DMs already land via the iter-679 tap |
+| Gaps 1/2/4/7/8 (envelope metering, clarify fail-fast, D-2 posture, budget fold + predicates + read surfaces, synthesis + amendments) | **DONE** (iters 677/678/688/692/695) |
+
 ## §5 Config/ops hygiene
 
 - **Config-schema exemption wiring** — `guardrail_exempt_tools` config-file
   surface; BLOCKED on the peer's `config.rs` ownership.
 - **Telegram bot-auth credential** — `TELEGRAM_BOT_TOKEN` empty; the only
-  delivery-hop blocker; operator action, not code.
+  delivery-hop blocker AND the org phase-2 read-adapter blocker (discord/slack
+  also disabled + unset); operator action, not code.
 - **Cron hygiene** — ephemeral test regs to archive post-smoke-test; DUE-job
   backlog.
 - **LTO marker rule** — shipped-binary marker checks must be
