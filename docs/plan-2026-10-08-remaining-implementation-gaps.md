@@ -279,9 +279,15 @@ Chief-of-staff synthesis (notices → org bank + seat notices) and the
 decision→charter amendment path. Depends on 5's predicates and read
 surfaces. Socialization phases 2/3 ride the same unblock.
 
-### Item 7 — Gap 5 phase 2: platform read adapters (L per-platform, last) — BLOCKED on credentials
-Telegram `getUpdates`/`getChat`, Discord channel history, Slack
-`conversations.history` → the `Dm` class through the same collectors;
+### Item 7 — Gap 5 phase 2: platform read adapters (L per-platform, last) — RE-SCOPED 2026-10-09
+- **Superseded by `docs/plan-2026-10-09-remaining-gaps.md`**: the owner
+  supplied a live Telegram token (@ip_zeroclaw_bot) on 2026-10-09; the
+  delivery hop is closed and inbound DMs work end-to-end. Live testing found
+  two concrete bugs (offset store not keyed per bot; session entry never
+  created → DM tap never fires) and re-scoped the remaining work — see the
+  2026-10-09 outline, items 1–3. Discord/Slack remain blocked on credentials.
+- Original sketch (for history): Telegram
+
 the durable `context_items` store lands here (design doc §5 deferred
 from phase 1 — pull-once reads need a landing). Order after 1b so the
 DM class renders on both seams at once.

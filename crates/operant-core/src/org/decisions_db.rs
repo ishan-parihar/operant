@@ -62,6 +62,19 @@
 //! idempotent by construction and needs no version marker. See the module docs
 //! in [`super::worklog_db`] for the same argument on the kanban side.
 //!
+//! ## The one exception: guarded additive columns (do not strip)
+//!
+//! `ensure_schema` probes `PRAGMA table_info('org_decisions')` and runs
+//! `ALTER TABLE ... ADD COLUMN` for `amend_seat`/`amend_charter` when the
+//! live file predates the Slice-10 DDL (deployed 2026-10-08 files created by
+//! an older binary lack the pair, and `CREATE TABLE IF NOT EXISTS` cannot
+//! extend an existing table). This is the **only sanctioned deviation** from
+//! the no-migration law above: purely additive, probed (idempotent), never a
+//! drop/rename/retype, and deliberately not a `user_version` marker — a
+//! version counter for two nullable TEXT columns would cost more surface
+//! than the probe it replaced. Removing the probe "because the docs say no
+//! migration" breaks every pre-Slice-10 decisions file on a live box.
+//!
 //! ## Three invariants this module enforces at the store boundary
 //!
 //! 1. **Every mutation carries a non-blank `reason`.** `propose`, `accept`,
