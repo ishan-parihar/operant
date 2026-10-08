@@ -1,5 +1,11 @@
 # Remaining implementation gaps — outline plan (2026-10-08)
 
+> **Post-stretch revision (same day, after iters 677-680):** the wave map
+> below now carries the full execution queue. Statuses: gaps 4, 2, 1 DONE;
+> gap 5 phase 1 DONE (cron seam); gap 6 DESIGNED. What remains is ordered
+> in the "Post-stretch execution plan" section — read that first; the
+> wave sections below keep the detail and provenance for each item.
+
 Status: OUTLINE. The execution stretch iters 661–673 closed every gap in the
 2026-10-07 flaw audit; this is what remains after them, ordered by dependency
 wave. Scope guard: the peer's `plan-2026-10-07-agentic-core-verified-remaining-work.md`
@@ -150,12 +156,84 @@ graph LR
 - Provider capacity (503s/stream deaths) remains the growth constraint;
   iter-669/673 retries cover the flake class, not the capacity.
 
-## Suggested order (updated 2026-10-08 after the execution stretch 677-679)
-1. ~~Gap 4 implementation (decided; S) + gap 2 (S–M)~~ — DONE iter-677.
-2. ~~Gap 1: instrumented run → implementation~~ — DONE iter-678.
-3. ~~Gap 5 phase 1~~ — DONE iter-679; phase 1b (gateway turn-start seam)
-   and phase 2 (platform read adapters) remain, per the design doc §7.
-4. ~~Gap 6 design doc~~ — DELIVERED; implementation on owner approval.
-5. Gap 7 the moment the peer's `cmd_org.rs` lands → gap 8 → socialization
-   phases 2/3.
-6. Gap 3 on the data window's evidence, any time after ~2026-10-11.
+## Post-stretch execution plan (2026-10-08, after iters 677-680)
+
+The ordered queue for the next execution stretch. Each item: approach,
+acceptance, effort, blockers.
+
+### Step 0 — Live-verify the 13:00 UTC tick (operational, no iteration)
+The first live run of the full new path (seat binding + seat memory +
+feed injection + metering + envelope) lands at the next top-of-hour.
+Confirm before building more on top: `context_watermarks` populates
+for the hourly seats; `employee_window_usage` is non-zero for
+`dispatcher`/`identity-warden` (cron spend now meters — the wave-4
+trap actually closed); no repeated-content injections across ticks.
+
+### Item 1 — Gap 5 phase 1b: the gateway turn-start seam (S–M, unblocked)
+- **Problem**: injection is live on the CRON path only; a gateway DM turn
+  still misses cross-session feeds/DMs it has not consumed.
+- **Approach**: mirror the cron seam — the injector handle goes on the
+  `GatewayRunner` struct (the `summary_ttl_minutes` precedent; avoids a
+  second process-global), the render call sits at turn start next to
+  the budget consult (gateway_runner.rs:1040-1160 area), seat from the
+  session entry's `employee_id` binding. **Transcript check**: never
+  re-inject the inbound message itself — hash the recent user turns of
+  the hot session and drop matching items at render (the design doc
+  §3.3's third dedup layer).
+- **Acceptance**: a DM turn sees unseen feeds; its own inbound message
+  is never echoed back; `enabled=false` byte-identical.
+- **Blockers**: none. gateway_runner.rs is clean (not peer-dirty).
+
+### Item 2 — Gap 6 phase 1: the socializer cast (M, unblocked)
+- **Approved design**: `plan-2026-10-08-socialization-sessions.md` —
+  build exactly that, nothing wider.
+- **Approach**: (a) `[org.socialization]` config section (enabled=false
+  default, 09:30 schedule, pairs as data); (b) a `socializer` module
+  that opens `dm_threads` per pair, drives senior-first turns as full
+  agent runs (seat binding + seat memory + injected context — every
+  landed seam composes), enforces the shared 3-turn budget, closes;
+  (c) bounded outcome appends to BOTH seats' MEMORY.md under a
+  `## Socialization <date>` heading; (d) `cron_cast_socializer`
+  registration in the cast seeder so the registry stays 9-seats+
+  socializer — **owner note**: this adds a 10th registry row by
+  design; flag if you want the socializer infra-owned instead.
+- **Acceptance**: 09:30 pairs hold 3-turn sessions; both seats'
+  MEMORY.md gain the session outcome; spend lands in both rollups;
+  `enabled=false` = zero behavior change.
+- **Blockers**: none hard. Notice-posting outcomes stay deferred to wave C.
+
+### Item 3 — Gap 3: breaker threshold tuning (S, time-gated ~2026-10-11)
+Collect `degenerate_detail` rows until the window closes, then decide
+6/6 vs 2-3 on data; any change updates the pinned contract tests in the
+same iteration.
+
+### Item 4 — Small debts (S, opportunistic)
+- **BUGS.md D-2 test debt (:73-75)**: verify whether
+  `cron_session_isolation` already pins the `scheduler.rs` session-id
+  derivation; close the note or add the pin.
+- **4 lib-test warnings** from the 679 build: identify, clean or annotate.
+- `~/.operant/backups/packet-e-wt-wip-20261007.tar.gz`: deletion awaits
+  owner sign-off.
+
+### Item 5 — Gap 7: budget fold + slices 4/5 (M, BLOCKED — peer dirty)
+`cmd_org.rs` AND `cmd_budget.rs` still carry the peer's WIP (checked
+2026-10-08; their TUI refactor — jcode_*→operant_* renames — is in
+flight in the same tree). Fold `operant budget` → `org budget`, wire
+`can_post_to`/`can_accept_decision` at the notice seams, add the
+`org cast`/`org audit` read surfaces. The moment their files land.
+
+### Item 6 — Gap 8: slices 9/10 (M–L, blocked on 5)
+Chief-of-staff synthesis (notices → org bank + seat notices) and the
+decision→charter amendment path. Depends on 5's predicates and read
+surfaces. Socialization phases 2/3 ride the same unblock.
+
+### Item 7 — Gap 5 phase 2: platform read adapters (L per-platform, last)
+Telegram `getUpdates`/`getChat`, Discord channel history, Slack
+`conversations.history` → the `Dm` class through the same collectors;
+the durable `context_items` store lands here (design doc §5 deferred
+from phase 1 — pull-once reads need a landing). Order after 1b so the
+DM class renders on both seams at once. No blockers, just size.
+
+### Execution order
+0 → 1 → 2 → 3/4 (when the window/prompt suits) → 5 → 6 → 7.
+
