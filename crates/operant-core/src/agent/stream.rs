@@ -506,6 +506,63 @@ impl OperantAgent {
         }
     }
 
+    /// Feed one completed iteration to the output-side successful-repeat
+    /// rung (openhuman `record_output`, iter-688): the canonical signature
+    /// of the assistant's narration + tool batch, hashed by the caller
+    /// BEFORE the batch moved into [`Self::execute_tools`]. A Warn verdict
+    /// surfaces the repetition warning as feed content; the skip backstop
+    /// lands on the next `observe()` call.
+    ///
+    /// Synthetic guardrail skips are excluded from the success check (a
+    /// batch that was partially skipped is not clean progress), and an
+    /// all-exempt (polling) batch resets the streak — a poller re-narrating
+    /// itself is legitimate progress.
+    pub(crate) async fn observe_iteration_output(&self, signature: u64, results: &[ToolResult]) {
+        use crate::tool_guardrails::{self, GuardrailDecision};
+
+        let decision = {
+            let mut g = self
+                .tool_guardrails
+                .lock()
+                .expect("tool_guardrails lock poisoned");
+            let batch_exempt = results.iter().all(|r| g.is_exempt(&r.name));
+            let mut saw_real = false;
+            let mut all_ok = true;
+            for r in results {
+                if r.content.starts_with(tool_guardrails::SKIP_MESSAGE_PREFIX) {
+                    continue;
+                }
+                saw_real = true;
+                if !r.success {
+                    all_ok = false;
+                }
+            }
+            g.observe_output(signature, saw_real && all_ok, batch_exempt)
+        };
+        if matches!(decision, GuardrailDecision::Warn) {
+            let count = {
+                let g = self
+                    .tool_guardrails
+                    .lock()
+                    .expect("tool_guardrails lock poisoned");
+                g.last_pattern()
+                    .map(|p| match p {
+                        crate::tool_guardrails::RepeatPattern::IdenticalOutput { count } => count,
+                        _ => 0,
+                    })
+                    .unwrap_or(0)
+            };
+            warn!(
+                count,
+                "Output repeat rung — warning model"
+            );
+            self.emit(AgentEvent::Content {
+                text: crate::tool_guardrails::output_repeat_warning_message(count),
+            })
+            .await;
+        }
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "invariant guaranteed by surrounding validation"

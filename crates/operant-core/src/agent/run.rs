@@ -1576,8 +1576,30 @@ impl OperantAgent {
                         h.finish()
                     });
 
+                    // iter-688: the iteration's canonical output signature
+                    // (narration + ordered tool batch) for the output-side
+                    // successful-repeat rung. Hashed here because the batch
+                    // moves into execute_tools below; openhuman's
+                    // `record_output` folds the same two parts.
+                    let iteration_output_sig: u64 = {
+                        use std::hash::{Hash, Hasher};
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        effective_text.trim().hash(&mut h);
+                        for tc in &tool_calls {
+                            tc.function.name.hash(&mut h);
+                            tc.function.arguments.hash(&mut h);
+                        }
+                        h.finish()
+                    };
+
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
+
+                    // Output-side successful-repeat rung (openhuman
+                    // `record_output` port): identical narration + batch
+                    // ≥4 iterations warns, ≥5 arms the skip backstop.
+                    self.observe_iteration_output(iteration_output_sig, &tool_results)
+                        .await;
 
                     // ── S2 per-tool consecutive-timeout breaker ──────────
                     // A timeout used to be an ordinary retryable error, so
@@ -2136,6 +2158,16 @@ impl OperantAgent {
                         info!("Steer request-stop — triggering interrupt flag");
                         self.interrupt_flag.trigger();
                         break;
+                    }
+                    // iter-688: mid-run model switch through the iter-162
+                    // interior-cell override — same seam the fallback chain
+                    // (run.rs:1226) and gateway session metadata use. The
+                    // iteration budget is refunded so the switch itself
+                    // costs no work (fallback-chain parity).
+                    builders::SteeringCommand::SwitchModel(model) => {
+                        info!(model = %model, "Steer model-switch — retargeting");
+                        self.set_model(model);
+                        self.iteration_budget.refund();
                     }
                 }
             }

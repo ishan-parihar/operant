@@ -90,6 +90,15 @@ pub const HARD_REJECT_HALT: usize = 2;
 /// stream.rs's blocked arm constructs its message from this constant so
 /// the classifier and the message cannot drift apart.
 pub const HARD_REJECT_PREFIX: &str = "Blocked by security policy";
+/// Consecutive identical assistant outputs (narration + tool batch
+/// signature) before the model is warned — openhuman
+/// `DEFAULT_REPEAT_OUTPUT_THRESHOLD` (`record_output`).
+pub const OUTPUT_REPEAT_WARN: usize = 4;
+/// At one more identical output the next tool call is skipped regardless
+/// of identity — the output-side analog of [`NO_PROGRESS_SKIP_CALLS`].
+/// Deliberately warn/skip, never Halt: repeated *successes* are corrected,
+/// not punished (the iter-682 deviation from openhuman's halt).
+pub const OUTPUT_REPEAT_SKIP: usize = 5;
 
 /// Guardrail decision for one observed tool call or result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +133,10 @@ pub enum RepeatPattern {
     NoProgress { tool: String, calls: usize },
     /// One tool failing `count` times in a row this turn, any error class.
     Failures { tool: String, count: usize },
+    /// The identical assistant output (narration + tool batch) repeated
+    /// `count` consecutive iterations this turn — the output-side
+    /// successful-repeat rung (openhuman `record_output`).
+    IdenticalOutput { count: usize },
 }
 
 /// Per-turn tracker of identical tool-call repeats.
@@ -154,6 +167,14 @@ pub struct ToolGuardrailTracker {
     /// result was observed this turn (openhuman `recurrences`): catches
     /// A, B(reset), A cycles the consecutive streak rung can never see.
     recurrences: HashMap<(String, u64), usize>,
+    /// (last iteration-signature hash, consecutive identical count) — the
+    /// output-side successful-repeat streak (openhuman
+    /// `SuccessfulRepeatTracker::record_output`). Fed by
+    /// [`Self::observe_output`] once per completed iteration.
+    output_streak: (Option<u64>, usize),
+    /// True when the output streak tripped [`OUTPUT_REPEAT_SKIP`]: the
+    /// next non-exempt tool call is skipped regardless of identity.
+    output_armed: bool,
     /// `is_repeat_call_exempt` port (the W1.8c-dropped `tool_call_dedup_exempt`):
     /// tools exempt from every repeat/loop rung. Survives [`Self::reset`].
     exempt_tools: HashSet<String>,
@@ -189,6 +210,17 @@ impl ToolGuardrailTracker {
             self.last_pattern = Some(RepeatPattern::NoProgress {
                 tool: tool_name.to_string(),
                 calls,
+            });
+            return GuardrailDecision::Skip;
+        }
+
+        // Output-side backstop (iter-688): the iteration-level repeat
+        // streak tripped OUTPUT_REPEAT_SKIP — skip the next call whatever
+        // it is. The model already narrated the identical output ≥5 times;
+        // feeding it another result cannot produce new information.
+        if self.output_armed {
+            self.last_pattern = Some(RepeatPattern::IdenticalOutput {
+                count: self.output_streak.1,
             });
             return GuardrailDecision::Skip;
         }
@@ -381,6 +413,48 @@ impl ToolGuardrailTracker {
         self.exempt_tools.contains(tool_name)
     }
 
+    /// Feed one completed iteration's canonical output signature (assistant
+    /// narration + ordered tool batch) to the output-side successful-repeat
+    /// rung — the openhuman `SuccessfulRepeatTracker::record_output` port.
+    /// Warn at [`OUTPUT_REPEAT_WARN`] identical consecutive outputs; arm the
+    /// skip-everything backstop at [`OUTPUT_REPEAT_SKIP`]. Per the iter-682
+    /// deviation this rung never Halts: repeated successes get a warning
+    /// and a skip, not a turn abort.
+    ///
+    /// `batch_successful` = the batch produced at least one real executed
+    /// result and none failed; `batch_exempt` = every call in the batch was
+    /// exempt (legitimate polling). A failed or all-exempt batch resets the
+    /// streak so its output cannot leak into the next progress-eligible
+    /// iteration (openhuman `record_call_batch` gate semantics).
+    pub fn observe_output(
+        &mut self,
+        signature: u64,
+        batch_successful: bool,
+        batch_exempt: bool,
+    ) -> GuardrailDecision {
+        if batch_exempt || !batch_successful {
+            self.output_streak = (None, 0);
+            self.output_armed = false;
+            self.last_pattern = None;
+            return GuardrailDecision::Allow;
+        }
+        if self.output_streak.0 == Some(signature) {
+            self.output_streak.1 += 1;
+        } else {
+            self.output_streak = (Some(signature), 1);
+        }
+        let count = self.output_streak.1;
+        if count >= OUTPUT_REPEAT_WARN {
+            self.last_pattern = Some(RepeatPattern::IdenticalOutput { count });
+            if count >= OUTPUT_REPEAT_SKIP {
+                self.output_armed = true;
+            }
+            return GuardrailDecision::Warn;
+        }
+        self.last_pattern = None;
+        GuardrailDecision::Allow
+    }
+
     /// Number of times this exact (tool, args) pair has been observed.
     pub fn count_of(&self, tool_name: &str, args: &str) -> usize {
         let key = (tool_name.to_string(), Self::normalize_args(args));
@@ -397,6 +471,8 @@ impl ToolGuardrailTracker {
         self.failure_streaks.clear();
         self.hard_reject_streaks.clear();
         self.recurrences.clear();
+        self.output_streak = (None, 0);
+        self.output_armed = false;
         self.last_pattern = None;
     }
 }
@@ -478,6 +554,12 @@ pub fn build_pattern_skip_message(tool_name: &str, pattern: Option<&RepeatPatter
             "{SKIP_MESSAGE_PREFIX}tool '{tool}' has failed {count} times in a row this turn \
              without progress — a different approach is required."
         ),
+        Some(RepeatPattern::IdenticalOutput { count }) => format!(
+            "{SKIP_MESSAGE_PREFIX}the last {count} iterations produced the identical \
+             response and tool call. Repeating the same step cannot finish the task \
+             — this call was skipped. Change your approach or finish with what you \
+             already have."
+        ),
         None => format!(
             "{SKIP_MESSAGE_PREFIX}repetitive tool-call pattern detected — this call was skipped."
         ),
@@ -506,8 +588,24 @@ pub fn pattern_warning_message(tool_name: &str, pattern: Option<&RepeatPattern>)
             "⚠ Tool '{tool}' has failed {count} times in a row this turn without \
              making progress — change approach before it exhausts the turn."
         ),
+        Some(RepeatPattern::IdenticalOutput { count }) => format!(
+            "⚠ The last {count} iterations produced the identical response and tool \
+             call with no change. The run is stuck repeating the same step — \
+             change your approach or finish with what you have."
+        ),
         None => format!("⚠ Tool '{tool_name}' is repeating itself without progress."),
     }
+}
+
+/// Feed-visible warning copy for the output-side repeat rung (the Warn
+/// verdict from [`ToolGuardrailTracker::observe_output`] — no tool name
+/// to anchor it, unlike the per-tool patterns).
+pub fn output_repeat_warning_message(count: usize) -> String {
+    format!(
+        "⚠ The last {count} iterations produced the identical response and tool \
+         call with no change. The run appears stuck repeating the same step — \
+         change your approach or finish with what you already have."
+    )
 }
 
 /// Build the synthetic skip result text fed back to the model.
@@ -1181,5 +1279,134 @@ mod ladder_tests {
             assert_eq!(t.observe("poll_status", "{}"), GuardrailDecision::Allow);
             assert_eq!(ok(&mut t, "poll_status", "same"), GuardrailDecision::Allow);
         }
+    }
+
+    // ── iter-688: output-side successful-repeat rung (`record_output`) ──
+
+    #[test]
+    fn identical_outputs_warn_at_four_and_arm_skip_at_five() {
+        let mut t = ToolGuardrailTracker::new();
+        let sig = 42u64;
+        for i in 1..=3 {
+            assert_eq!(
+                t.observe_output(sig, true, false),
+                GuardrailDecision::Allow,
+                "iterations 1-3 stay quiet (openhuman: no verdict before the threshold)"
+            );
+            let _ = i;
+        }
+        assert_eq!(
+            t.observe_output(sig, true, false),
+            GuardrailDecision::Warn,
+            "4th identical output warns (DEFAULT_REPEAT_OUTPUT_THRESHOLD)"
+        );
+        assert_eq!(
+            t.observe_output(sig, true, false),
+            GuardrailDecision::Warn,
+            "5th warns again and arms the skip backstop"
+        );
+        assert_eq!(
+            t.observe("anything", "{\"different\":1}"),
+            GuardrailDecision::Skip,
+            "an armed output streak skips the next call regardless of identity"
+        );
+    }
+
+    #[test]
+    fn changed_output_resets_the_streak() {
+        let mut t = ToolGuardrailTracker::new();
+        for _ in 0..3 {
+            let _ = t.observe_output(1, true, false);
+        }
+        let _ = t.observe_output(2, true, false);
+        for _ in 0..2 {
+            assert_eq!(
+                t.observe_output(2, true, false),
+                GuardrailDecision::Allow,
+                "a changed output starts a fresh streak (3 total, below the threshold)"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_or_exempt_batches_reset_the_output_streak() {
+        // openhuman `record_call_batch`: output is observed before the
+        // completed batch can be classified, so a failed or exempt batch
+        // resets the streak — its output cannot leak into the next
+        // progress-eligible iteration.
+        let mut t = ToolGuardrailTracker::new();
+        for _ in 0..3 {
+            let _ = t.observe_output(1, true, false);
+        }
+        let _ = t.observe_output(1, false, false);
+        for _ in 0..3 {
+            assert_eq!(
+                t.observe_output(1, true, false),
+                GuardrailDecision::Allow,
+                "a failed prior batch must not count toward a successful output loop"
+            );
+        }
+        let _ = t.observe_output(1, true, true);
+        for _ in 0..3 {
+            assert_eq!(
+                t.observe_output(1, true, false),
+                GuardrailDecision::Allow,
+                "an exempt (polling) batch must not count either"
+            );
+        }
+    }
+
+    #[test]
+    fn exempt_tools_still_bypass_an_armed_output_streak() {
+        let mut t = ToolGuardrailTracker::new().with_exempt_tools(["wait_poll"]);
+        for _ in 0..5 {
+            let _ = t.observe_output(1, true, false);
+        }
+        assert!(t.output_armed, "test helper: streak must be armed");
+        assert_eq!(
+            t.observe("wait_poll", "{}"),
+            GuardrailDecision::Allow,
+            "exempt tools bypass every rung, including the output backstop"
+        );
+        assert_eq!(
+            t.observe("non_exempt", "{}"),
+            GuardrailDecision::Skip,
+            "non-exempt tools are still skipped"
+        );
+    }
+
+    #[test]
+    fn armed_output_streak_disarms_on_a_failed_or_exempt_batch() {
+        let mut t = ToolGuardrailTracker::new();
+        for _ in 0..5 {
+            let _ = t.observe_output(1, true, false);
+        }
+        assert!(t.output_armed);
+        let _ = t.observe_output(1, false, false);
+        assert!(!t.output_armed, "a failed batch clears the backstop");
+        assert_eq!(
+            t.observe("anything", "{}"),
+            GuardrailDecision::Allow,
+            "and the next call proceeds"
+        );
+    }
+
+    #[test]
+    fn reset_clears_the_output_streak_and_backstop() {
+        let mut t = ToolGuardrailTracker::new();
+        for _ in 0..5 {
+            let _ = t.observe_output(1, true, false);
+        }
+        t.reset();
+        assert_eq!(
+            t.observe("anything", "{}"),
+            GuardrailDecision::Allow,
+            "reset disarms the output backstop"
+        );
+        assert_eq!(
+            t.observe_output(1, true, false),
+            GuardrailDecision::Allow,
+            "reset clears the streak count"
+        );
     }
 }
