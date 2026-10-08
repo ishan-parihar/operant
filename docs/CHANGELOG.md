@@ -78,6 +78,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-691 — W5 palette/dead-code sweep, sub-wave 1: the transcript's last
+  hardcoded grays route through the palette, and a dead helpers stratum goes.**
+  `messages/tools.rs` paints tool-row summaries with `theme::dim_color()`
+  (the `Dim` role) instead of a private `TRANSCRIPT_MUTED` const — jcode paints
+  the same spans the same way, and the role follows the user's palette config.
+  The const itself, `TRANSCRIPT_TEXT`, `TRANSCRIPT_SUBTLE`, `GOAL_ACCENT`,
+  `GOAL_BODY`, and the user-prompt truncation trio were read only by
+  unreachable code and are deleted. `messages/helpers.rs` keeps its live fold
+  machinery and loses seven never-called rendering primitives (user-text
+  rendering, indenting, block styling, attachment chips) that rustc had been
+  flagging; the four generic result renderers in `tools.rs`
+  (`render_file_read_result`, `render_file_op_result`,
+  `render_tool_result_success`, `render_tool_result_error`) were unreachable
+  (the live tool-block renderer in `render/tools.rs` paints every result the
+  transcript shows) and go together with `TOOL_RESULT_MAX_LINES` and their
+  test. `render_markdown` has no production caller, so its re-export is now
+  `#[cfg(test)]` pending the markdown wire-or-delete sweep. Verbatim-parity
+  literals (swarm gallery, overscroll pink, latex marker — jcode-identical) and
+  data ladders (heatmap, memory-age tints, diff red/green, usage severity ramp)
+  are deliberately kept hard-coded. Full suite 1721/0; corpus verify 0 drift.
+
 - **iter-687 — W4 animation: the original radar-pulse `signal` replaces the
   four vendored samplers.** `sample_donut`, `sample_gyroscope`, `sample_black_hole`
   and `sample_orbit_rings` (with their angle-table LUT machinery and their

@@ -6,6 +6,7 @@
 use super::*;
 use crate::tui::render::{display_width, take_width};
 use crate::tui::theme_colors;
+use crate::tui::vendor::style::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -110,7 +111,7 @@ pub(crate) fn render_tool_use_inner(
                 if !summary.is_empty() {
                     task_lines.push(Line::from(vec![
                         Span::raw("    "),
-                        Span::styled(summary, Style::default().fg(TRANSCRIPT_MUTED)),
+                        Span::styled(summary, Style::default().fg(theme::dim_color())),
                     ]));
                 }
                 task_lines
@@ -134,7 +135,7 @@ pub(crate) fn render_tool_use_inner(
     if !summary.is_empty() {
         lines.push(Line::from(vec![
             Span::raw("    "),
-            Span::styled(summary, Style::default().fg(TRANSCRIPT_MUTED)),
+            Span::styled(summary, Style::default().fg(theme::dim_color())),
         ]));
     }
 
@@ -175,84 +176,14 @@ pub(crate) fn render_tool_use_inner(
     lines
 }
 
-/// Render a file-read tool result: `Read N lines` summary.
-pub(crate) fn render_file_read_result(output: &str) -> Vec<Line<'static>> {
-    let n = output.lines().count();
-    vec![Line::from(vec![Span::styled(
-        format!("  Read {} line{}", n, if n == 1 { "" } else { "s" }),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
-    )])]
-}
-
-/// Render a file-edit/write tool result: `Updated file` or `Created file`.
-pub(crate) fn render_file_op_result(is_create: bool) -> Vec<Line<'static>> {
-    let action = if is_create { "Created" } else { "Updated" };
-    vec![Line::from(vec![Span::styled(
-        format!("  {} file", action),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
-    )])]
-}
-
-/// Render a tool result (success variant) — generic fallback.
-pub fn render_tool_result_success(output: &str, truncated: bool) -> Vec<Line<'static>> {
-    let total_lines = output.lines().count();
-    // Use explicit Gray (brighter than terminal default DarkGray) so tool
-    // output stays legible on themes where the default fg gets dimmed by
-    // surrounding styles. Issue #149: tool result text contrast was too low.
-    let body_style = Style::default().fg(Color::Gray);
-    let mut lines: Vec<Line<'static>> = output
-        .lines()
-        .enumerate()
-        .take_while(|(i, _)| *i < TOOL_RESULT_MAX_LINES)
-        .map(|(_, l)| {
-            Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(l.to_string(), body_style),
-            ])
-        })
-        .collect();
-    if total_lines > TOOL_RESULT_MAX_LINES {
-        let remaining = total_lines - TOOL_RESULT_MAX_LINES;
-        lines.push(Line::from(vec![Span::styled(
-            format!("  ... {} more lines", remaining),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        )]));
-    }
-    if truncated {
-        lines.push(Line::from(vec![Span::styled(
-            "  ... output truncated".to_string(),
-            Style::default().fg(Color::DarkGray),
-        )]));
-    }
-    lines
-}
-
 /// Render a tool result (error variant).
-pub fn render_tool_result_error(error: &str) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    // Orange, not red: see `theme_colors::TOOL_ERROR` for why this is a
-    // constant rather than a palette lookup.
-    let error_color = theme_colors::TOOL_ERROR;
-    lines.push(Line::from(vec![Span::styled(
-        "  Error",
-        Style::default()
-            .fg(error_color)
-            .add_modifier(Modifier::BOLD),
-    )]));
-    for line in error.lines().take(10) {
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(line.to_string(), Style::default().fg(error_color)),
-        ]));
-    }
-    lines
-}
+///
+/// The four generic result renderers that used to live here
+/// (`render_file_read_result`, `render_file_op_result`,
+/// `render_tool_result_success`, `render_tool_result_error`) were unreachable:
+/// the live tool-block renderer in `render/tools.rs` paints every result the
+/// transcript shows. They went in the W5 palette/dead-code sweep together
+/// with `TOOL_RESULT_MAX_LINES`.
 
 /// Render a bash command input line with a green `$ ` prefix.
 #[allow(dead_code)] // Bash input line renderer

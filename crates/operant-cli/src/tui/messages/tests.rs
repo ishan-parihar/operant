@@ -55,20 +55,6 @@ fn test_render_bash_output_block_no_overflow() {
     assert_eq!(result.len(), 3);
 }
 
-#[test]
-fn test_render_tool_result_success_uses_30_lines() {
-    let output = (0..50)
-        .map(|i| format!("line {}", i))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let result = render_tool_result_success(&output, false);
-    // 30 content lines + 1 overflow indicator = 31 (no separate header line)
-    assert_eq!(result.len(), 31);
-    let overflow_text = line_text(result.last().unwrap());
-    assert!(overflow_text.contains("more lines"));
-    assert!(!overflow_text.contains("ctrl+o"));
-}
-
 // ── New function tests ────────────────────────────────────────────────────
 
 #[test]

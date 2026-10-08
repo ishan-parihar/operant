@@ -19,6 +19,10 @@ mod tools;
 // the async raster producers (mermaid/latex hash + preview render), the MCP
 // view's fold labels, and render/tools' summary extractor.
 pub(crate) use helpers::*;
+// `render_markdown` has no production caller (the transcript renders via the
+// vendored renderer); the re-export serves this module's own tests until the
+// markdown wire-or-delete sweep lands.
+#[cfg(test)]
 pub use markdown::render_markdown;
 pub use tools::*;
 
@@ -46,32 +50,11 @@ impl Default for RenderContext {
     }
 }
 
-const MAX_USER_PROMPT_DISPLAY_CHARS: usize = 10_000;
-const TRUNCATE_USER_PROMPT_HEAD_CHARS: usize = 2_500;
-const TRUNCATE_USER_PROMPT_TAIL_CHARS: usize = 2_500;
-
-// The accent is read through `theme_colors::accent()` at every use site rather
-// than frozen into a `const` here: the accessors are runtime `fn`s (the active
-// palette lives behind a lock), so a `const` would pin every theme to the
-// default theme's amber.
-//
-// `TRANSCRIPT_USER_BG` / `TRANSCRIPT_CHIP_BG` used to sit in this list. Both were
-// read only by `helpers.rs`, so their use sites now name the role directly:
-// `UserBg` for the message panel and `SelectionBg` for the chip raised above it.
-// The remaining five are still read *as values* by `transcript.rs`,
-// `commands.rs` and `tools.rs`; turning a `const` into a role accessor turns it
-// into an `fn` and breaks every one of those call sites, so they migrate with
-// those files rather than ahead of them.
-const TRANSCRIPT_TEXT: Color = Color::Rgb(236, 236, 241);
-const TRANSCRIPT_MUTED: Color = Color::Rgb(139, 139, 153);
-const TRANSCRIPT_SUBTLE: Color = Color::Rgb(112, 112, 126);
-
-const TOOL_RESULT_MAX_LINES: usize = 30;
-
-/// Accent color for goal-event blocks (warm amber/gold).
-const GOAL_ACCENT: Color = Color::Rgb(255, 170, 50);
-/// Body text color for goal-event objective display.
-const GOAL_BODY: Color = Color::Rgb(215, 180, 110);
+// Transcript color notes: there is deliberately no `TRANSCRIPT_*` const list
+// here anymore. The last hardcoded shade read as a value (`TRANSCRIPT_MUTED`,
+// the tool-row summary gray) migrated to the `Dim` palette role in `tools.rs`
+// (jcode paints the same spans with `dim_color()`); everything else in this
+// list was dead after `helpers.rs`'s unused primitives were removed.
 
 #[cfg(test)]
 mod tests;
