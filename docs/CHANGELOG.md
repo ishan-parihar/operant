@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-684/685 — guardrail exemption threading (openhuman
+  `is_repeat_call_exempt`):** `AgentConfig.guardrail_exempt_tools` seeds
+  the live `ToolGuardrailTracker` in both `OperantAgent` constructors
+  (`add_exempt_tools`, the mutable complement to `with_exempt_tools`);
+  `FacadeConstruction.guardrail_exempt_tools` threads caller exemptions
+  through `build_from_config` — the facade-side per-tool activation beyond
+  CLI exclusions. `is_guardrail_exempt()` exposes the state. iter-685
+  seeded the new field across 18 test/example/facade fixture literals.
+  Config-schema wiring remains a pending row.
+
 - **iter-682 — Wave-2 ladder completion: per-tool failure rungs, hard-reject
   halt, successful-repeat recurrence ledger.** `ToolGuardrailTracker`
   gains the remaining openhuman `no_progress/` semantics: a per-tool
@@ -57,6 +67,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semantics.
 
 ### Changed
+
+- **iter-684 — W3 rebrand: the vendored TUI layer stops saying jcode.** The
+  seven vendored module trees rename on disk (`tui/jcode_{anim,app,markdown,
+  model,render,render_core,ui}` → `tui/operant_*`), every `jcode_`/`JCODE_`
+  identifier and env var with them (`JCODE_HOME` → `OPERANT_HOME`, etc.),
+  and the user-visible surface with it: the onboarding header wordmark, the
+  `/feedback`, `/subscription`, `/subscribe`, `/log`, `/selfdev` command
+  descriptions, the login provider's display name ("Jcode Subscription" →
+  "Operant Subscription"), logger stderr prefixes, two subscription-overlay
+  lines, and the flicker-notice log hint. The TUI state root moves from
+  `~/.jcode` to `~/.operant` (`OPERANT_HOME` override unchanged) and
+  `binary_stem()` reports `operant`, so builds/logs/session markers land in
+  the canonical operant state dir; existing `~/.jcode` state migrates with a
+  one-time `cp -a ~/.jcode/. ~/.operant/` (leaf names are disjoint from the
+  gateway's files). `AuthStatus.jcode` renames to `subscription` (serde shape
+  changes only in-process). Provenance comments ("ported verbatim from jcode
+  @ 0a9dc7805", "jcode parity") and the vendored file headers stay by design;
+  machine-facing identifiers with state-compatibility risk (`LoginProvider
+  id: "jcode"`, `SessionSource::Jcode`, `LoginProviderAuthStateKey::Jcode`)
+  are deliberately kept. Corpus goldens regenerated for the rebrand; three
+  goldens that had drifted with a peer's concurrent renderer edits (ask-user-
+  dialog, bypass-permissions-dialog, footer-bar) ride along — absorbing peer
+  drift is what a full golden regen does.
 
 - **iter-671 — W1 of the TUI upgrade**: tool rows splice at their arrival
   anchor (`after_index` — the message count when the call started, immutable)
