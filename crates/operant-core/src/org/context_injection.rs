@@ -35,7 +35,7 @@
 //! already keeps.
 
 use crate::error::{Error, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
 /// Per-seat, per-class read cursors — the nonredundancy backbone.
@@ -319,7 +319,10 @@ impl ContextInjector {
             "## Notices addressed to you — each needs an acknowledgment before it clears\n",
         );
         for n in &notices {
-            let subject = n.subject.clone().unwrap_or_else(|| "(no subject)".to_string());
+            let subject = n
+                .subject
+                .clone()
+                .unwrap_or_else(|| "(no subject)".to_string());
             let body = if n.body.chars().count() > 160 {
                 let cut: String = n.body.chars().take(160).collect();
                 format!("{cut}…")
@@ -328,7 +331,10 @@ impl ContextInjector {
             };
             block.push_str(&format!(
                 "- [{}] From {}: {} — {}\n",
-                n.id, n.sender, subject, body.trim()
+                n.id,
+                n.sender,
+                subject,
+                body.trim()
             ));
         }
         // Trim the trailing newline — the caller composes block separators.
@@ -642,7 +648,6 @@ impl ContextInjector {
             }
         }
         // Roll-over pool: fill leftover total budget by global score.
-        let mut pool = pool;
         pool.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         for (score, item) in pool {
             let text = truncate_chars(&item.text, MAX_ITEM_CHARS);
@@ -755,8 +760,7 @@ mod tests {
         // A real employee row + board on the shared org sibling — the
         // same file `EmployeeDb::for_app` / `NoticeBoard::for_app`
         // derive from the app path the injector holds.
-        let employees =
-            crate::org::employee_db::EmployeeDb::for_app(&app_db).expect("employee db");
+        let employees = crate::org::employee_db::EmployeeDb::for_app(&app_db).expect("employee db");
         employees
             .insert_ignore(&crate::org::employee::Employee {
                 employee_id: "emp-warden-1".to_string(),
@@ -779,8 +783,9 @@ mod tests {
             .post(&crate::org::notice::PostNotice {
                 sender: "user".to_string(),
                 from_dept: None,
-                recipients: vec![crate::org::notice::Recipient::parse("agent:emp-warden-1")
-                    .expect("recipient")],
+                recipients: vec![
+                    crate::org::notice::Recipient::parse("agent:emp-warden-1").expect("recipient"),
+                ],
                 subject: Some("Registry binding audit".to_string()),
                 body: "Please check the session bindings tonight.".to_string(),
                 correlation_id: None,
@@ -900,7 +905,7 @@ mod tests {
         let rendered = injector.render_section("dispatcher", None, "PROMPT", &[]);
         let count = rendered.matches("row xxx").count();
         assert!(
-            count >= 2 && count <= 5,
+            (2..=5).contains(&count),
             "class quota holds ~1, the pool takes the rest under the total: got {count}"
         );
     }

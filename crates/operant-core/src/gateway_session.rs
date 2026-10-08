@@ -1188,10 +1188,6 @@ impl PersistentSessionStore {
         Err(Error::Agent(format!("Session not found: {}", session_key)))
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Re-bind a session to a different cast employee (ORGANISM-ARCHITECTURE
     /// §2, the `/session new <employee>` surface). `None` is returned when no
     /// row exists for the key so the caller can say so honestly instead of
@@ -1279,7 +1275,10 @@ impl PersistentSessionStore {
         Ok(row)
     }
 
-    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned session-entries write lock is a programmer error, not a runtime condition")]
+    #[expect(
+        clippy::expect_used,
+        reason = "RwLock poison recovery — a poisoned session-entries write lock is a programmer error, not a runtime condition"
+    )]
     pub fn bind_employee(
         &self,
         session_key: &str,
@@ -1522,7 +1521,10 @@ impl PersistentSessionStore {
             .cloned()
     }
 
-    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned session-entries read lock is a programmer error, not a runtime condition")]
+    #[expect(
+        clippy::expect_used,
+        reason = "RwLock poison recovery — a poisoned session-entries read lock is a programmer error, not a runtime condition"
+    )]
     pub fn find_session(
         &self,
         platform: &str,
@@ -1953,6 +1955,31 @@ mod tests {
         store.get_or_create_session(&source, false).unwrap();
         assert!(store.entry_for_source("telegram", "u1", "OTHER").is_none());
         assert!(store.entry_for_source("discord", "u1", "c1").is_none());
+    }
+
+    #[test]
+    fn wave2_store_files_dm_sessions_not_under_the_turn_lease_key() {
+        // Regression pin (defect found live 2026-10-09 on the Zeroclaw swap):
+        // the gateway turn path derives `{platform}:{channel}:{user}` as its
+        // session key (turn-lease namespace), while the store files every
+        // session under `build_session_key` (`agent:main:…`). Looking rows
+        // up by the lease key can never hit — which left the Wave-2
+        // employee binding, the iter-684 DM tap, and Wave-4 metering all
+        // silently dead for platform chats. The runner must resolve through
+        // `entry_for_source` (the seam `/session` uses), never
+        // `get_entry(<turn-lease key>)`.
+        let store = test_store();
+        let source = test_source("telegram", "5297486612", "5297486612", "dm");
+        store.get_or_create_session(&source, false).unwrap();
+        assert!(
+            store.get_entry("telegram:5297486612:5297486612").is_none(),
+            "turn-lease key resolved a store row — the namespaces converged; \
+             the runner's entry_for_source seam should be revisited"
+        );
+        let entry = store
+            .entry_for_source("telegram", "5297486612", "5297486612")
+            .expect("origin triple must resolve the created entry");
+        assert_eq!(entry.session_key, "agent:main:telegram:dm:5297486612");
     }
 
     // ── Wave 3 (ORGANISM-ARCHITECTURE §3): rolling summary handoff ────

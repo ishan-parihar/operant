@@ -1154,8 +1154,14 @@ mod tests {
         let (db, _dir) = test_db();
         let id = create_repeat_job(&db, None);
         for i in 0..5 {
-            db.record_cron_run(&id, "2026-10-07T00:0{i}:00+00:00", true, None, "scheduled")
-                .unwrap();
+            db.record_cron_run(
+                &id,
+                &format!("2026-10-07T00:0{i}:00+00:00"),
+                true,
+                None,
+                "scheduled",
+            )
+            .unwrap();
         }
         assert_eq!(db.list_recent_runs(&id, 3).unwrap().len(), 3, "limit binds");
         assert!(

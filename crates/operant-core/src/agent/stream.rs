@@ -444,7 +444,10 @@ impl OperantAgent {
     /// construction and would fake an identical-result streak. A Halt
     /// verdict triggers the interrupt flag and surfaces the root-cause
     /// summary as final content.
-    #[expect(clippy::expect_used, reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition")]
+    #[expect(
+        clippy::expect_used,
+        reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition"
+    )]
     async fn observe_guardrail_results(&self, results: &[ToolResult]) {
         use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
 
@@ -506,6 +509,10 @@ impl OperantAgent {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Feed one completed iteration to the output-side successful-repeat
     /// rung (openhuman `record_output`, iter-688): the canonical signature
     /// of the assistant's narration + tool batch, hashed by the caller
@@ -552,10 +559,7 @@ impl OperantAgent {
                     })
                     .unwrap_or(0)
             };
-            warn!(
-                count,
-                "Output repeat rung — warning model"
-            );
+            warn!(count, "Output repeat rung — warning model");
             self.emit(AgentEvent::Content {
                 text: crate::tool_guardrails::output_repeat_warning_message(count),
             })
@@ -565,7 +569,7 @@ impl OperantAgent {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "lock-poison recovery (masked_tools/tool_guardrails) and the len==1 checked single-tool invariant"
     )]
     /// Execute tools and handle self-healing
     pub(crate) async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {

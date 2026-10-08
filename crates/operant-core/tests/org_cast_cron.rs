@@ -6,6 +6,12 @@
 //! can surface, and the gateway wiring is fail-open warn — a broken seed
 //! would otherwise ship silently as a warn line while the cast jobs never
 //! land.
+//!
+//! `expect` in these tests is the panic-on-defect contract — the test
+//! suite is exempt from the production deny gate (convention header, see
+//! `agent_session_isolation.rs`).
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
 

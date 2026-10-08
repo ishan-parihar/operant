@@ -62,7 +62,6 @@ pub fn resolve_budget(
     seat: Option<&SeatBudget>,
     global: &BudgetSettings,
 ) -> Option<EffectiveBudget> {
-    let seat = seat;
     let basis = seat
         .and_then(|s| s.basis.clone())
         .unwrap_or_else(|| global.basis.clone());
@@ -234,7 +233,9 @@ impl SeatBudgetDb {
             .map_err(|e| Error::Agent(format!("Failed to list seat budgets: {e}")))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| Error::Agent(format!("Failed to read seat budget row: {e}")))?);
+            out.push(
+                row.map_err(|e| Error::Agent(format!("Failed to read seat budget row: {e}")))?,
+            );
         }
         Ok(out)
     }
@@ -279,11 +280,7 @@ mod tests {
     fn delete_removes_the_row_and_is_a_noop_for_a_missing_one() {
         let db = SeatBudgetDb::from_connection(conn()).unwrap();
         db.upsert(&budget("dispatcher", 50_000.0)).unwrap();
-        assert_eq!(
-            db.list_all().unwrap().len(),
-            1,
-            "upserted row must list"
-        );
+        assert_eq!(db.list_all().unwrap().len(), 1, "upserted row must list");
         db.delete("dispatcher").unwrap();
         assert!(
             db.get("dispatcher").unwrap().is_none(),
@@ -301,7 +298,9 @@ mod tests {
         db.upsert(&budget("dispatcher", 5.0)).unwrap();
         let rows = db.list_all().unwrap();
         assert_eq!(
-            rows.iter().map(|r| r.employee_id.as_str()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| r.employee_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["dispatcher", "premiere"],
             "ordered by seat id, cap material preserved"
         );

@@ -354,7 +354,10 @@ impl OperantAgent {
     /// seat a chat session runs under is its bound employee's id, not the
     /// `gw_<hash>` conversation id. `None` keeps today's behavior (consult
     /// on the session id, which is what cron runs already key on).
-    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned seat_id lock is a programmer error, not a runtime condition")]
+    #[expect(
+        clippy::expect_used,
+        reason = "RwLock poison recovery — a poisoned seat_id lock is a programmer error, not a runtime condition"
+    )]
     pub fn seat_id(&self) -> Option<String> {
         self.seat_id
             .read()
@@ -375,7 +378,10 @@ impl OperantAgent {
 
     /// The bound employee's charter (org system prompt), if the gateway set
     /// one. Appended to the frozen prefix — see [`Self::build_frozen_prefix`].
-    #[expect(clippy::expect_used, reason = "RwLock poison recovery — a poisoned charter lock is a programmer error, not a runtime condition")]
+    #[expect(
+        clippy::expect_used,
+        reason = "RwLock poison recovery — a poisoned charter lock is a programmer error, not a runtime condition"
+    )]
     pub fn charter(&self) -> Option<String> {
         self.charter
             .read()
@@ -527,12 +533,12 @@ impl OperantAgent {
         // base prompt, BEFORE skills, and byte-stable across turns (it only
         // changes when the bound employee changes), so the frozen-prefix
         // cache discipline holds.
-        if let Some(charter) = self.charter() {
-            if !charter.is_empty() {
-                frozen.push_str("\n\n<employee_charter>\n");
-                frozen.push_str(&charter);
-                frozen.push_str("\n</employee_charter>");
-            }
+        if let Some(charter) = self.charter()
+            && !charter.is_empty()
+        {
+            frozen.push_str("\n\n<employee_charter>\n");
+            frozen.push_str(&charter);
+            frozen.push_str("\n</employee_charter>");
         }
         if let Some(skill_manager) = &self.skill_manager {
             let skills = skill_manager.list();

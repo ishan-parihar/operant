@@ -407,11 +407,26 @@ pub(crate) fn scan_code_blocks(chunk_body: &str, carry_lang: Option<&str>) -> (b
 }
 
 /// Path used to persist the Telegram polling offset across restarts.
-pub(crate) fn get_offset_path() -> PathBuf {
-    std::env::current_dir()
-        .ok()
-        .map(|p| p.join("telegram_offset.txt"))
-        .unwrap_or_else(|| PathBuf::from("telegram_offset.txt"))
+///
+/// Keyed by bot id (the token segment before `:`) — the offset is
+/// per-bot state on Telegram's side, and a global file made a token swap
+/// inherit the previous bot's offset. Observed live 2026-10-09: the new
+/// bot inherited `505536029`, and since a fresh bot's update ids start
+/// near 1, `getUpdates?offset=505536029` silently skipped EVERY inbound
+/// update. The key makes each bot's cursor independent.
+///
+/// An empty/degenerate bot id (missing token) degrades to the legacy
+/// shared filename rather than failing the poll loop.
+pub(crate) fn get_offset_path_for(bot_id: &str) -> PathBuf {
+    let name = if bot_id.is_empty() {
+        "telegram_offset.txt".to_string()
+    } else {
+        format!("telegram_offset.{bot_id}.txt")
+    };
+    match std::env::current_dir() {
+        Ok(dir) => dir.join(&name),
+        Err(_) => PathBuf::from(name),
+    }
 }
 
 #[async_trait]
@@ -683,6 +698,10 @@ impl PlatformAdapter for TelegramAdapter {
         let client = self.client.clone();
         let media_base = base.clone();
         let media_token = token.clone();
+        // Per-bot offset cursor (see get_offset_path_for): derive the bot
+        // id here, outside the moved coroutines, so the inner task owns a
+        // plain String and never re-borrows `token` after it is moved.
+        let bot_id = token.split(':').next().unwrap_or_default().to_string();
 
         tracing::info!("Telegram polling task spawned");
         // Panic-supervisor wrapper: a polling epoch that panics must be
@@ -702,6 +721,7 @@ impl PlatformAdapter for TelegramAdapter {
                     let message_tx = message_tx.clone();
                     let media_base = media_base.clone();
                     let media_token = media_token.clone();
+                    let bot_id = bot_id.clone();
                     async move {
                         // ── OUTER SUPERVISED RESTART LOOP ──
                         // On 409 Conflict the inner loop breaks here, triggering a fresh
@@ -740,7 +760,8 @@ impl PlatformAdapter for TelegramAdapter {
                             tracing::info!("Startup probe completed, initial offset: {}", offset);
 
                             // === LOAD SAVED OFFSET (persist across restarts) ===
-                            let offset_path = get_offset_path();
+                            // Offset cursor is per-bot (`telegram_offset.<bot_id>.txt`).
+                            let offset_path = get_offset_path_for(&bot_id);
                             if offset_path.exists()
                                 && let Ok(saved) = tokio::fs::read_to_string(&offset_path).await
                                 && let Ok(n) = saved.trim().parse::<i64>()
@@ -1537,8 +1558,8 @@ impl TelegramAdapter {
 }
 
 #[cfg(test)]
-mod log_redaction_tests {
-    use super::redacted_error;
+mod tests {
+    use super::{get_offset_path_for, redacted_error};
 
     /// The exact shape that leaked 30 times into `gateway.log` (BUGS.md
     /// R42-10): `reqwest`'s `Display` puts the full request URL in the error
@@ -1588,4 +1609,34 @@ mod log_redaction_tests {
     // in memory-wire. The guarantee is structural instead: `redacted_error`
     // calls the unconditional `redact_sensitive_text`, not
     // `redact_sensitive_text_if_enabled`.
+    //
+    // ── Offset cursor is per-bot (defect found live 2026-10-09) ────
+
+    /// A token swap used to inherit the previous bot's offset cursor because
+    /// the offset file was one global name. A fresh bot's update ids start
+    /// near 1, so an inherited cursor in the millions silently skips every
+    /// inbound update. The path must be keyed by bot id, and the derivation
+    /// must be a pure function of that id.
+    #[test]
+    fn offset_paths_are_keyed_per_bot() {
+        let a1 = get_offset_path_for("8916661121");
+        let a2 = get_offset_path_for("8916661121");
+        let b = get_offset_path_for("8889773233");
+        assert_eq!(a1, a2, "same bot must map to one stable path");
+        assert_ne!(
+            a1, b,
+            "distinct bots must not share an offset cursor — a token swap \
+             must not inherit the old bot's cursor"
+        );
+        assert_eq!(
+            a1.file_name().and_then(|n| n.to_str()),
+            Some("telegram_offset.8916661121.txt")
+        );
+        // Degenerate bot id (missing token) degrades to the legacy shared
+        // name rather than a weird `telegram_offset..txt`.
+        assert_eq!(
+            get_offset_path_for("").file_name().and_then(|n| n.to_str()),
+            Some("telegram_offset.txt")
+        );
+    }
 }

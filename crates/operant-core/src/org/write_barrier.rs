@@ -1327,7 +1327,7 @@ mod tests {
             .path()
             .expect("path")
             .to_string();
-        let mut registry = rusqlite::Connection::open(registry_path).expect("open the kanban file");
+        let registry = rusqlite::Connection::open(registry_path).expect("open the kanban file");
         registry
             .execute_batch("DROP TABLE employees")
             .expect("drop the registry table");

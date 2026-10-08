@@ -273,7 +273,7 @@ mod tests {
         // No memory rows: the store file is not even created by a dry run.
         assert!(!mem_dir.path().join("memory_wire.sqlite").exists());
         // No notices on the board.
-        let board = NoticeBoard::init(org_db_path(&app_db).into()).expect("board");
+        let board = NoticeBoard::init(org_db_path(&app_db)).expect("board");
         assert_eq!(board.count().expect("count"), 0);
     }
 
@@ -282,7 +282,7 @@ mod tests {
         let (_dir, app_db) = temp_app();
         let mem_dir = tempfile::tempdir().expect("memdir");
         // Seed one notice so the digest carries real content.
-        let board = NoticeBoard::init(org_db_path(&app_db).into()).expect("board");
+        let board = NoticeBoard::init(org_db_path(&app_db)).expect("board");
         let post = PostNotice::new(
             "user",
             vec![Recipient::Broadcast],

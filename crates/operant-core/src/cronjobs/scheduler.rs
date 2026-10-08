@@ -159,10 +159,7 @@ impl CronScheduler {
     /// iter-678: mount the cron agent's usage accumulator (fed by its own
     /// event channel) so runs meter. Without it no drain happens —
     /// dark-mergeable.
-    pub fn with_usage_meter(
-        mut self,
-        meter: Arc<std::sync::Mutex<UsageAccumulator>>,
-    ) -> Self {
+    pub fn with_usage_meter(mut self, meter: Arc<std::sync::Mutex<UsageAccumulator>>) -> Self {
         self.usage_meter = Some(meter);
         self
     }
@@ -204,10 +201,7 @@ impl CronScheduler {
     /// checks the schedule every pass and runs the configured pairs when
     /// due. Settings carry their own `enabled` flag; mounting is the
     /// gateway's decision that the feature is wired at all.
-    pub fn with_socialization(
-        mut self,
-        settings: crate::config::SocializationSettings,
-    ) -> Self {
+    pub fn with_socialization(mut self, settings: crate::config::SocializationSettings) -> Self {
         self.socialization = Some(settings);
         self
     }
@@ -536,10 +530,7 @@ impl CronScheduler {
     fn seat_budget_state(
         &self,
         seat_id: &str,
-    ) -> Option<(
-        crate::org::seat_budgets::EffectiveBudget,
-        (i64, f64),
-    )> {
+    ) -> Option<(crate::org::seat_budgets::EffectiveBudget, (i64, f64))> {
         let budgets = self.seat_budgets.as_ref()?;
         let store = self.usage_store.as_ref()?;
         let seat_override = budgets.get(seat_id).ok().flatten();
@@ -567,7 +558,11 @@ impl CronScheduler {
         let (used, remaining, unit) = if budget.basis == "usd" {
             (usd_used, budget.cap - usd_used, "USD")
         } else {
-            (tokens_used as f64, budget.cap - tokens_used as f64, "tokens")
+            (
+                tokens_used as f64,
+                budget.cap - tokens_used as f64,
+                "tokens",
+            )
         };
         if remaining > 0.0 || budget.mode != "hard" {
             return None;
@@ -592,9 +587,7 @@ impl CronScheduler {
             return;
         }
         let Some(root) = self.seat_memory_root.clone() else {
-            warn!(
-                "socialization: no seat-memory root mounted — sessions cannot run; skipping"
-            );
+            warn!("socialization: no seat-memory root mounted — sessions cannot run; skipping");
             return;
         };
         let org_db = root.join("operant_kanban.db");
@@ -602,11 +595,7 @@ impl CronScheduler {
         let last = crate::org::socialization::last_socialization_run(&org_db)
             .ok()
             .flatten();
-        if !crate::org::socialization::socialization_due(
-            &settings.schedule,
-            last.as_deref(),
-            now,
-        ) {
+        if !crate::org::socialization::socialization_due(&settings.schedule, last.as_deref(), now) {
             return;
         }
         info!(
@@ -618,11 +607,16 @@ impl CronScheduler {
         if let Err(e) =
             crate::org::socialization::record_socialization_run(&org_db, &now.to_rfc3339())
         {
-            warn!("socialization: state write failed — sessions skipped to avoid a double run: {e}");
+            warn!(
+                "socialization: state write failed — sessions skipped to avoid a double run: {e}"
+            );
             return;
         }
         for pair in &settings.pairs {
-            if let Err(e) = self.run_socialization_pair(&root, settings.turn_budget, pair).await {
+            if let Err(e) = self
+                .run_socialization_pair(&root, settings.turn_budget, pair)
+                .await
+            {
                 warn!("socialization: pair {pair:?} failed: {e} (fail-open)");
             }
         }
@@ -645,8 +639,7 @@ impl CronScheduler {
             )));
         }
         let (senior, junior) = (&pair[0], &pair[1]);
-        let threads =
-            crate::org::dm_thread::DmThreadDb::init(root.join("operant_kanban.db"))?;
+        let threads = crate::org::dm_thread::DmThreadDb::init(root.join("operant_kanban.db"))?;
         let thread = threads.open(senior, junior, turn_budget)?;
         let thread_id = thread.thread_id.clone();
         let session_key = format!("socialization:{thread_id}");
@@ -702,8 +695,7 @@ impl CronScheduler {
                         meter_before,
                     );
                     transcript_tail =
-                        crate::agent::safe_truncate_str(message.content.trim(), 800)
-                            .to_string();
+                        crate::agent::safe_truncate_str(message.content.trim(), 800).to_string();
                 }
                 Err(e) => {
                     warn!("socialization: turn {i} for `{speaker}` failed: {e}");
@@ -719,8 +711,7 @@ impl CronScheduler {
         // BOTH seats' MEMORY.md under a dated heading.
         let outcome = transcript_tail.trim();
         if !outcome.is_empty() {
-            let heading =
-                format!("## Socialization {}", chrono::Utc::now().format("%Y-%m-%d"));
+            let heading = format!("## Socialization {}", chrono::Utc::now().format("%Y-%m-%d"));
             seat_memory_append(
                 Some(root),
                 senior,
@@ -741,9 +732,7 @@ impl CronScheduler {
             if let Err(e) =
                 crate::org::socialization::post_session_outcome(root, senior, junior, outcome)
             {
-                warn!(
-                    "socialization: outcome notice {senior}->{junior} skipped: {e} (fail-open)"
-                );
+                warn!("socialization: outcome notice {senior}->{junior} skipped: {e} (fail-open)");
             }
         }
         Ok(())
@@ -805,9 +794,9 @@ impl CronScheduler {
             None,
             self.compute_next_run(job),
         )?;
-        if let Err(e) = self
-            .db
-            .record_cron_run(&job.id, &started_at, false, Some(reason), "budget_block")
+        if let Err(e) =
+            self.db
+                .record_cron_run(&job.id, &started_at, false, Some(reason), "budget_block")
         {
             warn!("cron run history write failed for {}: {e}", job.id);
         }
@@ -863,7 +852,10 @@ impl CronScheduler {
                 }
             }
             Err(e) => {
-                warn!("cron usage session create failed for {}: {e} (fail-open)", source_id)
+                warn!(
+                    "cron usage session create failed for {}: {e} (fail-open)",
+                    source_id
+                )
             }
         }
     }
@@ -911,7 +903,11 @@ impl CronScheduler {
                 let (_used, remaining, unit) = if budget.basis == "usd" {
                     (usd_used, budget.cap - usd_used, "USD")
                 } else {
-                    (tokens_used as f64, budget.cap - tokens_used as f64, "tokens")
+                    (
+                        tokens_used as f64,
+                        budget.cap - tokens_used as f64,
+                        "tokens",
+                    )
                 };
                 if budget.mode == "hard" && budget.basis == "tokens" && remaining > 0.0 {
                     seat_envelope = Some(crate::agent::SeatBudgetEnvelope {
@@ -1161,7 +1157,10 @@ fn seat_memory_append(
         let _ = std::fs::create_dir_all(parent);
     }
     let entry = format!("\n{heading}\n{}\n", text.trim());
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path)
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
         .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()))
     {
         Ok(()) => {}
@@ -1213,10 +1212,7 @@ fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        repeat_limit_reached,
-        seat_memory_append,
-        seat_memory_prompt,
-        should_arm_transient_retry,
+        repeat_limit_reached, seat_memory_append, seat_memory_prompt, should_arm_transient_retry,
     };
     use std::sync::Arc;
 
@@ -1301,9 +1297,7 @@ mod tests {
         default_budget: crate::config::BudgetSettings,
         seat_budget: Option<crate::org::seat_budgets::SeatBudget>,
     ) -> super::CronScheduler {
-        let db = Arc::new(
-            crate::database::Database::init(dir.join("agent.sqlite")).expect("db"),
-        );
+        let db = Arc::new(crate::database::Database::init(dir.join("agent.sqlite")).expect("db"));
         let agent = Arc::new(crate::agent::OperantAgent::new(
             crate::agent::AgentConfig::default(),
             Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
@@ -1462,7 +1456,12 @@ mod tests {
             acc.record_cost(0.01);
         }
         let scheduler = scheduler.with_usage_meter(meter);
-        scheduler.drain_run_usage("job_budget_probe", "budget probe", &seat_id, Some((0, 0, 0.0)));
+        scheduler.drain_run_usage(
+            "job_budget_probe",
+            "budget probe",
+            &seat_id,
+            Some((0, 0, 0.0)),
+        );
 
         let store = scheduler.usage_store.clone().expect("store");
         let since = crate::org::seat_budgets::window_start("daily");
@@ -1488,10 +1487,9 @@ mod tests {
             "## Socialization 2026-10-09",
             "Session with premiere: follow-up held.",
         );
-        let read = std::fs::read_to_string(
-            dir.path().join("org/employees/identity-warden/MEMORY.md"),
-        )
-        .expect("read back");
+        let read =
+            std::fs::read_to_string(dir.path().join("org/employees/identity-warden/MEMORY.md"))
+                .expect("read back");
         assert!(read.contains("2026-10-08") && read.contains("2026-10-09"));
         assert!(read.contains("audit cadence"));
         // No root = a no-op, never a panic.
@@ -1509,9 +1507,18 @@ mod tests {
         let scheduler =
             scheduler_with_budgets(dir.path(), crate::config::BudgetSettings::default(), None);
         let prompt = scheduler.bind_seat_run("identity-warden", "emp-warden-1", "BASE PROMPT");
-        assert_eq!(scheduler.agent.session_id().as_deref(), Some("emp-warden-1"));
-        assert_eq!(scheduler.agent.seat_id().as_deref(), Some("identity-warden"));
-        assert_eq!(prompt, "BASE PROMPT", "no memory/injection mounted → byte-identical");
+        assert_eq!(
+            scheduler.agent.session_id().as_deref(),
+            Some("emp-warden-1")
+        );
+        assert_eq!(
+            scheduler.agent.seat_id().as_deref(),
+            Some("identity-warden")
+        );
+        assert_eq!(
+            prompt, "BASE PROMPT",
+            "no memory/injection mounted → byte-identical"
+        );
     }
 
     // ── iter-669: transient-retry budget ──

@@ -467,6 +467,7 @@ pub async fn semantic_compaction_cutoff(
 /// This is a port of magic-context's tiered target-headroom eviction,
 /// simplified to a single pass (magic-context uses idempotence latches
 /// + multi-pass; we don't need that for a first implementation).
+///
 /// Wave-4 PromptCacheGuard: the frozen prefix (leading run of system
 /// messages) must survive every preflight rung byte-identical so
 /// provider prompt caches keep hitting across a session's calls.

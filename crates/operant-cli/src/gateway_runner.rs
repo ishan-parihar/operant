@@ -829,8 +829,7 @@ struct GatewayMessageHandler {
     /// iter-683 (gap 5 phase 1b): the DM/feed context injector — the
     /// gateway turn's mirror of the scheduler's cron seam. `None` = no
     /// injection, turns byte-identical (dark-mergeable).
-    context_injection:
-        Option<Arc<operant_core::org::context_injection::ContextInjector>>,
+    context_injection: Option<Arc<operant_core::org::context_injection::ContextInjector>>,
 }
 
 #[async_trait::async_trait]
@@ -1029,33 +1028,51 @@ impl MessageHandler for GatewayMessageHandler {
         //
         // Wave 3 reuses `bound_employee` twice below: the continuation
         // injection (a reloaded session begins from the rolling summary)
-        // and the post-turn summary write.
+        // and the post-turn summary write. `store_session_key` carries the
+        // STORE's canonical key (build_session_key: `agent:main:…`) to the
+        // Wave-4 metering drain — the handler's `session_key`
+        // (`{platform}:{channel}:{user}`) is a turn-lease namespace the store
+        // never files under, so looking rows up by it always missed
+        // ("Session not found", and the DM tap could never fire).
         let mut bound_employee: Option<String> = None;
+        let mut store_session_key: Option<String> = None;
         {
             let gw_guard = self.gateway.lock().await;
-            if let Some(ref gw) = *gw_guard {
-                if let Some(store) = gw.get_persistent_sessions() {
-                    if let Some(entry) = store.get_entry(&session_key) {
-                        let employee_id = entry
-                            .employee_id
-                            .clone()
-                            .unwrap_or_else(|| "premiere".to_string());
-                        self.agent.set_seat_id(employee_id.clone());
-                        let charter = employee_registry().and_then(|registry| {
-                            registry
-                                .get_employee(&employee_id)
-                                .ok()
-                                .flatten()
-                                .and_then(|emp| emp.system_prompt.clone())
-                        });
-                        self.agent.set_charter(charter);
-                        tracing::debug!(
-                            session_key = %session_key,
-                            seat = %employee_id,
-                            "Wave 2: session runs as its bound employee"
-                        );
-                        bound_employee = Some(employee_id);
-                    }
+            if let Some(ref gw) = *gw_guard
+                && let Some(store) = gw.get_persistent_sessions()
+            {
+                // Resolve through the origin triple — the same seam the
+                // `/session` command uses — instead of `get_entry` with
+                // the turn-lease key. The gateway files every session
+                // under `build_session_key(source)` at routing time
+                // (gateway/mod.rs), so the triple always finds it.
+                // ponytail: threads/topics with the same origin triple
+                // resolve to the first matching entry — same ambiguity
+                // `/session` has always had; revisit when
+                // telegram_dm_topics_enabled is flipped on.
+                if let Some(entry) =
+                    store.entry_for_source(&message.platform, &message.user_id, &message.channel_id)
+                {
+                    store_session_key = Some(entry.session_key.clone());
+                    let employee_id = entry
+                        .employee_id
+                        .clone()
+                        .unwrap_or_else(|| "premiere".to_string());
+                    self.agent.set_seat_id(employee_id.clone());
+                    let charter = employee_registry().and_then(|registry| {
+                        registry
+                            .get_employee(&employee_id)
+                            .ok()
+                            .flatten()
+                            .and_then(|emp| emp.system_prompt.clone())
+                    });
+                    self.agent.set_charter(charter);
+                    tracing::debug!(
+                        session_key = %session_key,
+                        seat = %employee_id,
+                        "Wave 2: session runs as its bound employee"
+                    );
+                    bound_employee = Some(employee_id);
                 }
             }
         }
@@ -1065,13 +1082,11 @@ impl MessageHandler for GatewayMessageHandler {
         // socialization) then see what the human asked, ranked under the Dm
         // quota. This turn itself never sees it echoed back: the transcript
         // check excludes the inbound message's content hash. Fail-open.
-        if let (Some(injector), Some(seat)) = (
-            self.context_injection.as_ref(),
-            bound_employee.as_ref(),
-        ) {
+        if let (Some(injector), Some(seat)) =
+            (self.context_injection.as_ref(), bound_employee.as_ref())
+        {
             injector.record_inbound_dm(seat, &message.username, &message.content);
         }
-
 
         // Wave 3 (ORGANISM-ARCHITECTURE §3): a CONTINUATION begins from the
         // bound employee's rolling summary. Only when the transcript
@@ -1219,17 +1234,17 @@ impl MessageHandler for GatewayMessageHandler {
         // the reader; the agent's charter is the affinity corpus; the
         // inbound message is the transcript check (never echo it back).
         // None/empty/disabled → byte-identical (the iter-666 contract).
-        let query =
-            if let (Some(injector), Some(employee_id)) =
-                (self.context_injection.as_ref(), bound_employee.as_ref())
-            {
-                let charter = self.agent.charter();
-                let exclude =
-                    [operant_core::org::context_injection::content_hash(&message.content)];
-                injector.render_section(employee_id, charter.as_deref(), &query, &exclude)
-            } else {
-                query
-            };
+        let query = if let (Some(injector), Some(employee_id)) =
+            (self.context_injection.as_ref(), bound_employee.as_ref())
+        {
+            let charter = self.agent.charter();
+            let exclude = [operant_core::org::context_injection::content_hash(
+                &message.content,
+            )];
+            injector.render_section(employee_id, charter.as_deref(), &query, &exclude)
+        } else {
+            query
+        };
 
         // Turn start. `reloaded` is logged because it is the single fact that
         // explains what the model can see this turn: `true` means the
@@ -1281,8 +1296,15 @@ impl MessageHandler for GatewayMessageHandler {
                     .cloned()
             };
             if let Some(store) = store {
-                drain_turn_usage_into_store(&store, &self.turn_usage, usage_key, &session_key)
-                    .await;
+                // The store files rows under the canonical `build_session_key`
+                // namespace — drain by that key (captured at the Wave-2
+                // resolution above). Fallback keeps the legacy key when no
+                // entry resolved (unseen-session edge), preserving the
+                // fail-open warn instead of hard-failing the turn.
+                let meter_key = store_session_key
+                    .clone()
+                    .unwrap_or_else(|| session_key.clone());
+                drain_turn_usage_into_store(&store, &self.turn_usage, usage_key, &meter_key).await;
             }
         }
         match run_result {
@@ -1731,13 +1753,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let session_db_path = app_config.database_path.clone();
     // iter-678 (gap 1): hoist the handle — the cron scheduler's usage drain
     // writes through the SAME store the budget rollup reads.
-    let persistent_session_store: Option<
-        std::sync::Arc<operant_core::PersistentSessionStore>,
-    > = operant_core::PersistentSessionStore::open(
-        session_db_path.to_str().unwrap(),
-    )
-    .ok()
-    .map(std::sync::Arc::new);
+    let persistent_session_store: Option<std::sync::Arc<operant_core::PersistentSessionStore>> =
+        operant_core::PersistentSessionStore::open(session_db_path.to_str().unwrap())
+            .ok()
+            .map(std::sync::Arc::new);
     if let Some(store) = persistent_session_store.clone() {
         gateway = gateway.with_persistent_sessions(store);
     }
@@ -3861,18 +3880,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // app db (worklog reads + the context_watermarks cursors).
         // Fail-open: an injector that cannot open degrades to no injection
         // (prompts byte-identical) — injection must never block a boot.
-        let context_injector: Option<
-            Arc<operant_core::org::context_injection::ContextInjector>,
-        > = operant_core::org::context_injection::ContextInjector::open(
-            &app_config.database_path,
-            app_config.context_injection.clone(),
-        )
-        .ok()
-        .map(Arc::new);
+        let context_injector: Option<Arc<operant_core::org::context_injection::ContextInjector>> =
+            operant_core::org::context_injection::ContextInjector::open(
+                &app_config.database_path,
+                app_config.context_injection.clone(),
+            )
+            .ok()
+            .map(Arc::new);
         if context_injector.is_none() {
-            tracing::warn!(
-                "context injection unavailable — seat prompts stay byte-identical"
-            );
+            tracing::warn!("context injection unavailable — seat prompts stay byte-identical");
         }
         let mut scheduler = scheduler;
         if let Some(store) = persistent_session_store.clone() {
@@ -4851,11 +4867,8 @@ mod turn_state_tests {
             "a closed row must not read as still in-flight after restart"
         );
 
-        let content = std::fs::read_to_string(
-            base.join(".turn_state")
-                .join("dead_channel.json"),
-        )
-        .unwrap();
+        let content =
+            std::fs::read_to_string(base.join(".turn_state").join("dead_channel.json")).unwrap();
         let json: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(json["status"], "interrupted");
         assert_eq!(
