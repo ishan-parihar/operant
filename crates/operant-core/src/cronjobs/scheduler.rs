@@ -755,8 +755,25 @@ impl CronScheduler {
             Some(root) => seat_memory_prompt(root, seat_id, base_prompt),
             None => base_prompt.to_string(),
         };
-        match self.context_injection.as_ref() {
+        let prompt = match self.context_injection.as_ref() {
             Some(injector) => injector.render_section(seat_id, charter.as_deref(), &prompt, &[]),
+            None => prompt,
+        };
+        // iter-688: the seat's unacknowledged notices ride ahead of every
+        // feed/directive section — a pending notice is a request awaiting
+        // action, the board's read side at last (the ack is the watermark).
+        // `session_key` is the employee id the run executes as (the
+        // identity gate's binding); a non-employee or org-off session
+        // yields an empty block (fail-open inside the injector).
+        match self.context_injection.as_ref() {
+            Some(injector) => {
+                let notices = injector.pending_notices_block(session_key);
+                if notices.is_empty() {
+                    prompt
+                } else {
+                    format!("{notices}\n\n{prompt}")
+                }
+            }
             None => prompt,
         }
     }

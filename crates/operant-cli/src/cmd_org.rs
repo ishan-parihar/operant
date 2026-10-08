@@ -569,6 +569,23 @@ pub enum OrgNoticeAction {
         reason: String,
     },
 
+    /// Read an employee's identity-scoped inbox (the resolver-built
+    /// selector view — only notices addressed to them or broadcast)
+    Inbox {
+        /// The employee whose inbox to read (registered employee id)
+        #[arg(long, value_name = "EMPLOYEE_ID")]
+        for_employee: String,
+        /// Only notices awaiting this employee's acknowledgment
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        pending_only: bool,
+        /// Max notices to show (default 20)
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Print machine-readable JSON
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        json: bool,
+    },
+
     /// Unpin a notice
     Unpin {
         /// Notice id
@@ -1139,7 +1156,10 @@ fn handle_decision(config: &AppConfig, action: OrgDecisionAction) -> Result<()> 
 /// connection (no `from_shared_connection`) — the same two-connection
 /// shape the core suite and the gateway's P3 tests use over one sqlite
 /// file.
-fn seat_approver_for(config: &AppConfig, conn: &OrgConn) -> Result<operant_core::org::seat_authority::SeatApprover> {
+fn seat_approver_for(
+    config: &AppConfig,
+    conn: &OrgConn,
+) -> Result<operant_core::org::seat_authority::SeatApprover> {
     use operant_core::org::seat_authority::SeatApprover;
     use std::sync::Arc;
 
@@ -1148,10 +1168,8 @@ fn seat_approver_for(config: &AppConfig, conn: &OrgConn) -> Result<operant_core:
             .context("Failed to open grant store")?,
     );
     let requests = Arc::new(
-        operant_core::org::pending_requests::PendingRequestDb::from_shared_connection(
-            conn.clone(),
-        )
-        .context("Failed to open escalation queue")?,
+        operant_core::org::pending_requests::PendingRequestDb::from_shared_connection(conn.clone())
+            .context("Failed to open escalation queue")?,
     );
     let employees = Arc::new(
         operant_core::org::employee_db::EmployeeDb::from_shared_connection(conn.clone())
@@ -1717,7 +1735,88 @@ async fn handle_notice(config: &AppConfig, action: OrgNoticeAction) -> Result<()
         }
 
         OrgNoticeAction::List { json } => cmd_notice_list(config, json),
+
+        OrgNoticeAction::Inbox {
+            for_employee,
+            pending_only,
+            limit,
+            json,
+        } => cmd_notice_inbox(config, &for_employee, pending_only, limit, json),
     }
+}
+
+/// iter-688: the identity-scoped inbox — the notice-board READ side, built
+/// through the resolver exactly as §3.3's design intends (never a
+/// hand-rolled selector list): `identity_for` derives the reader's
+/// selectors from the Employee row, `inbox_query_for` shapes the query,
+/// `query_inbox` matches them against the board. `--pending-only` narrows
+/// to `ack_required` notices this employee has not acked (the same view
+/// the seat prompt's notices block renders).
+fn cmd_notice_inbox(
+    config: &AppConfig,
+    employee_id: &str,
+    pending_only: bool,
+    limit: Option<i64>,
+    json: bool,
+) -> Result<()> {
+    let conn = open_org_db(config)?;
+    let employees = operant_core::org::employee_db::EmployeeDb::from_shared_connection(
+        conn.clone(),
+    )
+    .context("Failed to open the employee registry")?;
+    let employee = employees
+        .get_employee(employee_id)?
+        .with_context(|| format!("Employee '{employee_id}' not found in the registry"))?;
+    let identity = operant_core::org::resolver::identity_for(&employee, &[], &[]);
+    let mut query = operant_core::org::resolver::inbox_query_for(&identity, None, limit.or(Some(20)));
+    query.pending_only = pending_only;
+    query.reader_id = Some(employee.employee_id.clone());
+    let board = NoticeBoard::from_shared_connection(conn)
+        .context("Failed to open the notice board")?;
+    let notices = board
+        .query_inbox(&query)
+        .context("Failed to read the inbox")?;
+
+    if json {
+        let rows: Vec<serde_json::Value> = notices
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "id": n.id,
+                    "sender": n.sender,
+                    "subject": n.subject,
+                    "body": n.body,
+                    "ack_required": n.ack_required,
+                    "acked_by": n.acked_by,
+                    "tags": n.tags,
+                    "created_at": n.created_at,
+                    "ttl_expires_at": n.ttl_expires_at,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
+        );
+    } else if notices.is_empty() {
+        println!("Inbox for '{employee_id}' is empty.");
+    } else {
+        println!("Inbox for '{}' ({} notice(s)):", employee_id, notices.len());
+        for n in &notices {
+            let subject = n.subject.clone().unwrap_or_else(|| "(no subject)".to_string());
+            let state = if n.ack_required {
+                if n.acked_by.contains(&employee.employee_id) {
+                    "[acked  ]"
+                } else {
+                    "[PENDING]"
+                }
+            } else {
+                "[info   ]"
+            };
+            println!("  {state} {} — {}: {}", n.id, n.sender, subject);
+        }
+    }
+    Ok(())
 }
 
 /// Pin/unpin, in one transaction with the reason-bearing audit row.
@@ -2290,11 +2389,8 @@ mod tests {
 
         // A head mints department scope; --scope org is a request the
         // approver would not mint, refused BEFORE any row is written.
-        let err = handle_grant(
-            &config,
-            give("emp-head", "emp-worker", "org", None, None),
-        )
-        .expect_err("a head cannot mint org scope");
+        let err = handle_grant(&config, give("emp-head", "emp-worker", "org", None, None))
+            .expect_err("a head cannot mint org scope");
         let msg = err.to_string();
         assert!(msg.contains("Grant refused"), "{msg}");
         assert!(

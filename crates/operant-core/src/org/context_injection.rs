@@ -284,6 +284,57 @@ impl ContextInjector {
         format!("{rendered}\n\n{prompt}")
     }
 
+    /// The seat's unacknowledged inbox notices, rendered as a prompt block
+    /// (iter-688 — the notice-board READ side). The ack IS the watermark: a
+    /// pending notice re-renders on every seat prompt until the seat acks
+    /// it, then never again — no injector watermark table involved.
+    ///
+    /// Fail-open like every rung: disabled, a missing employee row (the
+    /// org layer off, or the session is not an employee), or any store
+    /// error → `String::new()` and the prompt stays byte-identical.
+    pub fn pending_notices_block(&self, employee_id: &str) -> String {
+        if !self.settings.enabled || employee_id.is_empty() {
+            return String::new();
+        }
+        let Ok(employee_db) = crate::org::employee_db::EmployeeDb::for_app(&self.app_db) else {
+            return String::new();
+        };
+        let Ok(Some(employee)) = employee_db.get_employee(employee_id) else {
+            return String::new(); // not a registered employee — no inbox
+        };
+        let Ok(board) = crate::org::notice_db::NoticeBoard::for_app(&self.app_db) else {
+            return String::new();
+        };
+        let identity = crate::org::resolver::identity_for(&employee, &[], &[]);
+        let mut query = crate::org::resolver::inbox_query_for(&identity, None, Some(20));
+        query.pending_only = true;
+        query.reader_id = Some(employee.employee_id.clone());
+        let Ok(notices) = board.query_inbox(&query) else {
+            return String::new();
+        };
+        if notices.is_empty() {
+            return String::new();
+        }
+        let mut block = String::from(
+            "## Notices addressed to you — each needs an acknowledgment before it clears\n",
+        );
+        for n in &notices {
+            let subject = n.subject.clone().unwrap_or_else(|| "(no subject)".to_string());
+            let body = if n.body.chars().count() > 160 {
+                let cut: String = n.body.chars().take(160).collect();
+                format!("{cut}…")
+            } else {
+                n.body.clone()
+            };
+            block.push_str(&format!(
+                "- [{}] From {}: {} — {}\n",
+                n.id, n.sender, subject, body.trim()
+            ));
+        }
+        // Trim the trailing newline — the caller composes block separators.
+        block.trim_end().to_string()
+    }
+
     /// Collect unseen items for the seat, one class at a time, drop the
     /// transcript-check exclusions, then drop cross-class duplicates (DM
     /// form wins — the addressing context is the valuable part; then
@@ -690,6 +741,82 @@ mod tests {
             params![format!("id-{employee}-{ts}"), ts, employee, text],
         )
         .expect("insert worklog");
+    }
+
+    #[test]
+    fn pending_notices_block_renders_until_acked() {
+        // Bare injector — this test needs no worklog fixture (and the
+        // db_with_worklog fixture's hand-made `employees` table would
+        // collide with EmployeeDb's real schema).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app_db = dir.path().join("app.sqlite");
+        let injector = ContextInjector::open(&app_db, settings()).expect("injector");
+
+        // A real employee row + board on the shared org sibling — the
+        // same file `EmployeeDb::for_app` / `NoticeBoard::for_app`
+        // derive from the app path the injector holds.
+        let employees =
+            crate::org::employee_db::EmployeeDb::for_app(&app_db).expect("employee db");
+        employees
+            .insert_ignore(&crate::org::employee::Employee {
+                employee_id: "emp-warden-1".to_string(),
+                name: "Identity Warden".to_string(),
+                role: "automator".to_string(),
+                department: Some("identity".to_string()),
+                skills: vec![],
+                agent_type: None,
+                persona: None,
+                system_prompt: None,
+                status: "active".to_string(),
+                reason: "test fixture".to_string(),
+                created_at: "2026-10-08T00:00:00Z".to_string(),
+                updated_at: "2026-10-08T00:00:00Z".to_string(),
+            })
+            .expect("insert employee");
+
+        let board = crate::org::notice_db::NoticeBoard::for_app(&app_db).expect("board");
+        let notice = board
+            .post(&crate::org::notice::PostNotice {
+                sender: "user".to_string(),
+                from_dept: None,
+                recipients: vec![crate::org::notice::Recipient::parse("agent:emp-warden-1")
+                    .expect("recipient")],
+                subject: Some("Registry binding audit".to_string()),
+                body: "Please check the session bindings tonight.".to_string(),
+                correlation_id: None,
+                ack_required: true,
+                tags: vec![],
+                thread_id: None,
+                pinned: false,
+                ttl: None,
+                ttl_expires_at: None,
+                reason: "test".to_string(),
+                metadata: None,
+            })
+            .expect("post notice");
+
+        // The block renders the pending notice — the board's read side.
+        let block = injector.pending_notices_block("emp-warden-1");
+        assert!(
+            block.contains("Notices addressed to you"),
+            "the block must carry its heading: {block}"
+        );
+        assert!(
+            block.contains("Registry binding audit"),
+            "the pending notice must reach its addressee: {block}"
+        );
+
+        // The ack IS the watermark: once acked the block is empty again.
+        board.ack(&notice.id, "emp-warden-1").expect("ack");
+        assert_eq!(
+            injector.pending_notices_block("emp-warden-1"),
+            "",
+            "an acked notice must never re-render"
+        );
+
+        // Fail-open: a session that is not a registered employee has no
+        // inbox — empty block, never an error.
+        assert_eq!(injector.pending_notices_block("emp-nobody"), "");
     }
 
     #[test]
