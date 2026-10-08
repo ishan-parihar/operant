@@ -460,12 +460,12 @@ pub(crate) fn parse_path_only_attachment(message: &str) -> Option<TelegramAttach
 /// Strip tool-call XML tags from outgoing messages.
 ///
 /// LLM responses may contain `<function_calls>`, `<function_call>`,
-/// `eckecks`, `<toolcall>`, `<tool-call>`, `<tool>`, or `<invoke>`
-/// blocks that are internal protocol and must not be forwarded to end
+/// `eckecks`, `<toolcall>`, `<tool-call>`, `<tool>`, `<invoke>`, or
+/// `<tool_call>` blocks that are internal protocol and must not be forwarded to end
 /// users on any channel. (Relocated verbatim from the former
 /// orchestrator/sanitize.rs when iter-664 deleted that cluster.)
 pub(crate) fn strip_tool_call_tags(message: &str) -> String {
-    const TOOL_CALL_OPEN_TAGS: [&str; 7] = [
+    const TOOL_CALL_OPEN_TAGS: [&str; 8] = [
         "<function_calls>",
         "<function_call>",
         "eckecks",
@@ -473,6 +473,7 @@ pub(crate) fn strip_tool_call_tags(message: &str) -> String {
         "<tool-call>",
         "<tool>",
         "<invoke>",
+        "<tool_call>",
     ];
 
     fn find_first_tag<'a>(haystack: &str, tags: &'a [&'a str]) -> Option<(usize, &'a str)> {
@@ -490,6 +491,7 @@ pub(crate) fn strip_tool_call_tags(message: &str) -> String {
             "<tool-call>" => Some("</tool-call>"),
             "<tool>" => Some("</tool>"),
             "<invoke>" => Some("</invoke>"),
+            "<tool_call>" => Some("</tool_call>"),
             _ => None,
         }
     }
