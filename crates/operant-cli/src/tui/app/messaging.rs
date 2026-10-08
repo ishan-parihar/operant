@@ -75,6 +75,21 @@ impl App {
         self.new_messages_while_scrolled = 0;
     }
 
+    /// Whether usable credentials exist RIGHT NOW, not a snapshot taken at
+    /// `App::new`. The init-time `has_credentials` boolean goes stale the
+    /// moment a credential arrives from anywhere other than the boot-time
+    /// auth-store/env scan (omp/custom base URLs, `/login` mid-session on a
+    /// fresh install) — which left the jcode header pinned in
+    /// "/login to add provider" mode for an entire working session. The
+    /// header transition bug (2026-10-09 visual audit, complaint 2) traced
+    /// to exactly this: `auth_status()` mapped the stale boolean onto the
+    /// provider matrix and nothing ever refreshed it.
+    pub fn credentials_live(&self) -> bool {
+        self.has_credentials
+            || self.auth_store.has_any_key()
+            || crate::tui::adapter_types::config::resolve_api_key().is_some()
+    }
+
     /// Whether the terminal-clear state is live right now. Derived the way
     /// jcode derives its spacer-tail check, adapted to operant's
     /// version-keyed display cache: the clear holds only while the version

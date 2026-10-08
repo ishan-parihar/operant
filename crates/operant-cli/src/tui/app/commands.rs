@@ -438,7 +438,7 @@ impl App {
                 true
             }
             "model" => {
-                if !self.has_credentials {
+                if !self.credentials_live() {
                     self.connect_dialog.open();
                     self.status_message = Some("Connect a provider to choose a model.".to_string());
                     return true;

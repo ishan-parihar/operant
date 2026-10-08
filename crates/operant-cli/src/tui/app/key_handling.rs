@@ -1243,7 +1243,7 @@ impl App {
 
             // ---- Model picker (Ctrl+A) -----------------------------------
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if !self.is_streaming && self.has_credentials {
+                if !self.is_streaming && self.credentials_live() {
                     self.open_model_picker_for_provider(
                         &self.active_provider.clone().unwrap_or_default(),
                         None,

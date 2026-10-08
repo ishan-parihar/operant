@@ -673,7 +673,7 @@ impl TuiState for App {
             provider_name: self.active_provider.clone(),
             working_dir: self.current_dir.clone(),
             tokens_per_second: self.output_tps(),
-            auth_method: if self.has_credentials {
+            auth_method: if self.credentials_live() {
                 AuthMethod::ApiKey
             } else {
                 AuthMethod::Unknown
@@ -711,32 +711,52 @@ impl TuiState for App {
         // Operant keeps one boolean ("are there usable credentials for the
         // session's provider"), not a per-provider matrix. Map it onto the
         // active provider's slot and leave the rest at their default.
-        let state = if self.has_credentials {
+        // 2026-10-09: the boolean is now `credentials_live()` — the stale
+        // init-time snapshot never refreshed, so a session that acquired
+        // credentials after boot (omp/custom base URLs, mid-session /login)
+        // reported NotConfigured forever and the header never transitioned.
+        let state = if self.credentials_live() {
             AuthState::Available
         } else {
             AuthState::NotConfigured
         };
-        match self.active_provider.as_deref() {
-            Some("anthropic") => {
+        // Boot infers the provider from the configured model (init.rs), but
+        // model-only configs ("glm-5.3" via omp, bare "gpt-4") leave it None.
+        // Re-derive from the same model so the matrix can populate at all.
+        let provider = self
+            .active_provider
+            .clone()
+            .or_else(|| crate::tui::provider::infer_provider_from_model(&self.config.agent.model));
+        match provider.as_deref() {
+            Some("anthropic") | Some("claude") => {
                 status.anthropic = ProviderAuth {
                     state,
                     has_oauth: false,
                     oauth_state: state,
-                    has_api_key: self.has_credentials,
+                    has_api_key: self.credentials_live(),
                 };
             }
             Some("openai") => {
                 status.openai = state;
-                status.openai_has_api_key = self.has_credentials;
+                status.openai_has_api_key = self.credentials_live();
             }
             Some("openrouter") => status.openrouter = state,
             Some("azure") => status.azure = state,
             Some("copilot") => {
                 status.copilot = state;
-                status.copilot_has_api_token = self.has_credentials;
+                status.copilot_has_api_token = self.credentials_live();
             }
-            Some("gemini") => status.gemini = state,
-            _ => {}
+            Some("gemini") | Some("google") => status.gemini = state,
+            Some("cursor") => status.cursor = state,
+            Some("antigravity") => status.antigravity = state,
+            // Every other provider id (custom-openai, omp/omniroute, free/*,
+            // groq/cerebras/deepseek catalog profiles) is an OpenAI-compatible
+            // profile — that is exactly what this slot exists for. They get no
+            // dedicated circle row upstream; the header gains one (ui_header
+            // adaptation) so a working custom session still reads as
+            // configured instead of "login to add provider".
+            Some(_) => status.openai_compatible_any = state,
+            None => {}
         }
         status
     }

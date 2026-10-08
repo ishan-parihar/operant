@@ -386,7 +386,15 @@ fn auth_full_specs(
         provider_label("gemini", auth.gemini, None)
     };
 
-    vec![
+    // [port-adaptation] operant routes every OpenAI-compatible profile
+    // (custom-openai base URLs, omp/omniroute, free-mode upstreams, catalog
+    // profiles like groq/cerebras) through `openai_compatible_any`; upstream
+    // renders that slot only in the credential-tag surface. Without a circle
+    // row here, a fully working custom-provider session still showed the
+    // full "nothing configured" fallback list — the stuck-login-header bug
+    // (2026-10-09 visual audit). Row appears only when configured so
+    // unconfigured sessions (and every corpus golden) render byte-identically.
+    let mut specs = vec![
         (anthropic_label, auth.anthropic.state),
         ("openrouter".to_string(), auth.openrouter),
         (openai_label, auth.openai),
@@ -397,7 +405,14 @@ fn auth_full_specs(
             provider_label("antigravity", auth.antigravity, None),
             auth.antigravity,
         ),
-    ]
+    ];
+    if auth.openai_compatible_any != AuthState::NotConfigured {
+        specs.push((
+            provider_label("custom", auth.openai_compatible_any, None),
+            auth.openai_compatible_any,
+        ));
+    }
+    specs
 }
 
 /// Vertical auth inventory: one line per provider. Configured providers get

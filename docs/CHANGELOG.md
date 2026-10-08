@@ -143,6 +143,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-703 — Clean-sweep 1: live credential status fixes the stuck
+  "/login to add provider" header.** Root cause of the 2026-10-09 visual-audit
+  complaint 2: the jcode persistent header is auth-driven, and operant's
+  adapter mapped a `has_credentials` boolean snapshotted once at `App::new`
+  (auth-store + ANTHROPIC/OPENAI env only) onto the provider matrix — so any
+  session that acquired credentials after boot (omp/custom base URLs,
+  mid-session /login) reported NotConfigured forever and the header never
+  transitioned. `credentials_live()` now recomputes per read (activation flag
+  OR live auth-store OR env); `auth_status()` re-derives the provider from the
+  configured model when `active_provider` is unset, and maps every
+  OpenAI-compatible profile (custom-openai, omp, free-mode upstreams, groq/
+  cerebras catalog) onto `openai_compatible_any`. The header gains a `custom`
+  circle row for that slot when configured (unconfigured sessions — and every
+  corpus golden — render byte-identically; corpus verify 0 drift). The /model
+  gate, Ctrl+A model-picker gate, and `auth_method` telemetry read the live
+  predicate. Tests: store-gain refreshes matrix without App recreation,
+  env-isolated via AUTH_ENV_LOCK (real on-disk store cleared per test — the
+  dev machine carries real credentials).
+
 - **iter-694 — W5 Tier-2: Ctrl+L terminal-style clear (jcode parity).** The
   confirmed Tier-2 gap from JCODE-VISUAL-PARITY-PLAN.md item 17: the
   layout-side collapse was already ported (operant_ui renders a zero-height

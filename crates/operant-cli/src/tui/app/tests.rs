@@ -5,6 +5,8 @@
 
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
+use crate::tui::operant_app::auth::AuthState;
+use crate::tui::operant_app::tui_state::TuiState as _;
 
 pub(crate) fn make_app() -> App {
     // `App::new` calls `set_active_theme_enum`, which writes the process-global
@@ -3058,5 +3060,107 @@ fn ctrl_l_keybinding_collapses_the_view() {
     assert!(
         app.terminal_clear_state_live(),
         "the Ctrl+L chord must reach clear_view_terminal_style"
+    );
+}
+
+// ── Live credential status (2026-10-09 visual audit: stuck login header) ──
+
+/// Serializes tests that mutate ANTHROPIC/OPENAI env vars; other suite tests
+/// read these only via App init, and the cleared window below makes such an
+/// init see "no credentials" — the exact state under test.
+static AUTH_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn with_cleared_auth_env<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = AUTH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved_anthropic = std::env::var("ANTHROPIC_API_KEY").ok();
+    let saved_openai = std::env::var("OPENAI_API_KEY").ok();
+    // SAFETY: serialized by AUTH_ENV_LOCK; tests are single-binary and the
+    // cleared window only affects other tests' App-init reads (the state
+    // under test). Restored before the lock drops.
+    unsafe {
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+    }
+    let result = f();
+    // SAFETY: same lock held; restoring the exact values observed above.
+    unsafe {
+        if let Some(key) = saved_anthropic {
+            std::env::set_var("ANTHROPIC_API_KEY", key);
+        }
+        if let Some(key) = saved_openai {
+            std::env::set_var("OPENAI_API_KEY", key);
+        }
+    }
+    result
+}
+
+#[test]
+fn auth_status_refreshes_when_store_gains_key_without_recreating_app() {
+    with_cleared_auth_env(|| {
+        let mut app = make_app();
+        app.has_credentials = false;
+        // The real on-disk store may carry the developer's credentials; this
+        // test controls credential presence explicitly.
+        app.auth_store.credentials.clear();
+        app.active_provider = Some("anthropic".to_string());
+        let before = app.auth_status();
+        assert!(
+            before.anthropic.state == AuthState::NotConfigured,
+            "precondition: matrix starts unconfigured"
+        );
+        // The boot-time snapshot is false; a mid-session /login adds a key.
+        // Direct map insert — `AuthStore::set` persists to the real on-disk
+        // credential file, which a unit test must never touch.
+        app.auth_store.credentials.insert(
+            "anthropic".to_string(),
+            crate::tui::adapter_types::StoredCredential::ApiKey {
+                key: "sk-ant-test".to_string(),
+            },
+        );
+        let after = app.auth_status();
+        assert_eq!(
+            after.anthropic.state,
+            AuthState::Available,
+            "auth_status must recompute from the live store, not the init snapshot"
+        );
+    })
+}
+
+#[test]
+fn credentials_live_or_s_store_env_and_activation_flag() {
+    with_cleared_auth_env(|| {
+        let mut app = make_app();
+        app.has_credentials = false;
+        app.auth_store.credentials.clear();
+        assert!(!app.credentials_live());
+        app.has_credentials = true;
+        assert!(app.credentials_live(), "sticky activation flag alone counts");
+    })
+}
+
+#[test]
+fn auth_status_maps_custom_profiles_to_compatible_slot() {
+    let mut app = make_app();
+    app.has_credentials = true;
+    app.active_provider = Some("groq".to_string()); // catalog profile: no dedicated slot
+    let status = app.auth_status();
+    assert_eq!(
+        status.openai_compatible_any,
+        AuthState::Available,
+        "OpenAI-compatible catalog profiles must land in openai_compatible_any"
+    );
+}
+
+#[test]
+fn auth_status_falls_back_to_model_inference_when_provider_unset() {
+    let mut app = make_app();
+    app.has_credentials = true;
+    app.active_provider = None;
+    app.config.agent.model = "free/auto".to_string();
+    let status = app.auth_status();
+    assert_eq!(
+        status.openai_compatible_any,
+        AuthState::Available,
+        "provider inference from the configured model must still populate the matrix"
     );
 }
