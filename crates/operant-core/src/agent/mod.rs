@@ -1497,6 +1497,118 @@ mod tests {
         assert!(system.contains("[fact] User prefers concise answers"));
         assert!(system.contains("</long_term_memory>"));
     }
+
+    // ── Wave-4 ordered preflight ladder ────────────────────────────────
+
+    /// Ladder no-op property: under the preflight threshold nothing fires
+    /// — no trim marker, no wrap-up notice, byte-identical history.
+    #[serial]
+    #[tokio::test]
+    async fn build_messages_under_threshold_is_ladder_noop() {
+        let db = Database::init(std::path::PathBuf::from("ladder-noop-test.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent
+            .add_message(crate::client::Message::assistant("").with_tool_calls(vec![
+                crate::client::ToolCall {
+                    id: "t1".to_string(),
+                    function: crate::client::ToolCallFunction {
+                        name: "read_file".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+            ]))
+            .await;
+        let mut tool_msg =
+            crate::client::Message::new(Role::Tool, "small tool result".to_string());
+        tool_msg.tool_call_id = Some("t1".to_string());
+        agent.add_message(tool_msg).await;
+        agent.user_message("hi").await;
+
+        let msgs = agent.build_messages("ladder-noop").await.unwrap();
+        assert!(
+            !msgs.iter().any(|m| m.content.contains("[CONTEXT NOTICE]")),
+            "no wrap-up notice under the preflight threshold"
+        );
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m.content.contains("characters truncated")),
+            "no tool-result trim under the preflight threshold"
+        );
+        assert!(
+            msgs.iter().any(|m| m.role == Role::Tool && m.content == "small tool result"),
+            "tool result passed through verbatim"
+        );
+    }
+
+    /// Ladder firing property: over the threshold, rung 1 re-trims the
+    /// oversized historical tool result and the wrap-up rung appends the
+    /// final-call notice as the last built message.
+    #[serial]
+    #[tokio::test]
+    async fn build_messages_over_threshold_runs_preflight_ladder() {
+        let db = Database::init(std::path::PathBuf::from("ladder-fire-test.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 10_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent.user_message("start").await;
+        agent.user_message("pad past the head-protection window").await;
+        agent
+            .add_message(crate::client::Message::assistant("").with_tool_calls(vec![
+                crate::client::ToolCall {
+                    id: "t2".to_string(),
+                    function: crate::client::ToolCallFunction {
+                        name: "read_file".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+            ]))
+            .await;
+        let big = "x".repeat(40_000);
+        let mut tool_msg = crate::client::Message::new(Role::Tool, big);
+        tool_msg.tool_call_id = Some("t2".to_string());
+        agent.add_message(tool_msg).await;
+        // Pad past the protect-last-n window so the tool result is
+        // trimmable (rung 1 protects the final 4 messages).
+        for filler in ["one", "two", "three", "four"] {
+            agent.user_message(filler).await;
+        }
+
+        let msgs = agent.build_messages("ladder-fire").await.unwrap();
+        let trimmed = msgs
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("tool message survived the ladder");
+        assert!(
+            trimmed.content.contains("characters truncated"),
+            "rung 1 re-trimmed the oversized tool result"
+        );
+        assert!(
+            trimmed.content.len() < 5_000,
+            "tool result shrank from 40k chars (got {})",
+            trimmed.content.len()
+        );
+        let last = msgs.last().expect("built list non-empty");
+        assert!(
+            last.role == Role::User && last.content.contains("[CONTEXT NOTICE]"),
+            "wrap-up rung appended final-call copy as the last message"
+        );
+    }
     #[serial]
     #[tokio::test]
     async fn lcm_engine_injects_auto_recall_evidence_into_build_messages() {

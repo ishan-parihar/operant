@@ -366,6 +366,50 @@ impl OperantAgent {
         crate::context_management::manage_context(messages, budget, 4096)
     }
 
+    /// Wave-4 preflight ladder rung 3: LLM summarize-before-evict.
+    ///
+    /// Same guards as the reactive path (`should_compress`, anti-thrash
+    /// cooldown, persistence bind) but with NO deterministic fallback —
+    /// the ladder's later rungs own decay and eviction. On failure or
+    /// guard rejection the messages pass through untouched.
+    pub(crate) async fn preflight_llm_summarize(&self, messages: Vec<Message>) -> Vec<Message> {
+        let Some(ref compressor) = self.llm_compressor else {
+            return messages;
+        };
+        {
+            let mut guard = compressor.lock().await;
+            if guard.session_id().is_none()
+                && let Some(session_id) = self.session_id()
+            {
+                guard.bind_persistence(Arc::clone(&self.database), session_id);
+            }
+        }
+        let estimated = self.estimate_current_tokens(&messages);
+        let mut guard = compressor.lock().await;
+        if !guard.should_compress(estimated) {
+            return messages;
+        }
+        if guard.is_in_cooldown() {
+            warn!("Preflight LLM summarize skipped — anti-thrash cooldown active");
+            return messages;
+        }
+        match guard.compress(messages.clone(), self.client.as_ref()).await {
+            Ok(result) => {
+                info!(
+                    tokens_before = result.tokens_before,
+                    tokens_after = result.tokens_after,
+                    turns_summarized = result.turns_summarized,
+                    "Preflight LLM summarize succeeded (summarize-before-evict)"
+                );
+                result.messages
+            }
+            Err(e) => {
+                warn!(error = %e, "Preflight LLM summarize failed — rung passes through");
+                messages
+            }
+        }
+    }
+
     /// Access the underlying model client (useful for tools needing direct
     /// access to the concrete provider client).
     pub fn client(&self) -> &Arc<dyn ModelClient> {

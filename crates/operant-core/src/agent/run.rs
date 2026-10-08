@@ -2300,24 +2300,33 @@ impl OperantAgent {
         // if over budget. Without this, any long-running session would
         // eventually exceed the context window and 400-error.
         //
-        // Preflight compression (proactive): estimate tokens before the
-        // LLM call. If the estimated count exceeds 80% of the context
-        // window, apply aggressive decay to compress older messages.
-        // This prevents wasted LLM calls that would fail with
-        // context_length_exceeded. Ported from hermes-agent's
-        // turn_context.py preflight compression pattern.
+        // ── Wave-4 ordered preflight ladder (hermes turn_context.py
+        // parity): fixed rung order, cheapest first; each rung fires
+        // only while the estimate is still over the preflight
+        // threshold. Rung 4 (evict) stays the unconditional final fit —
+        // a no-op under budget, replaced by the lossless engine path
+        // when a context engine is attached.
+        //   1. TOC/trim — re-trim historical tool results (no LLM)
+        //   2. decay — deterministic decay-render of older messages
+        //   3. summarize — LLM compression, summarize-before-evict
+        //   4. evict — engine assemble or lossy evict_to_budget
+        // Wrap-up rung: when the ladder compacted the context, append
+        // final-call copy so the model lands the plane instead of
+        // opening new work near the ceiling.
         let budget = self.config.context_window;
         let reserve = 4096; // tokens reserved for the model's response
         let effective_budget = budget.saturating_sub(reserve);
 
-        let estimated_tokens = self.estimate_current_tokens(&messages);
+        let mut estimated_tokens = self.estimate_current_tokens(&messages);
         let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
+        let mut ladder_fired = false;
         if estimated_tokens > preflight_threshold {
+            ladder_fired = true;
             info!(
                 estimated = estimated_tokens,
                 threshold = preflight_threshold,
                 budget,
-                "Preflight compression: estimated tokens exceed threshold"
+                "Preflight ladder: over threshold — running ordered rungs"
             );
             // Memory provider: on_pre_compress hook.
             // Extract insights from messages about to be compressed and
@@ -2340,11 +2349,37 @@ impl OperantAgent {
                     );
                 }
             }
-            messages = crate::context_management::decay_render(
-                messages,
-                PREFLIGHT_DECAY_H50,
-                PREFLIGHT_DECAY_CONSTANT,
-            );
+
+            // ── Rung 1: TOC/trim — re-trim historical tool results (no LLM) ──
+            let preflight_cfg = PreflightConfig::default();
+            let trimmed = fast_trim_tool_results(&mut messages, &preflight_cfg);
+            if trimmed > 0 {
+                debug!(
+                    tools_trimmed = trimmed,
+                    "Preflight rung 1 (TOC/trim): historical tool results re-trimmed"
+                );
+            }
+            estimated_tokens = self.estimate_current_tokens(&messages);
+
+            // ── Rung 2: decay — deterministic decay-render ──
+            if estimated_tokens > preflight_threshold {
+                info!("Preflight rung 2 (decay): deterministic decay-render");
+                messages = crate::context_management::decay_render(
+                    messages,
+                    PREFLIGHT_DECAY_H50,
+                    PREFLIGHT_DECAY_CONSTANT,
+                );
+                estimated_tokens = self.estimate_current_tokens(&messages);
+            }
+
+            // ── Rung 3: summarize — LLM compression, summarize-before-evict ──
+            // The lossy rung 4 below used to be the only preflight fit;
+            // this rung gives the summarizer first claim on the middle
+            // of the conversation, mirroring the reactive overflow path.
+            if estimated_tokens > preflight_threshold {
+                info!("Preflight rung 3 (summarize): LLM summarize-before-evict");
+                messages = self.preflight_llm_summarize(messages).await;
+            }
         }
 
         // Context engine hook (hermes-lcm parity): when a lossless engine is
@@ -2417,6 +2452,19 @@ impl OperantAgent {
                 sanitizations = tool_sans,
                 "Sanitized tool calls for strict API"
             );
+        }
+
+        // ── Wrap-up rung: final-call copy ────────────────────────────────
+        // Fires only when the ladder compacted the context this call.
+        // hermes parity: the notice rides the BUILT list only — never the
+        // stored conversation — so it cannot accumulate across turns;
+        // each build re-derives it from `ladder_fired` alone.
+        if ladder_fired {
+            messages.push(Message::user(
+                "[CONTEXT NOTICE] The conversation context was compacted to fit the model window. \
+                 Wrap up now: finish the current task and deliver your final answer. \
+                 Do not start new exploratory work.",
+            ));
         }
 
         Ok(messages)

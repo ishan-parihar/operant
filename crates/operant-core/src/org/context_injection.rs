@@ -581,7 +581,7 @@ impl ContextInjector {
     /// shared pool, and render under the total cap. Premiere-authored
     /// global items are directive-class: exempt from the class quota
     /// (subject only to the total cap) — the owner's directive slice.
-    fn render(&self, mut items: Vec<ContextItem>, affinity: Option<&str>) -> String {
+    fn render(&self, items: Vec<ContextItem>, affinity: Option<&str>) -> String {
         let now = chrono::Utc::now().timestamp();
         let s = &self.settings;
         let quota_for = |class: ContextClass| match class {

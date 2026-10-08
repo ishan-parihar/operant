@@ -908,7 +908,7 @@ impl CronScheduler {
         let prompt = match self.seat_budget_state(&seat_id) {
             None => prompt,
             Some((budget, (tokens_used, usd_used))) => {
-                let (used, remaining, unit) = if budget.basis == "usd" {
+                let (_used, remaining, unit) = if budget.basis == "usd" {
                     (usd_used, budget.cap - usd_used, "USD")
                 } else {
                     (tokens_used as f64, budget.cap - tokens_used as f64, "tokens")
