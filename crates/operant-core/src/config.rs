@@ -74,6 +74,9 @@ pub struct AppConfig {
     /// DM/feed context injection (`[context_injection]`, gap 5 phase 1).
     #[serde(default)]
     pub context_injection: ContextInjectionSettings,
+    /// Daily seat-pairing sessions (`[socialization]`, gap 6).
+    #[serde(default)]
+    pub socialization: SocializationSettings,
 }
 
 impl Default for AppConfig {
@@ -104,6 +107,7 @@ impl Default for AppConfig {
             harness: HarnessSettings::default(),
             genome: GenomeSettings::default(),
             context_injection: ContextInjectionSettings::default(),
+            socialization: SocializationSettings::default(),
             pk: PkSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
@@ -211,6 +215,36 @@ impl Default for ContextInjectionSettings {
             weight_recency: 1.0,
             weight_lexical: 1.0,
             weight_authority: 0.5,
+        }
+    }
+}
+
+/// `[socialization]` — the daily seat-pairing sessions (gap 6,
+/// plan-2026-10-08-socialization-sessions.md). Pairs are DATA and ordered:
+/// each entry is `[senior, junior]` — the senior seat initiates; junior
+/// voice is an explicit grant, visibly exceptional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SocializationSettings {
+    /// Master switch. `false` (default) = the sessions never run —
+    /// dark-mergeable like every wave.
+    pub enabled: bool,
+    /// cron expression, six fields (sec min hour dom mon dow), UTC.
+    pub schedule: String,
+    /// Shared turn budget per pair per day (the dm_threads envelope).
+    pub turn_budget: u32,
+    /// `[senior, junior]` pairs. Invalid entries (wrong arity, duplicate
+    /// seats) are skipped with a warning, never fail the tick.
+    pub pairs: Vec<Vec<String>>,
+}
+
+impl Default for SocializationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            schedule: "0 30 9 * * *".to_string(),
+            turn_budget: 3,
+            pairs: Vec::new(),
         }
     }
 }
@@ -2277,6 +2311,19 @@ wonderful_unknown_key = 42
     /// pinned with NON-default values so the test fails if the keys stop
     /// binding (a commented-out block parses as defaults and would pass
     /// vacuously, which is exactly what the values below rule out).
+    #[test]
+    fn socialization_block_parses_into_fields() {
+        let raw = "[socialization]\nenabled = true\nschedule = \"0 45 9 * * *\"\nturn_budget = 2\npairs = [[\"premiere\", \"chief-of-staff\"]]\n";
+        let config = parse_config_str(raw, Path::new("memory://socialization-probe")).unwrap();
+        assert!(config.socialization.enabled);
+        assert_eq!(config.socialization.schedule, "0 45 9 * * *");
+        assert_eq!(config.socialization.turn_budget, 2);
+        assert_eq!(
+            config.socialization.pairs,
+            vec![vec!["premiere".to_string(), "chief-of-staff".to_string()]]
+        );
+    }
+
     #[test]
     fn genome_block_parses_into_fields() {
         let raw = "[genome]\nunrestricted_default = \"standard\"\nunattended_posture = \"lockdown\"\ngrant_ttl_days = 3\n";

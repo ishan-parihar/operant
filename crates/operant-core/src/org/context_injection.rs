@@ -104,8 +104,10 @@ fn authority_of(author: &str) -> f64 {
 }
 
 /// FNV-1a over lowercased, whitespace-collapsed text — cheap, stable, and
-/// only used for identity comparison, never security.
-fn content_hash(text: &str) -> u64 {
+/// only used for identity comparison, never security. Public so a caller
+/// can pre-compute exclusion hashes (the gateway's transcript check:
+/// never echo the inbound message back as an injected item).
+pub fn content_hash(text: &str) -> u64 {
     let normalized: String = text
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -194,14 +196,25 @@ pub struct ContextInjector {
 }
 
 impl ContextInjector {
-    /// Open (idempotently creating the watermark table) against the app db.
-    pub fn open(app_db: &Path, settings: crate::config::ContextInjectionSettings) -> Result<Self> {
-        let conn = Connection::open(app_db)
+    /// Open (idempotently creating the watermark table) against the app
+    /// db's ORG SIBLING — `worklog_db_path`/`org_db_path`'s "one sibling
+    /// kanban file" rule: the worklog, the employees registry, and the
+    /// `context_watermarks` cursors are all org-family rows in
+    /// `operant_kanban.db`, NOT the app `database.db`. (Found in live
+    /// verification 2026-10-08: the first deployment opened the app db,
+    /// the worklog query failed, and fail-open correctly produced
+    /// byte-identical prompts — an invisible no-op. This is the fix.)
+    pub fn open(
+        database_path: &Path,
+        settings: crate::config::ContextInjectionSettings,
+    ) -> Result<Self> {
+        let org_sibling = crate::org::worklog_db::worklog_db_path(database_path);
+        let conn = Connection::open(&org_sibling)
             .map_err(|e| Error::Agent(format!("context injection: open: {e}")))?;
         conn.execute_batch(CONTEXT_WATERMARKS_SCHEMA)
             .map_err(|e| Error::Agent(format!("context injection: schema: {e}")))?;
         Ok(Self {
-            app_db: app_db.to_path_buf(),
+            app_db: org_sibling,
             settings,
         })
     }
@@ -211,15 +224,23 @@ impl ContextInjector {
     /// byte-identical (the iter-666 contract).
     ///
     /// `affinity` is the relevance corpus — the seat's charter — and may be
-    /// `None` (lexical component scores zero).
-    pub fn render_section(&self, seat_id: &str, affinity: Option<&str>, prompt: &str) -> String {
+    /// `None` (lexical component scores zero). `exclude` is the transcript
+    /// check: content hashes of messages the live conversation ALREADY
+    /// carries (the inbound DM chiefly); matching items never render.
+    pub fn render_section(
+        &self,
+        seat_id: &str,
+        affinity: Option<&str>,
+        prompt: &str,
+        exclude: &[u64],
+    ) -> String {
         if !self.settings.enabled {
             return prompt.to_string();
         }
         let Ok(conn) = Connection::open(&self.app_db) else {
             return prompt.to_string(); // fail-open: injection never fails a run
         };
-        let items = match self.collect(&conn, seat_id) {
+        let items = match self.collect(&conn, seat_id, exclude) {
             Ok(items) => items,
             Err(e) => {
                 tracing::warn!("context injection collect failed: {e} (fail-open)");
@@ -241,10 +262,16 @@ impl ContextInjector {
         format!("{rendered}\n\n{prompt}")
     }
 
-    /// Collect unseen items for the seat, one class at a time, then drop
-    /// cross-class duplicates (DM form wins — the addressing context is
-    /// the valuable part; then Global > Dept > Self).
-    fn collect(&self, conn: &Connection, seat_id: &str) -> Result<Vec<ContextItem>> {
+    /// Collect unseen items for the seat, one class at a time, drop the
+    /// transcript-check exclusions, then drop cross-class duplicates (DM
+    /// form wins — the addressing context is the valuable part; then
+    /// Global > Dept > Self).
+    fn collect(
+        &self,
+        conn: &Connection,
+        seat_id: &str,
+        exclude: &[u64],
+    ) -> Result<Vec<ContextItem>> {
         let mut items: Vec<ContextItem> = Vec::new();
         for class in [
             ContextClass::Dm,
@@ -255,6 +282,11 @@ impl ContextInjector {
             let watermark = self.watermark(conn, seat_id, class)?;
             let rows = self.collect_class(conn, seat_id, class, watermark)?;
             items.extend(rows);
+        }
+        // Transcript check: the live conversation already carries these
+        // items (the inbound message chiefly) — never echo them back.
+        if !exclude.is_empty() {
+            items.retain(|item| !exclude.contains(&item.hash));
         }
         // Cross-class dedup, first-writer-wins (collection order above IS
         // the class priority, so a DM form survives over a feed form). A
@@ -554,7 +586,11 @@ mod tests {
 
     fn db_with_worklog() -> (tempfile::TempDir, ContextInjector) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let conn = Connection::open(dir.path().join("app.sqlite")).expect("open");
+        // The injector derives the org sibling (operant_kanban.db) from
+        // the app path — build the worklog fixture THERE.
+        let app_db = dir.path().join("app.sqlite");
+        let kanban = crate::org::worklog_db::worklog_db_path(&app_db);
+        let conn = Connection::open(&kanban).expect("open");
         conn.execute_batch(
             "CREATE TABLE worklog (
                 id TEXT PRIMARY KEY, ts INTEGER NOT NULL, ts_iso TEXT NOT NULL,
@@ -566,7 +602,7 @@ mod tests {
         .expect("schema");
         drop(conn);
         let injector = ContextInjector::open(
-            &dir.path().join("app.sqlite"),
+            &app_db,
             crate::config::ContextInjectionSettings {
                 self_quota: 300,
                 ..settings()
@@ -592,7 +628,7 @@ mod tests {
         log(&conn, "dispatcher", 100, "audited the queue");
         drop(conn);
 
-        let first = injector.render_section("dispatcher", None, "PROMPT");
+        let first = injector.render_section("dispatcher", None, "PROMPT", &[]);
         assert!(
             first.contains("audited the queue"),
             "first render must include it"
@@ -602,7 +638,7 @@ mod tests {
             "prompt must ride under the section"
         );
 
-        let second = injector.render_section("dispatcher", None, "PROMPT");
+        let second = injector.render_section("dispatcher", None, "PROMPT", &[]);
         assert_eq!(
             second, "PROMPT",
             "a consumed row must never re-inject — byte-identical"
@@ -616,12 +652,12 @@ mod tests {
         log(&conn, "premiere", 100, "org directive: ship the wave");
         drop(conn);
 
-        let warden = injector.render_section("identity-warden", None, "PROMPT");
+        let warden = injector.render_section("identity-warden", None, "PROMPT", &[]);
         assert!(
             warden.contains("org directive"),
             "the global feed must reach other seats: {warden}"
         );
-        let premiere_self = injector.render_section("premiere", None, "PROMPT");
+        let premiere_self = injector.render_section("premiere", None, "PROMPT", &[]);
         assert!(
             premiere_self.contains("org directive"),
             "for the author the same row is Self-class continuity (never a broadcast to itself), and it still renders: {premiere_self}"
@@ -644,7 +680,7 @@ mod tests {
         log(&conn, "premiere", 100, &long);
         drop(conn);
 
-        let rendered = injector.render_section("identity-warden", None, "PROMPT");
+        let rendered = injector.render_section("identity-warden", None, "PROMPT", &[]);
         assert!(
             rendered.contains("prioritise the rollout"),
             "a premiere directive must not be dropped by the class quota"
@@ -663,7 +699,7 @@ mod tests {
         log(&conn, "dispatcher", 300, &filler);
         drop(conn);
 
-        let rendered = injector.render_section("dispatcher", None, "PROMPT");
+        let rendered = injector.render_section("dispatcher", None, "PROMPT", &[]);
         let count = rendered.matches("row xxx").count();
         assert!(
             count >= 2 && count <= 5,
@@ -683,14 +719,14 @@ mod tests {
         )
         .expect("injector");
         assert_eq!(
-            injector.render_section("dispatcher", None, "PROMPT"),
+            injector.render_section("dispatcher", None, "PROMPT", &[]),
             "PROMPT",
             "disabled must be byte-identical"
         );
 
         let (_d2, injector2) = db_with_worklog(); // empty worklog
         assert_eq!(
-            injector2.render_section("dispatcher", None, "PROMPT"),
+            injector2.render_section("dispatcher", None, "PROMPT", &[]),
             "PROMPT",
             "empty pipeline must be byte-identical"
         );
@@ -719,6 +755,23 @@ mod tests {
         assert!(
             r > i,
             "affinity must rank the relevant item higher: {r} vs {i}"
+        );
+    }
+
+    #[test]
+    fn transcript_check_never_echoes_the_inbound_message() {
+        let (_dir, injector) = db_with_worklog();
+        let conn = Connection::open(&injector.app_db).expect("conn");
+        log(&conn, "premiere", 100, "urgent directive follow up now");
+        drop(conn);
+        // The live conversation already carries this content (its inbound
+        // form, differently cased/spaced) — the hash normalizes, so the
+        // exclusion drops the item instead of echoing it back.
+        let exclude = [content_hash("Urgent  directive   follow up now")];
+        assert_eq!(
+            injector.render_section("identity-warden", None, "PROMPT", &exclude),
+            "PROMPT",
+            "the inbound message must never echo back as injected context"
         );
     }
 

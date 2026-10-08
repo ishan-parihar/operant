@@ -512,24 +512,6 @@ unrestricted_default = "yolo"
 # affected — their policy row already clamps unattended runs. This knob,
 # and only this knob, manages the unattended posture.
 unattended_posture = "yolo"
-# DM/feed context injection (gap 5 phase 1) — the bounded, deduplicated,
-# ranked context section injected ahead of a seat's prompt: its own
-# previous cycles (self), premiere/chief-of-staff broadcasts (global),
-# same-department peers (dept), and DMs (phase 2 platform reads). The
-# quotas are per-aspect character budgets; the total is a hard ceiling.
-# Set enabled = false for byte-identical prompts.
-[context_injection]
-enabled = true
-total_char_cap = 2000
-dm_quota = 800
-global_quota = 500
-dept_quota = 400
-self_quota = 300
-recency_halflife_hours_feed = 24.0
-recency_halflife_hours_dm = 168.0
-weight_recency = 1.0
-weight_lexical = 1.0
-weight_authority = 0.5
 # Days a department-head approval's grant stands (the HoD default is 7).
 # 0 or negative = never-standing for non-CEO approvals: the grant is
 # recorded already-lapsed, so the approval stays auditable while conferring
@@ -537,7 +519,7 @@ weight_authority = 0.5
 grant_ttl_days = 7
 # Wave 3 — minutes a completed turn's rolling session summary remains a
 # valid continuation entry point (restart / session reload inside the
-# window begins from it; after the window the next session starts fresh).
+# window begins from it); after the window the next session starts fresh.
 # Owner spec range 15-30; default 30. The summary is rewritten (upserted)
 # after EVERY completed turn: new roll = previous roll + this session's
 # doings — rolling, never an aggregate of old rolls.
@@ -559,3 +541,40 @@ mode = "soft"
 # only by a human verdict or the 60s interactive lapse. [genome] rejects
 # unknown keys, so if you uncommented it, delete that line from your config.
 # (The run consults the grant ledger every tick regardless.)
+# DM/feed context injection (gap 5 phase 1) — the bounded, deduplicated,
+# ranked context section injected ahead of a seat's prompt: its own
+# previous cycles (self), premiere/chief-of-staff broadcasts (global),
+# same-department peers (dept), and DMs (phase 2 platform reads). The
+# quotas are per-aspect character budgets; the total is a hard ceiling.
+# Set enabled = false for byte-identical prompts.
+[context_injection]
+enabled = true
+total_char_cap = 2000
+dm_quota = 800
+global_quota = 500
+dept_quota = 400
+self_quota = 300
+recency_halflife_hours_feed = 24.0
+recency_halflife_hours_dm = 168.0
+weight_recency = 1.0
+weight_lexical = 1.0
+weight_authority = 0.5
+# Daily seat-pairing sessions (gap 6, plan-2026-10-08-socialization-
+# sessions.md). Pairs are DATA and ordered [senior, junior] — the senior
+# seat initiates; junior voice is an explicit grant. Each pair holds one
+# shared-budget conversation per schedule fire; the close-out lands in
+# both seats' MEMORY.md. enabled = false (default) = the sessions never
+# run (dark-mergeable).
+[socialization]
+enabled = false
+schedule = "0 30 9 * * *"
+turn_budget = 3
+pairs = [
+    ["premiere", "chief-of-staff"],
+    ["chief-of-staff", "crew-chief"],
+    ["chief-of-staff", "hrmaster"],
+    ["chief-of-staff", "governor"],
+    ["crew-chief", "dispatcher"],
+    ["crew-chief", "identity-warden"],
+    ["hrmaster", "compass"],
+]

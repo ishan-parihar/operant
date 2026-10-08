@@ -69,6 +69,7 @@ pub mod notice;
 pub mod notice_db;
 pub mod pending_requests;
 pub mod context_injection;
+pub mod socialization;
 // RESTORED BY PACKET D — packet A temporarily disabled these because of a
 // compile error in worklog_db.rs. That error is fixed (the `named_params!`
 // macro was used without its `use` import; see worklog_db.rs:49).

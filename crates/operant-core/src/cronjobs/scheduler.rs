@@ -86,6 +86,9 @@ pub struct CronScheduler {
     /// iter-679 (gap 5, phase 1): the DM/feed context injector. `None` =
     /// no injection, prompts byte-identical (dark-mergeable).
     context_injection: Option<Arc<crate::org::context_injection::ContextInjector>>,
+    /// iter-684 (gap 6): the daily seat-pairing sessions' settings.
+    /// `None` = never mounted, the tick never checks (dark-mergeable).
+    socialization: Option<crate::config::SocializationSettings>,
 }
 
 impl CronScheduler {
@@ -104,6 +107,7 @@ impl CronScheduler {
             seat_budgets: None,
             default_budget: crate::config::BudgetSettings::default(),
             context_injection: None,
+            socialization: None,
         }
     }
 
@@ -196,6 +200,18 @@ impl CronScheduler {
         self
     }
 
+    /// iter-684 (gap 6): mount the socialization settings — the tick then
+    /// checks the schedule every pass and runs the configured pairs when
+    /// due. Settings carry their own `enabled` flag; mounting is the
+    /// gateway's decision that the feature is wired at all.
+    pub fn with_socialization(
+        mut self,
+        settings: crate::config::SocializationSettings,
+    ) -> Self {
+        self.socialization = Some(settings);
+        self
+    }
+
     /// The seat a job belongs to: the §3.1.1 `employee_cron_jobs` join when
     /// the job is linked, else the derived id — the pre-661 claim. Shared
     /// by worklog attribution and seat-memory injection so the two always
@@ -275,6 +291,11 @@ impl CronScheduler {
                 error!("Failed to run cron job {}: {}", job.id, e);
             }
         }
+
+        // iter-684 (gap 6): the daily seat-pairing sessions — a schedule
+        // check, not a job row (infra-owned, outside the cast registry).
+        // After the due jobs so a busy tick never delays a live dispatch.
+        self.maybe_run_socialization().await;
 
         Ok(())
     }
@@ -535,7 +556,14 @@ impl CronScheduler {
     fn budget_gate_block(&self, job: &CronJob) -> Option<String> {
         let derived = crate::org::employee::derive_employee_id(&job.id);
         let seat_id = self.resolve_seat_id(job, &derived);
-        let (budget, (tokens_used, usd_used)) = self.seat_budget_state(&seat_id)?;
+        self.budget_refusal_for_seat(&seat_id)
+    }
+
+    /// iter-684: the hard-cap refusal for a SEAT (not a job) — the
+    /// socialization turns consult the same posture a cron run does.
+    /// `None` = the turn may run. Soft mode and ungoverned seats never refuse.
+    fn budget_refusal_for_seat(&self, seat_id: &str) -> Option<String> {
+        let (budget, (tokens_used, usd_used)) = self.seat_budget_state(seat_id)?;
         let (used, remaining, unit) = if budget.basis == "usd" {
             (usd_used, budget.cap - usd_used, "USD")
         } else {
@@ -550,6 +578,187 @@ impl CronScheduler {
              for the window to roll",
             seat_id, used, budget.cap, unit, budget.window
         ))
+    }
+
+    /// iter-684 (gap 6): the socialization coordinator — checked every
+    /// tick, runs at most once per schedule fire. Infra-owned per the
+    /// owner's 9-cast-seats ruling (the design doc's `cron_cast_socializer`
+    /// is realized HERE, outside the registry, like dispatcher-retry).
+    async fn maybe_run_socialization(&self) {
+        let Some(settings) = self.socialization.as_ref() else {
+            return;
+        };
+        if !settings.enabled {
+            return;
+        }
+        let Some(root) = self.seat_memory_root.clone() else {
+            warn!(
+                "socialization: no seat-memory root mounted — sessions cannot run; skipping"
+            );
+            return;
+        };
+        let org_db = root.join("operant_kanban.db");
+        let now = chrono::Utc::now();
+        let last = crate::org::socialization::last_socialization_run(&org_db)
+            .ok()
+            .flatten();
+        if !crate::org::socialization::socialization_due(
+            &settings.schedule,
+            last.as_deref(),
+            now,
+        ) {
+            return;
+        }
+        info!(
+            pairs = settings.pairs.len(),
+            "socialization: due — running the daily sessions"
+        );
+        // At-most-once: stamp first; a crashed pair is a missed pair, not a
+        // doubled one (spend discipline over completeness).
+        if let Err(e) =
+            crate::org::socialization::record_socialization_run(&org_db, &now.to_rfc3339())
+        {
+            warn!("socialization: state write failed — sessions skipped to avoid a double run: {e}");
+            return;
+        }
+        for pair in &settings.pairs {
+            if let Err(e) = self.run_socialization_pair(&root, settings.turn_budget, pair).await {
+                warn!("socialization: pair {pair:?} failed: {e} (fail-open)");
+            }
+        }
+    }
+
+    /// iter-684 (gap 6): drive ONE pair's session — senior opens, junior
+    /// answers, the alternation closes; the shared turn budget is the
+    /// dm_threads envelope; every turn is a full seat-shaped run (binding +
+    /// memory + injected feeds + metering). On close, the close-out lands in
+    /// BOTH seats' MEMORY.md — the densification ledger.
+    async fn run_socialization_pair(
+        &self,
+        root: &std::path::Path,
+        turn_budget: u32,
+        pair: &[String],
+    ) -> Result<(), Error> {
+        if pair.len() != 2 || pair[0].is_empty() || pair[1].is_empty() || pair[0] == pair[1] {
+            return Err(Error::Agent(format!(
+                "socialization: invalid pair {pair:?} — expected [senior, junior]"
+            )));
+        }
+        let (senior, junior) = (&pair[0], &pair[1]);
+        let threads =
+            crate::org::dm_thread::DmThreadDb::init(root.join("operant_kanban.db"))?;
+        let thread = threads.open(senior, junior, turn_budget)?;
+        let thread_id = thread.thread_id.clone();
+        let session_key = format!("socialization:{thread_id}");
+        let n = turn_budget.max(1);
+
+        let mut transcript_tail = String::new();
+        for i in 0..n {
+            let speaker = if i % 2 == 0 { senior } else { junior };
+            let other = if i % 2 == 0 { junior } else { senior };
+            if threads.remaining(&thread_id)? == 0 {
+                break;
+            }
+            // The seat's budget posture gates a session turn exactly like a
+            // cron run — sessions never spend past a hard cap.
+            if let Some(reason) = self.budget_refusal_for_seat(speaker) {
+                warn!("socialization: turn refused for `{speaker}`: {reason}");
+                break;
+            }
+            let budget = threads.spend_turn(&thread_id)?;
+            let awareness = crate::org::dm_thread::awareness_line(budget.remaining(), n);
+            let base_prompt = if i == 0 {
+                format!(
+                    "Daily socialization session with `{other}`. {awareness}. Open the \
+                     session: greet {other}, share what is most relevant from your \
+                     latest work and the org feeds, name one decision you need from \
+                     {other} or their chain, and ask one question. Be concise."
+                )
+            } else if i + 1 >= n {
+                format!(
+                    "{other} said:\n{transcript_tail}\n{awareness}. Close the session: \
+                     state the outcomes of this exchange and your next intents in \
+                     two to four lines — they will be appended to both seats' \
+                     MEMORY.md files."
+                )
+            } else {
+                format!(
+                    "{other} said:\n{transcript_tail}\n{awareness}. Respond: answer the \
+                     question, share your latest, and surface what you need."
+                )
+            };
+            let prompt = self.bind_seat_run(speaker, &session_key, &base_prompt);
+            let meter_before = self.usage_meter.as_ref().and_then(|m| {
+                m.lock()
+                    .ok()
+                    .map(|acc| (acc.input_tokens(), acc.output_tokens(), acc.cost_usd()))
+            });
+            match self.agent.run(prompt).await {
+                Ok(message) => {
+                    self.drain_run_usage(
+                        &format!("socialization:{thread_id}"),
+                        &format!("socialization {senior}-{junior}"),
+                        speaker,
+                        meter_before,
+                    );
+                    transcript_tail =
+                        crate::agent::safe_truncate_str(message.content.trim(), 800)
+                            .to_string();
+                }
+                Err(e) => {
+                    warn!("socialization: turn {i} for `{speaker}` failed: {e}");
+                    break;
+                }
+            }
+        }
+        let _ = threads
+            .close(&thread_id, "socialization session complete")
+            .inspect_err(|e| warn!("socialization: close failed for {thread_id}: {e}"));
+
+        // Densification: the close-out (the last spoken content) lands in
+        // BOTH seats' MEMORY.md under a dated heading.
+        let outcome = transcript_tail.trim();
+        if !outcome.is_empty() {
+            let heading =
+                format!("## Socialization {}", chrono::Utc::now().format("%Y-%m-%d"));
+            seat_memory_append(
+                Some(root),
+                senior,
+                &heading,
+                &format!("Session with {junior}: {outcome}"),
+            );
+            seat_memory_append(
+                Some(root),
+                junior,
+                &heading,
+                &format!("Session with {senior}: {outcome}"),
+            );
+        }
+        Ok(())
+    }
+
+    /// iter-684: bind the shared agent to a seat and compose its full prompt
+    /// — session key, seat + charter, seat memory, injected feeds. The
+    /// shared preamble of every seat-shaped run (cron jobs and socialization
+    /// turns), so the two paths can never disagree about what a seat sees.
+    fn bind_seat_run(&self, seat_id: &str, session_key: &str, base_prompt: &str) -> String {
+        self.agent.set_session_id(session_key.to_string());
+        self.agent.set_seat_id(seat_id.to_string());
+        let charter = self.employee_db.as_ref().and_then(|db| {
+            db.get_employee(seat_id)
+                .ok()
+                .flatten()
+                .and_then(|emp| emp.system_prompt.clone())
+        });
+        self.agent.set_charter(charter.clone());
+        let prompt = match self.seat_memory_root.as_deref() {
+            Some(root) => seat_memory_prompt(root, seat_id, base_prompt),
+            None => base_prompt.to_string(),
+        };
+        match self.context_injection.as_ref() {
+            Some(injector) => injector.render_section(seat_id, charter.as_deref(), &prompt, &[]),
+            None => prompt,
+        }
     }
 
     /// iter-678: fail-open side effect for a budget refusal — the gate's
@@ -584,7 +793,8 @@ impl CronScheduler {
     /// Fail-open (genome invariant): a metering write never fails a run.
     fn drain_run_usage(
         &self,
-        job: &CronJob,
+        source_id: &str,
+        source_name: &str,
         seat_id: &str,
         meter_before: Option<(u64, u64, f64)>,
     ) {
@@ -607,24 +817,24 @@ impl CronScheduler {
         }
         let source = crate::gateway_session::SessionSource {
             platform: "cron".to_string(),
-            chat_id: job.id.clone(),
-            chat_name: Some(job.name.clone()),
+            chat_id: source_id.to_string(),
+            chat_name: Some(source_name.to_string()),
             chat_type: "cron".to_string(),
             ..Default::default()
         };
         match store.get_or_create_session(&source, false) {
             Ok(entry) => {
                 if let Err(e) = store.bind_employee(&entry.session_key, seat_id) {
-                    warn!("cron usage bind failed for {}: {e} (fail-open)", job.id);
+                    warn!("cron usage bind failed for {}: {e} (fail-open)", source_id);
                 }
                 if let Err(e) =
                     store.update_tokens(&entry.session_key, in_delta, out_delta, 0, 0, cost_delta)
                 {
-                    warn!("cron usage drain failed for {}: {e} (fail-open)", job.id);
+                    warn!("cron usage drain failed for {}: {e} (fail-open)", source_id);
                 }
             }
             Err(e) => {
-                warn!("cron usage session create failed for {}: {e} (fail-open)", job.id)
+                warn!("cron usage session create failed for {}: {e} (fail-open)", source_id)
             }
         }
     }
@@ -645,44 +855,16 @@ impl CronScheduler {
         //
         // The id is derived with the same §3.1.1 rule the org gate uses, so the
         // session and the employee are the same identity.
+        //
+        // iter-684: the seat preamble (binding, charter, seat memory,
+        // injected feeds) is the shared `bind_seat_run` — one composition
+        // path for cron runs and socialization turns, so the two can never
+        // disagree about what a seat sees. Its history: iter-672 bound the
+        // seat (the guard at stream.rs:811 keys on it); iter-666 injected
+        // MEMORY.md; iter-679 injected the bounded feed section.
         let session_id = crate::org::employee::derive_employee_id(&job.id);
-        self.agent.set_session_id(session_id.clone());
-
-        // iter-672: bind the run to its SEAT, mirroring the gateway's DM
-        // path (gateway_runner.rs:967-975). The dangerous-tool guard
-        // (stream.rs:811) consults seat_authority keyed by seat_id with a
-        // derived-id fallback — without this binding, a governed seat's
-        // policy row never binds its own cron runs: they resolve as the
-        // derived id, which has no row, i.e. ungoverned. Charter comes from
-        // the registry like the gateway does (None for cron is fine — the
-        // job's prompt already IS the charter).
         let seat_id = self.resolve_seat_id(job, &session_id);
-        self.agent.set_seat_id(seat_id.clone());
-        let charter = self.employee_db.as_ref().and_then(|db| {
-            db.get_employee(&seat_id)
-                .ok()
-                .flatten()
-                .and_then(|emp| emp.system_prompt.clone())
-        });
-        self.agent.set_charter(charter.clone());
-
-        // iter-666: the seat's curated MEMORY.md rides in ahead of the
-        // charter (docs/plan-2026-10-07-two-tier-memory-hybrid). Absent
-        // file (cold start), unlinked job, or no mounted root → the
-        // prompt is the job's own, byte-identical.
-        let prompt = match self.seat_memory_root.as_deref() {
-            Some(root) => seat_memory_prompt(root, &seat_id, &job.prompt),
-            None => job.prompt.clone(),
-        };
-
-        // iter-679 (gap 5, phase 1): the bounded, deduplicated, ranked
-        // context section — org feeds + DMs since the seat's last cycle.
-        // The charter is the lexical-affinity corpus. Absent/empty/disabled
-        // → byte-identical (the iter-666 contract, extended).
-        let prompt = match self.context_injection.as_ref() {
-            Some(injector) => injector.render_section(&seat_id, charter.as_deref(), &prompt),
-            None => prompt,
-        };
+        let prompt = self.bind_seat_run(&seat_id, &session_id, &job.prompt);
 
         // ── iter-678: budget posture (gap 1) ──────────────────────────
         // Mirrors the gateway's turn-start construction
@@ -754,7 +936,7 @@ impl CronScheduler {
         // iter-678 (gap 1, metering): drain the run's usage into the seat's
         // rollup BEFORE the outcome arms — error runs are metered too, the
         // same order the gateway drains at turn end.
-        self.drain_run_usage(job, &seat_id, meter_before);
+        self.drain_run_usage(&job.id, &job.name, &seat_id, meter_before);
 
         match run_result {
             Ok(message) => {
@@ -930,6 +1112,34 @@ fn seat_memory_path(org_root: &std::path::Path, seat_id: &str) -> std::path::Pat
         .join("MEMORY.md")
 }
 
+/// iter-684 (gap 6): append a bounded socialization outcome to a seat's
+/// MEMORY.md — the two-tier memory doc's seat tier, appended by the
+/// socialization coordinator (the seat itself curates what stays). Creates
+/// the file and its directory when absent — a cold-start seat's first
+/// socialization IS its first memory. `None` root = no-op (the caller
+/// warns); a failed write warns and never fails the session.
+fn seat_memory_append(
+    org_root: Option<&std::path::Path>,
+    seat_id: &str,
+    heading: &str,
+    text: &str,
+) {
+    let Some(org_root) = org_root else {
+        return;
+    };
+    let path = seat_memory_path(org_root, seat_id);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let entry = format!("\n{heading}\n{}\n", text.trim());
+    match std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()))
+    {
+        Ok(()) => {}
+        Err(e) => warn!("seat memory append failed for `{seat_id}`: {e} (fail-open)"),
+    }
+}
+
 /// Prepend the seat's memory under a fixed, self-describing header — the
 /// header names the file's path so the seat can find it with its file
 /// tools, and the file itself stays the seat's alone.
@@ -973,7 +1183,12 @@ fn repeat_limit_reached(repeat_times: Option<i32>, repeat_completed: i32) -> boo
 
 #[cfg(test)]
 mod tests {
-    use super::{repeat_limit_reached, seat_memory_prompt, should_arm_transient_retry};
+    use super::{
+        repeat_limit_reached,
+        seat_memory_append,
+        seat_memory_prompt,
+        should_arm_transient_retry,
+    };
     use std::sync::Arc;
 
     #[test]
@@ -1218,7 +1433,7 @@ mod tests {
             acc.record_cost(0.01);
         }
         let scheduler = scheduler.with_usage_meter(meter);
-        scheduler.drain_run_usage(&test_job(), &seat_id, Some((0, 0, 0.0)));
+        scheduler.drain_run_usage("job_budget_probe", "budget probe", &seat_id, Some((0, 0, 0.0)));
 
         let store = scheduler.usage_store.clone().expect("store");
         let since = crate::org::seat_budgets::window_start("daily");
@@ -1227,6 +1442,31 @@ mod tests {
             .expect("rollup");
         assert_eq!(tokens, 165, "in+out must land in the seat's rollup");
         assert!((usd - 0.01).abs() < 1e-9, "cost must land too, got {usd}");
+    }
+
+    #[test]
+    fn seat_memory_append_creates_and_appends() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        seat_memory_append(
+            Some(dir.path()),
+            "identity-warden",
+            "## Socialization 2026-10-08",
+            "Session with premiere: aligned on the audit cadence.",
+        );
+        seat_memory_append(
+            Some(dir.path()),
+            "identity-warden",
+            "## Socialization 2026-10-09",
+            "Session with premiere: follow-up held.",
+        );
+        let read = std::fs::read_to_string(
+            dir.path().join("org/employees/identity-warden/MEMORY.md"),
+        )
+        .expect("read back");
+        assert!(read.contains("2026-10-08") && read.contains("2026-10-09"));
+        assert!(read.contains("audit cadence"));
+        // No root = a no-op, never a panic.
+        seat_memory_append(None, "x", "h", "t");
     }
 
     // ── iter-669: transient-retry budget ──

@@ -826,6 +826,11 @@ struct GatewayMessageHandler {
     /// Per-seat overrides resolve through the SEAT_BUDGET_DBS global at
     /// turn time.
     default_budget: operant_core::config::BudgetSettings,
+    /// iter-683 (gap 5 phase 1b): the DM/feed context injector — the
+    /// gateway turn's mirror of the scheduler's cron seam. `None` = no
+    /// injection, turns byte-identical (dark-mergeable).
+    context_injection:
+        Option<Arc<operant_core::org::context_injection::ContextInjector>>,
 }
 
 #[async_trait::async_trait]
@@ -1195,6 +1200,23 @@ impl MessageHandler for GatewayMessageHandler {
         } else {
             query
         };
+
+        // iter-683 (gap 5 phase 1b): the DM/feed context section — the
+        // gateway mirror of the scheduler's seam. The bound employee is
+        // the reader; the agent's charter is the affinity corpus; the
+        // inbound message is the transcript check (never echo it back).
+        // None/empty/disabled → byte-identical (the iter-666 contract).
+        let query =
+            if let (Some(injector), Some(employee_id)) =
+                (self.context_injection.as_ref(), bound_employee.as_ref())
+            {
+                let charter = self.agent.charter();
+                let exclude =
+                    [operant_core::org::context_injection::content_hash(&message.content)];
+                injector.render_section(employee_id, charter.as_deref(), &query, &exclude)
+            } else {
+                query
+            };
 
         // Turn start. `reloaded` is logged because it is the single fact that
         // explains what the model can see this turn: `true` means the
@@ -1984,6 +2006,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         turn_usage: turn_usage.clone(),
         summary_ttl_minutes: app_config.genome.session_summary_ttl_minutes,
         default_budget: app_config.genome.budget.clone(),
+        // iter-683: same injector the scheduler holds — one settings
+        // surface for both seams. Fail-open: an injector that cannot open
+        // leaves turns byte-identical.
+        context_injection: operant_core::org::context_injection::ContextInjector::open(
+            &app_config.database_path,
+            app_config.context_injection.clone(),
+        )
+        .ok()
+        .map(Arc::new),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -3804,7 +3835,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         if let Some(injector) = context_injector {
             scheduler = scheduler.with_context_injection(injector);
         }
-        let scheduler = scheduler;
+        // iter-684 (gap 6): mount the socialization settings — the tick
+        // then checks the schedule every pass. Settings carry their own
+        // `enabled` flag (default false, dark-mergeable).
+        let scheduler = scheduler.with_socialization(app_config.socialization.clone());
         tokio::spawn(async move { scheduler.start().await });
 
         // Delivery receiver — sends cron results to platforms
