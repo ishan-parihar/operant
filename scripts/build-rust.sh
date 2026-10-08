@@ -47,8 +47,12 @@ cd "$PROJECT_DIR"
 PROJECT_NAME=$(grep -m1 '^name' Cargo.toml 2>/dev/null | sed 's/.*= *"\([^"]*\)"/\1/' || echo "rust-project")
 echo "Project: $PROJECT_NAME"
 
-# Auto-detect parallelism
-JOBS=$(nproc 2>/dev/null || echo 1)
+# Parallelism: default 4, honour cargo's own CARGO_BUILD_JOBS override.
+# RG-089 (pioneer-qf): $(nproc)-wide builds (24 here) spawn a ~20+ rust-lld
+# link herd at ~2GB each and thrash-wedge this 46GB host to death (crashes
+# #4-#8, 2026-10-08). A CLI --jobs flag outranks ~/.cargo/config.toml, so the
+# cap must live here. Override per-invocation: CARGO_BUILD_JOBS=8 ./scripts/build-rust.sh
+JOBS="${CARGO_BUILD_JOBS:-4}"
 CARGO_JOBS="--jobs $JOBS"
 echo "  Parallelism: $JOBS jobs"
 
