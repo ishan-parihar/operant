@@ -45,7 +45,7 @@ impl OperantTool for ClarifyTool {
         ToolSchema::from_type::<ClarifyArgs>("clarify", "Ask the user a clarifying question")
     }
 
-    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
         let args: ClarifyArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => return ToolResult::error("clarify", format!("Invalid arguments: {}", e)),
@@ -66,6 +66,20 @@ impl OperantTool for ClarifyTool {
             Some(c) => Some(c),
             None => None,
         };
+
+        // BUGS.md D-6 fail-fast: an unattended run (cron) has no interactive
+        // user. The user-question channel is process-global and the gateway
+        // drains it into whatever chat is active — so without this guard a
+        // 03:00 scheduled job can wake the owner by routing its question
+        // into their chat, or hang forever on a channel nobody answers.
+        // Fail the call instead: the agent proceeds on its own judgment.
+        if context.metadata.get("unattended").map(String::as_str) == Some("true") {
+            return ToolResult::error(
+                "clarify",
+                "unattended run: no interactive user can answer a clarifying \
+                 question — proceed with your best judgment and do not wait",
+            );
+        }
 
         // If a TUI is running (user_question sender is set), push the
         // question to the TUI and await the user's reply. The TUI opens
@@ -115,6 +129,30 @@ mod tests {
 
     fn default_context() -> ToolContext {
         ToolContext::default()
+    }
+
+    #[tokio::test]
+    async fn test_clarify_unattended_fails_fast() {
+        // D-6: a scheduled job must never route its question into a human's
+        // chat nor block on the process-global channel — the tool errors
+        // immediately so the run proceeds on its own judgment.
+        let tool = ClarifyTool;
+        let context = ToolContext::default().with_metadata("unattended", "true");
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "question": "Which flavor?"
+                }),
+                context,
+            )
+            .await;
+
+        assert!(!result.success, "unattended clarify must fail fast");
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unattended"));
     }
 
     #[tokio::test]

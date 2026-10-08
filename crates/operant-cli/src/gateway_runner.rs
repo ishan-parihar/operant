@@ -65,6 +65,77 @@ struct TurnUsage {
 
 type TurnUsageMap = Arc<Mutex<HashMap<ThreadKey, TurnUsage>>>;
 
+/// D-2 (owner ruling 2026-10-08): the verdict for an UNGOVERNED unattended
+/// permission request that has no interactive approver to answer it, under
+/// `[genome].unattended_posture`. This knob, and only this knob, manages the
+/// unattended posture — governed seats never reach it (their policy row
+/// already clamps unattended runs in `agent/stream.rs`, F2).
+///
+/// Returns `None` to auto-approve (`yolo`, byte-identical legacy behavior)
+/// or `Some(reason)` to deny with the reason. A typo'd spelling FAILS
+/// CLOSED — the same read-error discipline as `seat_policies`: a typo'd
+/// `lockdonw` silently re-opening unattended dangerous tools would be the
+/// exact widening the genome exists to prevent.
+fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
+    use operant_core::org::seat_policy::SeatMode;
+    use std::str::FromStr;
+    match SeatMode::from_str(posture_raw) {
+        Ok(SeatMode::Yolo) => None,
+        Ok(mode) => Some(format!(
+            "Permission denied by unattended posture: \
+             [genome].unattended_posture is `{}` and no interactive \
+             approver is attached to this run. Give the seat a governed \
+             policy (`operant cron create --seat-mode` or /grant) so its \
+             approver can mint a grant between runs, or set the posture \
+             back to `yolo` to restore auto-approval",
+            mode.as_str()
+        )),
+        Err(e) => Some(format!(
+            "Permission denied (fail-closed): the unattended posture is \
+             unreadable — {}. Fix [genome].unattended_posture; `yolo` \
+             restores auto-approval",
+            e
+        )),
+    }
+}
+
+#[cfg(test)]
+mod unattended_posture_tests {
+    use super::unattended_no_channel_verdict;
+
+    #[test]
+    fn yolo_keeps_the_legacy_auto_approve() {
+        // The shipped default MUST stay byte-identical: `None` means the
+        // receiver falls through to the legacy AllowSession arm.
+        assert!(unattended_no_channel_verdict("yolo").is_none());
+    }
+
+    #[test]
+    fn every_governing_mode_denies_with_the_knob_in_the_reason() {
+        for mode in ["standard", "scoped", "lockdown"] {
+            let Some(reason) = unattended_no_channel_verdict(mode) else {
+                panic!("{mode} must deny");
+            };
+            assert!(
+                reason.contains(mode),
+                "the deny reason must name the posture: {reason}"
+            );
+            assert!(
+                reason.contains("unattended_posture"),
+                "the deny reason must name the knob: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_typo_fails_closed_instead_of_silently_reopening_tools() {
+        let Some(reason) = unattended_no_channel_verdict("lockdonw") else {
+            panic!("a typo'd posture must deny");
+        };
+        assert!(reason.contains("fail-closed"), "got: {reason}");
+    }
+}
+
 /// iter-632: drain one turn's accumulated usage into the session store's
 /// metering accumulator (`gateway_sessions.total_tokens` /
 /// `estimated_cost_usd` — the columns Wave 4's budget rollup sums).
@@ -2633,6 +2704,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // 4. If no response within 60s, auto-deny (safety timeout).
     let gw_for_perm = gw.clone();
     let current_channel_for_perm = current_channel.clone();
+    // D-2 (owner ruling 2026-10-08): the unattended posture, captured at
+    // start — the receiver consults it when nobody can answer a prompt.
+    let unattended_posture_for_perm = app_config.genome.unattended_posture.clone();
     let pending_permissions: Arc<
         Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>,
     > = Arc::new(Mutex::new(HashMap::new()));
@@ -2774,6 +2848,28 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     tracing::warn!(
                         tool = %req.tool_name,
                         "No active channel for a seat-policy escalation — denying; the ask stays queued"
+                    );
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::Deny);
+                    continue;
+                }
+                // D-2 (owner ruling 2026-10-08): an UNGOVERNED unattended
+                // request with nobody to answer it consults
+                // `[genome].unattended_posture` — the governance knob that,
+                // per the ruling, solely manages the unattended posture.
+                // `yolo` (the shipped default) keeps the auto-approve below
+                // byte-identical; any other spelling denies with the
+                // actionable reason. Attended requests never reach this
+                // consult — their behavior is unchanged either way.
+                if req.unattended
+                    && let Some(reason) =
+                        unattended_no_channel_verdict(&unattended_posture_for_perm)
+                {
+                    tracing::warn!(
+                        tool = %req.tool_name,
+                        posture = %unattended_posture_for_perm,
+                        "Unattended permission request with no active channel — denying by unattended posture"
                     );
                     let _ = req
                         .response_tx
@@ -4619,6 +4715,7 @@ mod pending_permissions_tests {
             danger_explanation: "Runs arbitrary code".into(),
             input_preview: None,
             seat_escalation: None,
+            unattended: false,
             response_tx: tx,
         }
     }
@@ -4718,6 +4815,7 @@ mod pending_permissions_tests {
             danger_explanation: "Spawns a process".into(),
             input_preview: None,
             seat_escalation: None,
+            unattended: false,
             response_tx: tx,
         };
         let store: Arc<Mutex<HashMap<String, ToolPermissionRequest>>> =

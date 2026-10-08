@@ -616,6 +616,11 @@ pub struct ToolPermissionRequest {
     /// denial/timeout resolves it too. `None` is today's ungoverned prompt:
     /// nothing is minted or resolved, byte-identical to mainline.
     pub seat_escalation: Option<crate::org::seat_authority::SeatEscalation>,
+    /// D-2: this request came from an UNATTENDED agent (cron). The
+    /// receiver consults `[genome].unattended_posture` with it when no
+    /// interactive approver can answer; attended requests ignore it and
+    /// keep today's behavior byte-identical.
+    pub unattended: bool,
     pub response_tx: tokio::sync::oneshot::Sender<ToolPermissionResponse>,
 }
 

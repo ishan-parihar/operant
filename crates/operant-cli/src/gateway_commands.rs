@@ -2653,6 +2653,7 @@ mod tests {
                         danger_explanation: String::new(),
                         input_preview: None,
                         seat_escalation: None,
+                        unattended: false,
                         response_tx: tx,
                     },
                 );
@@ -2690,6 +2691,7 @@ mod tests {
                 danger_explanation: String::new(),
                 input_preview: None,
                 seat_escalation: None,
+                unattended: false,
                 response_tx: tx,
             },
         );

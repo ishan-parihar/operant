@@ -127,12 +127,25 @@ impl Default for AppConfig {
 ///   policy row stays ungoverned (byte-identical to mainline — which is
 ///   NOT `yolo`: dangerous tools still prompt), per
 ///   `org/seat_policy.rs` rule 2.
+/// - `unattended_posture` — D-2 (owner ruling 2026-10-08): the posture an
+///   UNGOVERNED unattended run takes on a dangerous tool when nobody can
+///   answer the prompt (no active channel). `yolo` (the default) keeps the
+///   legacy auto-approve byte-identical; any other `SeatMode` spelling
+///   denies with a reason naming the knob; a typo'd spelling fails CLOSED.
+///   Governed seats are NOT affected — their policy row already clamps
+///   unattended runs (F2, `agent/stream.rs`). This knob, and only this
+///   knob, manages the unattended posture: the governance config surface
+///   the owner ruled it into.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GenomeSettings {
     /// Default seat mode for operator-seated policy rows that do not name
     /// one (P3 consumer; see the struct docs).
     pub unrestricted_default: String,
+    /// D-2: the posture for UNGOVERNED unattended permission requests that
+    /// have no interactive approver (`SeatMode` spelling; see the struct
+    /// docs). Default `yolo` = legacy auto-approve, byte-identical.
+    pub unattended_posture: String,
     /// Days a department-head approval's grant stands. 0/negative =
     /// never-standing for non-CEO approvals (see the struct docs).
     pub grant_ttl_days: i64,
@@ -189,6 +202,7 @@ impl Default for GenomeSettings {
     fn default() -> Self {
         Self {
             unrestricted_default: "yolo".to_string(),
+            unattended_posture: "yolo".to_string(),
             grant_ttl_days: 7,
             session_summary_ttl_minutes: 30,
             budget: BudgetSettings::default(),
@@ -2216,9 +2230,10 @@ wonderful_unknown_key = 42
     /// vacuously, which is exactly what the values below rule out).
     #[test]
     fn genome_block_parses_into_fields() {
-        let raw = "[genome]\nunrestricted_default = \"standard\"\ngrant_ttl_days = 3\n";
+        let raw = "[genome]\nunrestricted_default = \"standard\"\nunattended_posture = \"lockdown\"\ngrant_ttl_days = 3\n";
         let config = parse_config_str(raw, Path::new("memory://genome-probe")).unwrap();
         assert_eq!(config.genome.unrestricted_default, "standard");
+        assert_eq!(config.genome.unattended_posture, "lockdown");
         assert_eq!(config.genome.grant_ttl_days, 3);
         // A removed [genome] key MUST fail loudly (deny_unknown_fields):
         // a typo'd security knob silently falling back to defaults is the

@@ -504,6 +504,14 @@ enabled = true
 # default for a seat without a policy row stays ungoverned regardless of
 # this value.
 unrestricted_default = "yolo"
+# D-2 (owner ruling 2026-10-08) — the posture an UNGOVERNED unattended (cron)
+# run takes on a dangerous tool when no interactive approver can answer the
+# prompt (no active channel). "yolo" (default) keeps the legacy auto-approve;
+# any other seat mode (standard | scoped | lockdown) denies with an
+# actionable reason; a typo'd value fails CLOSED. Governed seats are not
+# affected — their policy row already clamps unattended runs. This knob,
+# and only this knob, manages the unattended posture.
+unattended_posture = "yolo"
 # Days a department-head approval's grant stands (the HoD default is 7).
 # 0 or negative = never-standing for non-CEO approvals: the grant is
 # recorded already-lapsed, so the approval stays auditable while conferring

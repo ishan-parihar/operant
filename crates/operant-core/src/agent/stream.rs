@@ -15,6 +15,23 @@ use tracing::{debug, error, warn};
 use super::*;
 
 impl OperantAgent {
+    /// The tool context every tool call runs with: session-id keyed (Plan
+    /// 015) and, for unattended runs, flagged so interactive tools can fail
+    /// fast instead of routing into a human's chat (BUGS.md D-6 — the
+    /// user-question channel is process-global and the gateway drains it
+    /// into whatever chat is active; a scheduled job must never block on
+    /// it).
+    fn tool_context(&self) -> ToolContext {
+        let mut ctx = ToolContext::default().with_metadata(
+            "session_id",
+            self.session_id().unwrap_or_else(|| "default".to_string()),
+        );
+        if self.unattended {
+            ctx = ctx.with_metadata("unattended", "true");
+        }
+        ctx
+    }
+
     /// Process streaming response with early tool detection
     pub(crate) async fn process_stream(
         &self,
@@ -934,6 +951,9 @@ impl OperantAgent {
                             description,
                             danger_explanation: danger,
                             seat_escalation,
+                            // D-2: the receiver's unattended-posture consult
+                            // keys on this; attended runs never carry it.
+                            unattended: self.unattended,
                             input_preview,
                             response_tx: resp_tx,
                         })
@@ -1010,10 +1030,7 @@ impl OperantAgent {
                 .expect("pending non-empty in single-tool branch");
             let name = tool_call.function.name.clone();
             // Plan 015: kernel tools key kernels/harness by session id.
-            let tool_ctx = ToolContext::default().with_metadata(
-                "session_id",
-                self.session_id().unwrap_or_else(|| "default".to_string()),
-            );
+            let tool_ctx = self.tool_context();
             // Permit is already in hand (single-tool path skips the pool), so
             // re-announce the call: the TUI shows Queued from the first
             // ToolStart and flips to Running on this one.
@@ -1069,10 +1086,7 @@ impl OperantAgent {
                 })
                 .await;
                 let tool_started = std::time::Instant::now();
-                let tool_ctx = ToolContext::default().with_metadata(
-                    "session_id",
-                    self.session_id().unwrap_or_else(|| "default".to_string()),
-                );
+                let tool_ctx = self.tool_context();
                 let exec = self.registry.execute(&name, &tool_call.id, args, tool_ctx);
                 let limit = if is_interactive_tool(&name) || is_long_running_tool(&name) {
                     LONG_RUNNING_TOOL_TIMEOUT
@@ -1145,10 +1159,7 @@ impl OperantAgent {
                         })
                         .await;
                         // Plan 015: session-keyed ToolContext for kernel tools.
-                        let tool_ctx = ToolContext::default().with_metadata(
-                            "session_id",
-                            self.session_id().unwrap_or_else(|| "default".to_string()),
-                        );
+                        let tool_ctx = self.tool_context();
                         let exec_started = std::time::Instant::now();
                         let exec = registry.execute(&name, &tool_call.id, args, tool_ctx);
                         // Interactive tools exempt from the generic tool

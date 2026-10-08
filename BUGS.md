@@ -144,7 +144,17 @@ was consumed by a job they do not know ran.
   remains open is cron's own posture — D-2 — plus D-6, where cron's `clarify`
   calls still route to the user's chat via the global `USER_QUESTION_TX`.
 
-### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (PARTIALLY ADDRESSED 2026-10-03 — mechanism landed; the default posture is still the owner's explicit call)
+### D-2 — `create_runtime_agent` cannot be called twice without an explicit decision (CLOSED 2026-10-08 — owner ruling landed as `[genome].unattended_posture`)
+
+**CLOSED per the owner's 2026-10-08 ruling**: the unattended posture is
+managed by the governance configuration itself — the seat's policy row
+(governed seats, live since the F2 clamp) plus a NEW global knob,
+`[genome].unattended_posture`, for UNGOVERNED unattended runs with no
+interactive approver. That config, and only that config, manages the
+unattended posture. Default `yolo` keeps the legacy auto-approve
+byte-identical (the standing owner directive); any other seat mode denies
+with an actionable reason; a typo'd value fails closed (the seat_policies
+read-error discipline). Attended behavior is untouched.
 
 **PARTIALLY ADDRESSED by the permission genome (iters 570/580/585).**
 What landed is the *mechanism*: an unattended cron agent's authority is its
