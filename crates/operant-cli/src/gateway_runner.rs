@@ -2066,6 +2066,32 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             count = interrupted.len(),
             "Detected interrupted turns from previous session"
         );
+        // iter-691 — the CLOSE path. The turn is dead the moment this
+        // process boots (the old process is gone; no executor can still
+        // finish it), so each pending row flips terminal NOW, at detection,
+        // not after a channel notice succeeds. Gating the close on delivery
+        // meant a dead channel (the current Telegram hop) left rows
+        // `pending` forever — the "still in-flight after restart" state,
+        // re-detected and re-failed on every boot. The notice below is
+        // best-effort and no longer guards the close; a late honest terminal
+        // write from a draining old process would simply overwrite this, and
+        // that is the right order of truth.
+        for (channel_id, ts, platform) in &interrupted {
+            save_turn_state_in_for(
+                &operant_core::platform::operant_home(),
+                channel_id,
+                "interrupted",
+                platform,
+                Some(operant_core::gateway::lifecycle::TurnExitReason::Interrupted),
+                Some("gateway restarted before the turn finished"),
+            );
+            tracing::info!(
+                channel_id = %channel_id,
+                pending_since = %ts,
+                platform = %platform,
+                "Closed orphaned turn as interrupted (restart reaper)"
+            );
+        }
     }
 
     let (message_tx, mut message_rx) = mpsc::unbounded_channel::<IncomingMessage>();
@@ -2097,28 +2123,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                        before it finished. Nothing was sent back. Please re-send \
                        your request.";
         let msg = OutgoingMessage::new(channel_id, notice).no_markdown();
+        // Best-effort only (iter-691): the row was already closed as
+        // `interrupted` at detection time, above — a failed send must never
+        // resurrect it.
         match gateway.send_to_platform(platform, msg).await {
-            Ok(_) => {
-                tracing::info!(
-                    channel_id = %channel_id,
-                    platform = %platform,
-                    "Delivered interrupted-turn notice"
-                );
-                // Mark the turn terminal so the same interrupted turn is not
-                // re-notified on every subsequent boot. Without this, a user
-                // who never replies gets the notice forever.
-                save_turn_state_in_for(
-                    &operant_core::platform::operant_home(),
-                    channel_id,
-                    "interrupted",
-                    platform,
-                );
-            }
+            Ok(_) => tracing::info!(
+                channel_id = %channel_id,
+                platform = %platform,
+                "Delivered interrupted-turn notice"
+            ),
             Err(e) => tracing::error!(
                 channel_id = %channel_id,
                 platform = %platform,
                 error = %e,
-                "Failed to deliver interrupted-turn notice"
+                "Failed to deliver interrupted-turn notice (row already closed)"
             ),
         }
     }
@@ -3680,7 +3698,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     redact_err(&e)
                                 );
                             }
-                            save_turn_state(&channel_id, "complete");
+                            save_turn_state_exit(
+                                &channel_id,
+                                "complete",
+                                operant_core::gateway::lifecycle::TurnExitReason::Complete,
+                                "turn returned a final response",
+                            );
                         }
                         Ok(None) => {
                             // Even when the handler returns no response, clear any
@@ -3688,18 +3711,34 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             // wrongly suppressed.
                             let mut map = stream_delivery_for_dispatch.lock().await;
                             map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
-                            save_turn_state(&channel_id, "complete");
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to route message on {}: {}",
-                                platform,
-                                redact_err(&e)
+                            save_turn_state_exit(
+                                &channel_id,
+                                "complete",
+                                operant_core::gateway::lifecycle::TurnExitReason::Complete,
+                                "turn ended without a response",
                             );
-                            let mut map = stream_delivery_for_dispatch.lock().await;
-                            map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
-                            save_turn_state(&channel_id, "failed");
                         }
+                         Err(e) => {
+                             tracing::error!(
+                                 "Failed to route message on {}: {}",
+                                 platform,
+                                 redact_err(&e)
+                             );
+                             let mut map = stream_delivery_for_dispatch.lock().await;
+                             map.remove(&(platform.clone(), channel_id.clone(), msg_thread));
+                             // iter-691: classify before the close so the
+                             // journal's exit_code column carries the class a
+                             // retry/breaker can branch on (kill markers are
+                             // never auth — see classify_turn_error).
+                             let exit_code =
+                                 operant_core::gateway::lifecycle::classify_turn_error(&e.to_string());
+                             save_turn_state_exit(
+                                 &channel_id,
+                                 "failed",
+                                 exit_code,
+                                 &e.to_string(),
+                             );
+                         }
                     }
 
                     if let Some(handle) = typing_handle {
@@ -4582,10 +4621,30 @@ fn save_turn_state(channel_id: &str, status: &str) {
     save_turn_state_in(&operant_core::platform::operant_home(), channel_id, status);
 }
 
+/// Terminal close with the machine-readable exit class (iter-691) — the
+/// journal's exit_code/exit_reason columns. The platform defaults to
+/// telegram like every legacy writer here; the restart-reaper close path
+/// calls `save_turn_state_in_for` directly with the recorded platform.
+fn save_turn_state_exit(
+    channel_id: &str,
+    status: &str,
+    exit_code: operant_core::gateway::lifecycle::TurnExitReason,
+    exit_reason: &str,
+) {
+    save_turn_state_in_for(
+        &operant_core::platform::operant_home(),
+        channel_id,
+        status,
+        "telegram",
+        Some(exit_code),
+        Some(exit_reason),
+    );
+}
+
 /// Same as `save_turn_state` but writes to a caller-provided base directory.
 /// Exposed for tests so they don't pollute the real operant home.
 fn save_turn_state_in(base_dir: &std::path::Path, channel_id: &str, status: &str) {
-    save_turn_state_in_for(base_dir, channel_id, status, "telegram")
+    save_turn_state_in_for(base_dir, channel_id, status, "telegram", None, None);
 }
 
 /// Persist turn state, recording the originating platform.
@@ -4593,22 +4652,35 @@ fn save_turn_state_in(base_dir: &std::path::Path, channel_id: &str, status: &str
 /// The platform is part of the record because the boot-time interrupted-turn
 /// notice has to deliver on the same platform the turn arrived on. Without it,
 /// a Discord or Slack channel_id would be notified through Telegram.
+///
+/// `exit_code`/`exit_reason` (iter-691 — the journal's exit columns) are
+/// written on terminal closes: the machine-readable class a retry or
+/// breaker can branch on, and the free-form human reason. `None` keeps
+/// them absent (open turns, back-compat readers).
 fn save_turn_state_in_for(
     base_dir: &std::path::Path,
     channel_id: &str,
     status: &str,
     platform: &str,
+    exit_code: Option<operant_core::gateway::lifecycle::TurnExitReason>,
+    exit_reason: Option<&str>,
 ) {
     let dir = base_dir.join(".turn_state");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(format!("{}.json", sanitize_channel_id(channel_id)));
     let ts = chrono::Utc::now().to_rfc3339();
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "channel_id": channel_id,
         "status": status,
         "timestamp": ts,
         "platform": platform,
     });
+    if let Some(code) = exit_code {
+        json["exit_code"] = serde_json::to_value(code).unwrap_or(serde_json::json!("unknown"));
+    }
+    if let Some(reason) = exit_reason {
+        json["exit_reason"] = serde_json::Value::from(reason);
+    }
     let _ = std::fs::write(path, json.to_string());
 }
 
@@ -4747,6 +4819,58 @@ mod turn_state_tests {
         assert!(channel_ids.contains(&"discord_channel_2"));
     }
 
+    /// iter-691 — the restart reaper's CLOSE path. A pending row closed as
+    /// `interrupted` (with its exit columns) must never be re-detected on
+    /// the next boot, even though the channel notice may never have been
+    /// delivered — the close is no longer gated on delivery succeeding.
+    #[test]
+    fn closed_interrupted_turn_is_not_redictected_and_carries_exit_columns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        save_turn_state_in(base, "dead_channel", "pending");
+        assert_eq!(
+            check_interrupted_turns_in(base).len(),
+            1,
+            "a pending row is detected once"
+        );
+
+        // The iter-691 close at detection time: status interrupted + the
+        // machine-readable exit columns.
+        save_turn_state_in_for(
+            base,
+            "dead_channel",
+            "interrupted",
+            "telegram",
+            Some(operant_core::gateway::lifecycle::TurnExitReason::Interrupted),
+            Some("gateway restarted before the turn finished"),
+        );
+
+        assert!(
+            check_interrupted_turns_in(base).is_empty(),
+            "a closed row must not read as still in-flight after restart"
+        );
+
+        let content = std::fs::read_to_string(
+            base.join(".turn_state")
+                .join("dead_channel.json"),
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(json["status"], "interrupted");
+        assert_eq!(
+            json["exit_code"], "Interrupted",
+            "the exit_code column carries the machine-readable class"
+        );
+        assert!(
+            json["exit_reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("restarted"),
+            "the exit_reason column carries the human reason"
+        );
+    }
+
     /// The boot-time notice delivers on the platform the turn arrived on. The
     /// state file now records it, so a Discord turn is not announced through
     /// Telegram.
@@ -4755,8 +4879,8 @@ mod turn_state_tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
 
-        save_turn_state_in_for(base, "dc_chan", "pending", "discord");
-        save_turn_state_in_for(base, "tg_chan", "pending", "telegram");
+        save_turn_state_in_for(base, "dc_chan", "pending", "discord", None, None);
+        save_turn_state_in_for(base, "tg_chan", "pending", "telegram", None, None);
 
         let interrupted = check_interrupted_turns_in(base);
         let by_channel: std::collections::HashMap<_, _> = interrupted

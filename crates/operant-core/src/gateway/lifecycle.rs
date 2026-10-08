@@ -11,6 +11,10 @@
 //!   once visibility — every send is accounted, success or failure).
 //! - [`MirrorRule`]: forwards responses for a matched source channel to a
 //!   target channel (e.g. DM → ops group).
+//! - [`TurnExitReason`] + [`classify_turn_error`]: the machine-readable exit
+//!   classification written to the turn-state journal at close (the
+//!   exit_code/exit_reason columns), with negative-marker precedence so a
+//!   subprocess signal death is never misread as a credential failure.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -18,6 +22,89 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+
+/// Machine-readable reason a turn closed — the turn-state journal's
+/// exit_code column. Free-form `last_error` strings stay for the human,
+/// but retries, breakers, and audits branch on THIS (trinity
+/// `TaskExecutionErrorCode` pattern, ported iter-691).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TurnExitReason {
+    /// The turn returned a final response.
+    Complete,
+    /// Killed mid-turn by a restart, interrupt, or steer request-stop —
+    /// never a provider/tool fault.
+    Interrupted,
+    /// Credential/authentication failure on the provider or channel.
+    Auth,
+    /// Turn- or call-level timeout.
+    Timeout,
+    /// Rate limit / quota (retryable, never an auth problem).
+    RateLimit,
+    /// Any other failure class.
+    AgentError,
+}
+
+/// Substrings that indicate an auth-class failure (lowercase match).
+const AUTH_EXIT_MARKERS: &[&str] = &[
+    "unauthorized",
+    "authentication",
+    "credentials",
+    "forbidden",
+    "401",
+    "403",
+    "token expired",
+    "not authenticated",
+];
+
+/// Unambiguous signal-kill / OOM markers (trinity #904's lesson). These
+/// SHORT-CIRCUIT the auth classification: a SIGKILL is evidence the
+/// subprocess died from outside, not a real auth response on the wire —
+/// treating it as auth would skip-list a credential that is actually
+/// fine and mask the real failure.
+const KILL_EXIT_MARKERS: &[&str] = &[
+    "sigkill",
+    "sigterm",
+    "sigint",
+    "exit code -9",
+    "exit code -15",
+    "exit code -2",
+    "exit code 137",
+    "exit code 143",
+    "exit code 130",
+    "terminated by",
+    "killed by",
+    "out of memory",
+    "oom",
+];
+
+const RATE_LIMIT_EXIT_MARKERS: &[&str] =
+    &["429", "rate limit", "quota exceeded", "too many requests"];
+const TIMEOUT_EXIT_MARKERS: &[&str] = &["timeout", "timed out", "deadline elapsed"];
+
+/// Classify a turn-terminal error string into a [`TurnExitReason`].
+/// Kill markers win over auth markers; rate-limit and timeout follow;
+/// everything else is [`TurnExitReason::AgentError`].
+pub fn classify_turn_error(error: &str) -> TurnExitReason {
+    let lower = error.to_ascii_lowercase();
+    if lower.is_empty() {
+        return TurnExitReason::AgentError;
+    }
+    if KILL_EXIT_MARKERS.iter().any(|m| lower.contains(m)) {
+        // A signal death is a hard kill of the process tree — the honest
+        // bucket is the generic fault, and it must never burn auth logic.
+        return TurnExitReason::AgentError;
+    }
+    if AUTH_EXIT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return TurnExitReason::Auth;
+    }
+    if RATE_LIMIT_EXIT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return TurnExitReason::RateLimit;
+    }
+    if TIMEOUT_EXIT_MARKERS.iter().any(|m| lower.contains(m)) {
+        return TurnExitReason::Timeout;
+    }
+    TurnExitReason::AgentError
+}
 
 /// Per-session turn lease.
 ///
@@ -247,6 +334,56 @@ impl MirrorRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── iter-691: turn-exit classification (trinity #904 negative-marker
+    // precedence — kill markers short-circuit auth, never the reverse) ──
+
+    #[test]
+    fn classify_names_auth_failures() {
+        assert_eq!(
+            classify_turn_error("HTTP 401 Unauthorized from provider"),
+            TurnExitReason::Auth
+        );
+        assert_eq!(
+            classify_turn_error("telegram: bot token expired"),
+            TurnExitReason::Auth
+        );
+    }
+
+    #[test]
+    fn classify_never_reads_a_signal_death_as_auth() {
+        // The trinity #904 case: an OOM/SIGKILL stderr can contain the word
+        // "credentials" — the kill markers must win.
+        assert_eq!(
+            classify_turn_error("child killed by SIGKILL while loading credentials"),
+            TurnExitReason::AgentError
+        );
+        assert_eq!(
+            classify_turn_error("process terminated by signal 9 (exit code 137)"),
+            TurnExitReason::AgentError
+        );
+    }
+
+    #[test]
+    fn classify_names_rate_limit_and_timeout() {
+        assert_eq!(
+            classify_turn_error("429 Too Many Requests"),
+            TurnExitReason::RateLimit
+        );
+        assert_eq!(
+            classify_turn_error("request timed out after 30s"),
+            TurnExitReason::Timeout
+        );
+    }
+
+    #[test]
+    fn classify_defaults_to_agent_error() {
+        assert_eq!(classify_turn_error(""), TurnExitReason::AgentError);
+        assert_eq!(
+            classify_turn_error("tool returned malformed JSON"),
+            TurnExitReason::AgentError
+        );
+    }
 
     #[tokio::test]
     async fn turn_lease_serializes_a_session_and_releases_on_drop() {
