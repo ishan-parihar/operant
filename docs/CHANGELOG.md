@@ -143,6 +143,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
   dispatch-row writer that fed `last_msg_area`; every consumer (right-click
@@ -343,6 +352,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
   dispatch-row writer that fed `last_msg_area`; every consumer (right-click
@@ -394,6 +412,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (mirroring `/grant`'s `--days`); a request the approver would not mint is
   refused before any row is written, with the refusal naming why.
 ### Changed
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
 
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
@@ -637,6 +664,15 @@ D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
 
 ### Changed
 
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
   dispatch-row writer that fed `last_msg_area`; every consumer (right-click
@@ -700,6 +736,15 @@ Parity work against the `jcode` reference agent (iters 347-409). The TUI
 gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ### Changed
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
 
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
@@ -937,6 +982,15 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
   dispatch-row writer that fed `last_msg_area`; every consumer (right-click
@@ -1083,6 +1137,15 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
   dispatch-row writer that fed `last_msg_area`; every consumer (right-click
@@ -1129,6 +1192,15 @@ under `deny_unknown_fields` instead of being silently ignored.
 - `--dangerously-skip-permissions` flag that shows a confirmation dialog at startup and, on accept, runs the session in permission-bypass mode
 
 ### Changed
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
 
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
@@ -1189,6 +1261,15 @@ Full Changelog: [v0.1.3...v0.1.4](https://github.com/ishan-parihar/operant/compa
 
 ### Changed
 
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
   dispatch-row writer that fed `last_msg_area`; every consumer (right-click
@@ -1222,6 +1303,15 @@ Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/operant-rs/compare/
 - Regression coverage for Windows key handling, landing prompt bootstrap, follow-up prompting after errors, and activity-pane failure rendering
 
 ### Changed
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
 
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
@@ -1259,6 +1349,15 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - GitHub release workflow that extracts matching release notes from `CHANGELOG.md` and publishes tagged build artifacts to GitHub Releases
 
 ### Changed
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
 
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the
@@ -1308,6 +1407,15 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - CI/CD pipelines: lint (rustfmt + clippy + docs), build (3 native + 6 cross-compiled targets), test (3 platforms + coverage)
 
 ### Changed
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
 
 - **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
   context menu lives again.** The iter-648 chrome cutover deleted the

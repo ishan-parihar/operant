@@ -1586,6 +1586,29 @@ impl App {
                 self.note_user_scroll(prev);
             }
 
+            // ---- Fine transcript scroll (Ctrl+Up/Ctrl+Down, jcode parity) -----
+            // Completes the keyboard scroll ladder: ±3 here, ±10 on
+            // PageUp/PageDown, ±20 on Alt+Up/Alt+Down. Without the fine rung a
+            // mouseless session (tmux without mouse-mode, plain tty) jumps in
+            // 10-line quanta only — the "chat window is pinned" complaint
+            // (2026-10-09 visual audit) from users without wheel events.
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let prev = self.scroll_offset;
+                self.scroll_offset = self.scroll_offset.saturating_add(3);
+                self.auto_scroll = false;
+                self.note_user_scroll(prev);
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let prev = self.scroll_offset;
+                let new_off = self.scroll_offset.saturating_sub(3);
+                self.scroll_offset = new_off;
+                if new_off == 0 {
+                    self.auto_scroll = true;
+                    self.new_messages_while_scrolled = 0;
+                }
+                self.note_user_scroll(prev);
+            }
+
             // ---- Input history navigation ------------------------------
             // For multi-line / wrapped prompts: Up/Down move the cursor by
             // one visual row first, only falling through to history recall

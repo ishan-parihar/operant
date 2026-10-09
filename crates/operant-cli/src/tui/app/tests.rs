@@ -3179,3 +3179,20 @@ fn last_msg_area_defaults_zero_and_is_republished_from_draw() {
     app.last_msg_area.set(ratatui::layout::Rect::new(2, 3, 40, 10));
     assert_eq!(app.last_msg_area.get().width, 40);
 }
+
+#[test]
+fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
+    let mut app = make_app();
+    app.auto_scroll = true;
+    app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 3, "Ctrl+Up must scroll the transcript 3 lines");
+    assert!(!app.auto_scroll, "Ctrl+Up must pause tail-follow");
+    app.scroll_offset = 10;
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 7, "Ctrl+Down must scroll back 3 lines");
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset, 0);
+    assert!(app.auto_scroll, "reaching the bottom must resume tail-follow");
+}
