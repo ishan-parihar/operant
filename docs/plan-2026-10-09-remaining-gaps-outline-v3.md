@@ -31,12 +31,15 @@
 
 ## §1 Core execution queue (ordered)
 
-1. **Config-file wiring batch** — UNBLOCKED, next slice.
-   - `guardrail_exempt_tools` config-file schema surface (the
-     approval-path exemption knob; the runtime predicate exists, the
-     config key does not).
-   - `OPERANT_GUARDIAN_LLM` / `OPERANT_MICRO_COMPACTION` config-file
-     surfaces — env vars landed (iter-713/714); config parity only.
+1. **~~Config-file wiring batch~~ EXECUTED iter-724** —
+   `[agent] guardrail_exempt_tools` flows to the guardrail tracker via
+   the From impl (was hardcoded empty: the runtime path existed, no
+   config surface fed it); `[agent] guardian_llm`/`micro_compaction`
+   are config-file DEFAULTS below the `OPERANT_*` env vars and the
+   `with_*` builders (`apply_agent_config_defaults` at all three agent
+   factories + ACP; the gateway rides the events factory — no
+   `gateway_runner.rs` edit). Dark-mergeable; bindings pinned with
+   non-default values.
 2. **Gateway ledger consumer mount + registry attach** — BLOCKED on the
    peer's `gateway_runner.rs` WIP. Two small slices on the same file:
    - Consumer mount: the sender loop settles each `CronDelivery` via

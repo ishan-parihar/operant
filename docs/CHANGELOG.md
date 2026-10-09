@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Meta-Skill Routing" block rewritten to the file-node contract.
   Regression tests: unreachable node, dangling link, stray nested
   SKILL.md — each fails without the fix (113 skills tests green).
+- **iter-724 — config-file wiring: `[agent] guardrail_exempt_tools` +
+  the two env-armed knobs get config parity:** the runtime exempt path
+  existed end-to-end (`AgentConfig::guardrail_exempt_tools` →
+  `ToolGuardrailTracker::add_exempt_tools`) but
+  `From<&BehaviorSettings>` hardcoded `Vec::new()` — no config-file
+  surface ever fed it. Now a `BehaviorSettings` field (serde default)
+  flows through the From impl to the tracker. `[agent] guardian_llm` /
+  `micro_compaction` are config-file DEFAULTS for the iter-713/714
+  knobs: each applies only when its `OPERANT_*` env var is UNSET — env
+  var and the explicit `with_*` builders still win — applied by
+  `apply_agent_config_defaults` (the `attach_credential_pool`
+  post-construction modifier shape) at all three agent factories
+  (events path covers TUI/chat/gateway; no `gateway_runner.rs` edit
+  needed) plus the ACP command path. Dark-mergeable: an unchanged
+  config file parses to empty-exempt/off/off. Tests pin all three
+  bindings with non-default values plus the dark default.
 - **iter-722 — durable cron delivery ledger (trinity P2-A concrete;
   hermes `deliveries.db` tombstone/stale-claim shape):**
   `deliver_result` handed the payload to the gateway over an in-memory
