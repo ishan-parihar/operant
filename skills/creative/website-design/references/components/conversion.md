@@ -3,7 +3,7 @@
 Build pricing sections, CTA bands, and signup/waitlist blocks that convert. Load BEFORE writing any pricing table, call-to-action, email capture, or button markup, and when auditing a page for duplicate CTAs, wrapped labels, or unreadable buttons.
 
 Pricing sections, CTA bands, signup/waitlist blocks, and the button system they
-share. Every hard rule here is a gate in `references/quality/preflight.md`.
+share. Every hard rule here is a gate in [preflight](../quality/preflight.md).
 
 ## Procedure
 
@@ -42,7 +42,7 @@ fails accessibility.
   4.5:1 (3:1 only for text 24px+, or 18px+ bold). White-on-white, accent text
   on accent bg, and borderless transparent buttons over photos are banned;
   give ghost buttons over imagery a scrim, backdrop, or border.
-  Full ban list: `references/quality/anti-slop.md`.
+  Full ban list: [anti-slop](../quality/anti-slop.md).
 - WRAP BAN (mandatory): a primary CTA label is 3 words max and renders on one
   line at desktop. If it wraps, shorten the label or widen the button; never
   fix it by capping the button's `max-width`.
@@ -66,7 +66,7 @@ Final CTA band (last section before the footer):
 - Exactly one button: the primary intent, same label as nav and hero.
 - Optional one reassurance line under the button that lowers perceived risk:
   "Free 14-day trial. No credit card." True claims only; rules in
-  `references/content.md`.
+  [content](../content.md).
 - The band may flip to an accent background with `--accent-contrast` text,
   but every element on it must still pass contrast (see worked example for
   the inverted button).
@@ -81,7 +81,7 @@ Final CTA band (last section before the footer):
 | Price typography | large number + small period label | amount in `--font-display` at 2.5-3.5rem; "/month" at 0.875-1rem in `--text-muted` |
 | Numerals | `font-variant-numeric: tabular-nums` | billing-toggle swaps must not shift layout |
 | CTA per tier | 1 button, all tiers same intent | featured tier gets primary variant, others secondary |
-| Claims | no invented stats, no fake precision | copy rules in `references/content.md` |
+| Claims | no invented stats, no fake precision | copy rules in [content](../content.md) |
 
 Annual/monthly toggle: a real radio group, not a styled div.
 

@@ -41,7 +41,7 @@ Hard gates on the table:
   text-only page is incomplete work, not minimalism.
 - Product Screenshot requires a REAL screenshot, generated image, or a real
   working component preview. Div-built fake UI is banned, see
-  `references/quality/anti-slop.md`.
+  [anti-slop](../quality/anti-slop.md).
 - Docs and content-first pages skip Scroll-Pinned. Why: it taxes the scroll
   budget readers need for content.
 
@@ -62,7 +62,7 @@ want a tagline, drop the tagline.
 
 Hero-specific tells (no version-label eyebrows like `BETA` or `v2.0`, no
 "Brand · No. 01" sub-eyebrows, no mono-caps decoration strip across the hero
-bottom) are absolute bans listed in `references/quality/anti-slop.md`. Check that
+bottom) are absolute bans listed in [anti-slop](../quality/anti-slop.md). Check that
 file, do not re-derive the list.
 
 **Font scale is planned WITH the asset, not after it.**
@@ -96,7 +96,7 @@ Use `clamp()` so the same rule holds down to tablet, e.g.
    paradigm chosen on purpose, not as a fallback for missing images).
 
 Text plus a gradient blob is a placeholder, not a hero. Fake screenshots built
-from styled divs are banned, see `references/quality/anti-slop.md`. If no image
+from styled divs are banned, see [anti-slop](../quality/anti-slop.md). If no image
 source exists, leave a labeled slot
 (`<!-- TODO: hero product photo, 1600x1200 -->`) and tell the user.
 
@@ -208,6 +208,6 @@ inside `.hero`.
 6. Grep hero CSS for `100vh`: zero matches. Full-viewport heights use `100dvh`.
 7. Hero contains a real `<img>`, `<video>`, real component preview, or is a
    deliberately chosen typographic paradigm. No div-built fake UI and no hero
-   tells from `references/quality/anti-slop.md`.
+   tells from [anti-slop](../quality/anti-slop.md).
 8. Headline, subtext, and primary CTA all visible without scroll at 1280x800
    and 390x844.

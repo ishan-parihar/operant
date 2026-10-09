@@ -12,7 +12,7 @@ essay-length quotes destroy trust faster than having no social proof at all.
    (hero rules: [heroes](heroes.md)).
 3. Build with the specs below, canonical tokens only.
 4. Replace every generic name, avatar, and round number with realistic data
-   (rules: `references/content.md`).
+   (rules: [content](../content.md)).
 5. Run `## Checks`.
 
 Framework note: recipes are plain HTML + CSS custom properties.
@@ -57,7 +57,7 @@ One proof section per slot. Two logo walls or two testimonial sections on one pa
 - 5-8 logos, one row on desktop, uniform height 24-32px, gap `var(--space-7)`,
   centered with `align-items: center`. Overflow on mobile: wrap to 2 rows or marquee.
 - Heading is optional and plain: "Trusted by teams at", "Customers include", or none.
-  Cutesy phrasings are banned; the list lives in `references/quality/anti-slop.md`, do not improvise.
+  Cutesy phrasings are banned; the list lives in [anti-slop](../quality/anti-slop.md), do not improvise.
 
 ## Testimonial spec
 
@@ -72,7 +72,7 @@ One proof section per slot. Two logo walls or two testimonial sections on one pa
   disc (`background: color-mix(in oklab, var(--accent) 15%, var(--surface))`, initials in
   `var(--text)`). Never an SVG egg, person glyph, or icon-library user icon.
 - **Realistic data.** Locale-appropriate full names, real-sounding companies, organic
-  numbers. Full rules in `references/content.md`; do not ship "Jane Doe from Acme".
+  numbers. Full rules in [content](../content.md); do not ship "Jane Doe from Acme".
 
 ### Layout by count
 
@@ -89,7 +89,7 @@ Never a symmetric row of 3 identical quote cards. Featured-vs-rest always beats 
 - One line: rating value + source + count. Example: `4.8/5 on G2, 1,962 reviews`.
 - Value uses `font-variant-numeric: tabular-nums`. Count is organic, not round
   (1,962, not 2,000). Mark mock data with `<!-- mock -->`.
-- Stars, if drawn, come from the project icon family (icon rules: `references/content.md`).
+- Stars, if drawn, come from the project icon family (icon rules: [content](../content.md)).
 - Sits within `var(--space-6)` of the pricing table or final CTA, never as its own hero moment.
 
 ## Case-study teaser spec
@@ -162,4 +162,4 @@ where no photo fits, explicit mobile collapse. Imitate the structure, not the co
 5. Every logo renders in the page theme: inline SVGs use `currentColor`, CDN URLs use the hex of `--text-muted`; no default full-color logo row.
 6. No avatar is an SVG person glyph or icon-library user icon; each is a photo placeholder or an initials disc.
 7. No name from the generic set (John Doe, Jane Doe, Sarah Chen, Jack Su) and no fake-round counts (2,000 reviews, 99.99%).
-8. No social-proof heading matches a banned phrasing from `references/quality/anti-slop.md`.
+8. No social-proof heading matches a banned phrasing from [anti-slop](../quality/anti-slop.md).

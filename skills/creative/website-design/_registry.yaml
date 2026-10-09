@@ -6,13 +6,13 @@ nodes:
   role: root
   description: "Build and deploy world-class websites with any agent: briefing, direction, tokens, sections, components, content, motion, quality gates. Triggers on build me a website, landing page, portfolio, redesign, audit this site, deploy to higgsfield."
   skill_lines: 79
-  resources: 0
+  resources: 3
   children:
       - name: "briefing"
         path: "references/briefing.md"
         role: node
         description: "Read any brief and produce the DESIGN BRIEF artifact: page kind, audience, vibe words, VARIANCE/MOTION/DENSITY dials, m\u2026"
-        skill_lines: 210
+        skill_lines: 227
         resources: 0
       - name: "components"
         path: "references/components"
@@ -63,9 +63,202 @@ nodes:
         description: "Block recipes for every website section: header/nav/footer, heroes, feature sections and bento grids, social proof, pri\u2026"
         skill_lines: 43
         resources: 0
+      - name: "content"
+        path: "references/content.md"
+        role: node
+        description: "Fill every content slot in the SECTION MAP with real copy and a real asset decision. Use IMMEDIATELY after the SECTION\u2026"
+        skill_lines: 209
+        resources: 0
+      - name: "deploy"
+        path: "references/deploy"
+        role: group
+        description: "Deploy a finished website-design build: route to Higgsfield Worker (website/app/game) or generic static host (Vercel, N\u2026"
+        skill_lines: 0
+        resources: 2
+        children:
+      - name: "generic"
+        path: "references/deploy/generic.md"
+        role: node
+        description: "Deploy the finished site to a generic static host: Vercel, Netlify, Cloudflare Pages, or a plain static directory on an\u2026"
+        skill_lines: 265
+        resources: 0
+      - name: "higgsfield"
+        path: "references/deploy/higgsfield.md"
+        role: node
+        description: "Deploy a finished website-design build to Higgsfield: pick --type website/app/game (user decides), scaffold with the hi\u2026"
+        skill_lines: 289
+        resources: 0
+      - name: "deploy"
+        path: "references/deploy.md"
+        role: node
+        description: "Deploy a finished website-design build: route to Higgsfield Worker (website/app/game) or generic static host (Vercel, N\u2026"
+        skill_lines: 39
+        resources: 0
+      - name: "direction"
+        path: "references/direction"
+        role: group
+        description: "| Translates a DESIGN BRIEF into a DIRECTION artifact: one concrete style, palette, typography pairing, and effects bud\u2026"
+        skill_lines: 0
+        resources: 1
+        children:
+      - name: "references"
+        path: "references/direction/references"
+        role: group
+        description: ""
+        skill_lines: 0
+        resources: 3
+        children:
+      - name: "font-pairings"
+        path: "references/direction/references/font-pairings.md"
+        role: node
+        description: "Curated display/body/mono pairings. Defaults: Geist + Geist Mono for dev tools, SaaS, B2B."
+        skill_lines: 219
+        resources: 0
+      - name: "palettes"
+        path: "references/direction/references/palettes.md"
+        role: node
+        description: "Curated palettes mapped to canonical tokens. Contrast columns are computed WCAG ratios (--bg vs --text, --accent vs --a\u2026"
+        skill_lines: 251
+        resources: 0
+      - name: "styles"
+        path: "references/direction/references/styles.md"
+        role: node
+        description: "176 style entries (base styles plus best-fit variants). Source: ui-ux-pro-max styles.csv, normalized to the VARIANCE/MO\u2026"
+        skill_lines: 280
+        resources: 0
+      - name: "direction"
+        path: "references/direction.md"
+        role: node
+        description: "| Translates a DESIGN BRIEF into a DIRECTION artifact: one concrete style, palette, typography pairing, and effects bud\u2026"
+        skill_lines: 323
+        resources: 0
+      - name: "higgsfield-adapter"
+        path: "references/higgsfield-adapter.md"
+        role: node
+        description: "Use this file when the `DEPLOY SPEC` targets Higgsfield (`--type website`,"
+        skill_lines: 116
+        resources: 0
+      - name: "motion"
+        path: "references/motion"
+        role: group
+        description: "Translate the SECTION MAP and MOTION dial into per-section animation specs. Use when adding motion, hover states, scrol\u2026"
+        skill_lines: 0
+        resources: 1
+        children:
+      - name: "references"
+        path: "references/motion/references"
+        role: group
+        description: ""
+        skill_lines: 0
+        resources: 1
+        children:
+      - name: "gsap-skeletons"
+        path: "references/motion/references/gsap-skeletons.md"
+        role: node
+        description: "Reference only. Load this file when the `SECTION MAP` MOTION column is 8-10. All snippets are language-agnostic ES-modu\u2026"
+        skill_lines: 244
+        resources: 0
+      - name: "motion"
+        path: "references/motion.md"
+        role: node
+        description: "Translate the SECTION MAP and MOTION dial into per-section animation specs. Use when adding motion, hover states, scrol\u2026"
+        skill_lines: 290
+        resources: 0
+      - name: "quality"
+        path: "references/quality"
+        role: group
+        description: "Review and gate router for website-design. Routes review, audit, accessibility, performance, SEO/production, and prefli\u2026"
+        skill_lines: 0
+        resources: 7
+        children:
+      - name: "accessibility"
+        path: "references/quality/accessibility.md"
+        role: node
+        description: "Audit and fix WCAG 2.2 AA compliance: contrast ratios, focus states, screen-reader semantics, keyboard reachability, mo\u2026"
+        skill_lines: 291
+        resources: 0
+      - name: "anti-slop"
+        path: "references/quality/anti-slop"
+        role: group
+        description: "Sole source of absolute bans, templated tells, and consistency locks for website-design. Run detect.sh to audit code ag\u2026"
+        skill_lines: 0
+        resources: 1
+        children:
+      - name: "scripts"
+        path: "references/quality/anti-slop/scripts"
+        role: group
+        description: ""
+        skill_lines: 0
+        resources: 0
+      - name: "anti-slop"
+        path: "references/quality/anti-slop.md"
+        role: node
+        description: "Sole source of absolute bans, templated tells, and consistency locks for website-design. Run detect.sh to audit code ag\u2026"
+        skill_lines: 280
+        resources: 0
+      - name: "audit"
+        path: "references/quality/audit.md"
+        role: node
+        description: "Run the squirrel audit against any URL: 260+ rules across SEO, performance, security, technical, content, and accessibi\u2026"
+        skill_lines: 286
+        resources: 0
+      - name: "performance"
+        path: "references/quality/performance.md"
+        role: node
+        description: "Hit Core Web Vitals on every page: LCP under 2.5s, INP under 200ms, CLS under 0.1. Covers image optimization (WebP/AVIF\u2026"
+        skill_lines: 287
+        resources: 0
+      - name: "preflight"
+        path: "references/quality/preflight.md"
+        role: node
+        description: "Final quality gate before shipping a website-design page. Runs upstream anti-slop plus seven own checks (accessibility,\u2026"
+        skill_lines: 291
+        resources: 0
+      - name: "production"
+        path: "references/quality/production.md"
+        role: node
+        description: "Ship the production files every page needs but components never create: SEO meta tags, Open Graph and Twitter cards, 12\u2026"
+        skill_lines: 276
+        resources: 0
+      - name: "quality"
+        path: "references/quality.md"
+        role: node
+        description: "Review and gate router for website-design. Routes review, audit, accessibility, performance, SEO/production, and prefli\u2026"
+        skill_lines: 102
+        resources: 0
+      - name: "redesign"
+        path: "references/redesign.md"
+        role: node
+        description: "Redesign an existing site without breaking it: audit-first (screenshots, accessibility baseline, full inventory), dial\u2026"
+        skill_lines: 301
+        resources: 0
+      - name: "stack-adapters"
+        path: "references/stack-adapters.md"
+        role: node
+        description: "system defines the canonical token set and the language-agnostic"
+        skill_lines: 268
+        resources: 0
+      - name: "structure"
+        path: "references/structure.md"
+        role: node
+        description: "| Turns TOKENS and DIRECTION into the SECTION MAP artifact: an ordered list of named sections, each with a layout famil\u2026"
+        skill_lines: 320
+        resources: 0
+      - name: "system"
+        path: "references/system.md"
+        role: node
+        description: "| Turns the DIRECTION file into the TOKENS artifact: every CSS custom property the build uses, plus typography scale, d\u2026"
+        skill_lines: 274
+        resources: 0
+      - name: "version-control"
+        path: "references/version-control.md"
+        role: node
+        description: "Version-control discipline for every website build: git-init at scaffold, commit at every phase end, push before deploy\u2026"
+        skill_lines: 55
+        resources: 0
 totals:
   roots: 1
-  nodes: 8
-  groups: 1
-  max_depth: 1
-  resources: 0
+  nodes: 31
+  groups: 9
+  max_depth: 3
+  resources: 3

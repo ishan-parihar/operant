@@ -5,7 +5,7 @@ Block recipes for every website section: header/nav/footer, heroes, feature sect
 Recipes for the visible blocks of a page. Every leaf assumes the pipeline artifacts
 exist (DESIGN BRIEF, DIRECTION, TOKENS, SECTION MAP) and expresses its recipes as
 semantic HTML + canonical CSS tokens, so the same recipe compiles to any stack via
-`../references/stack-adapters.md`.
+`references/stack-adapters.md`.
 
 ## Routing pattern: Selection
 
@@ -37,7 +37,7 @@ without a SECTION MAP (single-component request), pick by what is being built:
 
 ## Shared rules
 
-Content for every slot (copy, images, icons) comes from `references/content.md`.
-Animation for any block comes from `references/motion.md`. Bans live in
-`references/quality/anti-slop.md`. Each leaf ends with mechanical Checks; run them
+Content for every slot (copy, images, icons) comes from [content](content.md).
+Animation for any block comes from [motion](motion.md). Bans live in
+[anti-slop](quality/anti-slop.md). Each leaf ends with mechanical Checks; run them
 before leaving the leaf.

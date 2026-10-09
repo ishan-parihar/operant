@@ -474,6 +474,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-738 — skills/meta-skill-creator: registry.py `resolve()` now falls
+  back to the root-relative candidate only when the file-relative one does
+  not exist:** the walk returned the first inside-root candidate without an
+  existence check, so a valid root-relative link from a depth>0 node was
+  reported dangling whenever a same-named file-relative shadow path was
+  absent — contradicting the function's own docstring and the Rust parity
+  port (`skills_tool.rs resolve_pointer`, which checks existence per
+  candidate). Surfaced by the iter-5 live-tree migration as 4 false
+  dangling-link errors in linkedin-marketing; fixed, mutation-proven
+  (fallback / file-rel preference / dangling-signal preservation), and all
+  7 migrated live trees re-battery green (`registry.py --check` 0 errors).
+  Also lands the migration execution log (plan §6, per-tree node counts +
+  hand-repair ledger) and BUGS.md S-1/S-2/S-3 rows for the corpus defects
+  the stricter validator surfaced.
+
 - **iter-733 — docs: the phantom "progress-oscillation" rung and the
   false row-4 premise are gone (outline v5 + config docs):**
   `AgentConfig::guardrail_exempt_tools`'s doc comment

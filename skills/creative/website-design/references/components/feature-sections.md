@@ -9,7 +9,7 @@ chosen by the shape of the content, never by habit. The habit layout (3 equal ca
 
 1. Count the items and classify the content shape (features, steps, stats, comparison, spec list).
 2. Pick the layout family from the selection table below. Respect the repetition caps:
-   a layout family appears at most ONCE per page (see `references/structure.md`).
+   a layout family appears at most ONCE per page (see [structure](../structure.md)).
 3. Build with semantic HTML (`section > h2` + `article` per item) and the canonical tokens.
 4. Declare the mobile collapse (below 768px) in the same stylesheet block. Never assume it.
 5. Run `## Checks` before moving to the next section.
@@ -18,7 +18,7 @@ Section header rule: headline on top, optional body below it, body `max-width: 6
 Never the split header (big headline left, small paragraph floating right). One message per section.
 
 Icons inside feature cells: one icon family, one size, one stroke width, never emoji as icons.
-Full icon guidance lives in `references/content.md`.
+Full icon guidance lives in [content](../content.md).
 
 Framework note: every recipe here is plain HTML + CSS custom properties.
 Tailwind, React, Vue, and shadcn mappings live in `references/stack-adapters.md`.
@@ -69,13 +69,13 @@ Override: only when a design system in `preserve` mode already uses this pattern
 - **Max 2 consecutive** image+text split sections on the page. The 3rd in a row is a fail.
   Break with a full-width band, a stats band, a bento, or a marquee, then you may return.
 - Image half is a real image (generated or `picsum.photos/seed/...`), never a div-built
-  fake screenshot (ban list: `references/quality/anti-slop.md`).
+  fake screenshot (ban list: [anti-slop](../quality/anti-slop.md)).
 - Mobile: stack image above text, image first, gap `var(--space-6)`.
 
 ## Stats band spec
 
 Full-width band, 3-4 stats max, values from the brief or marked mock (`<!-- mock -->`).
-Organic numbers, never fake-round ones (see `references/content.md`).
+Organic numbers, never fake-round ones (see [content](../content.md)).
 
 ```css
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-6);
@@ -117,7 +117,7 @@ A 10-row table with a hairline under every row is the worst default. Banned. Pic
 ## Steps / how-it-works
 
 - Labels are **verb-noun**: "Connect repo", "Map fields", "Ship". Never "Step 1", "Stage 1",
-  "Phase 01", "Pass One" (ban list: `references/quality/anti-slop.md`). A numeral may appear as a
+  "Phase 01", "Pass One" (ban list: [anti-slop](../quality/anti-slop.md)). A numeral may appear as a
   small visual marker, but the label text is the action itself.
 - Max 5 steps. More than 5 means the process needs grouping, not a longer rail.
 - 2-3 steps: horizontal rail, `grid-template-columns: repeat(n, 1fr)`, thin connector line in
@@ -129,7 +129,7 @@ A 10-row table with a hairline under every row is the worst default. Banned. Pic
 
 - Semantic base: one `<details><summary>Question</summary><p>Answer</p></details>` per
   item. When styling demands full control, use the button + panel disclosure pattern in
-  `references/quality/accessibility.md` (aria-expanded, aria-controls, hidden).
+  [accessibility](../quality/accessibility.md) (aria-expanded, aria-controls, hidden).
 - 4-8 questions on a landing page; more belongs on a dedicated support page. The first
   item may start open; never all open.
 - Question <= 12 words; answer <= 60 words in the page's copy register. Answers handle
@@ -138,7 +138,7 @@ A 10-row table with a hairline under every row is the worst default. Banned. Pic
 - Chevron rotates via `transform` 200ms. Do not animate panel height (layout thrash);
   instant reveal or opacity only.
 - Launch note: visible FAQ sections get FAQPage JSON-LD, see
-  `references/quality/production.md` section 2.
+  [production](../quality/production.md) section 2.
 
 ## Worked example: 5-item bento
 
