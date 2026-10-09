@@ -232,23 +232,39 @@ impl ToolGuardrailTracker {
         while self.name_window.len() > PATTERN_WINDOW_SIZE {
             self.name_window.pop_front();
         }
-        if let Some((tool_a, tool_b, cycles)) = ping_pong_cycles(&self.name_window) {
-            if cycles >= PING_PONG_SKIP_CYCLES {
-                self.last_pattern = Some(RepeatPattern::PingPong {
-                    tool_a,
-                    tool_b,
+        if let Some((tool_a, tool_b, cycles)) = ping_pong_cycles(&self.name_window)
+            && cycles >= PING_PONG_MIN_CYCLES
+        {
+            // S7 (BUGS.md): an alternation whose every call returns the
+            // IDENTICAL output is a no-progress loop wearing a ping-pong
+            // costume — classify it by its results, not its names. The
+            // no-progress copy is true for both tools, and the skip arm
+            // arms the both-tools backstop so the next call to EITHER
+            // skips regardless of arguments: no arrangement of calls
+            // that all return the same output can finish the task.
+            let identical_output =
+                alternation_returns_identical_output(&self.result_streaks, &tool_a, &tool_b);
+            let pattern = if identical_output {
+                RepeatPattern::NoProgress {
+                    tool: tool_a.clone(),
+                    calls: cycles,
+                }
+            } else {
+                RepeatPattern::PingPong {
+                    tool_a: tool_a.clone(),
+                    tool_b: tool_b.clone(),
                     cycles,
-                });
+                }
+            };
+            if cycles >= PING_PONG_SKIP_CYCLES && identical_output {
+                self.no_progress_armed.insert(tool_a, cycles);
+                self.no_progress_armed.insert(tool_b, cycles);
+            }
+            self.last_pattern = Some(pattern);
+            if cycles >= PING_PONG_SKIP_CYCLES {
                 return GuardrailDecision::Skip;
             }
-            if cycles >= PING_PONG_MIN_CYCLES {
-                self.last_pattern = Some(RepeatPattern::PingPong {
-                    tool_a,
-                    tool_b,
-                    cycles,
-                });
-                return GuardrailDecision::Warn;
-            }
+            return GuardrailDecision::Warn;
         }
 
         let key = (tool_name.to_string(), Self::normalize_args(args));
@@ -305,10 +321,7 @@ impl ToolGuardrailTracker {
                 // Self-reset so a resumed turn does not insta-trip.
                 self.hard_reject_streaks.remove(tool_name);
                 self.last_pattern = None;
-                return GuardrailDecision::Halt(hard_reject_halt_summary(
-                    tool_name,
-                    result,
-                ));
+                return GuardrailDecision::Halt(hard_reject_halt_summary(tool_name, result));
             }
             self.last_pattern = None;
             return GuardrailDecision::Allow;
@@ -348,7 +361,7 @@ impl ToolGuardrailTracker {
         // (`recurrences`): a repeat after a streak-resetting different
         // result still counts, so A, B(reset), A cycles trip at the same
         // 5/6 thresholds as back-to-back repeats.
-        let hash = hash_str(result);
+        let hash = result_fingerprint(result);
         let ledger = {
             let rec = self
                 .recurrences
@@ -401,10 +414,7 @@ impl ToolGuardrailTracker {
     /// Adds exempt tools to a live tracker — the mutable complement to
     /// [`Self::with_exempt_tools`], used at construction time when
     /// `AgentConfig::guardrail_exempt_tools` is non-empty (iter-683).
-    pub fn add_exempt_tools(
-        &mut self,
-        exempt: impl IntoIterator<Item = impl Into<String>>,
-    ) {
+    pub fn add_exempt_tools(&mut self, exempt: impl IntoIterator<Item = impl Into<String>>) {
         self.exempt_tools.extend(exempt.into_iter().map(Into::into));
     }
 
@@ -504,6 +514,23 @@ fn ping_pong_cycles(window: &VecDeque<String>) -> Option<(String, String, usize)
         }
     }
     (len >= 3).then(|| (prev.clone(), newest.clone(), len / 2))
+}
+
+/// S7 (BUGS.md): true when both alternating tools' current result
+/// streaks hold the SAME fingerprint with count >= 2 — proof that every
+/// call in the alternation returned the identical output (a single
+/// coincidental shared round cannot reach count 2 on both sides).
+fn alternation_returns_identical_output(
+    result_streaks: &HashMap<String, (Option<u64>, usize)>,
+    tool_a: &str,
+    tool_b: &str,
+) -> bool {
+    match (result_streaks.get(tool_a), result_streaks.get(tool_b)) {
+        (Some((Some(hash_a), count_a)), Some((Some(hash_b), count_b))) => {
+            hash_a == hash_b && *count_a >= 2 && *count_b >= 2
+        }
+        _ => false,
+    }
 }
 
 /// Prefix stamped on synthetic skip results. `run`'s repetition guard keys
@@ -656,6 +683,17 @@ pub fn hash_str(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Canonical result fingerprint (BUGS.md S7): JSON results hash through
+/// [`hash_value`] so a re-serialized-but-identical output (key order,
+/// whitespace) does not break the no-progress streak; anything that is
+/// not valid JSON hashes raw via [`hash_str`].
+fn result_fingerprint(result: &str) -> u64 {
+    match serde_json::from_str::<serde_json::Value>(result) {
+        Ok(value) => hash_value(&value),
+        Err(_) => hash_str(result),
+    }
 }
 
 #[cfg(test)]
@@ -933,13 +971,20 @@ mod pattern_tests {
             t.observe_result("tool_x", "same", true);
             t.observe_result("tool_y", "same", true);
         }
-        assert_eq!(t.observe_result("tool_x", "same", true), GuardrailDecision::Warn);
-        assert_eq!(t.observe_result("tool_y", "same", true), GuardrailDecision::Warn);
+        assert_eq!(
+            t.observe_result("tool_x", "same", true),
+            GuardrailDecision::Warn
+        );
+        assert_eq!(
+            t.observe_result("tool_y", "same", true),
+            GuardrailDecision::Warn
+        );
     }
 
     #[test]
     fn exempt_tools_bypass_every_rung() {
-        let mut t = ToolGuardrailTracker::new().with_exempt_tools(["terminal", "tool_a", "tool_b"]);        for _ in 0..8 {
+        let mut t = ToolGuardrailTracker::new().with_exempt_tools(["terminal", "tool_a", "tool_b"]);
+        for _ in 0..8 {
             assert_eq!(t.observe("terminal", "{}"), GuardrailDecision::Allow);
             assert_eq!(
                 t.observe_result("terminal", "same", true),
@@ -1024,10 +1069,18 @@ mod ladder_tests {
     fn a_hard_rejection_halts_on_the_second_consecutive_one() {
         let mut t = ToolGuardrailTracker::new();
         assert_eq!(
-            fail(&mut t, "send_email", "Blocked by security policy: no email tool"),
+            fail(
+                &mut t,
+                "send_email",
+                "Blocked by security policy: no email tool"
+            ),
             GuardrailDecision::Allow
         );
-        match fail(&mut t, "send_email", "Blocked by security policy: no email tool") {
+        match fail(
+            &mut t,
+            "send_email",
+            "Blocked by security policy: no email tool",
+        ) {
             GuardrailDecision::Halt(msg) => {
                 assert!(msg.contains("security policy"), "{msg}");
                 assert!(msg.contains("send_email"), "{msg}");
@@ -1056,7 +1109,11 @@ mod ladder_tests {
         // failure ladder, never the hard-reject halt.
         for i in 0..3 {
             assert_eq!(
-                fail(&mut t, "write_file", &format!("declined by seat policy ({i})")),
+                fail(
+                    &mut t,
+                    "write_file",
+                    &format!("declined by seat policy ({i})")
+                ),
                 GuardrailDecision::Allow
             );
         }
@@ -1251,7 +1308,10 @@ mod ladder_tests {
         );
         let _ = ok(&mut t, "poll", "same");
         assert_eq!(
-            t.observe("poll", "{\"args\":\"varied to dodge the identical-call rung\"}"),
+            t.observe(
+                "poll",
+                "{\"args\":\"varied to dodge the identical-call rung\"}"
+            ),
             GuardrailDecision::Skip,
             "the sixth recurrence arms the skip across resets"
         );
@@ -1268,6 +1328,121 @@ mod ladder_tests {
             GuardrailDecision::Skip,
             "six run-wide identical results arm the next-call skip"
         );
+    }
+
+    #[test]
+    fn alternating_tools_with_identical_outputs_escalate_as_no_progress() {
+        // S7 (BUGS.md): an A/B alternation whose every call returns the
+        // identical output is a no-progress loop wearing a ping-pong
+        // costume — the pre-execution rung must classify by results, not
+        // names, and the skip arm must arm the both-tools backstop.
+        // Patterns are captured immediately after the pre-execution
+        // observes: the post-side recurrence rung also writes NoProgress
+        // at each tool's own 5th result, which would mask the
+        // classification under test.
+        let mut t = ToolGuardrailTracker::new();
+        let mut pattern_at_warn = None;
+        let mut pattern_at_skip = None;
+        for cycle in 0..5 {
+            let args = format!("{{\"round\":{cycle}}}");
+            let _ = t.observe("tool_a", &args);
+            let _ = ok(&mut t, "tool_a", "same");
+            let verdict_b = t.observe("tool_b", &args);
+            if cycle == 3 {
+                assert_eq!(verdict_b, GuardrailDecision::Warn, "4 complete cycles warn");
+                pattern_at_warn = t.last_pattern();
+            }
+            if cycle == 4 {
+                assert_eq!(verdict_b, GuardrailDecision::Skip, "5 complete cycles skip");
+                pattern_at_skip = t.last_pattern();
+            }
+            let _ = ok(&mut t, "tool_b", "same");
+        }
+        assert!(
+            matches!(pattern_at_warn, Some(RepeatPattern::NoProgress { .. })),
+            "the warn must classify the identical-output alternation as no-progress, got {pattern_at_warn:?}"
+        );
+        assert!(
+            matches!(pattern_at_skip, Some(RepeatPattern::NoProgress { .. })),
+            "the skip must classify the identical-output alternation as no-progress, got {pattern_at_skip:?}"
+        );
+        assert_eq!(
+            t.observe("tool_a", "{\"fresh\":true}"),
+            GuardrailDecision::Skip,
+            "the skip armed tool_a's regardless-of-args backstop"
+        );
+        assert!(
+            matches!(t.last_pattern(), Some(RepeatPattern::NoProgress { .. })),
+            "a fresh-args call skipped by the backstop stays no-progress — the old ping-pong path would reclassify it, got {:?}",
+            t.last_pattern()
+        );
+        assert_eq!(
+            t.observe("tool_b", "{\"fresh\":true}"),
+            GuardrailDecision::Skip,
+            "the skip armed tool_b's backstop too — every call in the loop returns the same output"
+        );
+    }
+
+    #[test]
+    fn alternating_tools_with_distinct_outputs_stay_ping_pong() {
+        // The gate's negative (S7): each tool repeating ITS OWN distinct
+        // output is the workflow-shaped alternation that stays ping-pong —
+        // the per-tool recurrence rungs still catch it at their own 5/6.
+        // The pattern is captured right after the pre-execution skip; the
+        // trailing post-side result would overwrite it with the per-tool
+        // no-progress verdict.
+        let mut t = ToolGuardrailTracker::new();
+        let mut pattern_at_skip = None;
+        for cycle in 0..5 {
+            let args = format!("{{\"round\":{cycle}}}");
+            let _ = t.observe("tool_a", &args);
+            let _ = ok(&mut t, "tool_a", "result-a");
+            let verdict_b = t.observe("tool_b", &args);
+            if cycle == 3 {
+                assert_eq!(verdict_b, GuardrailDecision::Warn);
+            }
+            if cycle == 4 {
+                assert_eq!(verdict_b, GuardrailDecision::Skip);
+                pattern_at_skip = t.last_pattern();
+            }
+            let _ = ok(&mut t, "tool_b", "result-b");
+        }
+        assert!(
+            matches!(pattern_at_skip, Some(RepeatPattern::PingPong { .. })),
+            "distinct outputs keep the ping-pong classification, got {pattern_at_skip:?}"
+        );
+    }
+
+    #[test]
+    fn re_serialized_identical_results_share_a_fingerprint() {
+        // S7's second half: the no-progress streak hashes results through
+        // the canonicalising fingerprint, so the same logical JSON with
+        // different key order or spacing counts as a recurrence instead
+        // of resetting the streak.
+        let variants = [
+            r#"{"status":"ok","count":1}"#,
+            r#"{"count":1,"status":"ok"}"#,
+            r#"{"count": 1, "status": "ok"}"#,
+            r#"{"status":"ok","count":1}"#,
+            r#"{"count":1,"status":"ok"}"#,
+        ];
+        let mut t = ToolGuardrailTracker::new();
+        for (i, variant) in variants.iter().enumerate() {
+            let verdict = ok(&mut t, "poll", variant);
+            if i < 4 {
+                assert_eq!(
+                    verdict,
+                    GuardrailDecision::Allow,
+                    "re-serialization {i} is the same logical result, not a reset"
+                );
+            } else {
+                assert_eq!(
+                    verdict,
+                    GuardrailDecision::Warn,
+                    "the fifth logical repeat warns despite five byte-different serializations"
+                );
+            }
+        }
     }
 
     #[test]

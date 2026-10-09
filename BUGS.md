@@ -4169,7 +4169,24 @@ which is why this record must outlive the file. Not fixed in Wave 1: parity
 pins today's behavior as-is; changing the verdict's effect is a semantics
 change that belongs to the absorb, not the migration.
 
-### S7 — LoopDetector ping-pong matches tool NAME only; identical outputs are invisible to it (OPEN)
+### S7 — LoopDetector ping-pong matches tool NAME only; identical outputs are invisible to it (CLOSED iter-745 — fixed in the merged controller, exactly as this entry prescribed)
+
+> **CLOSED (iter-745, 2026-10-10):** the fix landed in
+> `tool_guardrails.rs`, the merged controller, not the dead engine —
+> per this entry's own prescription. Two changes: (1) the pre-execution
+> ping-pong rung now consults the alternating pair's result streaks
+> (`alternation_returns_identical_output`): when both tools' current
+> streaks hold the SAME canonical fingerprint with count >= 2 — proof
+> every call in the alternation returned the identical output — the
+> verdict classifies as `NoProgress` instead of `PingPong`, and the
+> skip arm arms the both-tools regardless-of-args backstop (the next
+> call to EITHER skips; no arrangement of calls that all return the
+> same output can help). (2) `observe_result` hashes results through
+> the canonicalising `result_fingerprint` (JSON parses → `hash_value`
+> with sorted keys; non-JSON → raw `hash_str`), so a
+> re-serialized-but-identical output no longer breaks the no-progress
+> streak. Mutation-proven: reverting either half turns its regression
+> test red. The original finding is left as the record.
 
 `loop_detector.rs` `detect_ping_pong` (`:171`, extended-cycle count
 `:201-212`) detects alternation purely on `ToolCallRecord::name` —
