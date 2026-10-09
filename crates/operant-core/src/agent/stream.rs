@@ -10,7 +10,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use super::*;
 
@@ -506,6 +506,51 @@ impl OperantAgent {
         }
     }
 
+    /// Guardian-LLM classification for one flagged tool call (hermes
+    /// `approval_smart.py` parity): strip comments, wrap the command as
+    /// data, one small non-streaming chat, STRICT verdict parse.
+    /// `None` = call failed or reply unparseable → the caller treats it as
+    /// ESCALATE (today's channel behavior). The command extraction reuses
+    /// the smart gate's own extractor so the classifier and the gate can
+    /// never disagree about what the command is.
+    async fn guardian_classify(
+        &self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<crate::approval::GuardianVerdict> {
+        use crate::approval::{GuardianVerdict, guardian_messages, parse_guardian_reply, strip_shell_comments};
+        let command = strip_shell_comments(&crate::approval::extract_command_from_args(name, args));
+        if command.trim().is_empty() {
+            return Some(GuardianVerdict::Escalate);
+        }
+        let request = crate::agent::ChatRequest::new(
+            self.config.model.clone(),
+            guardian_messages(name, &command),
+        );
+        let request = ChatRequest {
+            max_tokens: Some(32),
+            temperature: Some(0.0),
+            ..request
+        };
+        match self.client.chat(request).await {
+            Ok(response) => {
+                let text = response
+                    .choices
+                    .first()
+                    .and_then(|c| c.message.content.as_deref())
+                    .unwrap_or("");
+                let verdict = parse_guardian_reply(text);
+                debug!(tool = %name, ?verdict, "Guardian-LLM classified");
+                Some(verdict)
+            }
+            Err(e) => {
+                warn!(tool = %name, error = %e, "Guardian-LLM call failed — escalating");
+                None
+            }
+        }
+    }
+
+
     /// Feed one completed iteration to the output-side successful-repeat
     /// rung (openhuman `record_output`, iter-688): the canonical signature
     /// of the assistant's narration + tool batch, hashed by the caller
@@ -877,6 +922,7 @@ impl OperantAgent {
             }
 
             // Smart approval gate
+            let mut guardian_approved = false;
             if self.config.approval_mode != "off" {
                 let approval_result = crate::approval::check_tool_approval(
                     &name,
@@ -900,6 +946,49 @@ impl OperantAgent {
                     }
                     "requires_approval" => {
                         warn!(tool = %name, "Tool call flagged — will prompt user");
+                        // ── Guardian-LLM arm (hermes `approval_smart.py`
+                        // parity, opt-in via `OPERANT_GUARDIAN_LLM` at
+                        // construction) ──────
+                        // The auxiliary classifier may APPROVE a flagged
+                        // command (skipping the channel) or DENY it (shaped
+                        // like a smart-gate block). Anything else —
+                        // ESCALATE, call failure, unarmed env — is today's
+                        // behavior: the channel below decides. Seat policy
+                        // keeps precedence: the guardian sits in the
+                        // UNGOVERNED chain only (an Escalate/Deny from a
+                        // policy row is never overridden — the classifier
+                        // classifies, the policy decides).
+                        if self.guardian_llm {
+                            match self.guardian_classify(&name, &args).await {
+                                Some(crate::approval::GuardianVerdict::Approve) => {
+                                    info!(
+                                        tool = %name,
+                                        "Guardian-LLM approved the flagged command — skipping the permission prompt"
+                                    );
+                                    guardian_approved = true;
+                                }
+                                Some(crate::approval::GuardianVerdict::Deny) => {
+                                    warn!(
+                                        tool = %name,
+                                        "Tool call blocked by the guardian-LLM classifier"
+                                    );
+                                    early_results[idx] = Some(ToolResult::error(
+                                        &tool_call.id,
+                                        format!(
+                                            "{}: the guardian-LLM classifier denied this command",
+                                            crate::tool_guardrails::HARD_REJECT_PREFIX
+                                        ),
+                                    ));
+                                    continue;
+                                }
+                                _ => {
+                                    debug!(
+                                        tool = %name,
+                                        "Guardian-LLM escalated — the permission channel decides"
+                                    );
+                                }
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -1056,6 +1145,11 @@ impl OperantAgent {
                             continue;
                         }
                     }
+                } else if guardian_approved {
+                    // The guardian-LLM approved this specific call — skip the
+                    // prompt, keep the approval's own audit trail (the info!
+                    // above).
+                    (false, String::new())
                 } else if self.tool_allowed_by_allowlist(&name) {
                     // allowed by allowlist — no prompt
                     (false, String::new())

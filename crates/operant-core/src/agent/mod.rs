@@ -405,6 +405,12 @@ pub struct OperantAgent {
     /// byte-for-byte, including the dispatcher's no-active-channel
     /// auto-AllowSession arm.
     unattended: bool,
+    /// Guardian-LLM arm (hermes `approval_smart.py` parity): armed when
+    /// `OPERANT_GUARDIAN_LLM` is truthy at CONSTRUCTION (one read, not a
+    /// per-call env probe — tests and callers override with
+    /// `with_guardian_llm`). Unarmed = the flagged-call path is today's
+    /// permission-channel behavior, byte-for-byte.
+    guardian_llm: bool,
     /// Session-scoped approvals (hermes `approve_session`): tool names the
     /// user allowed for the rest of this agent instance's lifetime. Never
     /// persisted.

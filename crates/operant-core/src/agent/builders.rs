@@ -114,6 +114,7 @@ impl OperantAgent {
             permission_tx: None,
             seat_authority: None,
             unattended: false,
+            guardian_llm: crate::approval::guardian_enabled(),
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -189,6 +190,7 @@ impl OperantAgent {
             event_tx: Some(event_tx),            permission_tx: None,
             seat_authority: None,
             unattended: false,
+            guardian_llm: crate::approval::guardian_enabled(),
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -437,6 +439,15 @@ impl OperantAgent {
     /// Mark this agent unattended (no interactive user behind it — cron).
     /// A governed `Escalate` verdict is clamped to a same-run Deny once the
     /// ask is queued; the ungoverned path ignores the flag.
+    /// Arm/disarm the guardian-LLM approval classifier explicitly —
+    /// the test/programmatic override for the construction-time env read
+    /// (`OPERANT_GUARDIAN_LLM`).
+    pub fn with_guardian_llm(mut self, armed: bool) -> Self {
+        self.guardian_llm = armed;
+        self
+    }
+
+    /// Mark this agent unattended (no interactive user behind it — cron).
     pub fn with_unattended(mut self, unattended: bool) -> Self {
         self.unattended = unattended;
         self

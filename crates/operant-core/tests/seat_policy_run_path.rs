@@ -296,6 +296,16 @@ struct World {
 }
 
 async fn world(responses: Vec<ChatResponse>, seat: Option<(&str, SeatPolicy)>) -> World {
+    world_with(responses, seat, false).await
+}
+
+/// The `world` builder with the guardian-LLM arm explicitly armed — the
+/// deterministic test seam (`with_guardian_llm`), never a process-env read.
+async fn world_with(
+    responses: Vec<ChatResponse>,
+    seat: Option<(&str, SeatPolicy)>,
+    guardian: bool,
+) -> World {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Arc::new(Database::init(dir.path().join("agent.sqlite")).expect("Database::init"));
 
@@ -303,6 +313,7 @@ async fn world(responses: Vec<ChatResponse>, seat: Option<(&str, SeatPolicy)>) -
     registry.register(SeatProbeTool).await.unwrap();
     registry.register(BashStubTool).await.unwrap();
     registry.register(DelegateStubTool).await.unwrap();
+    registry.register(TerminalStubTool).await.unwrap();
 
     let client = ScriptedClient::new(responses);
     let mut agent = OperantAgent::new(
@@ -310,7 +321,8 @@ async fn world(responses: Vec<ChatResponse>, seat: Option<(&str, SeatPolicy)>) -
         Box::new(ScriptedClientHandle(Arc::clone(&client))),
         registry,
         db,
-    );
+    )
+    .with_guardian_llm(guardian);
 
     let (permission_tx, permission_rx) = tokio::sync::mpsc::channel::<ToolPermissionRequest>(8);
     agent = agent.with_permissions(permission_tx);
@@ -660,5 +672,150 @@ async fn ungoverned_seat_delegates_as_today() {
     assert!(
         w.client.saw(DELEGATE_MARKER),
         "no posture on the row = ungoverned = the tool runs, byte-for-byte today"
+    );
+}
+
+// ── Guardian-LLM arm (approval matrix row) ──────────────────────────────
+
+/// Marker the `terminal` stub returns when it actually executes.
+const TERMINAL_MARKER: &str = "TERMINAL_STUB_RAN";
+
+/// Terminal-named stub: `extract_command_from_args` classifies `terminal`
+/// (not `bash`), so this is the name whose command text reaches the smart
+/// gate's pattern layers — the tool the guardian arm actually consults on.
+struct TerminalStubTool;
+
+#[derive(JsonSchema, Deserialize)]
+struct TerminalStubArgs {
+    command: String,
+}
+
+#[async_trait]
+impl OperantTool for TerminalStubTool {
+    fn name(&self) -> &str {
+        "terminal"
+    }
+    fn description(&self) -> &str {
+        "Test stub — named terminal so the smart gate reads its command."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<TerminalStubArgs>("terminal", "Terminal-named test stub")
+    }
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let parsed: TerminalStubArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::error("terminal", format!("bad args: {e}")),
+        };
+        ToolResult::success(
+            "terminal",
+            json!({ "marker": TERMINAL_MARKER, "command": parsed.command }),
+        )
+    }
+}
+
+/// An armed guardian that APPROVES a flagged command skips the permission
+/// channel — the tool runs, the prompt never exists. The guardian's chat is
+/// the SECOND scripted response (consumed during tool processing).
+#[tokio::test]
+async fn guardian_approve_skips_the_permission_prompt() {
+    let mut w = world_with(
+        vec![
+            tool_call_response("terminal", r#"{"command":"rm -rf /var/log/app"}"#),
+            text_response("APPROVE"),
+            text_response("done"),
+        ],
+        None, // ungoverned: the guardian sits in the ungoverned chain only
+        true,
+    )
+    .await;
+
+    w.agent.run("go".to_string()).await.expect("run completes");
+
+    assert!(
+        w.client.saw(TERMINAL_MARKER),
+        "the guardian's APPROVE must let the flagged tool run"
+    );
+    assert!(
+        w.permission_rx.try_recv().is_err(),
+        "an approved call must never reach the permission channel"
+    );
+    assert!(
+        w.client.saw("<command>rm -rf /var/log/app</command>"),
+        "the guardian consult wraps the command as data"
+    );
+}
+
+/// An armed guardian that DENIES blocks the call shaped like a smart-gate
+/// block — no channel prompt, no tool run.
+#[tokio::test]
+async fn guardian_deny_blocks_before_the_channel() {
+    let mut w = world_with(
+        vec![
+            tool_call_response("terminal", r#"{"command":"rm -rf /var/log/app"}"#),
+            text_response("DENY"),
+            text_response("done"),
+        ],
+        None,
+        true,
+    )
+    .await;
+
+    w.agent.run("go".to_string()).await.expect("run completes");
+
+    assert!(
+        !w.client.saw(TERMINAL_MARKER),
+        "the guardian's DENY must keep the tool from executing"
+    );
+    assert!(
+        w.client.saw("guardian-LLM classifier denied"),
+        "the denial must name the guardian so the audit trail can find it"
+    );
+    assert!(
+        w.permission_rx.try_recv().is_err(),
+        "a guardian denial is a verdict, not an escalation"
+    );
+}
+
+/// The unarmed twin: today's behavior — the flagged call escalates to the
+/// permission channel (the existing ungoverned prompt path).
+#[tokio::test]
+async fn disarmed_guardian_keeps_today_channel_behavior() {
+    let mut w = world_with(
+        vec![
+            tool_call_response("terminal", r#"{"command":"rm -rf /var/log/app"}"#),
+            text_response("done"),
+        ],
+        None,
+        false,
+    )
+    .await;
+
+    // Drain the permission channel like the gateway does: allow the call,
+    // and record that the channel — not the guardian — was consulted.
+    let prompt_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&prompt_seen);
+    let mut rx = std::mem::replace(&mut w.permission_rx, tokio::sync::mpsc::channel(8).1);
+    let drainer = tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = req
+                .response_tx
+                .send(ToolPermissionResponse::AllowOnce);
+        }
+    });
+
+    w.agent.run("go".to_string()).await.expect("run completes");
+    drainer.abort();
+    assert!(
+        prompt_seen.load(std::sync::atomic::Ordering::SeqCst),
+        "unarmed, the flagged call escalates to the permission channel as today"
+    );
+    assert!(
+        !w.client.saw("<command>"),
+        "unarmed, no guardian consult ever happens"
+    );
+    assert!(
+        w.client.saw(TERMINAL_MARKER),
+        "the human's AllowOnce runs the tool, unchanged"
     );
 }
