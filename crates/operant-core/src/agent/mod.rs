@@ -62,13 +62,13 @@ When using a skill and finding it outdated, incomplete, or wrong, patch it immed
 4. **DEDUP** — After reloading, ignore any remaining stale placeholders for that same skill — they are historical artifacts from previous compactions and do not need further action.
 
 ## Meta-Skill Routing
-Some skills are **meta-skills** (routers): their directory contains child skill directories, each with its own SKILL.md, forming a tree. Only the router's description sits in the always-loaded list — everything below is reached by reading.
-1. **Route, don't do.** A router's body is a map of its children; real procedure text lives in leaves. Read the child with `skill_view(name='<parent>/<child>')` before acting on it.
-2. **Use the map when present.** If a `_map.md` exists in the router root, read it first (`skill_view(name='<parent>', file_path='_map.md')`) to jump straight to the right leaf — one map read + one leaf read.
-3. **Announce the leaf.** State which leaf you are operating under, and re-route when the task shifts — don't improvise from whatever leaf is in context.
+Some skills are **meta-skills**: ONE skill with a root SKILL.md whose knowledge lives in plain `.md` node files under `references/`, nested to any depth. Only the root's description sits in the always-loaded list — every node below is reached by reading. Nodes are NOT skills: they have no frontmatter and are read with `skill_view(name='<skill>', file_path='references/<file>.md')`.
+1. **Route, don't do.** The root body is an index of its nodes; real procedure text lives in nodes. Follow its links to the right node before acting.
+2. **Use the map when present.** If a `_map.md` exists in the skill root, read it first (`skill_view(name='<skill>', file_path='_map.md')`) to jump straight to the right node — one map read + one node read.
+3. **Announce the node.** State which node you are operating under, and re-route when the task shifts — don't improvise from whatever node is in context.
 4. **Delegate branches.** For branch-shaped subtasks, hand one subagent the branch path plus a slice of the task; the subtree is self-contained.
-5. **Load ceiling.** Keep at most: the active leaf, its ancestor routers, and one framework/reference file. Needing more at once is a delegation signal, not a reason to load the tree.
-6. **Regenerate the map after structural changes.** After creating/renaming/reorganizing nodes, run `skill_manage(action='generate_map', name='<router>')` (or with `check_only=true` to validate without writing). Fix every reported error (unreachable children, name/dir mismatches, missing descriptions, orphan SKILL.md files under resource dirs) and treat warnings (vague descriptions, oversized router bodies over 200 lines, unreferenced resource files) as review prompts before calling a tree complete.
+5. **Load ceiling.** Keep at most: the active node, its ancestor indexes, and one framework file. Needing more at once is a delegation signal, not a reason to load the tree.
+6. **Regenerate the map after structural changes.** After creating/renaming/reorganizing nodes, run `skill_manage(action='generate_map', name='<skill>')` (or with `check_only=true` to validate without writing). Fix every reported error (stray nested SKILL.md, dangling links, unreachable nodes, name/dir mismatches, missing descriptions) and treat warnings (thin descriptions, oversized root bodies over 200 lines, missing index files, unreferenced resource files) as review prompts before calling a tree complete.
 
 ## Self-Management Protocol (own infrastructure)
 When the task is managing Operant itself (config, model, gateway, cron, channels, skills, memory, MCP):
@@ -1342,10 +1342,11 @@ mod tests {
         assert!(prefix.contains("## Skill Management Principles"));
         assert!(prefix.contains("skill_manage"));
         assert!(prefix.contains("Skills that aren't maintained become liabilities"));
-        // meta-skill parity: the routing contract rides the same prefix.
+        // meta-skill parity: the nested-references routing contract rides the
+        // same prefix.
         assert!(prefix.contains("## Meta-Skill Routing"));
         assert!(prefix.contains("Route, don't do"));
-        assert!(prefix.contains("skill_view(name='<parent>/<child>')"));
+        assert!(prefix.contains("skill_view(name='<skill>', file_path='references/<file>.md')"));
         assert!(prefix.contains("Regenerate the map after structural changes"));
         assert!(prefix.contains("check_only=true"));
         assert!(prefix.contains("## Skill Safety Rule"));

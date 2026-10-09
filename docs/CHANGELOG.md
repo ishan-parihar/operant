@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-723 — skills: nested-references validator lockstep (meta-skill-
+  creator rewrite Rust side):** the skill-side rewrite (iters 701–705)
+  shipped ONE skill + plain `.md` nodes under `references/`, but the Rust
+  copy of the old routing contract still validated child-skill-dir trees —
+  `operant skills audit` and `skill_manage generate_map` would misvalidate
+  every migrated tree, and the always-on agent prompt still taught
+  `skill_view(name='<parent>/<child>')` syntax that no longer exists.
+  `skills_tool.rs` walk rewritten for file-nodes: BFS reachability from
+  the root over markdown links + backticked paths (unreachable node =
+  error, dangling link = error, dangling backtick = warning, pointer
+  escaping the skill = error), stray nested `SKILL.md` = error (routing-
+  model regression guard), root-only health checks (name/dir mismatch,
+  description ≥60 chars registry.py-parity, root >200-line budget),
+  `<dir>.md` index-file convention, non-`.md` unreferenced-resource
+  warnings; discovery surfaces `references/` files with one-line summaries
+  (legacy child-dir trees still work pre-migration). `skills audit` tree
+  gate now also triggers on `references/` trees — otherwise migrated trees
+  (no child SKILL.md dirs) would be silently skipped. Agent prompt
+  "Meta-Skill Routing" block rewritten to the file-node contract.
+  Regression tests: unreachable node, dangling link, stray nested
+  SKILL.md — each fails without the fix (113 skills tests green).
 - **iter-722 — durable cron delivery ledger (trinity P2-A concrete;
   hermes `deliveries.db` tombstone/stale-claim shape):**
   `deliver_result` handed the payload to the gateway over an in-memory

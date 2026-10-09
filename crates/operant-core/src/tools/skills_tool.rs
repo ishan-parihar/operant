@@ -33,13 +33,14 @@ const MAX_SKILL_CONTENT_CHARS: usize = 100_000; // ~36k tokens at 2.75 chars/tok
 const MAX_SKILL_FILE_BYTES: usize = 1_048_576; // 1 MiB per supporting file
 
 /// Meta-skill validation budgets (meta-skill-creator registry.py parity).
-/// A router body is read on EVERY traversal through its subtree, so it pays
-/// rent constantly — aim well under 200 lines. Leaves get the normal budget.
+/// The root SKILL.md is read on EVERY traversal through its tree, so it pays
+/// rent constantly — aim well under 200 lines. Reference nodes get the normal
+/// skill budget.
 const MAX_ROUTER_BODY_LINES: usize = 200;
 const MAX_LEAF_BODY_LINES: usize = 500;
 /// Below this many chars a description cannot carry the routing surface
-/// (what it does AND when to use it).
-const MIN_DESCRIPTION_CHARS: usize = 12;
+/// (what it does AND when to use it) — registry.py parity (WARN at <60).
+const MIN_DESCRIPTION_CHARS: usize = 60;
 /// Lowercased substrings that mark a description as an unwritten placeholder.
 const PLACEHOLDER_MARKERS: &[&str] = &[
     "todo",
@@ -374,13 +375,13 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
                 .filter(|p| *p != base_dir)
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
-                .map(|s| s.to_string()); // Meta-skill support: a skill whose directory contains nested
-            // skill directories is a router — surface its children so the
-            // model sees the routing surface without loading every leaf.
-            // Cheap gate: only walk when the dir has subdirectories, so
-            // the 84+ leaf skills in a typical pool don't pay for tree
-            // discovery on every skills_list call.
-            let children = if dir_has_subdirs(&path) {
+                .map(|s| s.to_string());            // Meta-skill support: a skill with a nested references/ tree (or,
+            // legacy, nested skill dirs) surfaces its nodes so the model sees
+            // the routing surface without loading every file.
+            // Cheap gate: only walk when the dir has subdirectories or a
+            // references/ tree, so the 84+ leaf skills in a typical pool
+            // don't pay for tree discovery on every skills_list call.
+            let children = if path.join("references").is_dir() || dir_has_subdirs(&path) {
                 collect_skill_children(&path)
             } else {
                 Vec::new()
@@ -398,16 +399,13 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
     }
 }
 
-/// One node of a meta-skill tree, as collected for `_map.md` generation.
+/// One node of a meta-skill's references tree, as collected for `_map.md`
+/// generation. Nodes are plain files — no frontmatter, no skill identity.
 struct MapNode {
     rel_path: String,
+    /// First line of the file (post-heading) — its routing summary.
     description: String,
     depth: usize,
-    /// Body text (post-frontmatter) — used for line-count and
-    /// resource-reference validation.
-    body: String,
-    /// Resource files (references/templates/scripts/assets) at this node.
-    resources: Vec<String>,
 }
 
 /// Validation report for a meta-skill tree (CLI `skills audit` gate + the
@@ -418,10 +416,13 @@ pub struct SkillTreeValidation {
     pub warnings: Vec<String>,
 }
 
-/// Walk a meta-skill subtree (descending THROUGH routers) and run the full
-/// registry.py-parity validation: node health (name/dir mismatch, missing or
-/// vague description, oversized bodies), child reachability, orphan SKILL.md
-/// files under resource dirs, and unreferenced resource files. Shared by
+/// Walk one meta-skill's nested-references tree and run the full
+/// registry.py-parity validation: stray SKILL.md below root (skill-routing
+/// regression), root health (name/dir mismatch, missing/placeholder/short
+/// description, oversized root), bidirectional pointer checks (unreachable
+/// node = error, dangling markdown link = error, dangling backticked path =
+/// warning, pointer escaping the skill = error), the index-file convention,
+/// node size budgets, and unreferenced non-.md resources. Shared by
 /// `skill_manage generate_map` and the CLI `skills audit` tree gate — one
 /// code path, one contract.
 fn collect_tree_validation(
@@ -431,33 +432,97 @@ fn collect_tree_validation(
     let mut nodes: Vec<MapNode> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
-    collect_map_nodes(
-        skill_dir,
-        skill_dir,
-        1,
-        &mut nodes,
-        &mut errors,
-        &mut warnings,
-    );
-    nodes.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
-    // Phase 2 — unreferenced resource files (registry.py): a resource no
-    // SKILL.md mentions will never be loaded. The reference corpus is the
-    // root router's own body plus every node body in the tree.
-    let root_content = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap_or_default();
-    let (_, root_body) = parse_frontmatter(&root_content);
-    let joined_bodies = nodes
-        .iter()
-        .map(|n| n.body.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let all_bodies = format!("{root_body}\n{joined_bodies}");
-    let mut root_resources = collect_node_resources(skill_dir);
-    root_resources.sort();
-    warn_unreferenced_resources(name, &root_resources, &all_bodies, &mut warnings);
-    for n in &nodes {
-        warn_unreferenced_resources(&n.rel_path, &n.resources, &all_bodies, &mut warnings);
+    let root_text = fs::read_to_string(skill_dir.join("SKILL.md")).unwrap_or_default();
+    let (root_fm, root_body) = parse_frontmatter(&root_text);
+    let dir_name = skill_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    validate_root_health(&root_fm, &root_body, &dir_name, &mut errors, &mut warnings);
+
+    // Rule 1: a SKILL.md below root is a regression to the routing model.
+    collect_stray_skill_files(skill_dir, skill_dir, &mut errors);
+
+    // Nodes: plain .md files under references/ (hidden/_ segments skipped).
+    let node_rels = collect_reference_node_files(skill_dir);
+    for rel in &node_rels {
+        let abs = skill_dir.join(rel);
+        let body = fs::read_to_string(&abs).unwrap_or_default();
+        let body_lines = body.lines().count();
+        if body_lines > MAX_LEAF_BODY_LINES {
+            warnings.push(format!(
+                "'{rel}' is {body_lines} lines (>{MAX_LEAF_BODY_LINES}) — split it into a directory group with an index file."
+            ));
+        }
+        nodes.push(MapNode {
+            rel_path: rel.clone(),
+            description: first_line_summary(&body),
+            depth: rel.split('/').count().saturating_sub(1),
+        });
     }
+    check_index_files(skill_dir, &skill_dir.join("references"), &mut warnings);
+
+    // Bidirectional pointer walk: reachability from the root + dangling detection.
+    let mut reachable: HashSet<String> = HashSet::new();
+    reachable.insert("SKILL.md".to_string());
+    let mut queue: Vec<PathBuf> = vec![skill_dir.join("SKILL.md")];
+    let mut dangling: Vec<(String, bool, String)> = Vec::new();
+    let mut joined = String::new();
+    while let Some(cur) = queue.pop() {
+        let Ok(text) = fs::read_to_string(&cur) else {
+            continue;
+        };
+        joined.push_str(&text);
+        joined.push('\n');
+        let cur_rel = cur
+            .strip_prefix(skill_dir)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        for (is_link, target, resolved) in extract_pointers(&text, &cur, skill_dir) {
+            match resolved {
+                Pointer::Outside => errors.push(format!(
+                    "pointer in '{cur_rel}' escapes the skill: '{target}'"
+                )),
+                Pointer::Missing => dangling.push((cur_rel.clone(), is_link, target)),
+                Pointer::Inside(p) => {
+                    let rel = p
+                        .strip_prefix(skill_dir)
+                        .map(|q| q.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_default();
+                    if rel.ends_with(".md")
+                        && !path_is_hidden(&rel)
+                        && reachable.insert(rel.clone())
+                    {
+                        queue.push(skill_dir.join(&rel));
+                    }
+                }
+            }
+        }
+    }
+    for (cur, is_link, target) in dangling {
+        if is_link {
+            errors.push(format!(
+                "dangling link in '{cur}': '{target}' does not exist"
+            ));
+        } else {
+            warnings.push(format!(
+                "dangling backticked path in '{cur}': '{target}' does not exist — links are validated strictly; backticked paths are hints"
+            ));
+        }
+    }
+    // Unreachable nodes — the failure mode that silently kills a hierarchy.
+    for rel in &node_rels {
+        if !reachable.contains(rel) {
+            errors.push(format!(
+                "unreachable node '{rel}' — no chain of links from SKILL.md reaches it; add it to its index's routing table"
+            ));
+        }
+    }
+
+    // Unreferenced non-.md resources (scripts/, assets/, …) will never load.
+    let resources = collect_node_resources(skill_dir);
+    warn_unreferenced_resources(name, &resources, &joined, &mut warnings);
     (nodes, errors, warnings)
 }
 
@@ -500,70 +565,61 @@ fn vague_description_reason(description: &str) -> Option<String> {
     None
 }
 
-/// Validate one node's frontmatter-level health (registry.py per-node
-/// validation): name/dir mismatch (error), missing/vague description
-/// (error/warning), oversized body (warning — routers >200 lines, leaves
-/// >500). Shared by the root router and every child node.
-fn validate_node_health(
+/// Root-only health (registry.py parity): the root SKILL.md is the only
+/// frontmatter in a meta-skill. Name/dir mismatch, a missing description,
+/// and placeholder descriptions are errors (the skill list cannot route on
+/// them); thin descriptions and an oversized root are review prompts — the
+/// root budget is MAX_ROUTER_BODY_LINES because it pays rent on every
+/// traversal.
+fn validate_root_health(
     frontmatter: &Value,
     body: &str,
     dir_name: &str,
-    rel: &str,
-    dir_path: &Path,
     errors: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) {
-    // Name/dir mismatch — routing pointers target directories, so a
-    // frontmatter name that disagrees with its directory silently breaks
-    // every pointer that uses the path form.
+    // Name/dir mismatch — pointers and the skill list both key on the
+    // directory name, so frontmatter disagreeing silently breaks them.
     if let Some(fm_name) = frontmatter.get("name").and_then(|v| v.as_str())
         && !fm_name.is_empty()
         && fm_name != dir_name
     {
         errors.push(format!(
-            "node '{rel}': frontmatter name '{fm_name}' does not match its directory '{dir_name}' — routing pointers target directories, so the name must match. Rename the directory or fix the frontmatter."
+            "root: frontmatter name '{fm_name}' does not match its directory '{dir_name}' — pointers key on the path, so the name must match. Rename the directory or fix the frontmatter."
         ));
     }
-    // Missing/vague description.
-    if let Some(reason) = vague_description_reason(
-        frontmatter
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    ) {
-        // Missing descriptions break the routing surface (error); vague ones
-        // (too short / placeholder) are review prompts (warning).
-        if frontmatter
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-        {
-            errors.push(format!("node '{rel}': {reason}"));
+    let desc = frontmatter
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if let Some(reason) = vague_description_reason(desc) {
+        if desc.trim().is_empty() || description_is_placeholder(desc) {
+            // Missing/placeholder descriptions break the triggering surface.
+            errors.push(format!("root: {reason}"));
         } else {
-            warnings.push(format!("node '{rel}': {reason}"));
+            warnings.push(format!("root: {reason}"));
         }
     }
-    // Oversized bodies — routers pay rent on every traversal; leaves get the
-    // normal skill budget.
     let body_lines = body.lines().count();
-    if dir_has_subdirs(dir_path) {
-        if body_lines > MAX_ROUTER_BODY_LINES {
-            warnings.push(format!(
-                "router '{rel}': body is {body_lines} lines (router budget: {MAX_ROUTER_BODY_LINES}) — routers are read on every traversal; move how-to text into leaves."
-            ));
-        }
-    } else if body_lines > MAX_LEAF_BODY_LINES {
+    if body_lines > MAX_ROUTER_BODY_LINES {
         warnings.push(format!(
-            "leaf '{rel}': body is {body_lines} lines (leaf budget: {MAX_LEAF_BODY_LINES}) — consider splitting into child nodes."
+            "root SKILL.md is {body_lines} lines (>{MAX_ROUTER_BODY_LINES}) — it pays rent on every traversal; move procedure into reference files."
         ));
     }
 }
 
-/// List a node's resource files (references/templates/scripts/assets),
-/// relative to the node directory. Recursive so nested reference dirs count.
-/// Used by the unreferenced-resource validation (registry.py).
+/// Whether a description is an unwritten placeholder (registry.py parity:
+/// placeholders are ERRORS, not review prompts).
+fn description_is_placeholder(description: &str) -> bool {
+    let lower = description.trim().to_lowercase();
+    PLACEHOLDER_MARKERS.iter().any(|m| lower.contains(m))
+}
+
+/// List a skill's non-.md resource files (scripts/, assets/, templates/, …),
+/// relative to the skill directory, skipping hidden/underscore working state.
+/// Under the references model, .md files are nodes (covered by the
+/// reachability walk) — only executable/asset resources are checked for dead
+/// weight (registry.py parity).
 fn collect_node_resources(dir: &Path) -> Vec<String> {
     fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
         let Ok(entries) = fs::read_dir(dir) else {
@@ -572,25 +628,22 @@ fn collect_node_resources(dir: &Path) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
-            // Hidden entries and SKILL.md (already handled by the orphan
-            // check) are never loadable resources.
-            if name.starts_with('.') || name == "SKILL.md" {
+            if name.starts_with('.') || name == "node_modules" {
                 continue;
             }
             if path.is_dir() {
-                walk(&path, base, out);
-            } else if let Ok(rel) = path.strip_prefix(base) {
-                out.push(rel.to_string_lossy().to_string());
+                if !name.starts_with('_') {
+                    walk(&path, base, out);
+                }
+            } else if !name.ends_with(".md")
+                && let Ok(rel) = path.strip_prefix(base)
+            {
+                out.push(rel.to_string_lossy().to_string().replace('\\', "/"));
             }
         }
     }
     let mut out = Vec::new();
-    for sub in ALLOWED_SUBDIRS {
-        let subdir = dir.join(sub);
-        if subdir.is_dir() {
-            walk(&subdir, dir, &mut out);
-        }
-    }
+    walk(dir, dir, &mut out);
     out.sort();
     out
 }
@@ -617,134 +670,258 @@ fn warn_unreferenced_resources(
     }
 }
 
-/// Recursively walk a meta-skill subtree (descending THROUGH routers) and
-/// collect every node for `_map.md` + a validation report.
-///
-/// Mirrors the meta-skill-creator registry.py walk: routers are nodes that
-/// contain child nodes; resource dirs (references/scripts/templates/assets)
-/// are not skill nodes and are skipped. Validation is split into `errors`
-/// (fix every: unreachable children, name/dir mismatches, missing
-/// descriptions, orphan SKILL.md under resource dirs) and `warnings` (review
-/// prompts: vague descriptions, oversized bodies, unreferenced resources).
-fn collect_map_nodes(
-    root: &Path,
-    dir: &Path,
-    depth: usize,
-    nodes: &mut Vec<MapNode>,
-    errors: &mut Vec<String>,
-    warnings: &mut Vec<String>,
-) {
-    let dir_name = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    // Parent router body, used for the reachability check. Containers without
-    // a SKILL.md have no routing table, so no check applies at that level.
-    let parent_body = fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
+// ── Nested-references walk helpers (registry.py parity) ──────────────────
 
-    // Validate the entry node itself (the root of the walk). Children are
-    // validated in the loop below; recursion re-enters child dirs, so the
-    // `dir == root` guard prevents double-reporting.
-    if dir == root && !parent_body.is_empty() {
-        let (frontmatter, body) = parse_frontmatter(&parent_body);
-        validate_node_health(
-            &frontmatter,
-            &body,
-            &dir_name,
-            &dir_name,
-            dir,
-            errors,
-            warnings,
-        );
-    }
+/// Markdown link: [label](target). Captures: 1 = label, 2 = target.
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+static MD_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)").expect("static regex literal is invalid — authoring bug")
+});
+/// Inline code span — stripped before link extraction: a backticked link
+/// example is an illustration, not a pointer.
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"`[^`\n]+`").expect("static regex literal is invalid — authoring bug")
+});
+/// Backtick token (raw span content) — scanned for path-like pointers.
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+static BT_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"`([^`\n]+)`").expect("static regex literal is invalid — authoring bug")
+});
+/// Path-like token: relative path with a known file extension.
+#[expect(clippy::expect_used, reason = "infallible once-init / static init")]
+static PATHISH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[\w./-]+\.(md|py|sh|json|ya?ml|toml|txt|html?|css|js|ts|csv)$")
+        .expect("static regex literal is invalid — authoring bug")
+});
 
+/// Whether any segment of a skill-relative path is hidden or underscore-
+/// prefixed (`.git`, `_build/`, `_map.md`) — working state, never a node.
+fn path_is_hidden(rel: &str) -> bool {
+    rel.split('/')
+        .any(|seg| seg.starts_with('.') || seg.starts_with('_'))
+}
+
+/// Flag every SKILL.md below the root — a regression to the skill-routing
+/// model (registry.py rule 1: only the root may be a skill).
+fn collect_stray_skill_files(root: &Path, dir: &Path, errors: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
             continue;
         }
-        let child_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if is_skill_dir_skipped(child_name) {
-            // registry.py: a SKILL.md under a resource directory is an orphan
-            // — the tree scanner never descends there, so nothing can ever
-            // route to it.
-            if ALLOWED_SUBDIRS.contains(&child_name) && path.join("SKILL.md").exists() {
-                let rel = path
-                    .strip_prefix(root)
-                    .map(|p| p.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_else(|_| child_name.to_string());
-                errors.push(format!(
-                    "orphan SKILL.md under resource directory '{rel}' — the tree scanner skips resource dirs, so this skill can never be routed to. Move it into a proper child directory."
-                ));
+        if path.is_dir() {
+            if !name.starts_with('_') {
+                collect_stray_skill_files(root, &path, errors);
             }
-            continue;
-        }
-        let skill_md = path.join("SKILL.md");
-        if skill_md.exists()
-            && let Ok(content) = fs::read_to_string(&skill_md)
-        {
-            let (frontmatter, body) = parse_frontmatter(&content);
-            let name = frontmatter
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(child_name)
-                .to_string();
-            let description = frontmatter
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+        } else if name == "SKILL.md" && dir != root {
             let rel = path
                 .strip_prefix(root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|_| child_name.to_string());
-            // Reachability: a child that isn't referenced by its router's
-            // SKILL.md will never be reached — the whole reason for the map.
-            // Test the dir name, the frontmatter name (a router may reference
-            // a child by either), and the relative path. An ERROR: this is
-            // the failure mode that silently kills a hierarchy.
-            if !parent_body.is_empty()
-                && !parent_body.contains(child_name)
-                && !parent_body.contains(&name)
-                && !parent_body.contains(&rel)
-            {
-                errors.push(format!(
-                    "child '{}' is not referenced in parent router '{}' SKILL.md — it will never be routed to. Add a routing line.",
-                    rel, dir_name
-                ));
-            }
-            validate_node_health(
-                &frontmatter,
-                &body,
-                child_name,
-                &rel,
-                &path,
-                errors,
-                warnings,
-            );
-            nodes.push(MapNode {
-                rel_path: rel,
-                description,
-                depth,
-                body,
-                resources: collect_node_resources(&path),
-            });
+                .unwrap_or_default();
+            errors.push(format!(
+                "stray SKILL.md at '{rel}' — only the root may be a skill; meta-skill nodes are plain .md files under references/ (migrate this tree)"
+            ));
         }
-        // Descend through routers AND containers — leaves live below.
-        collect_map_nodes(root, &path, depth + 1, nodes, errors, warnings);
     }
 }
 
-/// Recursively collect the child skill nodes of a meta-skill router.
+/// Collect the reference nodes: every .md under references/, hidden/
+/// underscore segments skipped, skill-root-relative, sorted.
+fn collect_reference_node_files(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name.starts_with('_') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if name.ends_with(".md")
+                && let Ok(rel) = path.strip_prefix(root)
+            {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&root.join("references"), root, &mut out);
+    out.sort();
+    out
+}
+
+/// Contract rule 4: every directory group under references/ (except
+/// frameworks/, a resource collection) gets a sibling index file `<dir>.md` —
+/// otherwise its routing table has nowhere to live.
+fn check_index_files(root: &Path, dir: &Path, warnings: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name.starts_with('_') {
+            continue;
+        }
+        if path.is_dir() {
+            if name != "frameworks" && !dir.join(format!("{name}.md")).exists() {
+                let rel = path
+                    .strip_prefix(root)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                warnings.push(format!(
+                    "directory group '{rel}/' has no sibling index '{name}.md' — its routing table has nowhere to live"
+                ));
+            }
+            check_index_files(root, &path, warnings);
+        }
+    }
+}
+
+/// First non-heading line outside fenced code — a file's one-line summary
+/// (the routing sentence a child description used to play).
+fn first_line_summary(text: &str) -> String {
+    const CAP: usize = 120;
+    for line in unfenced(text).lines() {
+        let s = line.trim().trim_start_matches(">").trim();
+        if s.is_empty() || s.starts_with('#') {
+            continue;
+        }
+        let s = MD_LINK_RE.replace_all(s, "$1").to_string();
+        return if s.chars().count() <= CAP {
+            s
+        } else {
+            let cut: String = s.chars().take(CAP - 1).collect();
+            format!("{}…", cut.trim_end())
+        };
+    }
+    String::new()
+}
+
+/// Drop fenced code blocks entirely — template/example content inside them is
+/// illustration, not pointers, and must not be validated.
+fn unfenced(text: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            out.push(line);
+        }
+    }
+    out.join("\n")
+}
+
+/// A resolved pointer: inside the skill (reachable file), missing on disk,
+/// or escaping the skill root entirely.
+enum Pointer {
+    Inside(PathBuf),
+    Missing,
+    Outside,
+}
+
+/// Lexically normalize a path (`.`/`..` resolution without touching the
+/// filesystem) so inside-root checks cannot be fooled by traversal segments.
+fn lex_norm(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Resolve a pointer target: try `base`-relative first (or root-relative for
+/// backticks), then the other — preferring the first candidate that exists
+/// inside the skill; a candidate that looks in-tree but is absent is Missing;
+/// only candidates outside the root are Outside (an error).
+fn resolve_pointer(target: &str, base: &Path, root: &Path, file_first: bool) -> Option<Pointer> {
+    let t = target.split(['#', '?']).next().unwrap_or("").trim();
+    if t.is_empty() || t.contains("://") || t.starts_with("mailto:") || t.starts_with('<') {
+        return None; // external — not our contract to validate
+    }
+    if Path::new(t).is_absolute() {
+        return Some(Pointer::Outside);
+    }
+    let order: [&Path; 2] = if file_first { [base, root] } else { [root, base] };
+    let mut first_inside: Option<PathBuf> = None;
+    for first in order {
+        let cand = lex_norm(&first.join(t));
+        if cand.starts_with(root) {
+            if cand.exists() {
+                return Some(Pointer::Inside(cand));
+            }
+            if first_inside.is_none() {
+                first_inside = Some(cand);
+            }
+        }
+    }
+    match first_inside {
+        Some(_) => Some(Pointer::Missing),
+        None => Some(Pointer::Outside),
+    }
+}
+
+/// Extract pointers from a file body: markdown links (outside fences AND
+/// inline code) and path-like backticked tokens (contain '/', an extension,
+/// no underscore segments). Returns (is_link, target, resolved).
+fn extract_pointers(text: &str, cur_abs: &Path, root: &Path) -> Vec<(bool, String, Pointer)> {
+    let body = unfenced(text);
+    let no_inline = INLINE_CODE_RE.replace_all(&body, "").to_string();
+    let base = cur_abs.parent().unwrap_or(root);
+    let mut out = Vec::new();
+    for cap in MD_LINK_RE.captures_iter(&no_inline) {
+        let target = cap[2].to_string();
+        if let Some(resolved) = resolve_pointer(&target, base, root, true) {
+            out.push((true, target, resolved));
+        }
+    }
+    for cap in BT_TOKEN_RE.captures_iter(&body) {
+        let t = cap[1].trim().to_string();
+        if !t.contains('/') || !PATHISH_RE.is_match(&t) {
+            continue; // bare filenames and prose are not pointers
+        }
+        if t.split('/').any(|s| s.starts_with('_')) {
+            continue; // generated (_map.md) / working state (_build/) — skip
+        }
+        if let Some(resolved) = resolve_pointer(&t, root, base, false) {
+            out.push((false, t, resolved));
+        }
+    }
+    out
+}
+
+/// Collect the discovery children of a skill for tree surfaces
+/// (`skills_list(tree=true)`, the `skill_view` response).
 ///
-/// A child node is any directory (at any depth below `skill_dir`, excluding
-/// resource and hidden directories) that contains its own `SKILL.md`. Returns
-/// paths relative to `skill_dir` so the model can route with
-/// `skill_view(name='<parent>/<child>')`.
+/// Nested-references model: when the skill has a `references/` tree its nodes
+/// are FILES — each file becomes a child (name = file stem, description =
+/// one-line summary, path = skill-root-relative) and each directory group
+/// nests under its index file. Legacy trees (child skill dirs with their own
+/// SKILL.md) still surface until migrated, so discovery never silently loses
+/// a tree mid-transition.
 pub fn collect_skill_children(skill_dir: &Path) -> Vec<SkillMeta> {
+    let ref_dir = skill_dir.join("references");
+    if ref_dir.is_dir() {
+        return collect_reference_children(skill_dir, &ref_dir);
+    }
     fn walk(dir: &Path, base: &Path, out: &mut Vec<SkillMeta>) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
@@ -810,6 +987,68 @@ pub fn collect_skill_children(skill_dir: &Path) -> Vec<SkillMeta> {
     }
     let mut out = Vec::new();
     walk(skill_dir, skill_dir, &mut out);
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Children for the nested-references model: `.md` files under
+/// `references/`, grouped by directory. `description` is each file's
+/// one-line summary; a directory group's summary comes from its index file.
+fn collect_reference_children(skill_dir: &Path, ref_dir: &Path) -> Vec<SkillMeta> {
+    fn summary(path: &Path) -> String {
+        fs::read_to_string(path)
+            .map(|t| first_line_summary(&t))
+            .unwrap_or_default()
+    }
+    fn walk(dir: &Path, skill_dir: &Path, out: &mut Vec<SkillMeta>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name.starts_with('_') {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(skill_dir)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if path.is_dir() {
+                let mut kids = Vec::new();
+                walk(&path, skill_dir, &mut kids);
+                if kids.is_empty() {
+                    continue;
+                }
+                kids.sort_by(|a, b| a.name.cmp(&b.name));
+                // The group's index file (`<dir>.md`, sibling) is its summary.
+                let idx = dir.join(format!("{name}.md"));
+                let description = if idx.exists() {
+                    summary(&idx)
+                } else {
+                    String::new()
+                };
+                out.push(SkillMeta {
+                    name,
+                    description,
+                    category: None,
+                    children: kids,
+                    path: Some(rel),
+                });
+            } else if name.ends_with(".md") {
+                let stem = name.trim_end_matches(".md").to_string();
+                out.push(SkillMeta {
+                    name: stem,
+                    description: summary(&path),
+                    category: None,
+                    children: Vec::new(),
+                    path: Some(rel),
+                });
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(ref_dir, skill_dir, &mut out);
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -1094,7 +1333,7 @@ impl OperantTool for SkillsTool {
                 json!({
                     "tree": roots,
                     "count": roots.len(),
-                    "hint": "Use skill_view(name='<parent>/<child>') to read any node. Use skill_manage(action='generate_map', name='<router>') to build _map.md."
+                    "hint": "Meta-skill nodes are files: skill_view(name='<skill>', file_path='references/<file>.md') to read one. Use skill_manage(action='generate_map', name='<skill>') to validate and regenerate _map.md."
                 }),
             );
         }
@@ -1853,7 +2092,7 @@ impl SkillManageTool {
             // stays stable across the leaf/router cases (errors/warnings
             // always present, map_path null when nothing was written).
             let base = format!(
-                "'{}' has no child skills — it is a leaf, not a router. No _map.md written.",
+                "'{}' has no reference nodes — it is a flat skill, not a meta-skill. No _map.md written.",
                 parsed.name
             );
             let message = if errors.is_empty() && warnings.is_empty() {
@@ -1903,10 +2142,13 @@ impl SkillManageTool {
             );
         }
         let mut map = String::new();
-        map.push_str(&format!("# {} — meta-skill tree map\n\n", parsed.name));
-        map.push_str("Indented index: each line is a node (path — description).\n");
-        map.push_str("Jump: read this map and go straight to the leaf you need.\n");
-        map.push_str("Walk: descend router by router when you don't know the leaf.\n\n");
+        map.push_str(&format!(
+            "# {} — meta-skill node map (generated — do not hand-edit)\n\n",
+            parsed.name
+        ));
+        map.push_str("Indented index: each line is a node (path — one-line summary).\n");
+        map.push_str("Jump: read this map and go straight to the file you need.\n");
+        map.push_str("Walk: descend index files when you don't know the node.\n\n");
         for n in &nodes {
             let indent = "  ".repeat(n.depth);
             let first = n.description.split(['.', '\n']).next().unwrap_or("").trim();
@@ -2248,52 +2490,58 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_map_nodes_walks_through_routers() {
+    fn test_collect_tree_validation_indexes_reference_nodes() {
+        // Nested-references model: nodes are plain .md files under
+        // references/, grouped by directory groups with sibling index files.
+        // The walk validates reachability and never treats resource dirs as
+        // nodes — and a referenced resource stays quiet.
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("trading-systems");
-        fs::create_dir_all(root.join("strategy-research/backtesting")).unwrap();
+        fs::create_dir_all(root.join("references/components")).unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
         fs::write(
             root.join("SKILL.md"),
-            "---\nname: trading-systems\ndescription: Trading domain router covering research and execution\n---\n\nRoutes to strategy-research and execution.\n",
+            "---\nname: trading-systems\ndescription: Trading domain router covering research, execution, and backtesting workflows\n---\n\nRoutes to [research](references/research.md) and [components](references/components.md). Run `scripts/collect.sh` to refresh data.\n",
         )
         .unwrap();
         fs::write(
-            root.join("strategy-research/SKILL.md"),
-            "---\nname: strategy-research\ndescription: Researches and validates trading strategies before execution\n---\n\nRoutes to backtesting. See references/guide.md.\n",
+            root.join("references/research.md"),
+            "# Research\n\nResearches and validates trading strategies.\n\nSee [backtesting](backtesting.md).\n",
         )
         .unwrap();
         fs::write(
-            root.join("strategy-research/backtesting/SKILL.md"),
-            "---\nname: backtesting\ndescription: Backtests strategies against historical market data\n---\n\nBody.\n",
+            root.join("references/backtesting.md"),
+            "# Backtesting\n\nBacktests strategies against historical market data.\n",
         )
         .unwrap();
-        // A resource dir is NOT a skill node — and a referenced resource
-        // must not trip the unreferenced-resource warning.
-        fs::create_dir_all(root.join("strategy-research/references")).unwrap();
         fs::write(
-            root.join("strategy-research/references/guide.md"),
-            "# Guide",
+            root.join("references/components.md"),
+            "# Components\n\nWidget inventory for landing pages.\n\n- [heroes](components/heroes.md) — Hero sections and their anatomy.\n",
         )
         .unwrap();
+        fs::write(
+            root.join("references/components/heroes.md"),
+            "# Heroes\n\nHero section patterns and layout rules.\n",
+        )
+        .unwrap();
+        fs::write(root.join("scripts/collect.sh"), "#!/bin/sh\necho hi\n").unwrap();
 
-        let mut nodes = Vec::new();
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
-        collect_map_nodes(&root, &root, 1, &mut nodes, &mut errors, &mut warnings);
+        let (nodes, errors, warnings) = collect_tree_validation(&root, "trading-systems");
         let paths: Vec<&str> = nodes.iter().map(|n| n.rel_path.as_str()).collect();
-        assert!(paths.contains(&"strategy-research"), "got: {paths:?}");
+        assert!(paths.contains(&"references/research.md"), "got: {paths:?}");
         assert!(
-            paths.contains(&"strategy-research/backtesting"),
-            "leaf below a router is indexed: {paths:?}"
+            paths.contains(&"references/components/heroes.md"),
+            "node below a directory group is indexed: {paths:?}"
         );
         assert!(
-            !paths.iter().any(|p| p.contains("references")),
-            "resource dirs are not skill nodes: {paths:?}"
+            !paths.iter().any(|p| p.starts_with("scripts/")),
+            "resource dirs are not nodes: {paths:?}"
         );
-        // A healthy, fully-referenced tree reports no issues.
+        // A healthy, fully-linked tree reports no errors, and the
+        // backticked resource the root mentions is not flagged.
         assert!(errors.is_empty(), "got: {errors:?}");
         assert!(
-            !warnings.iter().any(|w| w.contains("guide.md")),
+            !warnings.iter().any(|w| w.contains("collect.sh")),
             "referenced resource must not be flagged: {warnings:?}"
         );
     }
@@ -2323,45 +2571,44 @@ mod tests {
     #[tokio::test]
     async fn test_generate_map_flags_registry_validation_issues() {
         // Exercises the FULL pipeline (walk + resource phase + response shape)
-        // against a deliberately broken tree — one violation per category.
+        // against a deliberately broken references-model tree — one violation
+        // per category.
         let dir = TempDir::new().unwrap();
         let skills_dir = dir.path().join("skills");
         fs::create_dir_all(&skills_dir).unwrap();
         let root = skills_dir.join("ops-domain");
-        fs::create_dir_all(root.join("deploy-ops/scripts")).unwrap();
-        fs::create_dir_all(root.join("deploy-ops/references")).unwrap();
-        fs::create_dir_all(root.join("monitoring-ops")).unwrap();
-        // Root: name/dir mismatch + vague description + oversized router body
-        // (250 lines, over the 200-line router budget).
-        let mut root_body = String::from("Routes to deploy-ops.\n");
+        fs::create_dir_all(root.join("references/legacy")).unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        // Root: name/dir mismatch + thin description + oversized root body
+        // (250 lines, over the 200-line root budget).
+        let mut root_body = String::from(
+            "Routes to [deploy](references/deploy.md). Run `scripts/ping.sh` to probe.\n",
+        );
         for _ in 0..249 {
-            root_body.push_str("context line for the router\n");
+            root_body.push_str("context line for the root\n");
         }
         fs::write(
             root.join("SKILL.md"),
             format!("---\nname: domain-ops\ndescription: router\n---\n\n{root_body}"),
         )
         .unwrap();
-        // Child: referenced by the root, but its deploy.sh is never mentioned
-        // anywhere, and an orphan SKILL.md hides under references/.
+        // Reachable node — but it carries a dangling link.
         fs::write(
-            root.join("deploy-ops/SKILL.md"),
-            "---\nname: deploy-ops\ndescription: Deploys services to production clusters safely\n---\n\nRuns the deployment playbook. See references/runbook.md.\n",
+            root.join("references/deploy.md"),
+            "# Deploy\n\nDeploys services. See the [runbook](runbook.md).\n",
         )
         .unwrap();
+        // Unreachable node — no chain of links from SKILL.md reaches it.
         fs::write(
-            root.join("deploy-ops/scripts/deploy.sh"),
-            "#!/bin/sh\necho hi\n",
+            root.join("references/orphan.md"),
+            "# Orphan\n\nNever linked from anywhere.\n",
         )
         .unwrap();
-        fs::write(root.join("deploy-ops/references/runbook.md"), "# Runbook\n").unwrap();
-        fs::write(root.join("deploy-ops/references/SKILL.md"), "orphan\n").unwrap();
-        // Child: never referenced by the root + placeholder description.
-        fs::write(
-            root.join("monitoring-ops/SKILL.md"),
-            "---\nname: monitoring-ops\ndescription: A placeholder description for now\n---\n\nBody.\n",
-        )
-        .unwrap();
+        // Stray SKILL.md below root — a regression to the routing model.
+        fs::write(root.join("references/legacy/SKILL.md"), "orphan\n").unwrap();
+        // Unreferenced script vs referenced script — only the dead one warns.
+        fs::write(root.join("scripts/deploy.sh"), "#!/bin/sh\necho hi\n").unwrap();
+        fs::write(root.join("scripts/ping.sh"), "#!/bin/sh\npong\n").unwrap();
 
         let tool = SkillManageTool::new(skills_dir);
         let args = SkillManageArgs {
@@ -2394,32 +2641,35 @@ mod tests {
         let err_text = errors.join("\n");
         let warn_text = warnings.join("\n");
 
-        // Errors: fix every.
+        // Errors: one per category.
         assert!(
             err_text.contains("does not match its directory"),
             "{err_text}"
         );
         assert!(
-            err_text.contains("not referenced in parent router"),
+            err_text.contains("stray SKILL.md at 'references/legacy/SKILL.md'"),
             "{err_text}"
         );
         assert!(
-            err_text.contains("orphan SKILL.md under resource directory"),
+            err_text.contains("dangling link in 'references/deploy.md'"),
+            "{err_text}"
+        );
+        assert!(
+            err_text.contains("unreachable node 'references/orphan.md'"),
             "{err_text}"
         );
         // Warnings: review prompts.
         assert!(
-            warn_text.contains("router 'ops-domain': body is 250 lines"),
+            warn_text.contains("root SKILL.md is 250 lines"),
             "{warn_text}"
         );
         assert!(warn_text.contains("description is only"), "{warn_text}");
-        assert!(warn_text.contains("unwritten placeholder"), "{warn_text}");
         assert!(
             warn_text.contains("deploy.sh") && warn_text.contains("not referenced"),
             "{warn_text}"
         );
         // Referenced resources stay quiet.
-        assert!(!warn_text.contains("runbook.md"), "{warn_text}");
+        assert!(!warn_text.contains("ping.sh"), "{warn_text}");
     }
 
     #[tokio::test]
@@ -2429,15 +2679,15 @@ mod tests {
         let skills_dir = dir.path().join("skills");
         fs::create_dir_all(&skills_dir).unwrap();
         let root = skills_dir.join("ops-domain");
-        fs::create_dir_all(root.join("deploy-ops")).unwrap();
+        fs::create_dir_all(root.join("references")).unwrap();
         fs::write(
             root.join("SKILL.md"),
-            "---\nname: ops-domain\ndescription: Ops domain router for deployment and monitoring\n---\n\nRoutes to deploy-ops.\n",
+            "---\nname: ops-domain\ndescription: Ops domain router for deployment and monitoring workflows\n---\n\nRoutes to [deploy](references/deploy.md).\n",
         )
         .unwrap();
         fs::write(
-            root.join("deploy-ops/SKILL.md"),
-            "---\nname: deploy-ops\ndescription: Deploys services to production clusters safely\n---\n\nBody.\n",
+            root.join("references/deploy.md"),
+            "# Deploy\n\nDeploys services to production clusters safely.\n",
         )
         .unwrap();
 
@@ -2469,7 +2719,7 @@ mod tests {
         let result = tool.action_generate_map(&args).await;
         let parsed: serde_json::Value = result.parse_content().expect("generate_map response");
         assert!(root.join("_map.md").exists(), "normal run writes _map.md");
-        assert!(parsed["map"].as_str().unwrap_or("").contains("deploy-ops"));
+        assert!(parsed["map"].as_str().unwrap_or("").contains("references/deploy.md"));
         assert!(parsed["errors"].as_array().unwrap().is_empty());
     }
     #[test]
@@ -2478,43 +2728,107 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_skill_tree_flags_unreachable_child_in_categorized_tree() {
-        // CLI `skills audit` tree-gate parity: validate_skill_tree is the
-        // non-destructive walker that flags a child never referenced by its
-        // router, even when the router sits under category dirs.
+    fn test_validate_skill_tree_flags_unreachable_node_in_categorized_tree() {
+        // CLI `skills audit` tree-gate parity: a node no chain of links from
+        // SKILL.md reaches is an error — the failure mode that silently
+        // kills a hierarchy. The skill sits under category dirs, as in the
+        // real skills/ layout.
         let dir = TempDir::new().unwrap();
         let skills_dir = dir.path().join("skills");
-        let router = skills_dir.join("creative/website-design/components");
-        fs::create_dir_all(router.join("heroes")).unwrap();
-        fs::create_dir_all(router.join("orphan-leaf")).unwrap();
+        let root = skills_dir.join("creative/website-design");
+        fs::create_dir_all(root.join("references")).unwrap();
         fs::write(
-            router.join("SKILL.md"),
-            "---\nname: components\ndescription: Website component router\n---\n\nRoutes to heroes.\n",
+            root.join("SKILL.md"),
+            "---\nname: website-design\ndescription: Designs marketing sites — direction, sections, and launch\n---\n\nStart with [sections](references/sections.md).\n",
         )
         .unwrap();
         fs::write(
-            router.join("heroes/SKILL.md"),
-            "---\nname: heroes\ndescription: Hero sections\n---\n\nBody.\n",
+            root.join("references/sections.md"),
+            "# Sections\n\nComposes page sections.\n",
         )
         .unwrap();
         fs::write(
-            router.join("orphan-leaf/SKILL.md"),
-            "---\nname: orphan-leaf\ndescription: Never referenced by the router\n---\n\nBody.\n",
+            root.join("references/orphan.md"),
+            "# Orphan\n\nNever referenced by the root.\n",
         )
         .unwrap();
 
-        let report = validate_skill_tree(&router, "components");
+        let report = validate_skill_tree(&root, "website-design");
         assert_eq!(report.node_count, 2);
         assert!(
             report
                 .errors
                 .iter()
-                .any(|e| e.contains("orphan-leaf") && e.contains("not referenced")),
-            "expected unreachable-child error, got: {:?}",
+                .any(|e| e.contains("unreachable node 'references/orphan.md'")),
+            "expected unreachable-node error, got: {:?}",
             report.errors
         );
-        // The referenced child stays quiet.
-        assert!(!report.errors.iter().any(|e| e.contains("heroes")));
+        // The linked node stays quiet.
+        assert!(!report.errors.iter().any(|e| e.contains("sections.md")));
+    }
+
+    #[test]
+    fn test_validate_skill_tree_flags_dangling_link() {
+        // A markdown link whose target does not exist is an error (links are
+        // validated strictly); a backticked path is only a hint — warning.
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let root = skills_dir.join("ops-domain");
+        fs::create_dir_all(root.join("references")).unwrap();
+        fs::write(
+            root.join("SKILL.md"),
+            "---\nname: ops-domain\ndescription: Ops domain router for deployment and monitoring workflows\n---\n\nSee [runbook](references/runbook.md) and `references/gone.md` for the rest.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("references/deploy.md"),
+            "# Deploy\n\nDeploys services safely.\n",
+        )
+        .unwrap();
+
+        let report = validate_skill_tree(&root, "ops-domain");
+        assert!(
+            report.errors.iter().any(|e| {
+                e.contains("dangling link in 'SKILL.md'") && e.contains("references/runbook.md")
+            }),
+            "expected a dangling-link error, got: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_skill_tree_flags_stray_nested_skill_md() {
+        // Regression guard: a SKILL.md below root means the tree slid back
+        // to the routing model. Only the root may carry skill identity.
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let root = skills_dir.join("ops-domain");
+        fs::create_dir_all(root.join("references/legacy")).unwrap();
+        fs::write(
+            root.join("SKILL.md"),
+            "---\nname: ops-domain\ndescription: Ops domain router for deployment and monitoring workflows\n---\n\nSee [deploy](references/deploy.md).\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("references/deploy.md"),
+            "# Deploy\n\nDeploys services safely.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("references/legacy/SKILL.md"),
+            "---\nname: legacy\ndescription: Old-style child skill\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        let report = validate_skill_tree(&root, "ops-domain");
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("stray SKILL.md at 'references/legacy/SKILL.md'")),
+            "expected stray-SKILL.md error, got: {:?}",
+            report.errors
+        );
     }
 
     #[test]
