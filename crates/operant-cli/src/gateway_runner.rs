@@ -4225,6 +4225,122 @@ mod tests {
     use super::*;
     use operant_core::config::GatewaySettings;
 
+    /// iter-720 (plan-2026-10-09 §3): the REAL `record_feed` override's
+    /// seat-map → `record_feed_item` → DB-row link had no test — the core
+    /// route-time branch is pinned with a counting stub and the injector
+    /// round-trip is core-tested, but the handler wiring between them was
+    /// exercised by nothing. Real injector over a temp db: an unmapped
+    /// channel defaults to `premiere`; a `feed_seat_map` entry routes the
+    /// post to the mapped seat. The agent stub is never invoked.
+    #[tokio::test]
+    async fn record_feed_routes_channel_posts_through_the_seat_map() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent_db = Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        );
+        let agent = Arc::new(operant_core::agent::OperantAgent::new(
+            operant_core::agent::AgentConfig::default(),
+            Box::new(
+                operant_core::agent::clients::openai::OpenAIModelClient::new(
+                    operant_core::client::OpenAIClient::new(
+                        operant_core::client::ClientConfig::default(),
+                    ),
+                ),
+            ),
+            operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            agent_db.clone(),
+        ));
+        let (bridge_state_tx, _bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::tui::bridge_state::BridgeConnectionState,
+        >();
+        let settings = operant_core::config::ContextInjectionSettings {
+            enabled: true,
+            feed_seat_map: std::collections::HashMap::from([(
+                "-100mapped".to_string(),
+                "compass".to_string(),
+            )]),
+            ..Default::default()
+        };
+        let injector = Arc::new(
+            operant_core::org::context_injection::ContextInjector::open(
+                &dir.path().join("agent.sqlite"),
+                settings,
+            )
+            .expect("injector"),
+        );
+        let handler = GatewayMessageHandler {
+            agent,
+            current_session_id: tokio::sync::Mutex::new(None),
+            gateway: tokio::sync::Mutex::new(None),
+            bridge_state_tx,
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            turn_usage: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: Some(injector),
+        };
+
+        // Unmapped channel → the `premiere` default (same default as the
+        // DM tap's employee binding).
+        let unmapped = IncomingMessage::new(
+            "telegram",
+            "anon",
+            "Some Channel",
+            "-100unmapped",
+            "daily update",
+        )
+        .with_channel_post(true);
+        handler.record_feed(&unmapped);
+        // Mapped channel → its seat.
+        let mapped = IncomingMessage::new(
+            "telegram",
+            "anon",
+            "Other Channel",
+            "-100mapped",
+            "strategy note",
+        )
+        .with_channel_post(true);
+        handler.record_feed(&mapped);
+
+        let org_db =
+            operant_core::org::worklog_db::worklog_db_path(&dir.path().join("agent.sqlite"));
+        let conn = rusqlite::Connection::open(&org_db).expect("org db");
+        let mut stmt = conn
+            .prepare("SELECT class, seat_hint, author, text FROM context_items ORDER BY id")
+            .expect("select");
+        let rows: Vec<(String, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0).expect("class"),
+                    row.get(1).expect("seat"),
+                    row.get(2).expect("author"),
+                    row.get(3).expect("text"),
+                ))
+            })
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "feed".to_string(),
+                    "premiere".to_string(),
+                    "Some Channel".to_string(),
+                    "daily update".to_string()
+                ),
+                (
+                    "feed".to_string(),
+                    "compass".to_string(),
+                    "Other Channel".to_string(),
+                    "strategy note".to_string()
+                ),
+            ],
+            "unmapped channel defaults to premiere; mapped channel lands on its seat"
+        );
+    }
+
     /// iter-632 regression (Wave-4 metering wire): a turn's accumulated
     /// usage must land in the `gateway_sessions` accumulator the budget
     /// rollup reads. Before the wire, `update_tokens` had zero production

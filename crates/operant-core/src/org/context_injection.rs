@@ -66,6 +66,11 @@ pub const CONTEXT_ITEMS_SCHEMA: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_context_items_seat_class_ts
         ON context_items(seat_hint, class, ts);
+    -- iter-720: the per-capture retention prune is `DELETE ... WHERE ts < ?`;
+    -- without a bare-ts index that is a full table scan on every inbound
+    -- message (quadratic on an active channel).
+    CREATE INDEX IF NOT EXISTS idx_context_items_ts
+        ON context_items(ts);
 "#;
 
 /// The four aspect classes (the owner's list, in render order).
@@ -117,9 +122,14 @@ const MAX_ITEM_CHARS: usize = 400;
 /// (watermarks are the read cursor, not a TTL) — but an active group
 /// writes a row per member message, so each capture prunes rows older
 /// than this. 7 days covers the feed recency halflife (24h) with the
-/// seat's whole week reviewable; a seat's prompt only ever sees items
-/// behind its watermark anyway. ponytail: constant, not config — raise
-/// when a seat demonstrably needs a longer memory, not speculatively.
+/// seat's whole week reviewable. KNOWN LOSS (iter-720 review): the
+/// watermark does NOT protect an offline seat — a seat that does not
+/// run for more than these 7 days has its queued DMs/feed rows pruned
+/// before its watermark ever advances past them; they are deleted
+/// unread. Raise (or split per class, longer for dm) when a real seat
+/// demonstrably needs that offline depth.
+/// ponytail: constant, not config — raise when a seat demonstrably needs
+/// a longer memory, not speculatively.
 const CAPTURE_RETENTION_DAYS: i64 = 7;
 
 /// The seats whose outputs are org-global broadcasts by role.
@@ -420,7 +430,14 @@ impl ContextInjector {
 
     /// Shared capture body: one INSERT into `context_items`, fail-open on
     /// every error — a failed capture must never fail a turn or a route.
-    fn record_item(&self, class: ContextClass, seat_id: &str, author: &str, text: &str, what: &str) {
+    fn record_item(
+        &self,
+        class: ContextClass,
+        seat_id: &str,
+        author: &str,
+        text: &str,
+        what: &str,
+    ) {
         if !self.settings.enabled {
             return;
         }
