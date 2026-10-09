@@ -83,15 +83,23 @@
    first time) and clones it into the sender loop to emit the outcome.
    The ledger stays the correctness contract (iter-734); this row is
    observability only.
-6. **Production work re-queued out of row 4** (not tests):
-   - **S7 (BUGS.md)**: `ping_pong_cycles` matches tool NAMES only, never
-     result hashes — an A/B alternation returning identical output every
-     cycle escalates as ping-pong Break instead of no-progress. Fix:
-     carry result hashes in `name_window` (`tool_guardrails.rs`).
-   - **Progress-token stall** (Wave-2): no "progress token" concept
-     exists; needs a new detector (a `RepeatPattern` variant +
-     claim-vs-action comparison in `observe_output`) — a design decision
-     before any test.
+ 6. **Production work re-queued out of row 4** (not tests):
+    - **~~S7 (BUGS.md)~~ LANDED iter-745 `b99be430`.** Fixed in the
+      merged controller exactly as the filing prescribed: the
+      pre-execution ping-pong rung now consults the alternating pair's
+      result streaks (`alternation_returns_identical_output`) — both
+      streaks holding the SAME canonical fingerprint with count >= 2
+      proves every call returned the identical output, so the
+      warn/skip classifies as NoProgress and the skip arms the
+      both-tools regardless-of-args backstop; `observe_result` hashes
+      through the canonicalising `result_fingerprint` (JSON →
+      sorted-key `hash_value`, else raw `hash_str`) so
+      re-serialized-but-identical outputs no longer reset the streak.
+      Mutation-proven; BUGS.md S7 header flipped CLOSED.
+    - **Progress-token stall** (Wave-2): no "progress token" concept
+      exists; needs a new detector (a `RepeatPattern` variant +
+      claim-vs-action comparison in `observe_output`) — a design decision
+      before any test. The only remaining row-6 item.
 7. **Peer's skills discovery cost (their track, tracked here for
    visibility)** — the §0 load-sensitivity finding; fixed by them in
    their skills/TUI line or by relaxing the deadline-sensitive
