@@ -425,8 +425,8 @@ pub struct BehaviorSettings {
     #[serde(default)]
     pub fallback_models: Vec<String>,
 
-    /// Tool names exempt from the guardrail rungs (ping-pong / no-progress /
-    /// progress-oscillation — `ToolGuardrailTracker::add_exempt_tools`,
+    /// Tool names exempt from the guardrail rungs (ping-pong /
+    /// no-progress — `ToolGuardrailTracker::add_exempt_tools`,
     /// hermes `guardrail_exempt_tools` parity). Exact names or `*`/`?`
     /// globs (e.g. `"read_*"`). Empty by default: every tool is guarded.
     /// Flows to the tracker via `AgentConfig::guardrail_exempt_tools`.

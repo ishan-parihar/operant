@@ -50,8 +50,8 @@ context_window = 128000
 # stated in the marker, because a silently shortened tool result is worse than
 # a failed one: the model cannot tell it is not reading what the tool returned.
 # 0.05 = 5%.
-# Tool names exempt from the guardrail rungs (ping-pong / no-progress /
-# progress-oscillation). Exact names or `*`/`?` globs. Empty = every tool
+# Tool names exempt from the guardrail rungs (ping-pong / no-progress).
+# Exact names or `*`/`?` globs. Empty = every tool
 # is guarded (iter-723).
 # guardrail_exempt_tools = ["read_*", "web_search"]
 # Guardian-LLM approval arm (iter-713) as a config-file default: applies

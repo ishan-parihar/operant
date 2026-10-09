@@ -27,10 +27,15 @@
   discovery cost tripling suite duration, making the 10s/60s
   deadlines marginal). Still the peer's track: their fix is either
   the discovery cost or the deadlines; flagged, not re-planned here.
-- **Blockers unchanged:** `gateway_runner.rs` still carries the
-  peer's WIP (`MM` re-verified at this tip) and still has no
-  `with_employee_registry` — the two gateway slices (§1 row 1) wait.
-  Next unblocked slice: §1 row 4 (openhuman adversarial remainder).
+- **Blocker note RETIRED (iter-733 audit):** `gateway_runner.rs`'s
+  `MM` is not the peer building — the overlay is a rolled-back copy
+  (index blob = `3429363f^`, one commit stale; worktree blob matches no
+  commit and reverts iter-704's `entry_for_source` and the
+  iter-720 test). `with_employee_registry` exists
+  (`org/seat_authority.rs:86`) and `employee_registry` is in scope at
+  the target site — both §1 row 1 slices are UNBLOCKED (landed iter-734).
+  §1 row 4 (openhuman adversarial remainder) was corrected and closed
+  the same audit; its one pure-test case landed at iter-732.
 
 ## §1 Core execution queue (ordered)
 
@@ -61,11 +66,29 @@
    run-path test proving a config-file `vision_provider` routes a
    marker request through a full facade turn (unit tests cover the
    client in isolation only). Hardening, not a gap.
-4. **openhuman adversarial suite remainder — NEXT UNBLOCKED SLICE.**
-   486-LOC `no_progress/mod_tests.rs` fault-injection suite; the 13
-   pattern tests landed at iter-669 live in `tool_guardrails`. Port
-   the fault-injection remainder (progress-token stall,
-   duplicate-progress spam, oscillation) as pure tests beside them.
+ 4. **openhuman adversarial suite remainder — CORRECTED + CLOSED
+    (iter-732/733 audit).** The row's premise was false: there is no
+    `no_progress/mod_tests.rs` in-tree and never was (`git log --all
+    --diff-filter=A -- '*no_progress*'` is empty — the 486-LOC suite is
+    upstream openhuman/tinyagents, and the port plan explicitly
+    declined to create the sibling module), and `pattern_tests` holds
+    **12** `#[test]` fns, not 13 (the 13 counted the `seq` helper).
+    **Landed iter-732** — the one genuinely uncovered *pure* case:
+    `duplicate_progress_spam_survives_the_output_batch_reset`
+    (`tool_guardrails.rs` mod ladder_tests): a loop padded with failed
+    batches resets the output-side streak between every pair while the
+    same successful result recurs; the recurrence ledger is run-wide
+    state, not batch state, so the spam still escalates at 5/6.
+    Mutation-proven (clearing the ledger in the reset arm turns it
+    red). The other two named faults are NOT test ports and leave this
+    queue: **oscillation = BUGS.md S7** (production fix in
+    `ping_pong_cycles` — carry result hashes, currently
+    name-only-matching) and **progress-token stall = Wave-2
+    production** (no "progress token" concept exists anywhere; needs a
+    detector design decision first). iter-733 also killed the phantom
+    "progress-oscillation" rung that `config.rs` and
+    `operant.example.toml` advertised — no such `RepeatPattern`
+    variant exists.
 5. **Peer's skills discovery cost (their track, tracked here for
    visibility)** — the §0 load-sensitivity finding; fixed by them in
    their skills/TUI line or by relaxing the deadline-sensitive
@@ -155,3 +178,36 @@
   micro-compaction (714), delivery-ledger core (722), config-file
   wiring (724), vision-routing "port to the facade" (resolved by
   audit, v4), `max_tool_result_chars` trim wiring (729) — landed.
+
+---
+
+## Correction appended 2026-10-09 (iters 732/733 — audited at tip
+`6abb205d`)
+
+Row 4 was audited against the tree and corrected in place (see §1 row
+4). Facts, each verified:
+
+- `no_progress/mod_tests.rs` never existed in this repo — no
+  `no_progress` directory, no `mod_tests.rs`, and
+  `git log --all --diff-filter=A -- '*no_progress*'` is empty. The
+  486-LOC figure is an upstream openhuman/tinyagents artifact cited by
+  `docs/OPENHUMAN-AGENTIC-LOGIC-PORT-PLAN.md:154`; that plan's :115
+  records the explicit decision NOT to create the sibling module. The
+  false path had propagated v2 → v5 un-globbed.
+- `mod pattern_tests` (`crates/operant-core/src/tool_guardrails.rs`)
+  holds 12 `#[test]` fns + one `seq` helper. iter-669's delta was +12
+  (9 → 21 `#[test]`); the "13" in this outline and CHANGELOG:723
+  counted fn declarations.
+- Zero code presence for progress-token stall / duplicate-progress
+  spam / oscillation before iter-732. `config.rs` +
+  `operant.example.toml` advertised a "progress-oscillation" rung that
+  `RepeatPattern` (5 variants) never had — removed in iter-733.
+- Row 1's blocker note retired: the peer's `gateway_runner.rs` overlay
+  is a rolled-back copy, not an active build (index blob `d6975271` ==
+  `3429363f^`, having silently dropped that commit's 116-line
+  record_feed seat-map test; worktree blob `6abbffe6` matches no
+  commit and reverts iter-704's `entry_for_source` + the canonical-key
+  metering drain). Both slices are unblocked — landed in iter-734.
+- Oscillation's real case is BUGS.md S7 (ping-pong matches tool NAME
+  only, never result hashes); progress-token stall has no production
+  seam at all. Both re-queued as production work, not tests.

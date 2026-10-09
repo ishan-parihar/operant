@@ -474,6 +474,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-733 — docs: the phantom "progress-oscillation" rung and the
+  false row-4 premise are gone (outline v5 + config docs):**
+  `AgentConfig::guardrail_exempt_tools`'s doc comment
+  (`operant-core/src/config.rs`) and `operant.example.toml` both
+  advertised the exemption list as covering "ping-pong / no-progress /
+  progress-oscillation" — no such rung exists (`RepeatPattern` has 5
+  variants, none is oscillation), so operators were told about a
+  capability that was never built. The list now names the two ported
+  rungs that exist. The v5 outline's row 4 is corrected in place with
+  an appended audit note: the `no_progress/mod_tests.rs` suite named
+  since v2 was upstream-only (never in-tree; the port plan declined to
+  create it), `pattern_tests` holds 12 tests not 13, and row 1's
+  "blocked on the peer's gateway_runner.rs WIP" note is retired — that
+  overlay is a rolled-back copy (index blob = `3429363f^`, worktree
+  reverts iter-704/iter-720 fixes), so both row-1 slices are unblocked.
+  No code behavior changes; the pure-test remainder landed at iter-732.
+
 - **Unblock main: `PathBuf` inline format capture in the cron seat-memory
   prompt** (`operant-core/src/cronjobs/scheduler.rs`): `{path}` →
   `path.display()` — committed in 5464764d, broke every `cargo check/test
