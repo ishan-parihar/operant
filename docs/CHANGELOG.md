@@ -443,6 +443,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-728 — P1-6 (2026-10-09 live-audit plan): transcript copy is
+  text-editor-clean — wrapped fragments rejoin their logical line with the
+  source spacing, and tool-status chrome drops out of the copied text.**
+  The drag/copy extraction was cell-based: every hard-wrapped screen row
+  copied as its own line with wrap padding baked in, and a selection
+  spanning a tool row copied the `✓ tool · N tok` status row as text.
+  Interior fully-covered lines now copy from the pre-wrap source via the
+  chat frame's `WrappedLineMap` (`reflowed_selection_text`): fragments of
+  one logical line merge back into that line, original spacing preserved,
+  and lines owned by a `tool` display message are excluded (message-owner
+  resolved through `message_boundaries`; when boundaries and the display
+  list disagree the filter degrades to include-everything rather than
+  misclassify). Drag-edge lines keep exact partial-column cell extraction.
+  The visible highlight is unchanged — every cell still paints with the
+  pinned blend; only the copied text changes. 3 unit tests (fragment
+  rejoin, chrome exclusion + logical-line separation, no-map fallback);
+  corpus verify 0-drift (the selection-highlight golden pins paint, not
+  copy text); suite 1747/0.
+
 - **iter-727 — N-2 (2026-10-09 live-audit plan): a submitted message
   commits to the transcript immediately — all three submit paths bump the
   display-cache version, and the corpus simulator is now faithful to that
