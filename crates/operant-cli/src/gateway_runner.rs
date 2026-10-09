@@ -3951,8 +3951,11 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // row pending, where the 2h reclaim replays it. The
                 // attempt was already counted at handoff, so this only
                 // reports the outcome. `ObserverEvent::CronDeliveryOutcome`
-                // stays unemitted — the gateway holds no observer handle
-                // today, and the ledger is the contract that matters.
+                // stays unemitted: the gateway holds no observer handle
+                // (AppConfig has no [observability] surface — the seam
+                // itself is the v6 row-5 re-queue, see
+                // docs/plan-2026-10-09-remaining-gaps-outline-v6.md §1
+                // row 5), and the ledger is the contract that matters.
                 if let Some(delivery_id) = delivery.delivery_id {
                     let err_text = send_result.as_ref().err().map(|e| e.to_string());
                     match cron_db_consumer.mark_delivery_outcome(

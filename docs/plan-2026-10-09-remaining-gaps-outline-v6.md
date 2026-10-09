@@ -63,13 +63,26 @@
    (mutation-proven). The other two named faults are production work,
    re-queued below: oscillation = BUGS.md S7; progress-token stall =
    Wave-2 detector design.
-5. **`ObserverEvent::CronDeliveryOutcome` emit seam — NEW, found while
-   landing iter-734.** The variant exists (`observer.rs:112`, Display at
-   `:334`) and iter-734's commit body documented the deviation, but
-   nothing emits it: the gateway holds no observer handle (grep: zero
-   matches in `gateway_runner.rs`). The ledger is the contract that
-   matters, so this is observability polish, not a correctness gap —
-   decide `observe`-seam wiring or `wire-or-delete` the variant.
+5. **`ObserverEvent::CronDeliveryOutcome` emit seam — DECIDED
+   (iter-738): keep the variant, the seam becomes its own row.** The
+   variant exists (`observer.rs:112`, Display at `:334`) and iter-734's
+   commit body documented the deviation, but nothing emits it: the
+   gateway holds no observer handle. Wiring it properly needs an
+   observability surface the gateway does not have — `AppConfig`
+   (`operant-core/src/config.rs:19`) carries no `[observability]`
+   section, so a config-driven observer is a schema change, and a
+   hardcoded one would break the dark-mergeable/config-driven
+   convention. Deleting the variant breaks the designed
+   Queued/Parked/Outcome trio (its two siblings are live behind
+   `CronScheduler::with_observer`, `cronjobs/scheduler.rs:141`). **The
+   re-queued slice**: `CronDelivery` gains `job_id` (the event payload
+   needs it; populate at both handoff sites), `AppConfig` gains an
+   `[observability]` section (schema + example.toml + docs), the gateway
+   constructs the observer at `start_gateway` and mounts it on the
+   scheduler (which also makes CronDeliveryQueued/Parked live for the
+   first time) and clones it into the sender loop to emit the outcome.
+   The ledger stays the correctness contract (iter-734); this row is
+   observability only.
 6. **Production work re-queued out of row 4** (not tests):
    - **S7 (BUGS.md)**: `ping_pong_cycles` matches tool NAMES only, never
      result hashes — an A/B alternation returning identical output every
