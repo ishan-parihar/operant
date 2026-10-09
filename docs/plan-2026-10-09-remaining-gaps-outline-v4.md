@@ -50,15 +50,18 @@
      without it (latent: no production row sets Bounded yet).
    - The trinity P1-A per-channel dispatch breaker rides this same
      unblock (same delivery path).
-2. **`max_tool_result_chars` wire-or-drop + ingestion-time
-   offload/TOC** — **NEXT UNBLOCKED SLICE.** Re-verified at the tip:
-   zero runtime consumers outside operant-config. The TUI live audit's
-   N-4 found the live symptom — `http_request` chained raw fetch
-   results charged 50k tokens (26% of context) because fetch results
-   are untrimmed. Either wire the truncation at tool-result ingestion
-   or delete the knob; the offload/TOC (`ArtifactIndex`) shape remains
-   the open follow-up. The live symptom gives a concrete acceptance
-   test (trimmed fetch result in the ingested message).
+2. **~~`max_tool_result_chars` wire-or-drop~~ TRIM WIRED iter-729
+   (code commit `da42909b`, labeled 728 at push; renumbered twice
+   append-only — the peer's TUI waves took 725/726/727, then 728);
+   offload/TOC remains the open follow-up.** The runtime Agent's two
+   turn paths ingested raw tool output into history (zero knob
+   consumers since the old engine's removal sweep) — the TUI live
+   audit's N-4 symptom (untrimmed `http_request` fetch, 50k tokens).
+   `truncate_tool_result` now applies at both ingestion sites with
+   the knob's contract (head 2/3 + tail 1/3, marker, 0 disables,
+   default 50000); observer/TurnEvent keep full output; core path
+   already capped at 4096. Gate 7522/1 (browser_provider flake,
+   solo-green). The `ArtifactIndex` offload/TOC shape stays open.
 3. **Vision-routing ruling — RESOLVED BY AUDIT at the tip; v3's premise
    was stale.** Config-file vision routing IS ported to the facade:
    `[multimodal] vision_provider`/`vision_model` (schema

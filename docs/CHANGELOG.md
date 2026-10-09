@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-729 — `[agent] max_tool_result_chars` wired: ingestion-time
+  tool-result trim for the runtime Agent (outline v4 §1 row 2:
+  wire-or-drop; wired; code commit `da42909b`, labeled iter-728 at
+  push):** the schema knob (head 2/3 + tail 1/3, truncation marker in
+  the middle, `0` disables, default 50000) had zero consumers since
+  the old runtime engine's removal sweep dropped its call site — both
+  runtime-Agent turn paths ingested raw tool output into history via
+  `format_results`, which is how an untrimmed `http_request` fetch
+  charged 50k tokens of context (the TUI live audit's N-4). The trim
+  now applies `history::truncate_tool_result` (whose contract matches
+  the knob schema exactly, including image-marker boundary nudging)
+  at both ingestion sites before either dispatcher renders; the
+  observer and `TurnEvent` channel keep the full output so UIs still
+  show it. Reconciled/core path untouched (core already caps ingestion
+  at 4096 with a JSON-aware trim). Dark-mergeable: unchanged config
+  keeps the 50000 default. Run-path test pair in `agent::tests` (200k
+  output → trimmed with marker at max=1000; untrimmed at 0). Label
+  note: renumbered twice append-only (725 → 728 at the code commit,
+  728 → 729 here) — the peer's TUI waves took 725/726/727 mid-slice
+  and their P1-6 took 728 between my code push and this docs push.
 - **iter-723 — skills: nested-references validator lockstep (meta-skill-
   creator rewrite Rust side):** the skill-side rewrite (iters 701–705)
   shipped ONE skill + plain `.md` nodes under `references/`, but the Rust
