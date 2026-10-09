@@ -1232,6 +1232,51 @@ fn retry_must_not_append_the_resurrected_stream_to_the_died_partial() {
 }
 
 #[test]
+fn todo_tool_result_populates_the_live_store_and_todos_command_toggles_the_band() {
+    // P4-3 (2026-10-09 v2 outline): the todo tool's result carries the full
+    // list — the counts-only TodoUpdated event could never render one. The
+    // ToolComplete(todo) path must keep the items on App (info-widget band +
+    // pinned card read them) and /todos must toggle the band.
+    let mut app = make_app();
+    let content = serde_json::json!({
+        "todos": [
+            { "id": "1", "content": "audit scroll", "status": "completed" },
+            { "id": "2", "content": "audit todo", "status": "in_progress" }
+        ]
+    })
+    .to_string();
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_todo".to_string(),
+            name: "todo".to_string(),
+            success: true,
+            content,
+            error: None,
+            timed_out: false,
+        },
+    });
+    assert_eq!(app.todos.len(), 2, "the full list must land on App");
+    assert_eq!(app.todos[1].content, "audit todo");
+    assert!(
+        !app.todos_card_payload.is_empty(),
+        "the pinned-band card payload must be built"
+    );
+    assert!(
+        app.todos_card_payload.contains("audit scroll"),
+        "the payload carries the items for the band renderer"
+    );
+
+    // /todos hides and re-shows the band.
+    assert!(app.handle_tui_command("todos", ""));
+    assert!(app.todos_band_hidden, "/todos must toggle the band off");
+    assert!(app.handle_tui_command("todos", ""));
+    assert!(
+        !app.todos_band_hidden,
+        "/todos must toggle the band back on"
+    );
+}
+
+#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));

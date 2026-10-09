@@ -264,10 +264,18 @@ impl IterationMaturity {
     }
 }
 
+fn default_todo_priority() -> String {
+    "medium".to_string()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoItem {
     pub content: String,
     pub status: String,
+    // [port-adaptation] upstream's tool output always carries a priority;
+    // operant's todo tool result only names id/content/status, so the TUI
+    // parse needs a default rather than failing the whole list.
+    #[serde(default = "default_todo_priority")]
     pub priority: String,
     pub id: String,
     /// Optional group label. Todos that share a group are displayed together

@@ -1187,6 +1187,22 @@ impl App {
                 true
             }
 
+            // P4-3 (2026-10-09 v2 outline): the band itself is live — the
+            // list arrives from the todo tool's results; /todos only chooses
+            // whether the pinned card is shown.
+            "todos" | "todo" => {
+                self.todos_band_hidden = !self.todos_band_hidden;
+                self.status_message = Some(if self.todos_band_hidden {
+                    "Todo card hidden".to_string()
+                } else if self.todos_card_payload.is_empty() {
+                    "Todo card pinned (no todos yet)".to_string()
+                } else {
+                    "Todo card pinned".to_string()
+                });
+                self.invalidate_transcript();
+                true
+            }
+
             // /journey, /replay, /replay-diff — these need their own overlays
             // (planned for a later iteration). Surface a "coming soon" status
             // rather than silently dropping.

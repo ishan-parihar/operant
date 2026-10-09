@@ -207,6 +207,15 @@ pub struct App {
     // ---- Scrollback / auto-scroll -----------------------------------------
     /// When `true`, the message pane follows the latest messages automatically.
     pub auto_scroll: bool,
+    /// The session's live todo list, parsed from the `todo` tool's results
+    /// (P4-3, 2026-10-09 v2 outline: the counts-only TodoUpdated event
+    /// could never render a list; the full items sit in the tool result).
+    pub todos: Vec<crate::tui::operant_app::todo::TodoItem>,
+    /// The JSON TodoCardPayload for the pinned band / info card, rebuilt
+    /// whenever `todos` changes (pinned_todos_payload returns &str).
+    pub todos_card_payload: String,
+    /// /todos toggle: hide the pinned todo card band.
+    pub todos_band_hidden: bool,
     /// Count of messages that arrived while the user was scrolled up.
     pub new_messages_while_scrolled: usize,
 

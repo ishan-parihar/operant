@@ -166,10 +166,14 @@ impl TuiState for App {
     }
 
     fn pinned_todos_payload(&self) -> Option<&str> {
-        // [port-decision] pinned_todos_payload: operant has no todo list on the
-        // session state; returns None — wire when a todo store lands on App
-        // (the info-widget `todos` field is the same missing source).
-        None
+        // [port-decision] RESOLVED (P4-3, 2026-10-10): the ToolComplete(todo)
+        // path keeps the full list + its card payload on App; the band
+        // renders it while it exists and /todos has not hidden it.
+        if self.todos_band_hidden || self.todos_card_payload.is_empty() {
+            None
+        } else {
+            Some(&self.todos_card_payload)
+        }
     }
 
     fn pinned_todos_expanded(&self) -> bool {
@@ -688,7 +692,7 @@ impl TuiState for App {
                 AuthMethod::Unknown
             },
             git_info: None,
-            todos: Vec::new(),
+            todos: self.todos.clone(),
             agent_edited: std::sync::Arc::new(std::collections::HashSet::new()),
             ..Default::default()
         }

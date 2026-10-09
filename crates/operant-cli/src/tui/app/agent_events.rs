@@ -212,6 +212,24 @@ impl App {
                 } else {
                     self.status_message = None;
                 }
+                // P4-3 (2026-10-09 v2 outline): the todo tool's result carries
+                // the full list; keep it on App so the info-widget Todos band,
+                // the pinned card and /todos read live state. The counts-only
+                // TodoUpdated event stays as the status-line signal — it can
+                // never render a list.
+                if result.success
+                    && result.name == "todo"
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&result.content)
+                    && let Some(items) = value.get("todos")
+                    && let Ok(parsed) = serde_json::from_value::<
+                        Vec<crate::tui::operant_app::todo::TodoItem>,
+                    >(items.clone())
+                {
+                    let card = serde_json::json!({ "todos": parsed });
+                    self.todos_card_payload = serde_json::to_string(&card).unwrap_or_default();
+                    self.todos = parsed;
+                    self.invalidate_transcript();
+                }
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
 

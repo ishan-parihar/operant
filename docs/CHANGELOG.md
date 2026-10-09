@@ -550,6 +550,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-746 — P4-3: the todo list is a live surface.** The audit's
+  "half-assed implementation" verdict, closed: the tool, the renderers, the
+  types and the `/todos` registration all existed, but the event carried
+  counts only and no store ever held the items — the TUI could render
+  nothing but "Todos: 0/2 done". The ToolComplete(todo) path now parses
+  the full list from the tool's result JSON (the same source the counts
+  event reads) into `App.todos` and builds the TodoCardPayload, the
+  info-widget Todos band and the pinned transcript card render it live
+  (verified live: "✓ fix scroll / ○ fix todos" card with progress pips),
+  and `/todos` toggles the pinned card band. The vendored TodoItem gains a
+  [port-adaptation] serde default for `priority` (upstream always emits
+  one; operant's tool result names only id/content/status). Unit
+  regression: todo_tool_result_populates_the_live_store_and_todos_command_
+  toggles_the_band. The counts one-liner stays as the status-line signal.
+  Label note: peer took 745 mid-flight; this ships as 746.
+
 - **iter-737 — outline v6 §1 row 2 (NEXT SLICE) LANDED: oversized tool
   results offload to a durable workspace artifact with a TOC stub.**
   iter-729 wired `[agent] max_tool_result_chars` (head 2/3 + tail 1/3)
