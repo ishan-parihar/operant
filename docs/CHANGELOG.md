@@ -513,6 +513,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-741 — docs: jcode-parity gap outline v2 — root causes pinned from
+  source.** Deep audit pass over the four still-live complaints: (1) todo
+  one-liner — AgentEvent::TodoUpdated carries counts only while the full list
+  JSON sits in result.content; jcode's TodoEvent carries the whole
+  Vec<TodoItem> (jcode-base/src/bus.rs:46); store + InfoWidgetData feed +
+  /todos handler are the missing wiring. (2) duplicated streaming —
+  RetryScheduled never clears streaming_text/is_streaming
+  (tui/app/agent_events.rs:472), so a died attempt's partial text appends the
+  retry's full re-stream on this stream-death-prone provider; one-line fix +
+  retry-dedup corpus scenario. (3) scroll — jcode confirmed alt-screen
+  (ratatui-0.30.2 init.rs:400 EnterAlternateScreen via src/cli/terminal.rs:353
+  ratatui::init); "integrated" scroll = an internal ladder that never dies
+  (prompt jumps, bookmarks, tail catch-up, resize anchors) + optional
+  handterm host scrollbar; native-scrollback is a distinct P5 wave if the
+  owner still wants it after the evidence. (4) thinking — jcode default
+  show_thinking=true + /thinking-display off|full|current + /effort; operant
+  render chain complete, kilo emits no reasoning under 4 flag probes
+  (thinking.type, reasoning_effort, 3 models). Order: P4-1 scroll seam ->
+  P4-2.5 retry dedup -> P4-3 todo -> P4-2 notifications -> P4-4 thinking.
+
 - **iter-740 — docs: second live-audit gap outline (jcode-parity v1).**
   First-hand tmux feedback loop on the iter-731 deploy: the scroll ladder is
   verifiably dead in the field (8x PageUp / Up / Alt+Up / Ctrl+Up, zero
