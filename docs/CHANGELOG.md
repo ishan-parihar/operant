@@ -513,6 +513,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-744 — P4-2.5: a retried stream no longer duplicates the reply.**
+  Root cause (v2 outline, live-audit): `AgentEvent::RetryScheduled` re-armed
+  the turn but never cleared `streaming_text`/`streaming_thinking` — the
+  died attempt's partial text stayed buffered, and since the provider
+  restarts the response from its top, the retry's first delta APPENDED to
+  the partial: the user watched the reply render twice. On this provider
+  (stream-death flake is the org's known condition) that is the most-hit
+  duplication path in the field. The fix discards the died attempt's text
+  at the retry boundary; the turn stays live (`is_streaming` untouched —
+  mid-turn retry display semantics are pinned by an existing test). Unit
+  regression: retry_must_not_append_the_resurrected_stream_to_the_died_
+  partial (partial -> RetryScheduled -> full text asserts replace, not
+  append). Corpus delta: zero (the 4 journey/skills drifts pre-date this
+  change and reproduce at origin/main without it).
+
 - **iter-743 — P4-1 follow-up: ghost-scroll-offset clamp + live scroll
   geometry in the F12 debug overlay.** The reflow-anchor growth correction
   counts the streaming bubble's rows, but the flush boundary (bubble ->

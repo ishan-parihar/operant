@@ -475,6 +475,17 @@ impl App {
                 reason,
             } => {
                 self.turn_state = TurnState::WaitingForNetwork;
+                // The died attempt's partial text must not survive into the
+                // retry: the provider restarts the response from its top, so
+                // any leftover buffer appends the full retry to the partial
+                // and the reply renders duplicated (2026-10-09 live-audit
+                // P4-2.5 — the org's provider stream-deaths make this the
+                // most-hit path in the field). The turn stays live
+                // (`is_streaming` untouched — a mid-turn retry keeps the
+                // turn's live-stream display semantics, as the existing
+                // test pins); only the died attempt's text is discarded.
+                self.streaming_text.clear();
+                self.streaming_thinking.clear();
                 // Reuse the SystemAPIError block so retries get the same
                 // boxed renderer as API failures instead of plain text.
                 let block = ContentBlock::SystemAPIError {

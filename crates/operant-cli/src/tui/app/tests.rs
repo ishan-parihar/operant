@@ -1204,6 +1204,34 @@ fn turn_state_should_reflect_retry_event() {
 }
 
 #[test]
+fn retry_must_not_append_the_resurrected_stream_to_the_died_partial() {
+    // 2026-10-09 live-audit P4-2.5: the provider stream died mid-response
+    // (the org's signature flake), leaving partial text in the buffer; the
+    // retry restarts the response from its top. If the partial survives,
+    // the full retry APPENDS to it and the user watches the reply twice.
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Content {
+        text: "partial sentence that d".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::RetryScheduled {
+        attempt: 1,
+        max_attempts: 3,
+        reason: "stream died mid-response".to_string(),
+    });
+    assert!(
+        app.streaming_text.is_empty(),
+        "the died attempt's partial must not survive the retry boundary"
+    );
+    app.handle_agent_event(AgentEvent::Content {
+        text: "The full reply from the top.".to_string(),
+    });
+    assert_eq!(
+        app.streaming_text, "The full reply from the top.",
+        "the retry's text must replace, not append to, the partial"
+    );
+}
+
+#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));
