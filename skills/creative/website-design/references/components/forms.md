@@ -1,16 +1,10 @@
----
-name: forms
-description: "Build form fields, validation, states, and submit feedback. Load BEFORE writing any input, contact form, checkout, settings panel, or multi-step flow. Covers label anatomy, semantic types, autocomplete, inline validation, error recovery, aria-live, and the full submit lifecycle."
-metadata:
-  operant:
-    tags: [forms, inputs, validation, submit]
----
-
 # Forms
+
+Build form fields, validation, states, and submit feedback. Load BEFORE writing any input, contact form, checkout, settings panel, or multi-step flow. Covers label anatomy, semantic types, autocomplete, inline validation, error recovery, aria-live, and the full submit lifecycle.
 
 Field anatomy, validation behavior, the six field states, and the submit
 lifecycle. Default LLM output ships the static success state only; this leaf
-forces the full cycle. Signup/waitlist one-field blocks: `components/conversion/SKILL.md`.
+forces the full cycle. Signup/waitlist one-field blocks: [conversion](conversion.md).
 
 ## Procedure
 

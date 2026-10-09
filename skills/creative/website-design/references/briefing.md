@@ -1,12 +1,6 @@
----
-name: briefing
-description: "Read any brief and produce the DESIGN BRIEF artifact: page kind, audience, vibe words, VARIANCE/MOTION/DENSITY dials, mode, foundation. Phase 1 of website-design: ALWAYS run this before writing any design code, picking any color, or choosing any library. If a site already exists, this leaf detects it and routes to redesign/."
-metadata:
-  operant:
-    tags: [website, design, brief, ux]
----
-
 # Briefing: Read the Brief Before Anything Else
+
+Read any brief and produce the DESIGN BRIEF artifact: page kind, audience, vibe words, VARIANCE/MOTION/DENSITY dials, mode, foundation. Phase 1 of website-design: ALWAYS run this before writing any design code, picking any color, or choosing any library. If a site already exists, this leaf detects it and routes to redesign/.
 
 Most bad LLM design output happens because the model jumps to a default aesthetic
 instead of reading the room. This phase costs zero code and prevents that. Output
@@ -17,12 +11,12 @@ is one artifact: the `DESIGN BRIEF` fenced block that every later phase re-reads
 1. Extract the seven signals (table below) from the user's message, linked URLs,
    screenshots, and any existing repo.
 2. Detect the mode (greenfield | preserve | overhaul). If preserve or overhaul,
-   read `redesign/SKILL.md` and run its audit BEFORE continuing here.
+   read `references/redesign.md` and run its audit BEFORE continuing here.
 3. Declare a one-line design read. This happens before any code, always.
 4. Set the three dials from the tables below.
 5. Pick the foundation: an official design system package OR a named aesthetic family.
 6. Emit the `DESIGN BRIEF` block in the exact format at the end of this file.
-7. Continue to `direction/SKILL.md`.
+7. Continue to `references/direction.md`.
 
 If the design read genuinely diverges into two incompatible directions, ask exactly
 ONE question (never a multi-question dump), e.g. "Should this feel closer to
@@ -54,7 +48,7 @@ Examples:
 
 Anti-default rule: the read must be derived from the signals, never from the
 LLM default aesthetic (purple gradient hero, three equal cards, Inter on slate).
-The full ban list lives in `quality/anti-slop/SKILL.md`; do not restate it here,
+The full ban list lives in `references/quality/anti-slop.md`; do not restate it here,
 just do not let a default become the read.
 
 ## 3. Mode detection
@@ -71,7 +65,7 @@ If an existing site is present and intent is unclear, this counts as your one
 allowed question: "Should this redesign preserve the existing brand, or are we
 starting visually from scratch?"
 
-For preserve or overhaul: read `redesign/SKILL.md` now. Its audit output feeds
+For preserve or overhaul: read `references/redesign.md` now. Its audit output feeds
 the dials and foundation below. Greenfield continues directly.
 
 ## 4. Set the dials
@@ -91,7 +85,7 @@ on these values.
 **MOTION** (animation intensity):
 - 1-3: static. `:hover` and `:active` state changes only. Behave as if `prefers-reduced-motion` is always on.
 - 4-7: CSS transitions, 0.3s `cubic-bezier(0.16, 1, 0.3, 1)`, staggered load-in delays, animate only `transform` and `opacity`.
-- 8-10: scroll-triggered reveals, parallax, scroll-driven animation. Recipes and hard limits in `motion/SKILL.md`.
+- 8-10: scroll-triggered reveals, parallax, scroll-driven animation. Recipes and hard limits in `references/motion.md`.
 
 **DENSITY** (visual packing):
 - 1-3: art gallery. Section vertical padding 128-192px. Expensive, airy.
@@ -155,7 +149,7 @@ override 90% of them. One system per project, never two mixed in one tree.
 ### 5.B Brief is an aesthetic, not a system
 
 No official package exists for these. Name the family, record it as
-`aesthetic:<family>`, and let `direction/SKILL.md` turn it into palette, type,
+`aesthetic:<family>`, and let `references/direction.md` turn it into palette, type,
 and effects: `minimal`, `editorial`, `brutalist`, `glassmorphism`, `bento`,
 `dark-tech`, `aurora`, `kinetic-type`, `playful`, `luxury`. If the user names a
 vendor-only effect (e.g. Apple Liquid Glass), record the nearest family and note
@@ -202,14 +196,14 @@ foundation: aesthetic:minimal
 constraints: none
 ```
 
-Next: `direction/SKILL.md`.
+Next: `references/direction.md`.
 
 ## Checks
 
 1. A fenced `DESIGN BRIEF` block exists with all nine lines, none blank.
 2. The design read is one sentence in the exact "Reading this as:" shape and was stated before any code, tokens, or colors.
 3. Dials line matches `VARIANCE=<int> MOTION=<int> DENSITY=<int>`, each value 1-10, no other dial names anywhere.
-4. mode is exactly one of greenfield, preserve, overhaul; if preserve or overhaul, `redesign/SKILL.md` was read before the brief was emitted.
+4. mode is exactly one of greenfield, preserve, overhaul; if preserve or overhaul, `references/redesign.md` was read before the brief was emitted.
 5. foundation is exactly one value: `system:<package>` from the 5.A table or `aesthetic:<family>` from the 5.B list, never both, never two systems.
 6. If constraints include regulated, public-sector, or accessibility-first: VARIANCE <= 4 and MOTION <= 3.
 7. Zero or one clarifying question was asked, never more.

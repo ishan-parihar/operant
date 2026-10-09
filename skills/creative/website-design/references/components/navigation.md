@@ -1,12 +1,6 @@
----
-name: navigation
-description: "Build the header, primary nav, mobile menu, and footer. Use IMMEDIATELY when the SECTION MAP reaches the header or footer, or whenever a nav wraps to two lines, exceeds 80px, lacks an active state, or a footer carries version stamps or dead links."
-metadata:
-  operant:
-    tags: [nav, header, footer, mobile-menu]
----
-
 # Navigation
+
+Build the header, primary nav, mobile menu, and footer. Use IMMEDIATELY when the SECTION MAP reaches the header or footer, or whenever a nav wraps to two lines, exceeds 80px, lacks an active state, or a footer carries version stamps or dead links.
 
 The header and footer frame every page: they must be consistent, one line at
 desktop, keyboard reachable, and free of decoration fixtures. Build the header
@@ -69,11 +63,11 @@ The footer is the sitemap, not a decoration zone.
 | Brand column | logo or wordmark + one line of description, nothing poetic |
 | Link groups | 2-4 groups (Product, Company, Resources, Legal), 3-6 links each, every top-level page reachable |
 | Legal row | copyright with current year, privacy, terms; smallest text on the page but still >= 4.5:1 contrast |
-| Contact | one email and, if the brief has a physical venue, one address line; atmospheric locale, time, or weather strips are banned, see `quality/anti-slop/SKILL.md` |
+| Contact | one email and, if the brief has a physical venue, one address line; atmospheric locale, time, or weather strips are banned, see `references/quality/anti-slop.md` |
 | Social | real profile links or omit the row entirely |
 | Newsletter (optional) | label above input, real submit handling or omit |
 
-Banned fixtures (`quality/anti-slop/SKILL.md` holds the full list, link do not
+Banned fixtures (`references/quality/anti-slop.md` holds the full list, link do not
 copy): version footers (`v1.4.2`, `Build 0048`, `last sync 4s ago`), weather or
 locale strips, decorative status dots. Every footer link resolves; `href="#"`
 is a dead link, not a placeholder.
@@ -255,7 +249,7 @@ the button.
 5. Mobile toggle is a `<button>` with `aria-expanded` and `aria-controls`; the
    open menu traps focus and closes on ESC.
 6. Grep the footer for `v\d`, `Build `, `last sync`, weather or locale strips:
-   zero matches (full ban list in `quality/anti-slop/SKILL.md`).
+   zero matches (full ban list in `references/quality/anti-slop.md`).
 7. Every header and footer link has a real href (no `href="#"`) and shows a
    visible `:focus-visible` outline when tabbed to.
 8. Nav placement, order, and labels are identical across all pages, and pages

@@ -1,12 +1,6 @@
----
-name: social-proof
-description: "Build social proof: logo walls, testimonials, pull quotes, case-study teasers, and review strips. Use whenever the SECTION MAP calls for trust, customers, testimonials, or reviews, and ALWAYS before placing any brand logo or quote on the page."
-metadata:
-  operant:
-    tags: [testimonials, logos, social-proof, trust]
----
-
 # Social proof
+
+Build social proof: logo walls, testimonials, pull quotes, case-study teasers, and review strips. Use whenever the SECTION MAP calls for trust, customers, testimonials, or reviews, and ALWAYS before placing any brand logo or quote on the page.
 
 Credibility sections live or die on believability. Fake-looking logos, egg avatars, and
 essay-length quotes destroy trust faster than having no social proof at all.
@@ -15,10 +9,10 @@ essay-length quotes destroy trust faster than having no social proof at all.
 
 1. Read the SECTION MAP: which proof assets exist (logos, quotes, ratings, case studies)?
 2. Place each asset by the placement table. Never stuff proof into the hero
-   (hero rules: `components/heroes/SKILL.md`).
+   (hero rules: [heroes](heroes.md)).
 3. Build with the specs below, canonical tokens only.
 4. Replace every generic name, avatar, and round number with realistic data
-   (rules: `content/SKILL.md`).
+   (rules: `references/content.md`).
 5. Run `## Checks`.
 
 Framework note: recipes are plain HTML + CSS custom properties.
@@ -63,7 +57,7 @@ One proof section per slot. Two logo walls or two testimonial sections on one pa
 - 5-8 logos, one row on desktop, uniform height 24-32px, gap `var(--space-7)`,
   centered with `align-items: center`. Overflow on mobile: wrap to 2 rows or marquee.
 - Heading is optional and plain: "Trusted by teams at", "Customers include", or none.
-  Cutesy phrasings are banned; the list lives in `quality/anti-slop/SKILL.md`, do not improvise.
+  Cutesy phrasings are banned; the list lives in `references/quality/anti-slop.md`, do not improvise.
 
 ## Testimonial spec
 
@@ -78,7 +72,7 @@ One proof section per slot. Two logo walls or two testimonial sections on one pa
   disc (`background: color-mix(in oklab, var(--accent) 15%, var(--surface))`, initials in
   `var(--text)`). Never an SVG egg, person glyph, or icon-library user icon.
 - **Realistic data.** Locale-appropriate full names, real-sounding companies, organic
-  numbers. Full rules in `content/SKILL.md`; do not ship "Jane Doe from Acme".
+  numbers. Full rules in `references/content.md`; do not ship "Jane Doe from Acme".
 
 ### Layout by count
 
@@ -95,7 +89,7 @@ Never a symmetric row of 3 identical quote cards. Featured-vs-rest always beats 
 - One line: rating value + source + count. Example: `4.8/5 on G2, 1,962 reviews`.
 - Value uses `font-variant-numeric: tabular-nums`. Count is organic, not round
   (1,962, not 2,000). Mark mock data with `<!-- mock -->`.
-- Stars, if drawn, come from the project icon family (icon rules: `content/SKILL.md`).
+- Stars, if drawn, come from the project icon family (icon rules: `references/content.md`).
 - Sits within `var(--space-6)` of the pricing table or final CTA, never as its own hero moment.
 
 ## Case-study teaser spec
@@ -103,7 +97,7 @@ Never a symmetric row of 3 identical quote cards. Featured-vs-rest always beats 
 - Max 3 teasers. Card = real image (`picsum.photos/seed/...` or generated), company name,
   one outcome metric ("34% fewer escalations"), link. No body paragraph.
 - 2 teasers: `grid-template-columns: 1.4fr 1fr`. 3 teasers: one wide + two stacked,
-  same asymmetric discipline as bento cells (`components/feature-sections/SKILL.md`).
+  same asymmetric discipline as bento cells ([feature-sections](feature-sections.md)).
 
 ## Worked example: 3-quote asymmetric grid
 
@@ -168,4 +162,4 @@ where no photo fits, explicit mobile collapse. Imitate the structure, not the co
 5. Every logo renders in the page theme: inline SVGs use `currentColor`, CDN URLs use the hex of `--text-muted`; no default full-color logo row.
 6. No avatar is an SVG person glyph or icon-library user icon; each is a photo placeholder or an initials disc.
 7. No name from the generic set (John Doe, Jane Doe, Sarah Chen, Jack Su) and no fake-round counts (2,000 reviews, 99.99%).
-8. No social-proof heading matches a banned phrasing from `quality/anti-slop/SKILL.md`.
+8. No social-proof heading matches a banned phrasing from `references/quality/anti-slop.md`.
