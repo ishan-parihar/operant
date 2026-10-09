@@ -2136,6 +2136,29 @@ fn user_scroll_should_cancel_the_anchor() {
     assert_eq!(app.scroll_offset, 15, "a user scroll drops the anchor");
 }
 
+#[test]
+fn reconcile_clamps_ghost_offset_after_the_flush_shrinks_the_transcript() {
+    // The growth correction counts the streaming bubble's rows; the flush
+    // boundary collapses them into one committed message, so the offset can
+    // hold rows that no longer exist (live-audit P4-1 follow-up: offset 355
+    // against a 15-row max left PageDown walking ghost rows home). The
+    // reconcile must clamp the STATE to the frame's live max — the render
+    // already clamps its own paint — and void the pin.
+    let mut app = make_app();
+    app.auto_scroll = false;
+    app.scroll_offset = 355;
+    crate::tui::operant_ui::set_last_max_scroll(15);
+    app.last_render_scroll_offset.set(15);
+    app.last_resolved_scroll.set(Some(15));
+    app.reconcile_scroll_anchor();
+    assert_eq!(
+        app.scroll_offset, 15,
+        "ghost rows must clamp to the live frame max"
+    );
+    // Reset the thread-local so later tests on this thread see "no frame".
+    crate::tui::operant_ui::set_last_max_scroll(0);
+}
+
 // ---- Resize preserves reading position ---------------------------------
 //
 // A resize rewraps every transcript line, so a row index captured before it

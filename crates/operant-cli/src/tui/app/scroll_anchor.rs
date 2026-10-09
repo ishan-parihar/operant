@@ -195,6 +195,25 @@ impl App {
         let mem = &mut self.scroll_memory;
         mem.max_scroll = max_scroll;
 
+        // ---- Ghost-offset clamp -----------------------------------------
+        //
+        // A flush boundary (streaming bubble -> committed message) or a
+        // compaction can drop rows the reader's offset still counts: the
+        // growth correction above tracked the bubble's rows, but they
+        // collapse when the flush reflows them into one message, leaving
+        // e.g. offset 355 against a 15-row max (2026-10-09 live-audit P4-1
+        // follow-up: the view parked correctly — the render clamps its own
+        // paint — but PageDown needed dozens of presses to walk ghost rows
+        // home). Keep the STATE honest: clamp to the frame's true max and
+        // void the pin (the row it named is gone). 0 means no frame has
+        // rendered yet (unit tests without a renderer) — leave the offset
+        // alone then.
+        let live_max = crate::tui::operant_ui::last_max_scroll();
+        if live_max > 0 && self.scroll_offset > live_max {
+            self.scroll_offset = live_max;
+            mem.anchor = None;
+        }
+
         // ---- Resize: adopt the row the anchored content now occupies -------
         //
         // A width change rewrapped every line, so `anchor.top_row` is stale by

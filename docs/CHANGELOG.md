@@ -513,6 +513,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-743 — P4-1 follow-up: ghost-scroll-offset clamp + live scroll
+  geometry in the F12 debug overlay.** The reflow-anchor growth correction
+  counts the streaming bubble's rows, but the flush boundary (bubble ->
+  committed message) collapses them: the reader's offset kept rows that no
+  longer exist (live-measured: offset 355 against a 15-row max after one
+  streamed turn — the view parked correctly since the render clamps its own
+  paint, but PageDown had to walk 34 ghost rows home). `reconcile_scroll_-
+  anchor` now clamps the STATE to the frame's live max (0 = no frame
+  rendered, so unit tests without a renderer are untouched) and voids the
+  pin. The F12 debug overlay gains Scroll (offset / max / total wrapped
+  lines) and Follow (tail|paused + resolved) rows — the live instrument the
+  P4-1 audit said it needed: the dead ladder was diagnosed with ten blind
+  probes where these two lines would have named the override immediately.
+  Unit regression: reconcile_clamps_ghost_offset_after_the_flush_shrinks_-
+  the_transcript (offset 355 + live max 15 -> 15). Live: PgUp x2 moves the
+  viewport to the transcript top with overflow (verified on the instrumented
+  build); corpus delta: zero (the 4 journey/skills drifts pre-date this
+  change and reproduce at origin/main without it).
+
 - **iter-741 — docs: jcode-parity gap outline v2 — root causes pinned from
   source.** Deep audit pass over the four still-live complaints: (1) todo
   one-liner — AgentEvent::TodoUpdated carries counts only while the full list
