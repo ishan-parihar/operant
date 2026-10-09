@@ -275,6 +275,15 @@ impl CronScheduler {
 
         let due_jobs = self.db.get_due_jobs()?;
         if due_jobs.is_empty() {
+            // iter-684 gap 6 (defect found live 2026-10-09, arming the
+            // sessions for the first time): the socialization coordinator
+            // must be checked on EVERY tick — this early return used to
+            // skip it, so a schedule fire landing on an empty tick was
+            // delayed to the next busy one (the 09:30 session would have
+            // waited for the 10:00 hourly jobs; an armed-with-no-stamp box
+            // waits even longer). The unit tests call the coordinator
+            // directly, so the tick-level gate was never pinned.
+            self.maybe_run_socialization().await;
             return Ok(());
         }
 
@@ -1322,6 +1331,50 @@ mod tests {
         super::CronScheduler::new(Arc::clone(&cron_db), agent)
             .with_budgets(seat_budgets, default_budget)
             .with_usage_store(store)
+    }
+
+    /// iter-684 gap 6 defect pin (found live 2026-10-09, arming the
+    /// sessions): the socialization coordinator must be checked on an
+    /// EMPTY-due tick — the early return used to skip it, delaying a
+    /// schedule fire to the next busy tick. Pairs are empty here on
+    /// purpose: the at-most-once STAMP is the observable, no agent turn
+    /// runs, and a real 09:30 fire on a jobless tick is never missed.
+    #[tokio::test]
+    async fn socialization_coordinator_runs_on_an_empty_due_tick() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
+        let agent = Arc::new(crate::agent::OperantAgent::new(
+            crate::agent::AgentConfig::default(),
+            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+            )),
+            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+            db,
+        ));
+        let cron_db = Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
+        let seats_root = dir.path().join("seats");
+        std::fs::create_dir_all(&seats_root).expect("seats root");
+        let scheduler = super::CronScheduler::new(cron_db, agent)
+            .with_seat_memory_root(seats_root.clone())
+            .with_socialization(crate::config::SocializationSettings {
+                enabled: true,
+                // Every-minute schedule: due with last=None by construction,
+                // so the tick's reach — not the schedule — is under test.
+                schedule: "0 * * * * *".to_string(),
+                turn_budget: 0,
+                pairs: Vec::new(),
+            });
+        // No cron job exists → due_jobs is empty → the old code returned
+        // before ever reaching the coordinator.
+        scheduler.tick().await.expect("tick");
+        let org_db = seats_root.join("operant_kanban.db");
+        let stamp = crate::org::socialization::last_socialization_run(&org_db)
+            .expect("socialization state read");
+        assert!(
+            stamp.is_some(),
+            "the coordinator must stamp on an empty-due tick — otherwise a \
+             09:30 fire waits for the next busy tick"
+        );
     }
 
     fn test_job() -> crate::cronjobs::db::CronJob {
