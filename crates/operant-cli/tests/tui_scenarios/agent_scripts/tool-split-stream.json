@@ -1,0 +1,7 @@
+[
+  {"type":"content","text":"I'll read the first 5 lines of AG"},
+  {"type":"tool_start","id":"call_mid","name":"aft_read","arguments":"{}"},
+  {"type":"content","text":"ENTS.md and summarize."},
+  {"type":"tool_complete","id":"call_mid","name":"aft_read","output":"1 line one\n2 line two"},
+  {"type":"done","text":"Done reading."}
+]

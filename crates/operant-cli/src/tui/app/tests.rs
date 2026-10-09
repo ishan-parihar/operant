@@ -4,9 +4,9 @@
 // Extracted from the app/mod.rs monolith.
 
 use super::*;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
 use crate::tui::operant_app::auth::AuthState;
 use crate::tui::operant_app::tui_state::TuiState as _;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
 
 pub(crate) fn make_app() -> App {
     // `App::new` calls `set_active_theme_enum`, which writes the process-global
@@ -31,6 +31,7 @@ fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         state: KeyEventState::NONE,
     }
 }
+
 
 // ---- MCP reconnect tick-drain tests (iter-326) ----
 
@@ -1726,6 +1727,145 @@ fn tool_should_transition_queued_to_running_on_permit_acquire() {
     assert!(!app.tool_use_blocks[0].status.is_pending());
 }
 
+// ---- P0-2: per-iteration text grouping (2026-10-09 live audit) ----
+//
+// Providers interleave content deltas around tool_call deltas in one
+// response; observed live splitting "AG|ENTS.md" across the tool row.
+// ToolStart must not flush (the seam joins); ToolComplete/ToolError are the
+// iteration boundary and must flush (responses never glue).
+
+#[test]
+fn tool_start_mid_stream_must_not_split_assistant_text() {
+    use operant_core::agent::AgentEvent;
+
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Content {
+        text: "I’ll read the first 5 lines of AG".into(),
+    });
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_split".into(),
+        name: "aft_read".into(),
+        arguments: "{}".into(),
+    });
+    app.handle_agent_event(AgentEvent::Content {
+        text: "ENTS.md and summarize.".into(),
+    });
+
+    assert!(
+        app.messages.is_empty(),
+        "ToolStart must not flush mid-response text"
+    );
+    assert_eq!(
+        app.streaming_text, "I’ll read the first 5 lines of AGENTS.md and summarize.",
+        "the interleaved chunks join into the unsplit sentence"
+    );
+    assert_eq!(
+        app.tool_use_blocks[0].after_index, 1,
+        "the tool row reserves the slot the pending text will occupy"
+    );
+
+    // The tool settles: iteration boundary flushes the joined text as one
+    // message, and the display order puts the tool row after it.
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_split".into(),
+            name: "aft_read".into(),
+            success: true,
+            content: "# AGENTS.md…".into(),
+            error: None,
+            timed_out: false,
+        },
+    });
+    assert_eq!(app.messages.len(), 1, "boundary flush commits one message");
+    let joined = app.messages[0].text_content();
+    assert!(
+        joined.contains("AGENTS.md and summarize."),
+        "the committed message carries the unsplit sentence: {joined}"
+    );
+
+    let display = crate::tui::operant_model::display_messages(&app);
+    assert_eq!(display[0].role, "assistant");
+    assert_eq!(display[1].role, "tool", "tool row renders after the text");
+}
+
+#[test]
+fn tool_complete_boundary_must_flush_iteration_text() {
+    use operant_core::agent::AgentEvent;
+
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Content {
+        text: "Sentence one.".into(),
+    });
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_b".into(),
+        name: "aft_read".into(),
+        arguments: "{}".into(),
+    });
+    app.handle_agent_event(AgentEvent::ToolComplete {
+        result: operant_core::tools::ToolResult {
+            tool_call_id: "call_b".into(),
+            name: "aft_read".into(),
+            success: true,
+            content: "ok".into(),
+            error: None,
+            timed_out: false,
+        },
+    });
+    // The model re-plans: the next response's text must NOT glue onto the
+    // previous one.
+    app.handle_agent_event(AgentEvent::Content {
+        text: "Sentence two.".into(),
+    });
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message::assistant("Sentence two."),
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
+
+    assert_eq!(app.messages.len(), 2, "two responses, two messages");
+    let first = app.messages[0].text_content();
+    let second = app.messages[1].text_content();
+    assert!(first.contains("Sentence one."), "first message: {first}");
+    assert!(second.contains("Sentence two."), "second message: {second}");
+    assert!(
+        !second.contains("one"),
+        "no glue: the second response must not carry the first's text: {second}"
+    );
+}
+
+#[test]
+fn tool_error_boundary_must_flush_iteration_text() {
+    use operant_core::agent::AgentEvent;
+
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Content {
+        text: "Trying the tool.".into(),
+    });
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_e".into(),
+        name: "shell".into(),
+        arguments: "{}".into(),
+    });
+    app.handle_agent_event(AgentEvent::ToolError {
+        tool_call_id: "call_e".into(),
+        name: "shell".into(),
+        error: "exit status 3".into(),
+    });
+    app.handle_agent_event(AgentEvent::Content {
+        text: "It failed.".into(),
+    });
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::client::Message::assistant("It failed."),
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
+
+    assert_eq!(app.messages.len(), 2, "error boundary also flushes");
+    let first = app.messages[0].text_content();
+    assert!(
+        first.contains("Trying the tool."),
+        "pre-error text is preserved as its own message: {first}"
+    );
+}
+
 // ---- Batched tool-call grouping ----
 //
 // A concurrent batch (6 same-name calls in one turn) must render as one block
@@ -3134,7 +3274,10 @@ fn credentials_live_or_s_store_env_and_activation_flag() {
         app.auth_store.credentials.clear();
         assert!(!app.credentials_live());
         app.has_credentials = true;
-        assert!(app.credentials_live(), "sticky activation flag alone counts");
+        assert!(
+            app.credentials_live(),
+            "sticky activation flag alone counts"
+        );
     })
 }
 
@@ -3176,7 +3319,8 @@ fn last_msg_area_defaults_zero_and_is_republished_from_draw() {
         ratatui::layout::Rect::default(),
         "fresh App must carry a zero rect so stale geometry never gates a menu"
     );
-    app.last_msg_area.set(ratatui::layout::Rect::new(2, 3, 40, 10));
+    app.last_msg_area
+        .set(ratatui::layout::Rect::new(2, 3, 40, 10));
     assert_eq!(app.last_msg_area.get().width, 40);
 }
 
@@ -3185,7 +3329,10 @@ fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
     let mut app = make_app();
     app.auto_scroll = true;
     app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::CONTROL));
-    assert_eq!(app.scroll_offset, 3, "Ctrl+Up must scroll the transcript 3 lines");
+    assert_eq!(
+        app.scroll_offset, 3,
+        "Ctrl+Up must scroll the transcript 3 lines"
+    );
     assert!(!app.auto_scroll, "Ctrl+Up must pause tail-follow");
     app.scroll_offset = 10;
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
@@ -3194,7 +3341,10 @@ fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
     assert_eq!(app.scroll_offset, 0);
-    assert!(app.auto_scroll, "reaching the bottom must resume tail-follow");
+    assert!(
+        app.auto_scroll,
+        "reaching the bottom must resume tail-follow"
+    );
 }
 
 // ── Composer shift-selection (jcode textarea selection, 2026-10-09 audit) ──
@@ -3251,7 +3401,10 @@ fn wrap_input_text_paints_selection_in_reverse_video() {
     let found = lines.iter().any(|line| {
         line.spans.iter().any(|span| {
             span.content.as_ref() == "wo"
-                && span.style.add_modifier.contains(ratatui::style::Modifier::REVERSED)
+                && span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::REVERSED)
         })
     });
     assert!(found, "selection span must paint reverse-video over 'wo'");

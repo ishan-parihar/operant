@@ -1,0 +1,19 @@
+{
+  "name": "tool-split-stream",
+  "surface": "crates/operant-cli/src/tui/app/agent_events.rs::handle_agent_event (ToolStart grouping + ToolComplete boundary flush) + operant_model/adapter.rs::display_messages",
+  "opens_with": "(agent script only — no keystroke opens it)",
+  "keys": "",
+  "size": "120x40",
+  "agent_script": "tool-split-stream.json",
+  "assert": [
+    "messages == 2",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:AGENTS.md and summarize.",
+    "contains:aft_read"
+  ],
+  "baseline": "tool-split-stream.txt",
+  "style_baseline": "tool-split-stream.style.txt",
+  "notes": "The 2026-10-09 live audit complaint 3, reproduced first-hand on the deployed binary: a provider interleaving content deltas around a tool_call delta split the word AG|ENTS.md across the tool row ('I'll read the first 5 lines of AG' / [tool row] / 'ENTS.md and summarize.'). The regression gate is the contiguous 'AGENTS.md and summarize.' row: on the pre-fix code ToolStart flushed mid-response and the seam rendered as two messages, so the joined string never appears on screen. ToolComplete is the iteration boundary — its flush keeps consecutive responses as separate messages (pinned by tool_complete_boundary_must_flush_iteration_text) while ToolStart no longer flushes (pinned by tool_start_mid_stream_must_not_split_assistant_text)."
+}

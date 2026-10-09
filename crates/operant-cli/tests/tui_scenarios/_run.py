@@ -120,6 +120,11 @@ PINNED_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "ANTHROPIC_API_KEY": "offline-capture-not-a-real-key",
+    # Corpus-only pin (2026-10-09): freeze the notification timeline so the
+    # banner's countdown progress bar renders full-width in every frame -
+    # the wall-clock `(exp - now)` read was the documented drift that made
+    # first-message/tool-block flaky (notifications.rs `now()` seam).
+    "OPERANT_FROZEN_NOTIFICATION_CLOCK": "1",
     # Corpus-only pin: freeze the decorative idle animation.
     # Merged into disabled_animation_names() at render time; real users keep
     # the empty default (all animations on).

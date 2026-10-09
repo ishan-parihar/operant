@@ -19,14 +19,14 @@
  ● anthropic(key)
  ~
 
- Hello from the mock agent.
+ I’ll read the first 5 lines of AGENTS.md and summarize.
+   ✓ aft_read · 5 tok
+
+ Done reading.
 
 
 1>
-                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
-
-
-
+                                                                         ~ 22/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

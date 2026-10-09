@@ -443,6 +443,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-725 — P0-2/N-3 (2026-10-09 live-audit plan): tool rows no longer
+  split a streaming sentence; the notification clock gained a corpus
+  determinism seam.** ToolStart no longer flushes the streaming assistant
+  text mid-response — providers interleave content deltas around tool_call
+  deltas (observed live splitting "AG|ENTS.md" across the tool row), so the
+  text buffer now spans the whole iteration and the seam joins
+  automatically; tool rows anchor one slot further (`+ text_slot`) so they
+  still render after the text that was in flight when the call was parsed.
+  ToolComplete/ToolError are the iteration boundary and flush there —
+  consecutive model responses never glue into one message. Tool-row dedupe
+  by `tool_call_id` re-verified by unit test (the live "duplicate
+  web_search row" was two model calls, not a rendering dup). New corpus
+  scenario `tool-split-stream` gates the regression end-to-end (the
+  contiguous "AGENTS.md and summarize." row is red on the pre-fix code);
+  3 unit tests pin the three event-arm semantics. Enabler:
+  `notifications.rs` `now()` seam + corpus pin
+  `OPERANT_FROZEN_NOTIFICATION_CLOCK` — the banner's shrinking countdown
+  bar was the documented wall-clock drift that made first-message/
+  tool-block flaky and any banner-bearing golden nondeterministic; with
+  the pin the bar renders full-width, byte-stable. Full corpus re-proven:
+  **62 deterministic goldens / 0 unstable / 0 broken** (9 banner-bearing
+  goldens intentionally reshaped by the frozen-bar pin). Suite 1741/0.
+
 - **iter-718 — Clean-sweep 8: provider-less sessions derive their auth slots
   from the credentials that actually exist; first-message transition pinned
   end-to-end.** Completes the auth-aliveness fix for the model-only config

@@ -91,15 +91,26 @@ impl App {
                 self.is_streaming = true;
                 self.turn_state = TurnState::RunningTool;
 
-                // When a tool starts, flush any accumulated streaming text/thinking
-                // as a completed message. This prevents content from accumulating
-                // across iterations (think → tool → think → tool → respond).
-                // (iter-123 — fixes duplicate thinking/text in multi-iteration turns.)
-                if !self.streaming_text.is_empty() || !self.streaming_thinking.is_empty() {
-                    self.flush_streamed_assistant_message();
-                }
-
-                let after_index = self.messages.len();
+                // Per-iteration text grouping (2026-10-09 live audit, P0-2):
+                // a mid-stream ToolStart must not split the assistant text.
+                // Providers interleave content deltas around tool_call deltas
+                // — observed live: "…first 5 lines of AG" / tool_call /
+                // "ENTS.md and summarize." — and flushing here rendered the
+                // word AGENTS.md split across the tool row. The text buffer now
+                // spans the whole iteration and flushes at the next boundary
+                // (next iteration's Thinking, Done, or cancel). Tool rows
+                // anchor one slot further so they still render after the text
+                // that was in flight when the call was parsed: the reservation
+                // mirrors flush_streamed_assistant_message's push condition
+                // exactly, so a slot is reserved iff the flush will fill it.
+                let text_slot = if self.streaming_text.trim().is_empty()
+                    && self.streaming_thinking.trim().is_empty()
+                {
+                    0
+                } else {
+                    1
+                };
+                let after_index = self.messages.len() + text_slot;
                 let tool_id = tool_call_id.clone();
                 let tool_name = name.clone();
                 let input_json = arguments;
@@ -187,6 +198,15 @@ impl App {
                 // The tool settled; the model has to re-plan before the next
                 // Content event, so the turn is back to Thinking.
                 self.turn_state = TurnState::Thinking;
+                // Iteration boundary (2026-10-09 live audit, P0-2): the
+                // assistant text streamed before this tool completed belongs
+                // to the previous model response — the next Content starts a
+                // NEW response. Flush here so the two never glue into one
+                // message ("…summarize.The file wasn't found…"), while text
+                // interleaved AROUND the tool_call parse mid-response still
+                // joins (the AG|ENTS.md seam) because ToolStart no longer
+                // flushes.
+                self.flush_streamed_assistant_message();
                 if is_error {
                     self.status_message = Some(format!("Tool error: {}", result_text));
                 } else {
@@ -224,6 +244,9 @@ impl App {
                 self.invalidate_transcript();
                 self.turn_state = TurnState::Thinking;
                 self.status_message = Some(format!("Tool error: {}", result_text));
+                // Iteration boundary, same as ToolComplete (P0-2): a failed
+                // tool also ends the response that called it.
+                self.flush_streamed_assistant_message();
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
 
