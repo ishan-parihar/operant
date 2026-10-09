@@ -1601,3 +1601,110 @@ async fn run_single_delegates_to_turn() {
         "Expected non-empty response from run_single"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 26. [agent] max_tool_result_chars ingestion-time truncation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A tool that returns a fixed 200_000-char output — the shape of an
+/// untrimmed `http_request` fetch result.
+struct HugeOutputTool;
+
+#[async_trait]
+impl Tool for HugeOutputTool {
+    fn name(&self) -> &str {
+        "huge"
+    }
+
+    fn description(&self) -> &str {
+        "Returns a huge output"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> Result<ToolResult> {
+        Ok(ToolResult {
+            success: true,
+            output: "x".repeat(200_000),
+            error: None,
+        })
+    }
+}
+
+fn huge_output_tool_call() -> ToolCall {
+    ToolCall {
+        id: "tc1".into(),
+        name: "huge".into(),
+        arguments: "{}".into(),
+        extra_content: None,
+    }
+}
+
+/// The config knob trims the oversized tool result at ingestion — the
+/// message pushed to history carries head (2/3) + tail (1/3) and a
+/// truncation marker, not the raw 200k output.
+#[tokio::test]
+async fn max_tool_result_chars_trims_oversized_result_at_ingestion() {
+    let provider = Box::new(ScriptedProvider::new(vec![
+        tool_response(vec![huge_output_tool_call()]),
+        text_response("done"),
+    ]));
+    let config = AgentConfig {
+        max_tool_result_chars: 1_000,
+        ..AgentConfig::default()
+    };
+    let mut agent = build_agent_with_config(provider, vec![Box::new(HugeOutputTool)], config);
+
+    let _ = agent.turn("fetch it").await.unwrap();
+
+    let results = agent
+        .history()
+        .iter()
+        .find_map(|m| match m {
+            ConversationMessage::ToolResults(rs) => Some(rs.clone()),
+            _ => None,
+        })
+        .expect("tool results message must be in history");
+    assert_eq!(results.len(), 1);
+    let content = &results[0].content;
+    assert!(
+        content.contains("[... "),
+        "ingested tool result must carry the truncation marker: {}",
+        &content[..80.min(content.len())]
+    );
+    assert!(
+        content.len() <= 1_200,
+        "ingested tool result must be trimmed to ~max_tool_result_chars, got {}",
+        content.len()
+    );
+    assert!(content.starts_with('x') && content.ends_with('x'));
+}
+
+/// `max_tool_result_chars: 0` disables the backstop — the raw output
+/// reaches history untrimmed (previous behavior).
+#[tokio::test]
+async fn max_tool_result_chars_zero_leaves_output_untrimmed() {
+    let provider = Box::new(ScriptedProvider::new(vec![
+        tool_response(vec![huge_output_tool_call()]),
+        text_response("done"),
+    ]));
+    let config = AgentConfig {
+        max_tool_result_chars: 0,
+        ..AgentConfig::default()
+    };
+    let mut agent = build_agent_with_config(provider, vec![Box::new(HugeOutputTool)], config);
+
+    let _ = agent.turn("fetch it").await.unwrap();
+
+    let results = agent
+        .history()
+        .iter()
+        .find_map(|m| match m {
+            ConversationMessage::ToolResults(rs) => Some(rs.clone()),
+            _ => None,
+        })
+        .expect("tool results message must be in history");
+    assert_eq!(results[0].content.len(), 200_000);
+}

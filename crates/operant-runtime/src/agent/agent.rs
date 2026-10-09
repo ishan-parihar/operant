@@ -2,6 +2,7 @@ use crate::agent::dispatcher::{
     NativeToolDispatcher, ParsedToolCall, ToolDispatcher, ToolExecutionResult, XmlToolDispatcher,
 };
 use crate::agent::eval::AutoClassifyExt;
+use crate::agent::history::truncate_tool_result;
 use crate::agent::memory_loader::{DefaultMemoryLoader, MemoryLoader};
 use crate::agent::prompt::{PromptContext, SystemPromptBuilder};
 use crate::approval::{ApprovalManager, ApprovalRequest, ApprovalRequirement, ApprovalResponse};
@@ -1452,6 +1453,26 @@ impl Agent {
         }
     }
 
+    /// Copy of `results` with each output trimmed to
+    /// `config.max_tool_result_chars` (head 2/3 + tail 1/3, truncation
+    /// marker in the middle; `0` disables) — the ingestion-time backstop the
+    /// knob documents. Only the ingested conversation message is trimmed;
+    /// the observer and the TurnEvent channel keep the full output.
+    fn results_for_ingestion(&self, results: &[ToolExecutionResult]) -> Vec<ToolExecutionResult> {
+        let max = self.config.max_tool_result_chars;
+        if max == 0 {
+            return results.to_vec();
+        }
+        results
+            .iter()
+            .map(|r| {
+                let mut trimmed = r.clone();
+                trimmed.output = truncate_tool_result(&r.output, max);
+                trimmed
+            })
+            .collect()
+    }
+
     async fn execute_tools(&self, calls: &[ParsedToolCall]) -> Vec<ToolExecutionResult> {
         let approval_required = self.approval_manager.as_deref().is_some_and(|mgr| {
             calls
@@ -1736,7 +1757,9 @@ impl Agent {
                 self.note_memory_tool_use();
             }
 
-            let formatted = self.tool_dispatcher.format_results(&results);
+            let formatted = self
+                .tool_dispatcher
+                .format_results(&self.results_for_ingestion(&results));
             self.history.push(formatted);
             self.trim_history();
         }
@@ -2305,7 +2328,9 @@ impl Agent {
                 }
             }
 
-            let formatted = self.tool_dispatcher.format_results(&results);
+            let formatted = self
+                .tool_dispatcher
+                .format_results(&self.results_for_ingestion(&results));
             self.history.push(formatted);
             self.trim_history();
         }
