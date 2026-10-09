@@ -46,24 +46,83 @@
   author `ishan_parihar`; the metering warn is gone post-restart; the
   `premiere|dm` watermark advanced.
 
-## 3. Feed class: channel/group posts → `context_items` (phase-2 remainder; M)
+## 3. Feed class: channel/group posts → `context_items` — EXECUTION PLAN (M)
 
-- The `context_items` schema already reserves non-DM classes
-  (`context_injection.rs:60` — "class dm (future: feed sources)"); the
-  watermark table is keyed `(seat_id, class)`.
-- **Scope now**: Telegram only. The bot (`can_join_groups=true`,
-  `has_topics_enabled=true`) can be added to a channel/group; the gateway's
-  poll already receives `channel_post`/`message` updates from groups —
-  classify them as `feed` rows through the same injector, per-seat by topic
-  or chat→seat mapping. **No second poller** — the gateway owns `getUpdates`;
-  a separate read adapter would 409-conflict with it (observed today: my own
-  probe and the daemon's long-poll collided into a 409 restart loop until the
-  probe stopped).
-- **Acceptance**: a group message lands as a `feed` row for the mapped seat;
-  DM quota/classes unaffected; `org synthesize`/turn prologue renders the
-  feed class under its own quota.
-- **Effort**: M. Files: `gateway_runner.rs` (classification),
-  `context_injection.rs` (feed class constant + query), tests.
+**State change since first filing**: inbound is live end-to-end
+(iter-704). The gateway's poll is the single `getUpdates` consumer —
+the feed class rides it; NO second poller (a separate one 409s against
+the daemon, observed live 2026-10-09).
+
+**Seam ruling (review-verified)**: capture goes at the TOP of
+`route_message` (gateway/mod.rs:345), BEFORE the admin check at :412 —
+group/channel posts come from arbitrary users, and capturing inside
+`MessageHandler::handle` would only ever see the operator's own posts
+plus draw "You are not authorized" replies into channels. A new
+`MessageHandler::record_feed(&IncomingMessage)` trait method with a
+NO-OP DEFAULT (contract NOT widened; existing `handle` untouched).
+
+### Slice A — the feed aspect in the injector (pure core, no gateway)
+
+1. `ContextClass::Feed` + `as_str()="feed"` + `quota_for` arm
+   (`context_injection.rs:73-90`).
+2. `feed_seat_map: HashMap<String,String>` + `feed_quota: usize`
+   (default 500) in `ContextInjectionSettings` (`config.rs:188`);
+   `operant.example.toml` gains both keys. Unmapped chat → `premiere`
+   (consistent with the DM default binding).
+3. `collect_class` Feed arm: `SELECT author, ts, text FROM context_items
+   WHERE class='feed' AND seat_hint=? AND ts>watermark` (mirror the Dm
+   arm at :430).
+4. `record_feed_item(seat_id, author, text)` mirroring `record_inbound_dm`
+   (:389) — class 'feed', truncate 800, fail-open.
+5. Render label: `ContextClass::Feed => "Channel feed"` (pattern: Dept →
+   "Department feed", :690).
+6. **Tests**: feed quota fill + roll-over into pool; record → collect →
+   watermark advance round-trip; unmapped-default-premiere mapping.
+
+### Slice B — capture at route time (adapter + routing + handler)
+
+1. `IncomingMessage.is_channel_post: bool` (default false) +
+   `.with_channel_post()` builder (`gateway/types.rs:100`).
+2. `parse_update` (`telegram.rs:1444`): accept `channel_post` as an
+   alternative top-level update key (same body minus `from`; author =
+   channel title from `chat.title`); mark `is_channel_post=true`.
+   Group/supergroup messages keep existing behavior — they ALREADY
+   parse with `is_group_chat=true`.
+3. `route_message` top (mod.rs:345, before the admin check):
+   - `is_channel_post` → `handler.record_feed(&msg)` then `Ok(None)`
+     (no turn, no reply — a channel post never spawns an agent turn
+     and never answers into the channel).
+   - `is_group_chat` → `handler.record_feed(&msg)` then FALL THROUGH
+     to normal routing (the operator's group-command surface keeps
+     working; feed capture is additive).
+4. `GatewayMessageHandler::record_feed` override (gateway_runner.rs):
+   seat = `settings.feed_seat_map.get(channel_id)` else `premiere`;
+   `injector.record_feed_item(...)`; fail-open on every error.
+5. **Tests**: `parse_update` channel_post → `is_channel_post=true` +
+   author=title; route_message feed-branch unit (stub handler counting
+   `record_feed` calls — channel post records + returns None, no
+   "not authorized" outgoing); group message records AND still turns.
+
+### Slice C — live verification (owner action prerequisite)
+
+Add @ip_zeroclaw_bot to a channel (or group) and post. Verify on the box:
+`context_items` gains a `feed` row with the mapped seat,
+`context_watermarks` gains `(seat,'feed')`, and the next turn prologue
+of that seat renders the Channel feed section. Until the owner adds
+the bot to a chat, Slices A+B are proven by unit tests + deploy only —
+state that plainly in the iteration report.
+
+### Slice D — docs
+
+CHANGELOG entry + example.toml keys + this row → EXECUTED. The stale
+`Channel: chat_636bbfc5f7ee` preamble label is RETIRED (not a bug):
+`build_session_context` routes channel ids through
+`pii::redact_chat_id` (gateway_runner.rs:1705) — `chat_…` is the
+redactor's stable alias, by design.
+
+**Order**: A → B → deploy → C (owner) → D. One code iteration (A+B),
+the live verify gated on the owner, the docs row close-out rides the
+same commit.
 
 ## 4. Discord/Slack read adapters — still blocked on owner credentials
 
@@ -87,6 +146,6 @@
 
 ## Execution order
 
-1 → 2 → 3 (1 and 2 are independent bug fixes; both small; do 1 first — it
-blocks all inbound on any future token swap). 4 waits on the owner. Each item
-is one iteration: fix + test + deploy + live-verify per AGENTS.md.
+3 (slices A→B→deploy, C gated on the owner) → 4 waits on the owner.
+Items 1+2 are DONE (iter-704, live-verified). Each code slice ships as
+one iteration: fix + test + deploy + live-verify per AGENTS.md.
