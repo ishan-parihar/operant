@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-714 — micro-compaction (hermes parity, opt-in via
+  `OPERANT_MICRO_COMPACTION`, off by default):**
+  `context_management::micro_compact` folds the oldest completed
+  exchange below the protected head (4) and recency tail (8) into one
+  marker message carrying the exchange's last assistant gist
+  (head/tail-preserved at 240 chars); tool-pair integrity by construction
+  (consecutive `Tool` results travel with the fold); the fold runs at
+  `build_messages` time against the STORE once the conversation crosses
+  the soft threshold (40% of the window) — continuous small bills ahead
+  of the batch preflight ladder, never replacing it. Strictly
+  below-prefix: the iter-698 PromptCacheGuard fires by design on any
+  violation — proven live during test design when a too-small window
+  drove the eviction into prefix territory and the guard caught it.
+  `parse_micro_compaction_env` pure-tested; armed once at construction
+  (`with_micro_compaction` the deterministic test seam).
 - **iter-713 — guardian-LLM approval arm (the approval-matrix row's
   missing tier; hermes `approval_smart.py` parity):** `GuardianVerdict`
   (Approve/Deny/Escalate) in `approval.rs` with comment-stripping (the
@@ -362,23 +377,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
-
-- **iter-717 — Clean-sweep 7: the two pre-port dead renderers go.**
-  `messages/markdown.rs` (1,069 lines) — the pre-port markdown renderer,
-  kept alive only by its own tests and a cfg(test) re-export; the live
-  transcript renders through the vendored stack (operant_app/markdown →
-  operant_markdown). `prompt_input/render.rs` (469 lines) —
-  `render_prompt_input` (dead since the chrome cutover), `input_height`
-  (orphaned import in render/mod.rs), PROMPT_POINTER; `wrap_line` survives,
-  moved to its only consumer (vim visual.rs). Latex/mermaid end-to-end tests
-  that exercised the dead renderer's fence-dispatch are trimmed to their
-  live detection contracts; the latex wiring gate now pins the VENDORED
-  renderer's math routing (operant_render_core::render_inline_latex) — the
-  old gate's file was deleted. Net −1,804/+67 across 10 files; suite
-  1737/0 (8 dead-renderer tests removed with their code); corpus verify
-  0 drift. Found during the sweep: tui/latex.rs is now orphaned (zero live
-  callers — the vendored renderer owns math) — its wire-or-delete is the
-  next sweep item.
 
 - **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
   mis-advertising the live web_search chain.** The introspection tool claimed

@@ -142,11 +142,12 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
    matrix (composes with the DECIDED D-2 posture ruling: the policy row
    consult IS the matrix) and the auxiliary-LLM APPROVE/DENY/ESCALATE tier.
    Small-Med.
-4. **Micro-compaction, opt-in off-by-default** (hermes): fold the oldest
-   un-absorbed exchange into a running summary per turn — continuous bills
-   vs. our batch preflight. Constraint from iter-698: folding must stay
-   below the frozen prefix or the PromptCacheGuard fires by design. Needs the
-   trade-off note before enabling. Small.
+4. ~~**Micro-compaction (opt-in)**~~ **EXECUTED iter-714** —
+   `context_management::micro_compact` at the `build_messages` seam,
+   opt-in via `OPERANT_MICRO_COMPACTION`; soft threshold 40%, protected
+   head/tail, tool-pair integrity, strictly below-prefix (the
+   PromptCacheGuard caught a prefix-violating test setup live — the
+   constraint is enforced, not just documented).
 5. **No-agent cron mode** (hermes): script-only scheduled runs, stdout
    delivered verbatim, zero LLM — a one-gate complement to seat routing for
    jobs that need no seat. Small.
