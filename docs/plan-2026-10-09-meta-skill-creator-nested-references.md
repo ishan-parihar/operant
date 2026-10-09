@@ -246,3 +246,77 @@ skip already exists).
    nesting. Manual review; outside the repo, no commit needed.
 3. Optional: fold `registry.py --check` for in-repo trees into
    `scripts/self-test.sh` (local only — GitHub Actions runs remain banned).
+
+## §6 Execution log — iters 4–5 (2026-10-09)
+
+Backup: `~/.agents/skills-backup-iter5-*.tar.gz` (960 entries, 3.2 MB), taken
+before any live-tree write; used for three restores (4-tree rollback after the
+prefer-file fix; linkedin-marketing full restore for a clean re-run).
+
+Final state — every tree passes both gates (`registry.py --check` 0 errors;
+`operant skills audit` exit 0, in-scope trees OK):
+
+| Tree | Reference nodes | Errors | Warnings (advisory) |
+|---|---|---|---|
+| agent-interface | 25 | 0 | 18 |
+| cognitive-kernel | 9 | 0 | 0 |
+| human-conversation | 163 | 0 | 18 |
+| linkedin-marketing | 54 | 0 | 32 |
+| mental-model-atlas | 94 | 0 | 238 |
+| perfect-github-readme | 14 | 0 | 8 |
+| website-design | 31 | 0 | 34 |
+
+Script fixes made during the run (all before the final green battery):
+
+- **prefer-file resolution** for ambiguous backtick pointers — where a child
+  shipped its own `references/x.md` alongside a root-level one, backtick
+  prefer-root silently redirected citations to the root's copy and orphaned
+  the child's (observed in linkedin-marketing);
+- **rewrite all `.md` files' pointers**, moving and staying — a file that
+  travels with its dir changes depth, so its own outgoing pointers break
+  (observed: cognitive-kernel's `frameworks/construction.md` kept `../SKILL.md`);
+- `prune_empty_dirs` checks emptiness **live** per dir (os.walk's captured
+  listings go stale the moment a child is removed);
+- bare skill-name backtick routing (`linkedin-post-writer` with no path) →
+  node links — the only routing form some roots use;
+- masked-prose assertion removes the inserted summary by **index** (its
+  pointers are rewritten, so content no longer identifies it).
+
+Hand repairs after migration — pre-existing corpus defects the old substring
+validator could not see. Every one is a broken pointer or dead file in the
+OLD tree, surfaced by the stricter contract (never prose rewrites):
+
+**human-conversation** (13 unreachable → 0):
+
+- root cited `textual-prosody/SKILL.md` (stale name; the dir is `prosody`);
+  fixed to a real link `[textual-prosody](references/prosody.md)` — restores
+  the whole 6-node prosody subtree;
+- emotional-authenticity cited renamed files under dead names
+  (`mood-drift.md` / `intimacy-calibration.md` vs real `mood.md` /
+  `calibration.md` — the H1s confirm identity) → links to the real files;
+- `facet-invocation-paths.md` was cited by nothing → added under the root's
+  Directory rules;
+- deleted 4 empty `.md` stubs (`playfulness/frameworks/serious.md`,
+  `storytelling/frameworks/{illustrative,open,vulnerable}.md` — 1 byte each;
+  the real content lives in the cited `-narrative`/`-narratives`/`-stories`
+  variants);
+- `emotional-memory.md` is cited but exists nowhere — left as a dangling-hint
+  WARN and filed in BUGS.md.
+
+**linkedin-marketing** (7 unreachable → 0):
+
+- deleted 3 redirect tombstones (child copies whose body is only "This file
+  moved to root-level … Update your citation") and 2 `examples.md` files that
+  byte-duplicate their parent node's inline Example section;
+- `engagement-metrics-taxonomy.md` + `industry-benchmarks.md` (77/94-line
+  root files) were cited by nothing → added a `## Reference data` block to
+  linkedin-engager-analytics.
+
+**validator fix (same iteration, this repo):** `registry.py resolve()`
+returned the first inside-root candidate WITHOUT an existence check — a
+nonexistent file-relative candidate shadowed a valid root-relative one,
+contradicting its own docstring and `skills_tool.rs resolve_pointer` (which
+checks existence per candidate). Cost: 4 false dangling-link errors in
+linkedin-marketing. Fixed to existence-checked fallback; mutation-proven
+(fallback / file-rel preference / dangling-signal preservation), then the
+full 7-tree battery re-ran green.

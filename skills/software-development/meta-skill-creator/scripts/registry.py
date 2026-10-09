@@ -106,12 +106,23 @@ def resolve(target, base_dir, root, base="file"):
     if os.path.isabs(target):
         return os.path.normpath(target)
     order = [(base_dir, root), (root, base_dir)] if base == "file" else [(root, base_dir), (base_dir, root)]
+    first_inside = outside = None
     for first, _ in order:
         cand = os.path.normpath(os.path.join(first, target))
         if cand == root or cand.startswith(root + os.sep):
-            return cand
-        outside = cand  # remember first candidate even if outside the root
-    return outside
+            # Existence-checked fallback (docstring contract; skills_tool.rs
+            # resolve_pointer parity): a nonexistent file-relative candidate
+            # must not shadow a valid root-relative one — writers mix both
+            # styles, and returning the first inside-root path blindly turned
+            # valid root-rel links from depth>0 nodes into false dangling
+            # errors (observed in linkedin-marketing).
+            if os.path.exists(cand):
+                return cand
+            if first_inside is None:
+                first_inside = cand
+        elif outside is None:
+            outside = cand
+    return first_inside if first_inside is not None else outside
 
 
 def extract_pointers(text, base_dir, root):

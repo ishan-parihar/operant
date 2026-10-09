@@ -4432,3 +4432,40 @@ consequences, both now measured rather than assumed:
 is the seam: tests point it at a temp dir, and it is where a future
 "share one set of stores across sub-agent spawns" optimization would
 land.
+
+## Skills referential integrity (2026-10-09, iters 735–737 window)
+
+### S-1 — `emotional-memory.md` cited by human-conversation but exists nowhere (OPEN, low)
+
+`references/emotional-authenticity.md` routes two capabilities to
+`references/emotional-memory.md` (cross-turn emotional continuity — grudges,
+warmth, residual irritation). No such file exists anywhere in the tree, under
+any name. The old substring validator never checked pointer targets, so the
+citation rode along since the tree was authored. Under the nested-references
+contract it is a dangling-hint WARN (backticked, not a link — advisory by
+design). Either author the file (the capability is real and routed for) or
+delete the two routing lines. Surfaced by the iter-5 migration; not introduced
+by it.
+
+### S-2 — `~/.operant/skills` default pool carries OLD-MODEL copies of migrated trees (OPEN, medium)
+
+The configured skills root (`[skills] root_dir` in `~/.operant/operant.toml`)
+is `~/.operant/skills` — a separate store from `~/.agents/skills`. At least
+`agent-interface` exists in both, and the pool copy is still a pre-migration
+child-SKILL.md tree: `operant skills audit` reports its stray nested
+`SKILL.md` files ("only the root may be a skill; migrate this tree") on every
+run. The `~/.agents/skills` copy is migrated and clean (0 errors). Decided
+scope for iter 5 was `~/.agents/skills` only; syncing or migrating the pool
+copies is a follow-up — decide first whether the two stores should be one
+(they drift exactly like the meta-skill-creator B1 divergence did).
+
+### S-3 — registry.py `resolve()` existence-blind candidate order (FIXED, same window)
+
+`resolve()` returned the first inside-root candidate without checking
+existence, so a valid root-relative link from a depth>0 node was reported
+dangling whenever the file-relative shadow path didn't exist — contradicting
+the function's own docstring and the Rust parity port
+(`skills_tool.rs resolve_pointer`, which checks existence per candidate).
+Fixed with existence-checked fallback; proven by linkedin-marketing (4 false
+errors → 0) plus direct unit proof of fallback, file-rel preference, and
+dangling-signal preservation.
