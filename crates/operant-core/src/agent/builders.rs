@@ -115,6 +115,7 @@ impl OperantAgent {
             seat_authority: None,
             unattended: false,
             guardian_llm: crate::approval::guardian_enabled(),
+            micro_compaction: crate::context_management::micro_compaction_enabled(),
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -191,6 +192,7 @@ impl OperantAgent {
             seat_authority: None,
             unattended: false,
             guardian_llm: crate::approval::guardian_enabled(),
+            micro_compaction: crate::context_management::micro_compaction_enabled(),
             session_allowlist: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             persistent_allowlist: Arc::new(std::sync::RwLock::new(persistent_allowlist)),
             memory_manager: None,
@@ -441,6 +443,14 @@ impl OperantAgent {
     /// (`OPERANT_GUARDIAN_LLM`).
     pub fn with_guardian_llm(mut self, armed: bool) -> Self {
         self.guardian_llm = armed;
+        self
+    }
+
+    /// Arm/disarm micro-compaction explicitly — the test/programmatic
+    /// override for the construction-time env read
+    /// (`OPERANT_MICRO_COMPACTION`).
+    pub fn with_micro_compaction(mut self, armed: bool) -> Self {
+        self.micro_compaction = armed;
         self
     }
 

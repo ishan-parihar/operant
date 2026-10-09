@@ -411,6 +411,13 @@ pub struct OperantAgent {
     /// `with_guardian_llm`). Unarmed = the flagged-call path is today's
     /// permission-channel behavior, byte-for-byte.
     guardian_llm: bool,
+    /// Micro-compaction (hermes parity): armed when
+    /// `OPERANT_MICRO_COMPACTION` is truthy at construction. Folds the
+    /// oldest completed exchange below the soft threshold (40% of the
+    /// window) at build_messages time — continuous small reductions ahead
+    /// of the batch preflight ladder. Unarmed = the conversation store is
+    /// never mutated by compaction, byte-for-byte.
+    micro_compaction: bool,
     /// Session-scoped approvals (hermes `approve_session`): tool names the
     /// user allowed for the rest of this agent instance's lifetime. Never
     /// persisted.
@@ -1557,6 +1564,92 @@ mod tests {
     /// Ladder firing property: over the threshold, rung 1 re-trims the
     /// oversized historical tool result and the wrap-up rung appends the
     /// final-call notice as the last built message.
+    /// Micro-compaction (opt-in): the STORE folds at build time — the oldest
+    /// completed exchange below the protected head/tail collapses into one
+    /// marker message once the conversation crosses the soft threshold, and
+    /// the unarmed twin never mutates the store.
+    #[serial]
+    #[tokio::test]
+    async fn micro_compaction_folds_the_stored_conversation_at_build_time() {
+        async fn seed_exchanges(agent: &OperantAgent, n: usize) -> usize {
+            for i in 0..n {
+                agent
+                    .add_message(crate::client::Message::new(
+                        Role::User,
+                        format!("question {i}"),
+                    ))
+                    .await;
+                agent
+                    .add_message(crate::client::Message::new(
+                        Role::Assistant,
+                        "y".repeat(3_000) + &format!(" — answer {i}"),
+                    ))
+                    .await;
+            }
+            let conv = agent.conversation.read().await;
+            conv.len()
+        }
+
+        let db =
+            Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: 50_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_micro_compaction(true);
+        let before = seed_exchanges(&agent, 32).await; // 64 messages, ~24k tokens > the 20k soft threshold, far below the 40k preflight
+
+        let _msgs = agent.build_messages("mc-test").await.unwrap();
+
+        {
+            let conv = agent.conversation.read().await;
+            assert_eq!(
+                conv.len(),
+                before - 1,
+                "one exchange (user+assistant, i.e. 2 messages... or more) folded to 1 marker"
+            );
+            assert!(
+                conv.iter().any(|m| m.content.contains("[compacted exchange")),
+                "the folded marker rides in the stored conversation"
+            );
+            assert!(
+                conv.iter().take(4).all(|m| !m.content.contains("[compacted exchange")),
+                "the protected head is untouched"
+            );
+            assert_eq!(
+                conv.last().unwrap().content.len(),
+                3_000 + " — answer 31".len(),
+                "the recency tail is untouched"
+            );
+        }
+
+        // The unarmed twin: the store is never mutated.
+        let db2 = Database::init(std::path::PathBuf::from("micro-compact-off.sqlite"))
+            .unwrap();
+        let agent2 = OperantAgent::new(
+            AgentConfig {
+                context_window: 50_000,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db2),
+        );
+        let before2 = seed_exchanges(&agent2, 32).await;
+        let _ = agent2.build_messages("mc-off").await.unwrap();
+        let after2 = agent2.conversation.read().await.len();
+        assert_eq!(after2, before2, "unarmed = the store is byte-for-byte");
+    }
+
     #[serial]
     #[tokio::test]
     async fn build_messages_over_threshold_runs_preflight_ladder() {

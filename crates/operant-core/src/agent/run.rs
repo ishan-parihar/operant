@@ -2300,6 +2300,41 @@ impl OperantAgent {
             messages.push(Message::system(guidance));
         }
 
+        // ── Micro-compaction (opt-in via `OPERANT_MICRO_COMPACTION`) ─────
+        // Continuous folding AHEAD of the batch preflight ladder: once the
+        // stored conversation crosses the soft threshold (40% of the
+        // window), the oldest completed exchange below the protected
+        // head/tail folds into one marker message — small continuous bills
+        // instead of the batch ladder's large ones. The fold mutates the
+        // STORE, not this built list, so every subsequent build benefits.
+        // Strictly below-prefix by construction: the PromptCacheGuard below
+        // fires by design on any violation.
+        if self.micro_compaction {
+            let estimated = {
+                let conv = self.conversation.read().await;
+                crate::context_management::estimate_total_tokens(&conv)
+            };
+            let soft = self.config.context_window
+                * crate::context_management::MICRO_COMPACTION_THRESHOLD_PERCENT
+                / 100;
+            if estimated > soft {
+                let mut conv = self.conversation.write().await;
+                if let Some(marker) = crate::context_management::micro_compact(
+                    &mut conv,
+                    crate::context_management::MICRO_COMPACTION_HEAD_KEEP,
+                    crate::context_management::MICRO_COMPACTION_TAIL_KEEP,
+                    crate::context_management::MICRO_COMPACTION_FOLD_MAX_CHARS,
+                ) {
+                    info!(
+                        marker_chars = marker.chars().count(),
+                        estimated_before = estimated,
+                        soft_threshold = soft,
+                        "Micro-compaction folded the oldest exchange below the soft threshold"
+                    );
+                }
+            }
+        }
+
         // Add conversation history
         let conv = self.conversation.read().await;
         messages.extend(conv.clone());

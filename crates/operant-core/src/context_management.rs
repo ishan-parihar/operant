@@ -27,7 +27,7 @@
 //!    (CJK-aware via the iter-18 fix). This is a placeholder until a
 //!    real tokenizer (tiktoken-rs) is wired in.
 
-use crate::client::Message;
+use crate::client::{Message, Role};
 
 // ---------------------------------------------------------------------------
 // Token estimation
@@ -456,6 +456,126 @@ pub async fn semantic_compaction_cutoff(
 ///
 /// Returns `true` when the prefix survived. Drift logs a warning in
 /// release and trips a `debug_assert` in test builds.
+// ---------------------------------------------------------------------------
+// Micro-compaction (hermes micro-compaction parity; opt-in via
+// `OPERANT_MICRO_COMPACTION`, off by default)
+// ---------------------------------------------------------------------------
+
+/// Soft threshold: once the estimated conversation crosses this share of
+/// the context window, the oldest foldable exchange folds. Below the 80%
+/// preflight threshold by design — micro-compaction works continuously
+/// AHEAD of the batch ladder, not as its replacement.
+pub const MICRO_COMPACTION_THRESHOLD_PERCENT: usize = 40;
+/// Protected head: the frozen prefix + first exchange are never folded.
+pub const MICRO_COMPACTION_HEAD_KEEP: usize = 4;
+/// Protected recency tail: the last N messages are never folded.
+pub const MICRO_COMPACTION_TAIL_KEEP: usize = 8;
+/// Character ceiling for the folded gist a marker message carries.
+pub const MICRO_COMPACTION_FOLD_MAX_CHARS: usize = 240;
+
+/// Pure env parse behind the opt-in — testable without touching the
+/// process environment (the agent reads it ONCE at construction).
+pub fn parse_micro_compaction_env(raw: Option<&str>) -> bool {
+    matches!(
+        raw.unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "on" | "yes"
+    )
+}
+
+/// Is micro-compaction armed? `OPERANT_MICRO_COMPACTION` truthy — read
+/// once at agent construction (`OperantAgent::micro_compaction`), never
+/// probed per call.
+pub fn micro_compaction_enabled() -> bool {
+    parse_micro_compaction_env(std::env::var("OPERANT_MICRO_COMPACTION").ok().as_deref())
+}
+
+/// Fold the oldest complete exchange (a user message through just before
+/// the next user message) into a single compact marker message. PURE: the
+/// caller owns the threshold decision and the store. Returns the marker
+/// text when a fold happened, `None` when nothing is foldable.
+///
+/// Invariants:
+/// - the protected head (`head_keep`) and recency tail (`tail_keep`) are
+///   never touched — folding stays strictly below the frozen prefix, or
+///   the PromptCacheGuard fires by design;
+/// - a fold never splits a tool pair: the exchange's trailing tool
+///   results travel with it (the slice boundary extends past consecutive
+///   `Tool` messages), so no orphaned half survives;
+/// - the folded gist keeps the exchange's last assistant text,
+///   head/tail-preserved at `max_chars`.
+pub fn micro_compact(
+    messages: &mut Vec<Message>,
+    head_keep: usize,
+    tail_keep: usize,
+    max_chars: usize,
+) -> Option<String> {
+    let len = messages.len();
+    let tail_start = len.saturating_sub(tail_keep);
+    if len <= head_keep || tail_start <= head_keep {
+        return None;
+    }
+    // The first foldable user message inside the unprotected middle.
+    let start = (head_keep..tail_start).find(|&i| messages[i].role == Role::User)?;
+    // The exchange ends at the next user message inside the middle window.
+    let mut end = (start + 1..tail_start)
+        .find(|&i| messages[i].role == Role::User)
+        .unwrap_or(tail_start);
+    // Tool-pair integrity: if the message just past the boundary is a tool
+    // result whose request is inside the slice, extend the fold to include
+    // those results (both halves travel together or neither does).
+    while end < len && messages[end].role == Role::Tool {
+        end += 1;
+    }
+    if end <= start + 1 && messages[start].role == Role::User {
+        // A lone user message with no reply is not a completed exchange.
+        return None;
+    }
+
+    // The gist: the exchange's LAST assistant text.
+    let gist = messages[start..end]
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::Assistant)
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+    let kept = if gist.chars().count() <= max_chars {
+        gist.to_string()
+    } else {
+        // Head/tail preservation, mirroring the engine's tool-result trim.
+        let head_len = max_chars * 2 / 3;
+        let tail_len = max_chars - head_len;
+        let head_end = gist
+            .char_indices()
+            .nth(head_len)
+            .map(|(i, _)| i)
+            .unwrap_or(gist.len());
+        let tail_start_b = gist
+            .char_indices()
+            .rev()
+            .nth(tail_len.saturating_sub(1))
+            .map(|(i, _)| i)
+            .unwrap_or(gist.len());
+        if head_end >= tail_start_b {
+            gist.chars().take(max_chars).collect()
+        } else {
+            format!(
+                "{} […] {}",
+                &gist[..head_end],
+                &gist[tail_start_b..]
+            )
+        }
+    };
+    let marker_text = format!("[compacted exchange — earlier conversation folded] {kept}");
+    messages.splice(
+        start..end,
+        std::iter::once(Message::user(marker_text.clone())),
+    );
+    Some(marker_text)
+}
+
 pub fn prompt_cache_guard(prefix: &[Message], after: &[Message]) -> bool {
     let prefix_len = prefix.len();
     let ok = after.len() >= prefix_len
@@ -1478,4 +1598,76 @@ mod tests {
             }
         }
     }
-}
+    // ── Micro-compaction ───────────────────────────────────────────────────
+
+    #[test]
+    fn micro_compact_folds_the_oldest_exchange_into_one_marker() {
+    let mut messages = vec![
+        make_msg(Role::System, "frozen prefix"),
+        make_msg(Role::User, "first question"),
+        make_tool_use("t1"),
+        make_msg(Role::Tool, "tool result for the first question"),
+        make_msg(Role::Assistant, "first answer"),
+        make_msg(Role::User, "second question"),
+        make_msg(Role::Assistant, "second answer"),
+        make_msg(Role::User, "latest question"),
+        make_msg(Role::Assistant, "latest answer"),
+    ];
+    let before = messages.len();
+    let marker = micro_compact(&mut messages, 1, 2, 240).expect("foldable");
+    assert!(marker.contains("first answer"), "the gist keeps the exchange's assistant text");
+    assert!(marker.contains("[compacted exchange"));
+    // head + fold marker + tail preserved; the middle collapsed to ONE.
+    assert_eq!(messages[0].content, "frozen prefix", "head untouched");
+    assert_eq!(messages.len(), before - 3, "4 exchange messages folded to 1");
+    assert_eq!(messages[1].role, Role::User, "the marker rides as a user message");
+    assert!(messages[1].content.contains("first answer"));
+    assert_eq!(messages.last().unwrap().content, "latest answer", "recency tail untouched");
+    // The fold never split the tool pair: both halves left together.
+    assert!(
+        !messages.iter().any(|m| m.role == Role::Tool && m.content.contains("first question")),
+        "the folded tool result is gone with its request"
+    );
+    }
+
+    #[test]
+    fn micro_compact_respects_head_and_tail_windows() {
+    let mut messages = vec![
+        make_msg(Role::System, "frozen"),
+        make_msg(Role::User, "q1"),
+        make_msg(Role::Assistant, "a1"),
+        make_msg(Role::User, "q2"),
+        make_msg(Role::Assistant, "a2"),
+    ];
+    // head_keep 1 + tail_keep 4 leaves nothing foldable in the middle.
+    assert_eq!(micro_compact(&mut messages, 1, 4, 240), None);
+    assert_eq!(messages.len(), 5, "nothing touched");
+    // A conversation shorter than the head window never folds.
+    assert_eq!(micro_compact(&mut messages, 8, 2, 240), None);
+    }
+
+    #[test]
+    fn micro_compact_truncates_long_gists_head_tail() {
+    let long = "x".repeat(1_000);
+    let mut messages = vec![
+        make_msg(Role::System, "s"),
+        make_msg(Role::User, "q"),
+        make_msg(Role::Assistant, long.clone()),
+        make_msg(Role::User, "q2"),
+        make_msg(Role::Assistant, "a2"),
+        make_msg(Role::User, "q3"),
+        make_msg(Role::Assistant, "a3"),
+    ];
+    let marker = micro_compact(&mut messages, 1, 2, 60).expect("foldable");
+    assert!(marker.contains("[…]"), "long gists fold head/tail with an explicit marker");
+    assert!(marker.chars().count() < 120, "the marker stays compact (got {})", marker.chars().count());
+    }
+
+    #[test]
+    fn micro_compaction_env_parse_is_pure_and_opt_in() {
+    assert!(!parse_micro_compaction_env(None));
+    assert!(!parse_micro_compaction_env(Some("off")));
+    assert!(parse_micro_compaction_env(Some("1")));
+    assert!(parse_micro_compaction_env(Some(" TRUE ")));
+    }
+    }
