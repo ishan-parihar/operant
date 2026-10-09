@@ -1884,11 +1884,18 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         &request_queue,
         app_config.genome.grant_ttl_days,
     )?;
-    let seat_authority = Arc::new(operant_core::org::seat_authority::SeatAuthority::new(
-        Arc::clone(&seat_policies),
-        Arc::clone(&grant_ledger),
-        Arc::clone(&request_queue),
-    ));
+    // Row 1 (outline v5 §1): bounded delegation resolves the employee row
+    // it delegates INTO — without the registry the authority fails closed
+    // on the registry-unavailable arm. Latent today (no production row sets
+    // Bounded yet); attaching it here closes the hole before one does.
+    let seat_authority = Arc::new(
+        operant_core::org::seat_authority::SeatAuthority::new(
+            Arc::clone(&seat_policies),
+            Arc::clone(&grant_ledger),
+            Arc::clone(&request_queue),
+        )
+        .with_employee_registry(Arc::clone(&employee_registry)),
+    );
     // The approver the dispatcher's `/approve` / `/deny` and the 60s timeout
     // resolve queued asks through. TTL comes from `[genome] grant_ttl_days`
     // (7-day HoD default; standing grants are CEO+ only).
@@ -3843,6 +3850,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             }
         }
         let cron_db = Arc::new(cron_db);
+        // Row 1 (outline v5 §1): the delivery consumer settles the ledger
+        // row the scheduler handed off. `cron_db` is MOVED into the
+        // scheduler below (both arms of the WriteBarrier match), so the
+        // sender loop takes its own clone of the same handle — without it
+        // pending rows linger until the 2h reclaim replays them.
+        let cron_db_consumer = Arc::clone(&cron_db);
         let (cron_tx, mut cron_rx) =
             tokio::sync::mpsc::unbounded_channel::<operant_core::cronjobs::CronDelivery>();
 
@@ -3931,7 +3944,35 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         tokio::spawn(async move {
             while let Some(delivery) = cron_rx.recv().await {
                 let msg = OutgoingMessage::new(&delivery.chat_id, &delivery.content);
-                if let Err(e) = gw_for_cron.send_to_platform(&delivery.platform, msg).await {
+                let send_result = gw_for_cron.send_to_platform(&delivery.platform, msg).await;
+                // Row 1 (outline v5 §1): close the ledger loop — settle
+                // the row the scheduler handed off. Success is terminal
+                // ('delivered'); failure records the error and leaves the
+                // row pending, where the 2h reclaim replays it. The
+                // attempt was already counted at handoff, so this only
+                // reports the outcome. `ObserverEvent::CronDeliveryOutcome`
+                // stays unemitted — the gateway holds no observer handle
+                // today, and the ledger is the contract that matters.
+                if let Some(delivery_id) = delivery.delivery_id {
+                    let err_text = send_result.as_ref().err().map(|e| e.to_string());
+                    match cron_db_consumer.mark_delivery_outcome(
+                        delivery_id,
+                        send_result.is_ok(),
+                        err_text.as_deref(),
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => tracing::debug!(
+                            delivery_id,
+                            "cron delivery row already settled — duplicate report ignored"
+                        ),
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            delivery_id,
+                            "failed to settle cron delivery row"
+                        ),
+                    }
+                }
+                if let Err(e) = send_result {
                     tracing::warn!(
                         error = %redact_err(&e),
                         "Failed to deliver cron result"

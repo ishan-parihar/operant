@@ -498,6 +498,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-734 — outline v5 §1 row 1 LANDED (both slices): the gateway
+  delivery consumer settles its ledger row, and the seat authority
+  carries the employee registry.** The row's "blocked on the peer's
+  `gateway_runner.rs` WIP" note was stale — the iter-733 audit proved
+  that overlay is a rolled-back copy (index blob = `3429363f^`, worktree
+  reverts iter-704/iter-720 fixes), not an active build — so both
+  slices were unblocked and land together in `start_gateway`.
+  **(a) Consumer mount** (`crates/operant-cli/src/gateway_runner.rs`):
+  the cron sender loop discarded `delivery_id`; it now settles each
+  `CronDelivery` via `CronDb::mark_delivery_outcome` — success is
+  terminal (`'delivered'`), failure records the error and leaves the
+  row pending, where the 2h reclaim replays it. Rows no longer linger
+  until the replay (correct but wasteful). **(b) Registry attach**:
+  `SeatAuthority::new` gains
+  `.with_employee_registry(Arc::clone(&employee_registry))` — Bounded
+  delegation now resolves the employee row it delegates INTO instead of
+  failing closed on the registry-unavailable arm (latent today: no
+  production row sets Bounded yet). `ObserverEvent::CronDeliveryOutcome`
+  stays unemitted — the gateway holds no observer handle (grep: zero
+  matches) and the ledger is the contract that matters. The trinity
+  P1-A per-channel dispatch breaker rides this path next; its hook is
+  `gateway/mod.rs:526 send_to_platform`, not the cron loop.
+
 - **iter-731 — P3-10 (2026-10-09 live-audit plan): DNS failures say what
   they are; the live config migrates off the retired `igs` name.** The
   SSRF pre-flight's fail-closed DNS arm surfaced raw resolver text
