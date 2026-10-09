@@ -167,6 +167,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -376,6 +388,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -436,6 +460,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (mirroring `/grant`'s `--days`); a request the approver would not mint is
   refused before any row is written, with the refusal naming why.
 ### Changed
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -688,6 +724,18 @@ D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
 
 ### Changed
 
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -760,6 +808,18 @@ Parity work against the `jcode` reference agent (iters 347-409). The TUI
 gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ### Changed
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1006,6 +1066,18 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -1161,6 +1233,18 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -1216,6 +1300,18 @@ under `deny_unknown_fields` instead of being silently ignored.
 - `--dangerously-skip-permissions` flag that shows a confirmation dialog at startup and, on accept, runs the session in permission-bypass mode
 
 ### Changed
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1285,6 +1381,18 @@ Full Changelog: [v0.1.3...v0.1.4](https://github.com/ishan-parihar/operant/compa
 
 ### Changed
 
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -1327,6 +1435,18 @@ Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/operant-rs/compare/
 - Regression coverage for Windows key handling, landing prompt bootstrap, follow-up prompting after errors, and activity-pane failure rendering
 
 ### Changed
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1373,6 +1493,18 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - GitHub release workflow that extracts matching release notes from `CHANGELOG.md` and publishes tagged build artifacts to GitHub Releases
 
 ### Changed
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1431,6 +1563,18 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - CI/CD pipelines: lint (rustfmt + clippy + docs), build (3 native + 6 cross-compiled targets), test (3 platforms + coverage)
 
 ### Changed
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,

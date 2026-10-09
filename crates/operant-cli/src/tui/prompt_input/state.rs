@@ -35,6 +35,7 @@ impl PromptInputState {
             vim_search_buf: String::new(),
             vim_search_last: None,
             vim_quit_requested: false,
+            sel_anchor: None,
             pending_images: Vec::new(),
             kill_ring: KillRing::new(),
             stash: None,
@@ -47,6 +48,48 @@ impl PromptInputState {
     /// Add a clipboard image attachment to the pending list.
     pub fn add_image(&mut self, img: crate::image_paste::PastedImage) {
         self.pending_images.push(img);
+    }
+
+    /// Normalized byte-offset range of the active shift-selection, or None.
+    /// The anchor is the fixed end, the cursor the moving end — exactly
+    /// jcode's textarea selection model (2026-10-09 visual audit). Consumed
+    /// by the vendored composer renderer (ui_input::wrap_input_text) for
+    /// reverse-video highlighting and by Ctrl+C for copy.
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        self.sel_anchor.map(|anchor| {
+            if anchor <= self.cursor {
+                (anchor, self.cursor)
+            } else {
+                (self.cursor, anchor)
+            }
+        })
+    }
+
+    /// The selected text, clamped to char boundaries (multibyte-safe).
+    pub fn selection_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        let start = self.snap_to_char_boundary(start);
+        let end = self.snap_to_char_boundary(end);
+        self.text.get(start..end).map(|s| s.to_string())
+    }
+
+    fn snap_to_char_boundary(&self, mut idx: usize) -> usize {
+        while idx < self.text.len() && !self.text.is_char_boundary(idx) {
+            idx += 1;
+        }
+        idx
+    }
+
+    /// Begin or extend a shift-selection: anchor the fixed end if unset.
+    pub fn selection_begin_or_extend(&mut self) {
+        if self.sel_anchor.is_none() {
+            self.sel_anchor = Some(self.cursor);
+        }
+    }
+
+    /// Collapse the selection (any non-extending edit key).
+    pub fn selection_clear(&mut self) {
+        self.sel_anchor = None;
     }
 
     /// Drain and return all pending image attachments (called at send time).

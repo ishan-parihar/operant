@@ -3196,3 +3196,72 @@ fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
     assert_eq!(app.scroll_offset, 0);
     assert!(app.auto_scroll, "reaching the bottom must resume tail-follow");
 }
+
+// ── Composer shift-selection (jcode textarea selection, 2026-10-09 audit) ──
+
+#[test]
+fn shift_arrows_select_composer_text_and_ctrl_c_wins_over_exit() {
+    let mut app = make_app();
+    app.prompt_input.replace_text("hello world".to_string());
+    app.prompt_input.cursor = 6; // between "hello" and "world"
+    app.handle_key_event(press_key(KeyCode::Right, KeyModifiers::SHIFT));
+    app.handle_key_event(press_key(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.prompt_input.selection_range(),
+        Some((6, 8)),
+        "Shift+Right must extend the selection from the anchor"
+    );
+    assert_eq!(
+        app.prompt_input.selection_text().as_deref(),
+        Some("wo"),
+        "selection_text must slice the selected span"
+    );
+    // Any plain edit key collapses the selection.
+    app.handle_key_event(press_key(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert_eq!(app.prompt_input.selection_range(), None);
+}
+
+#[test]
+fn shift_left_selects_backwards_toward_anchor() {
+    let mut app = make_app();
+    app.prompt_input.replace_text("abc".to_string());
+    app.prompt_input.cursor = 3;
+    app.handle_key_event(press_key(KeyCode::Left, KeyModifiers::SHIFT));
+    app.handle_key_event(press_key(KeyCode::Left, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.prompt_input.selection_range(),
+        Some((1, 3)),
+        "anchor fixes at the start; cursor moves back over it"
+    );
+    assert_eq!(app.prompt_input.selection_text().as_deref(), Some("bc"));
+}
+
+#[test]
+fn wrap_input_text_paints_selection_in_reverse_video() {
+    let (lines, _, _) = crate::tui::operant_ui::input_ui::wrap_input_text(
+        "hello world",
+        8,
+        80,
+        "1",
+        ">",
+        ratatui::style::Color::Gray,
+        2,
+        Some((6, 8)),
+    );
+    let found = lines.iter().any(|line| {
+        line.spans.iter().any(|span| {
+            span.content.as_ref() == "wo"
+                && span.style.add_modifier.contains(ratatui::style::Modifier::REVERSED)
+        })
+    });
+    assert!(found, "selection span must paint reverse-video over 'wo'");
+    // Unselected text still renders: the rest of the line is intact.
+    let joined: String = lines
+        .iter()
+        .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+        .collect();
+    assert!(
+        joined.contains("hello ") && joined.ends_with("rld"),
+        "chars outside the selection must survive: {joined}"
+    );
+}

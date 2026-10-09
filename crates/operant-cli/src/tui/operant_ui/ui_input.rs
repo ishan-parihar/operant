@@ -462,6 +462,7 @@ pub(super) fn wrapped_input_line_count(
         prompt_char,
         caret_color,
         prompt_len,
+        app.input_selection(),
     );
     lines.len().max(1)
 }
@@ -2459,6 +2460,7 @@ pub(super) fn draw_input(
 ) -> Option<Position> {
     let input_text = app.input();
     let cursor_pos = app.cursor_pos();
+    let selection = app.input_selection();
 
     let mode = composer_mode(input_text, app.is_remote_mode());
     // Command suggestions render later as an overlay pass
@@ -2484,6 +2486,7 @@ pub(super) fn draw_input(
         prompt_char,
         caret_color,
         prompt_len,
+        selection,
     );
 
     let mut lines: Vec<Line> = Vec::new();
@@ -2790,6 +2793,43 @@ fn wrap_input_segments(input: &str, line_width: usize) -> Vec<WrappedInputSegmen
     segments
 }
 
+/// [operant adaptation] Split one wrapped segment's text into up to three
+/// spans (before / selected / after) when the active shift-selection
+/// intersects it. Selection is char-index space, clamped to the segment;
+/// jcode paints its textarea selection as reverse video, so that's the style
+/// used here.
+fn selected_text_spans(
+    segment: &WrappedInputSegment,
+    sel_chars: Option<(usize, usize)>,
+) -> Vec<Span<'static>> {
+    let text = &segment.text;
+    let Some((sel_start, sel_end)) = sel_chars else {
+        return vec![Span::raw(segment.text.clone())];
+    };
+    let seg_start = segment.start_char;
+    let seg_end = segment.end_char;
+    let sel_lo = sel_start.max(seg_start);
+    let sel_hi = sel_end.min(seg_end);
+    if sel_lo >= sel_hi {
+        return vec![Span::raw(segment.text.clone())];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let local_lo = (sel_lo - seg_start).min(chars.len());
+    let local_hi = (sel_hi - seg_start).min(chars.len());
+    let mut spans = Vec::with_capacity(3);
+    if local_lo > 0 {
+        spans.push(Span::raw(chars[..local_lo].iter().collect::<String>()));
+    }
+    spans.push(Span::styled(
+        chars[local_lo..local_hi].iter().collect::<String>(),
+        Style::default().reversed(),
+    ));
+    if local_hi < chars.len() {
+        spans.push(Span::raw(chars[local_hi..].iter().collect::<String>()));
+    }
+    spans
+}
+
 fn cursor_col_for_segment(segment: &WrappedInputSegment, cursor_char_pos: usize) -> usize {
     use unicode_width::UnicodeWidthChar;
 
@@ -2910,8 +2950,19 @@ pub(crate) fn wrap_input_text<'a>(
     prompt_char: &'a str,
     caret_color: Color,
     prompt_len: usize,
+    selection: Option<(usize, usize)>,
 ) -> (Vec<Line<'a>>, usize, usize) {
     let cursor_char_pos = crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
+    // [operant adaptation] selection is byte offsets from the App seam
+    // (`TuiState::input_selection`); the wrap segments index by char, so
+    // convert once. jcode paints its textarea selection the same way:
+    // reverse video over the selected chars.
+    let sel_chars = selection.map(|(s, e)| {
+        (
+            crate::tui::operant_app::core::byte_offset_to_char_index(input, s),
+            crate::tui::operant_app::core::byte_offset_to_char_index(input, e),
+        )
+    });
     let wrapped_segments = wrap_input_segments(input, line_width);
     let mut lines: Vec<Line> = Vec::new();
     let mut cursor_line = 0;
@@ -2930,16 +2981,16 @@ pub(crate) fn wrap_input_text<'a>(
 
         if idx == 0 {
             let num_color = rainbow_prompt_color(0);
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(num_str.to_string(), Style::default().fg(num_color)),
                 Span::styled(prompt_char.to_string(), Style::default().fg(caret_color)),
-                Span::raw(segment.text.clone()),
-            ]));
+            ];
+            spans.extend(selected_text_spans(segment, sel_chars));
+            lines.push(Line::from(spans));
         } else {
-            lines.push(Line::from(vec![
-                Span::raw(" ".repeat(prompt_len)),
-                Span::raw(segment.text.clone()),
-            ]));
+            let mut spans = vec![Span::raw(" ".repeat(prompt_len))];
+            spans.extend(selected_text_spans(segment, sel_chars));
+            lines.push(Line::from(spans));
         }
     }
 

@@ -1088,7 +1088,7 @@ impl App {
             return true;
         }
 
-        // Clear any active text selection on key press, except the two chords
+        // Clear any active text selection on key press, except the chords
         // that act *on* a selection: Ctrl+C copies it, Ctrl+T enters copy mode
         // (which has to hand the prior selection back on exit).
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1098,6 +1098,18 @@ impl App {
             self.selection_anchor = None;
             self.selection_focus = None;
             *self.selection_text.borrow_mut() = String::new();
+        }
+
+        // Composer shift-selection (jcode textarea selection, 2026-10-09
+        // visual audit): Shift+arrows extend it; Ctrl+C copies it; every other
+        // key collapses it.
+        let is_shift_arrow = key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(
+                key.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
+            );
+        if !is_copy && !is_shift_arrow && self.prompt_input.sel_anchor.is_some() {
+            self.prompt_input.selection_clear();
         }
 
         // ---- Ctrl+V / Cmd+V — clipboard paste (image first, then text fallback) ----
@@ -1196,8 +1208,26 @@ impl App {
             // (issue #149 follow-up).
             KeyCode::Char(c)
                 if (c == 'c' || c == 'C') && key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                // If text is selected, copy it to clipboard instead of quitting.
+                {
+                    // Composer shift-selection (jcode textarea selection): the
+                    // in-input selection wins — copy it and stop, never exit.
+                    if let Some(sel) = self.prompt_input.selection_text() {
+                        if !sel.is_empty() {
+                            let outcome = crate::tui::clipboard::copy(&sel);
+                            self.prompt_input.selection_clear();
+                            self.push_notification(
+                                if outcome.is_copied() {
+                                    NotificationKind::Info
+                                } else {
+                                    NotificationKind::Warning
+                                },
+                                outcome.status_message(),
+                                Some(2),
+                            );
+                            return false;
+                        }
+                    }
+                    // If text is selected, copy it to clipboard instead of quitting.
                 let sel_text = self.selection_text.borrow().clone();
                 if self.selection_anchor.is_some() && !sel_text.is_empty() {
                     // Text is selected: copy to clipboard.
@@ -1455,7 +1485,11 @@ impl App {
                 self.refresh_prompt_input();
             }
             KeyCode::Left => {
-                if key.modifiers.contains(KeyModifiers::SUPER) {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    // jcode textarea selection: anchor + extend left.
+                    self.prompt_input.selection_begin_or_extend();
+                    self.prompt_input.move_left();
+                } else if key.modifiers.contains(KeyModifiers::SUPER) {
                     self.prompt_input.cursor = 0;
                 } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.prompt_input.move_word_backward();
@@ -1465,7 +1499,11 @@ impl App {
                 self.sync_legacy_prompt_fields();
             }
             KeyCode::Right => {
-                if key.modifiers.contains(KeyModifiers::SUPER) {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    // jcode textarea selection: anchor + extend right.
+                    self.prompt_input.selection_begin_or_extend();
+                    self.prompt_input.move_right();
+                } else if key.modifiers.contains(KeyModifiers::SUPER) {
                     self.prompt_input.cursor = self.prompt_input.text.len();
                 } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.prompt_input.move_word_forward();
@@ -1630,6 +1668,13 @@ impl App {
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_up(width);
+                } else if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    // jcode textarea selection in normal mode: anchor + extend
+                    // up one visual row (vim Visual keeps its own path above).
+                    self.prompt_input.selection_begin_or_extend();
+                    let area = self.last_input_area.get();
+                    let width = area.width.saturating_sub(4) as usize;
+                    self.prompt_input.move_visual_up(width);
                 } else if !self.prompt_input.suggestions.is_empty()
                     && (self.prompt_input.text.starts_with('/')
                         || self.prompt_input.has_active_file_ref())
@@ -1661,6 +1706,13 @@ impl App {
                     )
                 {
                     // Shift+Down in visual mode: extend selection down
+                    let area = self.last_input_area.get();
+                    let width = area.width.saturating_sub(4) as usize;
+                    self.prompt_input.move_visual_down(width);
+                } else if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    // jcode textarea selection in normal mode: anchor + extend
+                    // down one visual row (vim Visual keeps its own path above).
+                    self.prompt_input.selection_begin_or_extend();
                     let area = self.last_input_area.get();
                     let width = area.width.saturating_sub(4) as usize;
                     self.prompt_input.move_visual_down(width);

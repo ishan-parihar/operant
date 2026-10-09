@@ -148,6 +148,11 @@ pub struct PromptInputState {
     pub undo_stack: Vec<(String, usize)>,
     /// Visual mode selection anchor (byte offset).
     pub visual_anchor: Option<usize>,
+    /// Shift-selection anchor for the composer text area (jcode textarea
+    /// selection, 2026-10-09 visual audit): `Some` while a Shift+arrow
+    /// selection is being extended; the cursor is the moving end. Byte
+    /// offset into `text`. Cleared by any non-extending edit key.
+    pub sel_anchor: Option<usize>,
     /// Last f/F/t/T find for `;`/`,` repeat.
     pub last_find: Option<(VimFindKind, char)>,
     /// Named registers: key is the register name char (a-z, 0-9, etc.), value is text.

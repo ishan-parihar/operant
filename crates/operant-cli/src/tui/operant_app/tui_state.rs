@@ -141,6 +141,11 @@ pub trait TuiState {
     // ---- Input ----
     fn input(&self) -> &str;
     fn cursor_pos(&self) -> usize;
+    /// [operant extension] Active composer shift-selection as normalized
+    /// byte offsets, if any (jcode textarea selection). Default: none.
+    fn input_selection(&self) -> Option<(usize, usize)> {
+        None
+    }
     fn is_processing(&self) -> bool;
     fn queued_messages(&self) -> &[String];
     fn interleave_message(&self) -> Option<&str>;

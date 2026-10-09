@@ -197,6 +197,10 @@ impl TuiState for App {
         self.prompt_input.cursor
     }
 
+    fn input_selection(&self) -> Option<(usize, usize)> {
+        self.prompt_input.selection_range()
+    }
+
     fn is_processing(&self) -> bool {
         self.is_streaming
     }
