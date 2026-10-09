@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-711 — feed class live: channel/group posts reach the org's
+  seats (gap 5 phase 2's feed sources):** `ContextClass::Feed` joins the
+  four aspect classes — captured at route time, before the admin gate
+  (`MessageHandler::record_feed`, no-op default so `handle`'s contract is
+  untouched), rendered per-seat under `feed_quota` with
+  `feed_seat_map` routing (unmapped chats default to `premiere`).
+  Telegram `channel_post` updates now parse (author = channel title) and
+  are feed-ONLY: recorded, never turned, never answered into the
+  channel. Group messages record as feed AND keep their existing
+  turn behavior. Regression pins: channel-post parse, feed capture →
+  seat isolation → watermark advance, and the
+  capture-before-the-gate routing contract.
 - **iter-697 — Wave-4 ordered preflight ladder:** `build_messages` now
   runs explicit ordered rungs when the estimate exceeds the 80% preflight
   threshold — TOC/trim (`fast_trim_tool_results`, its first production

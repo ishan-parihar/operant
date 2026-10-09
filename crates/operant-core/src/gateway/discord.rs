@@ -502,6 +502,7 @@ pub(crate) fn parse_discord_message(
         raw: json.clone(),
         timestamp,
         is_group_chat: guild_id,
+        is_channel_post: false,
         thread_id: None,
         media_urls: Vec::new(),
     })

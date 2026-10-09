@@ -143,6 +143,7 @@ impl PlatformAdapter for WhatsAppAdapter {
                 username: name.to_string(),
                 content: text.to_string(),
                 is_group_chat: false,
+                is_channel_post: false,
                 timestamp: chrono::Utc::now().timestamp(),
                 thread_id: None,
                 media_urls: Vec::new(),

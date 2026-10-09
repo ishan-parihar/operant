@@ -112,6 +112,7 @@ impl PlatformAdapter for SmsAdapter {
             username: from.to_string(),
             content: body.to_string(),
             is_group_chat: false,
+            is_channel_post: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
             media_urls: Vec::new(),

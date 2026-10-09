@@ -239,6 +239,7 @@ impl PlatformAdapter for EmailAdapter {
             username: from.to_string(),
             content: format!("Subject: {}\n\n{}", subject, body),
             is_group_chat: false,
+            is_channel_post: false,
             timestamp: chrono::Utc::now().timestamp(),
             thread_id: None,
             media_urls: Vec::new(),

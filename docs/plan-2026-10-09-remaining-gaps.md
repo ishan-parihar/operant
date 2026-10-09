@@ -46,7 +46,7 @@
   author `ishan_parihar`; the metering warn is gone post-restart; the
   `premiere|dm` watermark advanced.
 
-## 3. Feed class: channel/group posts → `context_items` — EXECUTION PLAN (M)
+## 3. Feed class: channel/group posts → `context_items` — Slices A/B/D EXECUTED iter-709; Slice C (live E2E) gated on the owner adding the bot to a channel
 
 **State change since first filing**: inbound is live end-to-end
 (iter-704). The gateway's poll is the single `getUpdates` consumer —

@@ -187,9 +187,16 @@ pub struct ContextInjectionSettings {
     pub total_char_cap: usize,
     /// Per-aspect char quotas (the MEMORY.md budget model, per aspect).
     pub dm_quota: usize,
+    /// Feed sources (channel/group posts captured at route time,
+    /// plan-2026-10-09 §3): per-seat char quota, same budget model.
+    pub feed_quota: usize,
     pub global_quota: usize,
     pub dept_quota: usize,
     pub self_quota: usize,
+    /// Feed seat routing: platform chat id → the seat whose feed it is.
+    /// Unmapped chats default to `premiere` (the operator's default
+    /// binding, same rule as the DM tap).
+    pub feed_seat_map: std::collections::HashMap<String, String>,
     /// Recency decay half-lives (hours): feeds go stale faster than DMs.
     pub recency_halflife_hours_feed: f64,
     pub recency_halflife_hours_dm: f64,
@@ -207,9 +214,11 @@ impl Default for ContextInjectionSettings {
             enabled: true,
             total_char_cap: 2000,
             dm_quota: 800,
+            feed_quota: 500,
             global_quota: 500,
             dept_quota: 400,
             self_quota: 300,
+            feed_seat_map: std::collections::HashMap::new(),
             recency_halflife_hours_feed: 24.0,
             recency_halflife_hours_dm: 168.0,
             weight_recency: 1.0,

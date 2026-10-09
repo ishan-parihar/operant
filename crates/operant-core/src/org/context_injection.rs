@@ -72,6 +72,9 @@ pub const CONTEXT_ITEMS_SCHEMA: &str = r#"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextClass {
     Dm,
+    /// Channel/group posts captured at route time (gap 5 phase 2's feed
+    /// sources — the schema's long-reserved non-DM class).
+    Feed,
     Global,
     Dept,
     Self_,
@@ -81,6 +84,7 @@ impl ContextClass {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Dm => "dm",
+            Self::Feed => "feed",
             Self::Global => "global",
             Self::Dept => "dept",
             Self::Self_ => "self",
@@ -216,6 +220,11 @@ pub struct ContextInjector {
 }
 
 impl ContextInjector {
+    /// The effective settings (feed seat routing reads this).
+    pub fn settings(&self) -> &crate::config::ContextInjectionSettings {
+        &self.settings
+    }
+
     /// Open (idempotently creating the watermark table) against the app
     /// db's ORG SIBLING — `worklog_db_path`/`org_db_path`'s "one sibling
     /// kanban file" rule: the worklog, the employees registry, and the
@@ -354,6 +363,7 @@ impl ContextInjector {
         let mut items: Vec<ContextItem> = Vec::new();
         for class in [
             ContextClass::Dm,
+            ContextClass::Feed,
             ContextClass::Global,
             ContextClass::Dept,
             ContextClass::Self_,
@@ -389,6 +399,19 @@ impl ContextInjector {
     /// inbound DM addressed to a seat — the gateway taps every inbound
     /// message here. Fail-open: a failed capture never fails the turn.
     pub fn record_inbound_dm(&self, seat_id: &str, author: &str, text: &str) {
+        self.record_item(ContextClass::Dm, seat_id, author, text, "inbound DM");
+    }
+
+    /// Phase 2 feed sources (plan-2026-10-09 §3): record a channel/group
+    /// post routed to a seat — the gateway taps these at route time, before
+    /// any turn or admin gate. Same fail-open contract as the DM tap.
+    pub fn record_feed_item(&self, seat_id: &str, author: &str, text: &str) {
+        self.record_item(ContextClass::Feed, seat_id, author, text, "feed post");
+    }
+
+    /// Shared capture body: one INSERT into `context_items`, fail-open on
+    /// every error — a failed capture must never fail a turn or a route.
+    fn record_item(&self, class: ContextClass, seat_id: &str, author: &str, text: &str, what: &str) {
         if !self.settings.enabled {
             return;
         }
@@ -400,8 +423,9 @@ impl ContextInjector {
             return;
         }
         if let Err(e) = conn.execute(
-            "INSERT INTO context_items (class, author, ts, content_hash, seat_hint, text)\n             VALUES ('dm', ?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO context_items (class, author, ts, content_hash, seat_hint, text)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
+                class.as_str(),
                 author,
                 chrono::Utc::now().timestamp(),
                 content_hash(text) as i64,
@@ -409,7 +433,7 @@ impl ContextInjector {
                 text
             ],
         ) {
-            tracing::warn!("context injection: inbound DM capture failed: {e} (fail-open)");
+            tracing::warn!("context injection: {what} capture failed: {e} (fail-open)");
         }
     }
 
@@ -429,6 +453,30 @@ impl ContextInjector {
                     .prepare(
                         "SELECT author, ts, text FROM context_items \
                          WHERE class = 'dm' AND seat_hint = ?1 AND ts > ?2 \
+                         ORDER BY ts DESC LIMIT 20",
+                    )
+                    .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
+                let rows = stmt
+                    .query_map(params![seat_id, watermark], |row| {
+                        Ok(ContextItem {
+                            class,
+                            author: row.get(0)?,
+                            ts: row.get(1)?,
+                            text: row.get(2)?,
+                            hash: 0,
+                        })
+                    })
+                    .map_err(|e| Error::Agent(format!("context injection: query: {e}")))?;
+                Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            }
+            // Phase 2 feed sources: channel/group posts captured at route
+            // time (plan-2026-10-09 §3). Same durable landing as DMs — the
+            // Bot API gives the poll one look at each post.
+            ContextClass::Feed => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT author, ts, text FROM context_items \
+                         WHERE class = 'feed' AND seat_hint = ?1 AND ts > ?2 \
                          ORDER BY ts DESC LIMIT 20",
                     )
                     .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
@@ -559,6 +607,7 @@ impl ContextInjector {
     ) -> Result<()> {
         for class in [
             ContextClass::Dm,
+            ContextClass::Feed,
             ContextClass::Global,
             ContextClass::Dept,
             ContextClass::Self_,
@@ -592,6 +641,7 @@ impl ContextInjector {
         let s = &self.settings;
         let quota_for = |class: ContextClass| match class {
             ContextClass::Dm => s.dm_quota,
+            ContextClass::Feed => s.feed_quota,
             ContextClass::Global => s.global_quota,
             ContextClass::Dept => s.dept_quota,
             ContextClass::Self_ => s.self_quota,
@@ -621,6 +671,7 @@ impl ContextInjector {
         let mut used_total = 0usize;
         for class in [
             ContextClass::Dm,
+            ContextClass::Feed,
             ContextClass::Global,
             ContextClass::Dept,
             ContextClass::Self_,
@@ -686,6 +737,7 @@ impl ContextInjector {
 fn class_header(class: ContextClass) -> &'static str {
     match class {
         ContextClass::Dm => "DMs addressed to you",
+        ContextClass::Feed => "Channel feed",
         ContextClass::Global => "Global feed (directives + org broadcasts)",
         ContextClass::Dept => "Department feed",
         ContextClass::Self_ => "Your previous cycles",
@@ -987,6 +1039,36 @@ mod tests {
         // The watermark holds: a consumed DM never re-renders.
         assert_eq!(
             injector.render_section("identity-warden", None, "PROMPT", &[]),
+            "PROMPT"
+        );
+    }
+
+    #[test]
+    fn captured_feed_post_reaches_its_seat_and_not_others() {
+        let (_dir, injector) = db_with_worklog();
+        injector.record_feed_item(
+            "premiere",
+            "Engineering Notes",
+            "channel post: v0.2.2 release cut is live",
+        );
+        let premiere = injector.render_section("premiere", None, "PROMPT", &[]);
+        assert!(
+            premiere.contains("v0.2.2 release cut"),
+            "the captured feed post must reach its seat: {premiere}"
+        );
+        assert!(
+            premiere.contains("Channel feed"),
+            "it renders under the Feed class: {premiere}"
+        );
+        assert!(
+            !injector
+                .render_section("dispatcher", None, "PROMPT", &[])
+                .contains("v0.2.2 release cut"),
+            "another seat's feed must not leak"
+        );
+        // The watermark holds: a consumed feed post never re-renders.
+        assert_eq!(
+            injector.render_section("premiere", None, "PROMPT", &[]),
             "PROMPT"
         );
     }

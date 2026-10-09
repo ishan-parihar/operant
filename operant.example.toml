@@ -551,9 +551,13 @@ mode = "soft"
 enabled = true
 total_char_cap = 2000
 dm_quota = 800
+feed_quota = 500
 global_quota = 500
 dept_quota = 400
 self_quota = 300
+# Feed seat routing (plan-2026-10-09 §3): platform chat id -> seat whose
+# feed it is. Unmapped chats default to "premiere".
+# feed_seat_map = { "-1001234567890" = "premiere" }
 recency_halflife_hours_feed = 24.0
 recency_halflife_hours_dm = 168.0
 weight_recency = 1.0

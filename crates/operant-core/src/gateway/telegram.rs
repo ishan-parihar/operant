@@ -1442,13 +1442,40 @@ impl TelegramAdapter {
     /// Parse a Telegram update into an IncomingMessage.
     /// This is the same logic used by handle_update but callable without a trait object.
     pub(crate) fn parse_update(update: serde_json::Value) -> Result<Option<IncomingMessage>> {
-        let message = match update.get("message") {
-            Some(m) => m,
-            None => return Ok(None),
+        // Channel posts (plan-2026-10-09 §3): a `channel_post` update is the
+        // same body shape as `message` minus `from` — the channel itself is
+        // the author. Marked `is_channel_post` so routing captures it as a
+        // feed row and NEVER turns (a channel broadcast is not a prompt).
+        let is_channel_post = update.get("channel_post").is_some();
+        let message = if is_channel_post {
+            match update.get("channel_post") {
+                Some(m) => m,
+                None => return Ok(None),
+            }
+        } else {
+            match update.get("message") {
+                Some(m) => m,
+                None => return Ok(None),
+            }
         };
 
-        // Filter out messages from bots
-        if let Some(from) = message.get("from")
+        // Channel posts have no `from`; the channel title is the author
+        // label. Bot-author filtering keeps applying to chat messages only.
+        let channel_author = if is_channel_post {
+            message
+                .get("chat")
+                .and_then(|c| c.get("title"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("channel")
+                .to_string()
+        } else {
+            String::new()
+        };
+
+        // Filter out messages from bots (chat messages only — channel
+        // posts carry no `from`)
+        if !is_channel_post
+            && let Some(from) = message.get("from")
             && from
                 .get("is_bot")
                 .and_then(|b| b.as_bool())
@@ -1534,13 +1561,27 @@ impl TelegramAdapter {
         Ok(Some(
             IncomingMessage::new(
                 "telegram",
-                from.and_then(|f| f.get("id"))
-                    .and_then(|id| id.as_i64())
-                    .map(|i| i.to_string())
-                    .unwrap_or_default(),
-                from.and_then(|f| f.get("username"))
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("unknown"),
+                if is_channel_post {
+                    // Channel posts are anonymous broadcasts — the chat id
+                    // carries the routing; the author label is the title.
+                    chat.get("id")
+                        .and_then(|id| id.as_i64())
+                        .map(|i| i.to_string())
+                        .unwrap_or_default()
+                } else {
+                    from.and_then(|f| f.get("id"))
+                        .and_then(|id| id.as_i64())
+                        .map(|i| i.to_string())
+                        .unwrap_or_default()
+                },
+                if is_channel_post {
+                    channel_author
+                } else {
+                    from.and_then(|f| f.get("username"))
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                },
                 chat.get("id")
                     .and_then(|id| id.as_i64())
                     .map(|i| i.to_string())
@@ -1551,6 +1592,7 @@ impl TelegramAdapter {
                 chat.get("type").and_then(|t| t.as_str()),
                 Some("group" | "supergroup")
             ))
+            .with_channel_post(is_channel_post)
             .with_raw(update)
             .with_thread_id(thread_id),
         ))
@@ -1617,6 +1659,32 @@ mod tests {
     /// near 1, so an inherited cursor in the millions silently skips every
     /// inbound update. The path must be keyed by bot id, and the derivation
     /// must be a pure function of that id.
+    /// A channel_post parses as a feed-only message: marked
+    /// `is_channel_post`, authored by the channel title, no `from` needed.
+    /// Routing must capture it as a feed row and NEVER turn or reply.
+    #[test]
+    fn channel_post_parses_as_feed_only_message() {
+        let update = serde_json::json!({
+            "channel_post": {
+                "chat": {
+                    "id": -1002220508783i64,
+                    "title": "Integral Educator",
+                    "type": "channel"
+                },
+                "text": "new video is up",
+                "message_id": 77
+            }
+        });
+        let msg = super::TelegramAdapter::parse_update(update)
+            .expect("parse ok")
+            .expect("must produce a message");
+        assert!(msg.is_channel_post, "must be marked feed-only");
+        assert!(!msg.is_group_chat);
+        assert_eq!(msg.username, "Integral Educator", "author = channel title");
+        assert_eq!(msg.channel_id, "-1002220508783");
+        assert_eq!(msg.content, "new video is up");
+    }
+
     #[test]
     fn offset_paths_are_keyed_per_bot() {
         let a1 = get_offset_path_for("8916661121");

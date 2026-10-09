@@ -114,6 +114,10 @@ pub struct IncomingMessage {
     pub timestamp: i64,
     /// Whether this message is from a group chat
     pub is_group_chat: bool,
+    /// A Telegram `channel_post` (plan-2026-10-09 §3): a broadcast the
+    /// gateway captures as a feed row and NEVER answers — no turn, no
+    /// "not authorized" reply into the channel.
+    pub is_channel_post: bool,
     /// Forum thread/topic ID (Telegram-specific)
     pub thread_id: Option<i64>,
     /// Locally-cached paths for attachments on this message (photos,
@@ -145,6 +149,7 @@ impl IncomingMessage {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
             is_group_chat: false,
+            is_channel_post: false,
             thread_id: None,
             media_urls: Vec::new(),
         }
@@ -159,6 +164,12 @@ impl IncomingMessage {
     /// Mark as group chat message
     pub fn with_group_chat(mut self, is_group: bool) -> Self {
         self.is_group_chat = is_group;
+        self
+    }
+
+    /// Mark as a channel post (feed-only routing — never answered)
+    pub fn with_channel_post(mut self, is_post: bool) -> Self {
+        self.is_channel_post = is_post;
         self
     }
 

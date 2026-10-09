@@ -341,6 +341,7 @@ impl PlatformAdapter for WebhookAdapter {
                                                     username: user,
                                                     content,
                                                     is_group_chat: true,  // Slack events come from channels by default
+                                                    is_channel_post: false,
                                                     timestamp: ts,
                                                     thread_id: event.get("thread_ts")
                                                         .and_then(|t| t.as_str())
@@ -371,6 +372,7 @@ impl PlatformAdapter for WebhookAdapter {
                                                     username: change.get("value").and_then(|val| val.get("contacts")).and_then(|c| c.as_array()).and_then(|a| a.first()).and_then(|c| c.get("profile")).and_then(|p| p.get("name")).and_then(|n| n.as_str()).unwrap_or(&from).to_string(),
                                                     content: text,
                                                     is_group_chat: false,
+                                                    is_channel_post: false,
                                                     timestamp: msg.get("timestamp").and_then(|t| t.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or_else(|| chrono::Utc::now().timestamp()),
                                                     thread_id: None,
                                                     media_urls: Vec::new(),
@@ -406,6 +408,7 @@ impl PlatformAdapter for WebhookAdapter {
                             username: "Webhook".to_string(),
                             content,
                             is_group_chat: false,
+                            is_channel_post: false,
                             timestamp: chrono::Utc::now().timestamp(),
                             thread_id: None,
                             media_urls: Vec::new(),

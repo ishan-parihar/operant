@@ -834,6 +834,23 @@ struct GatewayMessageHandler {
 
 #[async_trait::async_trait]
 impl MessageHandler for GatewayMessageHandler {
+    /// Feed capture (plan-2026-10-09 §3): route a channel/group post to its
+    /// seat's feed. Seat = `feed_seat_map[channel]`, default `premiere` —
+    /// same default as the DM tap's employee binding. Fail-open on every
+    /// error: a failed feed row must never break routing.
+    fn record_feed(&self, message: &IncomingMessage) {
+        let Some(injector) = self.context_injection.as_ref() else {
+            return;
+        };
+        let seat = injector
+            .settings()
+            .feed_seat_map
+            .get(&message.channel_id)
+            .cloned()
+            .unwrap_or_else(|| "premiere".to_string());
+        injector.record_feed_item(&seat, &message.username, &message.content);
+    }
+
     async fn handle(&self, message: IncomingMessage) -> operant_core::Result<OutgoingMessage> {
         // (iter-161: Check for pending user-question reply before routing
         // to the agent. If there's a pending clarify() question for this

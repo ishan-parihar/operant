@@ -68,6 +68,13 @@ pub struct Gateway {
 pub trait MessageHandler: Send + Sync {
     /// Handle an incoming message
     async fn handle(&self, message: IncomingMessage) -> Result<OutgoingMessage>;
+
+    /// Record a feed item (channel/group post captured at route time,
+    /// plan-2026-10-09 §3). No-op default: handlers without a context
+    /// injector (tests, harnesses) stay untouched — the feed branch in
+    /// `route_message` calls this BEFORE the admin gate and never depends
+    /// on the reply. `handle`'s contract is deliberately NOT widened.
+    fn record_feed(&self, _message: &IncomingMessage) {}
 }
 
 impl Gateway {
@@ -351,6 +358,22 @@ impl Gateway {
             content = %message.content,
             "Routing message"
         );
+
+        // Feed capture (plan-2026-10-09 §3) — BEFORE the admin gate at all
+        // costs: channel/group posts arrive from arbitrary users, and the
+        // gate below would both miss them (capture-in-handle only ever sees
+        // the operator's own posts) and answer "not authorized" INTO the
+        // channel. Channel posts are feed-ONLY: record, no turn, no reply.
+        // Group messages record AND fall through — the operator's
+        // group-command surface keeps its existing turn behavior.
+        if message.is_channel_post || message.is_group_chat {
+            if let Some(handler) = &self.message_handler {
+                handler.record_feed(&message);
+            }
+            if message.is_channel_post {
+                return Ok(None);
+            }
+        }
 
         // Track session in persistent store if available. Thread id is
         // propagated so forum topics / threads get their own persistent
@@ -1076,6 +1099,56 @@ mod tests {
     /// (simulates a long-running agent turn).
     struct BlockingEchoHandler {
         gate: Option<Arc<tokio::sync::Notify>>,
+    }
+
+    /// Feed-capture contract (plan-2026-10-09 §3): a channel post is
+    /// recorded BEFORE the admin gate — a non-admin poster would be refused
+    /// by the gate, and capture-in-`handle` would never see the post — and
+    /// the post NEVER turns or draws a reply into the channel. A group
+    /// message records AND still falls through to normal routing.
+    #[tokio::test]
+    async fn channel_post_captures_feed_and_never_turns_or_replies() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingHandler {
+            feeds: AtomicUsize,
+            turns: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl MessageHandler for CountingHandler {
+            async fn handle(&self, _message: IncomingMessage) -> Result<OutgoingMessage> {
+                self.turns.fetch_add(1, Ordering::SeqCst);
+                Ok(OutgoingMessage::new("c", "ok"))
+            }
+            fn record_feed(&self, _message: &IncomingMessage) {
+                self.feeds.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let handler = Arc::new(CountingHandler {
+            feeds: AtomicUsize::new(0),
+            turns: AtomicUsize::new(0),
+        });
+        let mut config = GatewayConfig::default();
+        config.admins = vec!["admin".to_string()];
+        let gw = Arc::new(Gateway::new(config).with_handler(handler.clone()));
+
+        // Channel post from a NON-ADMIN: capture must happen before the
+        // gate; no turn; no reply (None, not the "not authorized" message).
+        let post = IncomingMessage::new("telegram", "anon", "Some Channel", "-1001", "daily update")
+            .with_channel_post(true);
+        let out = gw.route_message(post).await.expect("route ok");
+        assert!(out.is_none(), "channel post must never produce a reply: {out:?}");
+        assert_eq!(handler.feeds.load(Ordering::SeqCst), 1);
+        assert_eq!(handler.turns.load(Ordering::SeqCst), 0);
+
+        // Group message from the ADMIN: recorded as feed AND still turns.
+        let group = IncomingMessage::new("telegram", "admin", "alice", "g1", "run the audit")
+            .with_group_chat(true);
+        let out = gw.route_message(group).await.expect("route ok");
+        assert!(out.is_some(), "the admin's group command keeps its turn");
+        assert_eq!(handler.feeds.load(Ordering::SeqCst), 2);
+        assert_eq!(handler.turns.load(Ordering::SeqCst), 1);
     }
 
     #[async_trait::async_trait]
