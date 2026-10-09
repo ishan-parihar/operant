@@ -463,6 +463,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-731 — P3-10 (2026-10-09 live-audit plan): DNS failures say what
+  they are; the live config migrates off the retired `igs` name.** The
+  SSRF pre-flight's fail-closed DNS arm surfaced raw resolver text
+  ("Tool error: URL safety check failed: IO error: failed to lookup
+  address information: Name or service not known") — reproduced live
+  when `web_extract` hit a host-DNS-dead domain; the message read like an
+  operant bug when it was the environment. The arm now names the actual
+  condition (hostname does not resolve from this host, check
+  network/VPN/DNS; the check stays fail-closed). Separately, the live
+  user config carried `preferred_provider = "igs"` (the retired name,
+  working only through the iter-716 alias fallback) — migrated to
+  `"sourcehound"` on the host (backup: `operant.toml.bak-20261009`), so
+  the native chain is the configured default and not a fallback.
+  Suite note: the shared tree carries peer in-flight `config.rs`/agent
+  WIP that fails its own `agent_block_parses_guardrail…` test locally;
+  origin/main proves green in a clean worktree — this delta
+  (`security.rs` message arm only) is disjoint from that break.
+
 - **iter-730 — P1-7 (2026-10-09 live-audit plan): the rotating 💡 hint
   rail is off by default, and the corpus pins the prompt-entry fade.**
   The vendored hint widget (jcode's info_widget_tips) rendered rotating
