@@ -49,7 +49,7 @@ provider 503s cleared. If turns still 503 → provider-side; automatic
 retry next day. A crashed pair is a missed pair, never a doubled one
 (stamp-first, at-most-once — pinned).
 
-## 3. Three small code debts — one iteration, all in operant-core (M)
+## 3. Three small code debts — FIXED iter-720 `3429363f` (deployed, md5-verified)
 
 1. **`context_items(ts)` index** — `CONTEXT_ITEMS_SCHEMA` has none; the
    per-capture `DELETE WHERE ts < ?` is a full scan (quadratic on an
@@ -98,6 +98,20 @@ obsolete. Probes stay getMe/getChat only — the daemon's poll owns
 
 ## Execution order
 
-Item 3 (one code iteration, then deploy) → item 1 the moment the owner
-adds the bot → item 2 check after 09:30Z → item 4 only if 409s recur and
+Item 3 landed (iter-720, deployed) → item 1 the moment the owner adds
+the bot → item 2 check after 09:30Z → item 4 only if 409s recur and
 block inbound. Items 5+6 wait on the owner.
+
+## Owner-gated blockers (explicit)
+
+1. **@ip_zeroclaw_bot must be added as channel/group ADMIN** — without
+   it the bot receives no `channel_post` updates at all (two test posts:
+   no handler line, no offset advance). Unblocks item 1.
+2. **Discord/Slack bot tokens or an explicit deferral** — item 5.
+3. **`packet-e-wt-wip-20261007.tar.gz` deletion sign-off**.
+4. **Socialization spend authorization** — the daily sessions are
+   armed and will consume up to 7 pairs × 3 turns of provider tokens
+   per run once the 503s clear; pause with `enabled=false` if unwanted.
+5. **Provider capacity** — every socialization turn on 2026-10-09
+   failed on `resource_pressure` 503s from the configured endpoint;
+   until capacity clears, sessions and crons will keep flaking.
