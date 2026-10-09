@@ -495,21 +495,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resets the no-progress streak.
 
   Tests (mutation-proven — reverting either half turns its test red):
-  `alternating_tools_with_identical_outputs_escalate_as_no_progress`
-  (warn + skip classify NoProgress; a fresh-args call skipped by the
-  backstop STAYS NoProgress where the old path would reclassify
-  ping-pong), `re_serialized_identical_results_share_a_fingerprint`
-  (five byte-different serializations of one logical JSON warn at the
-  5th recurrence), and the gate's negative
-  `alternating_tools_with_distinct_outputs_stay_ping_pong` (each tool
-  repeating its OWN output keeps the ping-pong classification — the
-  per-tool recurrence rungs still catch it at their own 5/6).
-  tool_guardrails suite 45/45 (was 42); operant-core lib suite
-  2484 passed / 1 failed — the failure is the peer's in-flight WIP
-  test (`agent_block_parses_guardrail_exempts…`), documented in their
-  iter-731 body and green at origin/main; this delta adds zero
-  failures. Clippy clean on the touched file (the initial
-  collapsible-if was collapsed to the let-chain form).
+  `alternating_tools_with_identical_outputs_escalate_as_no_progress`,
+  `re_serialized_identical_results_share_a_fingerprint`, and the
+  gate's negative
+  `alternating_tools_with_distinct_outputs_stay_ping_pong`.
+  tool_guardrails suite 45/45 (was 42); operant-core lib suite 2484
+  passed / 1 failed — the failure is the peer's in-flight WIP test,
+  documented in their iter-731 body and green at origin/main; this
+  delta adds zero failures. Clippy clean on the touched file.
 
 - **iter-738 — skills/meta-skill-creator: registry.py `resolve()` now falls
   back to the root-relative candidate only when the file-relative one does
@@ -550,21 +543,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **iter-746 — P4-3: the todo list is a live surface.** The audit's
-  "half-assed implementation" verdict, closed: the tool, the renderers, the
-  types and the `/todos` registration all existed, but the event carried
-  counts only and no store ever held the items — the TUI could render
-  nothing but "Todos: 0/2 done". The ToolComplete(todo) path now parses
-  the full list from the tool's result JSON (the same source the counts
-  event reads) into `App.todos` and builds the TodoCardPayload, the
-  info-widget Todos band and the pinned transcript card render it live
-  (verified live: "✓ fix scroll / ○ fix todos" card with progress pips),
-  and `/todos` toggles the pinned card band. The vendored TodoItem gains a
-  [port-adaptation] serde default for `priority` (upstream always emits
-  one; operant's tool result names only id/content/status). Unit
-  regression: todo_tool_result_populates_the_live_store_and_todos_command_
-  toggles_the_band. The counts one-liner stays as the status-line signal.
-  Label note: peer took 745 mid-flight; this ships as 746.
+- **iter-744 — P4-2.5: a retried stream no longer duplicates the reply.**
+  Root cause (v2 outline, live-audit): `AgentEvent::RetryScheduled` re-armed
+  the turn but never cleared `streaming_text`/`streaming_thinking` — the
+  died attempt's partial text stayed buffered, and since the provider
+  restarts the response from its top, the retry's first delta APPENDED to
+  the partial: the user watched the reply render twice. On this provider
+  (stream-death flake is the org's known condition) that is the most-hit
+  duplication path in the field. The fix discards the died attempt's text
+  at the retry boundary; the turn stays live (`is_streaming` untouched —
+  mid-turn retry display semantics are pinned by an existing test). Unit
+  regression: retry_must_not_append_the_resurrected_stream_to_the_died_
+  partial (partial -> RetryScheduled -> full text asserts replace, not
+  append). Corpus delta: zero (the 4 journey/skills drifts pre-date this
+  change and reproduce at origin/main without it).
+
+- **iter-743 — P4-1 follow-up: ghost-scroll-offset clamp + live scroll
+  geometry in the F12 debug overlay.** The reflow-anchor growth correction
+  counts the streaming bubble's rows, but the flush boundary (bubble ->
+  committed message) collapses them: the reader's offset kept rows that no
+  longer exist (live-measured: offset 355 against a 15-row max after one
+  streamed turn — the view parked correctly since the render clamps its own
+  paint, but PageDown had to walk 34 ghost rows home). `reconcile_scroll_-
+  anchor` now clamps the STATE to the frame's live max (0 = no frame
+  rendered, so unit tests without a renderer are untouched) and voids the
+  pin. The F12 debug overlay gains Scroll (offset / max / total wrapped
+  lines) and Follow (tail|paused + resolved) rows — the live instrument the
+  P4-1 audit said it needed: the dead ladder was diagnosed with ten blind
+  probes where these two lines would have named the override immediately.
+  Unit regression: reconcile_clamps_ghost_offset_after_the_flush_shrinks_-
+  the_transcript (offset 355 + live max 15 -> 15). Live: PgUp x2 moves the
+  viewport to the transcript top with overflow (verified on the instrumented
+  build); corpus delta: zero (the 4 journey/skills drifts pre-date this
+  change and reproduce at origin/main without it).
+
+- **iter-741 — docs: jcode-parity gap outline v2 — root causes pinned from
+  source.** Deep audit pass over the four still-live complaints: (1) todo
+  one-liner — AgentEvent::TodoUpdated carries counts only while the full list
+  JSON sits in result.content; jcode's TodoEvent carries the whole
+  Vec<TodoItem> (jcode-base/src/bus.rs:46); store + InfoWidgetData feed +
+  /todos handler are the missing wiring. (2) duplicated streaming —
+  RetryScheduled never clears streaming_text/is_streaming
+  (tui/app/agent_events.rs:472), so a died attempt's partial text appends the
+  retry's full re-stream on this stream-death-prone provider; one-line fix +
+  retry-dedup corpus scenario. (3) scroll — jcode confirmed alt-screen
+  (ratatui-0.30.2 init.rs:400 EnterAlternateScreen via src/cli/terminal.rs:353
+  ratatui::init); "integrated" scroll = an internal ladder that never dies
+  (prompt jumps, bookmarks, tail catch-up, resize anchors) + optional
+  handterm host scrollbar; native-scrollback is a distinct P5 wave if the
+  owner still wants it after the evidence. (4) thinking — jcode default
+  show_thinking=true + /thinking-display off|full|current + /effort; operant
+  render chain complete, kilo emits no reasoning under 4 flag probes
+  (thinking.type, reasoning_effort, 3 models). Order: P4-1 scroll seam ->
+  P4-2.5 retry dedup -> P4-3 todo -> P4-2 notifications -> P4-4 thinking.
+
+- **iter-740 — docs: second live-audit gap outline (jcode-parity v1).**
+  First-hand tmux feedback loop on the iter-731 deploy: the scroll ladder is
+  verifiably dead in the field (8x PageUp / Up / Alt+Up / Ctrl+Up, zero
+  transcript movement, content proven above the fold, F12 proves keys arrive,
+  suite pins the state machine -> render-seam loss, zero scroll-key corpus
+  coverage); notification surfaces still stack (error modal + transcript rows
+  + margin box + every-response banner); selection paints whole-frame chrome
+  (442 chars / 17 lines for a 5-line conversation); the todo data path is
+  deliberately stubbed while tool/renderers/commands all exist; thinking is
+  provider-absent (3 raw SSE probes: no reasoning_content from kilo
+  small-stack / deepseek-v4.1-flash / glm-5.3-flash even with the thinking
+  flag). REFUTES the old P2-8 premise: jcode is also alt-screen
+  (src/cli/terminal.rs:353 ratatui::init()) - there is no native-scrollback
+  port; the real work is waves P4-1..P4-6 (scroll fix first).
 
 - **iter-737 — outline v6 §1 row 2 (NEXT SLICE) LANDED: oversized tool
   results offload to a durable workspace artifact with a TOC stub.**
