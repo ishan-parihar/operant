@@ -425,6 +425,28 @@ pub struct BehaviorSettings {
     #[serde(default)]
     pub fallback_models: Vec<String>,
 
+    /// Tool names exempt from the guardrail rungs (ping-pong / no-progress /
+    /// progress-oscillation — `ToolGuardrailTracker::add_exempt_tools`,
+    /// hermes `guardrail_exempt_tools` parity). Exact names or `*`/`?`
+    /// globs (e.g. `"read_*"`). Empty by default: every tool is guarded.
+    /// Flows to the tracker via `AgentConfig::guardrail_exempt_tools`.
+    #[serde(default)]
+    pub guardrail_exempt_tools: Vec<String>,
+
+    /// Guardian-LLM approval arm (iter-713) as a config-file DEFAULT:
+    /// applies only when the `OPERANT_GUARDIAN_LLM` env var is UNSET —
+    /// the env var (and the `with_guardian_llm` builder) still win when
+    /// present. Off by default.
+    #[serde(default)]
+    pub guardian_llm: bool,
+
+    /// Micro-compaction (iter-714) as a config-file DEFAULT: applies only
+    /// when the `OPERANT_MICRO_COMPACTION` env var is UNSET — the env var
+    /// (and the `with_micro_compaction` builder) still win when present.
+    /// Off by default.
+    #[serde(default)]
+    pub micro_compaction: bool,
+
     /// Whether to automatically fall back to `fallback_models` on provider errors.
     /// Default: `true`. Set to `false` to disable fallback behavior entirely.
     #[serde(default = "default_fallback_on_errors")]
@@ -570,6 +592,9 @@ impl Default for BehaviorSettings {
             max_tool_result_share: default_max_tool_result_share(),
             max_consecutive_tool_only: 90,
             fallback_models: Vec::new(),
+            guardrail_exempt_tools: Vec::new(),
+            guardian_llm: false,
+            micro_compaction: false,
             fallback_on_errors: true,
             memory_nudge_interval: 10,
             creation_nudge_interval: 10,
@@ -2331,6 +2356,41 @@ wonderful_unknown_key = 42
             config.socialization.pairs,
             vec![vec!["premiere".to_string(), "chief-of-staff".to_string()]]
         );
+    }
+
+    /// iter-723: the `[agent]` config-file surface for the guardrail
+    /// exemption list and the two env-armed knobs — pinned with
+    /// NON-default values so the keys stop binding = test fails (the
+    /// same anti-vacuous discipline as the socialization probe above).
+    #[test]
+    fn agent_block_parses_guardrail_exempts_and_env_knob_defaults() {
+        let raw = "[agent]\nguardrail_exempt_tools = [\"read_*\", \"web_search\"]\nguardian_llm = true\nmicro_compaction = true\n";
+        let config =
+            parse_config_str(raw, Path::new("memory://agent-block-probe")).unwrap();
+        assert_eq!(
+            config.agent.guardrail_exempt_tools,
+            vec!["read_*".to_string(), "web_search".to_string()]
+        );
+        assert!(config.agent.guardian_llm);
+        assert!(config.agent.micro_compaction);
+        // The exempt list flows to the agent config the guardrail
+        // tracker consumes (the From<&BehaviorSettings> mapping).
+        let agent_cfg = crate::agent::AgentConfig::from(&config.agent);
+        assert_eq!(
+            agent_cfg.guardrail_exempt_tools,
+            config.agent.guardrail_exempt_tools
+        );
+    }
+
+    #[test]
+    fn agent_block_env_knob_defaults_stay_dark() {
+        // No [agent] keys → every new knob off, list empty (dark-mergeable:
+        // an unchanged config file cannot change any behavior).
+        let config =
+            parse_config_str("[agent]\n", Path::new("memory://agent-dark-probe")).unwrap();
+        assert!(config.agent.guardrail_exempt_tools.is_empty());
+        assert!(!config.agent.guardian_llm);
+        assert!(!config.agent.micro_compaction);
     }
 
     #[test]

@@ -1914,6 +1914,7 @@ pub(crate) async fn create_runtime_agent_with(
         }
         configure_checkpoints(config);
         agent = attach_credential_pool(agent, &provider, config, pool_registry.as_ref());
+        agent = apply_agent_config_defaults(agent, behavior);
         agent
     })
 }
@@ -1985,6 +1986,7 @@ pub(crate) async fn create_agent_without_events(
         }
         configure_checkpoints(config);
         agent = attach_credential_pool(agent, &provider, config, pool_registry.as_ref());
+        agent = apply_agent_config_defaults(agent, &config.agent);
         agent
     })
 }
@@ -2174,6 +2176,26 @@ fn configure_checkpoints(config: &AppConfig) {
 /// consistent between the client-layer rotation and the agent-loop rotation.
 /// Without a registry (e.g. tests), a local pool is seeded from the env var
 /// + `client.additional_api_keys` as before.
+/// `[agent]` config-file DEFAULTS for the env-armed knobs (iter-723): the
+/// guardian-LLM approval arm (iter-713) and micro-compaction (iter-714).
+/// Each applies only when its `OPERANT_*` env var is UNSET — the env var
+/// (and the explicit `with_*` builders) still win when present. Mirrors
+/// Mirrors `attach_credential_pool`'s post-construction modifier shape.
+pub(crate) fn apply_agent_config_defaults(
+    mut agent: OperantAgent,
+    behavior: &BehaviorSettings,
+) -> OperantAgent {
+    if std::env::var_os("OPERANT_GUARDIAN_LLM").is_none() && behavior.guardian_llm {
+        agent = agent.with_guardian_llm(true);
+    }
+    if std::env::var_os("OPERANT_MICRO_COMPACTION").is_none()
+        && behavior.micro_compaction
+    {
+        agent = agent.with_micro_compaction(true);
+    }
+    agent
+}
+
 fn attach_credential_pool(
     agent: OperantAgent,
     provider: &str,

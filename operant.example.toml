@@ -50,6 +50,18 @@ context_window = 128000
 # stated in the marker, because a silently shortened tool result is worse than
 # a failed one: the model cannot tell it is not reading what the tool returned.
 # 0.05 = 5%.
+# Tool names exempt from the guardrail rungs (ping-pong / no-progress /
+# progress-oscillation). Exact names or `*`/`?` globs. Empty = every tool
+# is guarded (iter-723).
+# guardrail_exempt_tools = ["read_*", "web_search"]
+# Guardian-LLM approval arm (iter-713) as a config-file default: applies
+# only when the OPERANT_GUARDIAN_LLM env var is unset — the env var still
+# wins when present (iter-723).
+# guardian_llm = false
+# Micro-compaction (iter-714) as a config-file default: applies only when
+# the OPERANT_MICRO_COMPACTION env var is unset — the env var still wins
+# when present (iter-723).
+# micro_compaction = false
 max_tool_result_share = 0.05
 max_healing_attempts = 3
 show_reasoning = true

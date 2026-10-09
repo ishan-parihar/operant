@@ -159,6 +159,7 @@ async fn execute_acp_command_inner(
         agent = agent.with_memory_provider(provider);
     }
     agent = crate::attach_credential_pool(agent, &provider_name, &config, pool_registry.as_ref());
+    agent = crate::apply_agent_config_defaults(agent, &config.agent);
 
     let response = agent
         .run(command.to_string())

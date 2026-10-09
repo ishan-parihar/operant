@@ -196,7 +196,11 @@ impl From<&BehaviorSettings> for AgentConfig {
             memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
             tool_search: crate::config::ToolSearchSettings::default(),
-            guardrail_exempt_tools: Vec::new(),
+            // iter-723: the [agent] config key flows to the guardrail
+            // tracker (builders.rs consumes this field). Was hardcoded
+            // empty — the runtime exempt path existed but no config-file
+            // surface ever fed it.
+            guardrail_exempt_tools: settings.guardrail_exempt_tools.clone(),
         }
     }
 }
