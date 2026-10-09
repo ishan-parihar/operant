@@ -188,9 +188,16 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
 
 ### Corrected candidate rows (post-survey)
 
-1. **Delegation policy via governance consult** — new `can_delegate`
-   predicate in `org/authority.rs`, called from the existing DelegateTool
-   gate; forbidden/bounded/independent as the policy row's modes. Med.
+1. ~~**Delegation policy via governance consult**~~ **EXECUTED (P0 slice)** —
+   `DelegationPosture` (Forbidden/Bounded/Independent) + the PURE
+   `can_delegate` in `org/authority.rs` (the §2.3.1 tiers applied to work:
+   same-dept allowed, cross-dept on a live grant, unregistered target
+   fails closed); `SeatPolicy.delegation` column (PRAGMA-probe ALTER via
+   `ensure_column`, bad spelling errors on read); `SeatAuthority::
+   consult_delegation` companion; `stream.rs` consults it for every
+   `delegate` call from a governed seat. Gateway registry attach pending
+   the peer's gateway WIP (Bounded fails closed without it; no
+   production row sets Bounded yet).
 2. **Cron-stack consolidation ruling first, then delivery ledger** — pick
    Stack A `cron_runs` as the durable artifact (it already carries the
    `origin` discriminator); add delivery columns + `ObserverEvent`
@@ -204,3 +211,23 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
    below-prefix constraint documented. Small.
 
 Removed: no-agent cron mode (already shipped as `no_agent`).
+
+### Cron-stack ruling (DECIDED 2026-10-09: scope apart, ledger on A)
+
+Caller evidence settles it — the stacks serve different masters, merging
+would be a rewrite with no measured gain:
+
+- **Stack A** (`operant-core/src/cronjobs`, `operant_cron.db`) = the **org /
+  seat registry**: dispatcher routing, seat budgets, governance gates
+  (`IdentityGate`/`org_gate_block`), `cron_runs` history, delivery columns.
+  Canonical home for the delivery ledger row.
+- **Stack B** (`operant-runtime/src/cron`) = the **gateway HTTP API stack**:
+  `add_agent_job`/`add_shell_job_with_approval`/`execute_job_now`/
+  `deliver_announcement` called from `operant-gateway/src/api.rs` (live
+  REST surface, session-target model, per-job approval fields).
+- **Boundary rule:** no new cross-imports between the stacks; the delivery
+  ledger and `ObserverEvent` cron/delivery variants land in Stack A only;
+  Stack B carries a documented gap (no delivery durability, no run history)
+  until its API consumers demand one — then it gets its OWN ledger in its
+  own store, never a shared one. Same pattern as the §2 dispatch ruling:
+  one durable artifact per concern.
