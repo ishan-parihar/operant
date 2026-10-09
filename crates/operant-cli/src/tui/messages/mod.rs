@@ -9,7 +9,6 @@ use ratatui::style::Color;
 
 pub(crate) mod cache;
 mod helpers;
-mod markdown;
 mod markdown_enhanced;
 mod tools;
 
@@ -19,11 +18,11 @@ mod tools;
 // the async raster producers (mermaid/latex hash + preview render), the MCP
 // view's fold labels, and render/tools' summary extractor.
 pub(crate) use helpers::*;
-// `render_markdown` has no production caller (the transcript renders via the
-// vendored renderer); the re-export serves this module's own tests until the
-// markdown wire-or-delete sweep lands.
-#[cfg(test)]
-pub use markdown::render_markdown;
+// [dead-strata sweep 2026-10-09] the pre-port `markdown` renderer module is
+// deleted: the live transcript renders through the vendored renderer
+// (operant_app/markdown → operant_markdown). This module keeps helpers,
+// cache, tools, and the enhanced markdown helper that still serve live
+// consumers.
 pub use tools::*;
 
 /// Context passed to all renderers.

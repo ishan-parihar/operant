@@ -660,25 +660,11 @@ mod tests {
         assert!(!is_mermaid_lang(""));
         assert!(!is_mermaid_lang("mermaidish"));
 
-        // End to end through the real markdown renderer. A protocol-free
-        // terminal also guarantees no subprocess is spawned by this test.
-        let md = "```mermaid\ngraph TD;\n  A-->B;\n```\n";
-        let rendered = image_render::with_env(&PROTOCOL_FREE_ENV, || {
-            crate::tui::messages::render_markdown(md, 80)
-        });
-        let text = joined(&rendered);
-        assert!(
-            text.contains("no terminal graphics protocol"),
-            "the diagram is recognised, not read as code: {text}"
-        );
-        assert!(
-            text.contains("graph TD;"),
-            "the diagram source stays on screen: {text}"
-        );
-        assert!(
-            !text.contains("```"),
-            "the raw fence must not be shown as source text: {text}"
-        );
+        // [dead-strata sweep 2026-10-09] the end-to-end half — rendering a
+        // ```mermaid fence through "the real markdown renderer" — died with
+        // the pre-port renderer; the detection contract above stays. The
+        // vendored renderer owns the live mermaid path (aspect-ratio hook);
+        // the raster-producer wiring question is its own sweep item.
     }
 
     /// Rung 3: a terminal that can draw, but no mermaid toolchain installed.

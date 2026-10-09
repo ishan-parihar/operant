@@ -13,7 +13,6 @@
 mod editing;
 mod history;
 mod kill_ring;
-mod render;
 mod state;
 mod suggestions;
 mod typeahead;
@@ -26,7 +25,6 @@ mod visual;
 mod tests;
 
 pub use kill_ring::KillRing;
-pub use render::{input_height, render_prompt_input, wrap_line};
 pub use typeahead::{
     AcceptForSubmitOutcome, TypeaheadSource, TypeaheadSuggestion, compute_typeahead,
     register_typeahead_names,
@@ -42,7 +40,6 @@ use ratatui::style::Color;
 // The accent is read through `theme_colors::accent()` at its use site in
 // `render.rs` — the accessors are runtime `fn`s, so a `const` would pin every
 // theme to the default theme's amber.
-const PROMPT_POINTER: &str = "❯";
 
 pub fn handle_paste(content: &str, paste_counter: &mut u32) -> (String, Option<String>) {
     let line_count = content.lines().count();

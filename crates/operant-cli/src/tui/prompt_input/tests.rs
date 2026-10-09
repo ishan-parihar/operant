@@ -93,39 +93,6 @@ fn cursor_visual_pos_counts_wide_characters() {
 }
 
 #[test]
-fn render_cursor_after_wide_character() {
-    let mut s = PromptInputState::new();
-    s.text = "你a".to_string();
-    s.cursor = "你".len();
-
-    let area = Rect {
-        x: 0,
-        y: 0,
-        width: 12,
-        height: 4,
-    };
-    let mut buf = Buffer::empty(area);
-    render_prompt_input(
-        &s,
-        area,
-        &mut buf,
-        true,
-        InputMode::Default,
-        Color::Blue,
-        false,
-    );
-
-    // iter-121: cursor now uses reverse video instead of solid block.
-    // The character at the cursor position ('a') should still be visible
-    // (not replaced by █). We check that the cell contains 'a' and has
-    // reverse-video styling (black fg, white bg).
-    let cell = &buf[(4, 1)];
-    assert_eq!(cell.symbol(), "a");
-    assert_eq!(cell.fg, Color::Black);
-    assert_eq!(cell.bg, Color::White);
-}
-
-#[test]
 fn readonly_blocks_insert() {
     let mut s = PromptInputState::new();
     s.mode = InputMode::Readonly;

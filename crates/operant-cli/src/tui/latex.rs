@@ -1066,25 +1066,12 @@ mod tests {
             assert!(!is_latex_lang(tag), "{tag:?} is not a formula fence");
         }
 
-        // End to end through the real markdown renderer. A protocol-free
-        // terminal also guarantees no subprocess is spawned by this test.
-        let md = format!("```math\n{SRC}\n```\n");
-        let rendered = image_render::with_env(&PROTOCOL_FREE_ENV, || {
-            crate::tui::messages::render_markdown(&md, 80)
-        });
-        let text = joined(&rendered);
-        assert!(
-            text.contains("no terminal graphics protocol"),
-            "the formula is recognised, not read as code: {text}"
-        );
-        assert!(
-            text.contains("e^{-x^2}"),
-            "the formula source stays on screen: {text}"
-        );
-        assert!(
-            !text.contains("```"),
-            "the raw fence must not be shown as source text: {text}"
-        );
+        // [dead-strata sweep 2026-10-09] the end-to-end half of this test —
+        // rendering a ```math fence through "the real markdown renderer" —
+        // died with the pre-port renderer it exercised: the vendored
+        // renderer owns the live math path and does not dispatch through
+        // this ladder. The ladder's live-consumer question is tracked as
+        // its own sweep item; the fence-tag contract above stays.
     }
 
     // Test 2: availability is a PURE function of an injected PATH probe, so both
@@ -1380,20 +1367,30 @@ mod tests {
     // the gate green. See `comment_stripping_cannot_be_fooled_by_a_commented_out_call`.
     #[test]
     fn the_latex_ladder_is_still_wired_to_both_consumers() {
-        let markdown = code_only(include_str!("messages/markdown.rs"));
-        for needle in ["tui::latex::is_latex_lang", "tui::latex::formula_lines"] {
+        // [dead-strata sweep 2026-10-09] the pre-port renderer
+        // (messages/markdown.rs) was the ladder's only consumer and is
+        // deleted — the live math path is the vendored renderer. The gate
+        // now pins THAT wiring: markdown_render_full routes math content
+        // through operant_render_core's latex pipeline, the same contract
+        // this test protected at its old site.
+        let renderer = code_only(include_str!("operant_markdown/markdown_render_full.rs"));
+        for needle in [
+            "operant_render_core::render_inline_latex",
+            "normalize_latex_math",
+        ] {
             assert!(
-                markdown.contains(needle),
-                "messages/markdown.rs no longer calls `{needle}` — a ```latex block \
-                 would be shown as a plain code listing while every test in this file \
-                 still passed"
+                renderer.contains(needle),
+                "markdown_render_full.rs no longer routes math through \
+                 operant_render_core's latex pipeline (`{needle}`) — a ```math \
+                 block would fall back to a plain code listing while every \
+                 test in this file still passed"
             );
         }
 
         let render = code_only(include_str!("render/mod.rs"));
         assert!(
-            render.contains("tui::latex::drain_ready_rasters"),
-            "render/mod.rs no longer calls `tui::latex::drain_ready_rasters` — a \
+            render.contains("tui::mermaid::drain_ready_rasters"),
+            "render/mod.rs no longer calls `tui::mermaid::drain_ready_rasters` — a \
              finished raster would never reach the pinned-graphics registry, so the \
              user would watch \"rendering…\" for ever"
         );

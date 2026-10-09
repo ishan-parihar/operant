@@ -39,7 +39,6 @@ pub use utils::{balanced_wrap, display_width, take_width};
 // table, and the post-draw passes. The surface render functions moved into
 // `dispatch.rs`, which imports each one from the module its surface lives in.
 use crate::tui::app::App;
-use crate::tui::prompt_input::input_height;
 use crate::tui::vendor::style::theme_mode;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};

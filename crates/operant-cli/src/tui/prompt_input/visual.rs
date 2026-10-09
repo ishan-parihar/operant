@@ -3,7 +3,40 @@
 // Extracted from the prompt_input/mod.rs monolith.
 
 use super::*;
+use unicode_width::UnicodeWidthChar as _;
 use unicode_width::UnicodeWidthStr;
+
+/// Wrap a logical line into visual chunks of `width` terminal cells. Empty
+/// input yields a single empty chunk so the caller can still place a cursor.
+/// Moved here from the deleted render.rs — vim Visual mode is the only
+/// consumer (2026-10-09 dead-strata sweep).
+pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![line.to_string()];
+    }
+    if line.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for ch in line.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if current_width > 0 && current_width + ch_width > width {
+            out.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += ch_width;
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+
+    out
+}
 
 impl PromptInputState {
     /// Map the current cursor (byte offset) to a (visual_row, visual_col) pair
