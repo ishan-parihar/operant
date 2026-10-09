@@ -203,10 +203,14 @@ mount as an org-layer-default policy when the layer stabilizes (do NOT delete).
    `origin` discriminator); add delivery columns + `ObserverEvent`
    variants; hermes tombstone/stale-claim shape. Consolidation ruling =
    the same pattern as the §2 dispatch ruling. Med.
-3. **Unattended approval matrix + optional guardian-LLM tier** — the D-2
-   ruling already names the surface (seat policy row consult at the
-   approval guard); the guardian-LLM ESCALATE arm extends `ApprovalGuard`
-   in place. Small-Med.
+3. ~~**Unattended approval matrix + optional guardian-LLM tier**~~ — the
+   D-2 matrix was already live (`unattended_no_channel_verdict` +
+   `[genome].unattended_posture` + the F2 governed clamp); the missing
+   guardian-LLM tier landed at iter-713: `GuardianVerdict` + strict parse
+   in `approval.rs`, armed once at construction via
+   `OPERANT_GUARDIAN_LLM`, consulted in the smart gate's
+   `requires_approval` arm for UNGOVERNED seats only (policy keeps
+   precedence). Config-file wiring deferred to the `config.rs` unblock.
 4. **Micro-compaction (opt-in)** — TurnEndBus/`upsert_summary` seam,
    below-prefix constraint documented. Small.
 
