@@ -345,6 +345,7 @@ fn provision_cron_seat(
                 mode,
                 allow: allow.to_vec(),
                 deny: deny.to_vec(),
+            delegation: None,
             },
         )
         .context("Failed to seat the automaton's policy row")?;

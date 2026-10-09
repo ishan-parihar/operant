@@ -100,6 +100,10 @@ pub struct SeatPolicy {
     pub mode: SeatMode,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
+    /// §2.3-analog: how much of its work this seat may hand off
+    /// (`org/authority.rs::DelegationPosture`). `None` = no posture on
+    /// the row = today's ungoverned delegation — the opt-in rule.
+    pub delegation: Option<crate::org::authority::DelegationPosture>,
 }
 
 /// The verdict for one tool call, with the sentence that explains it —
@@ -224,6 +228,13 @@ pub fn decide(
 /// and the decision point must not await.
 pub trait SeatPolicySource: Send + Sync {
     fn policy_for(&self, employee_id: &str) -> Option<SeatPolicy>;
+
+    /// The seat's delegation posture, if the policy row sets one.
+    /// Default `None` = ungoverned — sources that do not model delegation
+    /// stay implementors without touching their bodies.
+    fn delegation_posture_for(&self, _employee_id: &str) -> Option<crate::org::authority::DelegationPosture> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +246,7 @@ mod tests {
             mode,
             allow: allow.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
+        delegation: None,
         }
     }
 

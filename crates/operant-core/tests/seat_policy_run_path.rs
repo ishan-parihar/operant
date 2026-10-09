@@ -86,7 +86,6 @@ impl OperantTool for SeatProbeTool {
 /// Dangerous-named stub: sits on the hardcoded dangerous list by NAME, so
 /// the ungoverned guard prompts for it, but executing it runs no shell.
 struct BashStubTool;
-
 #[derive(JsonSchema, Deserialize)]
 struct BashArgs {
     command: String,
@@ -111,6 +110,43 @@ impl OperantTool for BashStubTool {
         ToolResult::success(
             "bash",
             json!({ "marker": BASH_MARKER, "command": parsed.command }),
+        )
+    }
+}
+
+/// Marker the `delegate` stub returns when it actually executes.
+const DELEGATE_MARKER: &str = "DELEGATE_STUB_RAN";
+
+/// Delegate-named stub: the P0 delegation gate in `stream.rs` classifies by
+/// NAME and reads the `agent` arg — this stub exercises that consult
+/// without spawning a real sub-agent.
+struct DelegateStubTool;
+
+#[derive(JsonSchema, Deserialize)]
+struct DelegateStubArgs {
+    agent: String,
+    prompt: String,
+}
+
+#[async_trait]
+impl OperantTool for DelegateStubTool {
+    fn name(&self) -> &str {
+        "delegate"
+    }
+    fn description(&self) -> &str {
+        "Test stub — named delegate so the governance gate consults it."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::from_type::<DelegateStubArgs>("delegate", "Delegate-named test stub")
+    }
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        let parsed: DelegateStubArgs = match serde_json::from_value(args) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::error("delegate", format!("bad args: {e}")),
+        };
+        ToolResult::success(
+            "delegate",
+            json!({ "marker": DELEGATE_MARKER, "agent": parsed.agent }),
         )
     }
 }
@@ -266,6 +302,7 @@ async fn world(responses: Vec<ChatResponse>, seat: Option<(&str, SeatPolicy)>) -
     let registry = ToolRegistry::new(Duration::from_secs(5));
     registry.register(SeatProbeTool).await.unwrap();
     registry.register(BashStubTool).await.unwrap();
+    registry.register(DelegateStubTool).await.unwrap();
 
     let client = ScriptedClient::new(responses);
     let mut agent = OperantAgent::new(
@@ -368,6 +405,7 @@ async fn lockdown_seat_escalates_a_tool_call_through_the_real_guard() {
                 mode: SeatMode::Lockdown,
                 allow: vec![],
                 deny: vec![],
+            delegation: None,
             },
         )),
     )
@@ -418,6 +456,7 @@ async fn yolo_seat_runs_the_tool_with_no_permission_prompt() {
                 mode: SeatMode::Yolo,
                 allow: vec![],
                 deny: vec![],
+            delegation: None,
             },
         )),
     )
@@ -516,6 +555,7 @@ async fn seat_deny_row_denies_without_prompting() {
                 mode: SeatMode::Yolo,
                 allow: vec![],
                 deny: vec!["seat_probe".to_string()],
+            delegation: None,
             },
         )),
     )
@@ -538,5 +578,87 @@ async fn seat_deny_row_denies_without_prompting() {
     assert!(
         w.permission_rx.try_recv().is_err(),
         "deny is not escalate — the channel must never see the call"
+    );
+}
+
+// ── P0 delegation governance (run path) ─────────────────────────────────
+
+/// The real guard consults the seat's delegation posture: a `forbidden` row
+/// denies the delegate call BEFORE the tool executes, shaped like a seat
+/// policy denial, and the turn still completes.
+#[tokio::test]
+async fn forbidden_seat_cannot_delegate_through_the_real_guard() {
+    let mut w = world(
+        vec![
+            tool_call_response(
+                "delegate",
+                r#"{"agent":"researcher","prompt":"do the thing"}"#,
+            ),
+            text_response("done"),
+        ],
+        Some((
+            "seat-nodelegate",
+            SeatPolicy {
+                mode: SeatMode::Standard,
+                allow: vec![],
+                deny: vec![],
+                delegation: Some(operant_core::org::authority::DelegationPosture::Forbidden),
+            },
+        )),
+    )
+    .await;
+
+    w.agent
+        .run("go".to_string())
+        .await
+        .expect("run completes despite the denial");
+
+    assert!(
+        !w.client.saw(DELEGATE_MARKER),
+        "a forbidden seat must never reach the delegate tool body"
+    );
+    assert!(
+        w.client.saw("Permission denied by seat policy"),
+        "the denial must be shaped like a seat policy denial"
+    );
+    assert!(
+        w.client.saw("forbids delegation"),
+        "the posture's why-sentence must travel with the denial"
+    );
+    assert!(
+        w.permission_rx.try_recv().is_err(),
+        "a delegation denial is not an escalation — the channel never sees it"
+    );
+}
+
+/// The ungoverned twin: no posture on the row = today's behaviour — the
+/// delegate tool runs. The opt-in rule, on the real path.
+#[tokio::test]
+async fn ungoverned_seat_delegates_as_today() {
+    let mut w = world(
+        vec![
+            tool_call_response(
+                "delegate",
+                r#"{"agent":"researcher","prompt":"do the thing"}"#,
+            ),
+            text_response("done"),
+        ],
+        Some((
+            "seat-free",
+            SeatPolicy {
+                mode: SeatMode::Standard,
+                allow: vec![],
+                deny: vec![],
+                delegation: None,
+            },
+        )),
+    )
+    .await;
+
+    w.agent.run("go".to_string()).await.expect("run completes");
+
+    assert!(
+        w.client.saw(DELEGATE_MARKER),
+        "no posture on the row = ungoverned = the tool runs, byte-for-byte today"
     );
 }

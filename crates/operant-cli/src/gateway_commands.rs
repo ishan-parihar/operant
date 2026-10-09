@@ -2371,6 +2371,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                         mode,
                         allow: Vec::new(),
                         deny: Vec::new(),
+                    delegation: None,
                     },
                 ) {
                     return Some(format!("seating the policy row failed: {e}"));

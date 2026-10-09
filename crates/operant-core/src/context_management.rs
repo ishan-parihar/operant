@@ -446,28 +446,6 @@ pub async fn semantic_compaction_cutoff(
 // Tiered eviction
 // ---------------------------------------------------------------------------
 
-/// Evict messages from `messages` until the total token count fits within
-/// `budget_tokens`. Returns the new (potentially shorter) message vec.
-///
-/// ## Eviction tiers (lowest priority evicted first):
-///
-/// - **System messages**: never evicted (system prompt, memory, skills).
-/// - **T3 — tool results**: evicted first. Large, ephemeral, replaceable
-///   (the agent can re-run the tool if it needs the result again).
-/// - **T2 — assistant reasoning**: evicted second. Verbose thinking
-///   blocks that aren't essential to the conversation flow.
-/// - **T1 — user + assistant-final**: evicted last. These are the
-///   actual conversation turns.
-///
-/// When evicting from a tier, the oldest messages are removed first
-/// (FIFO within tier). A recency reserve of `keep_recent` messages
-/// (default 6) is always preserved regardless of tier — the agent
-/// needs recent context to understand the current turn.
-///
-/// This is a port of magic-context's tiered target-headroom eviction,
-/// simplified to a single pass (magic-context uses idempotence latches
-/// + multi-pass; we don't need that for a first implementation).
-///
 /// Wave-4 PromptCacheGuard: the frozen prefix (leading run of system
 /// messages) must survive every preflight rung byte-identical so
 /// provider prompt caches keep hitting across a session's calls.
@@ -495,6 +473,28 @@ pub fn prompt_cache_guard(prefix: &[Message], after: &[Message]) -> bool {
     ok
 }
 
+
+/// Evict messages from `messages` until the total token count fits within
+/// `budget_tokens`. Returns the new (potentially shorter) message vec.
+///
+/// ## Eviction tiers (lowest priority evicted first):
+///
+/// - **System messages**: never evicted (system prompt, memory, skills).
+/// - **T3 — tool results**: evicted first. Large, ephemeral, replaceable
+///   (the agent can re-run the tool if it needs the result again).
+/// - **T2 — assistant reasoning**: evicted second. Verbose thinking
+///   blocks that aren't essential to the conversation flow.
+/// - **T1 — user + assistant-final**: evicted last. These are the
+///   actual conversation turns.
+///
+/// When evicting from a tier, the oldest messages are removed first
+/// (FIFO within tier). A recency reserve of `keep_recent` messages
+/// (default 6) is always preserved regardless of tier — the agent
+/// needs recent context to understand the current turn.
+///
+/// This is a port of magic-context's tiered target-headroom eviction,
+/// simplified to a single pass (magic-context uses idempotence latches
+/// + multi-pass; we don't need that for a first implementation).
 pub fn evict_to_budget(messages: Vec<Message>, budget_tokens: usize) -> Vec<Message> {
     let total = estimate_total_tokens(&messages);
     if total <= budget_tokens {

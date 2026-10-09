@@ -568,6 +568,7 @@ async fn lockdown_cron_escalation_queue_mint_rerun_end_to_end() {
                 mode: SeatMode::Lockdown,
                 allow: Vec::new(),
                 deny: Vec::new(),
+            delegation: None,
             },
         )
         .expect("upsert lockdown policy");
@@ -750,6 +751,7 @@ async fn attended_governed_escalation_prompts_with_the_queued_ask_attached() {
                 mode: SeatMode::Lockdown,
                 allow: Vec::new(),
                 deny: Vec::new(),
+            delegation: None,
             },
         )
         .expect("upsert lockdown policy");
@@ -852,6 +854,7 @@ async fn approved_grant_lets_the_next_run_consult_run_without_reasking() {
                 mode: SeatMode::Lockdown,
                 allow: Vec::new(),
                 deny: Vec::new(),
+            delegation: None,
             },
         )
         .expect("upsert lockdown policy");

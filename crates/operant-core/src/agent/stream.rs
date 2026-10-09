@@ -444,10 +444,7 @@ impl OperantAgent {
     /// construction and would fake an identical-result streak. A Halt
     /// verdict triggers the interrupt flag and surfaces the root-cause
     /// summary as final content.
-    #[expect(
-        clippy::expect_used,
-        reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition"
-    )]
+    #[expect(clippy::expect_used, reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition")]
     async fn observe_guardrail_results(&self, results: &[ToolResult]) {
         use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
 
@@ -509,10 +506,6 @@ impl OperantAgent {
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Feed one completed iteration to the output-side successful-repeat
     /// rung (openhuman `record_output`, iter-688): the canonical signature
     /// of the assistant's narration + tool batch, hashed by the caller
@@ -559,7 +552,10 @@ impl OperantAgent {
                     })
                     .unwrap_or(0)
             };
-            warn!(count, "Output repeat rung — warning model");
+            warn!(
+                count,
+                "Output repeat rung — warning model"
+            );
             self.emit(AgentEvent::Content {
                 text: crate::tool_guardrails::output_repeat_warning_message(count),
             })
@@ -569,7 +565,7 @@ impl OperantAgent {
 
     #[expect(
         clippy::expect_used,
-        reason = "lock-poison recovery (masked_tools/tool_guardrails) and the len==1 checked single-tool invariant"
+        reason = "invariant guaranteed by surrounding validation"
     )]
     /// Execute tools and handle self-healing
     pub(crate) async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {
@@ -948,6 +944,37 @@ impl OperantAgent {
                 }
                 _ => None,
             };
+
+            // ── P0 delegation governance (§2.3-analog) ───────────────────
+            // The delegate tool hands work to another configured agent.
+            // When the acting seat is governed, its delegation posture owns
+            // that verdict — the PURE rule lives in `org/authority.rs`
+            // (`can_delegate`), the resolution in `SeatAuthority::
+            // consult_delegation`; this run-path site only consults, it
+            // never re-implements. `None` = ungoverned for delegation (no
+            // authority, no seat identity, or no posture on the policy row):
+            // today's tool-config gates own the verdict, byte-for-byte.
+            if name == "delegate"
+                && let Some(target) = args.get("agent").and_then(|v| v.as_str())
+                && let (Some(authority), Some(seat)) = (
+                    self.seat_authority.as_ref(),
+                    self.seat_id().or_else(|| self.session_id()),
+                )
+                && let Some(check) = authority.consult_delegation(&seat, target)
+                && !check.is_allowed()
+            {
+                warn!(
+                    tool = %name,
+                    target = %target,
+                    seat = %seat,
+                    "Delegation denied by seat policy"
+                );
+                early_results[idx] = Some(ToolResult::error(
+                    &tool_call.id,
+                    format!("Permission denied by seat policy: {}", check.reason),
+                ));
+                continue;
+            }
 
             // ── F2 unattended semantics ─────────────────────────────────
             // An unattended run (cron) never waits on an interactive

@@ -59,6 +59,11 @@ pub struct SeatAuthority {
     policy: Arc<dyn SeatPolicySource>,
     grants: Arc<GrantDb>,
     requests: Arc<PendingRequestDb>,
+    /// Optional employee registry for the Bounded delegation tier's
+    /// department resolution. `None` (unset) = a Bounded posture fails
+    /// closed on the registry-unavailable arm; Forbidden/Independent need
+    /// no registry. Non-breaking: `with_employee_registry` threads it.
+    employees: Option<Arc<crate::org::employee_db::EmployeeDb>>,
 }
 
 impl SeatAuthority {
@@ -71,7 +76,19 @@ impl SeatAuthority {
             policy,
             grants,
             requests,
+            employees: None,
         }
+    }
+
+    /// Attach the employee registry the Bounded delegation tier resolves
+    /// departments through. Builder-style: existing callers (and every
+    /// ungoverned seat) are unchanged.
+    pub fn with_employee_registry(
+        mut self,
+        employees: Arc<crate::org::employee_db::EmployeeDb>,
+    ) -> Self {
+        self.employees = Some(employees);
+        self
     }
 
     /// Consult the genome for one tool call. `None` = ungoverned (no source
@@ -89,6 +106,61 @@ impl SeatAuthority {
         let policy = self.policy.policy_for(seat)?;
         let has_grant = self.standing_grant_for(seat, tool).is_some();
         Some(decide(Some(&policy), tool, false, dangerous, has_grant))
+    }
+
+    /// §2.3-analog — the delegation consult. `None` = ungoverned for
+    /// delegation (no authority, no seat identity, no policy row, or no
+    /// posture on the row): the caller must reproduce today's behaviour
+    /// exactly. The verdict comes from the PURE `can_delegate` in
+    /// `org/authority.rs`; this companion does the resolution — posture
+    /// from the policy row, departments from the registry, grants from the
+    /// ledger.
+    ///
+    /// The Bounded tier's registry lookups fail closed: an unreadable
+    /// registry or an unregistered target is a refusal, never a widening.
+    pub fn consult_delegation(
+        &self,
+        seat: &str,
+        target_label: &str,
+    ) -> Option<crate::org::authority::ScopeCheck> {
+        let posture = self.policy.delegation_posture_for(seat)?;
+        let (actor_dept, target_dept) = match &self.employees {
+            Some(employees) => {
+                let actor_dept = employees
+                    .get_employee(seat)
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.department);
+                let target_dept = employees
+                    .get_employee(target_label)
+                    .ok()
+                    .flatten()
+                    .and_then(|e| e.department);
+                (actor_dept, target_dept)
+            }
+            None => (None, None),
+        };
+        let grants = match self.grants.list_for_grantee(seat) {
+            Ok(grants) => {
+                let now = chrono::Utc::now().to_rfc3339();
+                grants.into_iter().filter(|g| g.is_live_at(&now)).collect()
+            }
+            Err(e) => {
+                warn!(
+                    seat = %seat,
+                    error = %e,
+                    "delegation consult: grant ledger unreadable — consulting grantless (fail closed)"
+                );
+                Vec::new()
+            }
+        };
+        Some(crate::org::authority::can_delegate(
+            posture,
+            actor_dept.as_deref(),
+            target_label,
+            target_dept.as_deref(),
+            &grants,
+        ))
     }
 
     /// The standing grant covering `tool` for `seat`, if any.
@@ -615,6 +687,7 @@ mod tests {
             Arc::clone(&s.grants),
             Arc::clone(&s.requests),
         )
+        .with_employee_registry(Arc::clone(&s.employees))
     }
 
     fn approver(s: &Stores, ttl_days: i64) -> SeatApprover {
@@ -635,6 +708,7 @@ mod tests {
                     mode: SeatMode::Lockdown,
                     allow: Vec::new(),
                     deny: Vec::new(),
+                delegation: None,
                 },
             )
             .expect("upsert lockdown policy");
@@ -1102,5 +1176,65 @@ mod tests {
             grant.expires_at.is_some(),
             "the mint is TTL'd like the preview"
         );
+    }
+
+    // ── consult_delegation (P0 delegation governance) ───────────────────
+
+    fn seat_policy(posture: Option<crate::org::authority::DelegationPosture>) -> crate::org::seat_policy::SeatPolicy {
+        crate::org::seat_policy::SeatPolicy {
+            mode: SeatMode::Standard,
+            allow: Vec::new(),
+            deny: Vec::new(),
+            delegation: posture,
+        }
+    }
+
+    #[test]
+    fn consult_delegation_is_none_without_a_posture_on_the_row() {
+        let s = stores();
+        seed_employee(&s, "emp-a", "A", Some("platform"));
+        s.policies.upsert("emp-a", &seat_policy(None)).expect("upsert");
+        assert_eq!(authority(&s).consult_delegation("emp-a", "emp-b"), None);
+    }
+
+    #[test]
+    fn consult_delegation_forbidden_denies_even_a_registered_target() {
+        let s = stores();
+        seed_employee(&s, "emp-a", "A", Some("platform"));
+        seed_employee(&s, "emp-b", "B", Some("platform"));
+        s.policies
+            .upsert(
+                "emp-a",
+                &seat_policy(Some(crate::org::authority::DelegationPosture::Forbidden)),
+            )
+            .expect("upsert");
+        let check = authority(&s)
+            .consult_delegation("emp-a", "emp-b")
+            .expect("governed posture returns a verdict");
+        assert!(!check.is_allowed());
+        assert!(check.reason.contains("forbids delegation"));
+    }
+
+    #[test]
+    fn consult_delegation_bounded_allows_same_dept_and_fails_closed_on_alias() {
+        let s = stores();
+        seed_employee(&s, "emp-a", "A", Some("platform"));
+        seed_employee(&s, "emp-b", "B", Some("platform"));
+        s.policies
+            .upsert(
+                "emp-a",
+                &seat_policy(Some(crate::org::authority::DelegationPosture::Bounded)),
+            )
+            .expect("upsert");
+        let a = authority(&s);
+        let same_dept = a
+            .consult_delegation("emp-a", "emp-b")
+            .expect("governed posture returns a verdict");
+        assert!(same_dept.is_allowed(), "same dept: {}", same_dept.reason);
+        let alias = a
+            .consult_delegation("emp-a", "research-agent-alias")
+            .expect("governed posture returns a verdict");
+        assert!(!alias.is_allowed(), "unregistered target must fail closed");
+        assert!(alias.reason.contains("fail-closed"));
     }
 }

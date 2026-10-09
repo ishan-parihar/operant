@@ -437,6 +437,124 @@ pub fn can_accept_decision(actor: AuthorityScope, decision_scope: AuthorityScope
         )
     }
 }
+/// §2.3-analog — delegation posture. The per-seat policy row names HOW
+/// much of its work a seat may hand to another agent; the D-2 ruling's
+/// surface (the seat's policy row, and only that surface) extended to
+/// delegation. `Independent` is the default absence — today's behaviour,
+/// byte-for-byte — so wiring a posture is always the opt-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelegationPosture {
+    /// The seat may never hand work off. Every `delegate` call is denied.
+    Forbidden,
+    /// The seat may delegate within its department, or cross-department on
+    /// a live grant covering the target — the same tiers `can_post_to`
+    /// applies to notices (§2.3.1), because delegation is work, and work
+    /// follows the same boundaries as words.
+    Bounded,
+    /// Today's behaviour: the tool-config gates (depth, allowlists,
+    /// readonly) own the verdict; governance is not consulted further.
+    Independent,
+}
+
+impl DelegationPosture {
+    /// Stored/parsed spelling on the policy row.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Forbidden => "forbidden",
+            Self::Bounded => "bounded",
+            Self::Independent => "independent",
+        }
+    }
+}
+
+impl std::str::FromStr for DelegationPosture {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "forbidden" => Ok(Self::Forbidden),
+            "bounded" => Ok(Self::Bounded),
+            "independent" => Ok(Self::Independent),
+            other => Err(format!(
+                "unknown delegation posture '{other}' (expected forbidden/bounded/independent)"
+            )),
+        }
+    }
+}
+
+impl fmt::Display for DelegationPosture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// §2.3-analog — the delegation predicate. PURE: posture + resolved
+/// departments + live grants in, verdict out. The DB companions
+/// ([`crate::org::seat_authority::SeatAuthority::consult_delegation`]) do
+/// the resolution; this is the rule, stated once.
+///
+/// - `Forbidden` — deny, always. The policy row is the operator's word.
+/// - `Independent` — allow, always: the tool-config gates own the rest.
+/// - `Bounded` — the `can_post_to` tiers applied to work: same department
+///   allowed, cross-department needs a live grant covering the target's
+///   department, and an unregistered target is a refusal (the registry is
+///   the only source of identity — fail-closed, like
+///   [`resolve_actor_scope`]).
+pub fn can_delegate(
+    posture: DelegationPosture,
+    actor_dept: Option<&str>,
+    target_label: &str,
+    target_dept: Option<&str>,
+    grants: &[Grant],
+) -> ScopeCheck {
+    match posture {
+        DelegationPosture::Forbidden => ScopeCheck::deny(
+            "the seat's policy row forbids delegation (posture: forbidden)",
+            AuthorityScope::Own,
+        ),
+        DelegationPosture::Independent => ScopeCheck::allow(
+            "delegation posture is independent — tool-config gates own the verdict",
+            AuthorityScope::Own,
+        ),
+        DelegationPosture::Bounded => {
+            let Some(target_dept) = target_dept else {
+                return ScopeCheck::deny(
+                    format!(
+                        "bounded delegation requires a registered target; \
+                         '{target_label}' is not in the employee registry \
+                         (fail-closed)"
+                    ),
+                    AuthorityScope::Department,
+                );
+            };
+            if actor_dept == Some(target_dept) {
+                return ScopeCheck::allow(
+                    format!("department tier: delegating within own dept ({target_dept})"),
+                    AuthorityScope::Department,
+                );
+            }
+            let matched = grants.iter().find(|g| g.covers_department(target_dept));
+            match matched {
+                Some(g) => ScopeCheck::allow(
+                    format!(
+                        "cross-department delegation to '{target_label}' (dept:{target_dept}) \
+                         covered by grant {} ({})",
+                        g.grant_id, g.capability
+                    ),
+                    AuthorityScope::Org,
+                ),
+                None => ScopeCheck::deny(
+                    format!(
+                        "no live grant covers dept:{target_dept}; bounded delegation \
+                         crosses departments only on an explicit grant (§2.1 tiers \
+                         applied to work)"
+                    ),
+                    AuthorityScope::Org,
+                ),
+            }
+        }
+    }
+}
 
 // =====================================================================
 // Consult companions (DB-touching)
@@ -1674,5 +1792,95 @@ mod tests {
                 "scope {scope} must render its own authority sentence: {rendered}"
             );
         }
+    }
+
+    // ── Delegation posture + can_delegate (P0 governance slice) ───────────
+
+    #[test]
+    fn delegation_posture_round_trips_through_its_spellings() {
+        for p in [
+            DelegationPosture::Forbidden,
+            DelegationPosture::Bounded,
+            DelegationPosture::Independent,
+        ] {
+            let parsed: DelegationPosture = p.as_str().parse().expect(p.as_str());
+            assert_eq!(parsed, p);
+        }
+        assert!("nosuch".parse::<DelegationPosture>().is_err());
+    }
+
+    #[test]
+    fn can_delegate_forbidden_denies_everywhere() {
+        let check = can_delegate(
+            DelegationPosture::Forbidden,
+            Some("platform"),
+            "emp-peer",
+            Some("platform"),
+            &[],
+        );
+        assert!(!check.is_allowed());
+        assert!(check.reason.contains("forbids delegation"));
+    }
+
+    #[test]
+    fn can_delegate_independent_allows_without_governance() {
+        let check = can_delegate(
+            DelegationPosture::Independent,
+            None,
+            "literally-anything",
+            None,
+            &[],
+        );
+        assert!(check.is_allowed());
+    }
+
+    #[test]
+    fn can_delegate_bounded_allows_own_department_without_a_grant() {
+        let check = can_delegate(
+            DelegationPosture::Bounded,
+            Some("platform"),
+            "emp-peer",
+            Some("platform"),
+            &[],
+        );
+        assert!(check.is_allowed());
+        assert!(check.reason.contains("department tier"));
+    }
+
+    #[test]
+    fn can_delegate_bounded_cross_department_needs_a_live_grant() {
+        let denied = can_delegate(
+            DelegationPosture::Bounded,
+            Some("platform"),
+            "emp-finance",
+            Some("finance"),
+            &[],
+        );
+        assert!(!denied.is_allowed());
+        assert!(denied.reason.contains("no live grant"));
+
+        let grants = vec![live_grant("emp-platform", Some("finance"))];
+        let allowed = can_delegate(
+            DelegationPosture::Bounded,
+            Some("platform"),
+            "emp-finance",
+            Some("finance"),
+            &grants,
+        );
+        assert!(allowed.is_allowed());
+        assert!(allowed.reason.contains("covered by grant"));
+    }
+
+    #[test]
+    fn can_delegate_bounded_fails_closed_on_unregistered_target() {
+        let check = can_delegate(
+            DelegationPosture::Bounded,
+            Some("platform"),
+            "some-config-alias",
+            None,
+            &[],
+        );
+        assert!(!check.is_allowed());
+        assert!(check.reason.contains("fail-closed"));
     }
 }
