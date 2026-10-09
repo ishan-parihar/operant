@@ -166,9 +166,7 @@ pub(crate) fn render_idle_animation_into(buf: &mut Buffer, area: Rect, elapsed: 
 // all profiles so these trig-heavy loops stay optimized even in debug/selfdev
 // builds. They are imported under their original names so the call sites and
 // tests below are unchanged.
-use crate::tui::operant_anim::{
-    hsv_to_rgb, sample_signal, shape_char_3x3,
-};
+use crate::tui::operant_anim::{hsv_to_rgb, sample_signal, shape_char_3x3};
 
 fn animation_seed() -> u64 {
     static SEED: OnceLock<u64> = OnceLock::new();
@@ -197,7 +195,7 @@ where
     disabled
 }
 
-fn disabled_animation_names() -> HashSet<String> {
+pub(crate) fn disabled_animation_names() -> HashSet<String> {
     let mut disabled = expand_disabled_animation_names(
         crate::tui::operant_app::config_shim::config()
             .display

@@ -663,7 +663,13 @@ pub(super) fn draw_messages(
         .display
         .prompt_entry_animation
         && policy.enable_decorative_animations
-        && policy.tier.prompt_entry_animation_enabled();
+        && policy.tier.prompt_entry_animation_enabled()
+        // The entry fade is decorative and clock-driven, so it joins the
+        // same disable list as the idle animation (same corpus pin env,
+        // same config knob). A golden captured mid-fade differs per run
+        // duration - the user-message-commits style flake (2026-10-09).
+        && !crate::tui::operant_ui::disabled_animation_names()
+            .contains("prompt_entry");
     if prompt_anim_enabled {
         update_prompt_entry_animation(wrapped_user_prompt_starts, scroll, visible_end, now_ms);
     } else {

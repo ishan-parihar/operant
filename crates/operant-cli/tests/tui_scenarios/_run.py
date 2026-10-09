@@ -128,7 +128,7 @@ PINNED_ENV = {
     # Corpus-only pin: freeze the decorative idle animation.
     # Merged into disabled_animation_names() at render time; real users keep
     # the empty default (all animations on).
-    "OPERANT_DISABLED_ANIMATIONS": "signal",
+    "OPERANT_DISABLED_ANIMATIONS": "signal,prompt_entry",
     # Fixed, not inherited: see the PATH note above for why this is the pin
     # that decides whether the corpus is reproducible at all.
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

@@ -463,6 +463,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-730 — P1-7 (2026-10-09 live-audit plan): the rotating 💡 hint
+  rail is off by default, and the corpus pins the prompt-entry fade.**
+  The vendored hint widget (jcode's info_widget_tips) rendered rotating
+  keyboard tips into the status strip unconditionally — the visible half
+  of the live audit's complaint 1 ("legacy overlays of notifications").
+  New shim `display.show_tips` (default **false**, port-adaptation —
+  upstream shows them unconditionally) gates all three render sites
+  (ui_input ×2, ui_status ×1); the vendored cycle function and its tests
+  stay verbatim. Also deleted the dead `adapter_types/tips.rs`
+  (`select_tip`, #[allow(dead_code)], zero callers since iter-106's stub
+  era). Determinism enabler: the prompt-entry fade — a wall-clock-driven
+  blend on freshly-entered user prompts — joins the
+  `OPERANT_DISABLED_ANIMATIONS` disable list (same corpus pin env, same
+  config knob as the idle animation); its golden-captured mid-fade phase
+  was the load-dependent style flake in `user-message-commits` /
+  `first-message` (proven: with the pin, both re-proved deterministic and
+  verify passes repeatedly; the goldens now hold the settled colors).
+  Label note: origin carries two iter-728s (peer's max_tool_result_chars
+  + this track's P1-6 selection copy, concurrent pushes) — append-only,
+  both stay; this slice takes 730 after the peer's 729.
+
 - **iter-728 — P1-6 (2026-10-09 live-audit plan): transcript copy is
   text-editor-clean — wrapped fragments rejoin their logical line with the
   source spacing, and tool-status chrome drops out of the copied text.**
