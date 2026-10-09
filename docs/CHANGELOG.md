@@ -513,6 +513,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-740 — docs: second live-audit gap outline (jcode-parity v1).**
+  First-hand tmux feedback loop on the iter-731 deploy: the scroll ladder is
+  verifiably dead in the field (8x PageUp / Up / Alt+Up / Ctrl+Up, zero
+  transcript movement, content proven above the fold, F12 proves keys arrive,
+  suite pins the state machine -> render-seam loss, zero scroll-key corpus
+  coverage); notification surfaces still stack (error modal + transcript rows
+  + margin box + every-response banner); selection paints whole-frame chrome
+  (442 chars / 17 lines for a 5-line conversation); the todo data path is
+  deliberately stubbed while tool/renderers/commands all exist; thinking is
+  provider-absent (3 raw SSE probes: no reasoning_content from kilo
+  small-stack / deepseek-v4.1-flash / glm-5.3-flash even with the thinking
+  flag). REFUTES the old P2-8 premise: jcode is also alt-screen
+  (src/cli/terminal.rs:353 ratatui::init()) - there is no native-scrollback
+  port; the real work is waves P4-1..P4-6 (scroll fix first).
+
 - **iter-737 — outline v6 §1 row 2 (NEXT SLICE) LANDED: oversized tool
   results offload to a durable workspace artifact with a TOC stub.**
   iter-729 wired `[agent] max_tool_result_chars` (head 2/3 + tail 1/3)
