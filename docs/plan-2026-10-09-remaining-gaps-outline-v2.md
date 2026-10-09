@@ -36,23 +36,17 @@
 
 ## §1 Execution queue (core track, ordered)
 
-1. **Delivery-ledger durability** (trinity P2-A made concrete; hermes
-   tombstone/stale-claim shape). Unblocked — next slice.
-   - Extend Stack A's `cron_runs`: `record_cron_run`
-     (`crates/operant-core/src/cronjobs/db.rs:697`) already carries the
-     `origin` discriminator (scheduled/retry-armed/gate_block) — add
-     delivery-target/attempt-count/last-error columns via
-     `crate::org::schema::ensure_column`; wire the write at
-     `Scheduler::deliver_result`
-     (`crates/operant-core/src/cronjobs/scheduler.rs:1082`), which
-     today sends `CronDelivery` onto `delivery_tx` and drops on error.
-   - `ObserverEvent` (`crates/operant-core/src/observer.rs`) has no
-     cron/delivery variants — add them (hermes' observer-hooks
-     telemetry contract is the pattern).
-   - Adopt stale-claim reclaim `max(3×timeout, 2h)` + tombstones so a
-     channel outage queues instead of drops.
-   - Tests: migration on pre-schema rows; attempt-counter increment;
-     tombstone + reclaim path; replay-after-unblock.
+1. **~~Delivery-ledger durability~~ EXECUTED iter-722** (trinity
+   P2-A concrete): the `cron_deliveries` v3 migration (separate
+   append-only table, hermes `deliveries.db` shape, no FK) + queue-before-
+   handoff in `deliver_result` + `mark_delivery_outcome` consumer API +
+   `MAX_DELIVERY_ATTEMPTS=3` park tombstone + `max(3×timeout, 2h)`
+   stale-claim reclaim replayed BEFORE the due-jobs gate (empty-due
+   ticks replay too) + `ObserverEvent::CronDelivery*` variants +
+   `with_observer` dark-mergeable mount. **Remaining sub-slice:** the
+   gateway consumer mount (settle via `mark_delivery_outcome` in the
+   sender loop) — blocked on the peer's `gateway_runner.rs` WIP, same
+   file as the registry-attach row below.
 2. **Config-file wiring batch** — UNBLOCKED (`config.rs` clean):
    - `guardrail_exempt_tools` config-file schema surface (the
      approval-path exemption knob).
@@ -89,7 +83,7 @@
 | **P1-A per-channel dispatch breaker, half-open probe** | **next trinity port** — fixes the Telegram hammering; rides §1 row 1 naturally (same delivery path) |
 | P1-B effect-scoped idempotency on outbound sends | open |
 | P1-C canary invariant harness (E-01/E-02/E-06) | open |
-| P2-A lease/retry redelivery cap + poison-park | **in flight** — §1 row 1 is its concrete form |
+| P2-A lease/retry redelivery cap + poison-park | **core ledger landed (iter-722)** — tombstone cap + stale-claim reclaim live on Stack A; the gateway consumer mount (outcome settle) rides the `gateway_runner.rs` unblock |
 | P2-B heartbeat liveness, `unsupported`-vs-`stale` hinge | open |
 | P2-C execution integrity at terminal-write time | open |
 | P2-D CAS/RECONCILED discipline + capacity slots | open |

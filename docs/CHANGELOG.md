@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-722 — durable cron delivery ledger (trinity P2-A concrete;
+  hermes `deliveries.db` tombstone/stale-claim shape):**
+  `deliver_result` handed the payload to the gateway over an in-memory
+  channel and forgot it — a gateway outage or dead consumer dropped the
+  message silently (`tx.send` on an unbounded channel never errors; the
+  delivery twin of the R39 finding). New append-only v3 migration
+  `cron_deliveries` (no FK, like `cron_runs` — history outlives job
+  deletion): the row is queued BEFORE the handoff, `CronDelivery` now
+  carries the ledger id, and the consumer settles it via
+  `CronDb::mark_delivery_outcome` (idempotent; the gateway consumer
+  mount is the next slice). One handoff = one attempt;
+  `MAX_DELIVERY_ATTEMPTS = 3` PARKs a row — the tombstone: replay
+  stops, the row stays inspectable. `reclaim_stale_deliveries` applies
+  hermes' `max(3×timeout, 2h)` horizon (2h floor — the send is a
+  fire-and-forget handoff), and the tick replays stale rows BEFORE the
+  due-jobs gate so empty-due ticks — the usual outage-recovery window —
+  still replay (same lesson as the iter-684 empty-tick socialization
+  fix). No channel mounted = rows stay pending and retry next tick: an
+  outage queues instead of drops. `ObserverEvent` gains
+  `CronDeliveryQueued`/`Reclaimed`/`Parked`/`Outcome` variants
+  (dark-mergeable `with_observer` mount on the scheduler). `parking_lot`
+  joins operant-core deps (unpoisoned-lock house rule). 7 tests: pre-v3
+  migration on a live v2 database, tombstone walk, idempotent outcome
+  settle, horizon-respecting reclaim, queue-and-handoff incl. the R39
+  no-target arm, replay-then-park with observer lifecycle points,
+  no-consumer leaves rows pending. Label note: a third concurrent
+  iter-720 landed on origin (peer's small-core-debts slice); this one is
+  renumbered 722 — append-only.
 - **iter-714 — micro-compaction (hermes parity, opt-in via
   `OPERANT_MICRO_COMPACTION`, off by default):**
   `context_management::micro_compact` folds the oldest completed
