@@ -6,7 +6,9 @@
 use super::*;
 use crate::tui::operant_app::auth::AuthState;
 use crate::tui::operant_app::tui_state::TuiState as _;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
+};
 
 pub(crate) fn make_app() -> App {
     // `App::new` calls `set_active_theme_enum`, which writes the process-global
@@ -32,6 +34,60 @@ fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
     }
 }
 
+// ---- P0-1: paste-burst Enter semantics (2026-10-09 live audit) ----
+//
+// tmux/SSH batch keystrokes into the same drain window; pre-fix, a batched
+// `text<Enter>` had its Enter absorbed as a literal newline and the message
+// never sent. The corpus simulator bypasses the burst path (it injects keys
+// directly), so these unit tests are the only gate for this logic.
+
+fn burst_event(code: KeyCode) -> Event {
+    Event::Key(press_key(code, KeyModifiers::NONE))
+}
+
+#[test]
+fn burst_trailing_enter_must_submit_not_absorb() {
+    let mut app = make_app();
+    // A latency-batched `text<Enter>`: [h, i, Enter] in one drain window.
+    let q = vec![
+        burst_event(KeyCode::Char('h')),
+        burst_event(KeyCode::Char('i')),
+        burst_event(KeyCode::Enter),
+    ];
+    let (buf, pending) = app.collect_paste_burst('T', q.into_iter());
+    assert_eq!(buf, "Thi", "the typed chars collect as burst text");
+    let pending = pending.expect("trailing Enter must be handed back for replay");
+    assert_eq!(pending.code, KeyCode::Enter);
+}
+
+#[test]
+fn burst_embedded_newline_still_absorbs() {
+    let mut app = make_app();
+    // A clipboard paste's embedded newline has more clipboard behind it —
+    // Windows Ctrl+V multi-line paste must keep working.
+    let q = vec![
+        burst_event(KeyCode::Char('a')),
+        burst_event(KeyCode::Enter),
+        burst_event(KeyCode::Char('b')),
+    ];
+    let (buf, pending) = app.collect_paste_burst('x', q.into_iter());
+    assert_eq!(buf, "xa\nb");
+    assert!(pending.is_none(), "a mid-paste Enter must not terminate");
+}
+
+#[test]
+fn burst_single_char_then_enter_replays_submit() {
+    let mut app = make_app();
+    // One typed char + Enter batched together: below the paste threshold, but
+    // the Enter must survive as a replayed submit key, not vanish into text.
+    let q = vec![burst_event(KeyCode::Enter)];
+    let (buf, pending) = app.collect_paste_burst('X', q.into_iter());
+    assert_eq!(buf, "X");
+    assert_eq!(
+        pending.expect("Enter survives below-threshold bursts").code,
+        KeyCode::Enter
+    );
+}
 
 // ---- MCP reconnect tick-drain tests (iter-326) ----
 

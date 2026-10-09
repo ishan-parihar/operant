@@ -443,6 +443,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-726 — P0-1 (2026-10-09 live-audit plan): a batched
+  `text<Enter>` submits again — the paste-burst detector no longer swallows
+  the Enter key.** Any latency-batching layer (tmux, SSH, mosh) can deliver
+  the typed characters and the Enter in the same zero-timeout drain window;
+  the old detector absorbed that trailing Enter as a literal newline, so
+  the message sat in the composer unsent with no error — reproduced
+  first-hand via tmux send-keys (100% swallowed) vs. human-cadence typing
+  (0%). The drain core is extracted into `collect_paste_burst` with a
+  queue-seam so the semantics are unit-testable (the corpus simulator
+  bypasses the burst path, so the unit tests are the only gate).
+  Discriminator: an Enter with more events behind it is a paste's embedded
+  newline (absorbed, Windows Ctrl+V multi-line paste unchanged); an Enter
+  that ends the burst is the user's submit key — stashed in `pending_key`
+  and replayed through the normal key path, so the text lands and the
+  replayed Enter sends it. 3 unit tests pin the three cases. Suite 1744/0;
+  corpus verify 0-drift (the sim injects keys directly, bypassing the
+  burst path).
+
 - **iter-725 — P0-2/N-3 (2026-10-09 live-audit plan): tool rows no longer
   split a streaming sentence; the notification clock gained a corpus
   determinism seam.** ToolStart no longer flushes the streaming assistant
