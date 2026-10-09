@@ -1103,6 +1103,8 @@ fn parse_key_sequence(seq: &str) -> Vec<crossterm::event::KeyEvent> {
                 "down" => KeyCode::Down,
                 "left" => KeyCode::Left,
                 "right" => KeyCode::Right,
+                "pageup" | "pgup" => KeyCode::PageUp,
+                "pagedown" | "pgdn" => KeyCode::PageDown,
                 "backspace" | "bs" => KeyCode::Backspace,
                 "ctrl+a" => {
                     modifiers.insert(KeyModifiers::CONTROL);

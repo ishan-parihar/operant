@@ -2171,7 +2171,13 @@ fn paint_at(app: &mut App, f: ResizeFrame) {
 }
 
 fn pos(message: usize, line: u16) -> ContentPos {
-    ContentPos { message, line }
+    // The captured target is opaque to the reconcile machinery (it is the
+    // render's job to resolve it); the tests only need a stable Some value.
+    ContentPos::Message(crate::tui::operant_model::Anchor {
+        msg_hash: message as u64,
+        occurrence: 0,
+        row_within_item: line as usize,
+    })
 }
 
 #[test]

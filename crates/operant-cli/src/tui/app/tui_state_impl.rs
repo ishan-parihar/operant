@@ -244,12 +244,17 @@ impl TuiState for App {
     }
 
     fn pending_resize_anchor(&self) -> Option<crate::tui::operant_model::ContentPos> {
-        // The ported chrome records the reader's content position every frame
-        // (operant_ui::record_reader_anchor, published from the prepared frame's
-        // scroll resolve). The ported ContentPos IS the target shape; operant's
-        // own scroll_anchor::ContentPos was the pre-cutover type and its
-        // publisher died with the dispatch table.
-        crate::tui::operant_ui::resolved_reader_anchor()
+        // The pending anchor must be the ONE-SHOT captured by `note_resize`
+        // on an actual Event::Resize — not the chrome's per-frame reader
+        // anchor. Returning the live global made `resize_anchor_scroll`
+        // Some(...) on EVERY frame while the reader was paused, which
+        // permanently overrode `user_scroll` and re-pinned the view to the
+        // last painted position: the entire keyboard scroll ladder was dead
+        // in live sessions (2026-10-09 live audit, P4-1). The render resolves
+        // this against the current frame; `reconcile_scroll_anchor` then
+        // takes the one-shot after the frame, so it fires exactly once per
+        // resize.
+        self.scroll_memory.pending_resize.as_ref().map(|p| p.target)
     }
 
     fn pending_history_anchor_lines_from_bottom(&self) -> Option<usize> {
@@ -769,9 +774,8 @@ impl TuiState for App {
                 // full unconfigured fallback list (the sim/corpus case, and
                 // any boot with keys but no active-provider field).
                 let store = &self.auth_store;
-                let env_key = |name: &str| {
-                    std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
-                };
+                let env_key =
+                    |name: &str| std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false);
                 let has = |id: &str| {
                     store
                         .api_key_for(id)
@@ -808,9 +812,7 @@ impl TuiState for App {
                 }
                 // Any other stored key still means an OpenAI-compatible profile
                 // is configured.
-                if status.anthropic.state == AuthState::NotConfigured
-                    && store.has_any_key()
-                {
+                if status.anthropic.state == AuthState::NotConfigured && store.has_any_key() {
                     status.openai_compatible_any = state;
                 }
             }
@@ -993,7 +995,10 @@ impl TuiState for App {
             selected_chars: self.selection_text.borrow().chars().count(),
             selected_lines: match (self.selection_anchor, self.selection_focus) {
                 (Some((_, start_line)), Some((_, end_line))) => {
-                    end_line.max(start_line).saturating_sub(end_line.min(start_line)) + 1
+                    end_line
+                        .max(start_line)
+                        .saturating_sub(end_line.min(start_line))
+                        + 1
                 }
                 _ => 0,
             },

@@ -22,7 +22,8 @@ mod turn_state;
 pub(crate) use event_coalesce::EventOutcome;
 use event_coalesce::MAX_DRAINED_EVENTS_PER_WAKE;
 
-pub(crate) use scroll_anchor::{ContentPos, ScrollMemory};
+use crate::tui::operant_model::ContentPos;
+pub(crate) use scroll_anchor::ScrollMemory;
 
 #[cfg(test)]
 pub(crate) mod tests;

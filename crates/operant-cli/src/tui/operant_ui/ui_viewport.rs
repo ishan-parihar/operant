@@ -1671,9 +1671,20 @@ mod tests {
         );
         let state_impl = include_str!("../app/tui_state_impl.rs");
         assert!(
-            state_impl.contains("resolved_reader_anchor()"),
-            "tui_state_impl.rs stopped returning the recorded anchor — \
-             pending_resize_anchor would always be None"
+            state_impl.contains("self.scroll_memory"),
+            "tui_state_impl.rs stopped returning the App's one-shot resize anchor — \
+             returning the per-frame chrome anchor instead re-pins the view to the \
+             tail on every frame and kills the keyboard scroll ladder (2026-10-09 \
+             P4-1 live-audit: the entire ladder was dead in live sessions)"
+        );
+        // The capture side: note_resize reads what the run loop published from
+        // this frame's resolve, so the one-shot holds a real position.
+        let render_mod = include_str!("../render/mod.rs");
+        assert!(
+            render_mod.contains("app.last_render_content_pos"),
+            "render/mod.rs stopped publishing the reader anchor into the App — \
+             note_resize would capture nothing and a resize-while-parked would \
+             drop the reader to the tail"
         );
     }
 

@@ -36,31 +36,22 @@ struct ScrollAnchor {
     applied_offset: usize,
 }
 
-/// A width-independent address for one transcript row.
-///
-/// `message` is the index into `App::messages`, which survives any rewrap;
-/// `line` is which rendered row of that message, which does not. Resolving a
-/// `ContentPos` against a differently-wrapped transcript therefore lands on the
-/// right *message* and on the same line within it when that line still exists —
-/// the same granularity jcode's `ContentPos` gives its resize anchor.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct ContentPos {
-    /// Index into `App::messages`.
-    pub message: usize,
-    /// Which rendered row of that message, counted from the message's first.
-    pub line: u16,
-}
-
 /// A resize the run loop has not reconciled yet.
 ///
 /// `captured_offset` is what tells our own adopt apart from a reader who moved
 /// after the resize: comparing against it catches every path that writes
 /// `scroll_offset` — keyboard and mouse wheel alike — in one place, the same
 /// trick [`ScrollAnchor::applied_offset`] plays for the reflow anchor.
+///
+/// The target is the ported `operant_model::ContentPos` (hash-anchored),
+/// captured per-frame by the run loop from the chrome reader anchor. The old
+/// index-based `ContentPos{message, line}` died with the dispatch-table
+/// cutover; keeping both shapes around is what wedged the resize seam (see
+/// tui_state_impl::pending_resize_anchor).
 #[derive(Clone, Copy)]
 pub(crate) struct PendingResize {
     /// The reader's content address at the moment of the resize.
-    pub(crate) target: ContentPos,
+    pub(crate) target: crate::tui::operant_model::ContentPos,
     /// The offset in effect then. A different value now means the reader chose a
     /// new position, which wins over anything we captured.
     pub(crate) captured_offset: usize,

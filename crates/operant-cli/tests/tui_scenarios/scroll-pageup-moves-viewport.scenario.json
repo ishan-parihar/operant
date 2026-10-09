@@ -1,0 +1,19 @@
+{
+  "name": "scroll-pageup-moves-viewport",
+  "surface": "crates/operant-cli/src/tui/operant_ui/ui_viewport.rs (scroll resolve) + app/tui_state_impl.rs (pending_resize_anchor)",
+  "opens_with": "A long transcript (200 wrapped lines) renders, then the reader pages up twice while tail-follow is active",
+  "keys": "list them<enter><pageup><pageup>",
+  "size": "100x30",
+  "agent_script": "long-transcript.json",
+  "assert": [
+    "messages == 2",
+    "is_streaming == false"
+  ],
+  "assert_screen": [
+    "contains:L020",
+    "not-contains:L199"
+  ],
+  "baseline": "scroll-pageup-moves-viewport.txt",
+  "style_baseline": "scroll-pageup-moves-viewport.style.txt",
+  "notes": "P4-1 regression pin (2026-10-09 live audit: the entire keyboard scroll ladder was dead in live sessions). The pageup keys drain before the mock content lands, but the mutation they make - auto_scroll=false + scroll_offset += 10 each - persists while content arrives paused (and the reflow-anchor reconcile grows the offset to keep the reader's chosen position), so the final frame proves the render seam: with the seam broken (pending_resize_anchor returning the per-frame chrome anchor), resize_anchor_scroll overrode user_scroll on every frame and the view stayed pinned to the tail (L199 visible, L020 not). With the one-shot wired, the view parks well above the tail: L020 visible, L199 off-screen. The keys arrive early by harness construction; that is fine because the state, not the key timing, is what the render must honor."
+}
