@@ -8,23 +8,23 @@
 
 
                         ┌──────────────────────────────────────────────────────────────────────┐
- operant · replay       │ WARNING: Bypass Permissions Mode                                     │
- operant                │Operant running in Bypass Permissions mode                            │
- /model to switch · Offl│                                                                      │
- v0.2.1                 │In Bypass Permissions mode, Operant will NOT ask for your             │
- /login to add provider │approval before running potentially dangerous commands.               │
- ○ anthropic            │                                                                      │
- ○ openrouter           │This mode should only be used in a sandboxed container or VM          │
- ○ openai               │that has restricted internet access and can easily be restored        │
- ○ cursor               │if damaged.                                                           │
- ○ copilot              │                                                                      │
- ○ gemini               │By proceeding, you accept all responsibility for actions taken        │
- ○ antigravity          │while running in Bypass Permissions mode.                             │
- ~                      │                                                                      │
+                        │ WARNING: Bypass Permissions Mode                                     │
+                        │Operant running in Bypass Permissions mode                            │
                         │                                                                      │
-                        │  [1] No, exit          [2] Yes, I accept                             │
+ operant · replay       │In Bypass Permissions mode, Operant will NOT ask for your             │
+ operant                │approval before running potentially dangerous commands.               │
+ /model to switch · Offl│                                                                      │
+ v0.2.1                 │This mode should only be used in a sandboxed container or VM          │
+ /login to add provider │that has restricted internet access and can easily be restored        │
+ ● anthropic(key)       │if damaged.                                                           │
+ ~                      │                                                                      │
+                        │By proceeding, you accept all responsibility for actions taken        │
+                        │while running in Bypass Permissions mode.                             │
 1>                      │                                                                      │
-                        │  ↑↓ or 1/2 to select  ·  Enter to confirm                            │ API key Offline Capture
+                        │                                                                      │ API key Offline Capture
+                        │  [1] No, exit          [2] Yes, I accept                             │
+                        │                                                                      │
+                        │  ↑↓ or 1/2 to select  ·  Enter to confirm                            │
                         │                                                                      │
                         │                                                                      │
                         │                                                                      │

@@ -378,6 +378,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-718 — Clean-sweep 8: provider-less sessions derive their auth slots
+  from the credentials that actually exist; first-message transition pinned
+  end-to-end.** Completes the auth-aliveness fix for the model-only config
+  shape (the user's omp session, the corpus sims): when no provider id is
+  derivable, `auth_status()` now reports per-provider slots from env keys and
+  auth-store entries instead of collapsing to nothing — so the header auth
+  inventory shows the configured session rather than the full
+  "nothing configured" fallback list. New corpus scenario `first-message`
+  (send first message → transcript carries it + the reply; the auth circle
+  for a keyed provider is filled, never hollow): the regression gate for the
+  "opening screen never transitions" complaint. Full corpus re-proven: 61
+  deterministic goldens (57 header goldens intentionally re-shaped by the
+  configured-session inventory; 0 unstable). Suite 1738/0 incl. the
+  store-based derivation test (env-mutating test removed — its window
+  poisoned parallel App inits through AuthStore::load's env snapshot,
+  breaking the Ctrl+A picker test's runtime assumption). Label note:
+  origin carries a second iter-714 (micro-compaction, concurrent line) —
+  append-only, both stay.
+
 - **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
   mis-advertising the live web_search chain.** The introspection tool claimed
   `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is

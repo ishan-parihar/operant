@@ -3265,3 +3265,37 @@ fn wrap_input_text_paints_selection_in_reverse_video() {
         "chars outside the selection must survive: {joined}"
     );
 }
+
+#[test]
+fn auth_status_derives_slots_from_env_keys_when_provider_unset() {
+    // No provider id and a stored anthropic key: the matrix must show the
+    // session as configured (the corpus/sim shape, and any boot with keys
+    // but no provider field). Store-based, not env-based: a parallel test's
+    // App init would snapshot a mutated env into its own AuthStore, and
+    // that cross-test poisoning is exactly what broke the Ctrl+A picker
+    // test (tokio::spawn needs a runtime the unit test lacks). Pinned
+    // end-to-end by the first-message corpus scenario (not-contains
+    // "○ anthropic").
+    with_cleared_auth_env(|| {
+        let mut app = make_app();
+        app.has_credentials = false;
+        app.active_provider = None;
+        // omp-style bare model — provider inference must yield None so the
+        // credential-derivation arm is the one under test (the exact shape of
+        // the user's reported session).
+        app.config.agent.model = "glm-5.3".to_string();
+        app.auth_store.credentials.clear();
+        app.auth_store.credentials.insert(
+            "anthropic".to_string(),
+            crate::tui::adapter_types::StoredCredential::ApiKey {
+                key: "sk-ant-test".to_string(),
+            },
+        );
+        let status = app.auth_status();
+        assert_eq!(
+            status.anthropic.state,
+            crate::tui::operant_app::auth::AuthState::Available,
+            "a stored anthropic key with no provider id must mark anthropic configured"
+        );
+    })
+}

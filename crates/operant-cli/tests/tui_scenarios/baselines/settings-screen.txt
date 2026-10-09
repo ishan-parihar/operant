@@ -8,23 +8,23 @@
                    Auto-compact                            false
                    Desktop notifications                   false
                    Show turn duration                      false
- operant · r       Output Style                            default
- operant           Reduce motion                           false
- /model to s       Terminal progress bar                   false
- v0.2.1            Verbose logging                         false
- /login to a       Cursor blinking                         false
- ○ anthropic       Show current directory                  false
- ○ openroute       Show git branch                         false
- ○ openai          Auto-compact threshold                  0
- ○ cursor          Auto-commits                            false
- ○ copilot
- ○ gemini      Maximum tokens per response.
- ○ antigravi
+                   Output Style                            default
+                   Reduce motion                           false
+                   Terminal progress bar                   false
+ operant · r       Verbose logging                         false
+ operant           Cursor blinking                         false
+ /model to s       Show current directory                  false
+ v0.2.1            Show git branch                         false
+ /login to a       Auto-compact threshold                  0
+ ● anthropic       Auto-commits                            false
  ~
-
+               Maximum tokens per response.
 
 1>
                                                                                                             line Capture
+
+
+
 
 
 

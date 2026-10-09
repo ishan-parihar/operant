@@ -1,22 +1,22 @@
 
 
- ope
- ope  Context & usage                                        Esc to close
- /mo  Token window, rate limits, and session cost.
- v0.  Context window
- /lo  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
- ○ a
- ○ o  Rate limits
- ○ o  5-hour   no data
- ○ c  7-day    no data
- ○ c
- ○ g  Session cost:  $0.0000
- ○ a
- ~
 
+      Context & usage                                        Esc to close
+      Token window, rate limits, and session cost.
+ ope  Context window
+ ope  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+ /mo
+ v0.  Rate limits
+ /lo  5-hour   no data
+ ● a  7-day    no data
+ ~
+      Session cost:  $0.0000
 
 1>
                                                                             ture
+
+
+
 
       enter/esc close
 

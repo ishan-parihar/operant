@@ -760,7 +760,60 @@ impl TuiState for App {
             // adaptation) so a working custom session still reads as
             // configured instead of "login to add provider".
             Some(_) => status.openai_compatible_any = state,
-            None => {}
+            None => {
+                // Model-only config (provider id not yet derived): report the
+                // credentials that ACTUALLY exist per provider slot — env keys
+                // and auth-store entries — so the auth inventory reflects a
+                // configured session even before the first model switch pins
+                // a provider id. Without this, an env-key session rendered the
+                // full unconfigured fallback list (the sim/corpus case, and
+                // any boot with keys but no active-provider field).
+                let store = &self.auth_store;
+                let env_key = |name: &str| {
+                    std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false)
+                };
+                let has = |id: &str| {
+                    store
+                        .api_key_for(id)
+                        .map(|k| !k.is_empty())
+                        .unwrap_or(false)
+                };
+                if env_key("ANTHROPIC_API_KEY") || has("anthropic") || has("claude") {
+                    status.anthropic = ProviderAuth {
+                        state,
+                        has_oauth: false,
+                        oauth_state: state,
+                        has_api_key: true,
+                    };
+                }
+                if env_key("OPENAI_API_KEY") || has("openai") {
+                    status.openai = state;
+                    status.openai_has_api_key = true;
+                }
+                if has("openrouter") {
+                    status.openrouter = state;
+                }
+                if has("copilot") {
+                    status.copilot = state;
+                    status.copilot_has_api_token = true;
+                }
+                if has("gemini") || has("google") {
+                    status.gemini = state;
+                }
+                if has("cursor") {
+                    status.cursor = state;
+                }
+                if has("antigravity") {
+                    status.antigravity = state;
+                }
+                // Any other stored key still means an OpenAI-compatible profile
+                // is configured.
+                if status.anthropic.state == AuthState::NotConfigured
+                    && store.has_any_key()
+                {
+                    status.openai_compatible_any = state;
+                }
+            }
         }
         status
     }

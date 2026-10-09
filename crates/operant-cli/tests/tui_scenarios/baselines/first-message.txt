@@ -19,13 +19,13 @@
  ● anthropic(key)
  ~
 
- The user asked a two-part question.Answer the first part, then the second.
+ Hello from the mock agent.
 
- First part of the answer. Second part of the answer. That is the whole answer.
+Prompt restored to the composer — the turn failed.
+1> Hello from the first message
+                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
-1>
-                                                                         ~ 19/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

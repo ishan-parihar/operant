@@ -1,22 +1,22 @@
 
 
- operant · replay
- operan┌───────────────────────────────────────────────────────────────┐
- /model│ Connect a provider                                            │
- v0.2.1│ Search                                                        │
- /login│                                                               │
- ○ anth│                                                               │
- ○ open│ Popular                                                       │
- ○ open│ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
- ○ curs│ Custom OpenAI-Compatible Custom URL + API key                 │
- ○ copi│ OpenAI (API key)                                              │
- ○ gemi│ Anthropic (API key)                                           │
- ○ anti│ Google AI Studio (API key)                                    │
- ~     │ xAI (API key)                                                 │
-       │ Mistral (API key)                                             │
+
+       ┌───────────────────────────────────────────────────────────────┐
+       │ Connect a provider                                            │
+ operan│ Search                                                        │
+ operan│                                                               │
+ /model│                                                               │
+ v0.2.1│ Popular                                                       │
+ /login│ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
+ ● anth│ Custom OpenAI-Compatible Custom URL + API key                 │
+ ~     │ OpenAI (API key)                                              │
+       │ Anthropic (API key)                                           │
+       │ Google AI Studio (API key)                                    │
+1>     │ xAI (API key)                                                 │
+       │ Mistral (API key)                                             │ Capture
        │ Groq (API key)                                                │
-1>     │ DeepSeek (API key)                                            │
-       │ NVIDIA NIM (API key)                                          │ Capture
+       │ DeepSeek (API key)                                            │
+       │ NVIDIA NIM (API key)                                          │
        │ OpenRouter (API key)                                          │
        └───────────────────────────────────────────────────Esc to close┘
 

@@ -8,23 +8,23 @@
 
 
 
+
+
+
  operant · replay
- operant
- /model to switch · Offline Capture
+ operant                       Export conversation                                   esc
+ /model to switch · Offline C  Choose a format to export this session.
  v0.2.1
- /login to add provider        Export conversation                                   esc
- ○ anthropic                   Choose a format to export this session.
- ○ openrouter
- ○ openai                      [1] JSON  Structured export for tooling and replay
- ○ cursor
- ○ copilot                     [2] Markdown  Readable transcript for docs and sharing
- ○ gemini
- ○ antigravity                 Saved to ./claude-export-<timestamp>.<ext>
- ~
+ /login to add provider        [1] JSON  Structured export for tooling and replay
+ ● anthropic(key)
+ ~                             [2] Markdown  Readable transcript for docs and sharing
 
-
-1>                             tab/←/→ switch  ·  enter export  ·  1/2 choose
+                               Saved to ./claude-export-<timestamp>.<ext>
+1>
                                                                                                ~ API key Offline Capture
+
+                               tab/←/→ switch  ·  enter export  ·  1/2 choose
+
 
 
 

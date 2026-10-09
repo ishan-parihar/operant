@@ -8,23 +8,23 @@
 
              No changes were captured for this turn.
 
- operant ·   Make an edit this turn, then reopen /changes to see the turn diff.
+             Make an edit this turn, then reopen /changes to see the turn diff.
+
+
+ operant ·
  operant
  /model to
  v0.2.1
  /login to
- ○ anthropi
- ○ openrout
- ○ openai
- ○ cursor
- ○ copilot
- ○ gemini
- ○ antigrav
+ ● anthropi
  ~
 
 
 1>
                                                                                                              ine Capture
+
+
+
 
 
 
