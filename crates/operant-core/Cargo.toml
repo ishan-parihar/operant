@@ -17,6 +17,8 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 axum = { workspace = true }
+# Unpoisoned locks where call sites would otherwise unwrap (house rule)
+parking_lot = { workspace = true }
 
 # Networking
 reqwest = { workspace = true }

@@ -114,6 +114,18 @@ pub struct CronRun {
     pub origin: String,
 }
 
+/// One pending/settled delivery row from the `cron_deliveries` ledger
+/// (iter-720), as returned to the scheduler for replay. `payload` is the
+/// fully rendered message (header included) — replay resends it verbatim.
+pub struct CronDeliveryRow {
+    pub id: i64,
+    pub job_id: String,
+    pub target: String,
+    pub payload: String,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+}
+
 impl CronDb {
     /// Lock the SQLite connection, converting mutex poisoning into a
     /// recoverable error instead of panicking (same pattern as database.rs).
@@ -220,7 +232,34 @@ impl CronDb {
             );
             CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, id);
     "#,
-    ];
+        // v3 (iter-720): the durable delivery ledger, hermes' deliveries.db
+        // shape. deliver_result hands the payload to the gateway over an
+        // in-memory channel and forgets it: a gateway outage or dead
+        // consumer drops the message silently (tx.send on an unbounded
+        // channel never errors, so the drop is invisible). One row per
+        // delivery, append-only; state walks pending to delivered
+        // (consumer confirmed) or pending to parked (the tombstone:
+        // attempts exhausted, replay stops, the row stays inspectable).
+        // No FK, same as cron_runs: history outlives job deletion.
+        r#"
+            CREATE TABLE IF NOT EXISTS cron_deliveries (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id          TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                target          TEXT NOT NULL,
+                payload         TEXT NOT NULL,
+                attempts        INTEGER NOT NULL DEFAULT 0,
+                state           TEXT NOT NULL DEFAULT 'pending',
+                last_error      TEXT,
+                claimed_at      TEXT,
+                last_attempt_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_cron_deliveries_pending
+                ON cron_deliveries(state, last_attempt_at);
+            CREATE INDEX IF NOT EXISTS idx_cron_deliveries_job
+                ON cron_deliveries(job_id, id);
+    "#,
+];
 
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -719,6 +758,143 @@ impl CronDb {
         Ok(())
     }
 
+    // ── iter-720: the durable delivery ledger (`cron_deliveries`) ──
+    // Same audit-layer discipline as `record_cron_run`: every write
+    // degrades to a warn at the caller and never fails the run whose
+    // outcome is already recorded. An "attempt" is one handoff to the
+    // consumer (the gateway's sender loop); the reclaim path owns the
+    // retry cadence, the tombstone caps it.
+
+    /// Queue one delivery: append-only, state='pending'. Returns the row
+    /// id the consumer echoes back via [`Self::mark_delivery_outcome`].
+    pub fn record_cron_delivery(
+        &self,
+        job_id: &str,
+        target: &str,
+        payload: &str,
+    ) -> Result<i64, Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO cron_deliveries (job_id, created_at, target, payload)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                job_id,
+                chrono::Utc::now().to_rfc3339(),
+                target,
+                payload
+            ],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record cron delivery: {}", e)))?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Count one replay/send attempt against a pending delivery: bumps
+    /// the counter, stamps the claim, records the error. When the count
+    /// reaches `max_attempts` the row is PARKED — the tombstone (replay
+    /// stops, the row stays inspectable). No-op on a settled row.
+    /// Returns the row's state after the write.
+    pub fn mark_delivery_attempt(
+        &self,
+        delivery_id: i64,
+        max_attempts: u32,
+        error: Option<&str>,
+    ) -> Result<String, Error> {
+        let conn = self.lock_conn()?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE cron_deliveries SET
+                attempts = attempts + 1,
+                last_attempt_at = ?1,
+                claimed_at = ?1,
+                last_error = ?2,
+                state = CASE WHEN attempts + 1 >= ?3 THEN 'parked' ELSE 'pending' END
+             WHERE id = ?4 AND state = 'pending'",
+            params![now, error, max_attempts as i64, delivery_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to mark cron delivery attempt: {}", e)))?;
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM cron_deliveries WHERE id = ?1",
+                params![delivery_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Agent(format!("Failed to read cron delivery state: {}", e)))?;
+        Ok(state)
+    }
+
+    /// Consumer-side outcome report — the gateway's sender loop is the
+    /// only place the real send outcome is known. Success settles the
+    /// row ('delivered', terminal); failure records the error and leaves
+    /// it pending: the attempt was already counted at handoff, the
+    /// reclaim path owns the retry. Returns false when the row was
+    /// already settled (idempotent report).
+    pub fn mark_delivery_outcome(
+        &self,
+        delivery_id: i64,
+        success: bool,
+        error: Option<&str>,
+    ) -> Result<bool, Error> {
+        let conn = self.lock_conn()?;
+        if success {
+            conn.execute(
+                "UPDATE cron_deliveries SET state = 'delivered', last_error = NULL
+                 WHERE id = ?1 AND state != 'delivered'",
+                params![delivery_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to settle cron delivery: {}", e)))?;
+        } else {
+            conn.execute(
+                "UPDATE cron_deliveries SET last_error = ?1
+                 WHERE id = ?2 AND state = 'pending'",
+                params![error, delivery_id],
+            )
+            .map_err(|e| Error::Agent(format!("Failed to record cron delivery error: {}", e)))?;
+        }
+        Ok(conn.changes() > 0)
+    }
+
+    /// The stale-claim reclaim: pending rows whose last handoff (or
+    /// creation, for never-sent rows) is older than `older_than` — the
+    /// hermes shape `max(3×timeout, 2h)`: a claim held past the horizon
+    /// is presumed dead (crashed consumer, gateway outage) and the row
+    /// returns to the scheduler for re-send on the next tick.
+    // ponytail: LIMIT 50 bounds one tick's replay batch; page or
+    // backpressure if a backlog ever outgrows it.
+    pub fn reclaim_stale_deliveries(
+        &self,
+        older_than: chrono::Duration,
+    ) -> Result<Vec<CronDeliveryRow>, Error> {
+        let conn = self.lock_conn()?;
+        let cutoff = (chrono::Utc::now() - older_than).to_rfc3339();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, job_id, target, payload, attempts, last_error
+                 FROM cron_deliveries
+                 WHERE state = 'pending' AND coalesce(last_attempt_at, created_at) <= ?1
+                 ORDER BY id ASC LIMIT 50",
+            )
+            .map_err(|e| Error::Agent(format!("Failed to prepare delivery reclaim: {}", e)))?;
+        let rows = stmt
+            .query_map(params![cutoff], |row| {
+                Ok(CronDeliveryRow {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    target: row.get(2)?,
+                    payload: row.get(3)?,
+                    attempts: row.get::<_, i64>(4)? as u32,
+                    last_error: row.get(5)?,
+                })
+            })
+            .map_err(|e| Error::Agent(format!("Failed to reclaim deliveries: {}", e)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(
+                row.map_err(|e| Error::Agent(format!("Failed to read delivery row: {}", e)))?,
+            );
+        }
+        Ok(out)
+    }
+
     /// The most recent run rows for one job, newest first — the
     /// `operant cron history <id>` surface.
     pub fn list_recent_runs(&self, job_id: &str, limit: usize) -> Result<Vec<CronRun>, Error> {
@@ -1169,6 +1345,133 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "unknown job reads empty, not an error"
+        );
+    }
+
+    // ── iter-720: the durable delivery ledger ──
+
+    #[test]
+    fn delivery_ledger_migrates_a_pre_v3_database() {
+        // A db created at v2 (cron_runs era) must gain cron_deliveries on
+        // the next open without disturbing existing history.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cron.db");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cron_jobs (id TEXT PRIMARY KEY);
+                 CREATE TABLE cron_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL, started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL, success INTEGER NOT NULL,
+                    error TEXT, origin TEXT NOT NULL);
+                 INSERT INTO cron_runs (job_id, started_at, finished_at, success, origin)
+                    VALUES ('j', 't0', 't1', 1, 'scheduled');
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        }
+
+        let db = CronDb::init(path).unwrap();
+        let runs = db.list_recent_runs("j", 10).unwrap();
+        assert_eq!(runs.len(), 1, "pre-v3 history survives the v3 migration");
+        assert!(runs[0].success);
+
+        // The new surface is live on the migrated db.
+        let id = db.record_cron_delivery("j", "telegram:123", "hello").unwrap();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn delivery_attempts_walk_to_the_parked_tombstone() {
+        let (db, _dir) = test_db();
+        let id = db.record_cron_delivery("j1", "telegram:1", "p").unwrap();
+
+        let s1 = db.mark_delivery_attempt(id, 3, Some("send failed")).unwrap();
+        assert_eq!(s1, "pending", "first attempt keeps the row pending");
+        let s2 = db.mark_delivery_attempt(id, 3, None).unwrap();
+        assert_eq!(s2, "pending", "second attempt keeps the row pending");
+        let s3 = db.mark_delivery_attempt(id, 3, Some("still down")).unwrap();
+        assert_eq!(s3, "parked", "third attempt parks — the tombstone");
+
+        // Parked is terminal for replay AND for new accounting.
+        let s4 = db.mark_delivery_attempt(id, 3, None).unwrap();
+        assert_eq!(s4, "parked", "a parked row ignores further attempts");
+        let stale = db
+            .reclaim_stale_deliveries(chrono::Duration::seconds(0))
+            .unwrap();
+        assert!(
+            stale.is_empty(),
+            "the reclaim scan never returns a parked row"
+        );
+    }
+
+    #[test]
+    fn delivery_outcome_settles_and_stays_idempotent() {
+        let (db, _dir) = test_db();
+        let id = db.record_cron_delivery("j2", "telegram:2", "p").unwrap();
+        db.mark_delivery_attempt(id, 3, None).unwrap();
+
+        assert!(db.mark_delivery_outcome(id, true, None).unwrap());
+        assert!(
+            !db.mark_delivery_outcome(id, true, None).unwrap(),
+            "settling an already-delivered row reports no change"
+        );
+
+        // A consumer failure report records the error, keeps the row
+        // pending (reclaim owns the retry), and never resurrects a
+        // settled row.
+        let id2 = db.record_cron_delivery("j2", "telegram:2", "p2").unwrap();
+        assert!(db.mark_delivery_outcome(id2, false, Some("502")).unwrap());
+        let stale = db
+            .reclaim_stale_deliveries(chrono::Duration::seconds(0))
+            .unwrap();
+        assert_eq!(stale.len(), 1, "the failed row stays pending for reclaim");
+        assert_eq!(stale[0].last_error.as_deref(), Some("502"));
+
+        db.mark_delivery_outcome(id2, true, None).unwrap();
+        assert!(
+            !db.mark_delivery_outcome(id, false, Some("late report")).unwrap(),
+            "a failure report after delivery is ignored"
+        );
+    }
+
+    #[test]
+    fn delivery_reclaim_respects_the_horizon_and_batch_bound() {
+        let (db, _dir) = test_db();
+        let fresh = db.record_cron_delivery("j3", "telegram:3", "fresh").unwrap();
+        db.mark_delivery_attempt(fresh, 3, None).unwrap();
+        let old = db.record_cron_delivery("j3", "telegram:3", "old").unwrap();
+
+        // Nothing is stale under a long horizon.
+        assert!(
+            db.reclaim_stale_deliveries(chrono::Duration::hours(2))
+                .unwrap()
+                .is_empty(),
+            "a just-attempted row is not stale"
+        );
+
+        // Backdate the old row's claim beyond the horizon (in-module
+        // tests reach the raw connection; production only writes now).
+        {
+            let conn = db.lock_conn().unwrap();
+            conn.execute(
+                "UPDATE cron_deliveries SET last_attempt_at = '2000-01-01T00:00:00+00:00'
+                 WHERE id = ?1",
+                params![old],
+            )
+            .unwrap();
+        }
+
+        let stale = db
+            .reclaim_stale_deliveries(chrono::Duration::hours(2))
+            .unwrap();
+        assert_eq!(stale.len(), 1, "only the backdated row reclaims");
+        assert_eq!(stale[0].id, old);
+        assert_eq!(
+            stale[0].payload, "old",
+            "replay resends the rendered payload verbatim"
         );
     }
 }

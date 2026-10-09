@@ -81,6 +81,40 @@ pub enum ObserverEvent {
         error: String,
         duration_ms: u64,
     },
+    /// A cron job's result was queued on the durable delivery ledger
+    /// (iter-720). The row is pending until the consumer settles it via
+    /// `CronDb::mark_delivery_outcome` or the reclaim path re-sends it.
+    CronDeliveryQueued {
+        job_id: String,
+        delivery_id: i64,
+        target: String,
+    },
+    /// A pending ledger row whose claim had gone stale was re-sent
+    /// (iter-720 replay-after-unblock). `attempt` is the counter AFTER
+    /// this handoff — it walks toward the park tombstone.
+    CronDeliveryReclaimed {
+        job_id: String,
+        delivery_id: i64,
+        attempt: u32,
+    },
+    /// A delivery hit the attempt cap and was parked — the tombstone
+    /// (iter-720). Replay stops; the row stays inspectable in
+    /// `cron_deliveries` for forensics.
+    CronDeliveryParked {
+        job_id: String,
+        delivery_id: i64,
+        attempts: u32,
+    },
+    /// The delivery consumer (gateway sender loop) reported an outcome
+    /// for a ledger row. Core emits nothing for this variant — it is the
+    /// consumer-side report contract (iter-720); the gateway slice is
+    /// the emitter.
+    CronDeliveryOutcome {
+        job_id: String,
+        delivery_id: i64,
+        success: bool,
+        error: Option<String>,
+    },
 }
 
 /// Numeric metrics emitted by the agent runtime.
@@ -275,6 +309,39 @@ impl Observer for ConsoleObserver {
                 duration_ms,
             } => {
                 tracing::error!(hand_name, error, duration_ms, "hand failed");
+            }
+            ObserverEvent::CronDeliveryQueued {
+                job_id,
+                delivery_id,
+                target,
+            } => {
+                tracing::info!(job_id, delivery_id, target, "cron delivery queued");
+            }
+            ObserverEvent::CronDeliveryReclaimed {
+                job_id,
+                delivery_id,
+                attempt,
+            } => {
+                tracing::warn!(job_id, delivery_id, attempt, "cron delivery reclaimed");
+            }
+            ObserverEvent::CronDeliveryParked {
+                job_id,
+                delivery_id,
+                attempts,
+            } => {
+                tracing::error!(job_id, delivery_id, attempts, "cron delivery parked");
+            }
+            ObserverEvent::CronDeliveryOutcome {
+                job_id,
+                delivery_id,
+                success,
+                error,
+            } => {
+                if *success {
+                    tracing::info!(job_id, delivery_id, "cron delivery settled");
+                } else {
+                    tracing::warn!(job_id, delivery_id, error, "cron delivery send failed");
+                }
             }
         }
     }
