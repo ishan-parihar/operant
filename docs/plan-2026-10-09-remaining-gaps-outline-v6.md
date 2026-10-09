@@ -90,7 +90,7 @@
 |---|---|
 | P0-A recovery semantics (grace window, CAS terminal write, two-store reconcile) | partial — close-at-detection absorbed at iter-691; grace/CAS/two-store open |
 | P0-B error-code taxonomy | **DONE** (iter-691) |
-| P1-A per-channel dispatch breaker, half-open probe | **UNBLOCKED by iter-734 — next trinity port.** Hook is `gateway/mod.rs:526 send_to_platform` (it already resolves the per-channel key and returns `Result`); NOT the cron loop — the decoupling was confirmed in the iter-733 audit. Design: `plan-2026-10-08-trinity-audit-and-remaining-outline.md:23-25` |
+| P1-A per-channel dispatch breaker, half-open probe | **UNBLOCKED by iter-734 — next trinity port.** Hook is `gateway/mod.rs:526 send_to_platform` (it resolves the **platform-adapter** key — `self.adapters.get(platform)` — and returns `Result`; the channel id rides unindexed on `OutgoingMessage`, `gateway/types.rs:192-205`, and must be plumbed into the breaker's channel+failure-class key); NOT the cron loop — the cron sender is a separate spawn (`gateway_runner.rs:3944-3982`) and `send_to_platform` is the shared seam for ~19 call sites. No breaker exists anywhere (verified: TurnLease is inbound-session serialization, DeliveryLedger records without gating, PollRecoveryState is poll-loop debounce). Design: `plan-2026-10-08-trinity-audit-and-remaining-outline.md:23-25` |
 | P1-B effect-scoped idempotency on outbound sends | open |
 | P1-C canary invariant harness (E-01/E-02/E-06) | open |
 | P2-A lease/retry redelivery cap + poison-park | **DONE** — core ledger iter-722 + the consumer-mount remainder iter-734 |
@@ -123,10 +123,35 @@
   memory → org loop guard (GAP-2.1) → teams table + Team path → org
   check exit codes → CEO loop → AD-RG → `retention_gc` wire-or-delete.
   **IdentityGate: HOLD** — finished, tested, unmounted.
-- **Unowned red tests** (BUGS.md): **K-1** `tools::kernel` roundtrip
-  (2 failures on mainline, cause undiagnosed), **K-2**
-  `loop_request_timeout` budget tests (order-dependent flake). Each
-  deserves its own iteration; do not fold into another slice.
+- **Unowned red tests — CORRECTED by the iter-736 audit (one row was
+  stale, one was mis-measured, one was missing):**
+  - **K-1 RETIRED as a defect.** `tools::kernel` roundtrip is **green in
+    the main tree at this tip — 7/7 measured** (ping_roundtrip,
+    harness_apply_and_rollback_roundtrip, exec_state, probe, tool_bridge,
+    transparent_restart, import_allowlist). The clean-worktree red is
+    the documented fleet-rule-6 precondition (uninitialized
+    `vendor/prime-agent` + untracked `kernel-sidecar/.venv`),
+    root-caused at `kernel-sidecar/kernel_sidecar/vendor.py:24-45`
+    (`_HAS_PRIME_RUNTIME`) — both prerequisites are present in this
+    tree. BUGS.md's row cites `kernel/mod.rs:285` (stale; the asserts
+    are at `:274`/`:275`) and calls the cause undiagnosed — both wrong.
+    Action: fix BUGS.md, do not spend an iteration.
+  - **K-2 keeps a row, re-characterized.** Measured at this tip: the
+    narrow filter (`--lib -- loop_request_timeout`) is green 3/3; the
+    broad `--lib -- config` battery was red in **2 of 4 runs** — a real
+    intermittent flake, but not BUGS.md's hypothesized mechanism:
+    `config_tool.rs:456-458` explicitly restores the process-global to
+    defaults (the contamination is already guarded), and the asserted
+    path reads only per-agent fields (`agent/mod.rs:2810-2862`,
+    `events.rs:23-29`). Measured before re-planning; do not trust the
+    "order-dependent" label until re-measured.
+  - **NEW — peer-owned red, not a K-class row.**
+    `config::tests::agent_block_parses_guardrail_exempts_and_env_knob_defaults`
+    is deterministically red **in the shared tree only** (fails in
+    isolation, every run) from the peer's in-flight `agent/` WIP (5
+    files dirty); green at origin/main per their iter-731 commit body.
+    §5 rule 7 territory — don't fix, don't block, don't mistake it for
+    an unowned red when running the battery.
 
 ## §4 Config/ops hygiene
 
@@ -146,9 +171,11 @@
   consequence, not a fault).
 - **LTO marker rule** — shipped-binary marker checks must be
   reachable-marker only.
-- **Peer's clippy `expect()` deny sites** (`agent/stream.rs:524/:544`)
-  — theirs (rule 7); annotate only if still present after their TUI
-  waves settle.
+- **Peer's clippy `expect()` deny sites** (`agent/stream.rs` — the
+  `#[expect(clippy::expect_used)]` attributes at **:447** and **:611**;
+  the earlier `:524/:544` refs were wrong and propagated four doc
+  generations unchecked) — theirs (rule 7); annotate only if still
+  present after their TUI waves settle.
 
 ## §5 Gate + concurrency hygiene (session-proven rules)
 
@@ -205,3 +232,42 @@
   adversarial pure-test remainder (732), phantom-rung + outline
   corrections (733), gateway consumer mount + registry attach (734),
   trinity P2-A (core 722 + consumer 734) — landed.
+
+---
+
+## Audit pass appended 2026-10-09 (iter-736)
+
+Every concrete claim in this outline was re-verified against the tree
+at tip `0b39222d` — an independent read-only subagent for the trinity/
+gate rows plus direct measurement for the test rows. Verdicts:
+
+- **HOLDS**: §1 row 2 (offload/TOC — zero `artifact_index`/`offload`
+  matches; the iter-729 trim's production call site is
+  `operant-runtime/src/agent/agent.rs:1470`), row 3 (vision port at
+  `reconciled.rs:2026`/`:2066` + `delegate.rs:1285`), row 5
+  (CronDeliveryOutcome zero emitters — the only two observer mentions
+  in gateway_runner are the iter-734 comment), row 6a
+  (`ping_pong_cycles` is a `VecDeque<String>` — name-only, S7
+  confirmed), row 6b (zero progress-token matches); §2 P2-A (both
+  halves; exactly one production `mark_delivery_outcome` caller at
+  `gateway_runner.rs:3958`, file clean at HEAD), P0-A (grace/CAS/
+  two-store all genuinely open — `check_interrupted_turns_in` never
+  compares the timestamp it reads, `save_turn_state_in_for` is a blind
+  write), P1-B, P2-B, P2-C, P2-D, P2-E (all open; scope notes: the
+  guarded UPDATEs at `cronjobs/db.rs:806/836/843` are a CAS precedent
+  scoped to P2-A only, and P1-B's settle-after-send is not a pre-send
+  claim — a crash between send and settle re-sends), P1-C (zero
+  E-01/E-02/E-06 matches); §3 IdentityGate HOLD (13 tests, zero
+  production `.with_org_gate` callers); §4 CHANGELOG 5× duplication.
+- **CORRECTED in place above**: P1-A's key nuance (platform adapter,
+  not channel key); K-1 retired (green 7/7 measured; environment
+  precondition, root cause named); K-2 re-characterized (real
+  intermittent flake, 2-of-4 battery runs; the env-mutation mechanism
+  is refuted by `config_tool.rs:456-458`); §4 clippy refs (real sites
+  `:447`/`:611`).
+- **Non-redundancy**: every row that also lives in another doc is a
+  pointer (S7 → BUGS.md; trinity design → the trinity doc; peer
+  tracks → their own docs); no duplicated work is queued across the
+  corpus. Relevance confirmed: row 2 is the next unblocked core
+  slice, P1-A the next trinity port, and the re-queued rows (S7,
+  progress-token stall) are production work, not tests.
