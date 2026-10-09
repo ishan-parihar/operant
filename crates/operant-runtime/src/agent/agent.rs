@@ -17,6 +17,7 @@ use operant_config::schema::Config;
 use operant_memory::{self, Memory, MemoryCategory};
 use operant_providers::{self, ChatMessage, ChatRequest, ConversationMessage, Provider};
 use operant_tool_call_parser::strip_think_tags;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as IoWrite;
 use std::path::Path;
@@ -1453,11 +1454,11 @@ impl Agent {
         }
     }
 
-    /// Copy of `results` with each output trimmed to
-    /// `config.max_tool_result_chars` (head 2/3 + tail 1/3, truncation
-    /// marker in the middle; `0` disables) — the ingestion-time backstop the
-    /// knob documents. Only the ingested conversation message is trimmed;
-    /// the observer and the TurnEvent channel keep the full output.
+    /// Copy of `results` with each oversized output offloaded to a durable
+    /// workspace artifact ([`Self::offload_oversized_result`], v6 §1 row 2)
+    /// and replaced by a TOC stub. Only the ingested conversation message
+    /// is offloaded; the observer and the TurnEvent channel keep the full
+    /// output.
     fn results_for_ingestion(&self, results: &[ToolExecutionResult]) -> Vec<ToolExecutionResult> {
         let max = self.config.max_tool_result_chars;
         if max == 0 {
@@ -1467,10 +1468,71 @@ impl Agent {
             .iter()
             .map(|r| {
                 let mut trimmed = r.clone();
-                trimmed.output = truncate_tool_result(&r.output, max);
+                if r.output.len() > max {
+                    trimmed.output = self.offload_oversized_result(&r.name, &r.output, max);
+                }
                 trimmed
             })
             .collect()
+    }
+
+    /// Offload one oversized tool result to a durable workspace artifact
+    /// and return the TOC stub that replaces it in history (v6 §1 row 2).
+    ///
+    /// iter-729's trim marker told the model text was truncated but named
+    /// no retrieval path — the middle was gone with no way back. The full
+    /// output is written content-addressed under
+    /// `<workspace>/.operant/artifacts/tool-results/`, inside the security
+    /// policy's allowed root, so the agent's own `file_read` can page back
+    /// through it (`offset`/`limit` are 1-based LINES). Best-effort: an
+    /// unwritable workspace falls back to the iter-729 trim, preserving
+    /// the old behavior instead of failing the turn.
+    // ponytail: artifacts accumulate with no retention sweep — a GC slice
+    // owns cleanup (size/age policy) once the shape proves out.
+    fn offload_oversized_result(&self, tool_name: &str, output: &str, max: usize) -> String {
+        let digest = {
+            let mut hasher = Sha256::new();
+            hasher.update(output.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let safe_tool: String = tool_name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(48)
+            .collect();
+        let path = self
+            .workspace_dir
+            .join(".operant")
+            .join("artifacts")
+            .join("tool-results")
+            .join(format!("{}-{}.txt", &digest[..16], safe_tool));
+
+        // Content-addressed: a repeat of the same result reuses the
+        // artifact instead of rewriting it.
+        if !path.exists() {
+            let parent_ok = path
+                .parent()
+                .is_some_and(|parent| std::fs::create_dir_all(parent).is_ok());
+            if !(parent_ok && std::fs::write(&path, output).is_ok()) {
+                return truncate_tool_result(output, max);
+            }
+        }
+
+        format!(
+            "[Tool result offloaded: `{}` produced {} chars (over the {}-char ingestion cap). \
+             Full output saved at {} — page through it with the `file_read` tool \
+             (`offset`/`limit` are 1-based LINES, not bytes; use `search` for single-line blobs).]",
+            tool_name,
+            output.len(),
+            max,
+            path.display()
+        )
     }
 
     async fn execute_tools(&self, calls: &[ParsedToolCall]) -> Vec<ToolExecutionResult> {

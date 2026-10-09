@@ -365,13 +365,22 @@ fn build_agent_with_config(
     tools: Vec<Box<dyn Tool>>,
     config: AgentConfig,
 ) -> Agent {
+    build_agent_with_config_and_workspace(provider, tools, config, std::env::temp_dir())
+}
+
+fn build_agent_with_config_and_workspace(
+    provider: Box<dyn Provider>,
+    tools: Vec<Box<dyn Tool>>,
+    config: AgentConfig,
+    workspace: std::path::PathBuf,
+) -> Agent {
     Agent::builder()
         .provider(provider)
         .tools(tools)
         .memory(make_memory())
         .observer(make_observer())
         .tool_dispatcher(Box::new(NativeToolDispatcher))
-        .workspace_dir(std::env::temp_dir())
+        .workspace_dir(workspace)
         .config(config)
         .build()
         .unwrap()
@@ -1603,7 +1612,7 @@ async fn run_single_delegates_to_turn() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 26. [agent] max_tool_result_chars ingestion-time truncation
+// 26. [agent] max_tool_result_chars ingestion-time offload
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// A tool that returns a fixed 200_000-char output — the shape of an
@@ -1642,11 +1651,17 @@ fn huge_output_tool_call() -> ToolCall {
     }
 }
 
-/// The config knob trims the oversized tool result at ingestion — the
-/// message pushed to history carries head (2/3) + tail (1/3) and a
-/// truncation marker, not the raw 200k output.
+/// The config knob offloads the oversized tool result to a durable
+/// workspace artifact and ingests a TOC stub naming it — the message in
+/// history is a pointer, and the full output stays retrievable through
+/// the agent's own `file_read`.
 #[tokio::test]
-async fn max_tool_result_chars_trims_oversized_result_at_ingestion() {
+async fn max_tool_result_chars_offloads_oversized_result_to_an_artifact() {
+    let workspace = std::env::temp_dir().join(format!(
+        "operant_test_offload_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workspace);
     let provider = Box::new(ScriptedProvider::new(vec![
         tool_response(vec![huge_output_tool_call()]),
         text_response("done"),
@@ -1655,7 +1670,12 @@ async fn max_tool_result_chars_trims_oversized_result_at_ingestion() {
         max_tool_result_chars: 1_000,
         ..AgentConfig::default()
     };
-    let mut agent = build_agent_with_config(provider, vec![Box::new(HugeOutputTool)], config);
+    let mut agent = build_agent_with_config_and_workspace(
+        provider,
+        vec![Box::new(HugeOutputTool)],
+        config,
+        workspace.clone(),
+    );
 
     let _ = agent.turn("fetch it").await.unwrap();
 
@@ -1670,16 +1690,87 @@ async fn max_tool_result_chars_trims_oversized_result_at_ingestion() {
     assert_eq!(results.len(), 1);
     let content = &results[0].content;
     assert!(
-        content.contains("[... "),
-        "ingested tool result must carry the truncation marker: {}",
+        content.starts_with("[Tool result offloaded"),
+        "ingested tool result must be the TOC stub: {}",
         &content[..80.min(content.len())]
     );
     assert!(
-        content.len() <= 1_200,
-        "ingested tool result must be trimmed to ~max_tool_result_chars, got {}",
+        content.contains("`huge` produced 200000 chars"),
+        "stub must name the tool and the full size: {}",
+        content
+    );
+    assert!(
+        content.len() < 1_000,
+        "the stub must not carry the raw output: {}",
         content.len()
     );
-    assert!(content.starts_with('x') && content.ends_with('x'));
+
+    // The artifact holds the full output, byte-identical and retrievable.
+    let saved = content
+        .split("Full output saved at ")
+        .nth(1)
+        .expect("stub must name the artifact path")
+        .split(" — page")
+        .next()
+        .expect("path must precede the retrieval hint");
+    let artifact = std::path::PathBuf::from(saved);
+    assert!(
+        artifact.starts_with(&workspace),
+        "artifact must live inside the workspace sandbox: {}",
+        artifact.display()
+    );
+    let full = std::fs::read_to_string(&artifact).expect("artifact must exist on disk");
+    assert_eq!(full, "x".repeat(200_000));
+
+    let _ = std::fs::remove_dir_all(&workspace);
+}
+
+/// An unwritable workspace (the artifact root cannot be created because
+/// the workspace path itself is a regular file) falls back to the
+/// iter-729 trim — the marker is back and the turn still ingests
+/// bounded text instead of failing.
+#[tokio::test]
+async fn offload_falls_back_to_the_trim_when_the_workspace_is_unwritable() {
+    let workspace = std::env::temp_dir().join(format!(
+        "operant_test_offload_fallback_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workspace);
+    std::fs::write(&workspace, "not a directory").expect("fixture: workspace is a regular file");
+    let provider = Box::new(ScriptedProvider::new(vec![
+        tool_response(vec![huge_output_tool_call()]),
+        text_response("done"),
+    ]));
+    let config = AgentConfig {
+        max_tool_result_chars: 1_000,
+        ..AgentConfig::default()
+    };
+    let mut agent = build_agent_with_config_and_workspace(
+        provider,
+        vec![Box::new(HugeOutputTool)],
+        config,
+        workspace.clone(),
+    );
+
+    let _ = agent.turn("fetch it").await.unwrap();
+
+    let results = agent
+        .history()
+        .iter()
+        .find_map(|m| match m {
+            ConversationMessage::ToolResults(rs) => Some(rs.clone()),
+            _ => None,
+        })
+        .expect("tool results message must be in history");
+    let content = &results[0].content;
+    assert!(
+        content.contains("[... ") && content.contains("characters truncated ...]"),
+        "the trim fallback must carry the marker: {}",
+        &content[..80.min(content.len())]
+    );
+    assert!(content.len() <= 1_200, "fallback must stay bounded: {}", content.len());
+
+    let _ = std::fs::remove_file(&workspace);
 }
 
 /// `max_tool_result_chars: 0` disables the backstop — the raw output

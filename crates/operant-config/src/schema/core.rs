@@ -379,9 +379,13 @@ pub struct AgentConfig {
     #[serde(default)]
     pub precheck: crate::scattered_types::ChannelPrecheckConfig,
 
-    /// Maximum characters for a single tool result before truncation.
-    /// Head (2/3) and tail (1/3) are preserved with a truncation marker in the
-    /// middle. Set to `0` to disable truncation. Default: `50000`.
+    /// Maximum characters for a single tool result before it is offloaded.
+    /// Over the cap, the full output is written to a durable artifact under
+    /// `<workspace>/.operant/artifacts/tool-results/` and the ingested
+    /// message becomes a one-line TOC stub naming it (retrievable with
+    /// `file_read`). An unwritable workspace falls back to head (2/3) +
+    /// tail (1/3) with a truncation marker. Set to `0` to disable.
+    /// Default: `50000`.
     #[serde(default = "default_max_tool_result_chars")]
     pub max_tool_result_chars: usize,
 

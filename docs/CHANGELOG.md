@@ -498,6 +498,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-737 — outline v6 §1 row 2 (NEXT SLICE) LANDED: oversized tool
+  results offload to a durable workspace artifact with a TOC stub.**
+  iter-729 wired `[agent] max_tool_result_chars` (head 2/3 + tail 1/3)
+  but left the model with a dead-end marker — the truncated middle was
+  gone with no retrieval path (the original 26%-context-burn fetch).
+  The runtime Agent's ingestion (`results_for_ingestion`, both turn
+  paths — plain and streamed) now writes any result over the cap to
+  `<workspace>/.operant/artifacts/tool-results/<sha256[..16]>-<tool>.txt`
+  (content-addressed, so a repeat reuses the artifact) and ingests a
+  one-line TOC stub naming the path and the `file_read` retrieval
+  semantics (`offset`/`limit` are 1-based LINES). The artifact lives
+  inside the security policy's allowed root, so the agent's own tools
+  can page back through it; the observer and TurnEvent keep the full
+  output, as before. Best-effort and dark-mergeable above the
+  threshold: an unwritable workspace falls back to the iter-729 trim
+  (marker + head/tail), and `max_tool_result_chars = 0` still disables
+  everything. Tests: stub + byte-identical artifact round-trip, the
+  zero-disable passthrough, and the unwritable-workspace trim
+  fallback — operant-runtime lib suite 1641/1641.
+  `ponytail:` artifacts accumulate with no retention sweep — a GC
+  slice owns cleanup once the shape proves out.
+
 - **iter-734 — outline v5 §1 row 1 LANDED (both slices): the gateway
   delivery consumer settles its ledger row, and the seat authority
   carries the employee registry.** The row's "blocked on the peer's
