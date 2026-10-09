@@ -3164,3 +3164,18 @@ fn auth_status_falls_back_to_model_inference_when_provider_unset() {
         "provider inference from the configured model must still populate the matrix"
     );
 }
+
+#[test]
+fn last_msg_area_defaults_zero_and_is_republished_from_draw() {
+    // The cell is a hit-test publish target: zero-rect means the right-click
+    // bounds check can never pass. The render pass sets it from the vendored
+    // message_area(); this test pins the default and the setter semantics.
+    let app = make_app();
+    assert_eq!(
+        app.last_msg_area.get(),
+        ratatui::layout::Rect::default(),
+        "fresh App must carry a zero rect so stale geometry never gates a menu"
+    );
+    app.last_msg_area.set(ratatui::layout::Rect::new(2, 3, 40, 10));
+    assert_eq!(app.last_msg_area.get().width, 40);
+}

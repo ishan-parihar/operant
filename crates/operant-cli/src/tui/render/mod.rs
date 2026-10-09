@@ -85,6 +85,15 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     app.last_input_area.set(crate::tui::operant_ui::input_area());
     app.last_render_scroll_offset
         .set(crate::tui::operant_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16);
+    // Transcript rect for the legacy message-context consumers (right-click
+    // context-menu bounds, cursor-open menu, menu clamping). Same publish
+    // discipline as the cells above: the iter-648 cutover deleted the
+    // dispatch-row writer, leaving a zero rect that silently killed every
+    // consumer — dead right-click menus, invisible keyboard menus (2026-10-09
+    // visual audit). `message_area()` is the chat band; clamping to it matches
+    // the legacy pane-rect semantics.
+    app.last_msg_area
+        .set(crate::tui::operant_ui::message_area());
 
     // ---- Background task rows (operant-only) ---------------------------
     // Docked to the bottom-left of the messages band, so the rows sit above
