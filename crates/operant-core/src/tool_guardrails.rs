@@ -1225,6 +1225,39 @@ mod ladder_tests {
     }
 
     #[test]
+    fn duplicate_progress_spam_survives_the_output_batch_reset() {
+        // The duplicate-progress-spam fault (openhuman no_progress
+        // remainder): the loop is padded with failed batches so the
+        // output-side streak keeps resetting, while the same successful
+        // result recurs underneath. `observe_output`'s reset arm clears
+        // the OUTPUT streak only — the recurrence ledger is run-wide
+        // state, not batch state, so the spam still escalates on the
+        // same 5/6 rungs as back-to-back repeats.
+        let mut t = ToolGuardrailTracker::new();
+        for _ in 0..3 {
+            let _ = ok(&mut t, "poll", "same");
+            // A failed batch resets the output streak between every pair.
+            let _ = t.observe_output(7, false, false);
+        }
+        assert_eq!(
+            ok(&mut t, "poll", "same"),
+            GuardrailDecision::Allow,
+            "fourth recurrence: still below the warn threshold"
+        );
+        assert_eq!(
+            ok(&mut t, "poll", "same"),
+            GuardrailDecision::Warn,
+            "fifth recurrence warns even though every interleaved batch reset the output streak"
+        );
+        let _ = ok(&mut t, "poll", "same");
+        assert_eq!(
+            t.observe("poll", "{\"args\":\"varied to dodge the identical-call rung\"}"),
+            GuardrailDecision::Skip,
+            "the sixth recurrence arms the skip across resets"
+        );
+    }
+
+    #[test]
     fn recurrence_ledger_arms_the_varied_args_backstop() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..6 {

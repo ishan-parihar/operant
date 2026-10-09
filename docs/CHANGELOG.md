@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-732 — tool_guardrails: duplicate-progress spam pinned across
+  the output batch reset (outline v5 §1 row 4 remainder):** the audit
+  behind this slice found row 4 mis-specified — the `no_progress/
+  mod_tests.rs` suite it names is upstream-only (never existed in-tree;
+  the port plan explicitly declined to create the path) and
+  `pattern_tests` holds 12 tests, not 13. The one genuinely uncovered
+  *pure* case is duplicate-progress spam: a loop padded with failed
+  batches resets the output-side streak between every pair
+  (`observe_output`'s reset arm clears `output_streak`/`output_armed`
+  only) while the same successful result recurs underneath. The
+  recurrence ledger is run-wide state, not batch state, so the spam
+  still escalates on the same 5/6 rungs as back-to-back repeats. New
+  `ladder_tests` case beside `failures_do_not_feed_the_recurrence_ledger`
+  asserts the fifth recurrence warns and the sixth arms the skip across
+  resets; mutation-proven — making the reset arm also clear the ledger
+  turns it red. The remaining two named faults are not test ports:
+  oscillation is BUGS.md S7 (a `ping_pong_cycles` production fix) and
+  progress-token stall has no production seam at all.
 - **iter-729 — `[agent] max_tool_result_chars` wired: ingestion-time
   tool-result trim for the runtime Agent (outline v4 §1 row 2:
   wire-or-drop; wired; code commit `da42909b`, labeled iter-728 at
