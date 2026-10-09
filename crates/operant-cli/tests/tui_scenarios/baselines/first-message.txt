@@ -21,11 +21,11 @@
 
  Hello from the mock agent.
 
-Prompt restored to the composer — the turn failed.
-1> Hello from the first message
-                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+ 1› Hello from the first message                                                                                       │
 
 
+2>
+                                                                         ~ 13/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

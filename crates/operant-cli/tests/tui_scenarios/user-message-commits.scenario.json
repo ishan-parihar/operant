@@ -1,0 +1,17 @@
+{
+  "name": "user-message-commits",
+  "surface": "crates/operant-cli/src/tui/adapter_types/tui_app.rs (all three submit paths) + app/tui_state_impl.rs display cache",
+  "opens_with": "Fresh boot; the user sends a message and the turn is still pending - no agent event has arrived yet",
+  "keys": "Commit this line before any reply<enter>",
+  "size": "120x40",
+  "agent_script": "no-events.json",
+  "assert": [
+    "messages == 1"
+  ],
+  "assert_screen": [
+    "contains:Commit this line before any reply"
+  ],
+  "baseline": "user-message-commits.txt",
+  "style_baseline": "user-message-commits.style.txt",
+  "notes": "The 2026-10-09 live audit N-2 gate: every submit path pushed the user Message without bumping transcript_version, so the display cache (keyed on that version) stayed stale-empty until the first agent event - the sent message was invisible in the transcript, the decorative idle orb kept painting over it (has_started_conversation reads the same stale cache), and a scrolled view rendered blank. The empty agent script means NO event ever bumps the version: the only way the message can render is the submit path's own invalidate. The composer clears on submit, so the contains-assert can only pass through the transcript. Reproduced first-hand on the deployed binary (PageUp after a submit blanked the view; a fresh-cache session did not)."
+}

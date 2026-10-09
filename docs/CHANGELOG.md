@@ -443,6 +443,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-727 — N-2 (2026-10-09 live-audit plan): a submitted message
+  commits to the transcript immediately — all three submit paths bump the
+  display-cache version, and the corpus simulator is now faithful to that
+  contract.** The display cache is keyed on `transcript_version`, but none
+  of the three submit sites (live loop, `submit_user_message`, headless)
+  bumped it after pushing the user Message — the sent message was
+  invisible until the first agent event arrived, the idle orb kept
+  painting over it (`has_started_conversation` reads the same stale
+  cache), and the earlier "PageUp blanks the transcript" repro was this
+  staleness, not the scroll (the renderer already clamps
+  `scroll_offset` — re-verified live on the deployed binary; the scroll
+  ladder stays as-is). The mock path also dropped every submitted message
+  into restore-to-composer (simulating an agent-init failure no scenario
+  ever had), so no corpus golden could pin the submit-path commit — the
+  mock now pushes + invalidates like the live paths. New scenario
+  `user-message-commits` (empty agent script: the only way the message
+  can render is the submit path's own invalidate) is red on the pre-fix
+  code; `first-message` intentionally reshapes (user row + reply = 2
+  messages; assert updated). Verify 0-drift; suite 1744/0.
+
 - **iter-726 — P0-1 (2026-10-09 live-audit plan): a batched
   `text<Enter>` submits again — the paste-burst detector no longer swallows
   the Enter key.** Any latency-batching layer (tmux, SSH, mosh) can deliver

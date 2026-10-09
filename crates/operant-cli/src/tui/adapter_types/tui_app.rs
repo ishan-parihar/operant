@@ -675,6 +675,10 @@ impl TuiApp {
                             role: Role::User,
                             content: MessageContent::Text(input.clone()),
                         });
+                        // The display cache is keyed on transcript_version;
+                        // without this bump the user message is invisible
+                        // until the first agent event arrives (N-2).
+                        self.app.invalidate_transcript();
                         self.app.is_streaming = true;
                         self.app.begin_turn();
                         self.app.streaming_text.clear();
@@ -734,6 +738,11 @@ impl TuiApp {
             role: Role::User,
             content: MessageContent::Text(text.clone()),
         });
+        // The display cache is keyed on transcript_version; without this
+        // bump the user message is invisible until the first agent event
+        // arrives (N-2) - and the idle orb keeps painting over the sent
+        // message because has_started_conversation reads the stale cache.
+        self.app.invalidate_transcript();
         self.app.is_streaming = true;
         self.app.begin_turn();
         self.app.streaming_text.clear();
@@ -985,6 +994,10 @@ impl TuiApp {
                             role: Role::User,
                             content: MessageContent::Text(input.clone()),
                         });
+                        // The display cache is keyed on transcript_version;
+                        // without this bump the user message is invisible
+                        // until the first agent event arrives (N-2).
+                        self.app.invalidate_transcript();
                         self.app.is_streaming = true;
                         self.app.begin_turn();
                         self.app.streaming_text.clear();
@@ -998,6 +1011,19 @@ impl TuiApp {
                         });
                         self.app.run_complete_rx = Some(rx);
                         self.app.agent_task_handle = Some(handle);
+                    } else if is_mock {
+                        // Mock path: the "agent" is the script, not a failed
+                        // init - a submitted message must land in the
+                        // transcript exactly like the live paths (N-2). The
+                        // pre-fix restore-else simulated an init failure for
+                        // every mock submit, so no scenario could ever pin
+                        // the submit-path commit.
+                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                        self.app.messages.push(Message {
+                            role: Role::User,
+                            content: MessageContent::Text(input.clone()),
+                        });
+                        self.app.invalidate_transcript();
                     } else {
                         self.app.restore_failed_input_to_composer();
                     }
