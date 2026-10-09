@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the policy decides); Approve skips the permission channel, Deny is
   shaped like a smart-gate block, anything else is today's byte-for-byte.
   Config-file wiring deferred to the `config.rs` unblock.
+
 - **iter-712 — P0 delegation governance (the standing rule's first slice):**
   employee-seat delegation now consults the governance layer and nowhere
   else — `DelegationPosture` (forbidden/bounded/independent) + the pure
@@ -36,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   employee registry (Bounded fails closed without it); `stream.rs`
   consults for every `delegate` call from a governed seat — no posture row
   = ungoverned = today's byte-for-byte.
+
 - **iter-711 — feed class live: channel/group posts reach the org's
   seats (gap 5 phase 2's feed sources):** `ContextClass::Feed` joins the
   four aspect classes — captured at route time, before the admin gate
@@ -48,15 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turn behavior. Regression pins: channel-post parse, feed capture →
   seat isolation → watermark advance, and the
   capture-before-the-gate routing contract.
-- **iter-697 — Wave-4 ordered preflight ladder:** `build_messages` now
-  runs explicit ordered rungs when the estimate exceeds the 80% preflight
-  threshold — TOC/trim (`fast_trim_tool_results`, its first production
-  caller) → deterministic decay → LLM summarize-before-evict
-  (`preflight_llm_summarize`: same reactive guards — `should_compress` +
-  anti-thrash cooldown — with NO deterministic fallback) → evict — each
-  gated on still-over-threshold. Wrap-up rung appends final-call copy when
-  the ladder fired, riding the built list only so it cannot accumulate
-  across turns. 2 ladder property tests.
+
 - **iter-698 — PromptCacheGuard + `HERMES_TURN_TIMEOUT`:** the frozen-prefix
   invariant becomes checked — `prompt_cache_guard` snapshots the head
   system run when the ladder fires and verifies it byte-identical after
@@ -66,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   malformed or non-positive input keeps the 20-minute default), the
   sibling of `HERMES_REQUEST_TIMEOUT` (one call) and `HERMES_MAX_ITERATIONS`
   (iteration count). 3 guard tests.
+
+- **iter-697 — Wave-4 ordered preflight ladder:** `build_messages` now
+  runs explicit ordered rungs when the estimate exceeds the 80% preflight
+  threshold — TOC/trim (`fast_trim_tool_results`, its first production
+  caller) → deterministic decay → LLM summarize-before-evict
+  (`preflight_llm_summarize`: same reactive guards — `should_compress` +
+  anti-thrash cooldown — with NO deterministic fallback) → evict — each
+  gated on still-over-threshold. Wrap-up rung appends final-call copy when
+  the ladder fired, riding the built list only so it cannot accumulate
+  across turns. 2 ladder property tests.
+
 - **iter-695 — socialization phase 2: session outcomes post to the board:**
   the senior's close-out notice is the only board write outside the CLI,
   gated by the same §2.3.1 consult (identity fail-closed, consult before
@@ -74,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by the CLI seams and the scheduler-side writer. Phase 3 holds by
   construction: outcomes ride the phase-2 notice + worklog into `org
   synthesize`'s org-bank digest.
+
 - **iter-692 — gap 8: chief-of-staff synthesis (Slice 9) + decision→charter
   amendment (Slice 10):** `operant org synthesize [--window-hours N]
   [--dry-run]` composes the org digest over a window (recent notices,
@@ -86,6 +92,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EmployeeDb::amend_charter` is the only sanctioned charter write besides
   the cast seeder; `org audit <seat>` shows the charter posture. Pre-692
   decision files migrate via a PRAGMA-probe ALTER.
+
+- **iter-691 — startup reaper CLOSE + turn-exit journal columns:** pending
+  turn-state rows flip terminal at detection time (close no longer gated on
+  channel-notice delivery — kills the "still in-flight after restart"
+  loop); `.turn_state` gains `exit_code`/`exit_reason` on every terminal;
+  `TurnExitReason` classifier with trinity-#904 kill-marker precedence (a
+  signal death is never auth).
+
+- **iter-690 — notice-board READ side wired:** `operant org notice inbox
+  --for-employee <id>` (`--pending-only`, `--limit`, `--json`) and the seat
+  prompt's pending-notices block in `bind_seat_run` — ack-is-the-watermark:
+  pending `ack_required` notices re-render each seat prompt until acked,
+  fail-open if the seat is not a registered employee.
+
+- **iter-689 — SwitchModel steer variant:** `/model <name>` parses to
+  `SteeringCommand::SwitchModel` (strict prefix, case-preserved arg); the
+  drain arm retargets via the interior-cell `set_model` with the iteration
+  budget refunded, mirroring the fallback chain.
+
 - **iter-688 (record_output port) — output-side successful-repeat guard:**
   `ToolGuardrailTracker::observe_output` (openhuman parity): identical
   narration+batch signature — captured in run.rs before `tool_calls` moves
@@ -94,35 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reset the streak; synthetic skip results excluded via
   `stream.rs::observe_iteration_output`. Warn/skip, never halt (iter-682
   deviation). 7 ladder tests.
-- **iter-689 — SwitchModel steer variant:** `/model <name>` parses to
-  `SteeringCommand::SwitchModel` (strict prefix, case-preserved arg); the
-  drain arm retargets via the interior-cell `set_model` with the iteration
-  budget refunded, mirroring the fallback chain.
-- **iter-690 — notice-board READ side wired:** `operant org notice inbox
-  --for-employee <id>` (`--pending-only`, `--limit`, `--json`) and the seat
-  prompt's pending-notices block in `bind_seat_run` — ack-is-the-watermark:
-  pending `ack_required` notices re-render each seat prompt until acked,
-  fail-open if the seat is not a registered employee.
-- **iter-691 — startup reaper CLOSE + turn-exit journal columns:** pending
-  turn-state rows flip terminal at detection time (close no longer gated on
-  channel-notice delivery — kills the "still in-flight after restart"
-  loop); `.turn_state` gains `exit_code`/`exit_reason` on every terminal;
-  `TurnExitReason` classifier with trinity-#904 kill-marker precedence (a
-  signal death is never auth).
-- **fix(channels) — telegram `strip_tool_call_tags` underscore alias:** the
-  iter-664 sanitize relocation dropped the `<tool_call>` tag form from the open-tag array and close-tag match, leaking raw tool-call JSON
-  into user-visible Telegram replies; pre-existing, surfaced when the gate
-  grew `-p operant-cli` (feature unification compiles the telegram tests).
-- **iter-688 — gap 7: authority predicates enforced + `org budget`/`org
-  cast`/`org audit`:** `org notice post` consults `can_post_to` per
-  recipient (§2.3.1) — employee senders gated on scope/dept/grants,
-  unregistered senders refused fail-closed, `user`/`system` keep the
-  operator-root surface; `org decision accept` takes `--as <actor>` and
-  consults `can_accept_decision` (§2.3.3) — closing the iter-642 finding
-  that ratification was structurally open. New read surfaces: `org cast`
-  (nine-seat topology + registry state) and `org audit <seat>` (grants,
-  decisions, budget posture + metered window spend). `operant budget`
-  folds into `org budget`; the top-level namespace is gone.
+
 - **iter-684/685 — guardrail exemption threading (openhuman
   `is_repeat_call_exempt`):** `AgentConfig.guardrail_exempt_tools` seeds
   the live `ToolGuardrailTracker` in both `OperantAgent` constructors
@@ -166,332 +163,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cursor ± 4 lines of context (jcode's `COPY_VIEWPORT_CONTEXT_LINES`) and
   exits, Enter/Y copy. Edge autoscroll now drives NORMAL drags too, not just
   copy mode (jcode autoscrolls on any edge drag).
-
-### Fixed
-
-- **iter-672 — selection release semantics and two pre-existing count bugs.**
-  A finalized drag selection now ALWAYS copies on release — the
-  `auto_copy_enabled` setting (default **false**, which is exactly why
-  copy-on-highlight appeared broken) is gone along with its settings-screen
-  row: jcode has no opt-out and neither does operant now. The highlight stays
-  visible until the next click (already jcode behavior, now documented).
-  `copy_selection_range` read the `(col, row)` tuple as `(row, col)` — the
-  jcode-adapter range pointed at the wrong cell; and `copy_selection_status`
-  counted COLUMNS as "selected lines" — both fixed with the content-space
-  semantics.
-
-### Changed
-
-- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
-  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
-  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
-  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
-  wheel events arrive as nothing) could only jump in 10-line quanta; part of
-  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
-  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
-  incl. chord-step regression test.
-
-- **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
-  context menu lives again.** The iter-648 chrome cutover deleted the
-  dispatch-row writer that fed `last_msg_area`; every consumer (right-click
-  message menu bounds, Ctrl+Shift+M cursor-open menu, menu clamping) gated on
-  a zero rect and could never fire — production-dead since the cutover,
-  flagged by the 2026-10-09 visual audit. The render pass now publishes it
-  from the vendored `message_area()` alongside the other three hit-test cells
-  (same post-draw discipline as the iter-661 fix). Pinned by a default-zero +
-  setter-semantics unit test. Corpus verify 0 drift; suite 1741/0.
-
-- **iter-707 — Clean-sweep 2: onboarding welcome-takeover phantom excised.**
-  The ported draw carried a constant-false gate for a first-run welcome
-  takeover (`onboarding_welcome_active` → early-return that suppresses all
-  chat chrome), plus its ~140-line support stratum: the two trait methods,
-  `OnboardingWelcomeKind` (4 variants), `LoginImportPrompt`, `ImportSummaryPill`,
-  `TelemetryChoice`, `LoginImportRow`, a `#[cfg(any())]` test draw hook, and
-  the onboarding margins branch. The upstream onboarding module
-  (tui/onboarding.rs) was never vendored and no implementor ever opted in —
-  the gate guarded a phantom. `onboarding_preview_mode` and
-  `suggestion_prompts` stay (live empty-state seam). Behavior identical:
-  constant-false branches removed. Corpus verify 0 drift; suite green.
-
-- **iter-703 — Clean-sweep 1: live credential status fixes the stuck
-  "/login to add provider" header.** Root cause of the 2026-10-09 visual-audit
-  complaint 2: the jcode persistent header is auth-driven, and operant's
-  adapter mapped a `has_credentials` boolean snapshotted once at `App::new`
-  (auth-store + ANTHROPIC/OPENAI env only) onto the provider matrix — so any
-  session that acquired credentials after boot (omp/custom base URLs,
-  mid-session /login) reported NotConfigured forever and the header never
-  transitioned. `credentials_live()` now recomputes per read (activation flag
-  OR live auth-store OR env); `auth_status()` re-derives the provider from the
-  configured model when `active_provider` is unset, and maps every
-  OpenAI-compatible profile (custom-openai, omp, free-mode upstreams, groq/
-  cerebras catalog) onto `openai_compatible_any`. The header gains a `custom`
-  circle row for that slot when configured (unconfigured sessions — and every
-  corpus golden — render byte-identically; corpus verify 0 drift). The /model
-  gate, Ctrl+A model-picker gate, and `auth_method` telemetry read the live
-  predicate. Tests: store-gain refreshes matrix without App recreation,
-  env-isolated via AUTH_ENV_LOCK (real on-disk store cleared per test — the
-  dev machine carries real credentials).
-
-- **iter-694 — W5 Tier-2: Ctrl+L terminal-style clear (jcode parity).** The
-  confirmed Tier-2 gap from JCODE-VISUAL-PARITY-PLAN.md item 17: the
-  layout-side collapse was already ported (operant_ui renders a zero-height
-  messages chunk when `terminal_clear_collapsed()` holds), but nothing could
-  set the state. App now captures the `transcript_version` at Ctrl+L
-  (`terminal_clear_version`); the state is live only while that version still
-  matches and the same idle conditions jcode derives hold (not scrolled up,
-  not streaming, no streaming text) — so any new output, streaming, or
-  scroll-up immediately restores the full layout, no reset points to hunt.
-  `clear_view_terminal_style()` snaps the scroll to the bottom; the chord
-  binds next to the paste handlers. Nothing is deleted (contrast `/clear`).
-  Also found while wiring: `/cls` is registered but has no execution arm —
-  pre-existing, left for its owner. New corpus scenario `terminal-clear`
-  (golden: cleared frame contains none of the transcript text). Label note:
-  origin/main carries two iter-691-labeled commits (W5a palette sweep + the
-  concurrent reaper line), and iters 692-693 (chief-of-staff gap-8 slice + its docs)
-  were taken mid-prove — append-only history, all stay.
-- **iter-691 — W5 palette/dead-code sweep, sub-wave 1: the transcript's last
-  hardcoded grays route through the palette, and a dead helpers stratum goes.**
-  `messages/tools.rs` paints tool-row summaries with `theme::dim_color()`
-  (the `Dim` role) instead of a private `TRANSCRIPT_MUTED` const — jcode paints
-  the same spans the same way, and the role follows the user's palette config.
-  The const itself, `TRANSCRIPT_TEXT`, `TRANSCRIPT_SUBTLE`, `GOAL_ACCENT`,
-  `GOAL_BODY`, and the user-prompt truncation trio were read only by
-  unreachable code and are deleted. `messages/helpers.rs` keeps its live fold
-  machinery and loses seven never-called rendering primitives (user-text
-  rendering, indenting, block styling, attachment chips) that rustc had been
-  flagging; the four generic result renderers in `tools.rs`
-  (`render_file_read_result`, `render_file_op_result`,
-  `render_tool_result_success`, `render_tool_result_error`) were unreachable
-  (the live tool-block renderer in `render/tools.rs` paints every result the
-  transcript shows) and go together with `TOOL_RESULT_MAX_LINES` and their
-  test. `render_markdown` has no production caller, so its re-export is now
-  `#[cfg(test)]` pending the markdown wire-or-delete sweep. Verbatim-parity
-  literals (swarm gallery, overscroll pink, latex marker — jcode-identical) and
-  data ladders (heatmap, memory-age tints, diff red/green, usage severity ramp)
-  are deliberately kept hard-coded. Full suite 1721/0; corpus verify 0 drift.
-
-- **iter-687 — W4 animation: the original radar-pulse `signal` replaces the
-  four vendored samplers.** `sample_donut`, `sample_gyroscope`, `sample_black_hole`
-  and `sample_orbit_rings` (with their angle-table LUT machinery and their
-  jcode-parity bit-identical tests) are deleted; the idle animation is now
-  `sample_signal`, original operant code: a beam sweeps the unit disk leaving a
-  rational-falloff afterglow, three staggered rings expand from the center, and
-  a bright core pulses at the origin. Determinism is pinned by a
-  bit-identical-across-calls test at four sizes × eight elapsed values
-  (determinism replaces parity as the guarantee — the code is no longer a
-  jcode port); `beam_head_leads_the_trail` and `sweeps_over_time` pin the
-  physics. Exactly two transcendentals per subpixel (`sqrt` + `atan2`), no
-  LUTs, vs the donut's ~142k `cos`/`sin` per frame. `IDLE_VARIANTS` becomes
-  `["signal"]`, the `idle_donut_*` identifiers rename to `idle_animation_*`,
-  the `three_rings`/`gyroscope` disabled-name aliases are deleted with their
-  samplers, and the corpus pin `OPERANT_DISABLED_ANIMATIONS` follows the new
-  name. `shape_char_3x3` and `hsv_to_rgb` stay vendored verbatim (the blit
-  path is sampler-agnostic).
-
-- **iter-686 — W3 rebrand: the vendored TUI layer stops saying jcode.** The
-  seven vendored module trees rename on disk (`tui/jcode_{anim,app,markdown,
-  model,render,render_core,ui}` → `tui/operant_*`), every `jcode_`/`JCODE_`
-  identifier and env var with them (`JCODE_HOME` → `OPERANT_HOME`, etc.),
-  and the user-visible surface with it: the onboarding header wordmark, the
-  `/feedback`, `/subscription`, `/subscribe`, `/log`, `/selfdev` command
-  descriptions, the login provider's display name ("Jcode Subscription" →
-  "Operant Subscription"), logger stderr prefixes, two subscription-overlay
-  lines, and the flicker-notice log hint. The TUI state root moves from
-  `~/.jcode` to `~/.operant` (`OPERANT_HOME` override unchanged) and
-  `binary_stem()` reports `operant`, so builds/logs/session markers land in
-  the canonical operant state dir; existing `~/.jcode` state migrates with a
-  one-time `cp -a ~/.jcode/. ~/.operant/` (leaf names are disjoint from the
-  gateway's files). `AuthStatus.jcode` renames to `subscription` (serde shape
-  changes only in-process). Provenance comments ("ported verbatim from jcode
-  @ 0a9dc7805", "jcode parity") and the vendored file headers stay by design;
-  machine-facing identifiers with state-compatibility risk (`LoginProvider
-  id: "jcode"`, `SessionSource::Jcode`, `LoginProviderAuthStateKey::Jcode`)
-  are deliberately kept. Corpus goldens regenerated for the rebrand; three
-  goldens that had drifted with a peer's concurrent renderer edits (ask-user-
-  dialog, bypass-permissions-dialog, footer-bar) ride along — absorbing peer
-  drift is what a full golden regen does.
-
-- **iter-671 — W1 of the TUI upgrade**: tool rows splice at their arrival
-  anchor (`after_index` — the message count when the call started, immutable)
-  instead of after their turn's last assistant message, so a tool that ran
-  between two assistant messages renders between them (the "tool calls and
-  final message messed up" bug); transcript turns attach tool blocks via a
-  message-index→ordinal map. The legacy voice-mode surface is fully purged
-  (~530 LOC): notice overlay + recorder + PTT key handling + `/voice` command
-  + `tui voice` subcommand + keybinding catalogue entry (Alt+V deliberately
-  uncatalogued — the registry must not advertise what nothing implements).
-  Core voice/TTS and gateway `/voice` untouched.
-
-- **iter-669 — Wave-2 guardrail harvest: ping-pong and no-progress rungs
-  live on the one engine.** `ToolGuardrailTracker` absorbed the three
-  patterns from the runtime's dead `loop_detector.rs` (its only consumer
-  was the deleted Loop B engine; thresholds verbatim): **ping-pong** — two
-  distinct tools alternating 4 complete cycles warn, 5 skip pre-execution
-  (20-name sliding window); **no-progress** — a tool returning the
-  identical result 5× warns, 6× arms a next-call skip regardless of
-  arguments (the varied-args backstop the identical-args rung could never
-  catch), fed by a new post-execution `observe_result` hook in
-  `execute_tools` (synthetic guardrail skips excluded — identical by
-  construction); and the **exemption port** — `with_exempt_tools`
-  bypasses every repeat/loop rung and survives `reset` (the W1.8c-dropped
-  `tool_call_dedup_exempt`). Skip/warn copy is pattern-aware and every
-  skip variant keeps the `Guardrail: ` prefix so R35 never counts guardrail
-  skips. `loop_detector.rs` deleted. Gate re-baseline: 5441 passed /
-  0 failed (−15 runtime tests, +13 ported pattern tests).
-
-### Fixed
-
-- **Unblock main: `PathBuf` inline format capture in the cron seat-memory
-  prompt** (`operant-core/src/cronjobs/scheduler.rs`): `{path}` →
-  `path.display()` — committed in 5464764d, broke every `cargo check/test
-  -p operant-core` build.
-
-### Removed
-
-- **iter-664 — the dead channels dispatch orchestrator (audit-r2 plan §2,
-  Option A)**: `start_channels` (the only pub entry), the dispatch chain
-  (`run_message_dispatch_loop` → `dispatch_worker` →
-  `process_channel_message`), and every sibling consumed only by that chain —
-  `commands`, `consts`, `dispatch`, `factory`, `health`, `history`,
-  `identity`, `memory_ctx`, `media_pipeline`, `prompts`, `routing`,
-  `runtime_types`, `sanitize`, `supervision`, `startup`, and the
-  orchestrator-level `tests.rs` (~167 tests) — plus the dead
-  `orchestrator::deliver_announcement` registry variant and
-  `ChannelNotifyObserver`. Audit trail: the shipped CLI gateway never
-  called any of it (live paths are `gateway_runner.rs` + `operant-gateway`;
-  LTO stripped the cluster from every deployed binary since iter-628), the
-  only external `channels::orchestrator::` consumer is `acp_server`, and no
-  production caller of `register_delivery_fn` exists. The one live helper
-  the cluster exported, `strip_tool_call_tags`, moved verbatim to
-  `telegram::helpers`. `acp_server` and the feature-gated `mqtt` listener
-  remain. Five-crate gate re-baselined: 5443 passed / 0 failed across 44
-  binaries.
-
-### Added
-
-- **Mouse injection for `operant tui debug simulate` (`--mouse`)**: the headless
-  simulator can replay mouse events after the key sequence —
-  `<action,x,y>` tokens (`left`, `right`, `middle`, `drag`, `up`/`release`,
-  `scroll_up`, `scroll_down`; 0-based viewport coordinates). This un-parks the
-  `selection-highlight` surface: `apply_selection_highlight` is mouse-written
-  and style-only, so no scenario could reach it before. The corpus gains a
-  `selection-highlight` scenario (120x40 + 80x24) whose style golden pins the
-  58% accent background blend and the 32% white foreground blend. Five
-  defects were fixed on the way, two of them live-UI bugs: (1) `render_app`
-  published `last_selectable_area` *before* `jcode_ui::draw`, one frame stale
-  and a zero-rect on the first frame — the first mouse click after startup was
-  silently dropped; (2) a token-advance off-by-one in the `--mouse` parser
-  hung any sequence of two or more tokens; (3) the simulation exit check
-  ignored the mouse queue, exiting at frame one before any mouse event was
-  consumed; (4) no closing draw on the simulation exit path — `terminal.draw`
-  runs before the event pump, so the last event's state never reached the
-  dumped buffer; (5) `App::debug_snapshot()` now exposes `selection_anchor`,
-  `selection_focus`, `selection_text` plus comma-free row fields, so drag state
-  is assertable from scenarios.
-
-### Changed
-
-- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
-  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
-  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
-  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
-  wheel events arrive as nothing) could only jump in 10-line quanta; part of
-  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
-  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
-  incl. chord-step regression test.
-
-- **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
-  context menu lives again.** The iter-648 chrome cutover deleted the
-  dispatch-row writer that fed `last_msg_area`; every consumer (right-click
-  message menu bounds, Ctrl+Shift+M cursor-open menu, menu clamping) gated on
-  a zero rect and could never fire — production-dead since the cutover,
-  flagged by the 2026-10-09 visual audit. The render pass now publishes it
-  from the vendored `message_area()` alongside the other three hit-test cells
-  (same post-draw discipline as the iter-661 fix). Pinned by a default-zero +
-  setter-semantics unit test. Corpus verify 0 drift; suite 1741/0.
-
-- **W1.8c — channel dispatch runs on the reconciled facade** (the last
-  `run_tool_call_loop` call site): `process_channel_message` now constructs a
-  `ReconciledAgent` per message via `FacadeConstruction` (provider route,
-  system prompt, `temperature`, the channel's `max_tool_iterations`, the
-  Loop-B-parity tool allowlist with non-CLI exclusions and the pacing
-  `loop_detection_enabled` switch), pins a per-conversation core session id
-  (re-minted on `/new` and on rollback), hydrates the fresh session transcript
-  from the orchestrator's sanitized prior turns, and runs the turn through
-  `run_facade_turn` with the old loop's scope chain at the call site
-  (`Box::pin` keeps the large turn future off the polling stack — a 2MB
-  tokio worker overflowed inside `Regex::new` in context-reference
-  preprocessing before this). Cross-crate fixes the migration surfaced:
-  (1) prompt-mode providers now receive tool results as user-role
-  `[Tool results]` text (`operant-api` `Provider::chat` default) — core's
-  role-`tool` JSON was invisible to text-only providers and re-triggered
-  calls until the loop detector tripped; (2) the facade's session store
-  enables `PRAGMA busy_timeout=500` and `BEGIN IMMEDIATE` on its write
-  transactions — concurrent facades (channel turns, cron, sub-agents) died
-  instantly with `SQLITE_BUSY_SNAPSHOT` ("database is locked"); (3) the
-  guardrail duplicate-skip result is success-shaped guidance (`Guardrail: …`,
-  no `[` prefix — the anomaly heuristic treated a bracket prefix as failed
-  JSON and refunded iterations re-asking the model); (4) channels substitute
-  core's empty degenerate grace summaries with a stopped-early notice naming
-  the configured iteration budget, and strip raw tool-call/result JSON
-  artifact lines from final replies; (5) test facades point at per-context
-  temp data dirs instead of the operator's live `~/.operant` (39 contexts
-  contended on one SQLite file). Channels suite: 1045/0.
-
-- `org grant give` / `org grant revoke` (F1, ORGANISM-ARCHITECTURE §6): the
-  CLI no longer writes the `authority_grants` ledger directly — every mint
-  and revocation goes through the `SeatApprover`, the same grantor-scope
-  ceiling, TTL shape, and vacant/unmanaged-seat fail-closed the gateway's
-  `/grant` and `/revoke` get. `GrantDb::insert`/`GrantDb::revoke` are now
-  `pub(crate)`: outside `operant-core` the approver is the only write path,
-  enforced by the compiler rather than by convention. The flags keep their
-  shape but become assertions about the approver-derived grant —
-  `--scope` must equal the derived scope, `--target-dept` (when given) the
-  derived pin, and `--expires-at` is honored as a whole-day TTL override
-  (mirroring `/grant`'s `--days`); a request the approver would not mint is
-  refused before any row is written, with the refusal naming why.
-### Changed
-
-- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
-  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
-  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
-  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
-  wheel events arrive as nothing) could only jump in 10-line quanta; part of
-  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
-  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
-  incl. chord-step regression test.
-
-- **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
-  context menu lives again.** The iter-648 chrome cutover deleted the
-  dispatch-row writer that fed `last_msg_area`; every consumer (right-click
-  message menu bounds, Ctrl+Shift+M cursor-open menu, menu clamping) gated on
-  a zero rect and could never fire — production-dead since the cutover,
-  flagged by the 2026-10-09 visual audit. The render pass now publishes it
-  from the vendored `message_area()` alongside the other three hit-test cells
-  (same post-draw discipline as the iter-661 fix). Pinned by a default-zero +
-  setter-semantics unit test. Corpus verify 0 drift; suite 1741/0.
-
-- **iter-637 — one canonical required-field guard in the org stores
-  (consolidation)**: `org::require_non_blank(value, message)` now owns the
-  emptiness rule (`trim().is_empty()`) exactly once. The four copies
-  (`authority::require_reason`, `pending_requests::require_non_blank`,
-  `decisions_db::{require_mutation_reason, require_text}`) became thin
-  wrappers that keep their domain message verbatim, so every error string
-  the 268 org tests pin is byte-identical.
-
-- **iter-636 — one glob matcher across every allowlist (consolidation)**:
-  the two hand-rolled glob subsets are deleted and both delegate to the
-  canonical `context::lcm::glob_match` — the matcher the org seat policy
-  already enforced with. Three matchers meant a pattern written with a
-  character class (`content.[0-9]`) matched in the org layer and silently
-  never matched in the agent command allowlist and the kernel import
-  allowlist. One deliberate behavior delta on kernel imports, in the
-  fail-closed direction: `skills.*` now requires the literal dot (it no
-  longer matches the bare name `skills`); character classes now work as
-  written. Also drops `check_genome`'s unused `config` parameter (the
-  genome checks read the org DB directly, not the config).
-
-### Added
 
 - **iter-633 — mid-flight seat-budget enforcement (Wave-4 §5)**: a HARD
   token cap now stops a runaway turn AT the iteration boundary instead of
@@ -631,8 +302,327 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   additive `ensure_columns` reconciliation, so existing databases gain
   it on next open; cron-backfilled rows keep `NULL`.
 
+- **Mouse injection for `operant tui debug simulate` (`--mouse`)**: the headless
+  simulator can replay mouse events after the key sequence —
+  `<action,x,y>` tokens (`left`, `right`, `middle`, `drag`, `up`/`release`,
+  `scroll_up`, `scroll_down`; 0-based viewport coordinates). This un-parks the
+  `selection-highlight` surface: `apply_selection_highlight` is mouse-written
+  and style-only, so no scenario could reach it before. The corpus gains a
+  `selection-highlight` scenario (120x40 + 80x24) whose style golden pins the
+  58% accent background blend and the 32% white foreground blend. Five
+  defects were fixed on the way, two of them live-UI bugs: (1) `render_app`
+  published `last_selectable_area` *before* `jcode_ui::draw`, one frame stale
+  and a zero-rect on the first frame — the first mouse click after startup was
+  silently dropped; (2) a token-advance off-by-one in the `--mouse` parser
+  hung any sequence of two or more tokens; (3) the simulation exit check
+  ignored the mouse queue, exiting at frame one before any mouse event was
+  consumed; (4) no closing draw on the simulation exit path — `terminal.draw`
+  runs before the event pump, so the last event's state never reached the
+  dumped buffer; (5) `App::debug_snapshot()` now exposes `selection_anchor`,
+  `selection_focus`, `selection_text` plus comma-free row fields, so drag state
+  is assertable from scenarios.
+
+- **fix(channels) — telegram `strip_tool_call_tags` underscore alias:** the
+  iter-664 sanitize relocation dropped the `<tool_call>` tag form from the open-tag array and close-tag match, leaking raw tool-call JSON
+  into user-visible Telegram replies; pre-existing, surfaced when the gate
+  grew `-p operant-cli` (feature unification compiles the telegram tests).
+
+- `operant-core/src/doctor.rs` — ONE doctor engine on `AppConfig`
+  (docs/ORGANISM-ARCHITECTURE.md §6 F2). Two divergent engines existed:
+  `operant-runtime::doctor` ran on `schema::Config` for the gateway's
+  `GET /api/doctor`, `operant doctor` ran its own checks on `AppConfig` —
+  same intent, drifting check lists. The surviving engine runs the union:
+  config semantics on the `[providers]` section (default provider, API key,
+  model, temperature range, fallback chain, model/embedding routes), data
+  root (exists/writable/disk) at `operant_home()`, environment (git, shell,
+  HOME, curl), and CLI tool discovery (`operant_tools`). A drift-pin test
+  pins the category order so the CLI and gateway paths cannot silently
+  diverge again.
+- `org/seat_policy.rs` + `org/seat_policy_db.rs` — seat modes, the
+  precedence engine, the sqlite store, and the `SeatPolicySource` seam.
+- `org/hierarchy_edges.rs` — reporting lines as an edges table feeding
+  `Hierarchy::new`; cycle/dangling defects are reported, not repaired.
+- `org/pending_requests.rs` — durable escalation queue with atomic
+  pending→resolved transitions and an `expired_as_of` TTL sweep.
+- `org/seat_authority.rs` — `SeatAuthority` (policy + grants + requests
+  in one consult) and `SeatApprover` (approve→`issue_grant` with TTL tiers,
+  deny, expire; `approver_of` routing with operator-literal fail-closed).
+- Agent builders: `with_seat_authority`, `with_unattended`.
+- `[genome]` config block: `unrestricted_default`, `grant_ttl_days`,
+  `queued_cron_jobs_resolve_grants`.
+- `tests/governance_escalation.rs` (4 end-to-end),
+  `tests/seat_policy_run_path.rs` (5), 6+8+8 unit tests across the new
+  stores, 2 new `cron_session_isolation` barrier tests.
+
+### Fixed
+
+- **Unblock main: `PathBuf` inline format capture in the cron seat-memory
+  prompt** (`operant-core/src/cronjobs/scheduler.rs`): `{path}` →
+  `path.display()` — committed in 5464764d, broke every `cargo check/test
+  -p operant-core` build.
+
+### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
+- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
+  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
+  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
+  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
+  wheel events arrive as nothing) could only jump in 10-line quanta; part of
+  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
+  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
+  incl. chord-step regression test.
+
+- **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
+  context menu lives again.** The iter-648 chrome cutover deleted the
+  dispatch-row writer that fed `last_msg_area`; every consumer (right-click
+  message menu bounds, Ctrl+Shift+M cursor-open menu, menu clamping) gated on
+  a zero rect and could never fire — production-dead since the cutover,
+  flagged by the 2026-10-09 visual audit. The render pass now publishes it
+  from the vendored `message_area()` alongside the other three hit-test cells
+  (same post-draw discipline as the iter-661 fix). Pinned by a default-zero +
+  setter-semantics unit test. Corpus verify 0 drift; suite 1741/0.
+
+- **iter-707 — Clean-sweep 2: onboarding welcome-takeover phantom excised.**
+  The ported draw carried a constant-false gate for a first-run welcome
+  takeover (`onboarding_welcome_active` → early-return that suppresses all
+  chat chrome), plus its ~140-line support stratum: the two trait methods,
+  `OnboardingWelcomeKind` (4 variants), `LoginImportPrompt`, `ImportSummaryPill`,
+  `TelemetryChoice`, `LoginImportRow`, a `#[cfg(any())]` test draw hook, and
+  the onboarding margins branch. The upstream onboarding module
+  (tui/onboarding.rs) was never vendored and no implementor ever opted in —
+  the gate guarded a phantom. `onboarding_preview_mode` and
+  `suggestion_prompts` stay (live empty-state seam). Behavior identical:
+  constant-false branches removed. Corpus verify 0 drift; suite green.
+
+- **iter-703 — Clean-sweep 1: live credential status fixes the stuck
+  "/login to add provider" header.** Root cause of the 2026-10-09 visual-audit
+  complaint 2: the jcode persistent header is auth-driven, and operant's
+  adapter mapped a `has_credentials` boolean snapshotted once at `App::new`
+  (auth-store + ANTHROPIC/OPENAI env only) onto the provider matrix — so any
+  session that acquired credentials after boot (omp/custom base URLs,
+  mid-session /login) reported NotConfigured forever and the header never
+  transitioned. `credentials_live()` now recomputes per read (activation flag
+  OR live auth-store OR env); `auth_status()` re-derives the provider from the
+  configured model when `active_provider` is unset, and maps every
+  OpenAI-compatible profile (custom-openai, omp, free-mode upstreams, groq/
+  cerebras catalog) onto `openai_compatible_any`. The header gains a `custom`
+  circle row for that slot when configured (unconfigured sessions — and every
+  corpus golden — render byte-identically; corpus verify 0 drift). The /model
+  gate, Ctrl+A model-picker gate, and `auth_method` telemetry read the live
+  predicate. Tests: store-gain refreshes matrix without App recreation,
+  env-isolated via AUTH_ENV_LOCK (real on-disk store cleared per test — the
+  dev machine carries real credentials).
+
+- **iter-694 — W5 Tier-2: Ctrl+L terminal-style clear (jcode parity).** The
+  confirmed Tier-2 gap from JCODE-VISUAL-PARITY-PLAN.md item 17: the
+  layout-side collapse was already ported (operant_ui renders a zero-height
+  messages chunk when `terminal_clear_collapsed()` holds), but nothing could
+  set the state. App now captures the `transcript_version` at Ctrl+L
+  (`terminal_clear_version`); the state is live only while that version still
+  matches and the same idle conditions jcode derives hold (not scrolled up,
+  not streaming, no streaming text) — so any new output, streaming, or
+  scroll-up immediately restores the full layout, no reset points to hunt.
+  `clear_view_terminal_style()` snaps the scroll to the bottom; the chord
+  binds next to the paste handlers. Nothing is deleted (contrast `/clear`).
+  Also found while wiring: `/cls` is registered but has no execution arm —
+  pre-existing, left for its owner. New corpus scenario `terminal-clear`
+  (golden: cleared frame contains none of the transcript text). Label note:
+  origin/main carries two iter-691-labeled commits (W5a palette sweep + the
+  concurrent reaper line), and iters 692-693 (chief-of-staff gap-8 slice + its docs)
+  were taken mid-prove — append-only history, all stay.
+
+- **iter-687 — W4 animation: the original radar-pulse `signal` replaces the
+  four vendored samplers.** `sample_donut`, `sample_gyroscope`, `sample_black_hole`
+  and `sample_orbit_rings` (with their angle-table LUT machinery and their
+  jcode-parity bit-identical tests) are deleted; the idle animation is now
+  `sample_signal`, original operant code: a beam sweeps the unit disk leaving a
+  rational-falloff afterglow, three staggered rings expand from the center, and
+  a bright core pulses at the origin. Determinism is pinned by a
+  bit-identical-across-calls test at four sizes × eight elapsed values
+  (determinism replaces parity as the guarantee — the code is no longer a
+  jcode port); `beam_head_leads_the_trail` and `sweeps_over_time` pin the
+  physics. Exactly two transcendentals per subpixel (`sqrt` + `atan2`), no
+  LUTs, vs the donut's ~142k `cos`/`sin` per frame. `IDLE_VARIANTS` becomes
+  `["signal"]`, the `idle_donut_*` identifiers rename to `idle_animation_*`,
+  the `three_rings`/`gyroscope` disabled-name aliases are deleted with their
+  samplers, and the corpus pin `OPERANT_DISABLED_ANIMATIONS` follows the new
+  name. `shape_char_3x3` and `hsv_to_rgb` stay vendored verbatim (the blit
+  path is sampler-agnostic).
+
+- **iter-686 — W3 rebrand: the vendored TUI layer stops saying jcode.** The
+  seven vendored module trees rename on disk (`tui/jcode_{anim,app,markdown,
+  model,render,render_core,ui}` → `tui/operant_*`), every `jcode_`/`JCODE_`
+  identifier and env var with them (`JCODE_HOME` → `OPERANT_HOME`, etc.),
+  and the user-visible surface with it: the onboarding header wordmark, the
+  `/feedback`, `/subscription`, `/subscribe`, `/log`, `/selfdev` command
+  descriptions, the login provider's display name ("Jcode Subscription" →
+  "Operant Subscription"), logger stderr prefixes, two subscription-overlay
+  lines, and the flicker-notice log hint. The TUI state root moves from
+  `~/.jcode` to `~/.operant` (`OPERANT_HOME` override unchanged) and
+  `binary_stem()` reports `operant`, so builds/logs/session markers land in
+  the canonical operant state dir; existing `~/.jcode` state migrates with a
+  one-time `cp -a ~/.jcode/. ~/.operant/` (leaf names are disjoint from the
+  gateway's files). `AuthStatus.jcode` renames to `subscription` (serde shape
+  changes only in-process). Provenance comments ("ported verbatim from jcode
+  @ 0a9dc7805", "jcode parity") and the vendored file headers stay by design;
+  machine-facing identifiers with state-compatibility risk (`LoginProvider
+  id: "jcode"`, `SessionSource::Jcode`, `LoginProviderAuthStateKey::Jcode`)
+  are deliberately kept. Corpus goldens regenerated for the rebrand; three
+  goldens that had drifted with a peer's concurrent renderer edits (ask-user-
+  dialog, bypass-permissions-dialog, footer-bar) ride along — absorbing peer
+  drift is what a full golden regen does.
+
+- **iter-671 — W1 of the TUI upgrade**: tool rows splice at their arrival
+  anchor (`after_index` — the message count when the call started, immutable)
+  instead of after their turn's last assistant message, so a tool that ran
+  between two assistant messages renders between them (the "tool calls and
+  final message messed up" bug); transcript turns attach tool blocks via a
+  message-index→ordinal map. The legacy voice-mode surface is fully purged
+  (~530 LOC): notice overlay + recorder + PTT key handling + `/voice` command
+  + `tui voice` subcommand + keybinding catalogue entry (Alt+V deliberately
+  uncatalogued — the registry must not advertise what nothing implements).
+  Core voice/TTS and gateway `/voice` untouched.
+
+- **iter-669 — Wave-2 guardrail harvest: ping-pong and no-progress rungs
+  live on the one engine.** `ToolGuardrailTracker` absorbed the three
+  patterns from the runtime's dead `loop_detector.rs` (its only consumer
+  was the deleted Loop B engine; thresholds verbatim): **ping-pong** — two
+  distinct tools alternating 4 complete cycles warn, 5 skip pre-execution
+  (20-name sliding window); **no-progress** — a tool returning the
+  identical result 5× warns, 6× arms a next-call skip regardless of
+  arguments (the varied-args backstop the identical-args rung could never
+  catch), fed by a new post-execution `observe_result` hook in
+  `execute_tools` (synthetic guardrail skips excluded — identical by
+  construction); and the **exemption port** — `with_exempt_tools`
+  bypasses every repeat/loop rung and survives `reset` (the W1.8c-dropped
+  `tool_call_dedup_exempt`). Skip/warn copy is pattern-aware and every
+  skip variant keeps the `Guardrail: ` prefix so R35 never counts guardrail
+  skips. `loop_detector.rs` deleted. Gate re-baseline: 5441 passed /
+  0 failed (−15 runtime tests, +13 ported pattern tests).
+
+- **iter-637 — one canonical required-field guard in the org stores
+  (consolidation)**: `org::require_non_blank(value, message)` now owns the
+  emptiness rule (`trim().is_empty()`) exactly once. The four copies
+  (`authority::require_reason`, `pending_requests::require_non_blank`,
+  `decisions_db::{require_mutation_reason, require_text}`) became thin
+  wrappers that keep their domain message verbatim, so every error string
+  the 268 org tests pin is byte-identical.
+
+- **iter-636 — one glob matcher across every allowlist (consolidation)**:
+  the two hand-rolled glob subsets are deleted and both delegate to the
+  canonical `context::lcm::glob_match` — the matcher the org seat policy
+  already enforced with. Three matchers meant a pattern written with a
+  character class (`content.[0-9]`) matched in the org layer and silently
+  never matched in the agent command allowlist and the kernel import
+  allowlist. One deliberate behavior delta on kernel imports, in the
+  fail-closed direction: `skills.*` now requires the literal dot (it no
+  longer matches the bare name `skills`); character classes now work as
+  written. Also drops `check_genome`'s unused `config` parameter (the
+  genome checks read the org DB directly, not the config).
+
+- **W1.8c — channel dispatch runs on the reconciled facade** (the last
+  `run_tool_call_loop` call site): `process_channel_message` now constructs a
+  `ReconciledAgent` per message via `FacadeConstruction` (provider route,
+  system prompt, `temperature`, the channel's `max_tool_iterations`, the
+  Loop-B-parity tool allowlist with non-CLI exclusions and the pacing
+  `loop_detection_enabled` switch), pins a per-conversation core session id
+  (re-minted on `/new` and on rollback), hydrates the fresh session transcript
+  from the orchestrator's sanitized prior turns, and runs the turn through
+  `run_facade_turn` with the old loop's scope chain at the call site
+  (`Box::pin` keeps the large turn future off the polling stack — a 2MB
+  tokio worker overflowed inside `Regex::new` in context-reference
+  preprocessing before this). Cross-crate fixes the migration surfaced:
+  (1) prompt-mode providers now receive tool results as user-role
+  `[Tool results]` text (`operant-api` `Provider::chat` default) — core's
+  role-`tool` JSON was invisible to text-only providers and re-triggered
+  calls until the loop detector tripped; (2) the facade's session store
+  enables `PRAGMA busy_timeout=500` and `BEGIN IMMEDIATE` on its write
+  transactions — concurrent facades (channel turns, cron, sub-agents) died
+  instantly with `SQLITE_BUSY_SNAPSHOT` ("database is locked"); (3) the
+  guardrail duplicate-skip result is success-shaped guidance (`Guardrail: …`,
+  no `[` prefix — the anomaly heuristic treated a bracket prefix as failed
+  JSON and refunded iterations re-asking the model); (4) channels substitute
+  core's empty degenerate grace summaries with a stopped-early notice naming
+  the configured iteration budget, and strip raw tool-call/result JSON
+  artifact lines from final replies; (5) test facades point at per-context
+  temp data dirs instead of the operator's live `~/.operant` (39 contexts
+  contended on one SQLite file). Channels suite: 1045/0.
+
+- `org grant give` / `org grant revoke` (F1, ORGANISM-ARCHITECTURE §6): the
+  CLI no longer writes the `authority_grants` ledger directly — every mint
+  and revocation goes through the `SeatApprover`, the same grantor-scope
+  ceiling, TTL shape, and vacant/unmanaged-seat fail-closed the gateway's
+  `/grant` and `/revoke` get. `GrantDb::insert`/`GrantDb::revoke` are now
+  `pub(crate)`: outside `operant-core` the approver is the only write path,
+  enforced by the compiler rather than by convention. The flags keep their
+  shape but become assertions about the approver-derived grant —
+  `--scope` must equal the derived scope, `--target-dept` (when given) the
+  derived pin, and `--expires-at` is honored as a whole-day TTL override
+  (mirroring `/grant`'s `--days`); a request the approver would not mint is
+  refused before any row is written, with the refusal naming why.
 
 ### Removed
+
+- **iter-664 — the dead channels dispatch orchestrator (audit-r2 plan §2,
+  Option A)**: `start_channels` (the only pub entry), the dispatch chain
+  (`run_message_dispatch_loop` → `dispatch_worker` →
+  `process_channel_message`), and every sibling consumed only by that chain —
+  `commands`, `consts`, `dispatch`, `factory`, `health`, `history`,
+  `identity`, `memory_ctx`, `media_pipeline`, `prompts`, `routing`,
+  `runtime_types`, `sanitize`, `supervision`, `startup`, and the
+  orchestrator-level `tests.rs` (~167 tests) — plus the dead
+  `orchestrator::deliver_announcement` registry variant and
+  `ChannelNotifyObserver`. Audit trail: the shipped CLI gateway never
+  called any of it (live paths are `gateway_runner.rs` + `operant-gateway`;
+  LTO stripped the cluster from every deployed binary since iter-628), the
+  only external `channels::orchestrator::` consumer is `acp_server`, and no
+  production caller of `register_delivery_fn` exists. The one live helper
+  the cluster exported, `strip_tool_call_tags`, moved verbatim to
+  `telegram::helpers`. `acp_server` and the feature-gated `mqtt` listener
+  remain. Five-crate gate re-baselined: 5443 passed / 0 failed across 44
+  binaries.
+
+- **W1.10 — Loop B engine deleted**: `run_tool_call_loop`
+  (`loop_/tool_loop.rs`), the `agent_turn` legacy wrapper (`loop_/turn.rs`),
+  and their 35 unit tests, fixtures, and the five `*_loop_c`
+  direct-drive parity tests go away with zero remaining production callers
+  (channel dispatch has run on the reconciled facade since iter-662;
+  `loop_detector.rs` was already harvested into `core::tool_guardrails` in
+  Wave 1). `agent_parity` keeps the core↔Loop C pairs (10 tests).
+  `ChannelRuntimeContext` drops the fields only the engine consumed —
+  `multimodal`, `tool_call_dedup_exempt`, `activated_tools` (the
+  context copy; the tool-registry's own `ActivatedToolSet` handle stays),
+  and `max_tool_result_chars` — from the struct, startup wiring, and all 39
+  test contexts. Re-baseline: runtime lib 1654/0, parity 10/10; five-crate
+  gate 5610 passed / 0 failed across 44 binaries.
 
 - `operant-runtime::doctor` (1,347 lines) — the duplicate engine. Only the
   gateway's `GET /api/doctor` consumed it; its uncalled `run`/`run_models`/
@@ -672,91 +662,6 @@ fixed by hoisting one `(MemoryManager, provider)` pair for both agents;
 D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
 `loop_request_timeout` pair).
 
-### Added
-
-- `operant-core/src/doctor.rs` — ONE doctor engine on `AppConfig`
-  (docs/ORGANISM-ARCHITECTURE.md §6 F2). Two divergent engines existed:
-  `operant-runtime::doctor` ran on `schema::Config` for the gateway's
-  `GET /api/doctor`, `operant doctor` ran its own checks on `AppConfig` —
-  same intent, drifting check lists. The surviving engine runs the union:
-  config semantics on the `[providers]` section (default provider, API key,
-  model, temperature range, fallback chain, model/embedding routes), data
-  root (exists/writable/disk) at `operant_home()`, environment (git, shell,
-  HOME, curl), and CLI tool discovery (`operant_tools`). A drift-pin test
-  pins the category order so the CLI and gateway paths cannot silently
-  diverge again.
-- `org/seat_policy.rs` + `org/seat_policy_db.rs` — seat modes, the
-  precedence engine, the sqlite store, and the `SeatPolicySource` seam.
-- `org/hierarchy_edges.rs` — reporting lines as an edges table feeding
-  `Hierarchy::new`; cycle/dangling defects are reported, not repaired.
-- `org/pending_requests.rs` — durable escalation queue with atomic
-  pending→resolved transitions and an `expired_as_of` TTL sweep.
-- `org/seat_authority.rs` — `SeatAuthority` (policy + grants + requests
-  in one consult) and `SeatApprover` (approve→`issue_grant` with TTL tiers,
-  deny, expire; `approver_of` routing with operator-literal fail-closed).
-- Agent builders: `with_seat_authority`, `with_unattended`.
-- `[genome]` config block: `unrestricted_default`, `grant_ttl_days`,
-  `queued_cron_jobs_resolve_grants`.
-- `tests/governance_escalation.rs` (4 end-to-end),
-  `tests/seat_policy_run_path.rs` (5), 6+8+8 unit tests across the new
-  stores, 2 new `cron_session_isolation` barrier tests.
-
-### Changed
-
-- **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
-  (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
-  ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
-  the fine rung a mouseless session (tmux without mouse-mode, plain tty —
-  wheel events arrive as nothing) could only jump in 10-line quanta; part of
-  the "chat window is pinned" complaint (2026-10-09 visual audit). Both
-  chords pause tail-follow; reaching the bottom resumes it. Suite 1742/0
-  incl. chord-step regression test.
-
-- **iter-709 — Clean-sweep 3: `last_msg_area` republished — the dead right-click
-  context menu lives again.** The iter-648 chrome cutover deleted the
-  dispatch-row writer that fed `last_msg_area`; every consumer (right-click
-  message menu bounds, Ctrl+Shift+M cursor-open menu, menu clamping) gated on
-  a zero rect and could never fire — production-dead since the cutover,
-  flagged by the 2026-10-09 visual audit. The render pass now publishes it
-  from the vendored `message_area()` alongside the other three hit-test cells
-  (same post-draw discipline as the iter-661 fix). Pinned by a default-zero +
-  setter-semantics unit test. Corpus verify 0 drift; suite 1741/0.
-
-- `operant doctor` renders the shared engine's Diagnostics section after
-  its install-level checks; engine errors count as issues (they gate the
-  exit code), warnings are advisories, and `--json` gains a `diagnostics`
-  array — the same list `GET /api/doctor` serves through a thin boundary
-  adapter (`schema::Config.providers` → `AppConfig.providers`).
-- `GET /api/doctor` now serves the shared engine (doc comment corrected:
-  the route was always `get(...)`, not POST).
-
-- `run_agent_job` mounts `WriteBarrier::apply` (opt-in via
-  `with_write_barrier`; the gateway constructs it over the app db, so it is
-  live in production) — one worklog row per completed run, failure
-  propagates to the run's status.
-- `start_gateway` builds the memory pair once and threads it to both
-  agents (D-5).
-- The permission dispatcher: policy-escalated requests deny under YOLO and
-  no-active-channel (ungoverned requests keep auto-`AllowSession`);
-  60s timeout records `Expired`.
-- `/approve` mints first, then answers; `/deny` resolves the queue row.
-
-### Removed
-
-- **W1.10 — Loop B engine deleted**: `run_tool_call_loop`
-  (`loop_/tool_loop.rs`), the `agent_turn` legacy wrapper (`loop_/turn.rs`),
-  and their 35 unit tests, fixtures, and the five `*_loop_c`
-  direct-drive parity tests go away with zero remaining production callers
-  (channel dispatch has run on the reconciled facade since iter-662;
-  `loop_detector.rs` was already harvested into `core::tool_guardrails` in
-  Wave 1). `agent_parity` keeps the core↔Loop C pairs (10 tests).
-  `ChannelRuntimeContext` drops the fields only the engine consumed —
-  `multimodal`, `tool_call_dedup_exempt`, `activated_tools` (the
-  context copy; the tool-registry's own `ActivatedToolSet` handle stays),
-  and `max_tool_result_chars` — from the struct, startup wiring, and all 39
-  test contexts. Re-baseline: runtime lib 1654/0, parity 10/10; five-crate
-  gate 5610 passed / 0 failed across 44 binaries.
-
 ## [0.2.1] - 2026-09-30
 
 Foundation for post-turn features (reflection / advisor / dreaming).
@@ -775,6 +680,34 @@ Parity work against the `jcode` reference agent (iters 347-409). The TUI
 gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1021,6 +954,34 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -1176,6 +1137,34 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -1231,6 +1220,34 @@ under `deny_unknown_fields` instead of being silently ignored.
 - `--dangerously-skip-permissions` flag that shows a confirmation dialog at startup and, on accept, runs the session in permission-bypass mode
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1300,6 +1317,34 @@ Full Changelog: [v0.1.3...v0.1.4](https://github.com/ishan-parihar/operant/compa
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
+
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
   ±10 on PageUp/PageDown, ±20 on Alt+arrows, mouse wheel otherwise. Without
@@ -1342,6 +1387,34 @@ Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/operant-rs/compare/
 - Regression coverage for Windows key handling, landing prompt bootstrap, follow-up prompting after errors, and activity-pane failure rendering
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1388,6 +1461,34 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - GitHub release workflow that extracts matching release notes from `CHANGELOG.md` and publishes tagged build artifacts to GitHub Releases
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
@@ -1446,6 +1547,34 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - CI/CD pipelines: lint (rustfmt + clippy + docs), build (3 native + 6 cross-compiled targets), test (3 platforms + coverage)
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
+- **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
+  Shift+Left/Right select characters in the composer; Shift+Up/Down extend
+  across visual rows (vim Visual mode keeps its existing Shift+arrow path);
+  the selection renders reverse-video through the vendored wrap renderer
+  (ui_input::wrap_input_text splits each wrapped segment into before/selected/
+  after spans); Ctrl+C copies the composer selection and suppresses exit-confirm
+  while one is live; any other edit key collapses it. The vendored surface
+  gains `TuiState::input_selection()` (default None — no other implementor
+  affected). Multibyte-safe via char-boundary clamping. Suite 1745/0 incl.
+  3 selection tests (chords, backwards anchor, reverse-video render with
+  surrounding chars intact).
 
 - **iter-710 — Clean-sweep 4: Ctrl+Up/Ctrl+Down fine transcript scroll
   (jcode parity).** Completes the keyboard scroll ladder: ±3 on Ctrl+arrows,
