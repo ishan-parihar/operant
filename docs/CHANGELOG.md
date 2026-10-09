@@ -167,6 +167,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
   across visual rows (vim Visual mode keeps its existing Shift+arrow path);
@@ -388,6 +404,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
   across visual rows (vim Visual mode keeps its existing Shift+arrow path);
@@ -460,6 +492,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (mirroring `/grant`'s `--days`); a request the approver would not mint is
   refused before any row is written, with the refusal naming why.
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
 
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
@@ -724,6 +772,22 @@ D-2 and D-3 resolved (see BUGS.md); K-2 filed (pre-existing order-dependent
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
   across visual rows (vim Visual mode keeps its existing Shift+arrow path);
@@ -808,6 +872,22 @@ Parity work against the `jcode` reference agent (iters 347-409). The TUI
 gained roughly 3,000 lines; 1,146 lines of long-dead code were deleted.
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
 
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
@@ -1066,6 +1146,22 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
   across visual rows (vim Visual mode keeps its existing Shift+arrow path);
@@ -1233,6 +1329,22 @@ under `deny_unknown_fields` instead of being silently ignored.
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
   across visual rows (vim Visual mode keeps its existing Shift+arrow path);
@@ -1300,6 +1412,22 @@ under `deny_unknown_fields` instead of being silently ignored.
 - `--dangerously-skip-permissions` flag that shows a confirmation dialog at startup and, on accept, runs the session in permission-bypass mode
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
 
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
@@ -1381,6 +1509,22 @@ Full Changelog: [v0.1.3...v0.1.4](https://github.com/ishan-parihar/operant/compa
 
 ### Changed
 
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
+
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
   across visual rows (vim Visual mode keeps its existing Shift+arrow path);
@@ -1435,6 +1579,22 @@ Full Changelog: [v0.1.2...v0.1.3](https://github.com/eikarna/operant-rs/compare/
 - Regression coverage for Windows key handling, landing prompt bootstrap, follow-up prompting after errors, and activity-pane failure rendering
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
 
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
@@ -1493,6 +1653,22 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - GitHub release workflow that extracts matching release notes from `CHANGELOG.md` and publishes tagged build artifacts to GitHub Releases
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
 
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend
@@ -1563,6 +1739,22 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 - CI/CD pipelines: lint (rustfmt + clippy + docs), build (3 native + 6 cross-compiled targets), test (3 platforms + coverage)
 
 ### Changed
+
+- **iter-716 — Clean-sweep 6: integration-truth fixes — `tool_backend` stops
+  mis-advertising the live web_search chain.** The introspection tool claimed
+  `tavily, exa, searxng, ddg` with `tavily` current — but the live chain is
+  `sourcehound → tavily → exa → ddg → searxng` with `sourcehound` the config
+  default and DDG the key-free fallback. Map + description now name sourcehound
+  and default to it (static claim of the config default, noted in source).
+  Stale `igs`-alias comment in web_tools.rs corrected (the config default is
+  `"sourcehound"`, not "the old string"); the alias itself stays — pre-re-home
+  configs depend on it reaching the key-free engine. NOT deleted (audit
+  candidates re-verified as live): operant-tools `WebSearchTool` + routing feed
+  the runtime agent registry consumed by the ACP orchestrator; the obscura/
+  lightpanda names in browser_provider are intentional retired-name fallbacks
+  with a pinned warning test. Suite: tool_backend 3/3 on clean origin/main
+  (the shared tree is red from a peer in-flight core change — collect_map_nodes
+  — unrelated to this delta).
 
 - **iter-714 — Clean-sweep 5: composer text-area selection (jcode parity).**
   Shift+Left/Right select characters in the composer; Shift+Up/Down extend

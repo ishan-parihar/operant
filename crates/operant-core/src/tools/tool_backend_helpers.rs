@@ -13,7 +13,14 @@ static BACKEND_MAP: LazyLock<HashMap<&'static str, (&'static [&'static str], &'s
         let mut m = HashMap::new();
         m.insert(
             "web_search",
-            (&["tavily", "exa", "searxng", "ddg"][..], "tavily"),
+            (
+                &["sourcehound", "tavily", "exa", "searxng", "ddg"][..],
+                // ponytail: static claim of the config default
+                // (tools.web.preferred_provider = "sourcehound", config.rs);
+                // a live read of the per-session override adds config plumbing
+                // this introspection tool has never needed.
+                "sourcehound",
+            ),
         );
         m.insert("code_execution", (&["local", "docker"][..], "local"));
         m.insert("terminal", (&["local", "docker", "ssh"][..], "local"));
@@ -43,7 +50,7 @@ impl OperantTool for ToolBackendTool {
     fn description(&self) -> &str {
         "Query and manage tool backends. Returns available backends for a given tool \
          and optionally switches the active backend. Known tools with backends include \
-         web_search (tavily, exa, searxng, ddg), code_execution (local, docker), \
+         web_search (sourcehound, tavily, exa, searxng, ddg), code_execution (local, docker), \
          terminal (local, docker, ssh), and vision (openai, anthropic)."
     }
 
@@ -99,8 +106,8 @@ mod tests {
         let result = tool.execute(args, ToolContext::default()).await;
         assert!(result.success);
         let v: Value = serde_json::from_str(&result.content).unwrap();
-        assert_eq!(v["available_backends"].as_array().unwrap().len(), 4);
-        assert_eq!(v["current_backend"], "tavily");
+        assert_eq!(v["available_backends"].as_array().unwrap().len(), 5);
+        assert_eq!(v["current_backend"], "sourcehound");
     }
 
     #[tokio::test]

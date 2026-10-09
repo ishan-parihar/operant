@@ -580,11 +580,11 @@ fn html_decode(s: &str) -> String {
 /// configured backend before auto-selecting among available ones.
 ///
 /// `igs` is the retired name of this same key-free engine, so it resolves to
-/// the successor (`auto`) rather than falling through to DuckDuckGo: a config
-/// written before the sourcehound re-home must still reach the engine it
-/// asked for. The default in `config.rs` is still the old string until the
-/// consolidation pass renames it, so this mapping is what keeps the retired
-/// name off the DuckDuckGo path.
+/// the successor (`sourcehound`/`auto`) rather than falling through to
+/// DuckDuckGo: a config written before the sourcehound re-home must still
+/// reach the engine it asked for. The config default has long been
+/// `"sourcehound"` (config.rs `tools.web.preferred_provider`); the retired
+/// alias survives purely for pre-re-home configs.
 ///
 /// `sourcehound_available` still gates the result: even a configured
 /// `sourcehound` preference yields `false` when the binary is missing.
