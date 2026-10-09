@@ -436,9 +436,6 @@ impl OperantAgent {
         self
     }
 
-    /// Mark this agent unattended (no interactive user behind it — cron).
-    /// A governed `Escalate` verdict is clamped to a same-run Deny once the
-    /// ask is queued; the ungoverned path ignores the flag.
     /// Arm/disarm the guardian-LLM approval classifier explicitly —
     /// the test/programmatic override for the construction-time env read
     /// (`OPERANT_GUARDIAN_LLM`).
@@ -448,6 +445,8 @@ impl OperantAgent {
     }
 
     /// Mark this agent unattended (no interactive user behind it — cron).
+    /// A governed `Escalate` verdict is clamped to a same-run Deny once the
+    /// ask is queued; the ungoverned path ignores the flag.
     pub fn with_unattended(mut self, unattended: bool) -> Self {
         self.unattended = unattended;
         self
