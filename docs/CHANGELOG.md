@@ -543,6 +543,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-751 — docs: P5 terminal-scrollback design + the duplication
+  investigation record.** The owner re-stated the requirement as native
+  terminal scrollback (select-and-copy across a long conversation), which
+  supersedes the jcode-parity framing — jcode is alt-screen and cannot
+  serve it. The design grounds in ratatui 0.30's own first-class support
+  (verified in the vendored source): the no-alt-screen init variant
+  (init.rs:416), `Viewport::Inline(n)`, and `Terminal::insert_before` —
+  ratatui's doc example is literally a streaming chat. Five waves
+  (P5-1..P5-5), mode-gated first, corpus impact scoped. Also records
+  today's duplication investigation (persisted transcripts clean, frame
+  captures clean, handlers re-verified; remaining suspects: pre-744
+  session inode, gateway double-emit; forced-repro blocked by the NEW
+  finding that `-c <config>` is silently ignored for provider selection
+  by chat/run — itself filed as the next fix), and the command-sweep
+  backlog tiers.
+
 - **iter-750 — command sweep: /cls + /clear-view implemented, alias tier
   wired, the lister fixed, the sweep committed.** The sweep (every
   REGISTERED command driven through the headless simulator, asserting
