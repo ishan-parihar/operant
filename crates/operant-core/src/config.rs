@@ -676,6 +676,12 @@ impl Default for LoggingSettings {
 pub struct TuiSettings {
     pub theme: String,
     pub rich_output: bool,
+    /// P5-1 terminal-scrollback mode (2026-10-10 design doc): render in the
+    /// main buffer with an inline bottom viewport — no alternate screen, so
+    /// the terminal's native scrollback owns the history (tmux copy-mode and
+    /// native selection reach everything). Default off until live-verified.
+    #[serde(default)]
+    pub terminal_scroll_mode: bool,
     pub show_tool_calls: bool,
     pub show_iterations: bool,
     pub landing_title: String,
@@ -690,6 +696,7 @@ impl Default for TuiSettings {
         Self {
             theme: "opencode".to_string(),
             rich_output: true,
+            terminal_scroll_mode: false,
             show_tool_calls: true,
             show_iterations: true,
             landing_title: "HERMES".to_string(),

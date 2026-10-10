@@ -543,6 +543,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-753 — P5-1: terminal-scrollback mode exists — the TUI can run in
+  the main buffer.** New `tui.terminal_scroll_mode` (default OFF; documented
+  in operant.example.toml): when enabled, `TuiApp::enter` skips the
+  alternate screen entirely and constructs the terminal with
+  `Terminal::with_options(TerminalOptions { viewport:
+  Viewport::Inline(14) })` — the app renders in a bottom strip of the main
+  buffer and everything above is the terminal's NATIVE scrollback (tmux
+  copy-mode, native selection, copy across the whole session). Mouse
+  capture stays off in this mode so the terminal's own selection works.
+  Live-verified end to end: boot, prompt submit, streamed reply
+  ("Hello from Operant"), composer, status row and info widget all
+  functional with no alt-screen; exit/teardown paths unchanged (the
+  leave-alt-screen sequence is a no-op in the main buffer). This is the
+  P5-1 milestone from the 2026-10-10 design doc: the terminal handoff.
+  Transcript emission via `insert_before` (native history accumulation)
+  is P5-2; the cramped 14-row viewport is the expected milestone state.
+
 - **iter-752 — a corrupted provider stream no longer ends the turn
   silently.** Forced-repro findings (double-emitting SSE proxy against the
   real omp omniroute gateway): the live chat provider is omp
