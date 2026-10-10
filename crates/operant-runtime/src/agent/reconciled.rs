@@ -781,6 +781,7 @@ fn provider_stream_event_to_core(
             extra_content: None,
             usage: None,
             finish_reason: chunk.is_final.then_some("stop".to_string()),
+            dropped_events: None,
         })),
         StreamEvent::ToolCall(tc) => Some(Ok(StreamChunk {
             content: None,
@@ -795,6 +796,7 @@ fn provider_stream_event_to_core(
             extra_content: tc.extra_content,
             usage: None,
             finish_reason: None,
+            dropped_events: None,
         })),
         StreamEvent::Usage(usage) => Some(Ok(StreamChunk {
             content: None,
@@ -808,6 +810,7 @@ fn provider_stream_event_to_core(
                     as u32,
             }),
             finish_reason: None,
+            dropped_events: None,
         })),
         StreamEvent::Final => Some(Ok(StreamChunk {
             content: None,
@@ -816,6 +819,7 @@ fn provider_stream_event_to_core(
             extra_content: None,
             usage: None,
             finish_reason: Some("stop".to_string()),
+            dropped_events: None,
         })),
         StreamEvent::PreExecutedToolCall { .. } | StreamEvent::PreExecutedToolResult { .. } => None,
     }
@@ -856,6 +860,7 @@ fn core_response_to_chunk(resp: ChatResponse) -> StreamChunk {
         extra_content: None,
         usage: None,
         finish_reason: finish_reason.or(Some("stop".to_string())),
+        dropped_events: None,
     }
 }
 
@@ -1470,7 +1475,8 @@ fn translate_event(event: &AgentEvent, sink: &mut TurnSink) -> Option<TurnEvent>
         | AgentEvent::ModelFallback { .. }
         | AgentEvent::SubagentStarted { .. }
         | AgentEvent::SubagentStopped { .. }
-        | AgentEvent::TodoUpdated { .. } => None,
+        | AgentEvent::TodoUpdated { .. }
+        | AgentEvent::StreamCorrupted { .. } => None,
     }
 }
 
