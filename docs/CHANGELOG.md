@@ -542,6 +542,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-761 — P5-3 completion (re-ship): preview-band RENDER gate.**
+  iter-759 gated the band's reserved line count but missed the render
+  gate — the dimmed `N›` prompt row still drew at y=0 over the first
+  content row in scroll mode's steady state. Both gates now carry the
+  terminal-scroll check. Live-verified: the live viewport collapses to
+  exactly the live tail + info widget + composer after each turn — no
+  duplicated rows; history lives in native scrollback only.
+  (Process incident, resolved: an earlier attempt at this fix was
+  accidentally committed from the shared tree's index, sweeping a peer's
+  in-flight notification-purge WIP to main as 8e72d80a — which did not
+  compile. Reverted as 492e4028; the peer's WIP is preserved on the
+  `fleet-hold-notif-purge-wip` branch for them to resume and land
+  properly. The shared tree was left untouched — its working files carry
+  their live edits.)
 
 - **iter-759 — P5-3: previous-prompt preview suppressed in terminal-scroll
   mode.** The watermark floor makes `scroll > 0` the steady state in scroll
