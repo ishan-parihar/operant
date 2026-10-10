@@ -1304,6 +1304,34 @@ fn thinking_display_defaults_on_and_the_command_toggles_it() {
 }
 
 #[test]
+fn cls_clears_the_view_only_and_the_alias_tier_routes() {
+    // 2026-10-10 command sweep: /cls is jcode's clear-rendered-view (the
+    // model keeps its context) — it must NOT route to /clear, which drops
+    // the conversation. The alias tier must route /commands → /help and
+    // /split-view → /splitview instead of falling through to the model as
+    // literal prompt text.
+    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+    let mut app = make_app();
+    app.messages.push(Message {
+        role: Role::User,
+        content: MessageContent::Text("kept context".to_string()),
+    });
+    assert!(app.handle_tui_command("cls", ""));
+    assert_eq!(
+        app.messages.len(),
+        1,
+        "/cls clears the VIEW only — the conversation must survive"
+    );
+    assert!(
+        app.terminal_clear_state_live(),
+        "/cls must collapse the view"
+    );
+
+    assert!(app.handle_tui_command("commands", ""));
+    assert!(app.show_help, "/commands must route to /help");
+}
+
+#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));

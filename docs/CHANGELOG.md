@@ -543,6 +543,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-750 — command sweep: /cls + /clear-view implemented, alias tier
+  wired, the lister fixed, the sweep committed.** The sweep (every
+  REGISTERED command driven through the headless simulator, asserting
+  consumption) found 73/106 registered commands falling through to the
+  model as literal prompt text — the "/commands not working" class.
+  This iteration lands the provable tier: /cls and /clear-view now run
+  the terminal-style view collapse (jcode semantics: view only, context
+  kept — NOT /clear, which drops the conversation; exact Ctrl+L sequence,
+  no post-capture invalidate); the alias tier routes /commands → /help,
+  /models → /model, /split + /split-view → /splitview; the empty
+  `tui debug slash-commands` lister (a stub since iter-154) now prints the
+  REGISTERED_COMMANDS registry with a consumption caveat; and
+  command_sweep.py ships as the standing instrument (37/106 consumed
+  after this wave; the remaining ~69 are the handler backlog — each
+  needs its jcode-parity surface, tracked in the sweep output).
+  /copy verified working live (wl-copy → wl-paste round-trip); its
+  near-invisible confirmation is the P4-2 notification purge's surface.
+  Unit regression: cls_clears_the_view_only_and_the_alias_tier_routes.
+
 - **iter-749 — P4-4: thinking display on by default, `/thinking-display`
   toggles it — jcode parity.** The vendored tree already had the full
   reasoning-trace renderer and the shim already resolved

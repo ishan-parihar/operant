@@ -629,10 +629,18 @@ async fn debug_banner(_config: &AppConfig) -> Result<()> {
 }
 
 async fn debug_slash_commands(_config: &AppConfig) -> Result<()> {
-    println!("=== Intercepted Slash Commands ===");
-    println!("Use: operant tui debug slash-commands");
-    println!("Source: crates/operant-cli/src/tui/app.rs::PROMPT_SLASH_COMMANDS");
-    // (iter-154: hardcoded 50-command list deleted — was duplicating PROMPT_SLASH_COMMANDS)
+    println!("=== Registered Slash Commands ===");
+    println!("Source: crates/operant-cli/src/tui/operant_app/app.rs::REGISTERED_COMMANDS");
+    println!();
+    let mut entries: Vec<_> = crate::tui::operant_app::app::registered_command_entries().collect();
+    entries.sort();
+    for (name, description) in entries {
+        println!("{:<22} {}", name, description);
+    }
+    println!();
+    println!(
+        "Note: registration is the /help catalog, not a handler guarantee.          The command-sweep script (tests/tui_scenarios/command_sweep.py)          reports which of these are actually intercepted."
+    );
     Ok(())
 }
 

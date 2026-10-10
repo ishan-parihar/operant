@@ -275,6 +275,16 @@ impl App {
                 at: crate::tui::debug::event_bus::now_secs(),
             });
         match cmd {
+            // Alias tier (2026-10-10 command sweep): the registry advertises
+            // names whose jcode counterparts are the same surface as an
+            // already-handled command — route instead of falling through to
+            // the model as literal text.
+            "commands" => return self.intercept_slash_command_with_args_impl("help", args),
+            "models" => return self.intercept_slash_command_with_args_impl("model", args),
+            "split" | "split-view" => {
+                return self.intercept_slash_command_with_args_impl("splitview", args);
+            }
+
             "config" | "settings" => {
                 self.settings_screen.open();
                 true
@@ -1184,6 +1194,20 @@ impl App {
             // since the pose system was dead code. Still shows the message.)
             "pet" => {
                 self.status_message = Some("Rustle wags its tail. 🐕".to_string());
+                true
+            }
+
+            // jcode /cls parity (2026-10-10 command sweep): clear the rendered
+            // VIEW only — the model keeps its full context. Distinct from
+            // /clear, which drops the conversation. Same machinery as Ctrl+L.
+            "cls" | "clear-view" => {
+                // Exactly Ctrl+L's sequence: the collapse capture must record
+                // the CURRENT transcript version, so no invalidate here —
+                // an invalidate after the capture bumps the version and the
+                // collapsed state reads as dead.
+                self.clear_view_terminal_style();
+                self.status_message =
+                    Some("View cleared — context kept (/clear drops context)".to_string());
                 true
             }
 
