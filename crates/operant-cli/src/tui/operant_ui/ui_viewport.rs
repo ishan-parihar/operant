@@ -447,6 +447,11 @@ pub(super) fn draw_messages(
         .display
         .prompt_preview
         && scroll > 0
+        // P5-3: in terminal-scroll mode the watermark floors `scroll` at
+        // the emitted prefix, so scroll > 0 is the steady state and the
+        // preview band would permanently duplicate the last prompt above
+        // the composer — the same rows already live in native scrollback.
+        && !app.terminal_scroll_mode()
     {
         compute_prompt_preview_line_count(
             wrapped_user_prompt_starts,

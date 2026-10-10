@@ -543,6 +543,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-759 — P5-3: previous-prompt preview suppressed in terminal-scroll
+  mode.** The watermark floor makes `scroll > 0` the steady state in scroll
+  mode, so the preview band permanently duplicated the last prompt above
+  the composer — the same rows already emitted into native scrollback.
+  The band is context for a scrolled-up reader; native scrollback IS that
+  context now. Live-verified: after each turn the live viewport collapses
+  to composer + status + info widgets only, history lives in the terminal.
+
+- **iter-759 — P5-3: previous-prompt preview suppressed in terminal-scroll
+  mode.** The watermark floor makes `scroll > 0` the steady state in scroll
+  mode, so the preview band permanently duplicated the last prompt above
+  the composer — the same rows already emitted into native scrollback.
+  The band is context for a scrolled-up reader; native scrollback IS that
+  context now. Live-verified: after each turn the live viewport collapses
+  to composer + status + info widgets only, history lives in the terminal.
+
 - **iter-758 — reasoning-alias collision salvage: the "missing output"
   mystery closed for real.** Live diagnosis (file-level capture of dropped
   SSE payloads) found omp/poolside-laguna emits OpenAI's full reasoning
