@@ -542,6 +542,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-762 — /cls in terminal-scroll mode leaves a visible boundary in
+  native history (the design doc's spacer).** The live-window collapse
+  already worked (iter-761's capture proof); the missing piece was the
+  history side: emitted scrollback is append-only, so a cleared view
+  needs a divider between what came before and after. `/cls`/Ctrl+L now
+  arms a one-shot divider — the scroll emitter prints one dim
+  `view cleared — context kept ───` rule into native scrollback ahead
+  of the next settled content. The watermark never resets (no
+  re-emission, no duplicates). Live-verified in tmux: old reply,
+  divider, then the next turn's prompt+reply.
 - **iter-761 — P5-3 completion (re-ship): preview-band RENDER gate.**
   iter-759 gated the band's reserved line count but missed the render
   gate — the dimmed `N›` prompt row still drew at y=0 over the first

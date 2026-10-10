@@ -49,6 +49,31 @@ impl App {
             return;
         }
         let watermark = self.scroll_emitted_rows.get();
+        // Pending /cls divider (P5 scroll mode): print the boundary row
+        // into native history ahead of the next content, then continue.
+        // Independent of the watermark delta — the divider is not a
+        // transcript row.
+        if self.scroll_cls_divider.get() {
+            self.scroll_cls_divider.set(false);
+            let width_now = terminal.size().map(|s| s.width).unwrap_or(0) as usize;
+            let label = " view cleared — context kept ";
+            let dashes = width_now.saturating_sub(label.len()).max(2);
+            let divider = ratatui::text::Line::from(ratatui::text::Span::styled(
+                format!("{label}{}", "─".repeat(dashes)),
+                ratatui::style::Style::default().dim(),
+            ));
+            let _ = terminal.insert_before(1, |buf| {
+                divider.render(
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        width: buf.area.width,
+                        height: 1,
+                    },
+                    buf,
+                );
+            });
+        }
         if committed <= watermark {
             return;
         }

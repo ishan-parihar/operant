@@ -272,6 +272,11 @@ pub struct App {
     /// scrollback cannot reflow), so the watermark re-syncs to the new
     /// committed prefix instead of re-emitting rows at the new width.
     pub scroll_emitted_width: Cell<u16>,
+    /// Pending `/cls` divider (P5: terminal-scroll mode): when set, the
+    /// scroll emitter prints one dim rule row into native history before
+    /// the next emitted content, so cleared-view boundaries are visible
+    /// in the terminal's own scrollback. One-shot.
+    pub scroll_cls_divider: Cell<bool>,
 
     // ---- New overlay / notification fields --------------------------------
     /// Full-screen help overlay (? / F1).

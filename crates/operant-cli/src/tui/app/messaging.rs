@@ -73,6 +73,13 @@ impl App {
         self.scroll_offset = 0;
         self.auto_scroll = true;
         self.new_messages_while_scrolled = 0;
+        // Terminal-scroll mode: emitted history is append-only, so the
+        // clear boundary needs a visible divider row in native scrollback
+        // (the design doc's spacer). The emitter prints it before the
+        // next settled content; the watermark does NOT reset.
+        if self.terminal_scroll_mode {
+            self.scroll_cls_divider.set(true);
+        }
     }
 
     /// Whether usable credentials exist RIGHT NOW, not a snapshot taken at
