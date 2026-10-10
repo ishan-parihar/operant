@@ -3615,6 +3615,134 @@ mod facade_tests {
         );
     }
 
+    /// v6 outline row 3 (run-path hardening): the config-file vision
+    /// route, end to end. `from_config_with` with `[multimodal]
+    /// vision_provider = "ollama"` + `vision_model`, the primary injected
+    /// through the external-provider seam as a non-vision scripted
+    /// provider, and the ollama factory arm addressed at a local wiremock
+    /// endpoint via `OPERANT_PROVIDER_URL` (the one provider arm whose
+    /// base URL is env-addressable). A full `turn()` carrying an image
+    /// marker must route to the LAZILY-created vision provider (the
+    /// factory runs inside the turn, not at construction): the answer is
+    /// the routed endpoint's, the primary is never called, and the
+    /// endpoint received the configured `vision_model` with the marker
+    /// text intact — proving the whole chain: config file → facade
+    /// construction → per-request preflight → lazy route creation →
+    /// provider call.
+    #[tokio::test]
+    async fn config_file_vision_provider_routes_a_marker_request_through_a_full_facade_turn() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": {"role": "assistant", "content": "vision reply from the routed endpoint"}
+            })))
+            .mount(&server)
+            .await;
+
+        // The ollama factory arm reads OPERANT_PROVIDER_URL for its base
+        // URL (`create_provider_with_url_and_options`). This test is the
+        // binary's sole writer/reader of that variable; the guard restores
+        // the original value on drop.
+        struct RestoreEnv(&'static str, Option<String>);
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                match self.1.as_deref() {
+                    // SAFETY: test-only env restore, this binary's only writer.
+                    Some(v) => unsafe { std::env::set_var(self.0, v) },
+                    // SAFETY: test-only env restore, this binary's only writer.
+                    None => unsafe { std::env::remove_var(self.0) },
+                }
+            }
+        }
+        let original = std::env::var("OPERANT_PROVIDER_URL").ok();
+        // SAFETY: test-only; the runtime test binary's sole writer/reader
+        // of this variable is this test (verified: no other match in the crate).
+        unsafe { std::env::set_var("OPERANT_PROVIDER_URL", server.uri()) };
+        let _restore = RestoreEnv("OPERANT_PROVIDER_URL", original);
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let config = operant_config::schema::Config {
+            workspace_dir: tmp.path().join("workspace"),
+            memory: operant_config::schema::MemoryConfig {
+                backend: "none".to_string(),
+                ..Default::default()
+            },
+            agent: operant_config::schema::AgentConfig {
+                max_tool_iterations: 2,
+                ..Default::default()
+            },
+            multimodal: operant_config::schema::MultimodalConfig {
+                vision_provider: Some("ollama".to_string()),
+                vision_model: Some("vision-model-x".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let primary = ScriptedProvider::new(vec![Step::Text("the primary must never answer")]);
+        let mut facade = ReconciledAgent::from_config_with(
+            &config,
+            None,
+            None,
+            false,
+            Some(("scripted".to_string(), primary.clone(), "demo".to_string())),
+            None,
+            FacadeConstruction {
+                data_dir: Some(tmp.path().join("data")),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("facade constructed from the config file");
+
+        let reply = facade
+            .turn("describe [IMAGE:/tmp/nonexistent-cat.png]")
+            .await
+            .expect("the turn completes through the routed vision endpoint");
+
+        assert!(
+            reply.contains("vision reply from the routed endpoint"),
+            "the turn's answer must be the routed endpoint's, got: {reply}"
+        );
+        assert!(
+            primary.requests.lock().is_empty(),
+            "the non-vision primary must never receive the marker request"
+        );
+
+        let routed: Vec<serde_json::Value> = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.url.path() == "/api/chat")
+            .map(|r| serde_json::from_slice(&r.body).expect("routed request body is JSON"))
+            .collect();
+        assert!(
+            routed
+                .iter()
+                .any(|body| body.get("model").and_then(|m| m.as_str()) == Some("vision-model-x")),
+            "the vision endpoint must receive the configured vision_model, got: {routed:?}"
+        );
+        assert!(
+            routed
+                .iter()
+                .any(|body| body["messages"]
+                    .as_array()
+                    .is_some_and(|msgs| msgs.iter().any(|m| m
+                        .get("images")
+                        .and_then(|i| i.as_array())
+                        .is_some_and(|imgs| imgs
+                            .iter()
+                            .any(|p| p.as_str() == Some("/tmp/nonexistent-cat.png")))))),
+            "the marker's image path must reach the routed endpoint as the ollama \
+             images payload, got: {routed:?}"
+        );
+    }
+
     /// Injection chokepoint: a guard configured to Block refuses the turn
     /// before any provider call.
     #[tokio::test]
