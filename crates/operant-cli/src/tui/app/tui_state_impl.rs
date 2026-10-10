@@ -542,6 +542,14 @@ impl TuiState for App {
         self.thinking_display_on
     }
 
+    fn terminal_scroll_mode(&self) -> bool {
+        self.terminal_scroll_mode
+    }
+
+    fn scroll_emitted_rows(&self) -> usize {
+        self.scroll_emitted_rows.get()
+    }
+
     fn time_since_user_interaction(&self) -> Option<Duration> {
         App::since(self.last_activity)
     }

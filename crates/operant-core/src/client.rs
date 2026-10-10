@@ -1211,6 +1211,12 @@ fn parse_retry_after_from_body(body: &str) -> Option<Duration> {
 pub struct ChatStreamResponse {
     inner: Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + Unpin>,
     buffer: String,
+    /// Raw bytes not yet decoded: a chunk boundary can split a UTF-8
+    /// multibyte sequence mid-char, so bytes decode incrementally —
+    /// `String::from_utf8` on individual chunks used to fail and silently
+    /// drop the chunk (corrupting the SSE framing downstream). The valid
+    /// prefix decodes into `buffer`; the partial tail waits for more bytes.
+    pending_bytes: Vec<u8>,
     /// Payloads dropped because they failed to parse as chat chunks (corrupted
     /// SSE framing). Surfaced via `dropped_counter()` so the adapter can
     /// report stream corruption to the agent — a silent drop is invisible to
@@ -1226,6 +1232,7 @@ impl ChatStreamResponse {
         Self {
             inner: Box::new(stream),
             buffer: String::new(),
+            pending_bytes: Vec::new(),
             dropped: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
@@ -1257,8 +1264,22 @@ impl Stream for ChatStreamResponse {
 
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                        this.buffer.push_str(&text);
+                    // Incremental UTF-8 decode: a multibyte char split across
+                    // chunk boundaries must not drop either half.
+                    this.pending_bytes.extend_from_slice(&bytes);
+                    match std::str::from_utf8(&this.pending_bytes) {
+                        Ok(text) => {
+                            this.buffer.push_str(text);
+                            this.pending_bytes.clear();
+                        }
+                        Err(e) => {
+                            let valid = e.valid_up_to();
+                            // SAFETY: `valid` is a confirmed-UTF-8 boundary.
+                            let text = std::str::from_utf8(&this.pending_bytes[..valid])
+                                .unwrap_or_default();
+                            this.buffer.push_str(text);
+                            this.pending_bytes.drain(..valid);
+                        }
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
@@ -1763,6 +1784,93 @@ Connection: close
         server.abort();
         assert_eq!(events, 2, "both duplicated deltas must be yielded");
         assert_eq!(got, "HelloHello", "duplicated deltas append, never drop");
+    }
+
+    #[tokio::test]
+    async fn chat_streaming_survives_utf8_char_split_across_chunks() {
+        // iter-755: a multibyte char split across byte-chunk boundaries used
+        // to make `String::from_utf8(chunk)` fail and silently DROP the
+        // chunk — corrupting the SSE framing and losing content. Incremental
+        // decode holds the partial tail until the next chunk completes it.
+        use futures::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // "नमस्ते" — multibyte Devanagari; split mid-char between writes.
+        let payload = "नमस्ते";
+        let bytes = payload.as_bytes();
+        let split = 6; // inside a multibyte sequence
+        let ev = format!(
+            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{}\"}},\"finish_reason\":null}}]}}\n\n",
+            payload
+        );
+        let ev_bytes = ev.as_bytes();
+        // Owned so the spawned server closure can capture them ('static).
+        let head: Vec<u8> = ev_bytes[..split].to_vec();
+        let tail: Vec<u8> = ev_bytes[split..].to_vec();
+        let _ = bytes;
+
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let body_len = head.len() + tail.len() + "data: [DONE]\n\n".len();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let write_chunk = |data: &[u8]| format!("{:x}\r\n", data.len());
+                let _ = sock.write_all(write_chunk(&head).as_bytes()).await;
+                let _ = sock.write_all(&head).await;
+                let _ = sock.write_all(b"\r\n").await;
+                // small delay so reqwest yields `head` as its own chunk
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let rest = format!("data: [DONE]\n\n");
+                let mut all = tail.clone();
+                all.extend_from_slice(rest.as_bytes());
+                let _ = sock.write_all(write_chunk(&all).as_bytes()).await;
+                let _ = sock.write_all(&all).await;
+                let _ = sock.write_all(b"\r\n0\r\n\r\n").await;
+                let _ = body_len;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let config = ClientConfig {
+            base_url: format!("http://{addr}"),
+            api_key: Some("test-key".into()),
+            timeout: Duration::from_secs(10),
+            max_context_length: 8000,
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 1,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+            prompt_cache_ttl: Default::default(),
+        };
+        let client = OpenAIClient::new(config);
+        let mut stream = client
+            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("stream should connect");
+        let dropped = stream.dropped_counter();
+
+        let mut got = String::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(event) = chunk
+                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
+            {
+                got.push_str(&content);
+            }
+        }
+        server.abort();
+        assert_eq!(got, "नमस्ते", "split multibyte char must reassemble");
+        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

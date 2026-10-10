@@ -62,6 +62,8 @@ impl App {
         let (bridge_state_tx, bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::tui::bridge_state::BridgeConnectionState,
         >();
+        // P5-2: read before `config` moves into the struct literal.
+        let terminal_scroll_mode = config.tui.terminal_scroll_mode;
         let app = Self {
             config,
             settings,
@@ -138,6 +140,9 @@ impl App {
             turn_metadata: Vec::new(),
             transcript_version: Cell::new(0),
             terminal_clear_version: Cell::new(None),
+            terminal_scroll_mode,
+            scroll_emitted_rows: Cell::new(0),
+            scroll_emitted_width: Cell::new(0),
             help_overlay: {
                 let mut overlay = HelpOverlay::new();
                 overlay.populate_from_commands(help_overlay_entries());

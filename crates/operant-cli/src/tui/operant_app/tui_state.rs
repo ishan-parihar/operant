@@ -303,6 +303,16 @@ pub trait TuiState {
     fn show_thinking(&self) -> bool {
         true
     }
+    /// Whether terminal-scrollback mode (P5-1 inline viewport) is active.
+    /// Gates P5-2 emission and the viewport watermark floor.
+    fn terminal_scroll_mode(&self) -> bool {
+        false
+    }
+    /// Last-emitted-row watermark (P5-2): rows below this live in native
+    /// scrollback already; the live viewport floors its window here.
+    fn scroll_emitted_rows(&self) -> usize {
+        0
+    }
     /// How long since the user last pressed a key, scrolled, or pasted, or
     /// `None` when they have not interacted yet.
     ///

@@ -543,6 +543,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-756 — P5-2: the transcript now emits into native terminal
+  scrollback.** In terminal-scroll mode (`tui.terminal_scroll_mode = true`),
+  settled rows — committed messages, tool rows, system annotations — are
+  printed into the terminal's own buffer via `Terminal::insert_before`,
+  tracked by a last-emitted-row watermark so each row is emitted exactly
+  once. A frame's emittable prefix stops at the first mutable section
+  (Streaming/Reasoning/BatchProgress); the watermark advances as messages
+  commit at flush boundaries, and the live viewport floors its window at the
+  watermark — emitted history lives in the terminal, the live window holds
+  only the unsettled tail. Live-verified: prompt + reply rows accumulate
+  above the inline viewport, selectable in tmux copy-mode, while the
+  viewport keeps status + composer + streaming. Resize re-syncs the
+  watermark (history keeps its original wrap — native scrollback cannot
+  reflow). Ctrl+L//cls deliberately does NOT reset the watermark: emitted
+  history is append-only; a reset would duplicate the whole transcript.
+  Also: incremental UTF-8 decode in the SSE stream reader — a multibyte
+  char split across byte-chunk boundaries used to fail `String::from_utf8`
+  and silently DROP the chunk (corrupting framing); the partial tail now
+  waits for its continuation (regression:
+  `chat_streaming_survives_utf8_char_split_across_chunks`). Corpus: the
+  4-drift peer baseline is unchanged; zero new drift in default mode.
+
 - **iter-754 — corrupted-SSE drop surfacing + a real parser tail bug
   fixed.** The duplication investigation's final answer: the parser
   NEVER ate event-duplicated deltas (proven live: a doubled
