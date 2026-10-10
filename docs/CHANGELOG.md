@@ -542,6 +542,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-765 — command backlog tier 1 (status messages): `/model-status`,
+  `/info`, and the `/thinking` alias now intercept instead of falling
+  through to the model as literal prompt text.** `/version` and `/usage`
+  already resolved via the registry fallback; these three did not.
+  `/model-status` flashes model · provider · credentials · streaming
+  state; `/info` flashes version · model · provider · title; bare
+  `/thinking` (the registered surface name) routes to the thinking-display
+  handler and reports current state. Command sweep: 37 → 40/106 consumed.
+  Regression test pins all three interceptions.
 - **iter-762 — /cls in terminal-scroll mode leaves a visible boundary in
   native history (the design doc's spacer).** The live-window collapse
   already worked (iter-761's capture proof); the missing piece was the

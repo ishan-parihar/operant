@@ -253,6 +253,25 @@ fn test_model_slash_command_opens_picker() {
 }
 
 #[test]
+fn test_status_tier_slash_commands_are_consumed() {
+    // /info, /model-status, and the /thinking alias previously fell
+    // through to the model as literal prompt text (command sweep: 37/106
+    // consumed). Tier-1 status commands must intercept and flash the
+    // status bar instead.
+    let mut app = make_app();
+    assert!(app.intercept_slash_command("model-status"));
+    assert!(app.status_message.is_some());
+    assert!(app.intercept_slash_command("info"));
+    assert!(app.status_message.is_some());
+    // The alias routes to the thinking-display handler: bare /thinking
+    // reports current state without toggling.
+    let before = app.thinking_display_on;
+    assert!(app.intercept_slash_command("thinking"));
+    assert!(app.status_message.is_some());
+    assert_eq!(app.thinking_display_on, before);
+}
+
+#[test]
 fn test_tasks_slash_command_is_an_alias_for_agents() {
     // /tasks is documented (commands.rs alias + gateway help text) as an
     // alias for /agents, but this match arm previously only accepted

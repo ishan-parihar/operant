@@ -460,6 +460,34 @@ impl App {
                 self.open_model_picker_for_provider(&provider, None);
                 true
             }
+            // /model-status — status-tier (command backlog tier 1):
+            // one-line model health flash in the status bar. /status keeps
+            // the full transcript annotation.
+            "model-status" => {
+                let model = if self.model_name.is_empty() {
+                    "(unset)".to_string()
+                } else {
+                    self.model_name.clone()
+                };
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string());
+                let creds = if self.credentials_live() {
+                    "live"
+                } else {
+                    "absent"
+                };
+                let streaming = if self.is_streaming {
+                    "streaming"
+                } else {
+                    "idle"
+                };
+                self.status_message = Some(format!(
+                    "Model: {model} · provider: {provider} · credentials: {creds} · {streaming}"
+                ));
+                true
+            }
             "session" | "resume" => {
                 self.session_browser.open(vec![]);
                 self.session_list_pending = true;
@@ -506,6 +534,28 @@ impl App {
                     crate::tui::app::enums::SystemMessageStyle::Info,
                 );
                 self.status_message = Some(summary);
+                true
+            }
+            // /info — status-tier (command backlog tier 1): compact
+            // environment identity flash. /status carries session numbers.
+            "info" => {
+                let model = if self.model_name.is_empty() {
+                    "(unset)".to_string()
+                } else {
+                    self.model_name.clone()
+                };
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string());
+                let title = self
+                    .session_title
+                    .clone()
+                    .unwrap_or_else(|| "(untitled)".to_string());
+                self.status_message = Some(format!(
+                    "operant v{} · model: {model} · provider: {provider} · title: {title}",
+                    env!("CARGO_PKG_VERSION"),
+                ));
                 true
             }
             "clear" => {
@@ -1218,7 +1268,9 @@ impl App {
             // (off|full|current). The vendored tree implements one trace
             // mode, so `full` and `current` both show it; the words stay so
             // the muscle memory ports.
-            "thinking-display" => {
+            // "thinking" alias: the registered surface name is /thinking
+            // (command registry); the muscle-memory ports cover it.
+            "thinking-display" | "thinking" => {
                 let mode = args.trim();
                 match mode {
                     "off" => self.thinking_display_on = false,
