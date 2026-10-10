@@ -1,10 +1,7 @@
 
                                                                   ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                                                                  ▌ ──────────────────────────────────────────────── ▐
+                                                                  ▌ ───────────────────────────────────────────────  ▐
                                                                   ▌                                                  ▐
-
-
-
 
 
 
@@ -16,7 +13,13 @@
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
  The user asked a two-part question.Answer the first part, then the second.
@@ -26,9 +29,6 @@
 
 1>
                                                                          ~ 19/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
-
-
-
 
 
 

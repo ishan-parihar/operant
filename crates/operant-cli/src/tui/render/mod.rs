@@ -81,19 +81,9 @@ pub fn render_app(frame: &mut Frame, app: &App) {
     // scenario's opening Down lands exactly there).
     app.last_selectable_area
         .set(crate::tui::operant_ui::message_area());
-    app.last_input_area
-        .set(crate::tui::operant_ui::input_area());
+    app.last_input_area.set(crate::tui::operant_ui::input_area());
     app.last_render_scroll_offset
         .set(crate::tui::operant_ui::last_resolved_chat_scroll().min(u16::MAX as usize) as u16);
-    // The reader's content address this frame resolved to — the one source
-    // `note_resize` captures from. Published here (not read lazily) so the
-    // App-side one-shot and the chrome anchor stay in lockstep with the frame
-    // that actually painted (2026-10-09 P4-1: the seam was half-wired — the
-    // render read a per-frame global as the pending anchor and nothing ever
-    // fed the App's capture, so user scroll was overridden to the tail every
-    // frame and resize-while-parked captured nothing).
-    app.last_render_content_pos
-        .set(crate::tui::operant_ui::resolved_reader_anchor());
     // Transcript rect for the legacy message-context consumers (right-click
     // context-menu bounds, cursor-open menu, menu clamping). Same publish
     // discipline as the cells above: the iter-648 cutover deleted the

@@ -8,23 +8,23 @@
                            │ Search                                                        │
                            │                                                               │
                            │                                                               │
-                           │ Other                                                         │
-                           │ /new Start a new session (fresh session ID + history)         │
-                           │ /redraw Force a full UI repaint (recovers from terminal drift)│
- operant · replay          │                                                               │
- operant                   │ Review & History                                              │
- /model to switch · Offline│ /history Show conversation history                            │
+ operant · replay          │ Other                                                         │
+ operant                   │ /new Start a new session (fresh session ID + history)         │
+ /model to switch · Offline│ /redraw Force a full UI repaint (recovers from terminal drift)│
  v0.2.1                    │                                                               │
- /login to add provider    │ Other                                                         │
- ● anthropic(key)          │ /save Save the current conversation                           │
- ~                         │                                                               │
-                           │ Review & History                                              │
-                           │ /retry Retry the last message (resend to agent)               │
-1>                         │ /undo Back up N user turns and re-prompt (default 1)          │
-                           │                                                               │   ~ API key Offline Capture
-                           │ Session                                                       │
-                           │ /title Set a title for the current session                    │
+ /login to add provider    │ Review & History                                              │
+ ○ anthropic               │ /history Show conversation history                            │
+ ○ openrouter              │                                                               │
+ ○ openai                  │ Other                                                         │
+ ○ cursor                  │ /save Save the current conversation                           │
+ ○ copilot                 │                                                               │
+ ○ gemini                  │ Review & History                                              │
+ ○ antigravity             │ /retry Retry the last message (resend to agent)               │
+ ~                         │ /undo Back up N user turns and re-prompt (default 1)          │
                            │                                                               │
+                           │ Session                                                       │
+1>                         │ /title Set a title for the current session                    │
+                           │                                                               │   ~ API key Offline Capture
                            │ Other                                                         │
                            │ /handoff Hand off this session to a messaging platform (Telegr│
                            │                                                               │

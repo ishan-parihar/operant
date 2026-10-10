@@ -8,23 +8,23 @@
                       Hooks — Select Event                                           Esc to close
                       Review configured hook events and matchers.
 
-                       No hooks configured.
-                       Edit ~/.operant/settings.json to add hooks.
-
- operant · replay
- operant
+ operant · replay      No hooks configured.
+ operant               Edit ~/.operant/settings.json to add hooks.
  /model to switch ·
  v0.2.1
  /login to add provi
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
 
 1>
                                                                                                      key Offline Capture
-
-
-
 
 
 

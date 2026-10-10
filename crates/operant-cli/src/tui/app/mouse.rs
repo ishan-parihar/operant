@@ -619,80 +619,33 @@ impl App {
             return None;
         }
 
-        let queued = std::iter::from_fn(|| {
-            if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
-                crossterm::event::read().ok()
-            } else {
-                None
+        let mut buf = String::new();
+        buf.push(first);
+
+        while let Ok(true) = crossterm::event::poll(std::time::Duration::ZERO) {
+            match crossterm::event::read() {
+                Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
+                    KeyCode::Char(c) => buf.push(c),
+                    KeyCode::Enter => buf.push('\n'),
+                    _ => {
+                        // Non-character key — save it for replay.
+                        self.pending_key = Some(k);
+                        break;
+                    }
+                },
+                // Non-key event (mouse, resize, …) — leave in queue by
+                // not reading it; we already checked poll() so it will
+                // be re-read next iteration. But we already read it, so
+                // we just break (the event is consumed but benign).
+                _ => break,
             }
-        });
-        let (buf, pending) = self.collect_paste_burst(first, queued);
-        self.pending_key = pending;
+        }
 
         if buf.chars().count() >= BURST_THRESHOLD {
             Some(buf)
         } else {
             None
         }
-    }
-
-    /// The paste-burst core, decoupled from the crossterm queue so the
-    /// Enter semantics are unit-testable (the live TUI reads real stdin;
-    /// the corpus simulator bypasses the burst path entirely, so the unit
-    /// tests are the only gate for this logic).
-    ///
-    /// Enter inside a burst is ambiguous and the two readings need OPPOSITE
-    /// outcomes: a clipboard paste's embedded newline must be absorbed as a
-    /// literal `\n`, while the user's submit key — which any latency-batching
-    /// layer (tmux, SSH, mosh) can deliver in the SAME drain window as the
-    /// typed characters — must submit, never become a trailing newline
-    /// (2026-10-09 live audit P0-1: batched `text<Enter>` never sent).
-    ///
-    /// Discriminator: an absorbed paste newline is followed by more queued
-    /// events (there is more clipboard behind it); a submit Enter ends the
-    /// burst (queue empty behind it). A terminator Enter is stashed in
-    /// `pending_key` — the run loop replays it through the normal key path,
-    /// so the burst text lands in the composer and the replayed Enter
-    /// submits it.
-    pub(super) fn collect_paste_burst<I: Iterator<Item = crossterm::event::Event>>(
-        &mut self,
-        first: char,
-        mut queued: I,
-    ) -> (String, Option<crossterm::event::KeyEvent>) {
-        use crossterm::event::{KeyCode, KeyEventKind};
-
-        let mut buf = String::new();
-        buf.push(first);
-
-        let mut lookahead = queued.next();
-        while let Some(ev) = lookahead.take() {
-            match ev {
-                Event::Key(k) if k.kind == KeyEventKind::Press => match k.code {
-                    KeyCode::Char(c) => buf.push(c),
-                    KeyCode::Enter => {
-                        // More events behind this Enter → it is a paste's
-                        // embedded newline. Nothing behind → it is the user's
-                        // submit key: terminate and hand it back for replay.
-                        lookahead = queued.next();
-                        if lookahead.is_some() {
-                            buf.push('\n');
-                        } else {
-                            return (buf, Some(k));
-                        }
-                        continue;
-                    }
-                    _ => {
-                        // Non-character key — save it for replay.
-                        return (buf, Some(k));
-                    }
-                },
-                // Non-key event (mouse, resize, …) — consumed but benign,
-                // same as the pre-refactor drain loop.
-                _ => return (buf, None),
-            }
-            lookahead = queued.next();
-        }
-        (buf, None)
     }
 
     // Handle terminal focus-change events (Phase 2.3 focus-aware rendering).

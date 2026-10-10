@@ -1,24 +1,24 @@
 
                           ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                          ▌ ──────────────────────────────────────────────── ▐
-                          ▌                                                  ▐
-
- operant · replay
- operant
+ operant · replay         ▌ ───────────────────────────────────────────────  ▐
+ operant                  ▌                                                  ▐
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
  Hello from the mock agent.
 
-
+Chat selection · 22 chars · Enter/Y copy · Esc exit
 1>
                                   ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
-
-
-
 
 
 

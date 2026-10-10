@@ -8,23 +8,23 @@
             │/ █                                                                                           │
             │──────────────────────────────────────────────────────────────────────────────────────────────│
             │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
  operant · r│                                                                                              │
  operant    │                                                                                              │
  /model to s│                                                                                              │
  v0.2.1     │                                                                                              │
  /login to a│                                                                                              │
- ● anthropic│                                                                                              │
+ ○ anthropic│                                                                                              │
+ ○ openroute│                                                                                              │
+ ○ openai   │                                                                                              │
+ ○ cursor   │                                                                                              │
+ ○ copilot  │                                                                                              │
+ ○ gemini   │                                                                                              │
+ ○ antigravi│                                                                                              │
  ~          │                                                                                              │
             │                                                                                              │
             │                                                                                              │
 1>          │                                                                                              │
             │                                                                                              │line Capture
-            │                                                                                              │
-            │                                                                                              │
-            │                                                                                              │
             │                                                                                              │
             │                                                                                              │
             │                                                                                              │

@@ -743,9 +743,7 @@ fn batch_progress_state(
     }
 }
 
-fn batch_running_summary(
-    batch_prog: &crate::tui::operant_app::bus::BatchProgress,
-) -> Option<String> {
+fn batch_running_summary(batch_prog: &crate::tui::operant_app::bus::BatchProgress) -> Option<String> {
     summarize_batch_running_tools_compact(&batch_prog.running)
 }
 
@@ -1068,22 +1066,16 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                 Span::styled("⚠ ", Style::default().fg(warning_color)),
                 Span::styled(warning, Style::default().fg(warning_color)),
             ])
-        } else if let Some(tip) = crate::tui::operant_app::config_shim::config()
-            .display
-            .show_tips
-            .then(|| occasional_status_tip(area.width as usize, app.animation_elapsed() as u64))
-            .flatten()
+        } else if let Some(tip) =
+            occasional_status_tip(area.width as usize, app.animation_elapsed() as u64)
         {
             Line::from(vec![Span::styled(tip, Style::default().fg(dim_color()))])
         } else {
             Line::from("")
         }
     } else {
-        if let Some(tip) = crate::tui::operant_app::config_shim::config()
-            .display
-            .show_tips
-            .then(|| occasional_status_tip(area.width as usize, app.animation_elapsed() as u64))
-            .flatten()
+        if let Some(tip) =
+            occasional_status_tip(area.width as usize, app.animation_elapsed() as u64)
         {
             Line::from(vec![Span::styled(tip, Style::default().fg(dim_color()))])
         } else {
@@ -1792,9 +1784,9 @@ pub(super) fn build_notification_spans(app: &dyn TuiState) -> Vec<Span<'static>>
             push_sep(&mut spans);
             spans.push(Span::styled(hint, Style::default().fg(rgb(255, 193, 7))));
         }
-        if let Some(schedule_notice) = crate::tui::operant_app::tui_fns::scheduled_notification_text(
-            info.ambient_info.as_ref(),
-        ) {
+        if let Some(schedule_notice) =
+            crate::tui::operant_app::tui_fns::scheduled_notification_text(info.ambient_info.as_ref())
+        {
             push_sep(&mut spans);
             spans.push(Span::styled(
                 schedule_notice,
@@ -2960,8 +2952,7 @@ pub(crate) fn wrap_input_text<'a>(
     prompt_len: usize,
     selection: Option<(usize, usize)>,
 ) -> (Vec<Line<'a>>, usize, usize) {
-    let cursor_char_pos =
-        crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
+    let cursor_char_pos = crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
     // [operant adaptation] selection is byte offsets from the App seam
     // (`TuiState::input_selection`); the wrap segments index by char, so
     // convert once. jcode paints its textarea selection the same way:
@@ -3092,8 +3083,7 @@ pub(crate) fn visual_line_move(
     if line_width == 0 {
         return None;
     }
-    let cursor_char_pos =
-        crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
+    let cursor_char_pos = crate::tui::operant_app::core::byte_offset_to_char_index(input, cursor_pos);
     let segments = wrap_input_segments(input, line_width);
     if segments.len() < 2 {
         return None;

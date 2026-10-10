@@ -39,10 +39,9 @@ use std::time::{Duration, Instant};
 mod animations;
 #[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 pub(crate) use animations::{
-    disabled_animation_names, idle_animation_debug_json, idle_animation_reserved_height,
-    last_idle_animation_area, note_idle_animation_fast_path_blocked,
-    note_idle_animation_full_repaint, note_idle_animation_partial_repaint,
-    record_idle_animation_area, render_idle_animation_into,
+    idle_animation_debug_json, idle_animation_reserved_height, last_idle_animation_area,
+    note_idle_animation_fast_path_blocked, note_idle_animation_full_repaint,
+    note_idle_animation_partial_repaint, record_idle_animation_area, render_idle_animation_into,
 };
 #[path = "ui_box.rs"]
 mod box_utils;
@@ -2145,9 +2144,7 @@ fn copy_snapshot_for_pane(
             let snapshots = snapshots.borrow().clone();
             match pane {
                 crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat => snapshots.chat,
-                crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane => {
-                    snapshots.side
-                }
+                crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane => snapshots.side,
                 crate::tui::operant_ui::copy_selection::CopySelectionPane::Input => snapshots.input,
             }
         })
@@ -2672,9 +2669,8 @@ pub(crate) fn copy_viewport_visible_range() -> Option<(usize, usize)> {
 // [port-source] ui.rs:2348-2351
 #[cfg(test)]
 pub(crate) fn side_pane_visible_range() -> Option<(usize, usize)> {
-    let snapshot = copy_snapshot_for_pane(
-        crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane,
-    )?;
+    let snapshot =
+        copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane)?;
     Some((snapshot.scroll, snapshot.visible_end))
 }
 
@@ -3747,7 +3743,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 Constraint::Length(inline_ui_gap_height), // 6 Inline UI/input spacing
                 Constraint::Length(input_height),  // 7 Input
                 Constraint::Length(overscroll_height), // 8 Overscroll status line
-                Constraint::Length(animation_height), // idle animation
+                Constraint::Length(animation_height),  // idle animation
             ]
         } else {
             vec![
@@ -3760,7 +3756,7 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
                 Constraint::Length(inline_ui_gap_height), // 6 Inline UI/input spacing
                 Constraint::Length(input_height),         // 7 Input
                 Constraint::Length(overscroll_height),    // 8 Overscroll status line
-                Constraint::Length(animation_height),     // idle animation
+                Constraint::Length(animation_height),         // idle animation
             ]
         })
         .split(chat_area);

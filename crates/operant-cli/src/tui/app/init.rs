@@ -62,8 +62,6 @@ impl App {
         let (bridge_state_tx, bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::tui::bridge_state::BridgeConnectionState,
         >();
-        // P5-2: read before `config` moves into the struct literal.
-        let terminal_scroll_mode = config.tui.terminal_scroll_mode;
         let app = Self {
             config,
             settings,
@@ -125,12 +123,6 @@ impl App {
             agent_status: Vec::new(),
             cursor_pos: 0,
             auto_scroll: true,
-            todos: Vec::new(),
-            todos_card_payload: String::new(),
-            todos_band_hidden: false,
-            thinking_display_on: crate::tui::operant_app::config_shim::config()
-                .display
-                .show_thinking,
             new_messages_while_scrolled: 0,
             token_warning_threshold_shown: 0,
             session_start: std::time::Instant::now(),
@@ -140,9 +132,6 @@ impl App {
             turn_metadata: Vec::new(),
             transcript_version: Cell::new(0),
             terminal_clear_version: Cell::new(None),
-            terminal_scroll_mode,
-            scroll_emitted_rows: Cell::new(0),
-            scroll_emitted_width: Cell::new(0),
             help_overlay: {
                 let mut overlay = HelpOverlay::new();
                 overlay.populate_from_commands(help_overlay_entries());

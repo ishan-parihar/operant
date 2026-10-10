@@ -8,23 +8,23 @@
 
 
 
+ operant · replay
+ operant
+ /model to switch · Offli
+ v0.2.1                    Choose a theme                                                esc
+ /login to add provider    Applies immediately — the whole TUI repaints in this palette.
+ ○ anthropic                         Default     Operant default — dark background, cyan accen
+ ○ openrouter
+ ○ openai                            Dark        High-contrast dark theme
+ ○ cursor
+ ○ copilot                           Light       Light background with dark text
+ ○ gemini
+ ○ antigravity                       Solarized   Solarized Dark — warm tones with blue accents
+ ~
+                                     Nord        Nord — cool blue-grey palette
 
-
-
- operant · replay          Choose a theme                                                esc
- operant                   Applies immediately — the whole TUI repaints in this palette.
- /model to switch · Offli            Default     Operant default — dark background, cyan accen
- v0.2.1
- /login to add provider              Dark        High-contrast dark theme
- ● anthropic(key)
- ~                                   Light       Light background with dark text
-
-                                     Solarized   Solarized Dark — warm tones with blue accents
-1>
-                                     Nord        Nord — cool blue-grey palette                 ~ API key Offline Capture
-
-                                     Dracula     Dracula — purple/pink dark theme
-                           ↑↓ navigate  ·  enter apply  ·  esc cancel
+1>                                   Dracula     Dracula — purple/pink dark theme
+                           ↑↓ navigate  ·  enter apply  ·  esc cancel                          ~ API key Offline Capture
 
 
 

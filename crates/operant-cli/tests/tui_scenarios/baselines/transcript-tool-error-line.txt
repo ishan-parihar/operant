@@ -1,10 +1,7 @@
 
                                                                   ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                                                                  ▌ ──────────────────────────────────────────────── ▐
+                                                                  ▌ ───────────────────────────────────────────────  ▐
                                                                   ▌                                                  ▐
-
-
-
 
 
 
@@ -16,7 +13,13 @@
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
  Trying a tool that will fail.
@@ -27,9 +30,6 @@
 Tool error: exit status 3
 1>
                                                                          ~ 21/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
-
-
-
 
 
 

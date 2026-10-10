@@ -1,10 +1,7 @@
 
                                                                   ▌ ⚠ No assistant message to copy.  esc             ▐
-                                                                  ▌ ──────────────────────────────────────────────── ▐
+                                                                  ▌ ───────────────────────────────────────────────  ▐
                                                                   ▌                                                  ▐
-
-
-
 
 
 
@@ -16,7 +13,13 @@
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
  Command /voice is not yet wired to a handler. Description: Toggle voice mode
@@ -24,9 +27,6 @@
 
 1>
                                                                                                ~ API key Offline Capture
-
-
-
 
 
 

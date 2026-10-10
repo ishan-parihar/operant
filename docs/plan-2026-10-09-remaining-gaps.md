@@ -1,117 +1,151 @@
-# Remaining implementation gaps — 2026-10-09 (rev 2, post-arm)
+# Remaining implementation gaps — 2026-10-09
 
-> Supersedes both the execution queue in
-> `plan-2026-10-08-remaining-implementation-gaps.md` (all items done/decided)
-> and rev 1 of this file (items 1+2 fixed iter-704, item 3 slices A/B/D
-> executed iter-711 — history preserved in git; this rev tracks only what
-> still REMAINS). Every claim below was measured on the box, not inferred.
-> Live bot: **8916661121 @ip_zeroclaw_bot** ("Zeroclaw"), token in
-> `~/.operant/.env`; delivery hop closed and live-verified 2026-10-09.
+> Supersedes the execution queue in `plan-2026-10-08-remaining-implementation-gaps.md`
+> (all its items are done/decided; only its "Item 7" survives here, re-scoped).
+> Owner supplied a live Telegram bot token (bot **8916661121 @ip_zeroclaw_bot**,
+> "Zeroclaw") on 2026-10-09; this outline reflects what that changed and what
+> live verification on the box actually showed. Every claim below was measured,
+> not inferred.
 
-## 0. State as of 05:20Z 2026-10-09 (verified)
+## 0. Live state as of this writing (verified)
 
-- Inbound DM pipeline live end-to-end (iter-704: per-bot offset cursor +
-  session-key namespace fix; `dm` rows land, metering warn gone).
-- Feed class **deployed** (iter-711): `ContextClass::Feed`, capture at
-  `route_message` top before the admin gate, channel posts feed-ONLY,
-  group posts feed + turn. Unit-proven; live E2E gated (item 1).
-- `context_items` retention **deployed** (iter-713): 7-day write-through
-  prune, pinned by `capture_prunes_rows_past_the_retention_window`.
-- Socialization **armed and fired** (config + iter-715): first run
-  2026-10-09T02:01:34Z, "pairs: 7", stamp-first held; every turn failed
-  on the environment's provider 503 class (same flake as cron_runs
-  breaker data). Next full attempt: **09:30Z daily**, now on the 715
-  binary with the empty-tick gate fixed.
-- Daemon healthy: 57 MB RSS, unit peak 188 MB (the earlier 14 GB RSS
-  concern does not reproduce on the gateway unit). Disk 43 G free.
+- **Delivery hop CLOSED.** `getMe=200` (Zeroclaw), `getChat(5297486612)=200`
+  (admin private chat), `sendMessage` DM delivered (message_id 40). The old
+  "stale channel ref / empty token" blocker is retired. Token installed in
+  `~/.operant/.env` (old Operant Testing Bot token kept as commented fallback;
+  `.env.bak-20261009` snapshot).
+- **Inbound DM pipeline works end-to-end.** Test DM (sent via the owner's `tg`
+  MTProto CLI as 5297486612) → gateway long-poll consumed it → agent turn ran
+  (small-stack) → 730-char reply delivered to the admin (message_id 46). Log:
+  `~/.operant/logs/gateway.log` @ 22:35Z.
+- **Outbound is healthy; inbound *capture* is not** — two bugs below.
 
-## 1. Slice C (feed live E2E) — owner-gated, empirically blocked (S)
+## 1. Telegram offset store is not keyed by bot (found live; S) — FIXED iter-704 `0373bb15`
 
-Two posts to the owner's channel `-1002220508783` (via `tg`) produced no
-`Sent message to gateway handler` log line, no offset advance, no pending
-updates: **the bot receives no `channel_post` updates at all**.
-`getChat` ok:true is disputed evidence (public-channel lookup vs bot
-membership) — do not resolve by argument; resolve by act:
+- **Operational patch (applied)**: reset `~/.operant/telegram_offset.txt` to 0
+  and restarted the daemon (`Loaded saved offset: 0` in the log).
+- **Code fix (deployed 2026-10-09)**: `get_offset_path_for(bot_id)` keys the
+  cursor `telegram_offset.<bot_id>.txt`; unit test
+  `offset_paths_are_keyed_per_bot` pins distinct bots to distinct paths.
+  Live-verified: the daemon writes `telegram_offset.8916661121.txt`.
 
-**Owner action**: add @ip_zeroclaw_bot as ADMIN to the channel (or any
-group). Then re-test: `tg send ishaan_parihar "<text>"` → expect a
-`context_items` row `class='feed'`, default seat `premiere`
-(`feed_seat_map` empty live), a `(premiere,'feed')` watermark row, and
-the seat's next turn prologue rendering "Channel feed". Test posts sent
-so far (msg_id 7, 8) are deleted; no residue.
+## 2. Gateway session entry is never created for a Telegram DM → DM tap and metering both miss (found live; S–M) — FIXED iter-704 `0373bb15`
 
-## 2. Socialization outcome check — watch item, no code (S)
+- **Root cause (sharper than first filed)**: key-namespace split. The store
+  files every session under `build_session_key` (`agent:main:telegram:dm:…`),
+  while the turn path looked rows up by its turn-lease key
+  (`telegram:5297486612:5297486612`) — structurally never a match, so the
+  Wave-2 employee binding, the iter-684 DM tap, and Wave-4 metering were
+  ALL dead for platform chats from the start. Live evidence: agent replied
+  fine but `context_items` stayed 0 and metering logged `Session not found`.
+- **Fix (deployed, live-verified)**: the turn path resolves through
+  `entry_for_source` — the same origin-triple seam `/session` uses — and
+  carries the canonical key to the metering drain. Regression pin:
+  `wave2_store_files_dm_sessions_not_under_the_turn_lease_key`.
+- **Live proof 2026-10-09**: two test DMs → two `dm` rows, `seat_hint=premiere`,
+  author `ishan_parihar`; the metering warn is gone post-restart; the
+  `premiere|dm` watermark advanced.
 
-Check after 09:30Z: `grep socialization ~/.operant/logs/gateway.log`
-(gate fix means the fire need not ride the hourly jobs), the
-`socialization_state` stamp, seat MEMORY.md densification, and whether
-provider 503s cleared. If turns still 503 → provider-side; automatic
-retry next day. A crashed pair is a missed pair, never a doubled one
-(stamp-first, at-most-once — pinned).
+## 3. Feed class: channel/group posts → `context_items` — Slices A/B/D EXECUTED iter-709; Slice C (live E2E) gated on the owner adding the bot to a channel
 
-## 3. Three small code debts — FIXED iter-720 `3429363f` (deployed, md5-verified)
+**State change since first filing**: inbound is live end-to-end
+(iter-704). The gateway's poll is the single `getUpdates` consumer —
+the feed class rides it; NO second poller (a separate one 409s against
+the daemon, observed live 2026-10-09).
 
-1. **`context_items(ts)` index** — `CONTEXT_ITEMS_SCHEMA` has none; the
-   per-capture `DELETE WHERE ts < ?` is a full scan (quadratic on an
-   active channel). One line in the existing schema batch:
-   `CREATE INDEX IF NOT EXISTS idx_context_items_ts ON context_items(ts)`.
-2. **`GatewayMessageHandler::record_feed` CLI-level test missing** — the
-   seat-map → `record_feed_item` link is only stub-tested. Real injector
-   + temp db: channel_post → `premiere` row; then with a
-   `feed_seat_map` entry → mapped seat.
-3. **Prune comment overclaims** — the watermark does NOT protect an
-   offline seat's queued items (8-day-offline seat loses rows before its
-   watermark advances). Either per-class retention (longer for `dm`)
-   or state the loss in the comment instead of "only ever see items
-   behind its watermark anyway".
+**Seam ruling (review-verified)**: capture goes at the TOP of
+`route_message` (gateway/mod.rs:345), BEFORE the admin check at :412 —
+group/channel posts come from arbitrary users, and capturing inside
+`MessageHandler::handle` would only ever see the operator's own posts
+plus draw "You are not authorized" replies into channels. A new
+`MessageHandler::record_feed(&IncomingMessage)` trait method with a
+NO-OP DEFAULT (contract NOT widened; existing `handle` untouched).
 
-## 4. Telegram 409 self-race — separate finding, candidate fix, time-boxed (M)
+### Slice A — the feed aspect in the injector (pure core, no gateway)
 
-Pre-existing (observed before any of today's changes). With exactly one
-gateway process on the box, bursts (~70s) correlate with agent-cycle
-windows; no second process was ever caught. Candidate (NOT shipped —
-needs poll-lifecycle testing): on a 409 the inner loop backs off 35s and
-the `'restart:` epoch re-enters via a cold-start probe
-(`getUpdates offset=0 timeout=0`) before re-polling; probe and first
-long-poll can self-409. Fix shape: skip the restart-probe on 409 backoff
-(probe is cold-start-only). Ship only with a unit test over the epoch
-state machine. Do not block this plan on it.
+1. `ContextClass::Feed` + `as_str()="feed"` + `quota_for` arm
+   (`context_injection.rs:73-90`).
+2. `feed_seat_map: HashMap<String,String>` + `feed_quota: usize`
+   (default 500) in `ContextInjectionSettings` (`config.rs:188`);
+   `operant.example.toml` gains both keys. Unmapped chat → `premiere`
+   (consistent with the DM default binding).
+3. `collect_class` Feed arm: `SELECT author, ts, text FROM context_items
+   WHERE class='feed' AND seat_hint=? AND ts>watermark` (mirror the Dm
+   arm at :430).
+4. `record_feed_item(seat_id, author, text)` mirroring `record_inbound_dm`
+   (:389) — class 'feed', truncate 800, fail-open.
+5. Render label: `ContextClass::Feed => "Channel feed"` (pattern: Dept →
+   "Department feed", :690).
+6. **Tests**: feed quota fill + roll-over into pool; record → collect →
+   watermark advance round-trip; unmapped-default-premiere mapping.
 
-## 5. Discord/Slack read adapters — blocked on owner credentials (unchanged)
+### Slice B — capture at route time (adapter + routing + handler)
 
-`discord_enabled=false`, `slack_enabled=false`, tokens unset (re-verified).
-No adapters against dead credentials. Blocked, not scoped.
+1. `IncomingMessage.is_channel_post: bool` (default false) +
+   `.with_channel_post()` builder (`gateway/types.rs:100`).
+2. `parse_update` (`telegram.rs:1444`): accept `channel_post` as an
+   alternative top-level update key (same body minus `from`; author =
+   channel title from `chat.title`); mark `is_channel_post=true`.
+   Group/supergroup messages keep existing behavior — they ALREADY
+   parse with `is_group_chat=true`.
+3. `route_message` top (mod.rs:345, before the admin check):
+   - `is_channel_post` → `handler.record_feed(&msg)` then `Ok(None)`
+     (no turn, no reply — a channel post never spawns an agent turn
+     and never answers into the channel).
+   - `is_group_chat` → `handler.record_feed(&msg)` then FALL THROUGH
+     to normal routing (the operator's group-command surface keeps
+     working; feed capture is additive).
+4. `GatewayMessageHandler::record_feed` override (gateway_runner.rs):
+   seat = `settings.feed_seat_map.get(channel_id)` else `premiere`;
+   `injector.record_feed_item(...)`; fail-open on every error.
+5. **Tests**: `parse_update` channel_post → `is_channel_post=true` +
+   author=title; route_message feed-branch unit (stub handler counting
+   `record_feed` calls — channel post records + returns None, no
+   "not authorized" outgoing); group message records AND still turns.
 
-## 6. Owner-side pending (no agent action)
+### Slice C — live verification (owner action prerequisite)
 
-- [ ] Add @ip_zeroclaw_bot as channel/group admin (unblocks item 1).
-- [ ] Discord/Slack tokens or explicit deferral (item 5).
-- [ ] `~/.operant/backups/packet-e-wt-wip-20261007.tar.gz` deletion sign-off.
-- Peer's TUI gate debt (rule 7) stays theirs until their wave settles.
+Add @ip_zeroclaw_bot to a channel (or group) and post. Verify on the box:
+`context_items` gains a `feed` row with the mapped seat,
+`context_watermarks` gains `(seat,'feed')`, and the next turn prologue
+of that seat renders the Channel feed section. Until the owner adds
+the bot to a chat, Slices A+B are proven by unit tests + deploy only —
+state that plainly in the iteration report.
 
-## 7. Dispatcher standing duty (rides existing cycle)
+### Slice D — docs
 
-The audit artifact's `telegram_status` header records the Zeroclaw hop as
-live (getMe/sendMessage 200); the old "stale channel ref" blocker line is
-obsolete. Probes stay getMe/getChat only — the daemon's poll owns
-`getUpdates`; any other process probing it triggers the 409 loops (item 4).
+CHANGELOG entry + example.toml keys + this row → EXECUTED. The stale
+`Channel: chat_636bbfc5f7ee` preamble label is RETIRED (not a bug):
+`build_session_context` routes channel ids through
+`pii::redact_chat_id` (gateway_runner.rs:1705) — `chat_…` is the
+redactor's stable alias, by design.
+
+**Order**: A → B → deploy → C (owner) → D. One code iteration (A+B),
+the live verify gated on the owner, the docs row close-out rides the
+same commit.
+
+## 4. Discord/Slack read adapters — still blocked on owner credentials
+
+- `discord_enabled=false`, `slack_enabled=false`, both tokens unset
+  (re-verified 2026-10-09). Same rule as before: no adapters against dead
+  credentials. Blocked, not scoped.
+
+## 5. Small disclosed items (not implementation)
+
+- Wave-4 metering fail-open warning shares root cause with item 2 — fixed by
+  it; do not patch separately.
+- Peer's two clippy `expect()` deny sites in `agent/stream.rs:524/:544` —
+  theirs (rule 7); annotate only if still present after their TUI work
+  settles.
+- Owner flips pending: `[socialization] enabled=true` (arms the completed
+  09:30 sessions); `~/.operant/backups/packet-e-wt-wip-20261007.tar.gz`
+  deletion sign-off.
+- Dispatcher standing duty: the audit artifact's `telegram_status` header
+  should now record the Zeroclaw hop as live (getMe/sendMessage 200) at the
+  next cycle; the old "stale channel ref" blocker line is obsolete.
 
 ## Execution order
 
-Item 3 landed (iter-720, deployed) → item 1 the moment the owner adds
-the bot → item 2 check after 09:30Z → item 4 only if 409s recur and
-block inbound. Items 5+6 wait on the owner.
-
-## Owner-gated blockers (explicit)
-
-1. **@ip_zeroclaw_bot must be added as channel/group ADMIN** — without
-   it the bot receives no `channel_post` updates at all (two test posts:
-   no handler line, no offset advance). Unblocks item 1.
-2. **Discord/Slack bot tokens or an explicit deferral** — item 5.
-3. **`packet-e-wt-wip-20261007.tar.gz` deletion sign-off**.
-4. **Socialization spend authorization** — the daily sessions are
-   armed and will consume up to 7 pairs × 3 turns of provider tokens
-   per run once the 503s clear; pause with `enabled=false` if unwanted.
-5. **Provider capacity** — every socialization turn on 2026-10-09
-   failed on `resource_pressure` 503s from the configured endpoint;
-   until capacity clears, sessions and crons will keep flaking.
+3 (slices A→B→deploy, C gated on the owner) → 4 waits on the owner.
+Items 1+2 are DONE (iter-704, live-verified). Each code slice ships as
+one iteration: fix + test + deploy + live-verify per AGENTS.md.

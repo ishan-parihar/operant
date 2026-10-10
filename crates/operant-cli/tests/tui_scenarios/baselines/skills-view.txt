@@ -8,23 +8,23 @@
 
                     ┌──────────────────────────────────────────────────────────────────────────────┐
                     │ Skills                                                                       │
-                    │ #    Name                     Category       Version                         │
-                    │                                                                              │
-                    │ › 1    ai-slop-cleaner                         0.1.0                         │
- operant · replay   │   2    airtable                                1.1.0                         │
- operant            │   3    architecture-diagram                    1.0.0                         │
- /model to switch · │   4    arxiv                                   1.0.0                         │
- v0.2.1             │   5    ascii-art                               4.0.0                         │
- /login to add provi│   6    ascii-video                             0.1.0                         │
- ● anthropic(key)   │   7    autonomous-loops                        0.1.0                         │
- ~                  │   8    axi                                     0.1.0                         │
-                    │   9    baoyu-infographic                       1.56.1                        │
-                    │   10   blogwatcher                             2.0.0                         │
-1>                  │   11   briefing                                0.1.0                         │
-                    │   12   claude-code                             2.2.1                         │ key Offline Capture
+ operant · replay   │ #    Name                     Category       Version                         │
+ operant            │                                                                              │
+ /model to switch · │ › 1    ai-slop-cleaner                         0.1.0                         │
+ v0.2.1             │   2    airtable                                1.1.0                         │
+ /login to add provi│   3    architecture-diagram                    1.0.0                         │
+ ○ anthropic        │   4    arxiv                                   1.0.0                         │
+ ○ openrouter       │   5    ascii-art                               4.0.0                         │
+ ○ openai           │   6    ascii-video                             0.1.0                         │
+ ○ cursor           │   7    autonomous-loops                        0.1.0                         │
+ ○ copilot          │   8    axi                                     0.1.0                         │
+ ○ gemini           │   9    baoyu-infographic                       1.56.1                        │
+ ○ antigravity      │   10   blogwatcher                             2.0.0                         │
+ ~                  │   11   briefing                                0.1.0                         │
+                    │   12   claude-code                             2.2.1                         │
                     │   13   claude-design                           1.1.0                         │
-                    │   14   codebase-inspection                     1.0.0                         │
-                    │   15   codex                                   1.0.1                         │
+1>                  │   14   codebase-inspection                     1.0.0                         │
+                    │   15   codex                                   1.0.1                         │ key Offline Capture
                     │Clean AI-generated code slop with a regression-safe, deletion-first workflow… │
                     │ ↑/↓ navigate · Enter inspect · Esc close                                     │
                     │                                                                              │

@@ -78,11 +78,6 @@ impl ModelClient for OpenAIModelClient {
                 request.temperature,
             )
             .await?;
-        // Corrupted-SSE accounting: clone the drop counter before the
-        // response is moved into the mapped stream; the terminal chunk
-        // below reports the total so the agent can surface stream
-        // corruption instead of silently rendering a truncated turn.
-        let dropped = stream.dropped_counter();
 
         // Map each ChatStreamEvent into a StreamChunk.  Tool-call deltas are
         // passed through as partial ToolCall objects; the receiving agent
@@ -113,7 +108,6 @@ impl ModelClient for OpenAIModelClient {
                         extra_content,
                         usage: event.usage,
                         finish_reason,
-                        dropped_events: None,
                     })
                 }
                 Err(e) => Err(e),
@@ -121,23 +115,7 @@ impl ModelClient for OpenAIModelClient {
             futures::future::ready(Some(chunk))
         });
 
-        // Terminal chunk: carries the stream's dropped-payload count (set
-        // only when > 0) so `process_stream` can emit StreamCorrupted at
-        // stream end. Chained after the source so it never precedes real
-        // content.
-        let fin = futures::stream::once(async move {
-            let n = dropped.load(std::sync::atomic::Ordering::Relaxed) as u32;
-            Ok(StreamChunk {
-                content: None,
-                reasoning: None,
-                tool_calls: None,
-                extra_content: None,
-                usage: None,
-                finish_reason: None,
-                dropped_events: (n > 0).then_some(n),
-            })
-        });
-        Ok(Box::pin(mapped.chain(fin)))
+        Ok(Box::pin(mapped))
     }
 }
 

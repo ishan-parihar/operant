@@ -1,14 +1,17 @@
 
 
-
-
-
  operant · replay
  operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
  Session status — model: offline-capture · provider: (default) · title:
@@ -16,9 +19,6 @@
 
 1>
                                                        ~ API key Offline Capture
-
-
-
 
 
 

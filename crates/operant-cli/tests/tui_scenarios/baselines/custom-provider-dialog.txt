@@ -8,23 +8,23 @@
 
 
 
-
-
-
- operant · replay     ┌──────────────────────────────────────────────────────────────────────────┐
- operant              │ Connect Custom OpenAI-Compatible                                         │
- /model to switch · Of│ URL:                                                                     │
- v0.2.1               │ https://your-openai-compatible-endpoint/v1_                              │
- /login to add provide│                                                                          │
- ● anthropic(key)     │ API Key:                                                                 │
- ~                    │ paste your API key here...                                               │
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1               ┌──────────────────────────────────────────────────────────────────────────┐
+ /login to add provide│ Connect Custom OpenAI-Compatible                                         │
+ ○ anthropic          │ URL:                                                                     │
+ ○ openrouter         │ https://your-openai-compatible-endpoint/v1_                              │
+ ○ openai             │                                                                          │
+ ○ cursor             │ API Key:                                                                 │
+ ○ copilot            │ paste your API key here...                                               │
+ ○ gemini             │                                                                          │
+ ○ antigravity        │ tab switch field   fill URL field                                        │
+ ~                    │                                                                          │
                       │                                                                          │
-                      │ tab switch field   fill URL field                                        │
-1>                    │                                                                          │
-                      │                                                                          │PI key Offline Capture
                       │                                                                          │
-                      └──────────────────────────────────────────────────────────────Esc to close┘
-
+1>                    └──────────────────────────────────────────────────────────────Esc to close┘
+                                                                                               ~ API key Offline Capture
 
 
 

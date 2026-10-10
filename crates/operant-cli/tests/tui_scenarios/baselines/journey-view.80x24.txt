@@ -1,22 +1,22 @@
 
 
-  ┌──────────────────────────────────────────────────────────────────────────┐
-  │ Journey — skills + memories                                              │
-  │┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
- o││ Name                     Category ││No memories stored yet.            ││
- o││                                   ││                                   ││
- /││›ai-slop-cleaner                   ││Memories accumulate as you use oper││
- v││ airtable                          ││Use /memory to manage MEMORY.md dir││
- /││ architecture-diagram              ││                                   ││
- ●││ arxiv                             ││                                   ││
- ~││ ascii-art                         ││                                   ││
-  ││ ascii-video                       ││                                   ││
-  ││ autonomous-loops                  ││                                   ││
-1>││ axi                               ││                                   ││
-  ││ baoyu-infographic                 ││                                   ││re
+ o┌──────────────────────────────────────────────────────────────────────────┐
+ o│ Journey — skills + memories                                              │
+ /│┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
+ v││ Name                     Category ││No memories stored yet.            ││
+ /││                                   ││                                   ││
+ ○││›ai-slop-cleaner                   ││Memories accumulate as you use oper││
+ ○││ airtable                          ││Use /memory to manage MEMORY.md dir││
+ ○││ architecture-diagram              ││                                   ││
+ ○││ arxiv                             ││                                   ││
+ ○││ ascii-art                         ││                                   ││
+ ○││ ascii-video                       ││                                   ││
+ ○││ autonomous-loops                  ││                                   ││
+ ~││ axi                               ││                                   ││
+  ││ baoyu-infographic                 ││                                   ││
   ││ blogwatcher                       ││                                   ││
-  ││                                   ││                                   ││
-  ││                                   ││                                   ││
+1>││                                   ││                                   ││
+  ││                                   ││                                   ││re
   │└───────────────────────────────────┘└───────────────────────────────────┘│
   │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory ·│
   └──────────────────────────────────────────────────────────────Esc to close┘

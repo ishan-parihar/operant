@@ -166,14 +166,10 @@ impl TuiState for App {
     }
 
     fn pinned_todos_payload(&self) -> Option<&str> {
-        // [port-decision] RESOLVED (P4-3, 2026-10-10): the ToolComplete(todo)
-        // path keeps the full list + its card payload on App; the band
-        // renders it while it exists and /todos has not hidden it.
-        if self.todos_band_hidden || self.todos_card_payload.is_empty() {
-            None
-        } else {
-            Some(&self.todos_card_payload)
-        }
+        // [port-decision] pinned_todos_payload: operant has no todo list on the
+        // session state; returns None — wire when a todo store lands on App
+        // (the info-widget `todos` field is the same missing source).
+        None
     }
 
     fn pinned_todos_expanded(&self) -> bool {
@@ -248,17 +244,12 @@ impl TuiState for App {
     }
 
     fn pending_resize_anchor(&self) -> Option<crate::tui::operant_model::ContentPos> {
-        // The pending anchor must be the ONE-SHOT captured by `note_resize`
-        // on an actual Event::Resize — not the chrome's per-frame reader
-        // anchor. Returning the live global made `resize_anchor_scroll`
-        // Some(...) on EVERY frame while the reader was paused, which
-        // permanently overrode `user_scroll` and re-pinned the view to the
-        // last painted position: the entire keyboard scroll ladder was dead
-        // in live sessions (2026-10-09 live audit, P4-1). The render resolves
-        // this against the current frame; `reconcile_scroll_anchor` then
-        // takes the one-shot after the frame, so it fires exactly once per
-        // resize.
-        self.scroll_memory.pending_resize.as_ref().map(|p| p.target)
+        // The ported chrome records the reader's content position every frame
+        // (operant_ui::record_reader_anchor, published from the prepared frame's
+        // scroll resolve). The ported ContentPos IS the target shape; operant's
+        // own scroll_anchor::ContentPos was the pre-cutover type and its
+        // publisher died with the dispatch table.
+        crate::tui::operant_ui::resolved_reader_anchor()
     }
 
     fn pending_history_anchor_lines_from_bottom(&self) -> Option<usize> {
@@ -538,18 +529,6 @@ impl TuiState for App {
         self.status_message.clone()
     }
 
-    fn show_thinking(&self) -> bool {
-        self.thinking_display_on
-    }
-
-    fn terminal_scroll_mode(&self) -> bool {
-        self.terminal_scroll_mode
-    }
-
-    fn scroll_emitted_rows(&self) -> usize {
-        self.scroll_emitted_rows.get()
-    }
-
     fn time_since_user_interaction(&self) -> Option<Duration> {
         App::since(self.last_activity)
     }
@@ -704,7 +683,7 @@ impl TuiState for App {
                 AuthMethod::Unknown
             },
             git_info: None,
-            todos: self.todos.clone(),
+            todos: Vec::new(),
             agent_edited: std::sync::Arc::new(std::collections::HashSet::new()),
             ..Default::default()
         }
@@ -781,57 +760,7 @@ impl TuiState for App {
             // adaptation) so a working custom session still reads as
             // configured instead of "login to add provider".
             Some(_) => status.openai_compatible_any = state,
-            None => {
-                // Model-only config (provider id not yet derived): report the
-                // credentials that ACTUALLY exist per provider slot — env keys
-                // and auth-store entries — so the auth inventory reflects a
-                // configured session even before the first model switch pins
-                // a provider id. Without this, an env-key session rendered the
-                // full unconfigured fallback list (the sim/corpus case, and
-                // any boot with keys but no active-provider field).
-                let store = &self.auth_store;
-                let env_key =
-                    |name: &str| std::env::var(name).map(|v| !v.is_empty()).unwrap_or(false);
-                let has = |id: &str| {
-                    store
-                        .api_key_for(id)
-                        .map(|k| !k.is_empty())
-                        .unwrap_or(false)
-                };
-                if env_key("ANTHROPIC_API_KEY") || has("anthropic") || has("claude") {
-                    status.anthropic = ProviderAuth {
-                        state,
-                        has_oauth: false,
-                        oauth_state: state,
-                        has_api_key: true,
-                    };
-                }
-                if env_key("OPENAI_API_KEY") || has("openai") {
-                    status.openai = state;
-                    status.openai_has_api_key = true;
-                }
-                if has("openrouter") {
-                    status.openrouter = state;
-                }
-                if has("copilot") {
-                    status.copilot = state;
-                    status.copilot_has_api_token = true;
-                }
-                if has("gemini") || has("google") {
-                    status.gemini = state;
-                }
-                if has("cursor") {
-                    status.cursor = state;
-                }
-                if has("antigravity") {
-                    status.antigravity = state;
-                }
-                // Any other stored key still means an OpenAI-compatible profile
-                // is configured.
-                if status.anthropic.state == AuthState::NotConfigured && store.has_any_key() {
-                    status.openai_compatible_any = state;
-                }
-            }
+            None => {}
         }
         status
     }
@@ -1011,10 +940,7 @@ impl TuiState for App {
             selected_chars: self.selection_text.borrow().chars().count(),
             selected_lines: match (self.selection_anchor, self.selection_focus) {
                 (Some((_, start_line)), Some((_, end_line))) => {
-                    end_line
-                        .max(start_line)
-                        .saturating_sub(end_line.min(start_line))
-                        + 1
+                    end_line.max(start_line).saturating_sub(end_line.min(start_line)) + 1
                 }
                 _ => 0,
             },

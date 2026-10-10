@@ -165,11 +165,6 @@ refresh_rate_ms = 80
 compact_width = 96
 medium_width = 120
 
-# P5-1 terminal-scrollback mode (2026-10-10 design doc): render in the main
-# buffer with an inline bottom viewport instead of the alternate screen — the
-# terminal's native scrollback owns the history (tmux copy-mode and native
-# selection reach everything). Default off until live-verified.
-# terminal_scroll_mode = false
 [mcp]
 autoload = true
 # Master switch for progressive tool disclosure: when false, MCP tool

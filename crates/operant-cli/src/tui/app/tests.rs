@@ -4,11 +4,9 @@
 // Extracted from the app/mod.rs monolith.
 
 use super::*;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton};
 use crate::tui::operant_app::auth::AuthState;
 use crate::tui::operant_app::tui_state::TuiState as _;
-use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
-};
 
 pub(crate) fn make_app() -> App {
     // `App::new` calls `set_active_theme_enum`, which writes the process-global
@@ -32,61 +30,6 @@ fn press_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         kind: KeyEventKind::Press,
         state: KeyEventState::NONE,
     }
-}
-
-// ---- P0-1: paste-burst Enter semantics (2026-10-09 live audit) ----
-//
-// tmux/SSH batch keystrokes into the same drain window; pre-fix, a batched
-// `text<Enter>` had its Enter absorbed as a literal newline and the message
-// never sent. The corpus simulator bypasses the burst path (it injects keys
-// directly), so these unit tests are the only gate for this logic.
-
-fn burst_event(code: KeyCode) -> Event {
-    Event::Key(press_key(code, KeyModifiers::NONE))
-}
-
-#[test]
-fn burst_trailing_enter_must_submit_not_absorb() {
-    let mut app = make_app();
-    // A latency-batched `text<Enter>`: [h, i, Enter] in one drain window.
-    let q = vec![
-        burst_event(KeyCode::Char('h')),
-        burst_event(KeyCode::Char('i')),
-        burst_event(KeyCode::Enter),
-    ];
-    let (buf, pending) = app.collect_paste_burst('T', q.into_iter());
-    assert_eq!(buf, "Thi", "the typed chars collect as burst text");
-    let pending = pending.expect("trailing Enter must be handed back for replay");
-    assert_eq!(pending.code, KeyCode::Enter);
-}
-
-#[test]
-fn burst_embedded_newline_still_absorbs() {
-    let mut app = make_app();
-    // A clipboard paste's embedded newline has more clipboard behind it —
-    // Windows Ctrl+V multi-line paste must keep working.
-    let q = vec![
-        burst_event(KeyCode::Char('a')),
-        burst_event(KeyCode::Enter),
-        burst_event(KeyCode::Char('b')),
-    ];
-    let (buf, pending) = app.collect_paste_burst('x', q.into_iter());
-    assert_eq!(buf, "xa\nb");
-    assert!(pending.is_none(), "a mid-paste Enter must not terminate");
-}
-
-#[test]
-fn burst_single_char_then_enter_replays_submit() {
-    let mut app = make_app();
-    // One typed char + Enter batched together: below the paste threshold, but
-    // the Enter must survive as a replayed submit key, not vanish into text.
-    let q = vec![burst_event(KeyCode::Enter)];
-    let (buf, pending) = app.collect_paste_burst('X', q.into_iter());
-    assert_eq!(buf, "X");
-    assert_eq!(
-        pending.expect("Enter survives below-threshold bursts").code,
-        KeyCode::Enter
-    );
 }
 
 // ---- MCP reconnect tick-drain tests (iter-326) ----
@@ -1204,155 +1147,6 @@ fn turn_state_should_reflect_retry_event() {
 }
 
 #[test]
-fn retry_must_not_append_the_resurrected_stream_to_the_died_partial() {
-    // 2026-10-09 live-audit P4-2.5: the provider stream died mid-response
-    // (the org's signature flake), leaving partial text in the buffer; the
-    // retry restarts the response from its top. If the partial survives,
-    // the full retry APPENDS to it and the user watches the reply twice.
-    let mut app = make_app();
-    app.handle_agent_event(AgentEvent::Content {
-        text: "partial sentence that d".to_string(),
-    });
-    app.handle_agent_event(AgentEvent::RetryScheduled {
-        attempt: 1,
-        max_attempts: 3,
-        reason: "stream died mid-response".to_string(),
-    });
-    assert!(
-        app.streaming_text.is_empty(),
-        "the died attempt's partial must not survive the retry boundary"
-    );
-    app.handle_agent_event(AgentEvent::Content {
-        text: "The full reply from the top.".to_string(),
-    });
-    assert_eq!(
-        app.streaming_text, "The full reply from the top.",
-        "the retry's text must replace, not append to, the partial"
-    );
-}
-
-#[test]
-fn todo_tool_result_populates_the_live_store_and_todos_command_toggles_the_band() {
-    // P4-3 (2026-10-09 v2 outline): the todo tool's result carries the full
-    // list — the counts-only TodoUpdated event could never render one. The
-    // ToolComplete(todo) path must keep the items on App (info-widget band +
-    // pinned card read them) and /todos must toggle the band.
-    let mut app = make_app();
-    let content = serde_json::json!({
-        "todos": [
-            { "id": "1", "content": "audit scroll", "status": "completed" },
-            { "id": "2", "content": "audit todo", "status": "in_progress" }
-        ]
-    })
-    .to_string();
-    app.handle_agent_event(AgentEvent::ToolComplete {
-        result: operant_core::tools::ToolResult {
-            tool_call_id: "call_todo".to_string(),
-            name: "todo".to_string(),
-            success: true,
-            content,
-            error: None,
-            timed_out: false,
-        },
-    });
-    assert_eq!(app.todos.len(), 2, "the full list must land on App");
-    assert_eq!(app.todos[1].content, "audit todo");
-    assert!(
-        !app.todos_card_payload.is_empty(),
-        "the pinned-band card payload must be built"
-    );
-    assert!(
-        app.todos_card_payload.contains("audit scroll"),
-        "the payload carries the items for the band renderer"
-    );
-
-    // /todos hides and re-shows the band.
-    assert!(app.handle_tui_command("todos", ""));
-    assert!(app.todos_band_hidden, "/todos must toggle the band off");
-    assert!(app.handle_tui_command("todos", ""));
-    assert!(
-        !app.todos_band_hidden,
-        "/todos must toggle the band back on"
-    );
-}
-
-#[test]
-fn thinking_display_defaults_on_and_the_command_toggles_it() {
-    // P4-4 (2026-10-09 v2 outline): jcode parity — thinking renders by
-    // default (default_file.rs:175 show_thinking = true) and
-    // /thinking-display toggles the trace surfaces off and back on.
-    let mut app = make_app();
-    assert!(
-        app.thinking_display_on,
-        "thinking display must default on (jcode parity)"
-    );
-    assert!(app.handle_tui_command("thinking-display", "off"));
-    assert!(
-        !app.thinking_display_on,
-        "/thinking-display off must hide traces"
-    );
-    assert!(app.handle_tui_command("thinking-display", "full"));
-    assert!(
-        app.thinking_display_on,
-        "/thinking-display full must show traces"
-    );
-    assert!(app.handle_tui_command("thinking-display", "current"));
-    assert!(
-        app.thinking_display_on,
-        "current is the same vendored trace mode as full"
-    );
-}
-
-#[test]
-fn cls_clears_the_view_only_and_the_alias_tier_routes() {
-    // 2026-10-10 command sweep: /cls is jcode's clear-rendered-view (the
-    // model keeps its context) — it must NOT route to /clear, which drops
-    // the conversation. The alias tier must route /commands → /help and
-    // /split-view → /splitview instead of falling through to the model as
-    // literal prompt text.
-    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-    let mut app = make_app();
-    app.messages.push(Message {
-        role: Role::User,
-        content: MessageContent::Text("kept context".to_string()),
-    });
-    assert!(app.handle_tui_command("cls", ""));
-    assert_eq!(
-        app.messages.len(),
-        1,
-        "/cls clears the VIEW only — the conversation must survive"
-    );
-    assert!(
-        app.terminal_clear_state_live(),
-        "/cls must collapse the view"
-    );
-
-    assert!(app.handle_tui_command("commands", ""));
-    assert!(app.show_help, "/commands must route to /help");
-}
-
-#[test]
-fn an_empty_done_turn_surfaces_a_corrupted_stream_notice() {
-    // 2026-10-10 forced-repro finding: a corrupted provider stream ends the
-    // turn with Done{content: ""} and ZERO Content events — the reply fails
-    // silently and the user stares at a blank transcript. The Done arm must
-    // surface it (status message) so the user knows to retry.
-    let mut app = make_app();
-    app.begin_turn();
-    app.is_streaming = true;
-    app.handle_agent_event(AgentEvent::Done {
-        message: operant_core::Message::assistant(String::new()),
-        reason: operant_core::agent::TurnExitReason::TextResponse,
-    });
-    assert_eq!(
-        app.status_message.as_deref(),
-        Some("Empty reply — the provider stream may be corrupted; retry or switch model"),
-        "an empty Done turn must not fail silently"
-    );
-    assert!(app.messages.is_empty(), "no message may be invented");
-}
-
-#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));
@@ -1932,145 +1726,6 @@ fn tool_should_transition_queued_to_running_on_permit_acquire() {
     assert!(!app.tool_use_blocks[0].status.is_pending());
 }
 
-// ---- P0-2: per-iteration text grouping (2026-10-09 live audit) ----
-//
-// Providers interleave content deltas around tool_call deltas in one
-// response; observed live splitting "AG|ENTS.md" across the tool row.
-// ToolStart must not flush (the seam joins); ToolComplete/ToolError are the
-// iteration boundary and must flush (responses never glue).
-
-#[test]
-fn tool_start_mid_stream_must_not_split_assistant_text() {
-    use operant_core::agent::AgentEvent;
-
-    let mut app = make_app();
-    app.handle_agent_event(AgentEvent::Content {
-        text: "I’ll read the first 5 lines of AG".into(),
-    });
-    app.handle_agent_event(AgentEvent::ToolStart {
-        tool_call_id: "call_split".into(),
-        name: "aft_read".into(),
-        arguments: "{}".into(),
-    });
-    app.handle_agent_event(AgentEvent::Content {
-        text: "ENTS.md and summarize.".into(),
-    });
-
-    assert!(
-        app.messages.is_empty(),
-        "ToolStart must not flush mid-response text"
-    );
-    assert_eq!(
-        app.streaming_text, "I’ll read the first 5 lines of AGENTS.md and summarize.",
-        "the interleaved chunks join into the unsplit sentence"
-    );
-    assert_eq!(
-        app.tool_use_blocks[0].after_index, 1,
-        "the tool row reserves the slot the pending text will occupy"
-    );
-
-    // The tool settles: iteration boundary flushes the joined text as one
-    // message, and the display order puts the tool row after it.
-    app.handle_agent_event(AgentEvent::ToolComplete {
-        result: operant_core::tools::ToolResult {
-            tool_call_id: "call_split".into(),
-            name: "aft_read".into(),
-            success: true,
-            content: "# AGENTS.md…".into(),
-            error: None,
-            timed_out: false,
-        },
-    });
-    assert_eq!(app.messages.len(), 1, "boundary flush commits one message");
-    let joined = app.messages[0].text_content();
-    assert!(
-        joined.contains("AGENTS.md and summarize."),
-        "the committed message carries the unsplit sentence: {joined}"
-    );
-
-    let display = crate::tui::operant_model::display_messages(&app);
-    assert_eq!(display[0].role, "assistant");
-    assert_eq!(display[1].role, "tool", "tool row renders after the text");
-}
-
-#[test]
-fn tool_complete_boundary_must_flush_iteration_text() {
-    use operant_core::agent::AgentEvent;
-
-    let mut app = make_app();
-    app.handle_agent_event(AgentEvent::Content {
-        text: "Sentence one.".into(),
-    });
-    app.handle_agent_event(AgentEvent::ToolStart {
-        tool_call_id: "call_b".into(),
-        name: "aft_read".into(),
-        arguments: "{}".into(),
-    });
-    app.handle_agent_event(AgentEvent::ToolComplete {
-        result: operant_core::tools::ToolResult {
-            tool_call_id: "call_b".into(),
-            name: "aft_read".into(),
-            success: true,
-            content: "ok".into(),
-            error: None,
-            timed_out: false,
-        },
-    });
-    // The model re-plans: the next response's text must NOT glue onto the
-    // previous one.
-    app.handle_agent_event(AgentEvent::Content {
-        text: "Sentence two.".into(),
-    });
-    app.handle_agent_event(AgentEvent::Done {
-        message: operant_core::client::Message::assistant("Sentence two."),
-        reason: operant_core::agent::TurnExitReason::TextResponse,
-    });
-
-    assert_eq!(app.messages.len(), 2, "two responses, two messages");
-    let first = app.messages[0].text_content();
-    let second = app.messages[1].text_content();
-    assert!(first.contains("Sentence one."), "first message: {first}");
-    assert!(second.contains("Sentence two."), "second message: {second}");
-    assert!(
-        !second.contains("one"),
-        "no glue: the second response must not carry the first's text: {second}"
-    );
-}
-
-#[test]
-fn tool_error_boundary_must_flush_iteration_text() {
-    use operant_core::agent::AgentEvent;
-
-    let mut app = make_app();
-    app.handle_agent_event(AgentEvent::Content {
-        text: "Trying the tool.".into(),
-    });
-    app.handle_agent_event(AgentEvent::ToolStart {
-        tool_call_id: "call_e".into(),
-        name: "shell".into(),
-        arguments: "{}".into(),
-    });
-    app.handle_agent_event(AgentEvent::ToolError {
-        tool_call_id: "call_e".into(),
-        name: "shell".into(),
-        error: "exit status 3".into(),
-    });
-    app.handle_agent_event(AgentEvent::Content {
-        text: "It failed.".into(),
-    });
-    app.handle_agent_event(AgentEvent::Done {
-        message: operant_core::client::Message::assistant("It failed."),
-        reason: operant_core::agent::TurnExitReason::TextResponse,
-    });
-
-    assert_eq!(app.messages.len(), 2, "error boundary also flushes");
-    let first = app.messages[0].text_content();
-    assert!(
-        first.contains("Trying the tool."),
-        "pre-error text is preserved as its own message: {first}"
-    );
-}
-
 // ---- Batched tool-call grouping ----
 //
 // A concurrent batch (6 same-name calls in one turn) must render as one block
@@ -2285,29 +1940,6 @@ fn user_scroll_should_cancel_the_anchor() {
     assert_eq!(app.scroll_offset, 15, "a user scroll drops the anchor");
 }
 
-#[test]
-fn reconcile_clamps_ghost_offset_after_the_flush_shrinks_the_transcript() {
-    // The growth correction counts the streaming bubble's rows; the flush
-    // boundary collapses them into one committed message, so the offset can
-    // hold rows that no longer exist (live-audit P4-1 follow-up: offset 355
-    // against a 15-row max left PageDown walking ghost rows home). The
-    // reconcile must clamp the STATE to the frame's live max — the render
-    // already clamps its own paint — and void the pin.
-    let mut app = make_app();
-    app.auto_scroll = false;
-    app.scroll_offset = 355;
-    crate::tui::operant_ui::set_last_max_scroll(15);
-    app.last_render_scroll_offset.set(15);
-    app.last_resolved_scroll.set(Some(15));
-    app.reconcile_scroll_anchor();
-    assert_eq!(
-        app.scroll_offset, 15,
-        "ghost rows must clamp to the live frame max"
-    );
-    // Reset the thread-local so later tests on this thread see "no frame".
-    crate::tui::operant_ui::set_last_max_scroll(0);
-}
-
 // ---- Resize preserves reading position ---------------------------------
 //
 // A resize rewraps every transcript line, so a row index captured before it
@@ -2343,13 +1975,7 @@ fn paint_at(app: &mut App, f: ResizeFrame) {
 }
 
 fn pos(message: usize, line: u16) -> ContentPos {
-    // The captured target is opaque to the reconcile machinery (it is the
-    // render's job to resolve it); the tests only need a stable Some value.
-    ContentPos::Message(crate::tui::operant_model::Anchor {
-        msg_hash: message as u64,
-        occurrence: 0,
-        row_within_item: line as usize,
-    })
+    ContentPos { message, line }
 }
 
 #[test]
@@ -3508,10 +3134,7 @@ fn credentials_live_or_s_store_env_and_activation_flag() {
         app.auth_store.credentials.clear();
         assert!(!app.credentials_live());
         app.has_credentials = true;
-        assert!(
-            app.credentials_live(),
-            "sticky activation flag alone counts"
-        );
+        assert!(app.credentials_live(), "sticky activation flag alone counts");
     })
 }
 
@@ -3553,8 +3176,7 @@ fn last_msg_area_defaults_zero_and_is_republished_from_draw() {
         ratatui::layout::Rect::default(),
         "fresh App must carry a zero rect so stale geometry never gates a menu"
     );
-    app.last_msg_area
-        .set(ratatui::layout::Rect::new(2, 3, 40, 10));
+    app.last_msg_area.set(ratatui::layout::Rect::new(2, 3, 40, 10));
     assert_eq!(app.last_msg_area.get().width, 40);
 }
 
@@ -3563,10 +3185,7 @@ fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
     let mut app = make_app();
     app.auto_scroll = true;
     app.handle_key_event(press_key(KeyCode::Up, KeyModifiers::CONTROL));
-    assert_eq!(
-        app.scroll_offset, 3,
-        "Ctrl+Up must scroll the transcript 3 lines"
-    );
+    assert_eq!(app.scroll_offset, 3, "Ctrl+Up must scroll the transcript 3 lines");
     assert!(!app.auto_scroll, "Ctrl+Up must pause tail-follow");
     app.scroll_offset = 10;
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
@@ -3575,10 +3194,7 @@ fn ctrl_arrow_chords_scroll_transcript_in_fine_steps() {
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
     app.handle_key_event(press_key(KeyCode::Down, KeyModifiers::CONTROL));
     assert_eq!(app.scroll_offset, 0);
-    assert!(
-        app.auto_scroll,
-        "reaching the bottom must resume tail-follow"
-    );
+    assert!(app.auto_scroll, "reaching the bottom must resume tail-follow");
 }
 
 // ── Composer shift-selection (jcode textarea selection, 2026-10-09 audit) ──
@@ -3635,10 +3251,7 @@ fn wrap_input_text_paints_selection_in_reverse_video() {
     let found = lines.iter().any(|line| {
         line.spans.iter().any(|span| {
             span.content.as_ref() == "wo"
-                && span
-                    .style
-                    .add_modifier
-                    .contains(ratatui::style::Modifier::REVERSED)
+                && span.style.add_modifier.contains(ratatui::style::Modifier::REVERSED)
         })
     });
     assert!(found, "selection span must paint reverse-video over 'wo'");
@@ -3651,38 +3264,4 @@ fn wrap_input_text_paints_selection_in_reverse_video() {
         joined.contains("hello ") && joined.ends_with("rld"),
         "chars outside the selection must survive: {joined}"
     );
-}
-
-#[test]
-fn auth_status_derives_slots_from_env_keys_when_provider_unset() {
-    // No provider id and a stored anthropic key: the matrix must show the
-    // session as configured (the corpus/sim shape, and any boot with keys
-    // but no provider field). Store-based, not env-based: a parallel test's
-    // App init would snapshot a mutated env into its own AuthStore, and
-    // that cross-test poisoning is exactly what broke the Ctrl+A picker
-    // test (tokio::spawn needs a runtime the unit test lacks). Pinned
-    // end-to-end by the first-message corpus scenario (not-contains
-    // "○ anthropic").
-    with_cleared_auth_env(|| {
-        let mut app = make_app();
-        app.has_credentials = false;
-        app.active_provider = None;
-        // omp-style bare model — provider inference must yield None so the
-        // credential-derivation arm is the one under test (the exact shape of
-        // the user's reported session).
-        app.config.agent.model = "glm-5.3".to_string();
-        app.auth_store.credentials.clear();
-        app.auth_store.credentials.insert(
-            "anthropic".to_string(),
-            crate::tui::adapter_types::StoredCredential::ApiKey {
-                key: "sk-ant-test".to_string(),
-            },
-        );
-        let status = app.auth_status();
-        assert_eq!(
-            status.anthropic.state,
-            crate::tui::operant_app::auth::AuthState::Available,
-            "a stored anthropic key with no provider id must mark anthropic configured"
-        );
-    })
 }

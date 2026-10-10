@@ -8,23 +8,23 @@
 
 
 
-                        ┌──────────────────────────────────────────────────────────────────────┐
-                        │ Plugins                                                              │
-                        │No plugins installed.                                                 │
- operant · replay       │                                                                      │
- operant                │Plugins are git repositories cloned into your operant                 │
- /model to switch · Offl│plugins directory. Install one with:                                  │
+ operant · replay       ┌──────────────────────────────────────────────────────────────────────┐
+ operant                │ Plugins                                                              │
+ /model to switch · Offl│No plugins installed.                                                 │
  v0.2.1                 │                                                                      │
- /login to add provider │  operant plugins install <git-url>                                   │
- ● anthropic(key)       │                                                                      │
- ~                      │Press Esc to close.                                                   │
+ /login to add provider │Plugins are git repositories cloned into your operant                 │
+ ○ anthropic            │plugins directory. Install one with:                                  │
+ ○ openrouter           │                                                                      │
+ ○ openai               │  operant plugins install <git-url>                                   │
+ ○ cursor               │                                                                      │
+ ○ copilot              │Press Esc to close.                                                   │
+ ○ gemini               │                                                                      │
+ ○ antigravity          │                                                                      │
+ ~                      │                                                                      │
                         │                                                                      │
                         │                                                                      │
 1>                      │                                                                      │
                         │                                                                      │ API key Offline Capture
-                        │                                                                      │
-                        │                                                                      │
-                        │                                                                      │
                         │                                                                      │
                         │                                                                      │
                         └──────────────────────────────────────────────────────────Esc to close┘

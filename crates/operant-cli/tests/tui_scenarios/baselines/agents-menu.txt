@@ -8,23 +8,23 @@
                 0 active  ·  0 definitions
                 [+ Create new agent]  Create a reusable workspace agent
 
-
-
-
  operant · rep
  operant
  /model to swi
  v0.2.1
  /login to add
- ● anthropic(k
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
 
 1>
                                                                                                           ffline Capture
-
-
-
 
 
 

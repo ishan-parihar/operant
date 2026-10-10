@@ -8,24 +8,24 @@
 
 
 
-
-
-
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1                 ┌──────────────────────────────────────────────────────────────────────┐
- /login to add provider │ History Search                                                       │
- ● anthropic(key)       │  Search: █  0 results                                                │
- ~                      │                                                                      │
-                        │  (no matches)                                                        │
-                        │                                                                      │
-1>                      │  ↑↓ navigate  ·  Enter select  ·  p pin/unpin                        │
-(history search) █  ↑↓ s└──────────────────────────────────────────────────────────Esc to close┘
+ v0.2.1
+ /login to add provider
+ ○ anthropic
+ ○ openrouter           ┌──────────────────────────────────────────────────────────────────────┐
+ ○ openai               │ History Search                                                       │
+ ○ cursor               │  Search: █  0 results                                                │
+ ○ copilot              │                                                                      │
+ ○ gemini               │  (no matches)                                                        │
+ ○ antigravity          │                                                                      │
+ ~                      │  ↑↓ navigate  ·  Enter select  ·  p pin/unpin                        │
+                        └──────────────────────────────────────────────────────────Esc to close┘
+
+1>
+(history search) █  ↑↓ select · ↵ insert · Esc cancel
   type to search history
-
-
-
 
 
 

@@ -1,24 +1,24 @@
                                                             ╭──────────────────────────────────────────────────────────╮
                                                             │  ⚠ Error                                                 │
-                                                            │──────────────────────────────────────────────────────────│
-                                                            │                                                          │
-                                                            │ Error: provider overloaded_error (529): the upstream is  │
- operant · replay                                           │ saturated, retry shortly                                 │
+ operant · replay                                           │──────────────────────────────────────────────────────────│
  operant                                                    │                                                          │
- /model to switch · Offline Capture                         │                                                          │
- v0.2.1                                                     │                                                          │
+ /model to switch · Offline Capture                         │ Error: provider overloaded_error (529): the upstream is  │
+ v0.2.1                                                     │ saturated, retry shortly                                 │
  /login to add provider                                     │                                                          │
- ● anthropic(key)                                           │                                                          │
+ ○ anthropic                                                │                                                          │
+ ○ openrouter                                               │                                                          │
+ ○ openai                                                   │                                                          │
+ ○ cursor                                                   │                                                          │
+ ○ copilot                                                  │                                                          │
+ ○ gemini                                                   │                                                          │
+ ○ antigravity                                              │                                                          │
  ~                                                          │                                                          │
                                                             │                                                          │
  Error: provider overloaded_error (529): the upstream is sat│                                                          │
-                                                            │                                                          │
-                                                            │                                                          │
-1>                                                          │                                                          │
                                                             │ → The provider is degraded — retry in                    │
                                                             │   a moment, or /model to switch route.                   │
-                                                            ╰──────────────────────────────────────────────────────────╯
-
+1>                                                          ╰──────────────────────────────────────────────────────────╯
+                                                                         ~ 20/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

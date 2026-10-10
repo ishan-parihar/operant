@@ -115,11 +115,8 @@ pub(super) fn format_status_for_debug(app: &dyn TuiState) -> String {
                     input / 1000,
                     output / 1000
                 )
-            } else if let Some(tip) = crate::tui::operant_app::config_shim::config()
-                .display
-                .show_tips
-                .then(|| info_widget::occasional_status_tip(120, app.animation_elapsed() as u64))
-                .flatten()
+            } else if let Some(tip) =
+                info_widget::occasional_status_tip(120, app.animation_elapsed() as u64)
             {
                 format!("Idle ({})", tip)
             } else {

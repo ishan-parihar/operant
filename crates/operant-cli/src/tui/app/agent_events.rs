@@ -91,26 +91,15 @@ impl App {
                 self.is_streaming = true;
                 self.turn_state = TurnState::RunningTool;
 
-                // Per-iteration text grouping (2026-10-09 live audit, P0-2):
-                // a mid-stream ToolStart must not split the assistant text.
-                // Providers interleave content deltas around tool_call deltas
-                // — observed live: "…first 5 lines of AG" / tool_call /
-                // "ENTS.md and summarize." — and flushing here rendered the
-                // word AGENTS.md split across the tool row. The text buffer now
-                // spans the whole iteration and flushes at the next boundary
-                // (next iteration's Thinking, Done, or cancel). Tool rows
-                // anchor one slot further so they still render after the text
-                // that was in flight when the call was parsed: the reservation
-                // mirrors flush_streamed_assistant_message's push condition
-                // exactly, so a slot is reserved iff the flush will fill it.
-                let text_slot = if self.streaming_text.trim().is_empty()
-                    && self.streaming_thinking.trim().is_empty()
-                {
-                    0
-                } else {
-                    1
-                };
-                let after_index = self.messages.len() + text_slot;
+                // When a tool starts, flush any accumulated streaming text/thinking
+                // as a completed message. This prevents content from accumulating
+                // across iterations (think → tool → think → tool → respond).
+                // (iter-123 — fixes duplicate thinking/text in multi-iteration turns.)
+                if !self.streaming_text.is_empty() || !self.streaming_thinking.is_empty() {
+                    self.flush_streamed_assistant_message();
+                }
+
+                let after_index = self.messages.len();
                 let tool_id = tool_call_id.clone();
                 let tool_name = name.clone();
                 let input_json = arguments;
@@ -198,37 +187,10 @@ impl App {
                 // The tool settled; the model has to re-plan before the next
                 // Content event, so the turn is back to Thinking.
                 self.turn_state = TurnState::Thinking;
-                // Iteration boundary (2026-10-09 live audit, P0-2): the
-                // assistant text streamed before this tool completed belongs
-                // to the previous model response — the next Content starts a
-                // NEW response. Flush here so the two never glue into one
-                // message ("…summarize.The file wasn't found…"), while text
-                // interleaved AROUND the tool_call parse mid-response still
-                // joins (the AG|ENTS.md seam) because ToolStart no longer
-                // flushes.
-                self.flush_streamed_assistant_message();
                 if is_error {
                     self.status_message = Some(format!("Tool error: {}", result_text));
                 } else {
                     self.status_message = None;
-                }
-                // P4-3 (2026-10-09 v2 outline): the todo tool's result carries
-                // the full list; keep it on App so the info-widget Todos band,
-                // the pinned card and /todos read live state. The counts-only
-                // TodoUpdated event stays as the status-line signal — it can
-                // never render a list.
-                if result.success
-                    && result.name == "todo"
-                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&result.content)
-                    && let Some(items) = value.get("todos")
-                    && let Ok(parsed) = serde_json::from_value::<
-                        Vec<crate::tui::operant_app::todo::TodoItem>,
-                    >(items.clone())
-                {
-                    let card = serde_json::json!({ "todos": parsed });
-                    self.todos_card_payload = serde_json::to_string(&card).unwrap_or_default();
-                    self.todos = parsed;
-                    self.invalidate_transcript();
                 }
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
@@ -262,9 +224,6 @@ impl App {
                 self.invalidate_transcript();
                 self.turn_state = TurnState::Thinking;
                 self.status_message = Some(format!("Tool error: {}", result_text));
-                // Iteration boundary, same as ToolComplete (P0-2): a failed
-                // tool also ends the response that called it.
-                self.flush_streamed_assistant_message();
                 // (iter-209: refresh_turn_diff_from_history removed)
             }
 
@@ -298,7 +257,6 @@ impl App {
                 // If we have streamed content, flush it normally. If not,
                 // use Done.message as the source of truth (fixes the
                 // dropped-message bug for non-streaming paths).
-                let before = self.messages.len();
                 if self.streaming_text.trim().is_empty()
                     && self.streaming_thinking.trim().is_empty()
                     && !message.content.is_empty()
@@ -322,24 +280,6 @@ impl App {
                     self.on_new_message();
                 } else {
                     self.flush_streamed_assistant_message();
-                }
-                // 2026-10-10 forced-repro finding: a corrupted provider
-                // stream (SSE events the parser must drop) ends the turn
-                // with NO text and NO tool rows — an empty reply that used
-                // to fail silently, which read as "the TUI ate my message".
-                // Surface it so the user knows to retry rather than stare
-                // at a blank transcript.
-                // `before` unchanged means neither branch pushed a message —
-                // tool rows are session-lifetime state, so they say nothing
-                // about THIS turn and must not gate the notice.
-                let turn_gained_nothing =
-                    self.messages.len() == before && self.streaming_text.trim().is_empty();
-                if turn_gained_nothing {
-                    self.status_message = Some(
-                        "Empty reply — the provider stream may be corrupted; \
-                         retry or switch model"
-                            .to_string(),
-                    );
                 }
                 // Mark any remaining pending (queued OR running) blocks as
                 // Done — they completed but the ToolComplete event either
@@ -419,21 +359,6 @@ impl App {
                     _ => "Rate limit reached — retrying with backoff".to_string(),
                 };
                 self.push_notification(NotificationKind::Warning, msg, None);
-            }
-
-            AgentEvent::StreamCorrupted { dropped_events } => {
-                // iter-754: the provider's SSE framing was corrupted and the
-                // parser dropped unparseable payloads — the rendered turn may
-                // be truncated or look interleaved. Surface WHY so the
-                // corruption is attributed to the wire, not the agent.
-                self.turn_state = TurnState::WaitingForNetwork;
-                self.push_notification(
-                    NotificationKind::Warning,
-                    format!(
-                        "⚠ {dropped_events} corrupted stream event(s) dropped by the provider — output may be truncated"
-                    ),
-                    None,
-                );
             }
 
             AgentEvent::Cost {
@@ -527,17 +452,6 @@ impl App {
                 reason,
             } => {
                 self.turn_state = TurnState::WaitingForNetwork;
-                // The died attempt's partial text must not survive into the
-                // retry: the provider restarts the response from its top, so
-                // any leftover buffer appends the full retry to the partial
-                // and the reply renders duplicated (2026-10-09 live-audit
-                // P4-2.5 — the org's provider stream-deaths make this the
-                // most-hit path in the field). The turn stays live
-                // (`is_streaming` untouched — a mid-turn retry keeps the
-                // turn's live-stream display semantics, as the existing
-                // test pins); only the died attempt's text is discarded.
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
                 // Reuse the SystemAPIError block so retries get the same
                 // boxed renderer as API failures instead of plain text.
                 let block = ContentBlock::SystemAPIError {

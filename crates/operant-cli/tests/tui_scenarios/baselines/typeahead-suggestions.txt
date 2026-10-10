@@ -8,15 +8,18 @@
 
 
 
-
-
-
  operant · replay
  operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ● anthropic(key)
+ ○ anthropic
+ ○ openrouter
+ ○ openai
+ ○ cursor
+ ○ copilot
+ ○ gemini
+ ○ antigravity
  ~
 
 
@@ -29,9 +32,6 @@
 /undo  Back up N user turns and re-prompt (default 1)
 /title  Set a title for the current session
 /handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.)  +78 more
-
-
-
 
 
 

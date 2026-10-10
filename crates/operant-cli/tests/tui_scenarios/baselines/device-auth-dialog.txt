@@ -8,23 +8,23 @@
 
 
 
-
-
-
- operant · replay           ┌──────────────────────────────────────────────────────────────┐
- operant                    │ Connect OpenAI Codex                                         │
- /model to switch · Offline │                                                              │
- v0.2.1                     │ Requesting device code...                                    │
- /login to add provider     │                                                              │
- ● anthropic(key)           │                                                              │
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1                     ┌──────────────────────────────────────────────────────────────┐
+ /login to add provider     │ Connect OpenAI Codex                                         │
+ ○ anthropic                │                                                              │
+ ○ openrouter               │ Requesting device code...                                    │
+ ○ openai                   │                                                              │
+ ○ cursor                   │                                                              │
+ ○ copilot                  │                                                              │
+ ○ gemini                   │                                                              │
+ ○ antigravity              │                                                              │
  ~                          │                                                              │
                             │                                                              │
                             │                                                              │
 1>                          │                                                              │
-                            │                                                              │   ~ API key Offline Capture
-                            │                                                              │
-                            │                                                              │
-                            └──────────────────────────────────────────────────Esc to close┘
+                            └──────────────────────────────────────────────────Esc to close┘   ~ API key Offline Capture
 
 
 

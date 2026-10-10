@@ -407,13 +407,6 @@ impl TuiApp {
         use ratatui::Terminal;
         use ratatui::backend::CrosstermBackend;
 
-        /// P5-1: rows the inline viewport occupies at the bottom of the main
-        /// buffer in terminal-scrollback mode (status + composer + a small
-        /// live stream window). The transcript emits above it in later P5
-        /// waves; for the P5-1 milestone the cramped-but-alive render proves
-        /// the terminal handoff.
-        const TERMINAL_SCROLL_INLINE_ROWS: u16 = 14;
-
         enable_raw_mode()?;
 
         // Install a panic hook that restores the terminal before printing
@@ -433,38 +426,22 @@ impl TuiApp {
         }));
 
         let mut stdout = std::io::stdout();
-        // P5-1 terminal-scrollback mode (2026-10-10 design): when enabled,
-        // skip the alternate screen entirely and render into an INLINE
-        // bottom viewport of the main buffer — the terminal's native
-        // scrollback owns everything above (tmux copy-mode, native
-        // selection and copy reach the whole session). Mouse capture stays
-        // off in this mode so the terminal's own selection works.
-        let mut terminal = if self.app.config.tui.terminal_scroll_mode {
-            let backend = CrosstermBackend::new(stdout);
-            Terminal::with_options(
-                backend,
-                ratatui::TerminalOptions {
-                    viewport: ratatui::Viewport::Inline(TERMINAL_SCROLL_INLINE_ROWS),
-                },
-            )?
-        } else {
-            execute!(stdout, EnterAlternateScreen)?;
-            // Enable mouse capture unless --no-mouse was passed. Mouse capture
-            // lets the TUI receive scroll/click events for the transcript, diff
-            // viewer, and overlay scrolling. Some terminal multiplexers (tmux,
-            // screen) interfere with mouse capture; --no-mouse disables it so
-            // the terminal's native mouse selection works. (Bug #24 from iter-82
-            // audit — /mouse mentioned a --no-mouse flag that didn't exist.)
-            if !self.no_mouse {
-                execute!(stdout, crossterm::event::EnableMouseCapture)?;
-            }
-            // Enable focus-change reporting so the TUI can pause animations and
-            // drop the redraw cadence when the window is backgrounded (Phase 2.3).
-            // Terminals that don't support focus events simply ignore the sequence.
-            execute!(stdout, crossterm::event::EnableFocusChange)?;
-            let backend = CrosstermBackend::new(stdout);
-            Terminal::new(backend)?
-        };
+        execute!(stdout, EnterAlternateScreen)?;
+        // Enable mouse capture unless --no-mouse was passed. Mouse capture
+        // lets the TUI receive scroll/click events for the transcript, diff
+        // viewer, and overlay scrolling. Some terminal multiplexers (tmux,
+        // screen) interfere with mouse capture; --no-mouse disables it so
+        // the terminal's native mouse selection works. (Bug #24 from iter-82
+        // audit — /mouse mentioned a --no-mouse flag that didn't exist.)
+        if !self.no_mouse {
+            execute!(stdout, crossterm::event::EnableMouseCapture)?;
+        }
+        // Enable focus-change reporting so the TUI can pause animations and
+        // drop the redraw cadence when the window is backgrounded (Phase 2.3).
+        // Terminals that don't support focus events simply ignore the sequence.
+        execute!(stdout, crossterm::event::EnableFocusChange)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
 
         // agent_tx was created above; agent_rx is stored on app.
         // No bridge — the agent sends AgentEvent directly to the TUI.
@@ -698,10 +675,6 @@ impl TuiApp {
                             role: Role::User,
                             content: MessageContent::Text(input.clone()),
                         });
-                        // The display cache is keyed on transcript_version;
-                        // without this bump the user message is invisible
-                        // until the first agent event arrives (N-2).
-                        self.app.invalidate_transcript();
                         self.app.is_streaming = true;
                         self.app.begin_turn();
                         self.app.streaming_text.clear();
@@ -761,11 +734,6 @@ impl TuiApp {
             role: Role::User,
             content: MessageContent::Text(text.clone()),
         });
-        // The display cache is keyed on transcript_version; without this
-        // bump the user message is invisible until the first agent event
-        // arrives (N-2) - and the idle orb keeps painting over the sent
-        // message because has_started_conversation reads the stale cache.
-        self.app.invalidate_transcript();
         self.app.is_streaming = true;
         self.app.begin_turn();
         self.app.streaming_text.clear();
@@ -1017,10 +985,6 @@ impl TuiApp {
                             role: Role::User,
                             content: MessageContent::Text(input.clone()),
                         });
-                        // The display cache is keyed on transcript_version;
-                        // without this bump the user message is invisible
-                        // until the first agent event arrives (N-2).
-                        self.app.invalidate_transcript();
                         self.app.is_streaming = true;
                         self.app.begin_turn();
                         self.app.streaming_text.clear();
@@ -1034,19 +998,6 @@ impl TuiApp {
                         });
                         self.app.run_complete_rx = Some(rx);
                         self.app.agent_task_handle = Some(handle);
-                    } else if is_mock {
-                        // Mock path: the "agent" is the script, not a failed
-                        // init - a submitted message must land in the
-                        // transcript exactly like the live paths (N-2). The
-                        // pre-fix restore-else simulated an init failure for
-                        // every mock submit, so no scenario could ever pin
-                        // the submit-path commit.
-                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                        self.app.messages.push(Message {
-                            role: Role::User,
-                            content: MessageContent::Text(input.clone()),
-                        });
-                        self.app.invalidate_transcript();
                     } else {
                         self.app.restore_failed_input_to_composer();
                     }

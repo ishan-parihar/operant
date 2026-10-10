@@ -8,23 +8,23 @@
 
 
 
-                         ┌────────────────────────────────────────────────────────────────────┐
-                         │ Sessions                                                           │
-                         │                                                                    │
- operant · replay        │  No sessions yet.                                                  │
- operant                 │  Sessions are saved automatically as you chat.                     │
+ operant · replay        ┌────────────────────────────────────────────────────────────────────┐
+ operant                 │ Sessions                                                           │
  /model to switch · Offli│                                                                    │
- v0.2.1                  │  ↑↓ navigate  Enter=resume  r=rename  Esc=close                    │
- /login to add provider  │                                                                    │
- ● anthropic(key)        │                                                                    │
+ v0.2.1                  │  No sessions yet.                                                  │
+ /login to add provider  │  Sessions are saved automatically as you chat.                     │
+ ○ anthropic             │                                                                    │
+ ○ openrouter            │  ↑↓ navigate  Enter=resume  r=rename  Esc=close                    │
+ ○ openai                │                                                                    │
+ ○ cursor                │                                                                    │
+ ○ copilot               │                                                                    │
+ ○ gemini                │                                                                    │
+ ○ antigravity           │                                                                    │
  ~                       │                                                                    │
                          │                                                                    │
                          │                                                                    │
 1>                       │                                                                    │
                          │                                                                    │~ API key Offline Capture
-                         │                                                                    │
-                         │                                                                    │
-                         │                                                                    │
                          │                                                                    │
                          │                                                                    │
                          └────────────────────────────────────────────────────────Esc to close┘

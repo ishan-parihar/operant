@@ -8,23 +8,23 @@
                            │ Search                                                        │
                            │                                                               │
                            │                                                               │
-                           │ Popular                                                       │
-                           │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
-                           │ Custom OpenAI-Compatible Custom URL + API key                 │
- operant · replay          │ OpenAI (API key)                                              │
- operant                   │ Anthropic (API key)                                           │
- /model to switch · Offline│ Google AI Studio (API key)                                    │
- v0.2.1                    │ xAI (API key)                                                 │
- /login to add provider    │ Mistral (API key)                                             │
- ● anthropic(key)          │ Groq (API key)                                                │
- ~                         │ DeepSeek (API key)                                            │
-                           │ NVIDIA NIM (API key)                                          │
-                           │ OpenRouter (API key)                                          │
-1>                         │ Together AI (API key)                                         │
-                           │ Vercel AI Gateway (API key)                                   │   ~ API key Offline Capture
+ operant · replay          │ Popular                                                       │
+ operant                   │ Free Mode OpenCode Zen → OpenRouter free fallback (no spend) F│
+ /model to switch · Offline│ Custom OpenAI-Compatible Custom URL + API key                 │
+ v0.2.1                    │ OpenAI (API key)                                              │
+ /login to add provider    │ Anthropic (API key)                                           │
+ ○ anthropic               │ Google AI Studio (API key)                                    │
+ ○ openrouter              │ xAI (API key)                                                 │
+ ○ openai                  │ Mistral (API key)                                             │
+ ○ cursor                  │ Groq (API key)                                                │
+ ○ copilot                 │ DeepSeek (API key)                                            │
+ ○ gemini                  │ NVIDIA NIM (API key)                                          │
+ ○ antigravity             │ OpenRouter (API key)                                          │
+ ~                         │ Together AI (API key)                                         │
+                           │ Vercel AI Gateway (API key)                                   │
                            │                                                               │
-                           │ International                                                 │
-                           │ Z.AI / GLM (API key)                                          │
+1>                         │ International                                                 │
+                           │ Z.AI / GLM (API key)                                          │   ~ API key Offline Capture
                            │ Kimi / Kimi Coding Plan (API key)                             │
                            │ Kimi / Moonshot (China) (API key)                             │
                            │ Moonshot (API key)                                            │

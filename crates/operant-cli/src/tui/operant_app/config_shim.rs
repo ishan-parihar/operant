@@ -222,13 +222,6 @@ pub struct DisplayConfig {
     /// Explicit reasoning display mode. Upstream display.rs:39, default at
     /// :137 (`Some(Full)`).
     pub reasoning_display: Option<ReasoningDisplayMode>,
-    /// [port-adaptation] Operant-only, not upstream: the rotating 💡 hint
-    /// rail in the status strip. Default OFF — operant's status row already
-    /// carries state (spinner, token meter, tool status), and the 2026-10-09
-    /// live audit's complaint 1 named the rotating hints as overlay noise.
-    /// Upstream jcode shows tips unconditionally; operant gates them at the
-    /// render call sites.
-    pub show_tips: bool,
 }
 
 impl DisplayConfig {
@@ -269,7 +262,6 @@ impl Default for DisplayConfig {
             reasoning_display: Some(ReasoningDisplayMode::Full),
             performance: "auto".to_string(),
             copy_badge_alt_label: String::new(),
-            show_tips: false,
         }
     }
 }

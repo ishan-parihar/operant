@@ -1,20 +1,20 @@
 {
   "name": "first-message",
-  "surface": "crates/operant-cli/src/tui/app/messaging.rs (send path) + operant_ui/ui_prepare.rs (empty-state \u2192 conversation transition)",
+  "surface": "crates/operant-cli/src/tui/app/messaging.rs (send path) + operant_ui/ui_prepare.rs (empty-state → conversation transition)",
   "opens_with": "Fresh boot in the opening empty state; the user sends their first message and the agent replies",
   "keys": "Hello from the first message<enter>",
   "size": "120x40",
   "agent_script": "assistant-simple.json",
   "assert": [
-    "messages == 2",
+    "messages == 1",
     "is_streaming == false"
   ],
   "assert_screen": [
     "contains:Hello from the first message",
     "contains:Hello from the mock agent",
-    "not-contains:\u25cb anthropic"
+    "not-contains:○ anthropic"
   ],
   "baseline": "first-message.txt",
   "style_baseline": "first-message.style.txt",
-  "notes": "The 2026-10-09 visual audit complaint 2: the user reported the 'opening screen never transitions' after sending a message. The corpus env sets ANTHROPIC_API_KEY, so with iter-703's live credentials the auth inventory must show a CONFIGURED session by the time the first reply lands \u2014 never the unconfigured '/login to add provider' fallback block. The transcript must carry the user's message; the mock agent's reply must be on screen. Pairs with the auth_status unit tests (matrix refresh, provider inference) and the terminal-clear scenario. Reshaped by the 2026-10-09 N-2 fix: the mock submit path now commits the user message to the transcript exactly like the live paths (pre-fix it silently dropped it and showed only the restored composer text), so the golden carries the user row + the reply and the assert counts both. Pairs with user-message-commits, which gates the no-agent-event window."
+  "notes": "The 2026-10-09 visual audit complaint 2: the user reported the 'opening screen never transitions' after sending a message. The corpus env sets ANTHROPIC_API_KEY, so with iter-703's live credentials the auth inventory must show a CONFIGURED session by the time the first reply lands — never the unconfigured '/login to add provider' fallback block. The transcript must carry the user's message; the mock agent's reply must be on screen. Pairs with the auth_status unit tests (matrix refresh, provider inference) and the terminal-clear scenario."
 }

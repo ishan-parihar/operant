@@ -1211,18 +1211,6 @@ fn parse_retry_after_from_body(body: &str) -> Option<Duration> {
 pub struct ChatStreamResponse {
     inner: Box<dyn Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + Unpin>,
     buffer: String,
-    /// Raw bytes not yet decoded: a chunk boundary can split a UTF-8
-    /// multibyte sequence mid-char, so bytes decode incrementally —
-    /// `String::from_utf8` on individual chunks used to fail and silently
-    /// drop the chunk (corrupting the SSE framing downstream). The valid
-    /// prefix decodes into `buffer`; the partial tail waits for more bytes.
-    pending_bytes: Vec<u8>,
-    /// Payloads dropped because they failed to parse as chat chunks (corrupted
-    /// SSE framing). Surfaced via `dropped_counter()` so the adapter can
-    /// report stream corruption to the agent — a silent drop is invisible to
-    /// the user otherwise (observed live: corrupted streams yield empty or
-    /// truncated turns with zero signal).
-    dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ChatStreamResponse {
@@ -1232,16 +1220,7 @@ impl ChatStreamResponse {
         Self {
             inner: Box::new(stream),
             buffer: String::new(),
-            pending_bytes: Vec::new(),
-            dropped: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
-    }
-
-    /// Shared counter of SSE payloads dropped for failing to parse.
-    /// Clone BEFORE consuming the stream (the response is moved into it) and
-    /// read after the stream ends.
-    pub fn dropped_counter(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
-        self.dropped.clone()
     }
 }
 
@@ -1252,66 +1231,21 @@ impl Stream for ChatStreamResponse {
         let this = self.get_mut();
 
         loop {
-            let mut dropped_here = 0u32;
-            let parsed = try_parse_next_sse_event(&mut this.buffer, false, &mut dropped_here);
-            if dropped_here > 0 {
-                this.dropped
-                    .fetch_add(dropped_here as usize, std::sync::atomic::Ordering::Relaxed);
-            }
-            if let Some(event) = parsed {
+            if let Some(event) = try_parse_next_sse_event(&mut this.buffer, false) {
                 return Poll::Ready(Some(event));
             }
 
             match Pin::new(&mut this.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    // Incremental UTF-8 decode: a multibyte char split across
-                    // chunk boundaries must not drop either half.
-                    this.pending_bytes.extend_from_slice(&bytes);
-                    match std::str::from_utf8(&this.pending_bytes) {
-                        Ok(text) => {
-                            this.buffer.push_str(text);
-                            this.pending_bytes.clear();
-                        }
-                        Err(e) => {
-                            let valid = e.valid_up_to();
-                            // SAFETY: `valid` is a confirmed-UTF-8 boundary.
-                            let text = std::str::from_utf8(&this.pending_bytes[..valid])
-                                .unwrap_or_default();
-                            this.buffer.push_str(text);
-                            this.pending_bytes.drain(..valid);
-                        }
+                    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                        this.buffer.push_str(&text);
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
                     return Poll::Ready(Some(Err(Error::Network(e.into()))));
                 }
                 Poll::Ready(None) => {
-                    // Body exhausted: drain ALL remaining buffered events, not
-                    // just one. A single final parse strands every event after
-                    // a corrupted one — when the body arrived fully buffered
-                    // (typical for small responses), one bad payload silently
-                    // discarded the whole valid tail (iter-754 regression:
-                    // chat_streaming_counts_corrupted_sse_payloads_as_dropped).
-                    // Each iteration either returns an event or drains ≥1
-                    // event, so the buffer strictly shrinks and this
-                    // terminates.
-                    loop {
-                        let mut dropped_tail = 0u32;
-                        let final_event =
-                            try_parse_next_sse_event(&mut this.buffer, true, &mut dropped_tail);
-                        if dropped_tail > 0 {
-                            this.dropped.fetch_add(
-                                dropped_tail as usize,
-                                std::sync::atomic::Ordering::Relaxed,
-                            );
-                        }
-                        if let Some(event) = final_event {
-                            return Poll::Ready(Some(event));
-                        }
-                        if this.buffer.trim().is_empty() {
-                            return Poll::Ready(None);
-                        }
-                    }
+                    return Poll::Ready(try_parse_next_sse_event(&mut this.buffer, true));
                 }
                 Poll::Pending => return Poll::Pending,
             }
@@ -1415,7 +1349,6 @@ fn classify_sse_error(payload: &str) -> Option<Error> {
 fn try_parse_next_sse_event(
     buffer: &mut String,
     allow_partial: bool,
-    dropped: &mut u32,
 ) -> Option<crate::error::Result<ChatStreamEvent>> {
     normalize_sse_buffer(buffer);
 
@@ -1465,59 +1398,7 @@ fn try_parse_next_sse_event(
                 }
             }
             debug!(error = %e, payload = %payload, "Failed to parse SSE event");
-            // Reasoning-alias collision salvage (observed live 2026-10-10):
-            // some reasoning upstreams emit SEVERAL aliases of the same
-            // reasoning field in ONE delta — omp/poolside-laguna sends
-            // `reasoning` + `reasoning_details` + `reasoning_content`
-            // together. Our alias set makes serde treat two of those as
-            // the same field → "duplicate field" hard error → the whole
-            // chunk (content included) used to drop silently. Rebuild the
-            // delta keeping only the preferred alias, then re-parse.
-            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(payload.trim()) {
-                salvage_reasoning_alias_collision(&mut v);
-                if let Ok(event) = serde_json::from_value::<ChatStreamEvent>(v) {
-                    return Some(Ok(event));
-                }
-            }
-            *dropped += 1;
             None
-        }
-    }
-}
-
-/// Remove alias-colliding reasoning keys from every choice delta so the
-/// strict `StreamingMessageDelta` deserializer sees at most one of them.
-/// Preference order: `reasoning_content` > `reasoning` > `reasoning_context`.
-/// `reasoning_details` (OpenAI's structured form) is dropped — the plain
-/// alias carries the same text in every observed wire shape.
-fn salvage_reasoning_alias_collision(v: &mut serde_json::Value) {
-    let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut()) else {
-        return;
-    };
-    for choice in choices.iter_mut() {
-        let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) else {
-            continue;
-        };
-        let has_preferred = delta
-            .get("reasoning_content")
-            .is_some_and(|rc| !rc.is_null());
-        let has_reasoning = delta.get("reasoning").is_some_and(|r| !r.is_null());
-        let has_context = delta.get("reasoning_context").is_some_and(|r| !r.is_null());
-        if has_preferred {
-            delta.remove("reasoning");
-            delta.remove("reasoning_context");
-            delta.remove("reasoning_details");
-        } else if has_reasoning || has_context {
-            // Keep whichever survives as `reasoning_content` — the field's
-            // canonical name — so downstream sees one spelling.
-            let kept = delta
-                .remove("reasoning")
-                .or_else(|| delta.remove("reasoning_context"))
-                .filter(|r| !r.is_null());
-            if let Some(kept) = kept {
-                delta.insert("reasoning_content".to_string(), kept);
-            }
-            delta.remove("reasoning_details");
         }
     }
 }
@@ -1661,7 +1542,7 @@ mod tests {
     #[test]
     fn streaming_parser_handles_crlf_events() {
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\r\n\r\n".to_string();
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let event = try_parse_next_sse_event(&mut buffer, false)
             .expect("event should parse")
             .expect("event should not be an error");
 
@@ -1673,7 +1554,7 @@ mod tests {
     #[test]
     fn streaming_parser_handles_partial_final_event() {
         let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}".to_string();
-        let event = try_parse_next_sse_event(&mut buffer, true, &mut 0)
+        let event = try_parse_next_sse_event(&mut buffer, true)
             .expect("trailing event should parse")
             .expect("event should not be an error");
 
@@ -1763,272 +1644,6 @@ mod tests {
             "SSE content should be consumed after the retry"
         );
         server.abort();
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn chat_streaming_yields_every_duplicated_content_delta() {
-        // 2026-10-10 forced-repro follow-up (iter-752): a gateway that
-        // double-emits SSE events must NOT lose the turn. The parser-level
-        // contract: every parseable data event is yielded, so duplicated
-        // deltas append (faithful, doubled text) rather than dying silently
-        // somewhere downstream. If this test fails, the drop is HERE.
-        use futures::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                let event = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}
-
-";
-                let body = format!(
-                    "{event}{event}data: [DONE]
-"
-                );
-                let response = format!(
-                    "HTTP/1.1 200 OK
-Content-Type: text/event-stream
-Content-Length: {}
-Connection: close
-
-{}",
-                    body.len(),
-                    body
-                );
-                let _ = sock.write_all(response.as_bytes()).await;
-                let _ = sock.shutdown().await;
-            }
-        });
-
-        let config = ClientConfig {
-            base_url: format!("http://{addr}"),
-            api_key: Some("test-key".into()),
-            timeout: Duration::from_secs(10),
-            max_context_length: 8000,
-            rate_limit: crate::config::RateLimitSettings {
-                max_retries: 2,
-                base_delay_secs: 0,
-                max_delay_secs: 1,
-                bucket_capacity: 100,
-                bucket_refill_rate: 100.0,
-            },
-            prompt_cache_ttl: Default::default(),
-        };
-        let client = OpenAIClient::new(config);
-        let mut stream = client
-            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
-            .await
-            .expect("stream should connect");
-
-        let mut got = String::new();
-        let mut events = 0usize;
-        while let Some(chunk) = stream.next().await {
-            if let Ok(event) = chunk
-                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
-            {
-                events += 1;
-                got.push_str(&content);
-            }
-        }
-        server.abort();
-        assert_eq!(events, 2, "both duplicated deltas must be yielded");
-        assert_eq!(got, "HelloHello", "duplicated deltas append, never drop");
-    }
-
-    #[test]
-    fn sse_reasoning_alias_collision_salvages_chunk() {
-        // iter-758: omp/poolside-laguna sends `reasoning` +
-        // `reasoning_details` + `reasoning_content` in ONE delta. The alias
-        // set on StreamingMessageDelta makes serde treat that as a
-        // duplicate field — a hard error that used to silently drop the
-        // whole chunk (content included). The salvage keeps the preferred
-        // alias and re-parses.
-        let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"The\",\"reasoning\":\"R\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"R\"}],\"reasoning_content\":\"R\"},\"finish_reason\":null}]}\n\n".to_string();
-        let mut dropped = 0u32;
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped)
-            .expect("salvaged event should parse")
-            .expect("should not be an error envelope");
-        assert_eq!(dropped, 0, "collision must not count as a drop");
-        let delta = &event.choices[0].delta;
-        assert_eq!(delta.content.as_deref(), Some("The"));
-        assert_eq!(delta.reasoning_content.as_deref(), Some("R"));
-    }
-
-    #[test]
-    fn sse_reasoning_alias_collision_keeps_reasoning_when_preferred_absent() {
-        // Some providers send only `reasoning` (no `reasoning_content`) —
-        // that must keep flowing through the salvage path too.
-        let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\",\"reasoning\":\"thinking\"},\"finish_reason\":null}]}\n\n".to_string();
-        let mut dropped = 0u32;
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped)
-            .expect("event should parse")
-            .expect("not an error envelope");
-        assert_eq!(dropped, 0);
-        assert_eq!(
-            event.choices[0].delta.reasoning_content.as_deref(),
-            Some("thinking")
-        );
-    }
-
-    #[tokio::test]
-    async fn chat_streaming_survives_utf8_char_split_across_chunks() {
-        // iter-755: a multibyte char split across byte-chunk boundaries used
-        // to make `String::from_utf8(chunk)` fail and silently DROP the
-        // chunk — corrupting the SSE framing and losing content. Incremental
-        // decode holds the partial tail until the next chunk completes it.
-        use futures::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        // "नमस्ते" — multibyte Devanagari; split mid-char between writes.
-        let payload = "नमस्ते";
-        let bytes = payload.as_bytes();
-        let split = 6; // inside a multibyte sequence
-        let ev = format!(
-            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{}\"}},\"finish_reason\":null}}]}}\n\n",
-            payload
-        );
-        let ev_bytes = ev.as_bytes();
-        // Owned so the spawned server closure can capture them ('static).
-        let head: Vec<u8> = ev_bytes[..split].to_vec();
-        let tail: Vec<u8> = ev_bytes[split..].to_vec();
-        let _ = bytes;
-
-        let server = tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                let body_len = head.len() + tail.len() + "data: [DONE]\n\n".len();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-                );
-                let _ = sock.write_all(response.as_bytes()).await;
-                let write_chunk = |data: &[u8]| format!("{:x}\r\n", data.len());
-                let _ = sock.write_all(write_chunk(&head).as_bytes()).await;
-                let _ = sock.write_all(&head).await;
-                let _ = sock.write_all(b"\r\n").await;
-                // small delay so reqwest yields `head` as its own chunk
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                let rest = format!("data: [DONE]\n\n");
-                let mut all = tail.clone();
-                all.extend_from_slice(rest.as_bytes());
-                let _ = sock.write_all(write_chunk(&all).as_bytes()).await;
-                let _ = sock.write_all(&all).await;
-                let _ = sock.write_all(b"\r\n0\r\n\r\n").await;
-                let _ = body_len;
-                let _ = sock.shutdown().await;
-            }
-        });
-
-        let config = ClientConfig {
-            base_url: format!("http://{addr}"),
-            api_key: Some("test-key".into()),
-            timeout: Duration::from_secs(10),
-            max_context_length: 8000,
-            rate_limit: crate::config::RateLimitSettings {
-                max_retries: 1,
-                base_delay_secs: 0,
-                max_delay_secs: 1,
-                bucket_capacity: 100,
-                bucket_refill_rate: 100.0,
-            },
-            prompt_cache_ttl: Default::default(),
-        };
-        let client = OpenAIClient::new(config);
-        let mut stream = client
-            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
-            .await
-            .expect("stream should connect");
-        let dropped = stream.dropped_counter();
-
-        let mut got = String::new();
-        while let Some(chunk) = stream.next().await {
-            if let Ok(event) = chunk
-                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
-            {
-                got.push_str(&content);
-            }
-        }
-        server.abort();
-        assert_eq!(got, "नमस्ते", "split multibyte char must reassemble");
-        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 0);
-    }
-
-    #[tokio::test]
-    async fn chat_streaming_counts_corrupted_sse_payloads_as_dropped() {
-        // iter-754: corrupted SSE framing (merged data lines — exactly what a
-        // naive line-level replay/doubler hop produces) must not vanish
-        // silently. The parser drops the unparseable payload; the drop must
-        // be COUNTED so the agent can surface StreamCorrupted instead of the
-        // user seeing a truncated turn with no explanation (observed live:
-        // empty Done turns with zero signal).
-        use futures::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let mut buf = [0u8; 4096];
-                let _ = sock.read(&mut buf).await;
-                // Two CORRUPTED events (truncated JSON — what a naive
-                // line-level replay hop emits), then a valid content event,
-                // then DONE. Both corrupt payloads must be counted as
-                // dropped; the valid one must still yield.
-                let body = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[]}\"created\":0}\"model\":\"demo\"}\n\ndata: {\"id\":\"2\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[]}\"created\":0}\n\ndata: {\"id\":\"3\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = sock.write_all(response.as_bytes()).await;
-                let _ = sock.shutdown().await;
-            }
-        });
-
-        let config = ClientConfig {
-            base_url: format!("http://{addr}"),
-            api_key: Some("test-key".into()),
-            timeout: Duration::from_secs(10),
-            max_context_length: 8000,
-            rate_limit: crate::config::RateLimitSettings {
-                max_retries: 1,
-                base_delay_secs: 0,
-                max_delay_secs: 1,
-                bucket_capacity: 100,
-                bucket_refill_rate: 100.0,
-            },
-            prompt_cache_ttl: Default::default(),
-        };
-        let client = OpenAIClient::new(config);
-        let mut stream = client
-            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
-            .await
-            .expect("stream should connect");
-        let dropped = stream.dropped_counter();
-
-        let mut got = String::new();
-        while let Some(chunk) = stream.next().await {
-            if let Ok(event) = chunk
-                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
-            {
-                got.push_str(&content);
-            }
-        }
-        server.abort();
-        assert_eq!(got, "Ok", "valid events still yield");
-        assert_eq!(
-            dropped.load(std::sync::atomic::Ordering::Relaxed),
-            2,
-            "both corrupted payloads counted as dropped"
-        );
     }
 
     // --- bounded error-body read tests (R3) ---
@@ -2281,7 +1896,7 @@ Connection: close
 
 "#,
         );
-        let event = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let event = try_parse_next_sse_event(&mut buffer, false)
             .expect("null-name delta must parse into an SSE event")
             .expect("event should not be an error");
         let deltas = &event.choices[0].delta.tool_calls;
@@ -2307,7 +1922,7 @@ Connection: close
         let mut buffer = String::from(
             "data: {\"error\":{\"message\":\"rate limit reached\",\"type\":\"rate_limit_error\",\"status\":429}}\n\n",
         );
-        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let parsed = try_parse_next_sse_event(&mut buffer, false)
             .expect("error event must surface, not be dropped");
         let err = parsed.expect_err("must be a classified error");
         assert!(
@@ -2322,7 +1937,7 @@ Connection: close
         let mut buffer = String::from(
             "data: {\"error\":{\"message\":\"invalid api key\",\"type\":\"invalid_api_key\",\"status\":401}}\n\n",
         );
-        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let parsed = try_parse_next_sse_event(&mut buffer, false)
             .expect("error event must surface, not be dropped");
         let err = parsed.expect_err("must be a classified error");
         assert!(
@@ -2336,7 +1951,7 @@ Connection: close
         let mut buffer = String::from(
             "data: {\"error\":{\"message\":\"This model's maximum context length is 128000 tokens\",\"type\":\"context_length_exceeded\",\"code\":\"context_length_exceeded\",\"status\":413}}\n\n",
         );
-        let parsed = try_parse_next_sse_event(&mut buffer, false, &mut 0)
+        let parsed = try_parse_next_sse_event(&mut buffer, false)
             .expect("error event must surface, not be dropped");
         let err = parsed.expect_err("must be a classified error");
         assert!(
@@ -2351,7 +1966,7 @@ Connection: close
         // must still be skipped (not surfaced as a bogus Provider error).
         let mut buffer = String::from("data: {\"unexpected\":true}\n\n");
         assert!(
-            try_parse_next_sse_event(&mut buffer, false, &mut 0).is_none(),
+            try_parse_next_sse_event(&mut buffer, false).is_none(),
             "non-envelope JSON must be dropped silently"
         );
     }

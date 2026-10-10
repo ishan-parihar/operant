@@ -1,22 +1,22 @@
 
 
-
-           Settings — Operant                           Esc to close
-           Type to search settings...
  operant
- operant     ► Max Tokens                              0
- /model        Auto-compact                            false
- v0.2.1        Desktop notifications                   false
- /login        Show turn duration                      false
- ● anthr       Output Style                            default
+ operant   Settings — Operant                           Esc to close
+ /model    Type to search settings...
+ v0.2.1
+ /login      ► Max Tokens                              0
+ ○ anthr       Auto-compact                            false
+ ○ openr       Desktop notifications                   false
+ ○ opena       Show turn duration                      false
+ ○ curso       Output Style                            default
+ ○ copil
+ ○ gemin   Maximum tokens per response.
+ ○ antig
  ~
-           Maximum tokens per response.
+
 
 1>
                                                                          Capture
-
-
-
 
                    ↑↓ navigate   Enter toggle/edit   Esc close
 

@@ -8,23 +8,23 @@
 
 
 
-
-                          Context & usage                                        Esc to close
-                          Token window, rate limits, and session cost.
- operant · replay         Context window
- operant                  [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
- /model to switch · Offl
- v0.2.1                   Rate limits
- /login to add provider   5-hour   no data
- ● anthropic(key)         7-day    no data
+ operant · replay
+ operant                  Context & usage                                        Esc to close
+ /model to switch · Offl  Token window, rate limits, and session cost.
+ v0.2.1                   Context window
+ /login to add provider   [░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  0%  (0 / 200.0k)
+ ○ anthropic
+ ○ openrouter             Rate limits
+ ○ openai                 5-hour   no data
+ ○ cursor                 7-day    no data
+ ○ copilot
+ ○ gemini                 Session cost:  $0.0000
+ ○ antigravity
  ~
-                          Session cost:  $0.0000
+
 
 1>
                                                                                                  API key Offline Capture
-
-
-
 
                           enter/esc close
 

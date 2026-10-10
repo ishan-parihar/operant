@@ -23,11 +23,6 @@ struct Inner {
     started_at: Instant,
     frame_count: AtomicU64,
     last_render_ms: AtomicU64,
-    // Live scroll geometry, noted per frame from the render call site so the
-    // F12 overlay can show the numbers the scroll resolve actually used
-    // (2026-10-09 P4-1: the dead-ladder audit needed these live).
-    scroll_offset: AtomicU64,
-    auto_paused: AtomicBool,
     /// `App::redraw_reason()`'s answer for the most recent frame. Kept out of
     /// the event bus deliberately: the bus is off unless `OPERANT_TUI_DEBUG=1`,
     /// but the overlay must show the reason in a normal run, the same way
@@ -64,8 +59,6 @@ impl TuiDebugHub {
                 started_at: Instant::now(),
                 frame_count: AtomicU64::new(0),
                 last_render_ms: AtomicU64::new(0),
-                scroll_offset: AtomicU64::new(0),
-                auto_paused: AtomicBool::new(false),
                 last_redraw_reason: Mutex::new(None),
                 last_error: Mutex::new(None),
                 overlay_visible: AtomicBool::new(false),
@@ -198,21 +191,6 @@ impl TuiDebugHub {
 
     pub fn uptime_secs(&self) -> f64 {
         self.inner.started_at.elapsed().as_secs_f64()
-    }
-
-    pub fn note_scroll(&self, offset: usize, paused: bool) {
-        self.inner
-            .scroll_offset
-            .store(offset as u64, Ordering::Relaxed);
-        self.inner.auto_paused.store(paused, Ordering::Relaxed);
-    }
-
-    pub fn scroll_offset(&self) -> usize {
-        self.inner.scroll_offset.load(Ordering::Relaxed) as usize
-    }
-
-    pub fn auto_paused(&self) -> bool {
-        self.inner.auto_paused.load(Ordering::Relaxed)
     }
 
     // ── Error tracking ───────────────────────────────────────────────
