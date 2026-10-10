@@ -1465,8 +1465,59 @@ fn try_parse_next_sse_event(
                 }
             }
             debug!(error = %e, payload = %payload, "Failed to parse SSE event");
+            // Reasoning-alias collision salvage (observed live 2026-10-10):
+            // some reasoning upstreams emit SEVERAL aliases of the same
+            // reasoning field in ONE delta — omp/poolside-laguna sends
+            // `reasoning` + `reasoning_details` + `reasoning_content`
+            // together. Our alias set makes serde treat two of those as
+            // the same field → "duplicate field" hard error → the whole
+            // chunk (content included) used to drop silently. Rebuild the
+            // delta keeping only the preferred alias, then re-parse.
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(payload.trim()) {
+                salvage_reasoning_alias_collision(&mut v);
+                if let Ok(event) = serde_json::from_value::<ChatStreamEvent>(v) {
+                    return Some(Ok(event));
+                }
+            }
             *dropped += 1;
             None
+        }
+    }
+}
+
+/// Remove alias-colliding reasoning keys from every choice delta so the
+/// strict `StreamingMessageDelta` deserializer sees at most one of them.
+/// Preference order: `reasoning_content` > `reasoning` > `reasoning_context`.
+/// `reasoning_details` (OpenAI's structured form) is dropped — the plain
+/// alias carries the same text in every observed wire shape.
+fn salvage_reasoning_alias_collision(v: &mut serde_json::Value) {
+    let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut()) else {
+        return;
+    };
+    for choice in choices.iter_mut() {
+        let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) else {
+            continue;
+        };
+        let has_preferred = delta
+            .get("reasoning_content")
+            .is_some_and(|rc| !rc.is_null());
+        let has_reasoning = delta.get("reasoning").is_some_and(|r| !r.is_null());
+        let has_context = delta.get("reasoning_context").is_some_and(|r| !r.is_null());
+        if has_preferred {
+            delta.remove("reasoning");
+            delta.remove("reasoning_context");
+            delta.remove("reasoning_details");
+        } else if has_reasoning || has_context {
+            // Keep whichever survives as `reasoning_content` — the field's
+            // canonical name — so downstream sees one spelling.
+            let kept = delta
+                .remove("reasoning")
+                .or_else(|| delta.remove("reasoning_context"))
+                .filter(|r| !r.is_null());
+            if let Some(kept) = kept {
+                delta.insert("reasoning_content".to_string(), kept);
+            }
+            delta.remove("reasoning_details");
         }
     }
 }
@@ -1784,6 +1835,41 @@ Connection: close
         server.abort();
         assert_eq!(events, 2, "both duplicated deltas must be yielded");
         assert_eq!(got, "HelloHello", "duplicated deltas append, never drop");
+    }
+
+    #[test]
+    fn sse_reasoning_alias_collision_salvages_chunk() {
+        // iter-758: omp/poolside-laguna sends `reasoning` +
+        // `reasoning_details` + `reasoning_content` in ONE delta. The alias
+        // set on StreamingMessageDelta makes serde treat that as a
+        // duplicate field — a hard error that used to silently drop the
+        // whole chunk (content included). The salvage keeps the preferred
+        // alias and re-parses.
+        let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"The\",\"reasoning\":\"R\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"R\"}],\"reasoning_content\":\"R\"},\"finish_reason\":null}]}\n\n".to_string();
+        let mut dropped = 0u32;
+        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped)
+            .expect("salvaged event should parse")
+            .expect("should not be an error envelope");
+        assert_eq!(dropped, 0, "collision must not count as a drop");
+        let delta = &event.choices[0].delta;
+        assert_eq!(delta.content.as_deref(), Some("The"));
+        assert_eq!(delta.reasoning_content.as_deref(), Some("R"));
+    }
+
+    #[test]
+    fn sse_reasoning_alias_collision_keeps_reasoning_when_preferred_absent() {
+        // Some providers send only `reasoning` (no `reasoning_content`) —
+        // that must keep flowing through the salvage path too.
+        let mut buffer = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\",\"reasoning\":\"thinking\"},\"finish_reason\":null}]}\n\n".to_string();
+        let mut dropped = 0u32;
+        let event = try_parse_next_sse_event(&mut buffer, false, &mut dropped)
+            .expect("event should parse")
+            .expect("not an error envelope");
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            event.choices[0].delta.reasoning_content.as_deref(),
+            Some("thinking")
+        );
     }
 
     #[tokio::test]

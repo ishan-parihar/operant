@@ -543,6 +543,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-758 — reasoning-alias collision salvage: the "missing output"
+  mystery closed for real.** Live diagnosis (file-level capture of dropped
+  SSE payloads) found omp/poolside-laguna emits OpenAI's full reasoning
+  triad — `reasoning` + `reasoning_details` + `reasoning_content` — in ONE
+  delta. Our `StreamingMessageDelta` aliases all three spellings to one
+  field, so serde hit "duplicate field" — a HARD error that silently
+  dropped every reasoning-bearing chunk (content included) since forever.
+  That is what iter-754's drop counter surfaced (the 109/379 warnings were
+  real corruptions: ours, not the provider's framing). The salvage path
+  rebuilds the delta keeping the preferred alias and re-parses; regression
+  tests pin both collision shapes. Live-verified against omp: ZERO drops,
+  and laguna's reasoning traces now RENDER in the TUI — omp does emit a
+  reasoning channel; we had been discarding it.
+
+
 - **iter-757 — anthropic adapter compiles again (iter-754 follow-up).**
   The two `StreamChunk` literals in `parse_sse_event` were missed when
   `dropped_events` was added — invisible to every standard gate because
