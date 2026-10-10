@@ -543,6 +543,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-749 — P4-4: thinking display on by default, `/thinking-display`
+  toggles it — jcode parity.** The vendored tree already had the full
+  reasoning-trace renderer and the shim already resolved
+  `ReasoningDisplayMode::Full` from jcode's `show_thinking = true` default;
+  what was missing was the runtime gate and the command. Added
+  `App.thinking_display_on` (initialized from the shim's
+  `display.show_thinking`, default ON), a `TuiState::show_thinking()`
+  accessor, a gate on the reasoning-row preparation in `ui_prepare` (hidden
+  traces still exist as display messages — history is not rewritten, they
+  just prepare zero rows), and `/thinking-display <off|full|current>` (the
+  vendored tree implements one trace mode, so full and current alias;
+  jcode's muscle-memory words are kept). Unit regression:
+  thinking_display_defaults_on_and_the_command_toggles_it. Reminder from
+  the audit: the configured kilo gateway emits NO reasoning channel under
+  any request dialect (4 raw SSE probes), so visible thinking also needs a
+  reasoning-forwarding endpoint — the render side now renders whatever
+  arrives, by default.
+
 - **iter-746 — P4-3: the todo list is a live surface.** The audit's
   "half-assed implementation" verdict, closed: the tool, the renderers, the
   types and the `/todos` registration all existed, but the event carried

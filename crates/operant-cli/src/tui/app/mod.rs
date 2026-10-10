@@ -216,6 +216,11 @@ pub struct App {
     pub todos_card_payload: String,
     /// /todos toggle: hide the pinned todo card band.
     pub todos_band_hidden: bool,
+    /// Runtime thinking-trace display flag (default from the shim's
+    /// display.show_thinking; /thinking-display toggles). Hidden traces
+    /// still exist as display messages — history is not rewritten, the
+    /// reasoning rows just prepare zero lines.
+    pub thinking_display_on: bool,
     /// Count of messages that arrived while the user was scrolled up.
     pub new_messages_while_scrolled: usize,
 

@@ -1277,6 +1277,33 @@ fn todo_tool_result_populates_the_live_store_and_todos_command_toggles_the_band(
 }
 
 #[test]
+fn thinking_display_defaults_on_and_the_command_toggles_it() {
+    // P4-4 (2026-10-09 v2 outline): jcode parity — thinking renders by
+    // default (default_file.rs:175 show_thinking = true) and
+    // /thinking-display toggles the trace surfaces off and back on.
+    let mut app = make_app();
+    assert!(
+        app.thinking_display_on,
+        "thinking display must default on (jcode parity)"
+    );
+    assert!(app.handle_tui_command("thinking-display", "off"));
+    assert!(
+        !app.thinking_display_on,
+        "/thinking-display off must hide traces"
+    );
+    assert!(app.handle_tui_command("thinking-display", "full"));
+    assert!(
+        app.thinking_display_on,
+        "/thinking-display full must show traces"
+    );
+    assert!(app.handle_tui_command("thinking-display", "current"));
+    assert!(
+        app.thinking_display_on,
+        "current is the same vendored trace mode as full"
+    );
+}
+
+#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));

@@ -298,6 +298,11 @@ pub trait TuiState {
     fn connected_clients(&self) -> Option<usize>;
     /// Short-lived notice shown in the status line (e.g., model switch, toggle diff)
     fn status_notice(&self) -> Option<String>;
+    /// Whether thinking/reasoning traces render (jcode display.show_thinking,
+    /// toggled by /thinking-display; default on).
+    fn show_thinking(&self) -> bool {
+        true
+    }
     /// How long since the user last pressed a key, scrolled, or pasted, or
     /// `None` when they have not interacted yet.
     ///
@@ -604,10 +609,10 @@ pub trait TuiState {
         }
         false
     }
-// [port-excised 2026-10-09] the OnboardingWelcomeKind enum, LoginImportPrompt,
-// ImportSummaryPill, TelemetryChoice, and LoginImportRow stratum: they fed only
-// the never-vendored welcome-takeover gate in the ported draw (see the excision
-// note above the trait). Nothing else in the workspace referenced them.
+    // [port-excised 2026-10-09] the OnboardingWelcomeKind enum, LoginImportPrompt,
+    // ImportSummaryPill, TelemetryChoice, and LoginImportRow stratum: they fed only
+    // the never-vendored welcome-takeover gate in the ported draw (see the excision
+    // note above the trait). Nothing else in the workspace referenced them.
 }
 
 pub(crate) fn is_ssh_remote() -> bool {

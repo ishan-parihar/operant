@@ -538,6 +538,10 @@ impl TuiState for App {
         self.status_message.clone()
     }
 
+    fn show_thinking(&self) -> bool {
+        self.thinking_display_on
+    }
+
     fn time_since_user_interaction(&self) -> Option<Duration> {
         App::since(self.last_activity)
     }

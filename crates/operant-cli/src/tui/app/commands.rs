@@ -1190,6 +1190,31 @@ impl App {
             // P4-3 (2026-10-09 v2 outline): the band itself is live — the
             // list arrives from the todo tool's results; /todos only chooses
             // whether the pinned card is shown.
+            // P4-4 (2026-10-09 v2 outline): jcode's /thinking-display
+            // (off|full|current). The vendored tree implements one trace
+            // mode, so `full` and `current` both show it; the words stay so
+            // the muscle memory ports.
+            "thinking-display" => {
+                let mode = args.trim();
+                match mode {
+                    "off" => self.thinking_display_on = false,
+                    "full" | "current" | "on" => self.thinking_display_on = true,
+                    "" => {}
+                    other => {
+                        self.status_message = Some(format!(
+                            "Unknown thinking-display mode '{other}' — use off|full|current"
+                        ));
+                        return true;
+                    }
+                }
+                self.status_message = Some(match (self.thinking_display_on, mode) {
+                    (true, "") => "Thinking display: on (full/current)".to_string(),
+                    (true, _) => "Thinking display: on".to_string(),
+                    (false, _) => "Thinking display: off".to_string(),
+                });
+                self.invalidate_transcript();
+                true
+            }
             "todos" | "todo" => {
                 self.todos_band_hidden = !self.todos_band_hidden;
                 self.status_message = Some(if self.todos_band_hidden {

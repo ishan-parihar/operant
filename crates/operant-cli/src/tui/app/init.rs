@@ -126,6 +126,9 @@ impl App {
             todos: Vec::new(),
             todos_card_payload: String::new(),
             todos_band_hidden: false,
+            thinking_display_on: crate::tui::operant_app::config_shim::config()
+                .display
+                .show_thinking,
             new_messages_while_scrolled: 0,
             token_warning_threshold_shown: 0,
             session_start: std::time::Instant::now(),
