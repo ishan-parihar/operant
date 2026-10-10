@@ -1646,6 +1646,78 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chat_streaming_yields_every_duplicated_content_delta() {
+        // 2026-10-10 forced-repro follow-up (iter-752): a gateway that
+        // double-emits SSE events must NOT lose the turn. The parser-level
+        // contract: every parseable data event is yielded, so duplicated
+        // deltas append (faithful, doubled text) rather than dying silently
+        // somewhere downstream. If this test fails, the drop is HERE.
+        use futures::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let event = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}
+
+";
+                let body = format!(
+                    "{event}{event}data: [DONE]
+"
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Content-Length: {}
+Connection: close
+
+{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        let config = ClientConfig {
+            base_url: format!("http://{addr}"),
+            api_key: Some("test-key".into()),
+            timeout: Duration::from_secs(10),
+            max_context_length: 8000,
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 2,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+            prompt_cache_ttl: Default::default(),
+        };
+        let client = OpenAIClient::new(config);
+        let mut stream = client
+            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("stream should connect");
+
+        let mut got = String::new();
+        let mut events = 0usize;
+        while let Some(chunk) = stream.next().await {
+            if let Ok(event) = chunk
+                && let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone())
+            {
+                events += 1;
+                got.push_str(&content);
+            }
+        }
+        server.abort();
+        assert_eq!(events, 2, "both duplicated deltas must be yielded");
+        assert_eq!(got, "HelloHello", "duplicated deltas append, never drop");
+    }
+
     // --- bounded error-body read tests (R3) ---
 
     #[tokio::test]
