@@ -80,6 +80,11 @@ pub struct StreamChunk {
     /// request a continuation instead of treating a cut-off answer as final
     /// (round-4 T1, hermes `_should_treat_stop_as_truncated` parity).
     pub finish_reason: Option<String>,
+    /// Count of SSE payloads this stream DROPPED because they failed to
+    /// parse (corrupted framing). Present only on the stream's synthetic
+    /// terminal chunk (emitted by the openai adapter after the source ends)
+    /// and only when at least one payload was dropped.
+    pub dropped_events: Option<u32>,
 }
 
 impl StreamChunk {
@@ -95,6 +100,7 @@ impl StreamChunk {
             extra_content: None,
             usage: None,
             finish_reason: None,
+            dropped_events: None,
         }
     }
 }

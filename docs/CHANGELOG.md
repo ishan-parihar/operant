@@ -543,6 +543,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-754 — corrupted-SSE drop surfacing + a real parser tail bug
+  fixed.** The duplication investigation's final answer: the parser
+  NEVER ate event-duplicated deltas (proven live: a doubled
+  keepalive+content+finish stream renders "perspersimimmonmon" — every
+  delta faithfully appended, zero drops). What it DID eat silently:
+  payloads with corrupted SSE framing (merged data lines / concatenated
+  JSON — what a naive line-level replay hop emits). Two fixes: (1)
+  `ChatStreamResponse` now COUNTS unparseable payloads; the openai
+  adapter chains a terminal `StreamChunk{dropped_events}` after the
+  source ends; `process_stream` emits ONE `AgentEvent::StreamCorrupted`
+  (only when drops>0); the TUI surfaces "⚠ N corrupted stream event(s)
+  dropped by the provider — output may be truncated". Live-proven via a
+  line-doubling corrupter proxy against real omp: `StreamCorrupted
+  {dropped_events: 2}` in the event dump, content intact. (2) REAL BUG:
+  the stream-end branch parsed only ONE remaining buffered event — with
+  the body fully buffered (typical), one corrupted payload silently
+  discarded the ENTIRE valid tail (regression test:
+  `chat_streaming_counts_corrupted_sse_payloads_as_dropped` — valid
+  events after corrupted ones now yield; before the fix the valid tail
+  was lost). Empty turns keep iter-752's status message.
+
 - **iter-753 — P5-1: terminal-scrollback mode exists — the TUI can run in
   the main buffer.** New `tui.terminal_scroll_mode` (default OFF; documented
   in operant.example.toml): when enabled, `TuiApp::enter` skips the

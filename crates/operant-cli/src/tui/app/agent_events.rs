@@ -421,6 +421,21 @@ impl App {
                 self.push_notification(NotificationKind::Warning, msg, None);
             }
 
+            AgentEvent::StreamCorrupted { dropped_events } => {
+                // iter-754: the provider's SSE framing was corrupted and the
+                // parser dropped unparseable payloads — the rendered turn may
+                // be truncated or look interleaved. Surface WHY so the
+                // corruption is attributed to the wire, not the agent.
+                self.turn_state = TurnState::WaitingForNetwork;
+                self.push_notification(
+                    NotificationKind::Warning,
+                    format!(
+                        "⚠ {dropped_events} corrupted stream event(s) dropped by the provider — output may be truncated"
+                    ),
+                    None,
+                );
+            }
+
             AgentEvent::Cost {
                 cost_usd,
                 input_tokens,
