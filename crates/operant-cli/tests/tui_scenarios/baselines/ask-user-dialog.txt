@@ -21,7 +21,7 @@
                                │                                                        │
  1› Which database should I poi│  type to fill custom answer…                           │                              │
                                │                                                        │
-                               │  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
+Empty reply — the provider stre│  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
 2>                             │                                                        │
                                │                                                        │▱▱▱▱ 0% API key Offline Capture
                                └────────────────────────────────────────────Esc to close┘

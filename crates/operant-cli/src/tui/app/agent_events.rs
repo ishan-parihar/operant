@@ -298,6 +298,7 @@ impl App {
                 // If we have streamed content, flush it normally. If not,
                 // use Done.message as the source of truth (fixes the
                 // dropped-message bug for non-streaming paths).
+                let before = self.messages.len();
                 if self.streaming_text.trim().is_empty()
                     && self.streaming_thinking.trim().is_empty()
                     && !message.content.is_empty()
@@ -321,6 +322,24 @@ impl App {
                     self.on_new_message();
                 } else {
                     self.flush_streamed_assistant_message();
+                }
+                // 2026-10-10 forced-repro finding: a corrupted provider
+                // stream (SSE events the parser must drop) ends the turn
+                // with NO text and NO tool rows — an empty reply that used
+                // to fail silently, which read as "the TUI ate my message".
+                // Surface it so the user knows to retry rather than stare
+                // at a blank transcript.
+                // `before` unchanged means neither branch pushed a message —
+                // tool rows are session-lifetime state, so they say nothing
+                // about THIS turn and must not gate the notice.
+                let turn_gained_nothing =
+                    self.messages.len() == before && self.streaming_text.trim().is_empty();
+                if turn_gained_nothing {
+                    self.status_message = Some(
+                        "Empty reply — the provider stream may be corrupted; \
+                         retry or switch model"
+                            .to_string(),
+                    );
                 }
                 // Mark any remaining pending (queued OR running) blocks as
                 // Done — they completed but the ToolComplete event either

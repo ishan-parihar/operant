@@ -543,6 +543,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-752 — a corrupted provider stream no longer ends the turn
+  silently.** Forced-repro findings (double-emitting SSE proxy against the
+  real omp omniroute gateway): the live chat provider is omp
+  (localhost:20129, OPENAI_BASE_URL env precedence — the earlier kilo
+  attribution and its "no reasoning channel" probes are RETRACTED, they
+  were 401s misread as clean streams), and a doubled-delta stream kills
+  the turn INSIDE the agent — Done{content: ""} with zero Content events
+  (event-dump proven), an empty assistant row persisted, and the TUI
+  rendered nothing at all. The Done arm now surfaces it: a turn that ends
+  with no message and no text sets the status notice "Empty reply — the
+  provider stream may be corrupted; retry or switch model" instead of
+  failing blank. The deeper fix (where the doubled deltas die in the
+  agent's stream pipeline before becoming Content events) is recorded as
+  the next core-side investigation. Unit regression:
+  an_empty_done_turn_surfaces_a_corrupted_stream_notice. The three
+  dialog goldens whose harness scripts terminate with done{text:""}
+  re-shape intentionally (the notice strip now appears). Corpus delta:
+  zero beyond those (4 pre-existing journey/skills drifts reproduce at
+  origin/main without this change).
+
 - **iter-751 — docs: P5 terminal-scrollback design + the duplication
   investigation record.** The owner re-stated the requirement as native
   terminal scrollback (select-and-copy across a long conversation), which

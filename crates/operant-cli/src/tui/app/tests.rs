@@ -1332,6 +1332,27 @@ fn cls_clears_the_view_only_and_the_alias_tier_routes() {
 }
 
 #[test]
+fn an_empty_done_turn_surfaces_a_corrupted_stream_notice() {
+    // 2026-10-10 forced-repro finding: a corrupted provider stream ends the
+    // turn with Done{content: ""} and ZERO Content events — the reply fails
+    // silently and the user stares at a blank transcript. The Done arm must
+    // surface it (status message) so the user knows to retry.
+    let mut app = make_app();
+    app.begin_turn();
+    app.is_streaming = true;
+    app.handle_agent_event(AgentEvent::Done {
+        message: operant_core::Message::assistant(String::new()),
+        reason: operant_core::agent::TurnExitReason::TextResponse,
+    });
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Empty reply — the provider stream may be corrupted; retry or switch model"),
+        "an empty Done turn must not fail silently"
+    );
+    assert!(app.messages.is_empty(), "no message may be invented");
+}
+
+#[test]
 fn footer_metrics_should_reset_each_turn() {
     let mut app = make_app();
     app.turn_started_at = Some(std::time::Instant::now() - std::time::Duration::from_millis(2_500));

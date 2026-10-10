@@ -21,7 +21,7 @@
                     │  ► [y] Yes, allow once                                                       │
  1› Delete the build│    [Y] Yes, allow this session                                               │                   │
                     │    [p] Yes, always allow (persistent)                                        │
-                    │    [n] No, deny                                                              │
+Empty reply — the pr│    [n] No, deny                                                              │
 2>                  │                                                                              │
                     └──────────────────────────────────────────────────────────────────Esc to close┘ key Offline Capture
 
