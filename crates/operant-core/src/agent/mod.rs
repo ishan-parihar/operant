@@ -272,6 +272,14 @@ pub enum AgentEvent {
     /// the CLI/TUI can surface "limit reached, retry in Ns" instead of only
     /// seeing the error text (T3 — hermes `_capture_rate_limits` parity).
     RateLimitNotice { retry_after_secs: Option<u64> },
+    /// The provider's SSE stream contained events that could not be parsed
+    /// (corrupted framing — merged data lines, concatenated JSON, mid-stream
+    /// replays). Those payloads are dropped by the parser, so the rendered
+    /// output may be truncated or duplicated-looking; this event surfaces
+    /// the drop count so the user knows the corruption came from the wire,
+    /// not from the agent eating content. Emitted once per turn at stream
+    /// end, only when at least one payload was dropped.
+    StreamCorrupted { dropped_events: u32 },
     /// Tool requires permission before execution
     ToolPermissionRequest {
         tool_name: String,
@@ -2261,6 +2269,56 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn process_stream_emits_stream_corrupted_when_payloads_dropped() {
+        // iter-754: the openai adapter's terminal chunk carries the count of
+        // SSE payloads the parser dropped (corrupted framing). process_stream
+        // must surface that as ONE StreamCorrupted event so the TUI can tell
+        // the user the wire was corrupted — not the agent.
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let db = Database::init(std::env::temp_dir().join(format!(
+            "test_stream_corrupted_{}_{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )))
+        .unwrap();
+        let agent = OperantAgent::with_events(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+            event_tx,
+        );
+
+        let chunks: Vec<crate::error::Result<super::model_client::StreamChunk>> = vec![
+            Ok(super::model_client::StreamChunk::new(Some("Hi".into()), None, None)),
+            Ok(super::model_client::StreamChunk {
+                dropped_events: Some(2),
+                ..super::model_client::StreamChunk::new(None, None, None)
+            }),
+        ];
+        let stream = futures::stream::iter(chunks);
+        let result = agent
+            .process_stream(Box::pin(stream))
+            .await
+            .expect("stream should process");
+        assert_eq!(result.0, "Hi", "real content accumulates untouched");
+
+        let mut saw_corrupted = false;
+        while let Ok(ev) = event_rx.try_recv() {
+            if let AgentEvent::StreamCorrupted { dropped_events } = ev {
+                assert_eq!(dropped_events, 2);
+                saw_corrupted = true;
+            }
+        }
+        assert!(saw_corrupted, "StreamCorrupted must be emitted once");
+    }
+
     fn budget_test_agent(
         event_tx: tokio::sync::mpsc::Sender<AgentEvent>,
     ) -> (OperantAgent, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
@@ -3042,6 +3100,7 @@ mod tests {
                 extra_content: None,
                 usage: None,
                 finish_reason: Some("length".to_string()),
+                dropped_events: None,
             }),
         ];
         let stream: BoxStream<'static, Result<StreamChunk>> =

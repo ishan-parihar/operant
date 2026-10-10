@@ -1,7 +1,10 @@
 
                                                                   ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                                                                  ▌ ───────────────────────────────────────────────  ▐
+                                                                  ▌ ──────────────────────────────────────────────── ▐
                                                                   ▌                                                  ▐
+
+
+
 
 
 
@@ -13,13 +16,7 @@
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ○ anthropic
- ○ openrouter
- ○ openai
- ○ cursor
- ○ copilot
- ○ gemini
- ○ antigravity
+ ● anthropic(key)
  ~
 
  I should reason before answering so the reasoning panel has something to show.Step 1: read the request. Step 2:
@@ -30,6 +27,9 @@
 Reasoning blocks expanded by default.
 1>
                                                                           ~ 4/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
 
 
 

@@ -8,23 +8,23 @@
 
 
 
+
+
+
  operant · replay
  operant
- /model to switch · Offline Capture
- v0.2.1
- /login to add provider
- ○ anthropic                  ┌──────────────────────────────────────────────────────────┐
- ○ openrouter                 │ Connect Anthropic                                        │
- ○ openai                     │ API Key:                                                 │
- ○ cursor                     │ paste your API key here..._                              │
- ○ copilot                    │                                                          │
- ○ gemini                     │ enter confirm                                            │
- ○ antigravity                │                                                          │
+ /model to switch · Offline Ca┌──────────────────────────────────────────────────────────┐
+ v0.2.1                       │ Connect Anthropic                                        │
+ /login to add provider       │ API Key:                                                 │
+ ● anthropic(key)             │ paste your API key here..._                              │
  ~                            │                                                          │
-                              └──────────────────────────────────────────────Esc to close┘
+                              │ enter confirm                                            │
+                              │                                                          │
+1>                            │                                                          │
+                              └──────────────────────────────────────────────Esc to close┘     ~ API key Offline Capture
 
-1>
-                                                                                               ~ API key Offline Capture
+
+
 
 
 

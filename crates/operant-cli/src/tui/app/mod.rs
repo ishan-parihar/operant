@@ -16,13 +16,15 @@ mod prompt;
 mod providers;
 mod redraw_reason;
 mod scroll_anchor;
+mod scroll_emit;
 mod tui_state_impl;
 mod turn_state;
 
 pub(crate) use event_coalesce::EventOutcome;
 use event_coalesce::MAX_DRAINED_EVENTS_PER_WAKE;
 
-pub(crate) use scroll_anchor::{ContentPos, ScrollMemory};
+use crate::tui::operant_model::ContentPos;
+pub(crate) use scroll_anchor::ScrollMemory;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -206,6 +208,20 @@ pub struct App {
     // ---- Scrollback / auto-scroll -----------------------------------------
     /// When `true`, the message pane follows the latest messages automatically.
     pub auto_scroll: bool,
+    /// The session's live todo list, parsed from the `todo` tool's results
+    /// (P4-3, 2026-10-09 v2 outline: the counts-only TodoUpdated event
+    /// could never render a list; the full items sit in the tool result).
+    pub todos: Vec<crate::tui::operant_app::todo::TodoItem>,
+    /// The JSON TodoCardPayload for the pinned band / info card, rebuilt
+    /// whenever `todos` changes (pinned_todos_payload returns &str).
+    pub todos_card_payload: String,
+    /// /todos toggle: hide the pinned todo card band.
+    pub todos_band_hidden: bool,
+    /// Runtime thinking-trace display flag (default from the shim's
+    /// display.show_thinking; /thinking-display toggles). Hidden traces
+    /// still exist as display messages — history is not rewritten, the
+    /// reasoning rows just prepare zero lines.
+    pub thinking_display_on: bool,
     /// Count of messages that arrived while the user was scrolled up.
     pub new_messages_while_scrolled: usize,
 
@@ -237,6 +253,25 @@ pub struct App {
     /// state is still live (nothing transcript-visible changed since the
     /// clear); any version bump ends it. `None` = never cleared.
     pub terminal_clear_version: Cell<Option<u64>>,
+
+    // ---- P5-2 terminal-scrollback emission --------------------------------
+    /// Whether the terminal-scrollback mode (P5-1, Viewport::Inline, no
+    /// alt-screen) is active — settled transcript rows emit into the native
+    /// buffer above the inline viewport.
+    pub terminal_scroll_mode: bool,
+    /// Last-emitted-row watermark (P5-2): absolute row index, in the
+    /// prepared frame's wrapped-line space, up to which settled rows have
+    /// been emitted into native history via `insert_before`. Only rows
+    /// before the first mutable section (Streaming/Reasoning/BatchProgress)
+    /// are emittable — those rows can still change. Deliberately NOT reset
+    /// by Ctrl+L / /cls: emitted history is append-only; a reset would
+    /// re-emit (duplicate) the whole transcript into native scrollback.
+    pub scroll_emitted_rows: Cell<usize>,
+    /// Terminal width the watermark was recorded at. A resize rewraps the
+    /// transcript; already-emitted history keeps its old wrap (native
+    /// scrollback cannot reflow), so the watermark re-syncs to the new
+    /// committed prefix instead of re-emitting rows at the new width.
+    pub scroll_emitted_width: Cell<u16>,
 
     // ---- New overlay / notification fields --------------------------------
     /// Full-screen help overlay (? / F1).
@@ -1017,6 +1052,12 @@ impl App {
             // observable; it nudges the offset back so the anchored row stays
             // under the cursor on the next paint.
             self.reconcile_scroll_anchor();
+
+            // P5-2: emit newly settled transcript rows into native
+            // scrollback (terminal-scroll mode only — a no-op in the
+            // default alt-screen mode). Must run after `draw` so the frame
+            // this render prepared (and its committed prefix) is current.
+            self.emit_settled_transcript_rows(terminal);
 
             // Post-paint OSC 8 overlay: re-emit URL cells wrapped in
             // hyperlink escapes so terminals that support OSC 8 (Windows

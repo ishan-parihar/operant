@@ -543,6 +543,180 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-759 — P5-3: previous-prompt preview suppressed in terminal-scroll
+  mode.** The watermark floor makes `scroll > 0` the steady state in scroll
+  mode, so the preview band permanently duplicated the last prompt above
+  the composer — the same rows already emitted into native scrollback.
+  The band is context for a scrolled-up reader; native scrollback IS that
+  context now. Live-verified: after each turn the live viewport collapses
+  to composer + status + info widgets only, history lives in the terminal.
+
+- **iter-759 — P5-3: previous-prompt preview suppressed in terminal-scroll
+  mode.** The watermark floor makes `scroll > 0` the steady state in scroll
+  mode, so the preview band permanently duplicated the last prompt above
+  the composer — the same rows already emitted into native scrollback.
+  The band is context for a scrolled-up reader; native scrollback IS that
+  context now. Live-verified: after each turn the live viewport collapses
+  to composer + status + info widgets only, history lives in the terminal.
+
+- **iter-758 — reasoning-alias collision salvage: the "missing output"
+  mystery closed for real.** Live diagnosis (file-level capture of dropped
+  SSE payloads) found omp/poolside-laguna emits OpenAI's full reasoning
+  triad — `reasoning` + `reasoning_details` + `reasoning_content` — in ONE
+  delta. Our `StreamingMessageDelta` aliases all three spellings to one
+  field, so serde hit "duplicate field" — a HARD error that silently
+  dropped every reasoning-bearing chunk (content included) since forever.
+  That is what iter-754's drop counter surfaced (the 109/379 warnings were
+  real corruptions: ours, not the provider's framing). The salvage path
+  rebuilds the delta keeping the preferred alias and re-parses; regression
+  tests pin both collision shapes. Live-verified against omp: ZERO drops,
+  and laguna's reasoning traces now RENDER in the TUI — omp does emit a
+  reasoning channel; we had been discarding it.
+
+
+- **iter-757 — anthropic adapter compiles again (iter-754 follow-up).**
+  The two `StreamChunk` literals in `parse_sse_event` were missed when
+  `dropped_events` was added — invisible to every standard gate because
+  the `anthropic` cargo feature is off by default and neither the core
+  lib suite, the no-default-features TUI suite, nor the default-feature
+  release build compiles that file. Both literals now carry
+  `dropped_events: None`; `cargo check -p operant-core --features
+  anthropic` is green. (Caught by cross-model review — the third
+  consumer crate sweep after operant-runtime in iter-755.)
+
+- **iter-756 — P5-2: the transcript now emits into native terminal
+  scrollback.** In terminal-scroll mode (`tui.terminal_scroll_mode = true`),
+  settled rows — committed messages, tool rows, system annotations — are
+  printed into the terminal's own buffer via `Terminal::insert_before`,
+  tracked by a last-emitted-row watermark so each row is emitted exactly
+  once. A frame's emittable prefix stops at the first mutable section
+  (Streaming/Reasoning/BatchProgress); the watermark advances as messages
+  commit at flush boundaries, and the live viewport floors its window at the
+  watermark — emitted history lives in the terminal, the live window holds
+  only the unsettled tail. Live-verified: prompt + reply rows accumulate
+  above the inline viewport, selectable in tmux copy-mode, while the
+  viewport keeps status + composer + streaming. Resize re-syncs the
+  watermark (history keeps its original wrap — native scrollback cannot
+  reflow). Ctrl+L//cls deliberately does NOT reset the watermark: emitted
+  history is append-only; a reset would duplicate the whole transcript.
+  Also: incremental UTF-8 decode in the SSE stream reader — a multibyte
+  char split across byte-chunk boundaries used to fail `String::from_utf8`
+  and silently DROP the chunk (corrupting framing); the partial tail now
+  waits for its continuation (regression:
+  `chat_streaming_survives_utf8_char_split_across_chunks`). Corpus: the
+  4-drift peer baseline is unchanged; zero new drift in default mode.
+
+- **iter-754 — corrupted-SSE drop surfacing + a real parser tail bug
+  fixed.** The duplication investigation's final answer: the parser
+  NEVER ate event-duplicated deltas (proven live: a doubled
+  keepalive+content+finish stream renders "perspersimimmonmon" — every
+  delta faithfully appended, zero drops). What it DID eat silently:
+  payloads with corrupted SSE framing (merged data lines / concatenated
+  JSON — what a naive line-level replay hop emits). Two fixes: (1)
+  `ChatStreamResponse` now COUNTS unparseable payloads; the openai
+  adapter chains a terminal `StreamChunk{dropped_events}` after the
+  source ends; `process_stream` emits ONE `AgentEvent::StreamCorrupted`
+  (only when drops>0); the TUI surfaces "⚠ N corrupted stream event(s)
+  dropped by the provider — output may be truncated". Live-proven via a
+  line-doubling corrupter proxy against real omp: `StreamCorrupted
+  {dropped_events: 2}` in the event dump, content intact. (2) REAL BUG:
+  the stream-end branch parsed only ONE remaining buffered event — with
+  the body fully buffered (typical), one corrupted payload silently
+  discarded the ENTIRE valid tail (regression test:
+  `chat_streaming_counts_corrupted_sse_payloads_as_dropped` — valid
+  events after corrupted ones now yield; before the fix the valid tail
+  was lost). Empty turns keep iter-752's status message.
+
+- **iter-753 — P5-1: terminal-scrollback mode exists — the TUI can run in
+  the main buffer.** New `tui.terminal_scroll_mode` (default OFF; documented
+  in operant.example.toml): when enabled, `TuiApp::enter` skips the
+  alternate screen entirely and constructs the terminal with
+  `Terminal::with_options(TerminalOptions { viewport:
+  Viewport::Inline(14) })` — the app renders in a bottom strip of the main
+  buffer and everything above is the terminal's NATIVE scrollback (tmux
+  copy-mode, native selection, copy across the whole session). Mouse
+  capture stays off in this mode so the terminal's own selection works.
+  Live-verified end to end: boot, prompt submit, streamed reply
+  ("Hello from Operant"), composer, status row and info widget all
+  functional with no alt-screen; exit/teardown paths unchanged (the
+  leave-alt-screen sequence is a no-op in the main buffer). This is the
+  P5-1 milestone from the 2026-10-10 design doc: the terminal handoff.
+  Transcript emission via `insert_before` (native history accumulation)
+  is P5-2; the cramped 14-row viewport is the expected milestone state.
+
+- **iter-752 — a corrupted provider stream no longer ends the turn
+  silently.** Forced-repro findings (double-emitting SSE proxy against the
+  real omp omniroute gateway): the live chat provider is omp
+  (localhost:20129, OPENAI_BASE_URL env precedence — the earlier kilo
+  attribution and its "no reasoning channel" probes are RETRACTED, they
+  were 401s misread as clean streams), and a doubled-delta stream kills
+  the turn INSIDE the agent — Done{content: ""} with zero Content events
+  (event-dump proven), an empty assistant row persisted, and the TUI
+  rendered nothing at all. The Done arm now surfaces it: a turn that ends
+  with no message and no text sets the status notice "Empty reply — the
+  provider stream may be corrupted; retry or switch model" instead of
+  failing blank. The deeper fix (where the doubled deltas die in the
+  agent's stream pipeline before becoming Content events) is recorded as
+  the next core-side investigation. Unit regression:
+  an_empty_done_turn_surfaces_a_corrupted_stream_notice. The three
+  dialog goldens whose harness scripts terminate with done{text:""}
+  re-shape intentionally (the notice strip now appears). Corpus delta:
+  zero beyond those (4 pre-existing journey/skills drifts reproduce at
+  origin/main without this change).
+
+- **iter-751 — docs: P5 terminal-scrollback design + the duplication
+  investigation record.** The owner re-stated the requirement as native
+  terminal scrollback (select-and-copy across a long conversation), which
+  supersedes the jcode-parity framing — jcode is alt-screen and cannot
+  serve it. The design grounds in ratatui 0.30's own first-class support
+  (verified in the vendored source): the no-alt-screen init variant
+  (init.rs:416), `Viewport::Inline(n)`, and `Terminal::insert_before` —
+  ratatui's doc example is literally a streaming chat. Five waves
+  (P5-1..P5-5), mode-gated first, corpus impact scoped. Also records
+  today's duplication investigation (persisted transcripts clean, frame
+  captures clean, handlers re-verified; remaining suspects: pre-744
+  session inode, gateway double-emit; forced-repro blocked by the NEW
+  finding that `-c <config>` is silently ignored for provider selection
+  by chat/run — itself filed as the next fix), and the command-sweep
+  backlog tiers.
+
+- **iter-750 — command sweep: /cls + /clear-view implemented, alias tier
+  wired, the lister fixed, the sweep committed.** The sweep (every
+  REGISTERED command driven through the headless simulator, asserting
+  consumption) found 73/106 registered commands falling through to the
+  model as literal prompt text — the "/commands not working" class.
+  This iteration lands the provable tier: /cls and /clear-view now run
+  the terminal-style view collapse (jcode semantics: view only, context
+  kept — NOT /clear, which drops the conversation; exact Ctrl+L sequence,
+  no post-capture invalidate); the alias tier routes /commands → /help,
+  /models → /model, /split + /split-view → /splitview; the empty
+  `tui debug slash-commands` lister (a stub since iter-154) now prints the
+  REGISTERED_COMMANDS registry with a consumption caveat; and
+  command_sweep.py ships as the standing instrument (37/106 consumed
+  after this wave; the remaining ~69 are the handler backlog — each
+  needs its jcode-parity surface, tracked in the sweep output).
+  /copy verified working live (wl-copy → wl-paste round-trip); its
+  near-invisible confirmation is the P4-2 notification purge's surface.
+  Unit regression: cls_clears_the_view_only_and_the_alias_tier_routes.
+
+- **iter-749 — P4-4: thinking display on by default, `/thinking-display`
+  toggles it — jcode parity.** The vendored tree already had the full
+  reasoning-trace renderer and the shim already resolved
+  `ReasoningDisplayMode::Full` from jcode's `show_thinking = true` default;
+  what was missing was the runtime gate and the command. Added
+  `App.thinking_display_on` (initialized from the shim's
+  `display.show_thinking`, default ON), a `TuiState::show_thinking()`
+  accessor, a gate on the reasoning-row preparation in `ui_prepare` (hidden
+  traces still exist as display messages — history is not rewritten, they
+  just prepare zero rows), and `/thinking-display <off|full|current>` (the
+  vendored tree implements one trace mode, so full and current alias;
+  jcode's muscle-memory words are kept). Unit regression:
+  thinking_display_defaults_on_and_the_command_toggles_it. Reminder from
+  the audit: the configured kilo gateway emits NO reasoning channel under
+  any request dialect (4 raw SSE probes), so visible thinking also needs a
+  reasoning-forwarding endpoint — the render side now renders whatever
+  arrives, by default.
+
 - **iter-746 — P4-3: the todo list is a live surface.** The audit's
   "half-assed implementation" verdict, closed: the tool, the renderers, the
   types and the `/todos` registration all existed, but the event carried

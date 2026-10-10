@@ -1297,11 +1297,6 @@ pub(super) fn draw_messages(
         .display
         .prompt_preview
         && scroll > 0
-        // P5-3 (iter-759 follow-up): the line-count gate above suppressed the
-        // band's RESERVED rows, but this render gate still drew it at y=0 —
-        // the dimmed prompt row reappeared over the first content row in
-        // scroll mode's steady state (scroll > 0 = watermark floor).
-        && !app.terminal_scroll_mode()
     {
         let last_offscreen_prompt_idx =
             lower_bound(wrapped_user_prompt_starts, scroll).checked_sub(1);

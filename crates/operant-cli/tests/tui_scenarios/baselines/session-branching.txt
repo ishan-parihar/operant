@@ -8,23 +8,23 @@
                     │                                                                              │
                     │                                                                              │
                     │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
  operant · replay   │                                                                              │
  operant            │                                                                              │
  /model to switch · │                                                                              │
  v0.2.1             │                                                                              │
  /login to add provi│                                                                              │
- ○ anthropic        │                                                                              │
- ○ openrouter       │                                                                              │
- ○ openai           │                                                                              │
- ○ cursor           │                                                                              │
- ○ copilot          │                                                                              │
- ○ gemini           │                                                                              │
- ○ antigravity      │                                                                              │
+ ● anthropic(key)   │                                                                              │
  ~                  │                                                                              │
                     │                                                                              │
                     │                                                                              │
 1>                  │                                                                              │
                     │                                                                              │ key Offline Capture
+                    │                                                                              │
+                    │                                                                              │
+                    │                                                                              │
                     │                                                                              │
                     │                                                                              │
                     │                                                                              │

@@ -8,25 +8,25 @@
 
 
 
- operant · replay
- operant
- /model to switch · Offline Capture
- v0.2.1
- /login to add provi┌──────────────────────────────────────────────────────────────────────────────┐
- ○ anthropic        │ Permission Required                                                          │
- ○ openrouter       │  Tool: bash                                                                  │
- ○ openai           │                                                                              │
- ○ cursor           │  rm -rf ./target                                                             │
- ○ copilot          │                                                                              │
- ○ gemini           │  ► [y] Yes, allow once                                                       │
- ○ antigravity      │    [Y] Yes, allow this session                                               │
- ~                  │    [p] Yes, always allow (persistent)                                        │
-                    │    [n] No, deny                                                              │
- 1› Delete the build│                                                                              │                   │
-                    └──────────────────────────────────────────────────────────────────Esc to close┘
 
-2>
-                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+ operant · replay
+ operant            ┌──────────────────────────────────────────────────────────────────────────────┐
+ /model to switch · │ Permission Required                                                          │
+ v0.2.1             │  Tool: bash                                                                  │
+ /login to add provi│                                                                              │
+ ● anthropic(key)   │  rm -rf ./target                                                             │
+ ~                  │                                                                              │
+                    │  ► [y] Yes, allow once                                                       │
+ 1› Delete the build│    [Y] Yes, allow this session                                               │                   │
+                    │    [p] Yes, always allow (persistent)                                        │
+Empty reply — the pr│    [n] No, deny                                                              │
+2>                  │                                                                              │
+                    └──────────────────────────────────────────────────────────────────Esc to close┘ key Offline Capture
+
+
+
 
 
 

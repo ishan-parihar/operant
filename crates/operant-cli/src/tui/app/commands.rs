@@ -275,6 +275,16 @@ impl App {
                 at: crate::tui::debug::event_bus::now_secs(),
             });
         match cmd {
+            // Alias tier (2026-10-10 command sweep): the registry advertises
+            // names whose jcode counterparts are the same surface as an
+            // already-handled command — route instead of falling through to
+            // the model as literal text.
+            "commands" => return self.intercept_slash_command_with_args_impl("help", args),
+            "models" => return self.intercept_slash_command_with_args_impl("model", args),
+            "split" | "split-view" => {
+                return self.intercept_slash_command_with_args_impl("splitview", args);
+            }
+
             "config" | "settings" => {
                 self.settings_screen.open();
                 true
@@ -1184,6 +1194,61 @@ impl App {
             // since the pose system was dead code. Still shows the message.)
             "pet" => {
                 self.status_message = Some("Rustle wags its tail. 🐕".to_string());
+                true
+            }
+
+            // jcode /cls parity (2026-10-10 command sweep): clear the rendered
+            // VIEW only — the model keeps its full context. Distinct from
+            // /clear, which drops the conversation. Same machinery as Ctrl+L.
+            "cls" | "clear-view" => {
+                // Exactly Ctrl+L's sequence: the collapse capture must record
+                // the CURRENT transcript version, so no invalidate here —
+                // an invalidate after the capture bumps the version and the
+                // collapsed state reads as dead.
+                self.clear_view_terminal_style();
+                self.status_message =
+                    Some("View cleared — context kept (/clear drops context)".to_string());
+                true
+            }
+
+            // P4-3 (2026-10-09 v2 outline): the band itself is live — the
+            // list arrives from the todo tool's results; /todos only chooses
+            // whether the pinned card is shown.
+            // P4-4 (2026-10-09 v2 outline): jcode's /thinking-display
+            // (off|full|current). The vendored tree implements one trace
+            // mode, so `full` and `current` both show it; the words stay so
+            // the muscle memory ports.
+            "thinking-display" => {
+                let mode = args.trim();
+                match mode {
+                    "off" => self.thinking_display_on = false,
+                    "full" | "current" | "on" => self.thinking_display_on = true,
+                    "" => {}
+                    other => {
+                        self.status_message = Some(format!(
+                            "Unknown thinking-display mode '{other}' — use off|full|current"
+                        ));
+                        return true;
+                    }
+                }
+                self.status_message = Some(match (self.thinking_display_on, mode) {
+                    (true, "") => "Thinking display: on (full/current)".to_string(),
+                    (true, _) => "Thinking display: on".to_string(),
+                    (false, _) => "Thinking display: off".to_string(),
+                });
+                self.invalidate_transcript();
+                true
+            }
+            "todos" | "todo" => {
+                self.todos_band_hidden = !self.todos_band_hidden;
+                self.status_message = Some(if self.todos_band_hidden {
+                    "Todo card hidden".to_string()
+                } else if self.todos_card_payload.is_empty() {
+                    "Todo card pinned (no todos yet)".to_string()
+                } else {
+                    "Todo card pinned".to_string()
+                });
+                self.invalidate_transcript();
                 true
             }
 

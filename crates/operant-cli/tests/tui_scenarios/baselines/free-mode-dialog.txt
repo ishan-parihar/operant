@@ -8,23 +8,23 @@
 
                   ┌──────────────────────────────────────────────────────────────────────────────────┐
                   │ Connect Free (multi-provider — 0/5 keys)                                         │
- operant · replay │ Stack free tiers behind one endpoint.                                            │
- operant          │ TIP More keys = better availability and higher caps.                             │
- /model to switch │                                                                                  │
- v0.2.1           │ ▸ Groq            console.groq.com                                               │
- /login to add pro│     paste your API key here..._                                                  │
- ○ anthropic      │   Cerebras        cloud.cerebras.ai                                              │
- ○ openrouter     │     paste your API key here...                                                   │
- ○ openai         │   Google Gemini   aistudio.google.com                                            │
- ○ cursor         │     paste your API key here...                                                   │
- ○ copilot        │   Mistral         console.mistral.ai                                             │
- ○ gemini         │     paste your API key here...                                                   │
- ○ antigravity    │   ↓ 1 more                                                                       │
- ~                │                                                                                  │
-                  │ ↑/↓ next field    paste at least 1 key — as many as you can add is better        │
+                  │ Stack free tiers behind one endpoint.                                            │
+                  │ TIP More keys = better availability and higher caps.                             │
                   │                                                                                  │
+ operant · replay │ ▸ Groq            console.groq.com                                               │
+ operant          │     paste your API key here..._                                                  │
+ /model to switch │   Cerebras        cloud.cerebras.ai                                              │
+ v0.2.1           │     paste your API key here...                                                   │
+ /login to add pro│   Google Gemini   aistudio.google.com                                            │
+ ● anthropic(key) │     paste your API key here...                                                   │
+ ~                │   Mistral         console.mistral.ai                                             │
+                  │     paste your API key here...                                                   │
+                  │   ↓ 1 more                                                                       │
 1>                │                                                                                  │
-                  │                                                                                  │ey Offline Capture
+                  │ ↑/↓ next field    paste at least 1 key — as many as you can add is better        │ey Offline Capture
+                  │                                                                                  │
+                  │                                                                                  │
+                  │                                                                                  │
                   │                                                                                  │
                   │                                                                                  │
                   │                                                                                  │
