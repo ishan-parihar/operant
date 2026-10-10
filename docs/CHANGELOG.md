@@ -543,6 +543,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-757 — anthropic adapter compiles again (iter-754 follow-up).**
+  The two `StreamChunk` literals in `parse_sse_event` were missed when
+  `dropped_events` was added — invisible to every standard gate because
+  the `anthropic` cargo feature is off by default and neither the core
+  lib suite, the no-default-features TUI suite, nor the default-feature
+  release build compiles that file. Both literals now carry
+  `dropped_events: None`; `cargo check -p operant-core --features
+  anthropic` is green. (Caught by cross-model review — the third
+  consumer crate sweep after operant-runtime in iter-755.)
+
 - **iter-756 — P5-2: the transcript now emits into native terminal
   scrollback.** In terminal-scroll mode (`tui.terminal_scroll_mode = true`),
   settled rows — committed messages, tool rows, system annotations — are
