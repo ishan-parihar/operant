@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ Hello from the mock agent.
+
+1>
+                                                                          ~ 6/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

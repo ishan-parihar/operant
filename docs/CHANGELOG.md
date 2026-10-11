@@ -542,6 +542,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-768 — P4-5 selection pane-scoping: corpus now actually selects.**
+  Diagnosis: the boot connect dialog (no credentials in the pinned sim
+  config) swallows the first Left-Down — its gate treats the click as
+  outside and closes the dialog, so the follow-on drag ran with no anchor
+  and the committed selection-highlight golden had been pinning an
+  UNSELECTED frame since the corpus was cut. The scenario now closes the
+  dialog (`<esc>`) before the drag; asserts gain
+  `selection_anchor != nil`/`selection_focus != nil` so an inert golden
+  can never return silently. New `selection-highlight-chrome` golden pins
+  the pane-scoping fix (iter-672 content-space points + Drag band clamp):
+  a drag that runs from mid-band up into the banner and out to the far
+  right paints only in-band transcript rows — banner rails/info widgets
+  keep their own styling. Live-audit v1's 442-char/17-line chrome leak
+  was measured pre-672; verified fixed headlessly (141 selection cells,
+  rows 11-21 only).
 - **iter-767 — P5-4: mode-aware corpus scenarios.** The scenario
   harness now supports a per-scenario `config` TOML fragment (schema
   field, appended to the pinned config) for behavior modes no key or env
