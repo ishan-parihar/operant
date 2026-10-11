@@ -220,6 +220,20 @@ impl core_observer::Observer for CoreObserverBridge {
     }
 }
 
+/// A core-trait observer wrapping the config-selected runtime observer —
+/// for consumers that run on core's Observer trait. The cron scheduler
+/// (core) takes core's trait; the gateway (v6 outline row 5) builds its
+/// observer through this so the cron lifecycle quartet lands on the same
+/// backend `create_observer` gives every other surface, instead of a
+/// second mapping that could drift from the factory's.
+pub fn core_observer_from_config(
+    config: &operant_config::schema::ObservabilityConfig,
+) -> Arc<dyn core_observer::Observer> {
+    Arc::new(CoreObserverBridge {
+        inner: Arc::from(crate::observability::create_observer(config)),
+    })
+}
+
 /// Re-exported so channels (which has no direct operant-core dependency)
 /// can construct the facade's config without a new edge in the dep graph.
 pub use operant_core::agent::PreflightConfig;

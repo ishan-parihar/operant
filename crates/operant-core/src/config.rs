@@ -77,6 +77,14 @@ pub struct AppConfig {
     /// Daily seat-pairing sessions (`[socialization]`, gap 6).
     #[serde(default)]
     pub socialization: SocializationSettings,
+    /// Observability backend selection (`[observability]`, schema parity,
+    /// v6 outline row 5). The gateway mounts the observer this section
+    /// selects on the cron scheduler and delivery sender loop — the
+    /// CronDeliveryQueued/Parked/Reclaimed/Outcome quartet (iter-720).
+    /// Default (`backend = "none"`) is the schema default: dark-merged,
+    /// no observer, byte-identical behavior.
+    #[serde(default)]
+    pub observability: operant_config::schema::ObservabilityConfig,
 }
 
 impl Default for AppConfig {
@@ -108,6 +116,7 @@ impl Default for AppConfig {
             genome: GenomeSettings::default(),
             context_injection: ContextInjectionSettings::default(),
             socialization: SocializationSettings::default(),
+            observability: operant_config::schema::ObservabilityConfig::default(),
             pk: PkSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),

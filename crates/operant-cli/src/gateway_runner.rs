@@ -22,6 +22,7 @@ use crate::gateway_commands::{
     CommandContext, CommandMatch, handle_command, resolve_command, telegram_bot_commands,
 };
 use operant_core::mcp::McpManager;
+use operant_core::observer::ObserverEvent;
 use operant_core::tools::{OperantTool, ToolContext, TranscriptionTool};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -3859,6 +3860,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let (cron_tx, mut cron_rx) =
             tokio::sync::mpsc::unbounded_channel::<operant_core::cronjobs::CronDelivery>();
 
+        // v6 outline row 5 (the queued seam, now closed): the config-driven
+        // cron observer. `[observability] backend` selects it — the same
+        // factory the WS/ACP paths use, so backend semantics do not drift
+        // between surfaces. Default (`none`) yields the no-op observer: the
+        // scheduler mounts an observer unconditionally and an unconfigured
+        // gateway stays byte-identical.
+        let cron_observer: Arc<dyn operant_core::observer::Observer> =
+            operant_runtime::agent::reconciled::core_observer_from_config(
+                &app_config.observability,
+            );
         // B′ (NEXT-IMPLEMENTATION-OUTLINE §3): the scheduled-run write
         // barrier, over the same app database the session store uses (:1027
         // derives it the same way). Every completed scheduled run now leaves
@@ -3876,6 +3887,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         ) {
             Ok(barrier) => operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
                 .with_write_barrier(barrier)
+                .with_observer(Arc::clone(&cron_observer))
                 .with_employee_db(employee_registry.clone())
                 .with_seat_memory_root(
                     app_config
@@ -3890,6 +3902,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     "org write barrier unavailable — cron runs will not write worklog rows: {e}"
                 );
                 operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+                    .with_observer(Arc::clone(&cron_observer))
                     .with_employee_db(employee_registry.clone())
                     .with_seat_memory_root(
                         app_config
@@ -3941,6 +3954,12 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
         // Delivery receiver — sends cron results to platforms
         let gw_for_cron = gateway.clone();
+        // v6 outline row 5: the sender loop is the `CronDeliveryOutcome`
+        // emitter — the one cron lifecycle event core never emits (the
+        // consumer-side report contract, iter-720). Same observer the
+        // scheduler holds, so the quartet (Queued/Parked/Reclaimed/Outcome)
+        // lands on one backend.
+        let cron_observer_sender = Arc::clone(&cron_observer);
         tokio::spawn(async move {
             while let Some(delivery) = cron_rx.recv().await {
                 let msg = OutgoingMessage::new(&delivery.chat_id, &delivery.content);
@@ -3950,13 +3969,21 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // ('delivered'); failure records the error and leaves the
                 // row pending, where the 2h reclaim replays it. The
                 // attempt was already counted at handoff, so this only
-                // reports the outcome. `ObserverEvent::CronDeliveryOutcome`
-                // stays unemitted: the gateway holds no observer handle
-                // (AppConfig has no [observability] surface — the seam
-                // itself is the v6 row-5 re-queue, see
-                // docs/plan-2026-10-09-remaining-gaps-outline-v6.md §1
-                // row 5), and the ledger is the contract that matters.
+                // reports the outcome.
                 if let Some(delivery_id) = delivery.delivery_id {
+                    // The outcome event rides alongside the ledger
+                    // report — redacted text (it reaches the console
+                    // observer's logs), while the ledger keeps the raw
+                    // error for forensics.
+                    cron_observer_sender.record_event(&ObserverEvent::CronDeliveryOutcome {
+                        job_id: delivery.job_id.clone(),
+                        delivery_id,
+                        success: send_result.is_ok(),
+                        error: send_result
+                            .as_ref()
+                            .err()
+                            .map(|e| redact_err(e).to_string()),
+                    });
                     let err_text = send_result.as_ref().err().map(|e| e.to_string());
                     match cron_db_consumer.mark_delivery_outcome(
                         delivery_id,

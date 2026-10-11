@@ -542,6 +542,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+
+- **iter-772 — v6 outline row 5 LANDED: the cron lifecycle quartet is
+  observable through the gateway.** The queued seam closed: `AppConfig`
+  gains the `[observability]` section (schema-parity type; `backend`
+  defaults to `"none"` — dark-merged, byte-identical). The gateway
+  constructs the observer through the runtime's canonical factory
+  (`core_observer_from_config` — the existing core↔runtime bridge aimed
+  in the direction the core-trait scheduler needs, so backend semantics
+  cannot drift between surfaces), mounts it on the scheduler at both
+  WriteBarrier arms — which makes `CronDeliveryQueued`/`Parked`/
+  `Reclaimed` live in the gateway for the first time — and clones it
+  into the delivery sender loop, which now emits
+  `CronDeliveryOutcome` as the consumer-side report (redacted error text
+  in the event; the ledger keeps the raw error for forensics).
+  `CronDelivery` carries `job_id`, populated at both handoff sites, so
+  the outcome event attributes the originating job without a ledger
+  lookup. Covered by the two existing handoff tests (assert the job id
+  on the first send and the replay) — mutation-proven: a blank job_id
+  at each handoff turns its assertion red. The ledger stays the
+  correctness contract; this row is observability only.
+  `operant.example.toml` documents the section.
+
 - **iter-770 — command backlog tier 3 (agent flows): `/improve`, `/judge`,
   `/refactor`, `/fix`, and `/triage` now launch real one-shot agent
   sessions instead of falling through to the model as literal prompt

@@ -154,6 +154,23 @@ with_thread_ids = false
 with_file = false
 with_line_number = false
 
+[observability]
+# Observer backend (schema + AppConfig parity, v6 outline row 5). "none"
+# (default) = no observer: dark-merged, behavior byte-identical.
+# "console" = core's tracing observer (every event at info/debug).
+# The gateway mounts the selected observer on the cron scheduler AND the
+# delivery sender loop, so the cron lifecycle quartet becomes visible:
+# CronDeliveryQueued / Parked / Reclaimed (scheduler) and
+# CronDeliveryOutcome (sender loop, after the platform send).
+backend = "none"
+# OpenTelemetry OTLP export (used by the runtime observer factory's
+# "log"/"verbose"/"prometheus" backends; ignored while backend = "none").
+# otel_endpoint = "http://localhost:4317"
+# otel_service_name = "operant"
+# runtime_trace_mode = "off"          # "off" | "rolling" | "full"
+# runtime_trace_path = "~/.operant/runtime-trace.jsonl"
+# runtime_trace_max_entries = 5000
+
 [tui]
 theme = "opencode"
 rich_output = true

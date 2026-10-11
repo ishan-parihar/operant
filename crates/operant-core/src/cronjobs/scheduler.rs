@@ -23,17 +23,21 @@ use crate::org::worklog::UsageAccumulator;
 use crate::org::write_barrier::{WriteBarrier, WriteBarrierRequest};
 use crate::turn_end::{RESULT_SUMMARY_LIMIT, TurnEnd};
 
-/// Message sent from the cron scheduler to the gateway for delivery.
-/// `delivery_id` (iter-720) names the `cron_deliveries` ledger row the
-/// consumer settles via `CronDb::mark_delivery_outcome` — the consumer
-/// reports outcomes against the row id, not the job id, so replays and
-/// first sends stay distinguishable in history.
-pub struct CronDelivery {
-    pub platform: String,
-    pub chat_id: String,
-    pub content: String,
-    pub delivery_id: Option<i64>,
-}
+ /// Message sent from the cron scheduler to the gateway for delivery.
+ /// `delivery_id` (iter-720) names the `cron_deliveries` ledger row the
+ /// consumer settles via `CronDb::mark_delivery_outcome` — the consumer
+ /// reports outcomes against the row id, not the job id, so replays and
+ /// first sends stay distinguishable in history.
+ /// `job_id` (v6 row 5) names the originating job so the consumer can
+ /// attribute the outcome event (`ObserverEvent::CronDeliveryOutcome`)
+ /// without a ledger lookup.
+ pub struct CronDelivery {
+     pub platform: String,
+     pub chat_id: String,
+     pub content: String,
+     pub delivery_id: Option<i64>,
+     pub job_id: String,
+ }
 
 /// iter-720 (trinity P2-A concrete, hermes deliveries.db shape): a
 /// delivery is PARKED — the tombstone — after this many handoffs to the
@@ -1169,6 +1173,7 @@ impl CronScheduler {
                 chat_id: chat_id.clone(),
                 content: payload,
                 delivery_id,
+                job_id: job.id.clone(),
             }) {
                 if let Some(id) = delivery_id {
                     self.account_delivery_attempt(id, &job.id, Some(&e.to_string()));
@@ -1265,6 +1270,7 @@ impl CronScheduler {
                 chat_id: chat_id.to_string(),
                 content: row.payload.clone(),
                 delivery_id: Some(row.id),
+                job_id: row.job_id.clone(),
             }) {
                 self.account_delivery_attempt(row.id, &row.job_id, Some(&e.to_string()));
             } else {
@@ -1902,6 +1908,10 @@ mod tests {
         // must settle.
         let msg = rx.try_recv().expect("handoff reached the channel");
         let id = msg.delivery_id.expect("the handoff carries the ledger id");
+        assert_eq!(
+            msg.job_id, "job_budget_probe",
+            "the handoff carries the job id so the consumer can attribute outcomes"
+        );
         assert!(
             msg.content.contains("📋 **Cron: budget probe**"),
             "the header still rides the payload: {}",
@@ -1951,6 +1961,10 @@ mod tests {
         scheduler.replay_stale_deliveries(0).await;
         let msg = rx.try_recv().expect("replay re-sent the row");
         assert_eq!(msg.delivery_id, Some(id));
+        assert_eq!(
+            msg.job_id, "job_replay",
+            "the replay handoff carries the row's job id"
+        );
         assert_eq!(msg.content, "raw payload", "replay is verbatim");
         assert_eq!(
             *recorder.events.lock(),
