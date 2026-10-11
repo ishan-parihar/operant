@@ -1,0 +1,17 @@
+{
+  "name": "terminal-scroll-mode",
+  "surface": "crates/operant-cli/src/tui/app/mod.rs (TuiApp::enter inline viewport) + ui_viewport.rs draw_messages preview gates",
+  "opens_with": "config `[tui] terminal_scroll_mode = true` + a settled mock conversation",
+  "config": "[tui]\nterminal_scroll_mode = true",
+  "keys": "",
+  "size": "120x40",
+  "agent_script": "assistant-simple.json",
+  "assert": [
+    "terminal_scroll_mode == true",
+    "is_streaming == false",
+    "messages == 1"
+  ],
+  "baseline": "terminal-scroll-mode.txt",
+  "style_baseline": "terminal-scroll-mode.style.txt",
+  "notes": "P5-4 scroll-mode golden (first of two). The mode is config-driven — no key or env var reaches it — so this scenario exercises the harness's per-scenario `config` fragment. With a settled conversation the dimmed N-preview band must NOT render (P5-3 render gate): the viewport shows only the live tail, info widget, and composer. insert_before emission is inert on the headless fullscreen TestBackend; scrollback history stays live-verified territory (see terminal-scroll-cls for the state side)."
+}

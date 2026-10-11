@@ -130,7 +130,15 @@ impl App {
             "selection_area_y": self.last_selectable_area.get().y,
             "selection_area_w": self.last_selectable_area.get().width,
             "selection_area_h": self.last_selectable_area.get().height,
-            "selection_text": self.selection_text.borrow().clone()
+            "selection_text": self.selection_text.borrow().clone(),
+            // Terminal-scroll mode (P5): scenarios assert the mode is
+            // live from config and that emission never re-emits (the
+            // watermark only advances). insert_before is inert on the
+            // headless fullscreen TestBackend, so scrollback history
+            // itself is live-verified territory, not corpus territory.
+            "terminal_scroll_mode": self.terminal_scroll_mode,
+            "scroll_emitted_rows": self.scroll_emitted_rows.get(),
+            "scroll_cls_divider": self.scroll_cls_divider.get()
         })
     }
 

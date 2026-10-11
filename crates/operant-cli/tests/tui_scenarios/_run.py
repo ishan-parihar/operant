@@ -166,12 +166,18 @@ class Fixture:
     that is really a harness bug.
     """
 
-    def __init__(self, tmpdir):
+    def __init__(self, tmpdir, extra_config=None):
         self.dir = pathlib.Path(tmpdir)
         self.home = self.dir / "home"
         (self.home / ".operant").mkdir(parents=True, exist_ok=True)
         self.config = self.dir / "operant.toml"
-        self.config.write_text(PINNED_CONFIG)
+        # Scenarios may append config (schema field `config`, a TOML
+        # fragment) to flip behavior modes that no key or env var can
+        # reach — e.g. `[tui] terminal_scroll_mode = true`.
+        text = PINNED_CONFIG
+        if extra_config:
+            text = text + "\n" + extra_config.strip() + "\n"
+        self.config.write_text(text)
 
     def env(self, extra=None):
         env = dict(PINNED_ENV)
@@ -245,7 +251,8 @@ def command(d, run):
 def render(d, run, *, dump_text=None, dump_style=None,
            gate_text=None, gate_style=None, accept=False, fixture=None):
     """One render in its own process. Returns (returncode, combined output)."""
-    tmp = fixture or Fixture(tempfile.mkdtemp(prefix="operant-tui-"))
+    tmp = fixture or Fixture(
+        tempfile.mkdtemp(prefix="operant-tui-"), d.get("config"))
     cmd = [c.replace("@CONFIG@", str(tmp.config)) for c in command(d, run)]
     if dump_text:
         cmd += ["--dump-screen", str(dump_text)]

@@ -542,6 +542,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-767 — P5-4: mode-aware corpus scenarios.** The scenario
+  harness now supports a per-scenario `config` TOML fragment (schema
+  field, appended to the pinned config) for behavior modes no key or env
+  var can reach — terminal-scroll mode being the first consumer. Two new
+  goldens pin the P5 surface: `terminal-scroll-mode` (inline viewport
+  with the preview band gated off after a settled conversation) and
+  `terminal-scroll-cls` (`/cls` arms the native-scrollback divider flag
+  AND collapses the live window). `debug_snapshot` exposes
+  `terminal_scroll_mode`, `scroll_emitted_rows`, and `scroll_cls_divider`
+  for assertions. Headless scope note: the sim's fullscreen `TestBackend`
+  makes `insert_before` emission inert, so scrollback history itself
+  remains live-verified territory — the corpus pins the render-visible
+  surfaces.
 - **iter-766 — status-tier flashes are now visible in an idle session.**
   `status_message` renders only inside the mid-turn spinner lines
   (`ProcessingStatus::Connecting/Thinking`), so iter-765's `/model-status`,
