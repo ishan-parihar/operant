@@ -126,5 +126,8 @@ is the tracker: `python3 tests/tui_scenarios/command_sweep.py`.
 Landed iter-749: default ON (jcode `show_thinking = true`), `/thinking-display
 off|full|current` verified live in the notice strip. Visible thinking
 additionally requires a provider that emits a reasoning channel — the
-configured kilo gateway emits none under any dialect (4 probes: bare,
-`thinking.type=enabled`, `reasoning_effort`, three models).
+superseded 2026-10-10 finding said the configured kilo gateway emits none;
+iter-758 (SSE reasoning-triad alias-collision fix) proved the opposite for
+omp/poolside-laguna: the gateway emits `reasoning` + `reasoning_details` +
+`reasoning_content` in one delta and OUR parser was silently dropping the
+chunk. Thinking now renders live on omp.
