@@ -542,6 +542,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-769 — command backlog tier 2 (dialog handlers): `/login`,
+  `/init`, `/logout`, and `/observe` now intercept instead of falling
+  through to the model as literal prompt text.** `/login` and `/init`
+  open the connect dialog (the login surface); `/logout` opens it with a
+  notice pointing at where keys actually live (the TUI holds no
+  credential material to drop); `/observe` surfaces the latest
+  `tool_use_block` (name + output preview) in the transcript until the
+  side panel exists. `/models` and `/agents` already resolved via
+  alias routing. Command sweep: 40 → 44/106 consumed. Regression test
+  pins all three interceptions.
 - **iter-768 — P4-5 selection pane-scoping: corpus now actually selects.**
   Diagnosis: the boot connect dialog (no credentials in the pinned sim
   config) swallows the first Left-Down — its gate treats the click as

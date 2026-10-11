@@ -858,7 +858,52 @@ impl App {
                 self.session_browser.start_rename();
                 true
             }
-            "init" | "login" | "logout" => false,
+            // /login, /init — dialog tier (command backlog tier 2): the
+            // registry advertises them but the handler returned false, so
+            // they fell through to the model as literal prompt text. The
+            // connect dialog IS the login surface; route like /connect.
+            "init" | "login" => {
+                self.connect_dialog.open();
+                true
+            }
+            // /logout — same surface family. The TUI holds no credential
+            // material to drop (keys live in ~/.operant/.env or the auth
+            // store, which the connect dialog manages), so logout shows
+            // the dialog and tells the user where the keys actually are
+            // instead of pretending a state change happened.
+            "logout" => {
+                self.connect_dialog.open();
+                self.push_system_message(
+                    "Logout: API keys live in ~/.operant/.env or the auth store — manage them from the connect dialog.".to_string(),
+                    crate::tui::app::SystemMessageStyle::Info,
+                );
+                true
+            }
+            // /observe — registered as "show the latest tool context in
+            // the side panel", but no side panel exists in the ported
+            // chrome yet. A registered surface must never fall through to
+            // the model; until the panel lands, surface the latest tool
+            // invocation (from tool_use_blocks) in the transcript.
+            "observe" => {
+                let ctx = self.tool_use_blocks.iter().rev().find_map(|b| {
+                    b.output_preview
+                        .as_ref()
+                        .map(|p| {
+                            format!(
+                                "{}: {}",
+                                b.name,
+                                crate::tui::render::utils::truncate_end(p, 200)
+                            )
+                        })
+                        .or_else(|| Some(format!("{} (no output preview)", b.name)))
+                });
+                let text = match ctx {
+                    Some(c) => format!("Observe (side panel pending) — last tool: {c}"),
+                    None => "Observe (side panel pending) — no tool calls yet this session.".to_string(),
+                };
+                self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
+                true
+            }
             "keybindings" => {
                 // Open the keybindings.json file in the external editor
                 let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir()

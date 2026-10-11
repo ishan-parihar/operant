@@ -253,6 +253,22 @@ fn test_model_slash_command_opens_picker() {
 }
 
 #[test]
+fn test_dialog_tier_slash_commands_are_consumed() {
+    // /login, /logout, and /observe previously fell through to the model
+    // as literal prompt text ("init"|"login"|"logout" => false; observe
+    // unhandled). Tier-2 dialog commands must intercept: login opens the
+    // connect dialog, logout opens it with the keys-location notice,
+    // observe surfaces the latest tool_use_block (or the no-calls note).
+    let mut app = make_app();
+    assert!(app.intercept_slash_command("login"));
+    assert!(app.connect_dialog.visible);
+    assert!(app.intercept_slash_command("logout"));
+    let before = app.system_annotations.len();
+    assert!(app.intercept_slash_command("observe"));
+    assert_eq!(app.system_annotations.len(), before + 1);
+}
+
+#[test]
 fn test_status_tier_slash_commands_are_consumed() {
     // /info, /model-status, and the /thinking alias previously fell
     // through to the model as literal prompt text (command sweep: 37/106
