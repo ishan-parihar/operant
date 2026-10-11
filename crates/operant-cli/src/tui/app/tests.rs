@@ -259,15 +259,19 @@ fn test_status_tier_slash_commands_are_consumed() {
     // consumed). Tier-1 status commands must intercept and flash the
     // status bar instead.
     let mut app = make_app();
+    // status_message alone renders only inside mid-turn spinner lines
+    // (ProcessingStatus::Connecting/Thinking) — an idle session would show
+    // nothing. Each command must also land a transcript annotation, the
+    // /status precedent.
     assert!(app.intercept_slash_command("model-status"));
-    assert!(app.status_message.is_some());
+    assert_eq!(app.system_annotations.len(), 1);
     assert!(app.intercept_slash_command("info"));
-    assert!(app.status_message.is_some());
+    assert_eq!(app.system_annotations.len(), 2);
     // The alias routes to the thinking-display handler: bare /thinking
     // reports current state without toggling.
     let before = app.thinking_display_on;
     assert!(app.intercept_slash_command("thinking"));
-    assert!(app.status_message.is_some());
+    assert_eq!(app.system_annotations.len(), 3);
     assert_eq!(app.thinking_display_on, before);
 }
 

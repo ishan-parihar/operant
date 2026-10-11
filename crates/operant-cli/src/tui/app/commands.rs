@@ -483,9 +483,14 @@ impl App {
                 } else {
                     "idle"
                 };
-                self.status_message = Some(format!(
+                let summary = format!(
                     "Model: {model} · provider: {provider} · credentials: {creds} · {streaming}"
-                ));
+                );
+                self.status_message = Some(summary.clone());
+                self.push_system_message(
+                    summary,
+                    crate::tui::app::enums::SystemMessageStyle::Info,
+                );
                 true
             }
             "session" | "resume" => {
@@ -552,10 +557,15 @@ impl App {
                     .session_title
                     .clone()
                     .unwrap_or_else(|| "(untitled)".to_string());
-                self.status_message = Some(format!(
+                let summary = format!(
                     "operant v{} · model: {model} · provider: {provider} · title: {title}",
                     env!("CARGO_PKG_VERSION"),
-                ));
+                );
+                self.status_message = Some(summary.clone());
+                self.push_system_message(
+                    summary,
+                    crate::tui::app::enums::SystemMessageStyle::Info,
+                );
                 true
             }
             "clear" => {
@@ -1283,11 +1293,16 @@ impl App {
                         return true;
                     }
                 }
-                self.status_message = Some(match (self.thinking_display_on, mode) {
+                let summary = match (self.thinking_display_on, mode) {
                     (true, "") => "Thinking display: on (full/current)".to_string(),
                     (true, _) => "Thinking display: on".to_string(),
                     (false, _) => "Thinking display: off".to_string(),
-                });
+                };
+                self.status_message = Some(summary.clone());
+                self.push_system_message(
+                    summary,
+                    crate::tui::app::enums::SystemMessageStyle::Info,
+                );
                 self.invalidate_transcript();
                 true
             }

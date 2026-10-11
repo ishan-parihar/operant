@@ -542,6 +542,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-766 — status-tier flashes are now visible in an idle session.**
+  `status_message` renders only inside the mid-turn spinner lines
+  (`ProcessingStatus::Connecting/Thinking`), so iter-765's `/model-status`,
+  `/info`, and bare `/thinking` outputs were invisible exactly when a user
+  would type them (no turn in flight). All three now also land a transcript
+  annotation (the `/status` precedent) alongside the status flash. Sweep
+  stays 40/106; the regression test now pins the annotation count.
 - **iter-765 — command backlog tier 1 (status messages): `/model-status`,
   `/info`, and the `/thinking` alias now intercept instead of falling
   through to the model as literal prompt text.** `/version` and `/usage`
