@@ -252,6 +252,36 @@ fn test_model_slash_command_opens_picker() {
     assert!(app.model_picker.visible);
 }
 
+#[tokio::test]
+async fn test_agent_flow_slash_commands_resolve_in_registry() {
+    // /improve /judge /refactor /fix /triage historically had neither a
+    // TUI intercept arm NOR a registry handler, so they fell through to
+    // the agent as literal prompt text (live-verified: the turn started
+    // and errored on credentials). They now resolve in the registry and
+    // return ShellCommand, which arms pending_shell_command — the /setup
+    // suspend-and-run escape hatch.
+    let mut registry = crate::commands::CommandRegistry::new();
+    crate::tui::adapter_types::tui_app::register_agent_flow_handlers(&mut registry);
+    for name in ["improve", "judge", "refactor", "fix", "triage"] {
+        let canonical = registry
+            .resolve(name)
+            .unwrap_or_else(|| panic!("{name} must resolve in the registry"));
+        let result = registry.execute(&canonical, "").await;
+        let crate::commands::CommandResult::ShellCommand(argv) = result else {
+            panic!("{name} must return ShellCommand, got {result:?}");
+        };
+        assert_eq!(argv[1], "run", "{name}: expected `run` subcommand");
+        // CLI contract (main.rs): --autonomous rejects --query; only
+        // /improve (TODO.md ledger) goes autonomous.
+        if name == "improve" {
+            assert!(argv.contains(&"--autonomous".to_string()));
+            assert!(!argv.contains(&"--query".to_string()));
+        } else {
+            assert!(argv.contains(&"--query".to_string()));
+        }
+    }
+}
+
 #[test]
 fn test_dialog_tier_slash_commands_are_consumed() {
     // /login, /logout, and /observe previously fell through to the model

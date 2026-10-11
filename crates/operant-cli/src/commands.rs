@@ -892,6 +892,36 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("pet", "Pet the mascot", "Info").cli_only(),
     CommandDef::new("replay", "Replay spawn tree (planned)", "Session").cli_only(),
     CommandDef::new("replay-diff", "Diff replay (planned)", "Session").cli_only(),
+
+    // ── Agent flows (tier 3) ─────────────────────────────────────────────
+    // One-shot agent sessions launched via the /setup suspend-and-run escape
+    // hatch; handlers registered in register_agent_flow_handlers (tui_app.rs).
+    CommandDef::new(
+        "improve",
+        "Autonomously improve the repository (TODO.md ledger)",
+        "Agent flows",
+    )
+    .with_aliases(&["cut-improve"]),
+    CommandDef::new(
+        "judge",
+        "Launch a one-shot judge session over the current conversation",
+        "Agent flows",
+    ),
+    CommandDef::new(
+        "refactor",
+        "Run a safe refactor loop with independent review",
+        "Agent flows",
+    ),
+    CommandDef::new(
+        "fix",
+        "Recover when the model cannot continue",
+        "Agent flows",
+    ),
+    CommandDef::new(
+        "triage",
+        "Triage new GitHub issues and autonomously fix the safe ones",
+        "Agent flows",
+    ),
 ];
 
 // ---------------------------------------------------------------------------

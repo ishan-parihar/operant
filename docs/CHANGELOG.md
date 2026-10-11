@@ -542,6 +542,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-770 — command backlog tier 3 (agent flows): `/improve`, `/judge`,
+  `/refactor`, `/fix`, and `/triage` now launch real one-shot agent
+  sessions instead of falling through to the model as literal prompt
+  text.** Each resolves in the command registry to
+  `CommandResult::ShellCommand`, arming the existing suspend-and-run
+  escape hatch (`pending_shell_command` → `run_suspended_shell_command`,
+  the /setup path): the TUI suspends and the current binary runs the
+  session with inherited stdio. Flag shapes follow the CLI contract:
+  `run --autonomous` rejects `--query`, so `/improve` (whose whole
+  purpose is the TODO.md ledger) goes autonomous-only; `/judge`,
+  `/refactor`, `/fix`, `/triage` take `run --query "<prompt>"`.
+  argv[0] is `current_exe()` per the /setup precedent (a bare "operant"
+  could resolve a different version on PATH). Handlers extracted into
+  `register_agent_flow_handlers` so the registry they build is testable
+  without entering the TUI; the regression test pins resolution + flag
+  shape for all five. Headless consumption verified: all five fire
+  SlashCommand events with no agent turn and no credential error.
 - **iter-769 — command backlog tier 2 (dialog handlers): `/login`,
   `/init`, `/logout`, and `/observe` now intercept instead of falling
   through to the model as literal prompt text.** `/login` and `/init`

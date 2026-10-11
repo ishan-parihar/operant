@@ -355,6 +355,12 @@ impl TuiApp {
             .register_handler("whoami", Box::new(WhoamiHandler))
             .ok();
 
+        // ── Tier 3: agent-flow commands ──────────────────────────────────
+        // Registered in the slash surface but historically unhandled — they
+        // fell through the TUI intercept AND the registry, landing in the
+        // model as literal prompt text. See register_agent_flow_handlers.
+        register_agent_flow_handlers(&mut command_registry);
+
         let mut app =
             crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
 
@@ -1143,4 +1149,106 @@ fn run_suspended_shell_command(
 pub enum LaunchMode {
     Landing,
     Query(String),
+}
+
+
+/// Tier-3 agent-flow handlers (/improve /judge /refactor /fix /triage):
+/// each suspends the TUI via `CommandResult::ShellCommand` →
+/// `pending_shell_command` → `run_suspended_shell_command` (the /setup
+/// escape hatch) and runs a one-shot operant session.
+///
+/// argv[0] is `current_exe()` per the /setup precedent: a bare "operant"
+/// would resolve against PATH and could run a different version than the
+/// TUI the user is sitting in.
+///
+/// Flag shapes follow the CLI contract (main.rs): `run --autonomous`
+/// rejects `--query` (autonomous mode reads TODO.md), so /improve — whose
+/// whole purpose is the TODO.md ledger — goes autonomous-only, while the
+/// one-shot flows take `run --query "<prompt>"`.
+pub(crate) fn register_agent_flow_handlers(registry: &mut crate::commands::CommandRegistry) {
+    use crate::commands::{CommandContext, CommandHandler, CommandResult};
+
+    pub(crate) fn agent_flow_argv(extra: &[&str]) -> Vec<String> {
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "operant".to_string());
+        std::iter::once(exe)
+            .chain(extra.iter().map(|s| s.to_string()))
+            .collect()
+    }
+
+    struct ImproveHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for ImproveHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            // Autonomous mode reads the TODO.md ledger (run --autonomous
+            // rejects --query by design).
+            CommandResult::ShellCommand(agent_flow_argv(&["run", "--autonomous"]))
+        }
+    }
+
+    struct JudgeHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for JudgeHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::ShellCommand(agent_flow_argv(&[
+                "run",
+                "--query",
+                "Judge this session: review the conversation for correctness, completeness, and safety, then report findings.",
+            ]))
+        }
+    }
+
+    struct RefactorHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for RefactorHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::ShellCommand(agent_flow_argv(&[
+                "run",
+                "--query",
+                "Run a safe refactor loop: identify a refactor opportunity, apply it, then review the diff.",
+            ]))
+        }
+    }
+
+    struct FixHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for FixHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::ShellCommand(agent_flow_argv(&[
+                "run",
+                "--query",
+                "Recover: the model cannot continue — diagnose the failure from the transcript and propose a fix.",
+            ]))
+        }
+    }
+
+    struct TriageHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for TriageHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::ShellCommand(agent_flow_argv(&[
+                "run",
+                "--query",
+                "Triage new GitHub issues: fetch open issues, classify safe vs unsafe, autonomously fix the safe ones.",
+            ]))
+        }
+    }
+
+    registry
+        .register_handler("improve", Box::new(ImproveHandler))
+        .ok();
+    registry
+        .register_handler("judge", Box::new(JudgeHandler))
+        .ok();
+    registry
+        .register_handler("refactor", Box::new(RefactorHandler))
+        .ok();
+    registry
+        .register_handler("fix", Box::new(FixHandler))
+        .ok();
+    registry
+        .register_handler("triage", Box::new(TriageHandler))
+        .ok();
 }
