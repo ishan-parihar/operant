@@ -543,6 +543,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-773 — v6 outline row 6b LANDED: the progress-token stall rung**
+  — the last row-6 item. The model-evasion shape the loop detector was
+  blind to: iterations whose narration keeps *claiming* forward motion
+  ("next…", "now I'll…", "step N") while **nothing executes** — every
+  call guardrail-skipped — reworded each time so `IdenticalOutput`'s
+  byte-identical signature never fires. New `RepeatPattern`
+  `ProgressTokenStall { count }` plus a claim-vs-action streak in
+  `ToolGuardrailTracker`: `observe_output` gains `claimed_progress`
+  (a pure `text_claims_progress` matcher over the narration) and
+  `acted` (the batch executed ≥1 non-skipped result); consecutive
+  claims without an action warn at `PROGRESS_TOKEN_WARN` (4) and arm
+  the shared skip backstop at `PROGRESS_TOKEN_SKIP` (5). Its reset
+  semantics are its own: an all-exempt polling batch resets it
+  (iter-688 parity), a claim *followed by an executed call* resets it
+  (the normal agent rhythm), and it deliberately sees batches the
+  identical-output rung discards — an all-skipped batch IS the stall
+  shape. Both pattern-message fns and the armed-skip branch gained
+  arms (the branch now reports the pattern that actually armed the
+  skip). Wire-up: `observe_iteration_output` takes the narration,
+  `run.rs` passes it; the Warn feed speaks the new copy. Six new
+  tests (vocabulary, warn-at-4/arm-at-5 with the arming pattern,
+  executed-call reset, no-claim-alone silence, exempt-batch reset,
+  skip copy); mutation-proven — dropping the increment turns the three
+  accumulation tests red. Guardrail suite 51/51; core suite 2500/2500;
+  clippy clean in touched zones (net-zero new warnings).
+
 - **iter-772 — v6 outline row 5 LANDED: the cron lifecycle quartet is
   observable through the gateway.** The queued seam closed: `AppConfig`
   gains the `[observability]` section (schema-parity type; `backend`

@@ -100,6 +100,43 @@ pub const OUTPUT_REPEAT_WARN: usize = 4;
 /// not punished (the iter-682 deviation from openhuman's halt).
 pub const OUTPUT_REPEAT_SKIP: usize = 5;
 
+/// Consecutive claim-only iterations before the progress-token rung
+/// warns — parity with [`OUTPUT_REPEAT_WARN`]. A claim followed by an
+/// executed call resets the streak, so only a genuine
+/// claims-without-actions streak reaches this.
+pub const PROGRESS_TOKEN_WARN: usize = 4;
+
+/// One more claim-only iteration arms the shared skip backstop —
+/// parity with [`OUTPUT_REPEAT_SKIP`].
+pub const PROGRESS_TOKEN_SKIP: usize = 5;
+
+/// Narration phrases that assert forward motion. The claim-vs-action
+/// rung (v6 outline row 6b) compares this signal against whether the
+/// iteration executed anything: a run that keeps promising action while
+/// nothing runs is stalled even though every narration is freshly
+/// worded — the shape the byte-identical output rung cannot see.
+const PROGRESS_CLAIM_PHRASES: &[&str] = &[
+    "next",
+    "let me",
+    "now i",
+    "step ",
+    "moving on",
+    "proceeding",
+    "i'll now",
+    "i will now",
+    "after that",
+    "then i",
+];
+
+/// Whether the narration asserts forward motion (a progress claim).
+/// Pure: the claim side of the claim-vs-action rung.
+pub fn text_claims_progress(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    PROGRESS_CLAIM_PHRASES
+        .iter()
+        .any(|phrase| lower.contains(phrase))
+}
+
 /// Guardrail decision for one observed tool call or result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardrailDecision {
@@ -137,6 +174,13 @@ pub enum RepeatPattern {
     /// `count` consecutive iterations this turn — the output-side
     /// successful-repeat rung (openhuman `record_output`).
     IdenticalOutput { count: usize },
+    /// The narration claimed forward motion ("next…", "now I'll…")
+    /// in `count` consecutive iterations while no tool call actually
+    /// executed — the claim-vs-action rung (v6 outline row 6b).
+    /// `IdenticalOutput` compares byte-identical signatures; a model
+    /// paraphrasing its claim each time never trips it, which is exactly
+    /// the stall shape this rung catches.
+    ProgressTokenStall { count: usize },
 }
 
 /// Per-turn tracker of identical tool-call repeats.
@@ -175,6 +219,15 @@ pub struct ToolGuardrailTracker {
     /// True when the output streak tripped [`OUTPUT_REPEAT_SKIP`]: the
     /// next non-exempt tool call is skipped regardless of identity.
     output_armed: bool,
+    /// Which pattern armed [`Self::output_armed`] — the identical-output
+    /// and progress-token rungs share the one skip backstop, so the
+    /// `observe()` armed branch reports the pattern that actually armed
+    /// it instead of assuming `IdenticalOutput`.
+    armed_pattern: Option<RepeatPattern>,
+    /// Consecutive iterations whose narration claimed progress while no
+    /// tool call executed — the claim-vs-action streak (v6 outline
+    /// row 6b). Fed by [`Self::observe_output`].
+    progress_token_streak: usize,
     /// `is_repeat_call_exempt` port (the W1.8c-dropped `tool_call_dedup_exempt`):
     /// tools exempt from every repeat/loop rung. Survives [`Self::reset`].
     exempt_tools: HashSet<String>,
@@ -219,9 +272,16 @@ impl ToolGuardrailTracker {
         // it is. The model already narrated the identical output ≥5 times;
         // feeding it another result cannot produce new information.
         if self.output_armed {
-            self.last_pattern = Some(RepeatPattern::IdenticalOutput {
-                count: self.output_streak.1,
-            });
+            // The pattern is always Some when armed (both arming rungs
+            // set it); the eager fallback is the defensive arm the
+            // field's doc describes (one usize copy, never hot).
+            let pattern = self
+                .armed_pattern
+                .clone()
+                .unwrap_or(RepeatPattern::IdenticalOutput {
+                    count: self.output_streak.1,
+                });
+            self.last_pattern = Some(pattern);
             return GuardrailDecision::Skip;
         }
 
@@ -441,10 +501,38 @@ impl ToolGuardrailTracker {
         signature: u64,
         batch_successful: bool,
         batch_exempt: bool,
+        claimed_progress: bool,
+        acted: bool,
     ) -> GuardrailDecision {
+        // v6 outline row 6b — claim-vs-action, evaluated FIRST and on
+        // its own reset semantics: an all-exempt polling batch resets
+        // it (iter-688 parity — a poller re-narrating is legitimate),
+        // a claim with an executed call resets it (the normal agent
+        // rhythm), and only consecutive claims without an executed
+        // call accumulate. It deliberately sees batches the
+        // identical-output rung discards below: an all-guardrail-
+        // skipped batch IS the stall shape.
+        if batch_exempt {
+            self.progress_token_streak = 0;
+        } else if claimed_progress && !acted {
+            self.progress_token_streak += 1;
+        } else {
+            self.progress_token_streak = 0;
+        }
+        if self.progress_token_streak >= PROGRESS_TOKEN_WARN {
+            let count = self.progress_token_streak;
+            self.last_pattern = Some(RepeatPattern::ProgressTokenStall { count });
+            if count >= PROGRESS_TOKEN_SKIP {
+                self.output_armed = true;
+                self.armed_pattern = Some(RepeatPattern::ProgressTokenStall { count });
+            }
+            return GuardrailDecision::Warn;
+        }
+
         if batch_exempt || !batch_successful {
             self.output_streak = (None, 0);
             self.output_armed = false;
+            self.armed_pattern = None;
             self.last_pattern = None;
             return GuardrailDecision::Allow;
         }
@@ -458,10 +546,11 @@ impl ToolGuardrailTracker {
             self.last_pattern = Some(RepeatPattern::IdenticalOutput { count });
             if count >= OUTPUT_REPEAT_SKIP {
                 self.output_armed = true;
+                self.armed_pattern = Some(RepeatPattern::IdenticalOutput { count });
             }
             return GuardrailDecision::Warn;
         }
-        self.last_pattern = None;
+
         GuardrailDecision::Allow
     }
 
@@ -483,6 +572,8 @@ impl ToolGuardrailTracker {
         self.recurrences.clear();
         self.output_streak = (None, 0);
         self.output_armed = false;
+        self.armed_pattern = None;
+        self.progress_token_streak = 0;
         self.last_pattern = None;
     }
 }
@@ -587,6 +678,11 @@ pub fn build_pattern_skip_message(tool_name: &str, pattern: Option<&RepeatPatter
              — this call was skipped. Change your approach or finish with what you \
              already have."
         ),
+        Some(RepeatPattern::ProgressTokenStall { count }) => format!(
+            "{SKIP_MESSAGE_PREFIX}the last {count} iterations narrated progress while no \
+             tool call actually ran. Claims are not actions — do the work or finish \
+             with what you already have; this call was skipped."
+        ),
         None => format!(
             "{SKIP_MESSAGE_PREFIX}repetitive tool-call pattern detected — this call was skipped."
         ),
@@ -620,6 +716,11 @@ pub fn pattern_warning_message(tool_name: &str, pattern: Option<&RepeatPattern>)
              call with no change. The run is stuck repeating the same step — \
              change your approach or finish with what you have."
         ),
+        Some(RepeatPattern::ProgressTokenStall { count }) => format!(
+            "⚠ The last {count} iterations narrated progress while no tool call \
+             actually ran. The run is going in circles — take a different action \
+             or finish with what you have."
+        ),
         None => format!("⚠ Tool '{tool_name}' is repeating itself without progress."),
     }
 }
@@ -632,6 +733,16 @@ pub fn output_repeat_warning_message(count: usize) -> String {
         "⚠ The last {count} iterations produced the identical response and tool \
          call with no change. The run appears stuck repeating the same step — \
          change your approach or finish with what you already have."
+    )
+}
+
+/// The progress-token stall warning (v6 outline row 6b): the
+/// claim-vs-action rung's Warn copy — claims without executions.
+pub fn progress_token_stall_warning_message(count: usize) -> String {
+    format!(
+        "⚠ The last {count} iterations narrated progress (\"next\", \"now I'll\") while no \\
+         tool call actually ran. The run is going in circles — take a different \\
+         action or finish with what you already have."
     )
 }
 
@@ -1294,7 +1405,7 @@ mod ladder_tests {
         for _ in 0..3 {
             let _ = ok(&mut t, "poll", "same");
             // A failed batch resets the output streak between every pair.
-            let _ = t.observe_output(7, false, false);
+            let _ = t.observe_output(7, false, false, false, true);
         }
         assert_eq!(
             ok(&mut t, "poll", "same"),
@@ -1497,19 +1608,19 @@ mod ladder_tests {
         let sig = 42u64;
         for i in 1..=3 {
             assert_eq!(
-                t.observe_output(sig, true, false),
+                t.observe_output(sig, true, false, false, true),
                 GuardrailDecision::Allow,
                 "iterations 1-3 stay quiet (openhuman: no verdict before the threshold)"
             );
             let _ = i;
         }
         assert_eq!(
-            t.observe_output(sig, true, false),
+            t.observe_output(sig, true, false, false, true),
             GuardrailDecision::Warn,
             "4th identical output warns (DEFAULT_REPEAT_OUTPUT_THRESHOLD)"
         );
         assert_eq!(
-            t.observe_output(sig, true, false),
+            t.observe_output(sig, true, false, false, true),
             GuardrailDecision::Warn,
             "5th warns again and arms the skip backstop"
         );
@@ -1524,12 +1635,12 @@ mod ladder_tests {
     fn changed_output_resets_the_streak() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..3 {
-            let _ = t.observe_output(1, true, false);
+            let _ = t.observe_output(1, true, false, false, true);
         }
-        let _ = t.observe_output(2, true, false);
+        let _ = t.observe_output(2, true, false, false, true);
         for _ in 0..2 {
             assert_eq!(
-                t.observe_output(2, true, false),
+                t.observe_output(2, true, false, false, true),
                 GuardrailDecision::Allow,
                 "a changed output starts a fresh streak (3 total, below the threshold)"
             );
@@ -1544,20 +1655,20 @@ mod ladder_tests {
         // progress-eligible iteration.
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..3 {
-            let _ = t.observe_output(1, true, false);
+            let _ = t.observe_output(1, true, false, false, true);
         }
-        let _ = t.observe_output(1, false, false);
+        let _ = t.observe_output(1, false, false, false, true);
         for _ in 0..3 {
             assert_eq!(
-                t.observe_output(1, true, false),
+                t.observe_output(1, true, false, false, true),
                 GuardrailDecision::Allow,
                 "a failed prior batch must not count toward a successful output loop"
             );
         }
-        let _ = t.observe_output(1, true, true);
+        let _ = t.observe_output(1, true, true, false, true);
         for _ in 0..3 {
             assert_eq!(
-                t.observe_output(1, true, false),
+                t.observe_output(1, true, false, false, true),
                 GuardrailDecision::Allow,
                 "an exempt (polling) batch must not count either"
             );
@@ -1568,7 +1679,7 @@ mod ladder_tests {
     fn exempt_tools_still_bypass_an_armed_output_streak() {
         let mut t = ToolGuardrailTracker::new().with_exempt_tools(["wait_poll"]);
         for _ in 0..5 {
-            let _ = t.observe_output(1, true, false);
+            let _ = t.observe_output(1, true, false, false, true);
         }
         assert!(t.output_armed, "test helper: streak must be armed");
         assert_eq!(
@@ -1587,10 +1698,10 @@ mod ladder_tests {
     fn armed_output_streak_disarms_on_a_failed_or_exempt_batch() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..5 {
-            let _ = t.observe_output(1, true, false);
+            let _ = t.observe_output(1, true, false, false, true);
         }
         assert!(t.output_armed);
-        let _ = t.observe_output(1, false, false);
+        let _ = t.observe_output(1, false, false, false, true);
         assert!(!t.output_armed, "a failed batch clears the backstop");
         assert_eq!(
             t.observe("anything", "{}"),
@@ -1603,7 +1714,7 @@ mod ladder_tests {
     fn reset_clears_the_output_streak_and_backstop() {
         let mut t = ToolGuardrailTracker::new();
         for _ in 0..5 {
-            let _ = t.observe_output(1, true, false);
+            let _ = t.observe_output(1, true, false, false, true);
         }
         t.reset();
         assert_eq!(
@@ -1612,9 +1723,154 @@ mod ladder_tests {
             "reset disarms the output backstop"
         );
         assert_eq!(
-            t.observe_output(1, true, false),
+            t.observe_output(1, true, false, false, true),
             GuardrailDecision::Allow,
             "reset clears the streak count"
         );
+    }
+
+    // ── v6 outline row 6b: claim-vs-action rung (progress-token stall) ──
+
+    /// Feed one claim-only iteration: the narration promises motion,
+    /// nothing executed (all guardrail-skipped), and the signature is
+    /// fresh each time — the paraphrase that keeps the identical-output
+    /// rung blind.
+    fn claim_only(t: &mut ToolGuardrailTracker, signature: u64) -> GuardrailDecision {
+        t.observe_output(signature, false, false, true, false)
+    }
+
+    #[test]
+    fn text_claims_progress_matches_the_claim_vocabulary() {
+        for claim in [
+            "Next I will read the file",
+            "let me check the tests",
+            "Now I'll run the suite",
+            "Step 2 of the plan",
+            "Moving on to the next check",
+            "Proceeding with the fix",
+            "After that, I'll verify",
+        ] {
+            assert!(text_claims_progress(claim), "should claim: {claim}");
+        }
+        for quiet in [
+            "The build failed with 3 errors.",
+            "Here is the summary of the run.",
+            "No further action needed.",
+        ] {
+            assert!(!text_claims_progress(quiet), "should not claim: {quiet}");
+        }
+    }
+
+    #[test]
+    fn claim_only_streak_warns_at_four_and_arms_skip_at_five() {
+        let mut t = ToolGuardrailTracker::new();
+        // Fresh signature each iteration: paraphrased claims never trip
+        // the identical-output rung.
+        for i in 1..=3u64 {
+            assert_eq!(
+                claim_only(&mut t, i),
+                GuardrailDecision::Allow,
+                "claim-only iterations 1-3 stay quiet (rung is 4, same as output)"
+            );
+        }
+        assert_eq!(
+            claim_only(&mut t, 4),
+            GuardrailDecision::Warn,
+            "the 4th consecutive claim-only iteration warns"
+        );
+        assert_eq!(
+            t.last_pattern(),
+            Some(RepeatPattern::ProgressTokenStall { count: 4 }),
+            "the warn carries the new pattern"
+        );
+        assert_eq!(
+            claim_only(&mut t, 5),
+            GuardrailDecision::Warn,
+            "the 5th warns again and arms the shared skip backstop"
+        );
+        assert_eq!(
+            t.observe("some_other_tool", "{\"x\":1}"),
+            GuardrailDecision::Skip,
+            "an armed claim-only streak skips the next call regardless of identity"
+        );
+        assert_eq!(
+            t.last_pattern(),
+            Some(RepeatPattern::ProgressTokenStall { count: 5 }),
+            "the skip reports the pattern that actually armed it, not IdenticalOutput"
+        );
+    }
+
+    #[test]
+    fn one_executed_call_resets_the_claim_only_streak() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 1..=3u64 {
+            claim_only(&mut t, i);
+        }
+        assert_eq!(
+            t.observe_output(99, true, false, true, true),
+            GuardrailDecision::Allow,
+            "a claim FOLLOWED BY AN EXECUTED call is the normal rhythm, not a stall"
+        );
+        for i in 10..=12u64 {
+            assert_eq!(
+                claim_only(&mut t, i),
+                GuardrailDecision::Allow,
+                "the streak restarted at zero — three fresh claims stay below the warn"
+            );
+        }
+        assert_eq!(
+            claim_only(&mut t, 13),
+            GuardrailDecision::Warn,
+            "four CONSECUTIVE claim-only iterations warn"
+        );
+    }
+
+    #[test]
+    fn claims_without_action_alone_never_trip_the_rung() {
+        let mut t = ToolGuardrailTracker::new();
+        // Silent successful iterations (no progress claim): even a long
+        // run never accumulates a claim streak.
+        for i in 1..=10u64 {
+            assert_eq!(
+                t.observe_output(i, true, false, false, true),
+                GuardrailDecision::Allow
+            );
+        }
+        assert_eq!(
+            t.observe_output(11, true, false, false, false),
+            GuardrailDecision::Allow,
+            "no claim, no action (empty batch) — nothing to warn about"
+        );
+    }
+
+    #[test]
+    fn exempt_batch_resets_the_claim_only_streak() {
+        let mut t = ToolGuardrailTracker::new();
+        for i in 1..=3u64 {
+            claim_only(&mut t, i);
+        }
+        assert_eq!(
+            t.observe_output(50, true, true, true, false),
+            GuardrailDecision::Allow,
+            "an all-exempt (polling) iteration resets the claim streak, exactly as \
+             it resets the identical-output streak (iter-688 parity)"
+        );
+        for i in 60..=62u64 {
+            assert_eq!(claim_only(&mut t, i), GuardrailDecision::Allow);
+        }
+        assert_eq!(
+            claim_only(&mut t, 63),
+            GuardrailDecision::Warn,
+            "four consecutive claims AFTER the exempt reset still warn"
+        );
+    }
+
+    #[test]
+    fn progress_token_skip_message_names_the_claim_action_gap() {
+        let msg =
+            build_pattern_skip_message("x", Some(&RepeatPattern::ProgressTokenStall { count: 4 }));
+        assert!(msg.contains("narrated progress"));
+        assert!(msg.contains("no tool call actually ran"));
+        assert!(msg.starts_with(SKIP_MESSAGE_PREFIX));
     }
 }

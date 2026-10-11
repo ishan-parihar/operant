@@ -584,7 +584,12 @@ impl OperantAgent {
     /// batch that was partially skipped is not clean progress), and an
     /// all-exempt (polling) batch resets the streak — a poller re-narrating
     /// itself is legitimate progress.
-    pub(crate) async fn observe_iteration_output(&self, signature: u64, results: &[ToolResult]) {
+    pub(crate) async fn observe_iteration_output(
+        &self,
+        signature: u64,
+        narration: &str,
+        results: &[ToolResult],
+    ) {
         use crate::tool_guardrails::{self, GuardrailDecision};
 
         let decision = {
@@ -604,26 +609,44 @@ impl OperantAgent {
                     all_ok = false;
                 }
             }
-            g.observe_output(signature, saw_real && all_ok, batch_exempt)
+            let claimed_progress = tool_guardrails::text_claims_progress(narration);
+            let batch_successful = saw_real && all_ok;
+            g.observe_output(
+                signature,
+                batch_successful,
+                batch_exempt,
+                claimed_progress,
+                saw_real,
+            )
         };
         if matches!(decision, GuardrailDecision::Warn) {
-            let count = {
+            let (count, is_progress_token) = {
                 let g = self
                     .tool_guardrails
                     .lock()
                     .expect("tool_guardrails lock poisoned");
                 g.last_pattern()
                     .map(|p| match p {
-                        crate::tool_guardrails::RepeatPattern::IdenticalOutput { count } => count,
-                        _ => 0,
+                        crate::tool_guardrails::RepeatPattern::IdenticalOutput { count } => {
+                            (count, false)
+                        }
+                        crate::tool_guardrails::RepeatPattern::ProgressTokenStall { count } => {
+                            (count, true)
+                        }
+                        _ => (0, false),
                     })
-                    .unwrap_or(0)
+                    .unwrap_or((0, false))
             };
-            warn!(count, "Output repeat rung — warning model");
-            self.emit(AgentEvent::Content {
-                text: crate::tool_guardrails::output_repeat_warning_message(count),
-            })
-            .await;
+            let warning = if is_progress_token {
+                crate::tool_guardrails::progress_token_stall_warning_message(count)
+            } else {
+                crate::tool_guardrails::output_repeat_warning_message(count)
+            };
+            warn!(
+                count,
+                is_progress_token, "Output-side repeat/stall rung — warning model"
+            );
+            self.emit(AgentEvent::Content { text: warning }).await;
         }
     }
 

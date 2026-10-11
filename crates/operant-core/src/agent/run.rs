@@ -1604,11 +1604,17 @@ impl OperantAgent {
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
 
-                    // Output-side successful-repeat rung (openhuman
+                    // Output-side repeat rungs (openhuman
                     // `record_output` port): identical narration + batch
-                    // ≥4 iterations warns, ≥5 arms the skip backstop.
-                    self.observe_iteration_output(iteration_output_sig, &tool_results)
-                        .await;
+                    // ≥4 iterations warns, ≥5 arms the skip backstop; the
+                    // v6 row-6b claim-vs-action rung rides the same call
+                    // (the narration is its claim-side input).
+                    self.observe_iteration_output(
+                        iteration_output_sig,
+                        &effective_text,
+                        &tool_results,
+                    )
+                    .await;
 
                     // ── S2 per-tool consecutive-timeout breaker ──────────
                     // A timeout used to be an ordinary retryable error, so
