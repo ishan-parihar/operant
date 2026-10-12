@@ -58,6 +58,11 @@ const REASONING_FLOORS: &[(&str, u64)] = &[
     ("grok-4.20-reasoning", 300),
     ("grok-4.5", 300),
     ("grok-4-fast-non-reasoning", 180),
+    // dots-studio preview reasoning (emits reasoning_content — iter-779
+    // salvage proves the thinking path is live; free-tier TTFB routinely
+    // exceeds the 120s configured ceiling, killing cron seat runs at the
+    // first LLM call — iter-784).
+    ("dots-3-note-preview", 300),
 ];
 
 /// Return the stale-timeout floor (seconds) for a known reasoning model.
