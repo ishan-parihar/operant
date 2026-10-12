@@ -352,16 +352,6 @@ pub fn create_memory(
     create_memory_with_storage_and_routes(config, &[], None, workspace_dir, api_key)
 }
 
-/// Factory: create memory with optional storage-provider override.
-pub fn create_memory_with_storage(
-    config: &MemoryConfig,
-    storage_provider: Option<&StorageProviderConfig>,
-    workspace_dir: &Path,
-    api_key: Option<&str>,
-) -> Result<Box<dyn Memory>> {
-    create_memory_with_storage_and_routes(config, &[], storage_provider, workspace_dir, api_key)
-}
-
 /// Factory: create memory with optional storage-provider override and embedding routes.
 pub fn create_memory_with_storage_and_routes(
     config: &MemoryConfig,
