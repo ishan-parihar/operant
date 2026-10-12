@@ -73,7 +73,7 @@ impl SecretStore {
         blob.extend_from_slice(&nonce);
         blob.extend_from_slice(&ciphertext);
 
-        Ok(format!("enc2:{}", hex_encode(&blob)))
+        Ok(format!("enc2:{}", hex::encode(&blob)))
     }
 
     /// Decrypt a secret.
@@ -187,7 +187,7 @@ impl SecretStore {
             if let Some(parent) = self.key_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            write_secret_file(&self.key_path, hex_encode(&key).as_bytes())
+            write_secret_file(&self.key_path, hex::encode(&key).as_bytes())
                 .context("Failed to write secret key file")?;
 
             #[cfg(windows)]
@@ -276,17 +276,7 @@ fn generate_random_key() -> Vec<u8> {
     ChaCha20Poly1305::generate_key(&mut OsRng).to_vec()
 }
 
-/// Hex-encode bytes to a lowercase hex string.
-fn hex_encode(data: &[u8]) -> String {
-    let mut s = String::with_capacity(data.len() * 2);
-    for b in data {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
-/// Write a secret file owner-only (0o600) on Unix in a single `open(2)` —
+/// Write a secret file owner-only (0o600) on Unix in a single `open(2)` — 
 /// a plain `fs::write` followed by `set_permissions` leaves a window where
 /// the umask default (typically 0644) exposes the key (same fix as
 /// `operant-channels`' matrix/wechat writers).
@@ -495,7 +485,7 @@ mod tests {
         if blob.len() > NONCE_LEN {
             blob[NONCE_LEN] ^= 0xff;
         }
-        let tampered = format!("enc2:{}", hex_encode(&blob));
+        let tampered = format!("enc2:{}", hex::encode(&blob));
 
         let result = store.decrypt(&tampered);
         assert!(result.is_err(), "Tampered ciphertext must be rejected");
@@ -557,7 +547,7 @@ mod tests {
         // Manually produce a legacy XOR-encrypted value
         let plaintext = "sk-legacy-api-key";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         // Store should still be able to decrypt legacy values
         let decrypted = store.decrypt(&legacy_value).unwrap();
@@ -623,7 +613,7 @@ mod tests {
         // Manually create a legacy XOR-encrypted value
         let plaintext = "sk-legacy-secret-to-migrate";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         // Verify it needs migration
         assert!(SecretStore::needs_migration(&legacy_value));
@@ -665,7 +655,7 @@ mod tests {
 
         let plaintext = "sk-日本語-émojis-🦀-тест";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         let (decrypted, migrated) = store.decrypt_and_migrate(&legacy_value).unwrap();
         assert_eq!(decrypted, plaintext);
@@ -688,7 +678,7 @@ mod tests {
         // Empty plaintext XOR-encrypted
         let plaintext = "";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         let (decrypted, migrated) = store.decrypt_and_migrate(&legacy_value).unwrap();
         assert_eq!(decrypted, plaintext);
@@ -707,7 +697,7 @@ mod tests {
 
         let plaintext = "a".repeat(10_000);
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         let (decrypted, migrated) = store.decrypt_and_migrate(&legacy_value).unwrap();
         assert_eq!(decrypted, plaintext);
@@ -743,7 +733,7 @@ mod tests {
         // Encrypt with store1's key
         let plaintext = "secret-for-store1";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key1);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         // Decrypt with store2 — XOR will produce garbage bytes
         // This may fail with UTF-8 error or succeed with garbage plaintext
@@ -775,7 +765,7 @@ mod tests {
 
         let plaintext = "sk-same-secret";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         let (_, migrated1) = store.decrypt_and_migrate(&legacy_value).unwrap();
         let (_, migrated2) = store.decrypt_and_migrate(&legacy_value).unwrap();
@@ -799,7 +789,7 @@ mod tests {
 
         let plaintext = "sk-sensitive-data";
         let ciphertext = xor_cipher(plaintext.as_bytes(), &key);
-        let legacy_value = format!("enc:{}", hex_encode(&ciphertext));
+        let legacy_value = format!("enc:{}", hex::encode(&ciphertext));
 
         let (_, migrated) = store.decrypt_and_migrate(&legacy_value).unwrap();
         let new_value = migrated.unwrap();
@@ -810,7 +800,7 @@ mod tests {
         if blob.len() > NONCE_LEN {
             blob[NONCE_LEN] ^= 0xff;
         }
-        let tampered = format!("enc2:{}", hex_encode(&blob));
+        let tampered = format!("enc2:{}", hex::encode(&blob));
 
         let result = store.decrypt_and_migrate(&tampered);
         assert!(result.is_err(), "Tampered migrated value must be rejected");
@@ -837,7 +827,7 @@ mod tests {
     #[test]
     fn hex_roundtrip() {
         let data = vec![0x00, 0x01, 0xfe, 0xff, 0xab, 0xcd];
-        let encoded = hex_encode(&data);
+        let encoded = hex::encode(&data);
         assert_eq!(encoded, "0001feffabcd");
         let decoded = hex_decode(&encoded).unwrap();
         assert_eq!(decoded, data);
