@@ -543,6 +543,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-775 — v6 outline CLOSED: every queued row landed.** The
+  outline that has driven this line's queue since iter-738 is now empty:
+  row 3 (vision-routing run-path test, iter-763), row 5 (the
+  `[observability]` seam + the cron outcome quartet, iter-772), row 6b
+  (the progress-token stall rung, iter-773) and §2 P1-A (the
+  per-channel dispatch breaker, iter-774) are all marked landed in
+  `docs/plan-2026-10-09-remaining-gaps-outline-v6.md`, each with its
+  landed-shape note (what shipped, what proves it). Docs-only — no
+  code changes.
+
 - **iter-774 — v6 outline §2 P1-A LANDED: the per-channel dispatch
   breaker.** The saga this exists for: a dead token (401) followed by
   the gateway re-issuing the same send on every cycle — 401 → 400 →

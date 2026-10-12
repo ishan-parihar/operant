@@ -49,12 +49,16 @@
    `artifact_index`/`ArtifactIndex`/`artifactindex` across `crates/`,
    and zero `offload` matches under `operant-core/src` +
    `operant-runtime/src`.
-3. **Vision-routing hardening test** — RESOLVED BY AUDIT at v4: the
+3. **~~Vision-routing hardening test~~ LANDED iter-763.** RESOLVED BY AUDIT at v4: the
    port already exists (`[multimodal]` config → `from_config_with` →
    per-request preflight + lazy route, incl. the delegate sub-agent
    path). Remainder: one run-path test proving a config-file
    `vision_provider` routes a marker request through a full facade
-   turn. Hardening, not a gap.
+   turn. Hardening, not a gap. **Landed**: `iter-763` proves the
+   config-file route end-to-end (offline ollama mock on
+   `OPERANT_PROVIDER_URL`; the marker's image path reaches the routed
+   endpoint as the `images` payload); mutation-proven (a blank
+   `provider_url` fails the test).
 4. **~~openhuman adversarial suite remainder~~ CORRECTED + CLOSED
    (iters 732/733).** The row's premise was false: no
    `no_progress/mod_tests.rs` ever existed in-tree (upstream-only; the
@@ -63,8 +67,9 @@
    (mutation-proven). The other two named faults are production work,
    re-queued below: oscillation = BUGS.md S7; progress-token stall =
    Wave-2 detector design.
-5. **`ObserverEvent::CronDeliveryOutcome` emit seam — DECIDED
-   (iter-738): keep the variant, the seam becomes its own row.** The
+5. **~~`ObserverEvent::CronDeliveryOutcome` emit seam~~ LANDED
+   iter-772. DECIDED (iter-738): keep the variant, the seam becomes its
+   own row.** The
    variant exists (`observer.rs:112`, Display at `:334`) and iter-734's
    commit body documented the deviation, but nothing emits it: the
    gateway holds no observer handle. Wiring it properly needs an
@@ -83,6 +88,13 @@
    first time) and clones it into the sender loop to emit the outcome.
    The ledger stays the correctness contract (iter-734); this row is
    observability only.
+   **Landed iter-772**: `AppConfig.observability` +
+   `core_observer_from_config` (the existing core↔runtime bridge in the
+   direction the core-trait scheduler needs — one factory for every
+   surface), the observer mounted on both WriteBarrier arms, the
+   sender loop emitting `CronDeliveryOutcome` with the new
+   `CronDelivery.job_id`; both handoff tests assert the job id,
+   mutation-proven.
  6. **Production work re-queued out of row 4** (not tests):
     - **~~S7 (BUGS.md)~~ LANDED iter-745 `b99be430`.** Fixed in the
       merged controller exactly as the filing prescribed: the
@@ -96,10 +108,16 @@
       sorted-key `hash_value`, else raw `hash_str`) so
       re-serialized-but-identical outputs no longer reset the streak.
       Mutation-proven; BUGS.md S7 header flipped CLOSED.
-    - **Progress-token stall** (Wave-2): no "progress token" concept
+    - **~~Progress-token stall~~ LANDED iter-773** (Wave-2): no "progress token" concept
       exists; needs a new detector (a `RepeatPattern` variant +
       claim-vs-action comparison in `observe_output`) — a design decision
       before any test. The only remaining row-6 item.
+      **Landed**: `RepeatPattern::ProgressTokenStall` +
+      `progress_token_streak`; `observe_output` takes
+      `claimed_progress` (pure `text_claims_progress` over the
+      narration) and `acted` (≥1 non-skipped result); warn at 4, arm the
+      shared skip at 5, own reset semantics (exempt resets; claim+acted
+      resets; silence never trips). With S7 at iter-745, row 6 is closed.
 7. **Peer's skills discovery cost (their track, tracked here for
    visibility)** — the §0 load-sensitivity finding; fixed by them in
    their skills/TUI line or by relaxing the deadline-sensitive
@@ -111,7 +129,7 @@
 |---|---|
 | P0-A recovery semantics (grace window, CAS terminal write, two-store reconcile) | partial — close-at-detection absorbed at iter-691; grace/CAS/two-store open |
 | P0-B error-code taxonomy | **DONE** (iter-691) |
-| P1-A per-channel dispatch breaker, half-open probe | **UNBLOCKED by iter-734 — next trinity port.** Hook is `gateway/mod.rs:526 send_to_platform` (it resolves the **platform-adapter** key — `self.adapters.get(platform)` — and returns `Result`; the channel id rides unindexed on `OutgoingMessage`, `gateway/types.rs:192-205`, and must be plumbed into the breaker's channel+failure-class key); NOT the cron loop — the cron sender is a separate spawn (`gateway_runner.rs:3944-3982`) and `send_to_platform` is the shared seam for ~19 call sites. No breaker exists anywhere (verified: TurnLease is inbound-session serialization, DeliveryLedger records without gating, PollRecoveryState is poll-loop debounce). Design: `plan-2026-10-08-trinity-audit-and-remaining-outline.md:23-25` |
+| P1-A per-channel dispatch breaker, half-open probe | **DONE — LANDED iter-774 `628f588d`.** Hook was `gateway/mod.rs:526 send_to_platform` (it resolves the **platform-adapter** key — `self.adapters.get(platform)` — and returns `Result`; the channel id rides unindexed on `OutgoingMessage`, `gateway/types.rs:192-205`, and must be plumbed into the breaker's channel+failure-class key); NOT the cron loop — the cron sender is a separate spawn (`gateway_runner.rs:3944-3982`) and `send_to_platform` is the shared seam for ~19 call sites. No breaker existed anywhere (verified: TurnLease is inbound-session serialization, DeliveryLedger records without gating, PollRecoveryState is poll-loop debounce). Design: `plan-2026-10-08-trinity-audit-and-remaining-outline.md:23-25`. **Landed**: `gateway/dispatch_breaker.rs` — SQLite-backed (restart-safe), keyed (platform, channel, class) with separate Transport/Auth/Wedged namespaces, capped exponential cooldown (30s→300s), one atomic half-open probe + 30s probe deadline, fail-open on infra down; both outbound seams hooked (`send_to_platform` AND `send_message_return_id`), classifier with hermes' anti-marker order; 10 pure + 3 seam tests, mutation-proven; core 2513/2513. |
 | P1-B effect-scoped idempotency on outbound sends | open |
 | P1-C canary invariant harness (E-01/E-02/E-06) | open |
 | P2-A lease/retry redelivery cap + poison-park | **DONE** — core ledger iter-722 + the consumer-mount remainder iter-734 |
