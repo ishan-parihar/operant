@@ -1,6 +1,8 @@
 //! Raspberry Pi GPIO peripheral — native rppal access.
 //!
-//! Only compiled when `peripheral-rpi` feature is enabled and target is Linux.
+//! Only compiled when the `hardware-vendor` cfg is active and target is Linux
+//! (registered in build.rs; the `peripheral-rpi` feature name was removed —
+//! it never gated anything).
 //! Uses BCM pin numbering (e.g. GPIO 17, 27).
 
 use crate::peripherals::Peripheral;

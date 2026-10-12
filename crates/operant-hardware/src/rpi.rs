@@ -1,6 +1,6 @@
 //! Raspberry Pi self-discovery and native GPIO tools.
 //!
-//! Only compiled on Linux with the `peripheral-rpi` feature enabled.
+//! Only compiled on Linux with the `hardware-vendor` cfg active.
 //!
 //! Provides two capabilities:
 //!
