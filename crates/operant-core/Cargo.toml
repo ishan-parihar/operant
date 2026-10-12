@@ -94,10 +94,8 @@ memory-wire = { git = "https://github.com/ishan-parihar/memory-wire", branch = "
 # See diagnosis before re-adding; fallback is subprocess over their MCP server.
 
 [features]
-default = ["agentmemory"]
+default = []
 anthropic = []
-# agentmemory — hybrid semantic memory via the agentmemory server (REST + MCP)
-agentmemory = []
 
 [build-dependencies]
 cc = "1.0"
