@@ -53,7 +53,7 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
     // geometry and rows when a stat is added.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(1)])
+        .constraints([Constraint::Length(8), Constraint::Min(1)])
         .split(inner);
 
     // ── Stats panel ──────────────────────────────────────────────────
@@ -79,6 +79,23 @@ pub fn render_debug_overlay(f: &mut Frame, hub: &TuiDebugHub, full_area: Rect) {
         Line::from(vec![
             Span::styled("Redraw:    ", Style::default().fg(theme_colors::accent())),
             Span::raw(hub.last_redraw_reason().unwrap_or("idle")),
+        ]),
+        Line::from(vec![
+            Span::styled("Scroll:    ", Style::default().fg(theme_colors::accent())),
+            Span::raw(format!(
+                "offset {} / max {} / total {}",
+                hub.scroll_offset(),
+                crate::tui::operant_ui::last_max_scroll(),
+                crate::tui::operant_ui::last_total_wrapped_lines()
+            )),
+        ]),
+        Line::from(vec![
+            Span::styled("Follow:    ", Style::default().fg(theme_colors::accent())),
+            Span::raw(format!(
+                "{} (resolved {})",
+                if hub.auto_paused() { "paused" } else { "tail" },
+                crate::tui::operant_ui::last_resolved_chat_scroll()
+            )),
         ]),
         Line::from(vec![
             Span::styled("Last err:  ", Style::default().fg(theme_colors::accent())),

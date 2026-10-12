@@ -118,8 +118,8 @@ pub fn set_diagram_mode_override(
     crate::tui::operant_markdown::set_diagram_mode_override(mode.map(to_markdown_diagram_mode));
 }
 
-pub fn get_diagram_mode_override() -> Option<crate::tui::operant_app::config_shim::DiagramDisplayMode>
-{
+pub fn get_diagram_mode_override()
+-> Option<crate::tui::operant_app::config_shim::DiagramDisplayMode> {
     crate::tui::operant_markdown::get_diagram_mode_override().map(from_markdown_diagram_mode)
 }
 

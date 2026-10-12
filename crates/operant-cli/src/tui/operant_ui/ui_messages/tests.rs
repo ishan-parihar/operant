@@ -660,7 +660,9 @@ fn render_todos_message_shows_goal_scores_without_verbose_feedback() {
         feedback_loop_relevance: Some(
             crate::tui::operant_app::todo::FeedbackLoopRelevance::Representative,
         ),
-        feedback_loop_coverage: Some(crate::tui::operant_app::todo::FeedbackLoopCoverage::MainPaths),
+        feedback_loop_coverage: Some(
+            crate::tui::operant_app::todo::FeedbackLoopCoverage::MainPaths,
+        ),
         delivery_state: Some(crate::tui::operant_app::todo::DeliveryState::from_legacy_score(90)),
         ..Default::default()
     }];
@@ -1125,7 +1127,9 @@ fn render_todo_quality_gate_retry_shows_only_changed_goal_fields() {
             crate::tui::operant_app::todo::FeedbackLoopState::from_legacy_score(90),
         ),
         feedback_loop: Some("Inspect one frame".to_string()),
-        feedback_loop_relevance: Some(crate::tui::operant_app::todo::FeedbackLoopRelevance::Indirect),
+        feedback_loop_relevance: Some(
+            crate::tui::operant_app::todo::FeedbackLoopRelevance::Indirect,
+        ),
         feedback_loop_coverage: Some(crate::tui::operant_app::todo::FeedbackLoopCoverage::Narrow),
         ..Default::default()
     };
@@ -1139,7 +1143,9 @@ fn render_todo_quality_gate_retry_shows_only_changed_goal_fields() {
         feedback_loop_relevance: Some(
             crate::tui::operant_app::todo::FeedbackLoopRelevance::Representative,
         ),
-        feedback_loop_coverage: Some(crate::tui::operant_app::todo::FeedbackLoopCoverage::MainPaths),
+        feedback_loop_coverage: Some(
+            crate::tui::operant_app::todo::FeedbackLoopCoverage::MainPaths,
+        ),
         ..before.clone()
     };
     let updates = vec![crate::tui::operant_app::todo::TodoGoalChange {
@@ -1606,7 +1612,9 @@ fn render_ownership_gated_todo_result_keeps_the_full_card() {
         feedback_loop_relevance: Some(
             crate::tui::operant_app::todo::FeedbackLoopRelevance::Representative,
         ),
-        feedback_loop_coverage: Some(crate::tui::operant_app::todo::FeedbackLoopCoverage::MainPaths),
+        feedback_loop_coverage: Some(
+            crate::tui::operant_app::todo::FeedbackLoopCoverage::MainPaths,
+        ),
         feedback_loop_traceability: Some(
             crate::tui::operant_app::todo::FeedbackLoopTraceability::Complete,
         ),
@@ -1832,7 +1840,10 @@ fn render_assistant_message_plan_card_keeps_nested_fences_inside() {
         .join("\n");
 
     assert!(plain.contains("⛭ Validation plan"), "plain: {plain}");
-    assert!(plain.contains("cargo test -p operant-tui"), "plain: {plain}");
+    assert!(
+        plain.contains("cargo test -p operant-tui"),
+        "plain: {plain}"
+    );
     assert!(plain.contains("After the block."), "plain: {plain}");
     assert!(plain.contains("Outside text."), "plain: {plain}");
     // The nested bash content stays inside the card borders.

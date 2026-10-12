@@ -306,7 +306,7 @@ mod tests {
             mode,
             allow: allow.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
-        delegation: None,
+            delegation: None,
         }
     }
 
@@ -495,7 +495,8 @@ mod tests {
         // A write through the migrated surface proves the column is live.
         let mut with_posture = policy(SeatMode::Standard, &[], &[]);
         with_posture.delegation = Some(crate::org::authority::DelegationPosture::Forbidden);
-        db.upsert("emp-1", &with_posture).expect("upsert post-migration");
+        db.upsert("emp-1", &with_posture)
+            .expect("upsert post-migration");
         assert_eq!(
             db.get("emp-1").expect("get").and_then(|p| p.delegation),
             Some(crate::org::authority::DelegationPosture::Forbidden)

@@ -8,23 +8,23 @@
 
 
 
+
+
+
  operant · replay
- operant
- /model to switch · Offline Capture
- v0.2.1
- /login to add provider               ┌──────────────────────────────────────────┐
- ○ anthropic                          │ Effort level                             │
- ○ openrouter                         │    ○  low                                │
- ○ openai                             │  › ◐  normal                             │
- ○ cursor                             │    ◕  high                               │
- ○ copilot                            │    ●  max                                │
- ○ gemini                             │                                          │
- ○ antigravity                        │  ↑/↓ to choose · Enter to apply · Esc to │
- ~                                    │                                          │
+ operant                              ┌──────────────────────────────────────────┐
+ /model to switch · Offline Capture   │ Effort level                             │
+ v0.2.1                               │    ○  low                                │
+ /login to add provider               │  › ◐  normal                             │
+ ● anthropic(key)                     │    ◕  high                               │
+ ~                                    │    ●  max                                │
                                       │                                          │
+                                      │  ↑/↓ to choose · Enter to apply · Esc to │
+1>                                    │                                          │
+                                      │                                          │             ~ API key Offline Capture
                                       └──────────────────────────────Esc to close┘
-1>
-                                                                                               ~ API key Offline Capture
+
+
 
 
 

@@ -8,23 +8,23 @@
 
 
 
+
+
+
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
- /login to add provider
- ○ anthropic
- ○ openrouter              ┌───────────────────────────────────────────────────────────────┐
- ○ openai                  │ Import config                                                 │
- ○ cursor                  │ Search                                                        │
- ○ copilot                 │                                                               │
- ○ gemini                  │ CLAUDE.md Import ~/.claude/CLAUDE.md                          │
- ○ antigravity             │ settings.json Import ~/.claude/settings.json                  │
- ~                         │ Both Import both CLAUDE.md and settings.json              SAFE│
-                           └───────────────────────────────────────────────────Esc to close┘
+ v0.2.1                    ┌───────────────────────────────────────────────────────────────┐
+ /login to add provider    │ Import config                                                 │
+ ● anthropic(key)          │ Search                                                        │
+ ~                         │                                                               │
+                           │ CLAUDE.md Import ~/.claude/CLAUDE.md                          │
+                           │ settings.json Import ~/.claude/settings.json                  │
+1>                         │ Both Import both CLAUDE.md and settings.json              SAFE│
+                           └───────────────────────────────────────────────────Esc to close┘   ~ API key Offline Capture
 
-1>
-                                                                                               ~ API key Offline Capture
+
+
 
 
 

@@ -40,6 +40,25 @@ pub struct NotificationQueue {
     next_id: u64,
 }
 
+/// The notification timeline's clock.
+///
+/// Corpus determinism seam (2026-10-09 live-audit wave): the banner's
+/// shrinking progress bar is driven by `(exp - now)` against a real clock,
+/// so a golden captured at a random moment shows the bar at a random width
+/// — the documented wall-clock drift that made `first-message` and
+/// `tool-block` flaky and any new banner-bearing scenario nondeterministic.
+/// With `OPERANT_FROZEN_NOTIFICATION_CLOCK` set (the corpus PINNED_ENV
+/// does), the timeline latches to the first read: banners render
+/// full-width and never expire mid-run, byte-stable across runs. Real
+/// sessions never set the var and keep live countdowns.
+fn now() -> Instant {
+    static FROZEN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    if std::env::var_os("OPERANT_FROZEN_NOTIFICATION_CLOCK").is_some() {
+        return *FROZEN.get_or_init(Instant::now);
+    }
+    Instant::now()
+}
+
 impl NotificationQueue {
     pub fn new() -> Self {
         Self {
@@ -52,7 +71,7 @@ impl NotificationQueue {
     ///
     /// * `duration_secs` — `None` for persistent, `Some(n)` for auto-expire after *n* seconds.
     pub fn push(&mut self, kind: NotificationKind, msg: String, duration_secs: Option<u64>) {
-        let pushed_at = Instant::now();
+        let pushed_at = now();
         let expires_at = duration_secs.map(|secs| pushed_at + std::time::Duration::from_secs(secs));
         self.notifications
             .retain(|n| !(n.kind == kind && n.message == msg));
@@ -75,7 +94,7 @@ impl NotificationQueue {
 
     /// Remove all expired notifications.  Call this once per render frame.
     pub fn tick(&mut self) {
-        let now = Instant::now();
+        let now = now();
         self.notifications
             .retain(|n| n.expires_at.is_none_or(|exp| exp > now));
     }
@@ -375,7 +394,7 @@ pub fn render_notification_banner(frame: &mut Frame, queue: &NotificationQueue, 
 
     // ── Row 1: thin progress bar for timed notifications ──
     let progress_line = if let Some(exp) = notif.expires_at {
-        let now = Instant::now();
+        let now = now();
         let remaining = if exp > now {
             (exp - now).as_millis()
         } else {

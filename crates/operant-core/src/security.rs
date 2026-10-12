@@ -72,7 +72,22 @@ pub async fn check_url_safety(url: &str) -> Result<bool> {
     let addr_str = format!("{hostname}:0");
     let addrs = tokio::net::lookup_host(&addr_str).await.map_err(|e| {
         warn!(hostname = %hostname, error = %e, "DNS resolution failed for URL safety check");
-        Error::Io(e)
+        // The raw resolver text ("failed to lookup address information: Name
+        // or service not known") reached users verbatim as a tool error and
+        // read like an operant bug; name the actual condition instead. The
+        // check stays fail-closed — this only clarifies the message.
+        // (2026-10-09 live audit, P3-10: the ratatui.dev web_extract failure
+        // was host DNS, but the tool error gave the user no way to know.)
+        if e.to_string().contains("lookup address information") {
+            Error::InvalidUrl(format!(
+                "DNS resolution failed for '{hostname}' — the hostname does not \
+                 resolve from this host (check network/VPN/DNS; note the SSRF \
+                 pre-flight is fail-closed, so an unreachable host fails the \
+                 request rather than bypassing the check)"
+            ))
+        } else {
+            Error::Io(e)
+        }
     })?;
 
     for addr in addrs {

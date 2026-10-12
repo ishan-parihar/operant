@@ -8,25 +8,25 @@
 
 
 
- operant · replay
- operant
- /model to switch · Offline Capture
- v0.2.1                        ┌────────────────────────────────────────────────────────┐
- /login to add provider        │ Question                                               │
- ○ anthropic                   │Which database should the migration target?             │
- ○ openrouter                  │                                                        │
- ○ openai                      │▶ 1 sqlite                                              │
- ○ cursor                      │  2 postgres                                            │
- ○ copilot                     │  3 qdrant                                              │
- ○ gemini                      │                                                        │
- ○ antigravity                 │  type to fill custom answer…                           │
- ~                             │                                                        │
-                               │  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
- 1› Which database should I poi│                                                        │                              │
+
+
+
+ operant · replay              ┌────────────────────────────────────────────────────────┐
+ operant                       │ Question                                               │
+ /model to switch · Offline Cap│Which database should the migration target?             │
+ v0.2.1                        │                                                        │
+ /login to add provider        │▶ 1 sqlite                                              │
+ ● anthropic(key)              │  2 postgres                                            │
+ ~                             │  3 qdrant                                              │
                                │                                                        │
+ 1› Which database should I poi│  type to fill custom answer…                           │                              │
+                               │                                                        │
+Empty reply — the provider stre│  type: custom   ↑↓/Tab: options   Enter: confirm   Esc:│
+2>                             │                                                        │
+                               │                                                        │▱▱▱▱ 0% API key Offline Capture
                                └────────────────────────────────────────────Esc to close┘
-2>
-                                                                         ~ 11/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
 
 
 

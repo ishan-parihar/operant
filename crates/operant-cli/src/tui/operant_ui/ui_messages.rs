@@ -1155,8 +1155,10 @@ pub(crate) fn render_todos_message(
         };
         let has_groups = todos.iter().any(|t| group_of(t).is_some());
         if has_groups {
-            let mut groups: Vec<(Option<String>, Vec<&crate::tui::operant_app::todo::TodoItem>)> =
-                Vec::new();
+            let mut groups: Vec<(
+                Option<String>,
+                Vec<&crate::tui::operant_app::todo::TodoItem>,
+            )> = Vec::new();
             for todo in &todos {
                 let key = group_of(todo);
                 if let Some(entry) = groups.iter_mut().find(|(existing, _)| *existing == key) {
@@ -1250,12 +1252,12 @@ fn todo_goal_score_spans(goal: &crate::tui::operant_app::todo::TodoGoal) -> Vec<
         let (state, color) = goal.feedback_loop_relevance.map_or_else(
             || ("missing".to_string(), todo_failure_color()),
             |state| {
-                let color = if state == crate::tui::operant_app::todo::FeedbackLoopRelevance::Indirect
-                {
-                    todo_failure_color()
-                } else {
-                    todo_warning_color()
-                };
+                let color =
+                    if state == crate::tui::operant_app::todo::FeedbackLoopRelevance::Indirect {
+                        todo_failure_color()
+                    } else {
+                        todo_warning_color()
+                    };
                 (state.as_str().to_string(), color)
             },
         );
@@ -1265,7 +1267,8 @@ fn todo_goal_score_spans(goal: &crate::tui::operant_app::todo::TodoGoal) -> Vec<
         let (state, color) = goal.feedback_loop_coverage.map_or_else(
             || ("missing".to_string(), todo_failure_color()),
             |state| {
-                let color = if state == crate::tui::operant_app::todo::FeedbackLoopCoverage::Narrow {
+                let color = if state == crate::tui::operant_app::todo::FeedbackLoopCoverage::Narrow
+                {
                     todo_failure_color()
                 } else {
                     todo_warning_color()
@@ -3230,8 +3233,9 @@ pub(crate) fn render_swarm_message(
     // renderer is live. The branch stays inert until operant produces
     // SwarmMemberStatus events, but the code path is real now.
     if msg.title.as_deref() == Some(SWARM_AGENT_SNAPSHOT_TITLE)
-        && let Ok(member) =
-            serde_json::from_str::<crate::tui::operant_app::protocol::SwarmMemberStatus>(&msg.content)
+        && let Ok(member) = serde_json::from_str::<
+            crate::tui::operant_app::protocol::SwarmMemberStatus,
+        >(&msg.content)
     {
         return crate::tui::operant_app::info_widget::swarm_gallery::render_swarm_chat_card_lines(
             &[member],

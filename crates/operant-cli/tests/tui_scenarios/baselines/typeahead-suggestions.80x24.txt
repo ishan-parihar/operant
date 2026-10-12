@@ -1,12 +1,18 @@
 
 
+
+
+
  operant · replay
  operant
  /model to switch · Offline Capture
  v0.2.1
  /login to add provider
- ○ anthropic
- ○ openrouter
+ ● anthropic(key)
+ ~
+
+
+1> /
 /new  Start a new session (fresh session ID + history)
 /redraw  Force a full UI repaint (recovers from terminal drift)
 /history  Show conversation history
@@ -15,10 +21,4 @@
 /undo  Back up N user turns and re-prompt (default 1)
 /title  Set a title for the current session
 /handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.
-1> /
-                                                       ~ API key Offline Capture
-
-
-
-
 

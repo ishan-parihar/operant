@@ -8,23 +8,23 @@
 
 
 
+
+
+
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1
- /login to add provider
- ○ anthropic
- ○ openrouter            ┌────────────────────────────────────────────────────────────────────┐
- ○ openai                │ Rewind — Select Message                                            │
- ○ cursor                │  Select a message to rewind to:                                    │
- ○ copilot               │                                                                    │
- ○ gemini                │  (no messages)                                                     │
- ○ antigravity           │                                                                    │
- ~                       │  ↑↓ navigate  ·  Enter to select                                   │
-                         └────────────────────────────────────────────────────────Esc to close┘
+ v0.2.1                  ┌────────────────────────────────────────────────────────────────────┐
+ /login to add provider  │ Rewind — Select Message                                            │
+ ● anthropic(key)        │  Select a message to rewind to:                                    │
+ ~                       │                                                                    │
+                         │  (no messages)                                                     │
+                         │                                                                    │
+1>                       │  ↑↓ navigate  ·  Enter to select                                   │
+                         └────────────────────────────────────────────────────────Esc to close┘~ API key Offline Capture
 
-1>
-                                                                                               ~ API key Offline Capture
+
+
 
 
 

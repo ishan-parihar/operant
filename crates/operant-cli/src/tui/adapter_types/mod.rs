@@ -16,7 +16,6 @@ pub mod model_registry;
 pub mod output_styles;
 pub mod provider_id;
 pub mod spinner;
-pub mod tips;
 pub mod tui_app;
 pub mod types;
 

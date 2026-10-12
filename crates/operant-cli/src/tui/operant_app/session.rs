@@ -735,7 +735,8 @@ impl ContentBlockMemoryStats {
             }
             ContentBlock::ToolUse { input, .. } => {
                 self.tool_use_blocks += 1;
-                let input_bytes = crate::tui::operant_app::process_memory::estimate_json_bytes(input);
+                let input_bytes =
+                    crate::tui::operant_app::process_memory::estimate_json_bytes(input);
                 self.tool_use_input_json_bytes += input_bytes;
                 self.record_bytes(input_bytes);
             }
@@ -1374,7 +1375,9 @@ fn format_reasoning_markup(text: &str) -> String {
     }
     let mut out = String::new();
     for line in text.split('\n') {
-        out.push_str(&crate::tui::operant_render_core::reasoning_line_markup(line));
+        out.push_str(&crate::tui::operant_render_core::reasoning_line_markup(
+            line,
+        ));
     }
     // Blank line terminates the reasoning block.
     out.push('\n');

@@ -1943,8 +1943,11 @@ impl SessionPicker {
 
         let full_width = inner.width as usize;
         let (full_lines, full_map) = wrap_lines_tracked(full_width);
-        let show_scrollbar =
-            crate::tui::operant_ui::native_scrollbar_visible(true, full_lines.len(), visible_height);
+        let show_scrollbar = crate::tui::operant_ui::native_scrollbar_visible(
+            true,
+            full_lines.len(),
+            visible_height,
+        );
 
         let (mut wrapped_lines, prewrap_to_wrapped) = if show_scrollbar {
             let content_width = inner.width.saturating_sub(1) as usize;

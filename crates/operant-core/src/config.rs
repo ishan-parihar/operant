@@ -676,6 +676,12 @@ impl Default for LoggingSettings {
 pub struct TuiSettings {
     pub theme: String,
     pub rich_output: bool,
+    /// P5-1 terminal-scrollback mode (2026-10-10 design doc): render in the
+    /// main buffer with an inline bottom viewport — no alternate screen, so
+    /// the terminal's native scrollback owns the history (tmux copy-mode and
+    /// native selection reach everything). Default off until live-verified.
+    #[serde(default)]
+    pub terminal_scroll_mode: bool,
     pub show_tool_calls: bool,
     pub show_iterations: bool,
     pub landing_title: String,
@@ -690,6 +696,7 @@ impl Default for TuiSettings {
         Self {
             theme: "opencode".to_string(),
             rich_output: true,
+            terminal_scroll_mode: false,
             show_tool_calls: true,
             show_iterations: true,
             landing_title: "HERMES".to_string(),
@@ -2365,8 +2372,7 @@ wonderful_unknown_key = 42
     #[test]
     fn agent_block_parses_guardrail_exempts_and_env_knob_defaults() {
         let raw = "[agent]\nguardrail_exempt_tools = [\"read_*\", \"web_search\"]\nguardian_llm = true\nmicro_compaction = true\n";
-        let config =
-            parse_config_str(raw, Path::new("memory://agent-block-probe")).unwrap();
+        let config = parse_config_str(raw, Path::new("memory://agent-block-probe")).unwrap();
         assert_eq!(
             config.agent.guardrail_exempt_tools,
             vec!["read_*".to_string(), "web_search".to_string()]
@@ -2386,8 +2392,7 @@ wonderful_unknown_key = 42
     fn agent_block_env_knob_defaults_stay_dark() {
         // No [agent] keys → every new knob off, list empty (dark-mergeable:
         // an unchanged config file cannot change any behavior).
-        let config =
-            parse_config_str("[agent]\n", Path::new("memory://agent-dark-probe")).unwrap();
+        let config = parse_config_str("[agent]\n", Path::new("memory://agent-dark-probe")).unwrap();
         assert!(config.agent.guardrail_exempt_tools.is_empty());
         assert!(!config.agent.guardian_llm);
         assert!(!config.agent.micro_compaction);

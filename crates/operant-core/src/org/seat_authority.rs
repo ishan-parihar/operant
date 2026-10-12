@@ -708,7 +708,7 @@ mod tests {
                     mode: SeatMode::Lockdown,
                     allow: Vec::new(),
                     deny: Vec::new(),
-                delegation: None,
+                    delegation: None,
                 },
             )
             .expect("upsert lockdown policy");
@@ -1180,7 +1180,9 @@ mod tests {
 
     // ── consult_delegation (P0 delegation governance) ───────────────────
 
-    fn seat_policy(posture: Option<crate::org::authority::DelegationPosture>) -> crate::org::seat_policy::SeatPolicy {
+    fn seat_policy(
+        posture: Option<crate::org::authority::DelegationPosture>,
+    ) -> crate::org::seat_policy::SeatPolicy {
         crate::org::seat_policy::SeatPolicy {
             mode: SeatMode::Standard,
             allow: Vec::new(),
@@ -1193,7 +1195,9 @@ mod tests {
     fn consult_delegation_is_none_without_a_posture_on_the_row() {
         let s = stores();
         seed_employee(&s, "emp-a", "A", Some("platform"));
-        s.policies.upsert("emp-a", &seat_policy(None)).expect("upsert");
+        s.policies
+            .upsert("emp-a", &seat_policy(None))
+            .expect("upsert");
         assert_eq!(authority(&s).consult_delegation("emp-a", "emp-b"), None);
     }
 

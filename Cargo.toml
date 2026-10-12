@@ -125,6 +125,20 @@ strip = true
 panic = "abort"
 codegen-units = 1
 
+# Debug builds were 50.9 GiB (2026-09-29) because this workspace has no
+# [profile.dev], so every build inherited Cargo's default `debug = 2` — full
+# debuginfo for the whole dependency tree, re-emitted into target/ on every
+# rebuild. Matches the house convention already used in parent-projects/oh-my-pi.
+# line-tables-only keeps file:line in panic backtraces; third-party crates get
+# no debuginfo at all, which is where the bulk of the 50.9 GiB lived.
+[profile.dev]
+debug = "line-tables-only"
+# Linux: split DWARF into .dwo files instead of packing it into every rlib.
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+debug = false
+
 # Advisory lints wired workspace-wide (see BUGS.md audit notes).
 # redundant_clone intentionally excluded: 136 nursery-level hits require a
 # dedicated sweep arc; adding it at warn would fail the -D warnings gate.

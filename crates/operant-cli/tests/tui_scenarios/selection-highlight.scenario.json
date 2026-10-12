@@ -2,7 +2,7 @@
   "name": "selection-highlight",
   "surface": "crates/operant-cli/src/tui/render/selection.rs::apply_selection_highlight",
   "opens_with": "(agent script seeds a message, then simulated down+drag selects it)",
-  "keys": "",
+  "keys": "<esc>",
   "mouse": "<left,5,24><drag,30,24>",
   "size": "120x40",
   "agent_script": "assistant-simple.json",
@@ -13,9 +13,11 @@
     }
   ],
   "assert": [
+    "selection_anchor != nil",
+    "selection_focus != nil",
     "messages == 1"
   ],
   "baseline": "selection-highlight.txt",
   "style_baseline": "selection-highlight.style.txt",
-  "notes": "The boot screen has no selectable transcript (the offline placeholder is not the message area), so assistant-simple.json seeds one assistant message first; the drag then anchors (col 5, row 25) and extends to (col 30) across it \u2014 apply_selection_highlight paints the range with the 58% accent bg blend (SELECTION_BLEND=0.58, selection.rs:56) and 32% white fg blend (SELECTION_FG_BLEND=0.32, selection.rs:59). The style golden is the blend guard: any change to either constant shifts every painted cell's bg/fg and fails verify. Deliberately no <release> token \u2014 the Up handler takes the auto-copy branch when anchor != focus and a headless clipboard write could block; that path is outside this surface."
+  "notes": "The boot connect dialog (no credentials in the pinned config) SWALLOWS the first Left-Down: the dialog gate treats the click as outside and closes, so the drag that follows runs with no anchor and paints nothing \u2014 the original golden pinned an unselected frame (inert since the corpus was cut). <esc> closes the dialog first, then the drag anchors (col 5, row 25) and extends to (col 30) across the seeded assistant message; apply_selection_highlight paints the range with the 58% accent bg blend (SELECTION_BLEND=0.58, selection.rs) and 32% white fg blend. The style golden is the blend guard. Deliberately no <release> token \u2014 the Up handler's auto-copy branch is outside this surface (headless clipboard). Pane-scoping (P4-5) is pinned by selection-highlight-chrome: a drag that runs up into the banner and far right must still paint only in-band rows."
 }

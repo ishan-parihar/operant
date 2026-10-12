@@ -707,6 +707,8 @@ fn paint_context_menu(frame: &mut Frame, app: &App, _ctx: &mut FrameCtx) {
 
 /// Topmost. Always last.
 fn paint_debug_overlay(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
+    app.debug_hub
+        .note_scroll(app.scroll_offset, !app.auto_scroll);
     crate::tui::debug::overlay::render_debug_overlay(frame, &app.debug_hub, ctx.size);
 }
 

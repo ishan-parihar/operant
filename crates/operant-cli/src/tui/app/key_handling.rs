@@ -1208,26 +1208,26 @@ impl App {
             // (issue #149 follow-up).
             KeyCode::Char(c)
                 if (c == 'c' || c == 'C') && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    // Composer shift-selection (jcode textarea selection): the
-                    // in-input selection wins — copy it and stop, never exit.
-                    if let Some(sel) = self.prompt_input.selection_text() {
-                        if !sel.is_empty() {
-                            let outcome = crate::tui::clipboard::copy(&sel);
-                            self.prompt_input.selection_clear();
-                            self.push_notification(
-                                if outcome.is_copied() {
-                                    NotificationKind::Info
-                                } else {
-                                    NotificationKind::Warning
-                                },
-                                outcome.status_message(),
-                                Some(2),
-                            );
-                            return false;
-                        }
+            {
+                // Composer shift-selection (jcode textarea selection): the
+                // in-input selection wins — copy it and stop, never exit.
+                if let Some(sel) = self.prompt_input.selection_text() {
+                    if !sel.is_empty() {
+                        let outcome = crate::tui::clipboard::copy(&sel);
+                        self.prompt_input.selection_clear();
+                        self.push_notification(
+                            if outcome.is_copied() {
+                                NotificationKind::Info
+                            } else {
+                                NotificationKind::Warning
+                            },
+                            outcome.status_message(),
+                            Some(2),
+                        );
+                        return false;
                     }
-                    // If text is selected, copy it to clipboard instead of quitting.
+                }
+                // If text is selected, copy it to clipboard instead of quitting.
                 let sel_text = self.selection_text.borrow().clone();
                 if self.selection_anchor.is_some() && !sel_text.is_empty() {
                     // Text is selected: copy to clipboard.

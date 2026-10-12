@@ -8,24 +8,24 @@
                                                             │                                                          │
                                                             │                                                          │
                                                             │                                                          │
+                                                            │                                                          │
+                                                            │                                                          │
+                                                            │                                                          │
  operant · replay                                           │                                                          │
  operant                                                    │                                                          │
  /model to switch · Offline Capture                         │                                                          │
  v0.2.1                                                     │                                                          │
  /login to add provider                                     │                                                          │
- ○ anthropic                                                │                                                          │
- ○ openrouter                                               │                                                          │
- ○ openai                                                   │                                                          │
- ○ cursor                                                   │                                                          │
- ○ copilot                                                  │                                                          │
- ○ gemini                                                   │                                                          │
- ○ antigravity                                              │                                                          │
+ ● anthropic(key)                                           │                                                          │
  ~                                                          │                                                          │
                                                             │                                                          │
  Error: provider overloaded_error (529): the upstream is sat│                                                          │
                                                             │                                                          │
                                                             │                                                          │
 1>                                                          │                                                          │
+                                                            │                                                          │
+                                                            │                                                          │
+                                                            │                                                          │
                                                             │                                                          │
                                                             │                                                          │
                                                             │                                                          │

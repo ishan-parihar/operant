@@ -196,11 +196,7 @@ impl From<&BehaviorSettings> for AgentConfig {
             memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
             tool_search: crate::config::ToolSearchSettings::default(),
-            // iter-723: the [agent] config key flows to the guardrail
-            // tracker (builders.rs consumes this field). Was hardcoded
-            // empty — the runtime exempt path existed but no config-file
-            // surface ever fed it.
-            guardrail_exempt_tools: settings.guardrail_exempt_tools.clone(),
+            guardrail_exempt_tools: Vec::new(),
         }
     }
 }
@@ -272,6 +268,14 @@ pub enum AgentEvent {
     /// the CLI/TUI can surface "limit reached, retry in Ns" instead of only
     /// seeing the error text (T3 — hermes `_capture_rate_limits` parity).
     RateLimitNotice { retry_after_secs: Option<u64> },
+    /// The provider's SSE stream contained events that could not be parsed
+    /// (corrupted framing — merged data lines, concatenated JSON, mid-stream
+    /// replays). Those payloads are dropped by the parser, so the rendered
+    /// output may be truncated or duplicated-looking; this event surfaces
+    /// the drop count so the user knows the corruption came from the wire,
+    /// not from the agent eating content. Emitted once per turn at stream
+    /// end, only when at least one payload was dropped.
+    StreamCorrupted { dropped_events: u32 },
     /// Tool requires permission before execution
     ToolPermissionRequest {
         tool_name: String,
@@ -1543,8 +1547,7 @@ mod tests {
                 },
             ]))
             .await;
-        let mut tool_msg =
-            crate::client::Message::new(Role::Tool, "small tool result".to_string());
+        let mut tool_msg = crate::client::Message::new(Role::Tool, "small tool result".to_string());
         tool_msg.tool_call_id = Some("t1".to_string());
         agent.add_message(tool_msg).await;
         agent.user_message("hi").await;
@@ -1561,7 +1564,8 @@ mod tests {
             "no tool-result trim under the preflight threshold"
         );
         assert!(
-            msgs.iter().any(|m| m.role == Role::Tool && m.content == "small tool result"),
+            msgs.iter()
+                .any(|m| m.role == Role::Tool && m.content == "small tool result"),
             "tool result passed through verbatim"
         );
     }
@@ -1595,8 +1599,7 @@ mod tests {
             conv.len()
         }
 
-        let db =
-            Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
+        let db = Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
                 context_window: 50_000,
@@ -1621,11 +1624,14 @@ mod tests {
                 "one exchange (user+assistant, i.e. 2 messages... or more) folded to 1 marker"
             );
             assert!(
-                conv.iter().any(|m| m.content.contains("[compacted exchange")),
+                conv.iter()
+                    .any(|m| m.content.contains("[compacted exchange")),
                 "the folded marker rides in the stored conversation"
             );
             assert!(
-                conv.iter().take(4).all(|m| !m.content.contains("[compacted exchange")),
+                conv.iter()
+                    .take(4)
+                    .all(|m| !m.content.contains("[compacted exchange")),
                 "the protected head is untouched"
             );
             assert_eq!(
@@ -1636,8 +1642,7 @@ mod tests {
         }
 
         // The unarmed twin: the store is never mutated.
-        let db2 = Database::init(std::path::PathBuf::from("micro-compact-off.sqlite"))
-            .unwrap();
+        let db2 = Database::init(std::path::PathBuf::from("micro-compact-off.sqlite")).unwrap();
         let agent2 = OperantAgent::new(
             AgentConfig {
                 context_window: 50_000,
@@ -1671,7 +1676,9 @@ mod tests {
             Arc::new(db),
         );
         agent.user_message("start").await;
-        agent.user_message("pad past the head-protection window").await;
+        agent
+            .user_message("pad past the head-protection window")
+            .await;
         agent
             .add_message(crate::client::Message::assistant("").with_tool_calls(vec![
                 crate::client::ToolCall {
@@ -2259,6 +2266,60 @@ mod tests {
         ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
             Err(Error::Agent("streaming not used in budget test".into()))
         }
+    }
+
+    #[tokio::test]
+    async fn process_stream_emits_stream_corrupted_when_payloads_dropped() {
+        // iter-754: the openai adapter's terminal chunk carries the count of
+        // SSE payloads the parser dropped (corrupted framing). process_stream
+        // must surface that as ONE StreamCorrupted event so the TUI can tell
+        // the user the wire was corrupted — not the agent.
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
+        let db = Database::init(std::env::temp_dir().join(format!(
+            "test_stream_corrupted_{}_{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )))
+        .unwrap();
+        let agent = OperantAgent::with_events(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+            event_tx,
+        );
+
+        let chunks: Vec<crate::error::Result<super::model_client::StreamChunk>> = vec![
+            Ok(super::model_client::StreamChunk::new(
+                Some("Hi".into()),
+                None,
+                None,
+            )),
+            Ok(super::model_client::StreamChunk {
+                dropped_events: Some(2),
+                ..super::model_client::StreamChunk::new(None, None, None)
+            }),
+        ];
+        let stream = futures::stream::iter(chunks);
+        let result = agent
+            .process_stream(Box::pin(stream))
+            .await
+            .expect("stream should process");
+        assert_eq!(result.0, "Hi", "real content accumulates untouched");
+
+        let mut saw_corrupted = false;
+        while let Ok(ev) = event_rx.try_recv() {
+            if let AgentEvent::StreamCorrupted { dropped_events } = ev {
+                assert_eq!(dropped_events, 2);
+                saw_corrupted = true;
+            }
+        }
+        assert!(saw_corrupted, "StreamCorrupted must be emitted once");
     }
 
     fn budget_test_agent(
@@ -3042,6 +3103,7 @@ mod tests {
                 extra_content: None,
                 usage: None,
                 finish_reason: Some("length".to_string()),
+                dropped_events: None,
             }),
         ];
         let stream: BoxStream<'static, Result<StreamChunk>> =

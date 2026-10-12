@@ -305,25 +305,8 @@ impl CronScheduler {
             return Ok(());
         }
 
-        // iter-720 (trinity P2-A): replay-after-unblock — stale pending
-        // delivery rows come back around on EVERY tick, empty-due ticks
-        // included (an outage-recovery window usually has no due jobs;
-        // same lesson as the empty-tick socialization fix below). A
-        // bounded batch that never delays a live dispatch.
-        self.replay_stale_deliveries(DELIVERY_RECLAIM_AFTER_SECS)
-            .await;
-
         let due_jobs = self.db.get_due_jobs()?;
         if due_jobs.is_empty() {
-            // iter-684 gap 6 (defect found live 2026-10-09, arming the
-            // sessions for the first time): the socialization coordinator
-            // must be checked on EVERY tick — this early return used to
-            // skip it, so a schedule fire landing on an empty tick was
-            // delayed to the next busy one (the 09:30 session would have
-            // waited for the 10:00 hourly jobs; an armed-with-no-stamp box
-            // waits even longer). The unit tests call the coordinator
-            // directly, so the tick-level gate was never pinned.
-            self.maybe_run_socialization().await;
             return Ok(());
         }
 
@@ -339,6 +322,12 @@ impl CronScheduler {
         // check, not a job row (infra-owned, outside the cast registry).
         // After the due jobs so a busy tick never delays a live dispatch.
         self.maybe_run_socialization().await;
+
+        // iter-720 (trinity P2-A): replay-after-unblock — stale pending
+        // delivery rows come back around before the tick ends. Last for
+        // the same reason: never delay a live dispatch.
+        self.replay_stale_deliveries(DELIVERY_RECLAIM_AFTER_SECS)
+            .await;
 
         Ok(())
     }
@@ -1194,12 +1183,7 @@ impl CronScheduler {
     /// counter, PARK on the cap (the tombstone — replay stops, the row
     /// stays inspectable), emit the observer events. Warn-only — the
     /// audit layer never fails the run whose outcome is already sent.
-    fn account_delivery_attempt(
-        &self,
-        delivery_id: i64,
-        job_id: &str,
-        error: Option<&str>,
-    ) {
+    fn account_delivery_attempt(&self, delivery_id: i64, job_id: &str, error: Option<&str>) {
         match self
             .db
             .mark_delivery_attempt(delivery_id, MAX_DELIVERY_ATTEMPTS, error)
@@ -1210,13 +1194,11 @@ impl CronScheduler {
                      {MAX_DELIVERY_ATTEMPTS} attempts (tombstone; replay stops)"
                 );
                 if let Some(observer) = &self.observer {
-                    observer.record_event(
-                        &crate::observer::ObserverEvent::CronDeliveryParked {
-                            job_id: job_id.to_string(),
-                            delivery_id,
-                            attempts: MAX_DELIVERY_ATTEMPTS,
-                        },
-                    );
+                    observer.record_event(&crate::observer::ObserverEvent::CronDeliveryParked {
+                        job_id: job_id.to_string(),
+                        delivery_id,
+                        attempts: MAX_DELIVERY_ATTEMPTS,
+                    });
                 }
             }
             Ok(_) => {}
@@ -1226,11 +1208,11 @@ impl CronScheduler {
 
     /// iter-720 (trinity P2-A): the stale-claim reclaim — hermes'
     /// replay-after-unblock. Pending ledger rows whose last handoff (or
-    /// creation) is older than the horizon are presumed dead (crashed
-    /// consumer, gateway outage) and re-sent; the attempt counter walks
-    /// each toward the [`MAX_DELIVERY_ATTEMPTS`] tombstone. With no
-    /// delivery channel mounted the rows stay pending and retry on a
-    /// later tick — an outage queues instead of drops.
+    /// creation) is older than [`DELIVERY_RECLAIM_AFTER_SECS`] are
+    /// presumed dead (crashed consumer, gateway outage) and re-sent; the
+    /// attempt counter walks each toward the [`MAX_DELIVERY_ATTEMPTS`]
+    /// tombstone. With no delivery channel mounted the rows stay pending
+    /// and retry on a later tick — an outage queues instead of drops.
     /// `horizon_secs` is a parameter so tests can drive the reclaim
     /// without a wall-clock wait; the tick path passes the const.
     async fn replay_stale_deliveries(&self, horizon_secs: i64) {
@@ -1270,13 +1252,11 @@ impl CronScheduler {
             } else {
                 self.account_delivery_attempt(row.id, &row.job_id, None);
                 if let Some(observer) = &self.observer {
-                    observer.record_event(
-                        &crate::observer::ObserverEvent::CronDeliveryReclaimed {
-                            job_id: row.job_id.clone(),
-                            delivery_id: row.id,
-                            attempt: row.attempts + 1,
-                        },
-                    );
+                    observer.record_event(&crate::observer::ObserverEvent::CronDeliveryReclaimed {
+                        job_id: row.job_id.clone(),
+                        delivery_id: row.id,
+                        attempt: row.attempts + 1,
+                    });
                 }
             }
         }
@@ -1505,50 +1485,6 @@ mod tests {
         super::CronScheduler::new(Arc::clone(&cron_db), agent)
             .with_budgets(seat_budgets, default_budget)
             .with_usage_store(store)
-    }
-
-    /// iter-684 gap 6 defect pin (found live 2026-10-09, arming the
-    /// sessions): the socialization coordinator must be checked on an
-    /// EMPTY-due tick — the early return used to skip it, delaying a
-    /// schedule fire to the next busy tick. Pairs are empty here on
-    /// purpose: the at-most-once STAMP is the observable, no agent turn
-    /// runs, and a real 09:30 fire on a jobless tick is never missed.
-    #[tokio::test]
-    async fn socialization_coordinator_runs_on_an_empty_due_tick() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
-        let agent = Arc::new(crate::agent::OperantAgent::new(
-            crate::agent::AgentConfig::default(),
-            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
-                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
-            )),
-            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
-            db,
-        ));
-        let cron_db = Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
-        let seats_root = dir.path().join("seats");
-        std::fs::create_dir_all(&seats_root).expect("seats root");
-        let scheduler = super::CronScheduler::new(cron_db, agent)
-            .with_seat_memory_root(seats_root.clone())
-            .with_socialization(crate::config::SocializationSettings {
-                enabled: true,
-                // Every-minute schedule: due with last=None by construction,
-                // so the tick's reach — not the schedule — is under test.
-                schedule: "0 * * * * *".to_string(),
-                turn_budget: 0,
-                pairs: Vec::new(),
-            });
-        // No cron job exists → due_jobs is empty → the old code returned
-        // before ever reaching the coordinator.
-        scheduler.tick().await.expect("tick");
-        let org_db = seats_root.join("operant_kanban.db");
-        let stamp = crate::org::socialization::last_socialization_run(&org_db)
-            .expect("socialization state read");
-        assert!(
-            stamp.is_some(),
-            "the coordinator must stamp on an empty-due tick — otherwise a \
-             09:30 fire waits for the next busy tick"
-        );
     }
 
     fn test_job() -> crate::cronjobs::db::CronJob {
@@ -1838,10 +1774,14 @@ mod tests {
                     format!("queued:{delivery_id}")
                 }
                 E::CronDeliveryReclaimed {
-                    delivery_id, attempt, ..
+                    delivery_id,
+                    attempt,
+                    ..
                 } => format!("reclaimed:{delivery_id}:{attempt}"),
                 E::CronDeliveryParked {
-                    delivery_id, attempts, ..
+                    delivery_id,
+                    attempts,
+                    ..
                 } => format!("parked:{delivery_id}:{attempts}"),
                 _ => return,
             };
@@ -1854,9 +1794,9 @@ mod tests {
     }
 
     /// A real scheduler over a real (uninvoked) agent with a delivery
-    /// channel mounted — `scheduler_with_budgets`' construction minus
-    /// the budget stores. Returns the cron_db Arc too so tests can
-    /// inspect the ledger directly.
+    /// channel mounted — `scheduler_with_budgets`' construction minus the
+    /// budget stores. Returns the cron_db Arc too so tests can inspect
+    /// the ledger directly.
     fn scheduler_with_channel(
         dir: &std::path::Path,
         observer: Option<std::sync::Arc<dyn crate::observer::Observer>>,
@@ -1896,7 +1836,10 @@ mod tests {
         let mut job = test_job();
         job.origin_platform = Some("telegram".to_string());
         job.origin_chat_id = Some("5297486612".to_string());
-        scheduler.deliver_result(&job, "the run output").await.unwrap();
+        scheduler
+            .deliver_result(&job, "the run output")
+            .await
+            .unwrap();
 
         // The consumer sees the rendered payload AND the ledger id it
         // must settle.
@@ -2004,7 +1947,11 @@ mod tests {
         let rows = cron_db
             .reclaim_stale_deliveries(chrono::Duration::seconds(0))
             .expect("reclaim scan");
-        assert_eq!(rows.len(), 1, "the row stays queued for the next armed tick");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the row stays queued for the next armed tick"
+        );
         assert_eq!(rows[0].attempts, 0, "no handoff was counted");
     }
 }

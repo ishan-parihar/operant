@@ -872,7 +872,8 @@ pub(crate) fn draw_pinned_diagram(
         ));
     }
 
-    let inner = if pane_position == crate::tui::operant_app::config_shim::DiagramPanePosition::Side {
+    let inner = if pane_position == crate::tui::operant_app::config_shim::DiagramPanePosition::Side
+    {
         let Some(content_area) =
             super::draw_right_rail_chrome(frame, area, Line::from(title_parts), border_style)
         else {

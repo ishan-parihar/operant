@@ -120,10 +120,15 @@ PINNED_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
     "ANTHROPIC_API_KEY": "offline-capture-not-a-real-key",
+    # Corpus-only pin (2026-10-09): freeze the notification timeline so the
+    # banner's countdown progress bar renders full-width in every frame -
+    # the wall-clock `(exp - now)` read was the documented drift that made
+    # first-message/tool-block flaky (notifications.rs `now()` seam).
+    "OPERANT_FROZEN_NOTIFICATION_CLOCK": "1",
     # Corpus-only pin: freeze the decorative idle animation.
     # Merged into disabled_animation_names() at render time; real users keep
     # the empty default (all animations on).
-    "OPERANT_DISABLED_ANIMATIONS": "signal",
+    "OPERANT_DISABLED_ANIMATIONS": "signal,prompt_entry",
     # Fixed, not inherited: see the PATH note above for why this is the pin
     # that decides whether the corpus is reproducible at all.
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -161,12 +166,18 @@ class Fixture:
     that is really a harness bug.
     """
 
-    def __init__(self, tmpdir):
+    def __init__(self, tmpdir, extra_config=None):
         self.dir = pathlib.Path(tmpdir)
         self.home = self.dir / "home"
         (self.home / ".operant").mkdir(parents=True, exist_ok=True)
         self.config = self.dir / "operant.toml"
-        self.config.write_text(PINNED_CONFIG)
+        # Scenarios may append config (schema field `config`, a TOML
+        # fragment) to flip behavior modes that no key or env var can
+        # reach — e.g. `[tui] terminal_scroll_mode = true`.
+        text = PINNED_CONFIG
+        if extra_config:
+            text = text + "\n" + extra_config.strip() + "\n"
+        self.config.write_text(text)
 
     def env(self, extra=None):
         env = dict(PINNED_ENV)
@@ -240,7 +251,8 @@ def command(d, run):
 def render(d, run, *, dump_text=None, dump_style=None,
            gate_text=None, gate_style=None, accept=False, fixture=None):
     """One render in its own process. Returns (returncode, combined output)."""
-    tmp = fixture or Fixture(tempfile.mkdtemp(prefix="operant-tui-"))
+    tmp = fixture or Fixture(
+        tempfile.mkdtemp(prefix="operant-tui-"), d.get("config"))
     cmd = [c.replace("@CONFIG@", str(tmp.config)) for c in command(d, run)]
     if dump_text:
         cmd += ["--dump-screen", str(dump_text)]

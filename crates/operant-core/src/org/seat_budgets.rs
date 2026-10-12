@@ -62,6 +62,7 @@ pub fn resolve_budget(
     seat: Option<&SeatBudget>,
     global: &BudgetSettings,
 ) -> Option<EffectiveBudget> {
+    let seat = seat;
     let basis = seat
         .and_then(|s| s.basis.clone())
         .unwrap_or_else(|| global.basis.clone());

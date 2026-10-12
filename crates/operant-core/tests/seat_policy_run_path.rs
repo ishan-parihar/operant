@@ -417,7 +417,7 @@ async fn lockdown_seat_escalates_a_tool_call_through_the_real_guard() {
                 mode: SeatMode::Lockdown,
                 allow: vec![],
                 deny: vec![],
-            delegation: None,
+                delegation: None,
             },
         )),
     )
@@ -468,7 +468,7 @@ async fn yolo_seat_runs_the_tool_with_no_permission_prompt() {
                 mode: SeatMode::Yolo,
                 allow: vec![],
                 deny: vec![],
-            delegation: None,
+                delegation: None,
             },
         )),
     )
@@ -567,7 +567,7 @@ async fn seat_deny_row_denies_without_prompting() {
                 mode: SeatMode::Yolo,
                 allow: vec![],
                 deny: vec!["seat_probe".to_string()],
-            delegation: None,
+                delegation: None,
             },
         )),
     )
@@ -798,9 +798,7 @@ async fn disarmed_guardian_keeps_today_channel_behavior() {
     let drainer = tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = req
-                .response_tx
-                .send(ToolPermissionResponse::AllowOnce);
+            let _ = req.response_tx.send(ToolPermissionResponse::AllowOnce);
         }
     });
 

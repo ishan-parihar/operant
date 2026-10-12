@@ -184,7 +184,13 @@
       "meaning": "Required whenever `deterministic` is `false`. `_validate.py` fails a scenario that sets the flag without both required strings.",
       "notes": "Written from the runner's own two-render byte diff, never from a guess: the runner prints the first differing (row, col) of whichever dump moved."
     },
-    "env": {
+    "config": {
+  "type": "string",
+  "required": false,
+  "meaning": "TOML fragment appended to the run's pinned operant.toml, for behavior modes no key or env var can reach.",
+  "notes": "Only prepend/append-style overrides — the fragment is concatenated AFTER the pinned config, so later tables win. Keep it minimal and mode-scoped (e.g. a `[tui]` block); anything that changes model or endpoint values belongs in PINNED_CONFIG, not per-scenario."
+ },
+ "env": {
       "type": "object",
       "required": false,
       "additionalProperties": {

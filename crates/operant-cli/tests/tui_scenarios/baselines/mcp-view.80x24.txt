@@ -1,22 +1,22 @@
 
 
- ope
- ope  MCP — 1 servers · 0 tools                              Esc to close
- /mo ┌ Servers ──────────────┐┌ Tools ────────────────────────────────────┐
- v0. │stdio                  ││/ filter tools                             │
- /lo │› ○ agentmemory  0 tool││                                           │
- ○ a │                       ││                                           │
- ○ o │                       ││                                           │
- ○ o │                       ││                                           │
- ○ c │                       ││                                           │
- ○ c │                       │└───────────────────────────────────────────┘
- ○ g │                       │┌ Tool Detail ──────────────────────────────┐
- ○ a │                       ││Select a tool to view details.             │
- ~   │                       ││                                           │
-     │                       ││                                           │
-     │                       ││                                           │
+
+      MCP — 1 servers · 0 tools                              Esc to close
+     ┌ Servers ──────────────┐┌ Tools ────────────────────────────────────┐
+ ope │stdio                  ││/ filter tools                             │
+ ope │› ○ agentmemory  0 tool││                                           │
+ /mo │                       ││                                           │
+ v0. │                       ││                                           │
+ /lo │                       ││                                           │
+ ● a │                       ││                                           │
+ ~   │                       │└───────────────────────────────────────────┘
+     │                       │┌ Tool Detail ──────────────────────────────┐
+     │                       ││Select a tool to view details.             │
 1>   │                       ││                                           │
-     └───────────────────────┘└───────────────────────────────────────────┘ ture
+     │                       ││                                           │ ture
+     │                       ││                                           │
+     │                       ││                                           │
+     └───────────────────────┘└───────────────────────────────────────────┘
       Tab switch pane   / filter tools   e error detail   a auth   r reconn
 
 

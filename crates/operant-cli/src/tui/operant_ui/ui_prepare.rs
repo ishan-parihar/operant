@@ -487,7 +487,9 @@ fn first_mermaid_pending_message(prepared: &PreparedMessages) -> Option<usize> {
     )
 }
 
-fn active_batch_progress(app: &dyn TuiState) -> Option<crate::tui::operant_app::bus::BatchProgress> {
+fn active_batch_progress(
+    app: &dyn TuiState,
+) -> Option<crate::tui::operant_app::bus::BatchProgress> {
     match app.status() {
         ProcessingStatus::RunningTool(name) if name == "batch" => app.batch_progress(),
         _ => None,
@@ -523,7 +525,9 @@ pub(super) fn active_batch_progress_hash(app: &dyn TuiState) -> u64 {
     hasher.finish()
 }
 
-fn swarm_members_signature(members: &[crate::tui::operant_app::protocol::SwarmMemberStatus]) -> u64 {
+fn swarm_members_signature(
+    members: &[crate::tui::operant_app::protocol::SwarmMemberStatus],
+) -> u64 {
     // Chat only renders a stable one-line identity/status summary. Excluding
     // elapsed time, age, output tails, todos, tool progress, and runtime details
     // prevents high-frequency live swarm updates from invalidating the entire
@@ -1175,9 +1179,9 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
         // a "rendering..." placeholder whose background render has since
         // finished. Fall through to the rebuild path, which truncates the
         // base at the pending message and re-renders the tail.
-        let stale = prepared
-            .mermaid_pending_epoch
-            .is_some_and(|stamp| crate::tui::operant_app::mermaid::deferred_render_epoch() != stamp);
+        let stale = prepared.mermaid_pending_epoch.is_some_and(|stamp| {
+            crate::tui::operant_app::mermaid::deferred_render_epoch() != stamp
+        });
         if !stale {
             super::note_body_cache_lookup(cache_lookup_start.elapsed());
             super::note_body_cache_hit(kind, prepared.as_ref());
@@ -1639,15 +1643,20 @@ fn render_message_into(
             }
         }
         "reasoning" => {
-            let content_width = width.saturating_sub(4);
-            let cached = get_cached_message_lines(
-                msg,
-                content_width,
-                app.diff_mode(),
-                render_reasoning_message,
-            );
-            for line in cached {
-                acc.push_auto(align_if_unset(line, align));
+            // jcode parity (P4-4): display.show_thinking gates the trace
+            // surfaces. Hidden traces still exist as display messages so
+            // history is not rewritten; they just prepare zero rows.
+            if app.show_thinking() {
+                let content_width = width.saturating_sub(4);
+                let cached = get_cached_message_lines(
+                    msg,
+                    content_width,
+                    app.diff_mode(),
+                    render_reasoning_message,
+                );
+                for line in cached {
+                    acc.push_auto(align_if_unset(line, align));
+                }
             }
         }
         "background_task" => {

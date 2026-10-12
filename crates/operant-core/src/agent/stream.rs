@@ -69,6 +69,12 @@ impl OperantAgent {
         // Provider-reported finish reason from the terminal chunk(s) (T1 —
         // truncation detection). Last non-None wins.
         let mut finish_reason: Option<String> = None;
+        // Corrupted-SSE accounting: the openai adapter's terminal chunk
+        // carries the count of payloads the parser dropped (merged data
+        // lines, concatenated JSON — anything unparseable). Surfaced as one
+        // StreamCorrupted event at stream end so the user sees WHY the turn
+        // looks truncated instead of the agent eating the blame silently.
+        let mut dropped_events: u32 = 0;
 
         while let Some(chunk_result) = stream.next().await {
             // `/stop` has to be able to cut a stream that is already flowing.
@@ -84,6 +90,9 @@ impl OperantAgent {
             }
             match chunk_result {
                 Ok(chunk) => {
+                    if let Some(n) = chunk.dropped_events {
+                        dropped_events = dropped_events.saturating_add(n);
+                    }
                     if let Some(u) = chunk.usage {
                         if u.prompt_tokens > 0 {
                             usage_prompt_tokens = Some(u.prompt_tokens);
@@ -357,6 +366,10 @@ impl OperantAgent {
                 })
                 .await;
             }
+            if dropped_events > 0 {
+                self.emit(AgentEvent::StreamCorrupted { dropped_events })
+                    .await;
+            }
             return Err(err);
         }
 
@@ -378,6 +391,11 @@ impl OperantAgent {
                 total_tokens: prompt_tokens + completion_tokens,
             };
             self.emit_usage_and_cost(&usage).await;
+        }
+
+        if dropped_events > 0 {
+            self.emit(AgentEvent::StreamCorrupted { dropped_events })
+                .await;
         }
 
         Ok((
@@ -444,7 +462,10 @@ impl OperantAgent {
     /// construction and would fake an identical-result streak. A Halt
     /// verdict triggers the interrupt flag and surfaces the root-cause
     /// summary as final content.
-    #[expect(clippy::expect_used, reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition")]
+    #[expect(
+        clippy::expect_used,
+        reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition"
+    )]
     async fn observe_guardrail_results(&self, results: &[ToolResult]) {
         use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
 
@@ -518,7 +539,9 @@ impl OperantAgent {
         name: &str,
         args: &serde_json::Value,
     ) -> Option<crate::approval::GuardianVerdict> {
-        use crate::approval::{GuardianVerdict, guardian_messages, parse_guardian_reply, strip_shell_comments};
+        use crate::approval::{
+            GuardianVerdict, guardian_messages, parse_guardian_reply, strip_shell_comments,
+        };
         let command = strip_shell_comments(&crate::approval::extract_command_from_args(name, args));
         if command.trim().is_empty() {
             return Some(GuardianVerdict::Escalate);
@@ -549,7 +572,6 @@ impl OperantAgent {
             }
         }
     }
-
 
     /// Feed one completed iteration to the output-side successful-repeat
     /// rung (openhuman `record_output`, iter-688): the canonical signature
@@ -597,10 +619,7 @@ impl OperantAgent {
                     })
                     .unwrap_or(0)
             };
-            warn!(
-                count,
-                "Output repeat rung — warning model"
-            );
+            warn!(count, "Output repeat rung — warning model");
             self.emit(AgentEvent::Content {
                 text: crate::tool_guardrails::output_repeat_warning_message(count),
             })

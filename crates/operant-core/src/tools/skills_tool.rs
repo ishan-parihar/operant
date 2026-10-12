@@ -375,7 +375,7 @@ fn collect_skills_recursive(base_dir: &Path, current_dir: &Path, skills: &mut Ve
                 .filter(|p| *p != base_dir)
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
-                .map(|s| s.to_string());            // Meta-skill support: a skill with a nested references/ tree (or,
+                .map(|s| s.to_string()); // Meta-skill support: a skill with a nested references/ tree (or,
             // legacy, nested skill dirs) surfaces its nodes so the model sees
             // the routing surface without loading every file.
             // Cheap gate: only walk when the dir has subdirectories or a
@@ -675,7 +675,8 @@ fn warn_unreferenced_resources(
 /// Markdown link: [label](target). Captures: 1 = label, 2 = target.
 #[expect(clippy::expect_used, reason = "infallible once-init / static init")]
 static MD_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)").expect("static regex literal is invalid — authoring bug")
+    Regex::new(r"\[([^\]]*)\]\(([^)\s]+)\)")
+        .expect("static regex literal is invalid — authoring bug")
 });
 /// Inline code span — stripped before link extraction: a backticked link
 /// example is an illustration, not a pointer.
@@ -860,7 +861,11 @@ fn resolve_pointer(target: &str, base: &Path, root: &Path, file_first: bool) -> 
     if Path::new(t).is_absolute() {
         return Some(Pointer::Outside);
     }
-    let order: [&Path; 2] = if file_first { [base, root] } else { [root, base] };
+    let order: [&Path; 2] = if file_first {
+        [base, root]
+    } else {
+        [root, base]
+    };
     let mut first_inside: Option<PathBuf> = None;
     for first in order {
         let cand = lex_norm(&first.join(t));
@@ -2719,7 +2724,12 @@ mod tests {
         let result = tool.action_generate_map(&args).await;
         let parsed: serde_json::Value = result.parse_content().expect("generate_map response");
         assert!(root.join("_map.md").exists(), "normal run writes _map.md");
-        assert!(parsed["map"].as_str().unwrap_or("").contains("references/deploy.md"));
+        assert!(
+            parsed["map"]
+                .as_str()
+                .unwrap_or("")
+                .contains("references/deploy.md")
+        );
         assert!(parsed["errors"].as_array().unwrap().is_empty());
     }
     #[test]

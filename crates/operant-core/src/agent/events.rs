@@ -533,12 +533,12 @@ impl OperantAgent {
         // base prompt, BEFORE skills, and byte-stable across turns (it only
         // changes when the bound employee changes), so the frozen-prefix
         // cache discipline holds.
-        if let Some(charter) = self.charter()
-            && !charter.is_empty()
-        {
-            frozen.push_str("\n\n<employee_charter>\n");
-            frozen.push_str(&charter);
-            frozen.push_str("\n</employee_charter>");
+        if let Some(charter) = self.charter() {
+            if !charter.is_empty() {
+                frozen.push_str("\n\n<employee_charter>\n");
+                frozen.push_str(&charter);
+                frozen.push_str("\n</employee_charter>");
+            }
         }
         if let Some(skill_manager) = &self.skill_manager {
             let skills = skill_manager.list();

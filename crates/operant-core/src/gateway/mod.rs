@@ -1135,10 +1135,14 @@ mod tests {
 
         // Channel post from a NON-ADMIN: capture must happen before the
         // gate; no turn; no reply (None, not the "not authorized" message).
-        let post = IncomingMessage::new("telegram", "anon", "Some Channel", "-1001", "daily update")
-            .with_channel_post(true);
+        let post =
+            IncomingMessage::new("telegram", "anon", "Some Channel", "-1001", "daily update")
+                .with_channel_post(true);
         let out = gw.route_message(post).await.expect("route ok");
-        assert!(out.is_none(), "channel post must never produce a reply: {out:?}");
+        assert!(
+            out.is_none(),
+            "channel post must never produce a reply: {out:?}"
+        );
         assert_eq!(handler.feeds.load(Ordering::SeqCst), 1);
         assert_eq!(handler.turns.load(Ordering::SeqCst), 0);
 

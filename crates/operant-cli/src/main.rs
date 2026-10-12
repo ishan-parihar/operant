@@ -2188,9 +2188,7 @@ pub(crate) fn apply_agent_config_defaults(
     if std::env::var_os("OPERANT_GUARDIAN_LLM").is_none() && behavior.guardian_llm {
         agent = agent.with_guardian_llm(true);
     }
-    if std::env::var_os("OPERANT_MICRO_COMPACTION").is_none()
-        && behavior.micro_compaction
-    {
+    if std::env::var_os("OPERANT_MICRO_COMPACTION").is_none() && behavior.micro_compaction {
         agent = agent.with_micro_compaction(true);
     }
     agent

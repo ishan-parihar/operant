@@ -508,6 +508,7 @@ fn parse_sse_event(
                     total_tokens: input_tokens,
                 }),
                 finish_reason: None,
+                dropped_events: None,
             })
         }
         "message_delta" => {
@@ -536,6 +537,7 @@ fn parse_sse_event(
                     total_tokens: output_tokens,
                 }),
                 finish_reason: stop_reason,
+                dropped_events: None,
             })
         }
         _ => None,

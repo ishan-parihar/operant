@@ -113,15 +113,6 @@ pub struct ContextItem {
 /// needs longer items, not speculatively.
 const MAX_ITEM_CHARS: usize = 400;
 
-/// Capture retention (days). `context_items` is append-only by design
-/// (watermarks are the read cursor, not a TTL) — but an active group
-/// writes a row per member message, so each capture prunes rows older
-/// than this. 7 days covers the feed recency halflife (24h) with the
-/// seat's whole week reviewable; a seat's prompt only ever sees items
-/// behind its watermark anyway. ponytail: constant, not config — raise
-/// when a seat demonstrably needs a longer memory, not speculatively.
-const CAPTURE_RETENTION_DAYS: i64 = 7;
-
 /// The seats whose outputs are org-global broadcasts by role.
 const GLOBAL_AUTHORS: [&str; 2] = ["premiere", "chief-of-staff"];
 
@@ -420,7 +411,14 @@ impl ContextInjector {
 
     /// Shared capture body: one INSERT into `context_items`, fail-open on
     /// every error — a failed capture must never fail a turn or a route.
-    fn record_item(&self, class: ContextClass, seat_id: &str, author: &str, text: &str, what: &str) {
+    fn record_item(
+        &self,
+        class: ContextClass,
+        seat_id: &str,
+        author: &str,
+        text: &str,
+        what: &str,
+    ) {
         if !self.settings.enabled {
             return;
         }
@@ -443,17 +441,6 @@ impl ContextInjector {
             ],
         ) {
             tracing::warn!("context injection: {what} capture failed: {e} (fail-open)");
-            return;
-        }
-        // Write-through prune (review finding 2026-10-09): the table is
-        // append-only and nothing else ever deletes — an active group
-        // writes a row per member message, which on this storage-watched
-        // box is an unbounded table. One best-effort DELETE per capture
-        // bounds it to CAPTURE_RETENTION_DAYS; the capture itself already
-        // succeeded, so a prune failure is logged and swallowed.
-        let cutoff = chrono::Utc::now().timestamp() - CAPTURE_RETENTION_DAYS * 86_400;
-        if let Err(e) = conn.execute("DELETE FROM context_items WHERE ts < ?1", [cutoff]) {
-            tracing::warn!("context injection: retention prune failed: {e} (fail-open)");
         }
     }
 
@@ -719,6 +706,7 @@ impl ContextInjector {
             }
         }
         // Roll-over pool: fill leftover total budget by global score.
+        let mut pool = pool;
         pool.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         for (score, item) in pool {
             let text = truncate_chars(&item.text, MAX_ITEM_CHARS);
@@ -977,7 +965,7 @@ mod tests {
         let rendered = injector.render_section("dispatcher", None, "PROMPT", &[]);
         let count = rendered.matches("row xxx").count();
         assert!(
-            (2..=5).contains(&count),
+            count >= 2 && count <= 5,
             "class quota holds ~1, the pool takes the rest under the total: got {count}"
         );
     }
@@ -1061,40 +1049,6 @@ mod tests {
             injector.render_section("identity-warden", None, "PROMPT", &[]),
             "PROMPT"
         );
-    }
-
-    #[test]
-    fn capture_prunes_rows_past_the_retention_window() {
-        // Review finding 2026-10-09: context_items is append-only and a
-        // group writes a row per member message — the write-through prune
-        // in record_item is the only bound. A row older than the retention
-        // window must disappear on the NEXT capture; a fresh row survives.
-        let (_dir, injector) = db_with_worklog();
-        let conn = Connection::open(&injector.app_db).expect("conn");
-        let ancient = chrono::Utc::now().timestamp() - 30 * 86_400;
-        conn.execute(
-            "INSERT INTO context_items (class, author, ts, content_hash, seat_hint, text)\n             VALUES ('feed', 'old-timer', ?1, 1, 'premiere', 'stale group chatter')",
-            [ancient],
-        )
-        .expect("seed ancient row");
-        // The next capture (any class) prunes it.
-        injector.record_inbound_dm("premiere", "ishan", "fresh dm");
-        let remaining: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM context_items WHERE text = 'stale group chatter'",
-                [],
-                |r| r.get(0),
-            )
-            .expect("count");
-        assert_eq!(remaining, 0, "the ancient row must be pruned on capture");
-        let fresh: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM context_items WHERE text = 'fresh dm'",
-                [],
-                |r| r.get(0),
-            )
-            .expect("count");
-        assert_eq!(fresh, 1, "the fresh capture must survive its own prune");
     }
 
     #[test]

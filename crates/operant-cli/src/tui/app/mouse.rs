@@ -341,13 +341,11 @@ impl App {
         drop(cache);
         let trimmed = text.trim_end();
         let ok = !trimmed.is_empty() && crate::tui::clipboard::copy(trimmed).is_copied();
-        self.status_message = Some(
-            if ok {
-                "Copied viewport context".to_string()
-            } else {
-                "Failed to copy viewport context".to_string()
-            },
-        );
+        self.status_message = Some(if ok {
+            "Copied viewport context".to_string()
+        } else {
+            "Failed to copy viewport context".to_string()
+        });
         self.exit_copy_mode();
     }
 
@@ -948,8 +946,10 @@ impl App {
                             if let Some((start_row, end_row, end_col)) =
                                 self.find_paragraph_boundaries(current_pos.1)
                             {
-                                self.selection_anchor =
-                                    Some((selectable_area.x, self.content_line_of_screen_row(start_row)));
+                                self.selection_anchor = Some((
+                                    selectable_area.x,
+                                    self.content_line_of_screen_row(start_row),
+                                ));
                                 self.selection_focus =
                                     Some((end_col, self.content_line_of_screen_row(end_row)));
                             } else {
@@ -1020,7 +1020,8 @@ impl App {
                                 .saturating_add(selectable_area.height)
                                 .saturating_sub(1),
                         );
-                        self.selection_focus = Some((clamped_col, self.content_line_of_screen_row(clamped_row)));
+                        self.selection_focus =
+                            Some((clamped_col, self.content_line_of_screen_row(clamped_row)));
                         self.click_count = 0; // Reset on drag to prevent further double-clicks
                         // Stream the selection to the clipboard as it grows.
                         // `selection_text` is filled by the renderer from the

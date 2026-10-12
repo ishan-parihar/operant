@@ -1657,10 +1657,8 @@ fn huge_output_tool_call() -> ToolCall {
 /// the agent's own `file_read`.
 #[tokio::test]
 async fn max_tool_result_chars_offloads_oversized_result_to_an_artifact() {
-    let workspace = std::env::temp_dir().join(format!(
-        "operant_test_offload_{}",
-        std::process::id()
-    ));
+    let workspace =
+        std::env::temp_dir().join(format!("operant_test_offload_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&workspace);
     let provider = Box::new(ScriptedProvider::new(vec![
         tool_response(vec![huge_output_tool_call()]),
@@ -1768,7 +1766,11 @@ async fn offload_falls_back_to_the_trim_when_the_workspace_is_unwritable() {
         "the trim fallback must carry the marker: {}",
         &content[..80.min(content.len())]
     );
-    assert!(content.len() <= 1_200, "fallback must stay bounded: {}", content.len());
+    assert!(
+        content.len() <= 1_200,
+        "fallback must stay bounded: {}",
+        content.len()
+    );
 
     let _ = std::fs::remove_file(&workspace);
 }

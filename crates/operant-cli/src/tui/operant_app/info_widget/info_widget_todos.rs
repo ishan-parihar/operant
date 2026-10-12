@@ -339,11 +339,19 @@ fn todo_group_key(todo: &crate::tui::operant_app::todo::TodoItem) -> Option<Stri
 /// `None` when no todo declares a group, so callers fall back to the flat list.
 fn grouped_todos(
     todos: &[crate::tui::operant_app::todo::TodoItem],
-) -> Option<Vec<(Option<String>, Vec<&crate::tui::operant_app::todo::TodoItem>)>> {
+) -> Option<
+    Vec<(
+        Option<String>,
+        Vec<&crate::tui::operant_app::todo::TodoItem>,
+    )>,
+> {
     if !todos.iter().any(|todo| todo_group_key(todo).is_some()) {
         return None;
     }
-    let mut groups: Vec<(Option<String>, Vec<&crate::tui::operant_app::todo::TodoItem>)> = Vec::new();
+    let mut groups: Vec<(
+        Option<String>,
+        Vec<&crate::tui::operant_app::todo::TodoItem>,
+    )> = Vec::new();
     for todo in todos {
         let key = todo_group_key(todo);
         if let Some(entry) = groups.iter_mut().find(|(existing, _)| *existing == key) {
@@ -494,7 +502,10 @@ fn push_todo_item_line(
 /// both group headers and item rows. Returns the rendered lines plus the number
 /// of todo items actually shown (so callers can render a "+N more" footer).
 fn render_grouped_todo_lines(
-    groups: &[(Option<String>, Vec<&crate::tui::operant_app::todo::TodoItem>)],
+    groups: &[(
+        Option<String>,
+        Vec<&crate::tui::operant_app::todo::TodoItem>,
+    )],
     goals: &[crate::tui::operant_app::todo::TodoGoal],
     inner: Rect,
     show_priority_marker: bool,
@@ -586,7 +597,8 @@ pub(super) fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Framed 
     }
 
     // Sort todos: in_progress first, then pending, then completed
-    let mut sorted_todos: Vec<&crate::tui::operant_app::todo::TodoItem> = data.todos.iter().collect();
+    let mut sorted_todos: Vec<&crate::tui::operant_app::todo::TodoItem> =
+        data.todos.iter().collect();
     sorted_todos.sort_by(|a, b| status_sort_rank(&a.status).cmp(&status_sort_rank(&b.status)));
 
     // Render todos (limit based on available height)
@@ -679,7 +691,8 @@ pub(super) fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<L
     lines.push(Line::from(header));
 
     // Sort todos: in_progress first, then pending, then completed
-    let mut sorted_todos: Vec<&crate::tui::operant_app::todo::TodoItem> = data.todos.iter().collect();
+    let mut sorted_todos: Vec<&crate::tui::operant_app::todo::TodoItem> =
+        data.todos.iter().collect();
     sorted_todos.sort_by(|a, b| status_sort_rank(&a.status).cmp(&status_sort_rank(&b.status)));
 
     // Render todos with priority colors

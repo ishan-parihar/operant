@@ -203,7 +203,8 @@ fn model_picker_top_hint(
     // The favorite/default hotkeys now work in both the focused picker and the
     // as-you-type preview, so the hint is shown whenever this is a runtime model
     // picker (i.e. it has selectable model rows).
-    let is_runtime_model_picker = picker.kind == crate::tui::operant_app::tui_fns::PickerKind::Model
+    let is_runtime_model_picker = picker.kind
+        == crate::tui::operant_app::tui_fns::PickerKind::Model
         && picker.entries.iter().any(|entry| {
             matches!(
                 entry.action,

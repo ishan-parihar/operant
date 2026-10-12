@@ -130,7 +130,15 @@ impl App {
             "selection_area_y": self.last_selectable_area.get().y,
             "selection_area_w": self.last_selectable_area.get().width,
             "selection_area_h": self.last_selectable_area.get().height,
-            "selection_text": self.selection_text.borrow().clone()
+            "selection_text": self.selection_text.borrow().clone(),
+            // Terminal-scroll mode (P5): scenarios assert the mode is
+            // live from config and that emission never re-emits (the
+            // watermark only advances). insert_before is inert on the
+            // headless fullscreen TestBackend, so scrollback history
+            // itself is live-verified territory, not corpus territory.
+            "terminal_scroll_mode": self.terminal_scroll_mode,
+            "scroll_emitted_rows": self.scroll_emitted_rows.get(),
+            "scroll_cls_divider": self.scroll_cls_divider.get()
         })
     }
 
@@ -275,6 +283,16 @@ impl App {
                 at: crate::tui::debug::event_bus::now_secs(),
             });
         match cmd {
+            // Alias tier (2026-10-10 command sweep): the registry advertises
+            // names whose jcode counterparts are the same surface as an
+            // already-handled command — route instead of falling through to
+            // the model as literal text.
+            "commands" => return self.intercept_slash_command_with_args_impl("help", args),
+            "models" => return self.intercept_slash_command_with_args_impl("model", args),
+            "split" | "split-view" => {
+                return self.intercept_slash_command_with_args_impl("splitview", args);
+            }
+
             "config" | "settings" => {
                 self.settings_screen.open();
                 true
@@ -450,6 +468,36 @@ impl App {
                 self.open_model_picker_for_provider(&provider, None);
                 true
             }
+            // /model-status — status-tier (command backlog tier 1):
+            // one-line model health flash in the status bar. /status keeps
+            // the full transcript annotation.
+            "model-status" => {
+                let model = if self.model_name.is_empty() {
+                    "(unset)".to_string()
+                } else {
+                    self.model_name.clone()
+                };
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string());
+                let creds = if self.credentials_live() {
+                    "live"
+                } else {
+                    "absent"
+                };
+                let streaming = if self.is_streaming {
+                    "streaming"
+                } else {
+                    "idle"
+                };
+                let summary = format!(
+                    "Model: {model} · provider: {provider} · credentials: {creds} · {streaming}"
+                );
+                self.status_message = Some(summary.clone());
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
+                true
+            }
             "session" | "resume" => {
                 self.session_browser.open(vec![]);
                 self.session_list_pending = true;
@@ -496,6 +544,30 @@ impl App {
                     crate::tui::app::enums::SystemMessageStyle::Info,
                 );
                 self.status_message = Some(summary);
+                true
+            }
+            // /info — status-tier (command backlog tier 1): compact
+            // environment identity flash. /status carries session numbers.
+            "info" => {
+                let model = if self.model_name.is_empty() {
+                    "(unset)".to_string()
+                } else {
+                    self.model_name.clone()
+                };
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string());
+                let title = self
+                    .session_title
+                    .clone()
+                    .unwrap_or_else(|| "(untitled)".to_string());
+                let summary = format!(
+                    "operant v{} · model: {model} · provider: {provider} · title: {title}",
+                    env!("CARGO_PKG_VERSION"),
+                );
+                self.status_message = Some(summary.clone());
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 true
             }
             "clear" => {
@@ -780,7 +852,54 @@ impl App {
                 self.session_browser.start_rename();
                 true
             }
-            "init" | "login" | "logout" => false,
+            // /login, /init — dialog tier (command backlog tier 2): the
+            // registry advertises them but the handler returned false, so
+            // they fell through to the model as literal prompt text. The
+            // connect dialog IS the login surface; route like /connect.
+            "init" | "login" => {
+                self.connect_dialog.open();
+                true
+            }
+            // /logout — same surface family. The TUI holds no credential
+            // material to drop (keys live in ~/.operant/.env or the auth
+            // store, which the connect dialog manages), so logout shows
+            // the dialog and tells the user where the keys actually are
+            // instead of pretending a state change happened.
+            "logout" => {
+                self.connect_dialog.open();
+                self.push_system_message(
+                    "Logout: API keys live in ~/.operant/.env or the auth store — manage them from the connect dialog.".to_string(),
+                    crate::tui::app::SystemMessageStyle::Info,
+                );
+                true
+            }
+            // /observe — registered as "show the latest tool context in
+            // the side panel", but no side panel exists in the ported
+            // chrome yet. A registered surface must never fall through to
+            // the model; until the panel lands, surface the latest tool
+            // invocation (from tool_use_blocks) in the transcript.
+            "observe" => {
+                let ctx = self.tool_use_blocks.iter().rev().find_map(|b| {
+                    b.output_preview
+                        .as_ref()
+                        .map(|p| {
+                            format!(
+                                "{}: {}",
+                                b.name,
+                                crate::tui::render::utils::truncate_end(p, 200)
+                            )
+                        })
+                        .or_else(|| Some(format!("{} (no output preview)", b.name)))
+                });
+                let text = match ctx {
+                    Some(c) => format!("Observe (side panel pending) — last tool: {c}"),
+                    None => {
+                        "Observe (side panel pending) — no tool calls yet this session.".to_string()
+                    }
+                };
+                self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
+                true
+            }
             "keybindings" => {
                 // Open the keybindings.json file in the external editor
                 let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir()
@@ -1184,6 +1303,65 @@ impl App {
             // since the pose system was dead code. Still shows the message.)
             "pet" => {
                 self.status_message = Some("Rustle wags its tail. 🐕".to_string());
+                true
+            }
+
+            // jcode /cls parity (2026-10-10 command sweep): clear the rendered
+            // VIEW only — the model keeps its full context. Distinct from
+            // /clear, which drops the conversation. Same machinery as Ctrl+L.
+            "cls" | "clear-view" => {
+                // Exactly Ctrl+L's sequence: the collapse capture must record
+                // the CURRENT transcript version, so no invalidate here —
+                // an invalidate after the capture bumps the version and the
+                // collapsed state reads as dead.
+                self.clear_view_terminal_style();
+                self.status_message =
+                    Some("View cleared — context kept (/clear drops context)".to_string());
+                true
+            }
+
+            // P4-3 (2026-10-09 v2 outline): the band itself is live — the
+            // list arrives from the todo tool's results; /todos only chooses
+            // whether the pinned card is shown.
+            // P4-4 (2026-10-09 v2 outline): jcode's /thinking-display
+            // (off|full|current). The vendored tree implements one trace
+            // mode, so `full` and `current` both show it; the words stay so
+            // the muscle memory ports.
+            // "thinking" alias: the registered surface name is /thinking
+            // (command registry); the muscle-memory ports cover it.
+            "thinking-display" | "thinking" => {
+                let mode = args.trim();
+                match mode {
+                    "off" => self.thinking_display_on = false,
+                    "full" | "current" | "on" => self.thinking_display_on = true,
+                    "" => {}
+                    other => {
+                        self.status_message = Some(format!(
+                            "Unknown thinking-display mode '{other}' — use off|full|current"
+                        ));
+                        return true;
+                    }
+                }
+                let summary = match (self.thinking_display_on, mode) {
+                    (true, "") => "Thinking display: on (full/current)".to_string(),
+                    (true, _) => "Thinking display: on".to_string(),
+                    (false, _) => "Thinking display: off".to_string(),
+                };
+                self.status_message = Some(summary.clone());
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
+                self.invalidate_transcript();
+                true
+            }
+            "todos" | "todo" => {
+                self.todos_band_hidden = !self.todos_band_hidden;
+                self.status_message = Some(if self.todos_band_hidden {
+                    "Todo card hidden".to_string()
+                } else if self.todos_card_payload.is_empty() {
+                    "Todo card pinned (no todos yet)".to_string()
+                } else {
+                    "Todo card pinned".to_string()
+                });
+                self.invalidate_transcript();
                 true
             }
 

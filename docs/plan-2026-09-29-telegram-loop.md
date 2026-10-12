@@ -4,6 +4,38 @@ Everything here is backed by a measured observation. Nothing is speculative.
 
 ## Tier 1 — data loss
 
+### FIXED — turn could never be terminated (iter-490, `2bad9d45`)
+**This was the cause of the 9-minute hang.** `reset_on_success()` is called from
+the Ok arm of the response match (`run.rs:754`) — once per agent **iteration**,
+not once per turn. It zeroes `retry_count`, so a turn alternating "stream
+dropped" with "answered fine" has its budget refilled between failures and can
+never exhaust it. The log shows the counter visibly resetting:
+
+```
+17:16:25  Stream dropped mid-read, retry: 1, max: 3
+17:17:25  Stream dropped mid-read, retry: 2, max: 3
+17:19:33  Stream dropped mid-read, retry: 1, max: 3   <- should be 3
+```
+
+Three bounds added: a monotonic `turn_retry_failures` per turn;
+`TURN_MAX_RETRY_FAILURES = 12` (deliberately not `max_retries = 3`, which is a
+per-call budget a 90-iteration turn passes through legitimately); and
+`TURN_WALL_CLOCK_LIMIT_SECS = 20 min`, because a finite retry cap still permits
+N × 120s of work.
+
+### FIXED — interrupted turns were invisible (iter-492, `72b55a98`)
+`check_interrupted_turns()` warned to the server log and returned `()`. The user
+got silence. Now delivers a notice on the originating platform; `platform` was
+added to the turn-state JSON for routing, with a telegram fallback for
+pre-existing files.
+
+### FIXED — model output logged verbatim (iter-491, `d0093d47`)
+`parser.rs` and `message_safety.rs` logged 80–100 chars of model-emitted text,
+and `parser.rs`'s `ParserEvent::Error` re-injected it into the **conversation**.
+Observed leaking `$TAVILY_API_KEY`. Now logs length plus a prefix cut before any
+`$`/`=`/quote, and the error event is a fixed sentence. Note the redactor is a
+**no-op** for a bare `$VAR` — measured, not assumed.
+
 ### D1. Telegram startup probe discards pending updates — fix in 47f318a4, POST-FIX UNVERIFIED
 `crates/operant-core/src/gateway/telegram.rs:692`
 

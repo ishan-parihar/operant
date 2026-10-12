@@ -35,6 +35,8 @@ mod tests {
         assert!(
             crate::tui::operant_app::fuzzy_engine::command_fuzzy_match("/g", "/config").is_none()
         );
-        assert!(crate::tui::operant_app::fuzzy_engine::command_fuzzy_match("/g", "/goals").is_some());
+        assert!(
+            crate::tui::operant_app::fuzzy_engine::command_fuzzy_match("/g", "/goals").is_some()
+        );
     }
 }
