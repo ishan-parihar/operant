@@ -1,0 +1,17 @@
+{
+  "name": "selection-highlight-chrome",
+  "surface": "crates/operant-cli/src/tui/app/mouse.rs (Drag clamp) + render/selection.rs apply_selection_highlight",
+  "opens_with": "<esc> closes the connect dialog; drag from the band up into the banner",
+  "keys": "<esc>",
+  "mouse": "<left,60,20><drag,118,2>",
+  "size": "120x40",
+  "agent_script": "assistant-simple.json",
+  "assert": [
+    "selection_anchor != nil",
+    "selection_focus != nil",
+    "messages == 1"
+  ],
+  "baseline": "selection-highlight-chrome.txt",
+  "style_baseline": "selection-highlight-chrome.style.txt",
+  "notes": "P4-5 pane-scoping pin: the v1 live-audit measured a chrome-spanning drag painting 442 chars / 17 lines including the left rail and info widgets. iter-672's content-space points + the Drag arm's band clamp were the fix; this golden proves it \u2014 the drag runs from mid-band up to the far-right banner row, and the selection paint must stay inside the chat band (the style baseline carries the blend on transcript rows only; banner rows 2-4 keep their own rgb:3C3C50 notice styling)."
+}

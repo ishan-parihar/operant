@@ -1,0 +1,1 @@
+The preview of your inventory was truncated at section 4 (feishu rows). Re-send ONLY the parts I haven't seen: the remainder of section 4 (tools registry rows from homeassistant onward), and any sections 5+ (MCP surface, memory/TTS/AFT/LifeOS integrations, operant.example.toml surfaces, final redundancy list). Keep it compact — table rows with file:line evidence only.

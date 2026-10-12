@@ -1,0 +1,18 @@
+{
+  "name": "terminal-scroll-cls",
+  "surface": "crates/operant-cli/src/tui/app/messaging.rs (clear_view_terminal_style scroll_cls_divider arm) + scroll_emit.rs emitter",
+  "opens_with": "/cls in terminal-scroll mode",
+  "config": "[tui]\nterminal_scroll_mode = true",
+  "keys": "/cls<enter>",
+  "size": "120x40",
+  "agent_script": "assistant-simple.json",
+  "assert": [
+    "terminal_clear_collapsed == true",
+    "terminal_scroll_mode == true",
+    "scroll_cls_divider == true",
+    "messages == 1"
+  ],
+  "baseline": "terminal-scroll-cls.txt",
+  "style_baseline": "terminal-scroll-cls.style.txt",
+  "notes": "P5-4 scroll-mode golden (second of two). /cls in scroll mode arms the one-shot native-scrollback divider (iter-762) AND collapses the live window (iter-761 capture). The divider flag stays armed until the NEXT settled content arrives — with no post-/cls emission in this scenario it must read exactly true. The state assertions pin both the collapse and the armed divider; the text golden pins the collapsed frame (no transcript rows)."
+}
