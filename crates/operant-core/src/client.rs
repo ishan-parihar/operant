@@ -272,8 +272,7 @@ impl OpenAIClient {
             return Err(classify_http_error(status.as_u16(), &body));
         }
 
-        let response: ChatResponse = serde_json::from_str(&body)
-            .map_err(|e| Error::ParseResponse(format!("{}: {}", e, body)))?;
+        let response: ChatResponse = parse_chat_response(&body)?;
 
         debug!(usage = ?response.usage, "Chat response received");
         Ok(response)
@@ -1485,8 +1484,12 @@ fn try_parse_next_sse_event(
     }
 }
 
-/// Remove alias-colliding reasoning keys from every choice delta so the
-/// strict `StreamingMessageDelta` deserializer sees at most one of them.
+/// Remove alias-colliding reasoning keys from every choice body so the
+/// strict delta deserializers see at most one of them.
+/// Covers both wire shapes: `delta` (streaming `StreamingMessageDelta`,
+/// iter-758) and `message` (non-streaming `MessageDelta`, iter-779 —
+/// dots-3-note-preview emits `reasoning` + `reasoning_details` +
+/// `reasoning_content` together and the alias set hard-errors).
 /// Preference order: `reasoning_content` > `reasoning` > `reasoning_context`.
 /// `reasoning_details` (OpenAI's structured form) is dropped — the plain
 /// alias carries the same text in every observed wire shape.
@@ -1495,30 +1498,57 @@ fn salvage_reasoning_alias_collision(v: &mut serde_json::Value) {
         return;
     };
     for choice in choices.iter_mut() {
-        let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) else {
-            continue;
-        };
-        let has_preferred = delta
-            .get("reasoning_content")
-            .is_some_and(|rc| !rc.is_null());
-        let has_reasoning = delta.get("reasoning").is_some_and(|r| !r.is_null());
-        let has_context = delta.get("reasoning_context").is_some_and(|r| !r.is_null());
-        if has_preferred {
-            delta.remove("reasoning");
-            delta.remove("reasoning_context");
-            delta.remove("reasoning_details");
-        } else if has_reasoning || has_context {
-            // Keep whichever survives as `reasoning_content` — the field's
-            // canonical name — so downstream sees one spelling.
-            let kept = delta
-                .remove("reasoning")
-                .or_else(|| delta.remove("reasoning_context"))
-                .filter(|r| !r.is_null());
-            if let Some(kept) = kept {
-                delta.insert("reasoning_content".to_string(), kept);
+        for key in ["delta", "message"] {
+            if let Some(body) = choice.get_mut(key).and_then(|d| d.as_object_mut()) {
+                dedup_reasoning_keys(body);
             }
-            delta.remove("reasoning_details");
         }
+    }
+}
+
+/// Parse a non-streaming chat completion body, salvaging reasoning-alias
+/// collisions on retry. Strict-first so the happy path pays no extra alloc;
+/// on failure the salvage keeps the preferred alias and re-parses
+/// (non-streaming twin of the SSE salvage, iter-758).
+fn parse_chat_response(body: &str) -> Result<ChatResponse> {
+    match serde_json::from_str::<ChatResponse>(body) {
+        Ok(r) => Ok(r),
+        Err(first_err) => {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(body) {
+                salvage_reasoning_alias_collision(&mut v);
+                if let Ok(r) = serde_json::from_value::<ChatResponse>(v) {
+                    return Ok(r);
+                }
+            }
+            Err(Error::ParseResponse(format!("{first_err}: {body}")))
+        }
+    }
+}
+
+/// Keep at most one reasoning spelling in a single choice body object.
+fn dedup_reasoning_keys(body: &mut serde_json::Map<String, serde_json::Value>) {
+    let has_preferred = body
+        .get("reasoning_content")
+        .is_some_and(|rc| !rc.is_null());
+    let has_reasoning = body.get("reasoning").is_some_and(|r| !r.is_null());
+    let has_context = body
+        .get("reasoning_context")
+        .is_some_and(|r| !r.is_null());
+    if has_preferred {
+        body.remove("reasoning");
+        body.remove("reasoning_context");
+        body.remove("reasoning_details");
+    } else if has_reasoning || has_context {
+        // Keep whichever survives as `reasoning_content` — the field's
+        // canonical name — so downstream sees one spelling.
+        let kept = body
+            .remove("reasoning")
+            .or_else(|| body.remove("reasoning_context"))
+            .filter(|r| !r.is_null());
+        if let Some(kept) = kept {
+            body.insert("reasoning_content".to_string(), kept);
+        }
+        body.remove("reasoning_details");
     }
 }
 
@@ -1835,6 +1865,20 @@ Connection: close
         server.abort();
         assert_eq!(events, 2, "both duplicated deltas must be yielded");
         assert_eq!(got, "HelloHello", "duplicated deltas append, never drop");
+    }
+
+    #[test]
+    fn nonstreaming_reasoning_alias_collision_salvages_body() {
+        // iter-779: dots-3-note-preview emits `reasoning` +
+        // `reasoning_details` + `reasoning_content` in ONE non-streaming
+        // `message`. MessageDelta's alias set hard-errors on that — the
+        // same miss as iter-758's streaming twin. parse_chat_response
+        // salvages and the turn completes.
+        let body = r#"{"id":"gen-1","object":"chat.completion","created":1,"model":"demo","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"CORE_SMOKE_OK","reasoning":"R","reasoning_details":[{"type":"reasoning.text","text":"R"}],"reasoning_content":"R"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let resp = parse_chat_response(body).expect("salvaged body should parse");
+        let msg = &resp.choices[0].message;
+        assert_eq!(msg.content.as_deref(), Some("CORE_SMOKE_OK"));
+        assert_eq!(msg.reasoning_content.as_deref(), Some("R"));
     }
 
     #[test]
