@@ -3,6 +3,7 @@
 //! Provides unified messaging interface across multiple platforms including
 //! Telegram, Discord, Slack, WhatsApp, and more.
 
+pub mod dispatch_breaker;
 pub mod lifecycle;
 
 use chrono::Utc;
@@ -14,7 +15,8 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::gateway::dispatch_breaker::DispatchBreaker;
 use crate::gateway::lifecycle::{DeliveryLedger, MirrorRule, SessionStallTracker, TurnLease};
 use crate::gateway_session::{PersistentSessionStore, SessionSource};
 
@@ -61,6 +63,11 @@ pub struct Gateway {
     delivery_ledger: DeliveryLedger,
     /// Response mirror rules (hermes `gateway/mirror.py` parity).
     mirror_rules: Vec<MirrorRule>,
+    /// The per-channel dispatch breaker (v6 outline §2 P1-A). `None`
+    /// until mounted with [`Self::with_dispatch_breaker`] — a gateway
+    /// without one behaves exactly as before every send (the hook is a
+    /// no-op), so tests and kernel-only builds stay untouched.
+    dispatch_breaker: Option<Arc<DispatchBreaker>>,
 }
 
 /// Handler for incoming messages from any platform
@@ -95,6 +102,7 @@ impl Gateway {
             stall_tracker: SessionStallTracker::new(),
             delivery_ledger: DeliveryLedger::default(),
             mirror_rules: Vec::new(),
+            dispatch_breaker: None,
         }
     }
 
@@ -127,6 +135,71 @@ impl Gateway {
     /// Register a mirror rule in place.
     pub fn add_mirror_rule(&mut self, rule: MirrorRule) {
         self.mirror_rules.push(rule);
+    }
+
+    /// Mount the per-channel dispatch breaker (v6 outline §2 P1-A).
+    /// Without it every send passes through untouched — the lookup in the
+    /// seam is a `None` check, so unmounted gateways (tests, harnesses)
+    /// keep the pre-breaker behavior byte-for-byte.
+    pub fn with_dispatch_breaker(mut self, breaker: Arc<DispatchBreaker>) -> Self {
+        self.dispatch_breaker = Some(breaker);
+        self
+    }
+
+    /// The seam hook (v6 outline §2 P1-A). Class-free pre-check: an OPEN
+    /// channel+any-class row fast-fails the send. Classed post-record:
+    /// success resets the channel (all classes), a failure increments the
+    /// class the error fell into. Every outcome is best-effort — a store
+    /// error logs and the send proceeds (fail-open on infra down), so the
+    /// breaker can never itself take delivery down.
+    async fn breaker_guard(
+        &self,
+        platform: &str,
+        message: &OutgoingMessage,
+    ) -> Option<crate::error::Error> {
+        let breaker = self.dispatch_breaker.as_ref()?;
+        match breaker.check(platform, &message.channel_id) {
+            crate::gateway::dispatch_breaker::DispatchVerdict::Reject => {
+                tracing::info!(
+                    platform,
+                    channel_id = %message.channel_id,
+                    "dispatch breaker OPEN for this channel — send skipped (logged once per open, not per cycle)"
+                );
+                return Some(crate::error::Error::Agent(format!(
+                    "dispatch breaker open for {} (channel {}); send skipped",
+                    platform, message.channel_id
+                )));
+            }
+            crate::gateway::dispatch_breaker::DispatchVerdict::Probe => {
+                tracing::info!(
+                    platform,
+                    channel_id = %message.channel_id,
+                    "dispatch breaker HALF-OPEN — this send is the single probe"
+                );
+            }
+            crate::gateway::dispatch_breaker::DispatchVerdict::Allow => {}
+        }
+        None
+    }
+
+    async fn breaker_record(&self, platform: &str, channel_id: &str, outcome: Option<&Error>) {
+        let Some(breaker) = self.dispatch_breaker.as_ref() else {
+            return;
+        };
+        match outcome {
+            None => {
+                if let Err(e) = breaker.record_success(platform, channel_id) {
+                    tracing::warn!(error = %e, "dispatch breaker success record failed (fail-open)");
+                }
+            }
+            Some(e) => {
+                let rendered = e.to_string();
+                let class = crate::gateway::dispatch_breaker::classify_error(&rendered);
+                if let Err(e2) = breaker.record_failure(platform, channel_id, class, &rendered) {
+                    tracing::warn!(error = %e2, "dispatch breaker failure record failed (fail-open)");
+                }
+            }
+        }
     }
 
     /// Configure the delivery ledger capacity (default 500).
@@ -524,6 +597,12 @@ impl Gateway {
 
     /// Send a message to a specific platform
     pub async fn send_to_platform(&self, platform: &str, message: OutgoingMessage) -> Result<()> {
+        // v6 outline §2 P1-A: the dispatch breaker seam — an open
+        // channel+class pair never reaches the adapter, an open pair past
+        // its cooldown lets exactly one probe through.
+        if let Some(rejection) = self.breaker_guard(platform, &message).await {
+            return Err(rejection);
+        }
         let adapter = match self.adapters.get(platform) {
             Some(a) => a,
             None => {
@@ -533,8 +612,13 @@ impl Gateway {
                 )));
             }
         };
+        // Snapshot the channel id (the message moves into the adapter).
+        let channel_id = message.channel_id.clone();
 
-        adapter.send_message(message).await
+        let outcome = adapter.send_message(message).await;
+        self.breaker_record(platform, &channel_id, outcome.as_ref().err())
+            .await;
+        outcome
     }
 
     /// Send a message and return the platform message ID.
@@ -543,6 +627,12 @@ impl Gateway {
         platform: &str,
         message: OutgoingMessage,
     ) -> Result<String> {
+        // v6 outline §2 P1-A: the same breaker seam (callers that need
+        // the message id back — proactive sends, edits — must not bypass
+        // the guard the plain send enforces).
+        if let Some(rejection) = self.breaker_guard(platform, &message).await {
+            return Err(rejection);
+        }
         let adapter = match self.adapters.get(platform) {
             Some(a) => a,
             None => {
@@ -552,7 +642,11 @@ impl Gateway {
                 )));
             }
         };
-        adapter.send_message_return_id(message).await
+        let channel_id = message.channel_id.clone();
+        let outcome = adapter.send_message_return_id(message).await;
+        self.breaker_record(platform, &channel_id, outcome.as_ref().err())
+            .await;
+        outcome
     }
 
     /// Edit an existing message on a platform.
@@ -1135,10 +1229,14 @@ mod tests {
 
         // Channel post from a NON-ADMIN: capture must happen before the
         // gate; no turn; no reply (None, not the "not authorized" message).
-        let post = IncomingMessage::new("telegram", "anon", "Some Channel", "-1001", "daily update")
-            .with_channel_post(true);
+        let post =
+            IncomingMessage::new("telegram", "anon", "Some Channel", "-1001", "daily update")
+                .with_channel_post(true);
         let out = gw.route_message(post).await.expect("route ok");
-        assert!(out.is_none(), "channel post must never produce a reply: {out:?}");
+        assert!(
+            out.is_none(),
+            "channel post must never produce a reply: {out:?}"
+        );
         assert_eq!(handler.feeds.load(Ordering::SeqCst), 1);
         assert_eq!(handler.turns.load(Ordering::SeqCst), 0);
 
@@ -1888,5 +1986,176 @@ mod tests {
     fn test_utf16_len_mixed() {
         // "Hello " = 6, "🎉" = 2 utf16, " World" = 6 → total 14
         assert_eq!(utf16_len("Hello 🎉 World"), 14);
+    }
+
+    // ── v6 outline §2 P1-A: the dispatch breaker seam ────────────────
+
+    use crate::gateway::dispatch_breaker::DispatchBreaker;
+    use crate::gateway::types::PlatformAdapter;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A platform adapter that counts its sends and fails every one with a
+    /// fixed rendered error — the hammered channel the breaker exists for.
+    struct FlakyAdapter {
+        name: String,
+        sends: Arc<AtomicUsize>,
+        error: String,
+    }
+
+    #[async_trait::async_trait]
+    impl PlatformAdapter for FlakyAdapter {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_enabled(&self) -> bool {
+            true
+        }
+        async fn start(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn send_message(&self, _message: OutgoingMessage) -> Result<()> {
+            self.sends.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Agent(self.error.clone()))
+        }
+        async fn handle_update(
+            &self,
+            _update: serde_json::Value,
+        ) -> Result<Option<IncomingMessage>> {
+            Ok(None)
+        }
+        fn config_json(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn start_with_channel(
+            &self,
+            _message_tx: tokio::sync::mpsc::UnboundedSender<IncomingMessage>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn send_message_to_channel(
+            &self,
+            _channel_id: &str,
+            _message: &OutgoingMessage,
+        ) -> Result<String> {
+            self.sends.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Agent(self.error.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn open_breaker_fast_fails_at_the_seam_without_touching_the_adapter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let breaker =
+            Arc::new(DispatchBreaker::init(dir.path().join("breaker.sqlite")).expect("breaker"));
+        let sends = Arc::new(AtomicUsize::new(0));
+        let adapter = Arc::new(FlakyAdapter {
+            name: "telegram".to_string(),
+            sends: Arc::clone(&sends),
+            error: "HTTP 401 Unauthorized".to_string(),
+        });
+        let gw = Gateway::new(GatewayConfig::default())
+            .with_adapter(adapter.clone())
+            .with_dispatch_breaker(Arc::clone(&breaker));
+
+        // Three failing sends each reach the adapter and walk the breaker.
+        for i in 0..3 {
+            let r = gw
+                .send_to_platform(
+                    "telegram",
+                    OutgoingMessage::new("chat-42", &format!("m{i}")),
+                )
+                .await;
+            assert!(r.is_err(), "the send itself still fails (i={i})");
+        }
+        assert_eq!(sends.load(Ordering::SeqCst), 3, "the adapter saw all three");
+        assert_eq!(
+            breaker
+                .state_of(
+                    "telegram",
+                    "chat-42",
+                    crate::gateway::dispatch_breaker::FailureClass::Auth
+                )
+                .unwrap()
+                .state,
+            crate::gateway::dispatch_breaker::BreakerState::Open,
+            "the third consecutive auth failure opened the breaker"
+        );
+
+        // The fourth send never reaches the adapter — this is the whole
+        // point of the breaker.
+        let r = gw
+            .send_to_platform("telegram", OutgoingMessage::new("chat-42", "m4"))
+            .await;
+        assert!(r.is_err());
+        assert!(
+            r.unwrap_err().to_string().contains("dispatch breaker open"),
+            "the fast-fail names the breaker"
+        );
+        assert_eq!(
+            sends.load(Ordering::SeqCst),
+            3,
+            "the adapter was never called for the fourth send"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_return_id_shares_the_seam() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let breaker =
+            Arc::new(DispatchBreaker::init(dir.path().join("breaker.sqlite")).expect("breaker"));
+        let sends = Arc::new(AtomicUsize::new(0));
+        let adapter = Arc::new(FlakyAdapter {
+            name: "telegram".to_string(),
+            sends: Arc::clone(&sends),
+            error: "connection refused".to_string(),
+        });
+        let gw = Gateway::new(GatewayConfig::default())
+            .with_adapter(adapter.clone())
+            .with_dispatch_breaker(Arc::clone(&breaker));
+
+        for i in 0..3 {
+            let r = gw
+                .send_message_return_id(
+                    "telegram",
+                    OutgoingMessage::new("chat-7", &format!("m{i}")),
+                )
+                .await;
+            assert!(r.is_err());
+        }
+        assert_eq!(sends.load(Ordering::SeqCst), 3);
+        let r = gw
+            .send_message_return_id("telegram", OutgoingMessage::new("chat-7", "m3"))
+            .await;
+        assert!(r.unwrap_err().to_string().contains("dispatch breaker open"));
+        assert_eq!(
+            sends.load(Ordering::SeqCst),
+            3,
+            "the id-returning seam enforces the same breaker"
+        );
+    }
+
+    #[tokio::test]
+    async fn unmounted_gateway_keeps_pre_breaker_behavior() {
+        let sends = Arc::new(AtomicUsize::new(0));
+        let adapter = Arc::new(FlakyAdapter {
+            name: "telegram".to_string(),
+            sends: Arc::clone(&sends),
+            error: "HTTP 500".to_string(),
+        });
+        let gw = Gateway::new(GatewayConfig::default()).with_adapter(adapter.clone());
+
+        // Ten failures, no breaker mounted: every send still reaches the
+        // adapter — the hook is a None check, so unmounted gateways are
+        // byte-for-byte the old behavior.
+        for i in 0..10 {
+            let r = gw
+                .send_to_platform("telegram", OutgoingMessage::new("chat-9", &format!("m{i}")))
+                .await;
+            assert!(r.is_err());
+        }
+        assert_eq!(sends.load(Ordering::SeqCst), 10);
     }
 }

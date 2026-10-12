@@ -1766,6 +1766,24 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     for adapter in adapters {
         gateway = gateway.with_adapter(adapter);
     }
+    // v6 outline §2 P1-A: the per-channel dispatch breaker, on the app
+    // database beside the session store (same file, separate table — a
+    // hot channel must not get a fresh breaker by restarting the
+    // gateway). Fail-open on an unusable store: a broken breaker file
+    // logs and the gateway runs unbreaked rather than refusing to boot.
+    match operant_core::gateway::dispatch_breaker::DispatchBreaker::init(
+        app_config.database_path.clone(),
+    ) {
+        Ok(breaker) => {
+            gateway = gateway.with_dispatch_breaker(std::sync::Arc::new(breaker));
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "dispatch breaker store unavailable — outbound sends run UNBREAKED"
+            );
+        }
+    }
 
     // Attach persistent session store for cross-restart session tracking
     let session_db_path = app_config.database_path.clone();

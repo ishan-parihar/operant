@@ -543,6 +543,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-774 — v6 outline §2 P1-A LANDED: the per-channel dispatch
+  breaker.** The saga this exists for: a dead token (401) followed by
+  the gateway re-issuing the same send on every cycle — 401 → 400 →
+  503 → 404, for hours, hammering a platform that already told us to
+  stop. `Gateway` now mounts a `DispatchBreaker`
+  (`gateway/dispatch_breaker.rs`) on both outbound seams
+  (`send_to_platform`, `send_message_return_id`): after
+  `OPEN_THRESHOLD` (3) consecutive failures for one
+  (platform, channel, class) key, sends fast-fail at the seam **before
+  the adapter is called** — the platform never sees the request, and
+  the reason is logged once per open, not once per cycle. Design
+  carried from the blueprint (`services/dispatch_breaker.py` #526):
+  **separate namespaces per concern** (Transport / Auth / Wedged — a
+  flaky network can never open the breaker for an auth-dead token);
+  **capped exponential cooldown** (30s → ×2 per tier → 300s clamp);
+  **exactly one half-open probe** (an atomic SQLite `UPDATE … WHERE
+  probe_lock = 0` claims it — concurrent senders race and one wins),
+  past a 30s probe deadline a never-reported probe is taken over so a
+  crashed sender cannot wedge the channel forever; **fail-open on
+  infra down** (a store error logs and the send proceeds — the breaker
+  can never itself take delivery down). The classifier
+  (`classify_error`) is hermes' anti-marker order: auth markers
+  (401/403/unauthorized/…) match before transport markers, so a
+  credential death is never misclassified as a network blip. State is
+  SQLite-backed next to the app database (separate table) so a hot
+  channel does not get a fresh breaker by restarting the gateway; an
+  unmountable store degrades to unbreaked sends with a warn, never a
+  boot failure. Tests: 10 pure-breaker (classifier order, cooldown
+  clamp, open-at-3, success-closes, class isolation, per-channel
+  isolation, exactly-one-probe, failed-probe re-open with stepped
+  cooldown, successful-probe reset, stale-probe takeover) plus 3 seam
+  tests with a counting failing adapter (open-breaker fast-fails with
+  the adapter untouched; the id-returning seam shares the guard; an
+  unmounted gateway keeps pre-breaker behavior byte-for-byte). The
+  seam is mutation-proven: removing both pre-checks turns both
+  seam tests red. Core suite 2513/2513; CLI compiles clean.
+
 - **iter-773 — v6 outline row 6b LANDED: the progress-token stall rung**
   — the last row-6 item. The model-evasion shape the loop detector was
   blind to: iterations whose narration keeps *claiming* forward motion
