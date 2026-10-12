@@ -68,7 +68,8 @@ impl App {
     /// immediately restores the full layout. Contrast `/clear`, which drops
     /// context entirely.
     pub fn clear_view_terminal_style(&mut self) {
-        self.terminal_clear_version.set(Some(self.transcript_version.get()));
+        self.terminal_clear_version
+            .set(Some(self.transcript_version.get()));
         // Snap to the bottom so the collapsed frame shows the composer at top.
         self.scroll_offset = 0;
         self.auto_scroll = true;
@@ -118,10 +119,37 @@ impl App {
         msg: String,
         duration_secs: Option<u64>,
     ) {
-        if kind == NotificationKind::Error {
-            self.error_modal_scroll_offset = 0;
+        // P4-2: the overlay-banner queue is gone; the duration argument is
+        // dead weight kept only so callers compile during the migration.
+        // The routing taxonomy lives in push_notice.
+        let _ = duration_secs;
+        self.push_notice(kind, msg);
+    }
+
+    /// Set the transient status-line notice (jcode `set_status_notice`
+    /// parity, P4-2). Single write seam: stamps `status_message_set_at` so
+    /// the `status_detail`/`status_notice` accessors can self-hide the
+    /// notice after 3s without a tick loop. All `status_message = Some(..)`
+    /// writes route here.
+    pub fn set_status_notice(&mut self, text: impl Into<String>) {
+        self.status_message = Some(text.into());
+        self.status_message_set_at = Some(std::time::Instant::now());
+    }
+
+    /// P4-2 routing seam — the jcode notification taxonomy:
+    /// Info/Success/Warning are transient status notices; Error lands an
+    /// inline transcript card (persistent, inspectable, scrollable) plus
+    /// the status notice. This replaces the overlay-banner queue.
+    pub fn push_notice(&mut self, kind: NotificationKind, msg: String) {
+        match kind {
+            NotificationKind::Error => {
+                self.push_system_message(msg.clone(), SystemMessageStyle::Error);
+                self.set_status_notice(msg);
+            }
+            NotificationKind::Info | NotificationKind::Success | NotificationKind::Warning => {
+                self.set_status_notice(msg);
+            }
         }
-        self.notifications.push(kind, msg, duration_secs);
     }
 
     pub fn push_system_message(&mut self, text: String, style: SystemMessageStyle) {
@@ -168,24 +196,21 @@ impl App {
         // Only escalate — never repeat a threshold already shown.
         if pct >= 100 && self.token_warning_threshold_shown < 100 {
             self.token_warning_threshold_shown = 100;
-            self.push_notification(
+            self.push_notice(
                 NotificationKind::Error,
                 "Context window full. Running auto-compact\u{2026}".to_string(),
-                None,
             );
         } else if pct >= 95 && self.token_warning_threshold_shown < 95 {
             self.token_warning_threshold_shown = 95;
-            self.push_notification(
+            self.push_notice(
                 NotificationKind::Error,
                 "Context window 95% full! Run /compact now.".to_string(),
-                None, // persistent until dismissed
             );
         } else if pct >= 80 && self.token_warning_threshold_shown < 80 {
             self.token_warning_threshold_shown = 80;
-            self.push_notification(
+            self.push_notice(
                 NotificationKind::Warning,
                 "Context window 80% full. Consider /compact.".to_string(),
-                Some(30),
             );
         }
     }
@@ -199,13 +224,12 @@ impl App {
     pub fn drop_pending_images_with_notice(&mut self) {
         let dropped = self.prompt_input.clear_images();
         if !dropped.is_empty() {
-            self.push_notification(
+            self.push_notice(
                 NotificationKind::Warning,
                 format!(
                     "Image attachments aren't sent to the model yet — {} image(s) dropped.",
                     dropped.len()
                 ),
-                Some(6),
             );
         }
     }
@@ -264,8 +288,7 @@ impl App {
             ComposerRecovery::Restore(text) => {
                 self.prompt_input.replace_text(text);
                 self.refresh_prompt_input();
-                self.status_message =
-                    Some("Prompt restored to the composer — the turn failed.".to_string());
+                self.set_status_notice("Prompt restored to the composer — the turn failed.");
             }
         }
     }

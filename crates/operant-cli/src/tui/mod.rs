@@ -54,6 +54,12 @@ pub mod input_history;
 // transcript renderers arrive; `expect` rather than `allow` so it fails
 // loudly the moment W3 wires in. The module's own tests read its items, so
 // the expectation is cfg-gated off in test builds (same as copy_targets).
+pub mod journey_view;
+pub mod keybindings;
+pub mod mcp_view;
+pub mod messages;
+pub mod model_picker;
+pub mod notifications;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "lands before its cutover wiring (W5 animations)")
@@ -101,12 +107,6 @@ pub mod operant_render_core;
     )
 )]
 pub mod operant_ui;
-pub mod journey_view;
-pub mod keybindings;
-pub mod mcp_view;
-pub mod messages;
-pub mod model_picker;
-pub mod notifications;
 pub mod osc8;
 pub mod overlays;
 pub mod pinned_images;

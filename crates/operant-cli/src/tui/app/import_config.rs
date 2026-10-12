@@ -29,7 +29,7 @@ impl App {
                 self.import_config_dialog.open(preview);
             }
             Err(err) => {
-                self.status_message = Some(format!("Import failed: {}", err));
+                self.set_status_notice(format!("Import failed: {}", err));
             }
         }
     }
@@ -76,11 +76,11 @@ impl App {
                 if imported_mcp {
                     self.pending_mcp_reconnect = true;
                 }
-                self.status_message = Some(result_message);
+                self.set_status_notice(result_message);
                 self.import_config_dialog.close();
             }
             Err(err) => {
-                self.status_message = Some(format!("Import failed: {}", err));
+                self.set_status_notice(format!("Import failed: {}", err));
                 self.import_config_dialog.close();
             }
         }

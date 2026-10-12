@@ -23,21 +23,21 @@ use crate::org::worklog::UsageAccumulator;
 use crate::org::write_barrier::{WriteBarrier, WriteBarrierRequest};
 use crate::turn_end::{RESULT_SUMMARY_LIMIT, TurnEnd};
 
- /// Message sent from the cron scheduler to the gateway for delivery.
- /// `delivery_id` (iter-720) names the `cron_deliveries` ledger row the
- /// consumer settles via `CronDb::mark_delivery_outcome` — the consumer
- /// reports outcomes against the row id, not the job id, so replays and
- /// first sends stay distinguishable in history.
- /// `job_id` (v6 row 5) names the originating job so the consumer can
- /// attribute the outcome event (`ObserverEvent::CronDeliveryOutcome`)
- /// without a ledger lookup.
- pub struct CronDelivery {
-     pub platform: String,
-     pub chat_id: String,
-     pub content: String,
-     pub delivery_id: Option<i64>,
-     pub job_id: String,
- }
+/// Message sent from the cron scheduler to the gateway for delivery.
+/// `delivery_id` (iter-720) names the `cron_deliveries` ledger row the
+/// consumer settles via `CronDb::mark_delivery_outcome` — the consumer
+/// reports outcomes against the row id, not the job id, so replays and
+/// first sends stay distinguishable in history.
+/// `job_id` (v6 row 5) names the originating job so the consumer can
+/// attribute the outcome event (`ObserverEvent::CronDeliveryOutcome`)
+/// without a ledger lookup.
+pub struct CronDelivery {
+    pub platform: String,
+    pub chat_id: String,
+    pub content: String,
+    pub delivery_id: Option<i64>,
+    pub job_id: String,
+}
 
 /// iter-720 (trinity P2-A concrete, hermes deliveries.db shape): a
 /// delivery is PARKED — the tombstone — after this many handoffs to the
@@ -1199,12 +1199,7 @@ impl CronScheduler {
     /// counter, PARK on the cap (the tombstone — replay stops, the row
     /// stays inspectable), emit the observer events. Warn-only — the
     /// audit layer never fails the run whose outcome is already sent.
-    fn account_delivery_attempt(
-        &self,
-        delivery_id: i64,
-        job_id: &str,
-        error: Option<&str>,
-    ) {
+    fn account_delivery_attempt(&self, delivery_id: i64, job_id: &str, error: Option<&str>) {
         match self
             .db
             .mark_delivery_attempt(delivery_id, MAX_DELIVERY_ATTEMPTS, error)
@@ -1215,13 +1210,11 @@ impl CronScheduler {
                      {MAX_DELIVERY_ATTEMPTS} attempts (tombstone; replay stops)"
                 );
                 if let Some(observer) = &self.observer {
-                    observer.record_event(
-                        &crate::observer::ObserverEvent::CronDeliveryParked {
-                            job_id: job_id.to_string(),
-                            delivery_id,
-                            attempts: MAX_DELIVERY_ATTEMPTS,
-                        },
-                    );
+                    observer.record_event(&crate::observer::ObserverEvent::CronDeliveryParked {
+                        job_id: job_id.to_string(),
+                        delivery_id,
+                        attempts: MAX_DELIVERY_ATTEMPTS,
+                    });
                 }
             }
             Ok(_) => {}
@@ -1276,13 +1269,11 @@ impl CronScheduler {
             } else {
                 self.account_delivery_attempt(row.id, &row.job_id, None);
                 if let Some(observer) = &self.observer {
-                    observer.record_event(
-                        &crate::observer::ObserverEvent::CronDeliveryReclaimed {
-                            job_id: row.job_id.clone(),
-                            delivery_id: row.id,
-                            attempt: row.attempts + 1,
-                        },
-                    );
+                    observer.record_event(&crate::observer::ObserverEvent::CronDeliveryReclaimed {
+                        job_id: row.job_id.clone(),
+                        delivery_id: row.id,
+                        attempt: row.attempts + 1,
+                    });
                 }
             }
         }
@@ -1522,7 +1513,8 @@ mod tests {
     #[tokio::test]
     async fn socialization_coordinator_runs_on_an_empty_due_tick() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
+        let db =
+            Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
         let agent = Arc::new(crate::agent::OperantAgent::new(
             crate::agent::AgentConfig::default(),
             Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
@@ -1531,7 +1523,8 @@ mod tests {
             crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
             db,
         ));
-        let cron_db = Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
+        let cron_db =
+            Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
         let seats_root = dir.path().join("seats");
         std::fs::create_dir_all(&seats_root).expect("seats root");
         let scheduler = super::CronScheduler::new(cron_db, agent)
@@ -1844,10 +1837,14 @@ mod tests {
                     format!("queued:{delivery_id}")
                 }
                 E::CronDeliveryReclaimed {
-                    delivery_id, attempt, ..
+                    delivery_id,
+                    attempt,
+                    ..
                 } => format!("reclaimed:{delivery_id}:{attempt}"),
                 E::CronDeliveryParked {
-                    delivery_id, attempts, ..
+                    delivery_id,
+                    attempts,
+                    ..
                 } => format!("parked:{delivery_id}:{attempts}"),
                 _ => return,
             };
@@ -1902,7 +1899,10 @@ mod tests {
         let mut job = test_job();
         job.origin_platform = Some("telegram".to_string());
         job.origin_chat_id = Some("5297486612".to_string());
-        scheduler.deliver_result(&job, "the run output").await.unwrap();
+        scheduler
+            .deliver_result(&job, "the run output")
+            .await
+            .unwrap();
 
         // The consumer sees the rendered payload AND the ledger id it
         // must settle.
@@ -2018,7 +2018,11 @@ mod tests {
         let rows = cron_db
             .reclaim_stale_deliveries(chrono::Duration::seconds(0))
             .expect("reclaim scan");
-        assert_eq!(rows.len(), 1, "the row stays queued for the next armed tick");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the row stays queued for the next armed tick"
+        );
         assert_eq!(rows[0].attempts, 0, "no handoff was counted");
     }
 }

@@ -1151,7 +1151,6 @@ pub enum LaunchMode {
     Query(String),
 }
 
-
 /// Tier-3 agent-flow handlers (/improve /judge /refactor /fix /triage):
 /// each suspends the TUI via `CommandResult::ShellCommand` →
 /// `pending_shell_command` → `run_suspended_shell_command` (the /setup
@@ -1245,9 +1244,7 @@ pub(crate) fn register_agent_flow_handlers(registry: &mut crate::commands::Comma
     registry
         .register_handler("refactor", Box::new(RefactorHandler))
         .ok();
-    registry
-        .register_handler("fix", Box::new(FixHandler))
-        .ok();
+    registry.register_handler("fix", Box::new(FixHandler)).ok();
     registry
         .register_handler("triage", Box::new(TriageHandler))
         .ok();

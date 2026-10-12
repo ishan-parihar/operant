@@ -157,18 +157,19 @@ fn todos_widgets_show_item_and_aggregate_confidence() {
 
 #[test]
 fn todos_widgets_render_group_headers_when_groups_present() {
-    let mk = |group: Option<&str>, id: &str, status: &str| crate::tui::operant_app::todo::TodoItem {
-        group: group.map(|g| g.to_string()),
-        id: id.to_string(),
-        content: format!("task {id}"),
-        status: status.to_string(),
-        priority: "medium".to_string(),
-        confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(80)),
-        completion_confidence: None,
-        confidence_history: Vec::new(),
-        blocked_by: Vec::new(),
-        assigned_to: None,
-    };
+    let mk =
+        |group: Option<&str>, id: &str, status: &str| crate::tui::operant_app::todo::TodoItem {
+            group: group.map(|g| g.to_string()),
+            id: id.to_string(),
+            content: format!("task {id}"),
+            status: status.to_string(),
+            priority: "medium".to_string(),
+            confidence: Some(crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(80)),
+            completion_confidence: None,
+            confidence_history: Vec::new(),
+            blocked_by: Vec::new(),
+            assigned_to: None,
+        };
     let data = InfoWidgetData {
         todos: vec![
             mk(Some("optimize rendering"), "a", "completed"),
@@ -1205,12 +1206,16 @@ fn workspace_widget_has_high_priority_when_enabled() {
     }
 
     let data = InfoWidgetData {
-        workspace_rows: vec![crate::tui::operant_app::workspace_map::VisibleWorkspaceRow {
-            workspace: 0,
-            is_current: true,
-            focused_index: Some(0),
-            sessions: vec![crate::tui::operant_app::workspace_map::WorkspaceSessionTile::new("fox")],
-        }],
+        workspace_rows: vec![
+            crate::tui::operant_app::workspace_map::VisibleWorkspaceRow {
+                workspace: 0,
+                is_current: true,
+                focused_index: Some(0),
+                sessions: vec![
+                    crate::tui::operant_app::workspace_map::WorkspaceSessionTile::new("fox"),
+                ],
+            },
+        ],
         session_name: Some("sauropod".to_string()),
         queue_mode: Some(true),
         ..Default::default()

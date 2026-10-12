@@ -69,7 +69,8 @@ fn wrapped_row_map_tiles_raw_line_and_skips_repeated_prefix() {
         "> quoted text that is long enough to wrap several times over so we can see the repeated gutter behaviour clearly and check the copy mapping once more",
     ];
     for case in cases {
-        let rendered = crate::tui::operant_app::markdown::render_markdown_with_width(case, Some(40));
+        let rendered =
+            crate::tui::operant_app::markdown::render_markdown_with_width(case, Some(40));
         let line = rendered
             .into_iter()
             .find(|line| line.width() > 40)

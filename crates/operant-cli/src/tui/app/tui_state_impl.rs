@@ -300,7 +300,20 @@ impl TuiState for App {
     }
 
     fn status_detail(&self) -> Option<String> {
-        self.status_message.clone()
+        // Status-notice contract (jcode parity, P4-2): transient notices
+        // self-hide after 3s in the accessor — no tick loop, no expiry
+        // state. Long-lived values (model name, transport) never route
+        // through the notice; they build their own labels.
+        match &self.status_message {
+            Some(_)
+                if self
+                    .status_message_set_at
+                    .is_some_and(|at| at.elapsed() <= std::time::Duration::from_secs(3)) =>
+            {
+                self.status_message.clone()
+            }
+            _ => None,
+        }
     }
 
     fn mcp_servers(&self) -> Vec<(String, usize)> {
@@ -1038,6 +1051,8 @@ impl TuiState for App {
     }
 
     fn has_notification(&self) -> bool {
-        !self.notifications.notifications.is_empty()
+        // P4-2: the banner queue is gone; a live status notice (within its
+        // 3s TTL) is what reserves the one-line slot now.
+        self.status_message.is_some()
     }
 }

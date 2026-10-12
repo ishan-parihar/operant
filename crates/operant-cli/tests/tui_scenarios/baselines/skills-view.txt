@@ -20,11 +20,11 @@
  ~                  │   8    axi                                     0.1.0                         │
                     │   9    baoyu-infographic                       1.56.1                        │
                     │   10   blogwatcher                             2.0.0                         │
-1>                  │   11   briefing                                0.1.0                         │
-                    │   12   claude-code                             2.2.1                         │ key Offline Capture
-                    │   13   claude-design                           1.1.0                         │
-                    │   14   codebase-inspection                     1.0.0                         │
-                    │   15   codex                                   1.0.1                         │
+1>                  │   11   claude-code                             2.2.1                         │
+                    │   12   claude-design                           1.1.0                         │ key Offline Capture
+                    │   13   codebase-inspection                     1.0.0                         │
+                    │   14   codex                                   1.0.1                         │
+                    │   15   design-md                               1.1.0                         │
                     │Clean AI-generated code slop with a regression-safe, deletion-first workflow… │
                     │ ↑/↓ navigate · Enter inspect · Esc close                                     │
                     │                                                                              │

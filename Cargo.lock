@@ -4916,6 +4916,7 @@ dependencies = [
  "operant-harness",
  "operant-providers",
  "operant-tools",
+ "parking_lot",
  "regex",
  "reqwest",
  "rusqlite",

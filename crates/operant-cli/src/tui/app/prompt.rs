@@ -79,17 +79,17 @@ impl App {
         if self.prompt_input.stash.is_some() {
             if self.prompt_input.restore_stash() {
                 self.refresh_prompt_input();
-                self.status_message = Some("Stash restored into the composer.".to_string());
+                self.set_status_notice("Stash restored into the composer.".to_string());
             }
             return;
         }
         if self.prompt_input.is_empty() {
-            self.status_message = Some("Nothing to stash.".to_string());
+            self.set_status_notice("Nothing to stash.".to_string());
             return;
         }
         self.prompt_input.stash_input();
         self.refresh_prompt_input();
-        self.status_message = Some("Input stashed — Ctrl+S brings it back.".to_string());
+        self.set_status_notice("Input stashed — Ctrl+S brings it back.".to_string());
     }
 
     /// Ctrl+Z — revert the last run of composer edits. Reports the state
@@ -97,9 +97,9 @@ impl App {
     pub fn undo_input_burst(&mut self) {
         if self.prompt_input.undo_burst() {
             self.refresh_prompt_input();
-            self.status_message = Some("Reverted the last edit burst.".to_string());
+            self.set_status_notice("Reverted the last edit burst.".to_string());
         } else {
-            self.status_message = Some("Nothing to undo.".to_string());
+            self.set_status_notice("Nothing to undo.".to_string());
         }
     }
 
@@ -114,12 +114,12 @@ impl App {
             return;
         }
         match self.pop_queued_message() {
-            Err(msg) => self.status_message = Some(msg.to_string()),
-            Ok(None) => self.status_message = Some("Queue is empty".to_string()),
+            Err(msg) => self.set_status_notice(msg.to_string()),
+            Ok(None) => self.set_status_notice("Queue is empty".to_string()),
             Ok(Some(text)) => {
                 self.prompt_input.replace_text(text);
                 self.refresh_prompt_input();
-                self.status_message = Some("Recalled a queued message for editing.".to_string());
+                self.set_status_notice("Recalled a queued message for editing.".to_string());
             }
         }
     }

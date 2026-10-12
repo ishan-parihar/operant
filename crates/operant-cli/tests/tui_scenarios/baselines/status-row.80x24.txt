@@ -14,9 +14,9 @@
  Session status — model: offline-capture · provider: (default) · title:
  (untitled) · messages: 0 · tokens: 0 · cost: $0.0000 · idle
 
+Session status — model: offline-capture · provider: (default) · title: (untitled
 1>
                                                        ~ API key Offline Capture
-
 
 
 

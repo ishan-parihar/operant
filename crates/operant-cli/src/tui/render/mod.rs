@@ -27,8 +27,8 @@ pub(crate) use selection::{
 };
 pub(crate) use tools::{build_tool_names, render_system_annotation_lines};
 pub(crate) use utils::{
-    clear_area, is_modal_open, render_error_modal, shimmer_spans, spinner_char, spinner_color,
-    truncate_end, truncate_middle, truncate_text,
+    is_modal_open, shimmer_spans, spinner_char, spinner_color, truncate_end, truncate_middle,
+    truncate_text,
 };
 // The width seam, re-exported at `pub` so sibling modules can `pub use` it.
 pub use utils::{balanced_wrap, display_width, take_width};

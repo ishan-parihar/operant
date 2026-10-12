@@ -28,6 +28,9 @@ pub enum SystemMessageStyle {
     Info,
     /// Compact / auto-compact boundary marker.
     Compact,
+    /// Inline error card (P4-2): the persistent surface for errors —
+    /// inspectable and scrollable in the transcript, no overlay modal.
+    Error,
 }
 
 /// A synthetic system annotation inserted between conversation messages.

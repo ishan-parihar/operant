@@ -1549,7 +1549,8 @@ fn render_compaction_widget(data: &InfoWidgetData, inner: Rect) -> Framed {
     } else {
         "compacted"
     };
-    let summary_tokens = (info.summary_chars / crate::tui::operant_app::compaction::CHARS_PER_TOKEN)
+    let summary_tokens = (info.summary_chars
+        / crate::tui::operant_app::compaction::CHARS_PER_TOKEN)
         .max(usize::from(info.summary_chars > 0));
     let detail = format!(
         "{} old · {} active · ~{} summary tok",

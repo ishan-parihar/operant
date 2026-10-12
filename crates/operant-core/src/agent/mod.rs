@@ -1551,8 +1551,7 @@ mod tests {
                 },
             ]))
             .await;
-        let mut tool_msg =
-            crate::client::Message::new(Role::Tool, "small tool result".to_string());
+        let mut tool_msg = crate::client::Message::new(Role::Tool, "small tool result".to_string());
         tool_msg.tool_call_id = Some("t1".to_string());
         agent.add_message(tool_msg).await;
         agent.user_message("hi").await;
@@ -1569,7 +1568,8 @@ mod tests {
             "no tool-result trim under the preflight threshold"
         );
         assert!(
-            msgs.iter().any(|m| m.role == Role::Tool && m.content == "small tool result"),
+            msgs.iter()
+                .any(|m| m.role == Role::Tool && m.content == "small tool result"),
             "tool result passed through verbatim"
         );
     }
@@ -1603,8 +1603,7 @@ mod tests {
             conv.len()
         }
 
-        let db =
-            Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
+        let db = Database::init(std::path::PathBuf::from("micro-compact-test.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig {
                 context_window: 50_000,
@@ -1629,11 +1628,14 @@ mod tests {
                 "one exchange (user+assistant, i.e. 2 messages... or more) folded to 1 marker"
             );
             assert!(
-                conv.iter().any(|m| m.content.contains("[compacted exchange")),
+                conv.iter()
+                    .any(|m| m.content.contains("[compacted exchange")),
                 "the folded marker rides in the stored conversation"
             );
             assert!(
-                conv.iter().take(4).all(|m| !m.content.contains("[compacted exchange")),
+                conv.iter()
+                    .take(4)
+                    .all(|m| !m.content.contains("[compacted exchange")),
                 "the protected head is untouched"
             );
             assert_eq!(
@@ -1644,8 +1646,7 @@ mod tests {
         }
 
         // The unarmed twin: the store is never mutated.
-        let db2 = Database::init(std::path::PathBuf::from("micro-compact-off.sqlite"))
-            .unwrap();
+        let db2 = Database::init(std::path::PathBuf::from("micro-compact-off.sqlite")).unwrap();
         let agent2 = OperantAgent::new(
             AgentConfig {
                 context_window: 50_000,
@@ -1679,7 +1680,9 @@ mod tests {
             Arc::new(db),
         );
         agent.user_message("start").await;
-        agent.user_message("pad past the head-protection window").await;
+        agent
+            .user_message("pad past the head-protection window")
+            .await;
         agent
             .add_message(crate::client::Message::assistant("").with_tool_calls(vec![
                 crate::client::ToolCall {
@@ -2296,7 +2299,11 @@ mod tests {
         );
 
         let chunks: Vec<crate::error::Result<super::model_client::StreamChunk>> = vec![
-            Ok(super::model_client::StreamChunk::new(Some("Hi".into()), None, None)),
+            Ok(super::model_client::StreamChunk::new(
+                Some("Hi".into()),
+                None,
+                None,
+            )),
             Ok(super::model_client::StreamChunk {
                 dropped_events: Some(2),
                 ..super::model_client::StreamChunk::new(None, None, None)

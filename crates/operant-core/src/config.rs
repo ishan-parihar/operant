@@ -2381,8 +2381,7 @@ wonderful_unknown_key = 42
     #[test]
     fn agent_block_parses_guardrail_exempts_and_env_knob_defaults() {
         let raw = "[agent]\nguardrail_exempt_tools = [\"read_*\", \"web_search\"]\nguardian_llm = true\nmicro_compaction = true\n";
-        let config =
-            parse_config_str(raw, Path::new("memory://agent-block-probe")).unwrap();
+        let config = parse_config_str(raw, Path::new("memory://agent-block-probe")).unwrap();
         assert_eq!(
             config.agent.guardrail_exempt_tools,
             vec!["read_*".to_string(), "web_search".to_string()]
@@ -2402,8 +2401,7 @@ wonderful_unknown_key = 42
     fn agent_block_env_knob_defaults_stay_dark() {
         // No [agent] keys → every new knob off, list empty (dark-mergeable:
         // an unchanged config file cannot change any behavior).
-        let config =
-            parse_config_str("[agent]\n", Path::new("memory://agent-dark-probe")).unwrap();
+        let config = parse_config_str("[agent]\n", Path::new("memory://agent-dark-probe")).unwrap();
         assert!(config.agent.guardrail_exempt_tools.is_empty());
         assert!(!config.agent.guardian_llm);
         assert!(!config.agent.micro_compaction);

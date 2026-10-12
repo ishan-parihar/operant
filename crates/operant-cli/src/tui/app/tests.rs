@@ -1465,11 +1465,10 @@ fn test_usage_event_pushes_token_warning_notification() {
     });
     assert_eq!(app.token_warning_threshold_shown, 80);
     assert!(
-        app.notifications
-            .notifications
-            .iter()
-            .any(|n| n.message.contains("80% full")),
-        "expected an 80%-full context warning notification to be pushed"
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("80% full")),
+        "expected an 80%-full context warning status notice"
     );
 }
 
@@ -1511,10 +1510,9 @@ fn test_drop_pending_images_with_notice_warns_and_clears() {
     app.drop_pending_images_with_notice();
     assert!(app.prompt_input.pending_images.is_empty());
     assert!(
-        app.notifications
-            .notifications
-            .iter()
-            .any(|n| n.message.contains("dropped")),
+        app.status_message
+            .as_deref()
+            .is_some_and(|m| m.contains("dropped")),
         "expected a warning that the image wasn't sent"
     );
 }
@@ -1522,9 +1520,9 @@ fn test_drop_pending_images_with_notice_warns_and_clears() {
 #[test]
 fn test_drop_pending_images_with_notice_noop_when_empty() {
     let mut app = make_app();
-    let before = app.notifications.notifications.len();
+    let before = app.status_message.clone();
     app.drop_pending_images_with_notice();
-    assert_eq!(app.notifications.notifications.len(), before);
+    assert_eq!(app.status_message, before);
 }
 
 #[test]

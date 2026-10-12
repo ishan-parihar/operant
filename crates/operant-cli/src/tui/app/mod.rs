@@ -42,7 +42,7 @@ use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
 use crate::tui::import_config_dialog::ImportConfigDialogState;
 use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
 use crate::tui::model_picker::{EffortLevel, ModelPickerState};
-use crate::tui::notifications::{NotificationKind, NotificationQueue};
+use crate::tui::notifications::NotificationKind;
 use crate::tui::overlays::{
     GlobalSearchState, HelpOverlay, HistorySearchOverlay, RewindFlowOverlay, SelectorMessage,
 };
@@ -140,6 +140,10 @@ pub struct App {
     /// /reasoning previously just printed a status message without toggling.)
     pub show_reasoning: bool,
     pub status_message: Option<String>,
+    /// When `status_message` was set. The status-notice contract (jcode
+    /// `status_notice`/P4-2): the accessor hides notices older than 3s so
+    /// transient feedback fades without a tick loop or expiry state.
+    pub status_message_set_at: Option<std::time::Instant>,
     /// Randomly chosen thinking verb shown next to the spinner while streaming.
     pub spinner_verb: Option<String>,
     pub should_exit: bool,
@@ -290,9 +294,8 @@ pub struct App {
     pub rewind_flow: RewindFlowOverlay,
     /// Bridge connection state.
     /// Active notification queue.
-    pub notifications: NotificationQueue,
     /// Scroll offset for error modal text (in lines).
-    pub error_modal_scroll_offset: usize,
+
     /// The text of the most recent composer submission, held only while that
     /// submission is still in flight, so a failure can hand it back.
     ///
@@ -908,11 +911,6 @@ impl App {
                 return Ok(None);
             }
             self.frame_count = self.frame_count.wrapping_add(1);
-
-            // Tick notifications so expired ones are removed. Without this,
-            // notifications with a TTL stay visible forever (Bug #5 from
-            // iter-82 audit).
-            self.notifications.tick();
 
             // Drain background session-list results.
             self.drain_session_list();

@@ -1,7 +1,7 @@
 
-                                                                  ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                                                                  ▌ ──────────────────────────────────────────────── ▐
-                                                                  ▌                                                  ▐
+
+
+
 
 
 
@@ -24,9 +24,9 @@
 
  Done reading.
 
-
 1>
                                                                          ~ 22/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
 
 
 

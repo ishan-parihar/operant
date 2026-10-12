@@ -177,7 +177,7 @@ impl App {
         self.selection_anchor = saved.saved_anchor;
         self.selection_focus = saved.saved_focus;
         *self.selection_text.borrow_mut() = saved.saved_selection_text;
-        self.status_message = Some("Copy mode off.".to_string());
+        self.set_status_notice("Copy mode off.".to_string());
     }
 
     /// Copy the current selection and report it, leaving the selection intact
@@ -185,11 +185,11 @@ impl App {
     pub fn copy_current_selection(&mut self) {
         let sel_text = self.selection_text.borrow().clone();
         if sel_text.is_empty() {
-            self.status_message = Some("Nothing selected to copy.".to_string());
+            self.set_status_notice("Nothing selected to copy.".to_string());
             return;
         }
         let outcome = crate::tui::clipboard::copy(&sel_text);
-        self.status_message = Some(outcome.status_message());
+        self.set_status_notice(outcome.status_message());
     }
 
     /// Scroll the transcript by one step when a drag has gone past the top or
@@ -341,13 +341,11 @@ impl App {
         drop(cache);
         let trimmed = text.trim_end();
         let ok = !trimmed.is_empty() && crate::tui::clipboard::copy(trimmed).is_copied();
-        self.status_message = Some(
-            if ok {
-                "Copied viewport context".to_string()
-            } else {
-                "Failed to copy viewport context".to_string()
-            },
-        );
+        self.set_status_notice(if ok {
+            "Copied viewport context".to_string()
+        } else {
+            "Failed to copy viewport context".to_string()
+        });
         self.exit_copy_mode();
     }
 
@@ -463,7 +461,7 @@ impl App {
 
                 if let Some(text) = text {
                     let outcome = crate::tui::clipboard::copy(&text);
-                    self.push_notification(
+                    self.push_notice(
                         if outcome.is_copied() {
                             NotificationKind::Info
                         } else {
@@ -474,7 +472,6 @@ impl App {
                         } else {
                             outcome.status_message()
                         },
-                        Some(3),
                     );
                     debug!("Copy action triggered, text: {} chars", text.len());
                 }
@@ -484,7 +481,7 @@ impl App {
                     let branch_point = message_index + 1;
                     self.prompt_input
                         .replace_text(format!("/fork {}", branch_point));
-                    self.status_message = Some(format!(
+                    self.set_status_notice(format!(
                         "Fork at message {} - press Enter to confirm",
                         branch_point
                     ));
@@ -562,7 +559,7 @@ impl App {
                 );
                 self.prompt_input.add_image(img.clone());
                 self.pending_inline_images.borrow_mut().push(img);
-                self.push_notification(crate::notifications::NotificationKind::Info, msg, Some(3));
+                self.push_notice(crate::notifications::NotificationKind::Info, msg);
             } else {
                 // Non-image file: insert as an @mention so the path is visible
                 // but clearly marked as a file reference.
@@ -995,8 +992,10 @@ impl App {
                             if let Some((start_row, end_row, end_col)) =
                                 self.find_paragraph_boundaries(current_pos.1)
                             {
-                                self.selection_anchor =
-                                    Some((selectable_area.x, self.content_line_of_screen_row(start_row)));
+                                self.selection_anchor = Some((
+                                    selectable_area.x,
+                                    self.content_line_of_screen_row(start_row),
+                                ));
                                 self.selection_focus =
                                     Some((end_col, self.content_line_of_screen_row(end_row)));
                             } else {
@@ -1067,7 +1066,8 @@ impl App {
                                 .saturating_add(selectable_area.height)
                                 .saturating_sub(1),
                         );
-                        self.selection_focus = Some((clamped_col, self.content_line_of_screen_row(clamped_row)));
+                        self.selection_focus =
+                            Some((clamped_col, self.content_line_of_screen_row(clamped_row)));
                         self.click_count = 0; // Reset on drag to prevent further double-clicks
                         // Stream the selection to the clipboard as it grows.
                         // `selection_text` is filled by the renderer from the
@@ -1103,17 +1103,9 @@ impl App {
                     if !sel_text.is_empty() {
                         let outcome = crate::tui::clipboard::copy(&sel_text);
                         if outcome.is_copied() {
-                            self.push_notification(
-                                NotificationKind::Info,
-                                outcome.status_message(),
-                                Some(1),
-                            );
+                            self.push_notice(NotificationKind::Info, outcome.status_message());
                         } else {
-                            self.push_notification(
-                                NotificationKind::Warning,
-                                outcome.status_message(),
-                                Some(4),
-                            );
+                            self.push_notice(NotificationKind::Warning, outcome.status_message());
                         }
                     }
                 }

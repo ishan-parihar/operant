@@ -749,7 +749,8 @@ impl AnchoredInlineImages {
                     }
                 }
                 "user" => {
-                    if !crate::tui::operant_app::session::is_attached_image_label_text(&msg.content) {
+                    if !crate::tui::operant_app::session::is_attached_image_label_text(&msg.content)
+                    {
                         prompt_count += 1;
                     }
                 }

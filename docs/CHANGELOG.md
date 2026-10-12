@@ -542,6 +542,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-774 — P4-2: the notification overlay system is purged — jcode's
+  status-notice mechanism replaces it.** User complaint #1 (legacy
+  notification overlays) closed: the every-response "Response complete ·
+  /copy…" banner, the full-screen `⚠ Error` modal (44 border rows on a
+  provider stream-death), and the countdown progress-bar machinery are
+  all deleted. What replaces them: `set_status_notice` (text + Instant,
+  jcode's `status_notice` contract — 3s TTL enforced in the accessor, no
+  tick loop) and `push_notice` routing — Info/Success/Warning → status
+  notice; Error → inline transcript card (`SystemMessageStyle::Error`,
+  theme error color) + notice. All 26 `push_notification` call sites
+  converted; errors no longer render as transcript rows AND a modal AND a
+  margin-box (one source of truth per event). `notifications.rs` reduced
+  to the `NotificationKind` taxonomy; `render_error_modal`,
+  `NotificationQueue`, `error_modal_scroll_offset`, and the
+  `OPERANT_FROZEN_NOTIFICATION_CLOCK` test seam are gone — which made
+  `tool-block` provable again (its documented nondeterminism WAS the
+  banner's wall-clock bar). Corpus: 20 goldens reshaped, `error-modal` +
+  `notification-banner` scenarios deleted with their surfaces. Suite
+  1750/0. Found and fixed mid-purge: the mechanical `status_message =
+  Some(..)` conversion had rewritten `set_status_notice`'s own body into
+  self-recursion (stack overflow in 3 tests).
 
 - **iter-775 — v6 outline CLOSED: every queued row landed.** The
   outline that has driven this line's queue since iter-738 is now empty:

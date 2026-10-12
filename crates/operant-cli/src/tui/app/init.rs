@@ -101,6 +101,7 @@ impl App {
             streaming_thinking: String::new(),
             show_reasoning: false,
             status_message: None,
+            status_message_set_at: None,
             spinner_verb: None,
             should_exit: false,
             show_help: false,
@@ -152,8 +153,7 @@ impl App {
             history_search_overlay: HistorySearchOverlay::new(),
             global_search: GlobalSearchState::default(),
             rewind_flow: RewindFlowOverlay::new(),
-            notifications: NotificationQueue::new(),
-            error_modal_scroll_offset: 0,
+
             failed_input_recovery: None,
             session_title: None,
             remote_session_url: None,

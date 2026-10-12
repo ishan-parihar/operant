@@ -892,7 +892,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("pet", "Pet the mascot", "Info").cli_only(),
     CommandDef::new("replay", "Replay spawn tree (planned)", "Session").cli_only(),
     CommandDef::new("replay-diff", "Diff replay (planned)", "Session").cli_only(),
-
     // ── Agent flows (tier 3) ─────────────────────────────────────────────
     // One-shot agent sessions launched via the /setup suspend-and-run escape
     // hatch; handlers registered in register_agent_flow_handlers (tui_app.rs).

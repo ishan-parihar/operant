@@ -103,7 +103,10 @@ impl App {
             "permission_pending"
         } else if self.user_question_rx.is_some() {
             "user_question_pending"
-        } else if !self.notifications.is_empty() {
+        } else if self
+            .status_message_set_at
+            .is_some_and(|at| at.elapsed() <= std::time::Duration::from_secs(3))
+        {
             "notification_ttl"
         } else if self.turn_started_at.is_some() {
             "turn_timer"

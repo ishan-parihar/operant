@@ -98,16 +98,18 @@ fn cmd_budget_set(
         cap,
         mode,
     })?;
-    println!(
-        "Budget override set for '{seat}' (cap {cap}; unset fields inherit [genome].budget)."
-    );
+    println!("Budget override set for '{seat}' (cap {cap}; unset fields inherit [genome].budget).");
     Ok(())
 }
 
 fn cmd_budget_list(config: &AppConfig) -> Result<()> {
-    let rows = budget_db(config)?.list_all().context("Failed to list seat budgets")?;
+    let rows = budget_db(config)?
+        .list_all()
+        .context("Failed to list seat budgets")?;
     if rows.is_empty() {
-        println!("No budget overrides — every seat runs under [genome].budget (default: ungoverned).");
+        println!(
+            "No budget overrides — every seat runs under [genome].budget (default: ungoverned)."
+        );
         return Ok(());
     }
     println!(

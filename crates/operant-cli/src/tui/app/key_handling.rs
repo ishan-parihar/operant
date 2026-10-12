@@ -33,12 +33,6 @@ impl App {
         // the dispatcher below, including presses consumed by an overlay.
         self.record_keybinding_usage(&key);
 
-        // Dismiss error modal with Esc
-        if key.code == KeyCode::Esc && self.notifications.current_is_error() {
-            self.dismiss_error_notifications();
-            return false;
-        }
-
         // Phase 3.3: Priority-based dialog handling.
         //
         // `dialog_priority()` is NOT the router, and the inline `if
@@ -94,7 +88,7 @@ impl App {
                 KeyCode::Char('2') => {
                     // "Yes, I accept" — arm bypass-permissions and continue.
                     self.arm_bypass_permissions();
-                    self.status_message = Some(
+                    self.set_status_notice(
                         "Bypass permissions mode enabled — permissions will be auto-approved. Use with care.".to_string(),
                     );
                     self.bypass_permissions_dialog.dismiss();
@@ -104,7 +98,7 @@ impl App {
                 KeyCode::Enter => {
                     if self.bypass_permissions_dialog.is_accept_selected() {
                         self.arm_bypass_permissions();
-                        self.status_message = Some(
+                        self.set_status_notice(
                             "Bypass permissions mode enabled — permissions will be auto-approved. Use with care.".to_string(),
                         );
                     }
@@ -125,7 +119,7 @@ impl App {
                     let chosen = self.effort_picker.current();
                     self.effort_level = chosen;
                     self.effort_picker.close();
-                    self.status_message = Some(format!(
+                    self.set_status_notice(format!(
                         "Effort set to {} {}.",
                         chosen.symbol(),
                         chosen.label()
@@ -252,10 +246,9 @@ impl App {
                 {
                     if let Some(text) = crate::image_paste::read_clipboard_text() {
                         if text.is_empty() {
-                            self.push_notification(
+                            self.push_notice(
                                 NotificationKind::Warning,
                                 "Clipboard is empty".to_string(),
-                                Some(2),
                             );
                         } else {
                             for ch in text.chars() {
@@ -263,10 +256,9 @@ impl App {
                             }
                         }
                     } else {
-                        self.push_notification(
+                        self.push_notice(
                             NotificationKind::Warning,
                             "Could not read clipboard".to_string(),
-                            Some(2),
                         );
                     }
                 }
@@ -644,7 +636,7 @@ impl App {
                         let effort_hint = effort
                             .map(|e| format!(" [{}]", e.label()))
                             .unwrap_or_default();
-                        self.status_message = Some(format!("Model: {}{}", full_model, effort_hint));
+                        self.set_status_notice(format!("Model: {}{}", full_model, effort_hint));
                     }
                 }
                 KeyCode::Backspace => self.model_picker.pop_filter_char(),
@@ -690,7 +682,7 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('n') => self.session_branching.cancel(),
                     KeyCode::Enter | KeyCode::Char('y') => {
                         if let Some(branch_id) = self.session_branching.confirm_delete() {
-                            self.status_message = Some(format!("Deleted branch: {}", branch_id));
+                            self.set_status_notice(format!("Deleted branch: {}", branch_id));
                         }
                     }
                     _ => {}
@@ -734,7 +726,7 @@ impl App {
                     KeyCode::Enter => {
                         if let Some((_id, name)) = self.session_browser.confirm_rename() {
                             self.session_title = Some(name.clone());
-                            self.status_message = Some(format!("Renamed to: {}", name));
+                            self.set_status_notice(format!("Renamed to: {}", name));
                         }
                     }
                     KeyCode::Backspace => self.session_browser.pop_rename_char(),
@@ -753,16 +745,11 @@ impl App {
                 }
                 KeyCode::Enter => {
                     if let Some(path) = self.perform_export() {
-                        self.push_notification(
-                            NotificationKind::Info,
-                            format!("Exported to {}", path),
-                            Some(4),
-                        );
+                        self.push_notice(NotificationKind::Info, format!("Exported to {}", path));
                     } else {
-                        self.push_notification(
+                        self.push_notice(
                             NotificationKind::Warning,
                             "Export failed: could not write file.".to_string(),
-                            Some(4),
                         );
                     }
                 }
@@ -991,12 +978,6 @@ impl App {
             return false;
         }
 
-        // Notification dismiss
-        if key.code == KeyCode::Esc && !self.notifications.is_empty() {
-            self.notifications.dismiss_current();
-            return false;
-        }
-
         // (iter-143: plugin_hints dismiss handler deleted — Vec was always empty)
 
         // Overage upsell dismiss — the overage_upsell dialog was deleted in
@@ -1136,7 +1117,7 @@ impl App {
                 self.prompt_input.add_image(img.clone());
                 // Queued for the post-paint emit pass in `render_app`.
                 self.pending_inline_images.borrow_mut().push(img);
-                self.push_notification(NotificationKind::Info, msg, Some(3));
+                self.push_notice(NotificationKind::Info, msg);
             } else if let Some(text) = read_clipboard_text().or_else(read_primary_text) {
                 self.handle_paste_data(text);
                 self.refresh_prompt_input();
@@ -1193,7 +1174,7 @@ impl App {
                 // Flush in-flight streaming text to messages BEFORE snapshot
                 // so the response is preserved in the transcript.
                 self.flush_streamed_assistant_message();
-                self.status_message = Some("Cancelled.".to_string());
+                self.set_status_notice("Cancelled.".to_string());
                 // Abort the background agent task so it actually stops.
                 if let Some(handle) = self.agent_task_handle.take() {
                     handle.abort();
@@ -1208,26 +1189,25 @@ impl App {
             // (issue #149 follow-up).
             KeyCode::Char(c)
                 if (c == 'c' || c == 'C') && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
-                    // Composer shift-selection (jcode textarea selection): the
-                    // in-input selection wins — copy it and stop, never exit.
-                    if let Some(sel) = self.prompt_input.selection_text() {
-                        if !sel.is_empty() {
-                            let outcome = crate::tui::clipboard::copy(&sel);
-                            self.prompt_input.selection_clear();
-                            self.push_notification(
-                                if outcome.is_copied() {
-                                    NotificationKind::Info
-                                } else {
-                                    NotificationKind::Warning
-                                },
-                                outcome.status_message(),
-                                Some(2),
-                            );
-                            return false;
-                        }
+            {
+                // Composer shift-selection (jcode textarea selection): the
+                // in-input selection wins — copy it and stop, never exit.
+                if let Some(sel) = self.prompt_input.selection_text() {
+                    if !sel.is_empty() {
+                        let outcome = crate::tui::clipboard::copy(&sel);
+                        self.prompt_input.selection_clear();
+                        self.push_notice(
+                            if outcome.is_copied() {
+                                NotificationKind::Info
+                            } else {
+                                NotificationKind::Warning
+                            },
+                            outcome.status_message(),
+                        );
+                        return false;
                     }
-                    // If text is selected, copy it to clipboard instead of quitting.
+                }
+                // If text is selected, copy it to clipboard instead of quitting.
                 let sel_text = self.selection_text.borrow().clone();
                 if self.selection_anchor.is_some() && !sel_text.is_empty() {
                     // Text is selected: copy to clipboard.
@@ -1235,14 +1215,13 @@ impl App {
                     self.selection_anchor = None;
                     self.selection_focus = None;
                     *self.selection_text.borrow_mut() = String::new();
-                    self.push_notification(
+                    self.push_notice(
                         if outcome.is_copied() {
                             NotificationKind::Info
                         } else {
                             NotificationKind::Warning
                         },
                         outcome.status_message(),
-                        Some(2),
                     );
                 } else if self.is_streaming {
                     // Cancel streaming.
@@ -1251,7 +1230,7 @@ impl App {
                     // Flush in-flight streaming text to messages BEFORE snapshot
                     // so the response is preserved in the transcript.
                     self.flush_streamed_assistant_message();
-                    self.status_message = Some("Cancelled.".to_string());
+                    self.set_status_notice("Cancelled.".to_string());
                     self.complete_current_turn_snapshot(true);
                     self.tool_use_blocks.clear();
                 } else {
@@ -1550,7 +1529,7 @@ impl App {
                     PermissionMode::BypassPermissions => "Bypass permissions (dangerous)",
                     PermissionMode::Plan => "Plan mode",
                 };
-                self.status_message = Some(label.to_string());
+                self.set_status_notice(label.to_string());
             }
 
             // ---- Submit ------------------------------------------------
@@ -1850,12 +1829,12 @@ impl App {
                 if let Some(server_name) = selected_server {
                     self.pending_mcp_panel_auth = Some(server_name);
                     self.mcp_view.close();
-                    self.status_message = Some("Starting MCP auth...".to_string());
+                    self.set_status_notice("Starting MCP auth...".to_string());
                 }
             }
             KeyCode::Char('r') => {
                 self.pending_mcp_reconnect = true;
-                self.status_message = Some("Reconnecting MCP runtime...".to_string());
+                self.set_status_notice("Reconnecting MCP runtime...".to_string());
             }
             KeyCode::Char(c)
                 if key.modifiers.is_empty()
@@ -1878,11 +1857,11 @@ impl App {
                 KeyCode::Backspace => self.agents_menu.editor_backspace(),
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     match self.agents_menu.save_editor() {
-                        Ok(msg) => self.status_message = Some(msg),
+                        Ok(msg) => self.set_status_notice(msg),
                         Err(err) => {
                             self.agents_menu.editor.error = Some(err.clone());
                             self.agents_menu.editor.saved_message = None;
-                            self.status_message = Some(err);
+                            self.set_status_notice(err);
                         }
                     }
                 }
@@ -2036,10 +2015,9 @@ impl App {
                         self.messages.truncate(idx);
                         // Remove system annotations placed after the truncation point.
                         self.system_annotations.retain(|a| a.after_index <= idx);
-                        self.push_notification(
+                        self.push_notice(
                             NotificationKind::Success,
                             format!("Rewound to message #{}", idx),
-                            Some(4),
                         );
                     }
                 }
@@ -2106,11 +2084,7 @@ impl App {
         }
 
         // Start new sequence (or show message for wrong key)
-        self.push_notification(
-            NotificationKind::Info,
-            exit_message(key_char).to_string(),
-            Some(2),
-        );
+        self.push_notice(NotificationKind::Info, exit_message(key_char).to_string());
         self.last_exit_key_warning = Some(std::time::Instant::now());
         self.exit_key_sequence_start = Some(key_char);
     }

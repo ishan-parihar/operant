@@ -141,7 +141,7 @@ impl App {
                     });
                     false
                 };
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "{} {}…",
                     if started { "Running" } else { "Queued" },
                     tool_name
@@ -208,7 +208,7 @@ impl App {
                 // flushes.
                 self.flush_streamed_assistant_message();
                 if is_error {
-                    self.status_message = Some(format!("Tool error: {}", result_text));
+                    self.set_status_notice(format!("Tool error: {}", result_text));
                 } else {
                     self.status_message = None;
                 }
@@ -261,7 +261,7 @@ impl App {
                 }
                 self.invalidate_transcript();
                 self.turn_state = TurnState::Thinking;
-                self.status_message = Some(format!("Tool error: {}", result_text));
+                self.set_status_notice(format!("Tool error: {}", result_text));
                 // Iteration boundary, same as ToolComplete (P0-2): a failed
                 // tool also ends the response that called it.
                 self.flush_streamed_assistant_message();
@@ -335,7 +335,7 @@ impl App {
                 let turn_gained_nothing =
                     self.messages.len() == before && self.streaming_text.trim().is_empty();
                 if turn_gained_nothing {
-                    self.status_message = Some(
+                    self.set_status_notice(
                         "Empty reply — the provider stream may be corrupted; \
                          retry or switch model"
                             .to_string(),
@@ -355,14 +355,9 @@ impl App {
                 self.invalidate_transcript();
                 // (iter-209: refresh_turn_diff_from_history removed)
 
-                // Show a "copy" hint after each response so the user knows
-                // they can copy the last response with /copy.
-                // (iter-122 — user-requested: copy button at end of response.)
-                self.push_notification(
-                    NotificationKind::Info,
-                    "Response complete · /copy to copy · Ctrl+J for line break".to_string(),
-                    Some(4),
-                );
+                // (P4-2 purge: the every-response "Response complete · /copy…"
+                // banner is gone — audit complaint 1; /copy stays in the
+                // command surface and the context menu.)
             }
 
             AgentEvent::Error { error } => {
@@ -378,7 +373,12 @@ impl App {
                 self.restore_failed_input_to_composer();
                 let err_msg = format!("Error: {}", error);
                 self.push_assistant_message(err_msg.clone());
-                self.push_notification(NotificationKind::Error, err_msg, None);
+                self.push_notice(NotificationKind::Error, err_msg);
+                // The restore notice deliberately lands LAST: the error is
+                // in the transcript card and the assistant row; the status
+                // line's job after a failed turn is telling the user their
+                // text is back in the composer.
+                self.set_status_notice("Prompt restored to the composer — the turn failed.");
             }
 
             AgentEvent::Usage {
@@ -418,7 +418,7 @@ impl App {
                     }
                     _ => "Rate limit reached — retrying with backoff".to_string(),
                 };
-                self.push_notification(NotificationKind::Warning, msg, None);
+                self.push_notice(NotificationKind::Warning, msg);
             }
 
             AgentEvent::StreamCorrupted { dropped_events } => {
@@ -427,13 +427,11 @@ impl App {
                 // be truncated or look interleaved. Surface WHY so the
                 // corruption is attributed to the wire, not the agent.
                 self.turn_state = TurnState::WaitingForNetwork;
-                self.push_notification(
+                self.push_notice(
                     NotificationKind::Warning,
                     format!(
                         "⚠ {dropped_events} corrupted stream event(s) dropped by the provider — output may be truncated"
-                    ),
-                    None,
-                );
+                    ));
             }
 
             AgentEvent::Cost {

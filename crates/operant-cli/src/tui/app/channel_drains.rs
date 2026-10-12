@@ -56,9 +56,16 @@ impl App {
             return false;
         };
         let mut changed = false;
+        let mut msgs = Vec::new();
         while let Ok(msg) = rx.try_recv() {
-            self.status_message = Some(msg);
+            msgs.push(msg);
             changed = true;
+        }
+        // The drain borrows self via rx; apply the last message AFTER the
+        // borrow ends — the channel is drained to empty, last wins (iter-326
+        // semantics kept).
+        if let Some(msg) = msgs.pop() {
+            self.set_status_notice(msg);
         }
         changed
     }
@@ -110,7 +117,7 @@ impl App {
             Ok(Err(_)) => {
                 self.model_fetch_rx = None;
                 self.model_picker_fetch_pending = false;
-                self.status_message = Some(
+                self.set_status_notice(
                     "Failed to fetch models from provider (rate limit or auth error). Using cached models."
                         .to_string(),
                 );
@@ -191,12 +198,12 @@ impl App {
                         at: crate::tui::debug::event_bus::now_secs(),
                     });
                 self.session_load_rx = None;
-                self.status_message = Some("Session loaded.".to_string());
+                self.set_status_notice("Session loaded.".to_string());
                 true
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                 self.session_load_rx = None;
-                self.status_message = Some("Session load failed.".to_string());
+                self.set_status_notice("Session load failed.".to_string());
                 true
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => false,

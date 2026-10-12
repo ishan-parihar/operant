@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ 1› Reading the file.                                                                                                  │
+   ✓ read_file · 8 tok
+
+ The file header is # operant.
+
+ Command /voice is not yet wired to a handler. Description: Toggle voice mode
+
+2>
+                                                                         ~ 25/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
+
+
+
+
+
+

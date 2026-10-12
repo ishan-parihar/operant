@@ -2,7 +2,7 @@
 
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ Journey — skills + memories                                              │
-  │┌ Skills (101) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
+  │┌ Skills (100) ─────────────────────┐┌ Memories (0) ─────────────────────┐│
  o││ Name                     Category ││No memories stored yet.            ││
  o││                                   ││                                   ││
  /││›ai-slop-cleaner                   ││Memories accumulate as you use oper││
@@ -18,7 +18,7 @@
   ││                                   ││                                   ││
   ││                                   ││                                   ││
   │└───────────────────────────────────┘└───────────────────────────────────┘│
-  │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory ·│
+  │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 100 skills · 0 memory ·│
   └──────────────────────────────────────────────────────────────Esc to close┘
 
 

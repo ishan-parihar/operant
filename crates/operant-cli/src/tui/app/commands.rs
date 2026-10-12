@@ -374,7 +374,7 @@ impl App {
                         true
                     }
                     None => {
-                        self.status_message = Some(format!(
+                        self.set_status_notice(format!(
                             "Skill '{}' not found. Use /skills to browse installed skills.",
                             skill_name
                         ));
@@ -395,7 +395,7 @@ impl App {
                             Some("No skill bundles found in ~/.operant/skill-bundles/".to_string());
                     } else {
                         let names: Vec<&str> = bundles.keys().map(|k| k.as_str()).collect();
-                        self.status_message = Some(format!(
+                        self.set_status_notice(format!(
                             "Available bundles: {} — usage: /bundle <name>",
                             names.join(", ")
                         ));
@@ -418,7 +418,7 @@ impl App {
                             true
                         }
                         None => {
-                            self.status_message = Some(format!(
+                            self.set_status_notice(format!(
                                 "Bundle '{}' not found (no loadable skills).",
                                 bundle_name
                             ));
@@ -458,7 +458,7 @@ impl App {
             "model" => {
                 if !self.credentials_live() {
                     self.connect_dialog.open();
-                    self.status_message = Some("Connect a provider to choose a model.".to_string());
+                    self.set_status_notice("Connect a provider to choose a model.".to_string());
                     return true;
                 }
                 let provider = self
@@ -494,11 +494,8 @@ impl App {
                 let summary = format!(
                     "Model: {model} · provider: {provider} · credentials: {creds} · {streaming}"
                 );
-                self.status_message = Some(summary.clone());
-                self.push_system_message(
-                    summary,
-                    crate::tui::app::enums::SystemMessageStyle::Info,
-                );
+                self.set_status_notice(summary.clone());
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 true
             }
             "session" | "resume" => {
@@ -546,7 +543,7 @@ impl App {
                     summary.clone(),
                     crate::tui::app::enums::SystemMessageStyle::Info,
                 );
-                self.status_message = Some(summary);
+                self.set_status_notice(summary);
                 true
             }
             // /info — status-tier (command backlog tier 1): compact
@@ -569,11 +566,8 @@ impl App {
                     "operant v{} · model: {model} · provider: {provider} · title: {title}",
                     env!("CARGO_PKG_VERSION"),
                 );
-                self.status_message = Some(summary.clone());
-                self.push_system_message(
-                    summary,
-                    crate::tui::app::enums::SystemMessageStyle::Info,
-                );
+                self.set_status_notice(summary.clone());
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 true
             }
             "clear" => {
@@ -594,7 +588,7 @@ impl App {
                 self.new_messages_while_scrolled = 0;
                 self.token_count = 0;
                 self.invalidate_transcript();
-                self.status_message = Some("Conversation cleared.".to_string());
+                self.set_status_notice("Conversation cleared.".to_string());
                 true
             }
             "exit" | "quit" => {
@@ -608,7 +602,7 @@ impl App {
                 } else {
                     "disabled"
                 };
-                self.status_message = Some(format!("Vim mode {}.", status));
+                self.set_status_notice(format!("Vim mode {}.", status));
                 self.refresh_prompt_input();
                 true
             }
@@ -619,7 +613,7 @@ impl App {
                 } else {
                     "disabled"
                 };
-                self.status_message = Some(format!("Fast mode {}.", status));
+                self.set_status_notice(format!("Fast mode {}.", status));
                 true
             }
             "plan" => {
@@ -630,7 +624,7 @@ impl App {
                 } else {
                     PermissionMode::Default
                 };
-                self.status_message = Some(if self.plan_mode {
+                self.set_status_notice(if self.plan_mode {
                     "Plan mode ON — Operant will plan before acting.".to_string()
                 } else {
                     "Plan mode OFF.".to_string()
@@ -646,11 +640,11 @@ impl App {
                     // Flush in-flight streaming text to messages BEFORE snapshot
                     // so the response is preserved in the transcript.
                     self.flush_streamed_assistant_message();
-                    self.status_message = Some("Stopped.".to_string());
+                    self.set_status_notice("Stopped.".to_string());
                     self.complete_current_turn_snapshot(true);
                     self.tool_use_blocks.clear();
                 } else {
-                    self.status_message = Some("Nothing to stop — no turn is running.".to_string());
+                    self.set_status_notice("Nothing to stop — no turn is running.".to_string());
                 }
                 true
             }
@@ -674,7 +668,7 @@ impl App {
                 self.token_count = 0;
                 self.session_title = None;
                 self.invalidate_transcript();
-                self.status_message = Some("New session started.".to_string());
+                self.set_status_notice("New session started.".to_string());
                 true
             }
 
@@ -696,9 +690,9 @@ impl App {
                     // Also discard the trailing assistant turn metadata entry.
                     self.turn_metadata.pop();
                     self.invalidate_transcript();
-                    self.status_message = Some("Last turn undone.".to_string());
+                    self.set_status_notice("Last turn undone.".to_string());
                 } else {
-                    self.status_message = Some("Nothing to undo.".to_string());
+                    self.set_status_notice("Nothing to undo.".to_string());
                 }
                 true
             }
@@ -734,9 +728,9 @@ impl App {
                     }
                     self.pending_retry_query = Some(text);
                     self.invalidate_transcript();
-                    self.status_message = Some("Retrying last message…".to_string());
+                    self.set_status_notice("Retrying last message…".to_string());
                 } else {
-                    self.status_message = Some("No previous message to retry.".to_string());
+                    self.set_status_notice("No previous message to retry.".to_string());
                 }
                 true
             }
@@ -760,7 +754,7 @@ impl App {
                         .session_goal
                         .clone()
                         .unwrap_or_else(|| "(none)".to_string());
-                    self.status_message = Some(format!(
+                    self.set_status_notice(format!(
                         "Session goal: {}. Use /goal <text> to change.",
                         cur
                     ));
@@ -771,7 +765,7 @@ impl App {
                         format!("🎯 Goal set: {}", trimmed),
                         crate::tui::app::SystemMessageStyle::Info,
                     );
-                    self.status_message = Some(format!("Goal set: {}", trimmed));
+                    self.set_status_notice(format!("Goal set: {}", trimmed));
                 }
                 true
             }
@@ -799,27 +793,21 @@ impl App {
                     // and why.
                     let outcome = crate::tui::clipboard::copy(&text);
                     if outcome.is_copied() {
-                        self.push_notification(
-                            NotificationKind::Info,
-                            outcome.status_message(),
-                            Some(3),
-                        );
+                        self.push_notice(NotificationKind::Info, outcome.status_message());
                     } else {
-                        self.push_notification(
+                        self.push_notice(
                             NotificationKind::Info,
                             format!(
                                 "Last response: {} chars. {}",
                                 text.len(),
                                 outcome.status_message()
                             ),
-                            Some(5),
                         );
                     }
                 } else {
-                    self.push_notification(
+                    self.push_notice(
                         NotificationKind::Warning,
                         "No assistant message to copy.".to_string(),
-                        Some(3),
                     );
                 }
                 true
@@ -830,7 +818,7 @@ impl App {
                     "stream" => "verbose".to_string(),
                     _ => "auto".to_string(),
                 };
-                self.status_message = Some(format!("Output style: {}.", self.output_style));
+                self.set_status_notice(format!("Output style: {}.", self.output_style));
                 true
             }
             "effort" => {
@@ -899,7 +887,9 @@ impl App {
                 });
                 let text = match ctx {
                     Some(c) => format!("Observe (side panel pending) — last tool: {c}"),
-                    None => "Observe (side panel pending) — no tool calls yet this session.".to_string(),
+                    None => {
+                        "Observe (side panel pending) — no tool calls yet this session.".to_string()
+                    }
                 };
                 self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
                 true
@@ -963,7 +953,7 @@ impl App {
                 settings.permission_mode = new_mode.clone();
                 let _ = settings.save_sync();
                 self.settings.permission_mode = new_mode.clone();
-                self.status_message = Some(
+                self.set_status_notice(
                     if matches!(
                         new_mode,
                         crate::tui::adapter_types::config::PermissionMode::BypassPermissions
@@ -981,7 +971,7 @@ impl App {
             // adding a new state field; busy = compact aggressively).
             "busy" => {
                 self.auto_compact_enabled = !self.auto_compact_enabled;
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "Auto-compact {}.",
                     if self.auto_compact_enabled {
                         "enabled"
@@ -1001,7 +991,7 @@ impl App {
             "reasoning" => {
                 self.show_reasoning = !self.show_reasoning;
                 self.invalidate_transcript();
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "Reasoning blocks {} by default.",
                     if self.show_reasoning {
                         "expanded"
@@ -1023,7 +1013,7 @@ impl App {
                         .agent_mode
                         .clone()
                         .unwrap_or_else(|| "default".to_string());
-                    self.status_message = Some(format!(
+                    self.set_status_notice(format!(
                         "Current personality: {}. Use /personality <name> to change.",
                         cur
                     ));
@@ -1032,7 +1022,7 @@ impl App {
                     // the run loop to update the query config on the next turn.
                     self.agent_mode = Some(trimmed.to_string());
                     self.agent_mode_changed = true;
-                    self.status_message = Some(format!("Personality set to: {}.", trimmed));
+                    self.set_status_notice(format!("Personality set to: {}.", trimmed));
                 }
                 true
             }
@@ -1041,12 +1031,13 @@ impl App {
             // the agent picks it up at the next iteration boundary mid-turn.
             // (iter-240 — wires to the real steer_queue_handle backend.)
             "steer" => {
-                self.status_message = Some(if args.is_empty() {
+                let notice = if args.is_empty() {
                     "Usage: /steer <message> (inject guidance while the agent is streaming)"
                         .to_string()
                 } else {
                     self.queue_steer(args)
-                });
+                };
+                self.set_status_notice(notice);
                 true
             }
 
@@ -1068,7 +1059,7 @@ impl App {
                         }
                     }
                 };
-                self.status_message = Some(msg);
+                self.set_status_notice(msg);
                 true
             }
 
@@ -1084,7 +1075,7 @@ impl App {
             // headless-testable, so we point at `operant run --query ... &`.)
             "background" => {
                 let trimmed = args.trim();
-                self.status_message = Some(if trimmed.is_empty() {
+                self.set_status_notice(if trimmed.is_empty() {
                     "Usage: /background <prompt> — operant runs one agent synchronously; this prints the command to run it detached.".to_string()
                 } else {
                     let escaped = trimmed.replace('"', "\\\"");
@@ -1113,7 +1104,7 @@ impl App {
             // pending_mcp_reconnect backend.)
             "reload-mcp" => {
                 self.pending_mcp_reconnect = true;
-                self.status_message = Some("Reconnecting MCP servers…".to_string());
+                self.set_status_notice("Reconnecting MCP servers…".to_string());
                 true
             }
 
@@ -1144,7 +1135,7 @@ impl App {
                     _ => "auto".to_string(),
                 };
 
-                self.status_message = Some(if model_changed {
+                self.set_status_notice(if model_changed {
                     "Config reloaded (provider/model changes apply on restart).".to_string()
                 } else {
                     "Configuration reloaded.".to_string()
@@ -1195,14 +1186,14 @@ impl App {
                             skill_names,
                             bundle_names,
                         );
-                        self.status_message = Some(format!(
+                        self.set_status_notice(format!(
                             "Rescanned {} skill{}. Browse with /skills (agent picks up changes on restart).",
                             count,
                             if count == 1 { "" } else { "s" }
                         ));
                     }
                     Err(e) => {
-                        self.status_message = Some(format!("Failed to reload skills: {}", e));
+                        self.set_status_notice(format!("Failed to reload skills: {}", e));
                     }
                 }
                 true
@@ -1211,7 +1202,7 @@ impl App {
             // /browser — surface that operant has a Camofox browser backend
             // but no in-TUI browser launcher (it's a tool the agent calls).
             "browser" => {
-                self.status_message = Some(
+                self.set_status_notice(
                     "Browser: operant uses Camofox as the default. The agent invokes it via the browser tool — no in-TUI browser panel.".to_string()
                 );
                 true
@@ -1224,7 +1215,7 @@ impl App {
                     crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
                 settings.terminal_progress_bar = !settings.terminal_progress_bar;
                 let _ = settings.save_sync();
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "Status bar {}.",
                     if settings.terminal_progress_bar {
                         "shown"
@@ -1240,7 +1231,7 @@ impl App {
             // TuiApp runner (adapter_types.rs) and is not threaded into App,
             // so this reports the real startup default. (iter-240.)
             "mouse" => {
-                self.status_message = Some(
+                self.set_status_notice(
                     "Mouse capture: enabled (use --no-mouse to disable, e.g. inside tmux)"
                         .to_string(),
                 );
@@ -1254,7 +1245,7 @@ impl App {
             // it has to be fixed terminal-side, so name the fix for the
             // environment we are actually in.
             "terminal-setup" => {
-                self.status_message = Some(crate::tui::terminal_setup::render(
+                self.set_status_notice(crate::tui::terminal_setup::render(
                     &crate::tui::terminal_setup::EnvSnapshot::from_process(),
                 ));
                 true
@@ -1265,7 +1256,7 @@ impl App {
             "redraw" => {
                 self.transcript_version
                     .set(self.transcript_version.get().wrapping_add(1));
-                self.status_message = Some("Screen redrawn.".to_string());
+                self.set_status_notice("Screen redrawn.".to_string());
                 true
             }
 
@@ -1273,7 +1264,7 @@ impl App {
             // provider billing/credits (it's BYOK); point users at /stats
             // for local token usage tracking.
             "billing" | "credits" => {
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "{}: operant is BYOK and doesn't track provider billing. Use /stats for local token usage.",
                     cmd
                 ));
@@ -1283,7 +1274,7 @@ impl App {
             // /update — point at `operant update` (the TUI can't self-update
             // without restarting).
             "update" => {
-                self.status_message = Some(
+                self.set_status_notice(
                     "Run `operant update` from a shell to check for and install a new release."
                         .to_string(),
                 );
@@ -1293,7 +1284,7 @@ impl App {
             // /heapdump, /mem — debug diagnostics; surface a snapshot of
             // turn count + token count + cost as a memory/heap summary.
             "heapdump" | "mem" => {
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "Turns: {} | Tokens: {} | Cost: ${:.4} | Agent status entries: {}",
                     self.turn_metadata.len(),
                     self.token_count,
@@ -1306,7 +1297,7 @@ impl App {
             // /pet — Easter-egg. (iter-144: rustle pose trigger deleted
             // since the pose system was dead code. Still shows the message.)
             "pet" => {
-                self.status_message = Some("Rustle wags its tail. 🐕".to_string());
+                self.set_status_notice("Rustle wags its tail. 🐕".to_string());
                 true
             }
 
@@ -1340,7 +1331,7 @@ impl App {
                     "full" | "current" | "on" => self.thinking_display_on = true,
                     "" => {}
                     other => {
-                        self.status_message = Some(format!(
+                        self.set_status_notice(format!(
                             "Unknown thinking-display mode '{other}' — use off|full|current"
                         ));
                         return true;
@@ -1351,17 +1342,14 @@ impl App {
                     (true, _) => "Thinking display: on".to_string(),
                     (false, _) => "Thinking display: off".to_string(),
                 };
-                self.status_message = Some(summary.clone());
-                self.push_system_message(
-                    summary,
-                    crate::tui::app::enums::SystemMessageStyle::Info,
-                );
+                self.set_status_notice(summary.clone());
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 self.invalidate_transcript();
                 true
             }
             "todos" | "todo" => {
                 self.todos_band_hidden = !self.todos_band_hidden;
-                self.status_message = Some(if self.todos_band_hidden {
+                self.set_status_notice(if self.todos_band_hidden {
                     "Todo card hidden".to_string()
                 } else if self.todos_card_payload.is_empty() {
                     "Todo card pinned (no todos yet)".to_string()
@@ -1382,7 +1370,7 @@ impl App {
                 true
             }
             "replay" | "replay-diff" => {
-                self.status_message = Some(format!(
+                self.set_status_notice(format!(
                     "/{} overlay is planned. For now, use /agents to view the spawn tree.",
                     cmd
                 ));
@@ -1404,7 +1392,7 @@ impl App {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| "operant".to_string());
                 self.pending_shell_command = Some(vec![exe, "setup".to_string()]);
-                self.status_message = Some("Launching setup wizard…".to_string());
+                self.set_status_notice("Launching setup wizard…".to_string());
                 true
             }
             // /whoami — show what the agent knows about the user.
@@ -1414,7 +1402,7 @@ impl App {
                 let store = operant_core::memory::MemoryStore::new(mem_dir);
                 match store.read_memories() {
                     Ok(map) if map.is_empty() => {
-                        self.status_message = Some(
+                        self.set_status_notice(
                             "I don't know much about you yet. Chat with me and I'll start remembering.".to_string()
                         );
                     }
@@ -1447,7 +1435,7 @@ impl App {
                         );
                     }
                     Err(_) => {
-                        self.status_message = Some(
+                        self.set_status_notice(
                             "No memory store found. Use /memory to manage memory files."
                                 .to_string(),
                         );
@@ -1495,7 +1483,7 @@ impl App {
                 true
             }
             CommandResult::Error(text) => {
-                self.status_message = Some(text);
+                self.set_status_notice(text);
                 true
             }
             CommandResult::Silent => true,
@@ -1514,7 +1502,7 @@ impl App {
                 self.is_streaming = false;
                 self.tool_use_blocks.clear();
                 self.invalidate_transcript();
-                self.status_message = Some("Conversation cleared.".to_string());
+                self.set_status_notice("Conversation cleared.".to_string());
                 true
             }
             CommandResult::NewSession => {
@@ -1525,7 +1513,7 @@ impl App {
                 self.is_streaming = false;
                 self.tool_use_blocks.clear();
                 self.invalidate_transcript();
-                self.status_message = Some("New session started.".to_string());
+                self.set_status_notice("New session started.".to_string());
                 true
             }
             CommandResult::SetMessages(msgs) => {
@@ -1547,7 +1535,7 @@ impl App {
                     self.messages.push(message);
                 }
                 self.invalidate_transcript();
-                self.status_message = Some(format!("Restored {} messages.", msgs.len()));
+                self.set_status_notice(format!("Restored {} messages.", msgs.len()));
                 true
             }
 
@@ -1558,12 +1546,12 @@ impl App {
                 true
             }
             CommandResult::CycleSetting { name, current } => {
-                self.status_message = Some(format!("{}: {}", name, current));
+                self.set_status_notice(format!("{}: {}", name, current));
                 true
             }
             CommandResult::SetGoal(goal) => {
                 self.session_goal = goal;
-                self.status_message = Some("Session goal updated.".to_string());
+                self.set_status_notice("Session goal updated.".to_string());
                 true
             }
 
@@ -1710,7 +1698,7 @@ impl App {
                     removed += 1;
                 }
                 self.invalidate_transcript();
-                self.status_message = Some(format!("Undid {} messages.", removed));
+                self.set_status_notice(format!("Undid {} messages.", removed));
                 true
             }
 
@@ -1733,7 +1721,7 @@ impl App {
                         })
                         .collect();
                     let outcome = crate::tui::clipboard::copy(&text);
-                    self.status_message = Some(outcome.status_message());
+                    self.set_status_notice(outcome.status_message());
                 }
                 true
             }
@@ -1801,10 +1789,10 @@ impl App {
     }
 
     pub(super) fn dismiss_error_notifications(&mut self) {
-        while self.notifications.current_is_error() {
-            self.notifications.dismiss_current();
-        }
-        self.error_modal_scroll_offset = 0;
+        // P4-2: errors are inline transcript cards now — nothing to
+        // dismiss; the modal and its scroll state are gone. Kept as a
+        // no-op seam for the five call sites that cleared the modal
+        // pre-purge.
     }
 
     /// Perform the export based on the selected format. Returns the path written.

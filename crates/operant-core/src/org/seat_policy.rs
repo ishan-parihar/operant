@@ -232,7 +232,10 @@ pub trait SeatPolicySource: Send + Sync {
     /// The seat's delegation posture, if the policy row sets one.
     /// Default `None` = ungoverned — sources that do not model delegation
     /// stay implementors without touching their bodies.
-    fn delegation_posture_for(&self, _employee_id: &str) -> Option<crate::org::authority::DelegationPosture> {
+    fn delegation_posture_for(
+        &self,
+        _employee_id: &str,
+    ) -> Option<crate::org::authority::DelegationPosture> {
         None
     }
 }
@@ -246,7 +249,7 @@ mod tests {
             mode,
             allow: allow.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
-        delegation: None,
+            delegation: None,
         }
     }
 

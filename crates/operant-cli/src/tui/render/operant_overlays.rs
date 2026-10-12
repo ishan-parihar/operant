@@ -72,7 +72,6 @@ use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::model_picker::render_model_picker;
-use crate::tui::notifications::{NotificationKind, render_notification_banner};
 use crate::tui::overlays::{
     render_global_search, render_history_search_overlay, render_rewind_flow,
 };
@@ -88,7 +87,6 @@ use crate::tui::usage_overlay::{UsageMetrics, render_usage_overlay};
 // the ported jcode chrome owns them since iter-649.)
 use super::{
     apply_selection_highlight, cache_selectable_row_text, is_modal_open, render_context_menu,
-    render_error_modal,
 };
 
 /// Which buffer a row reaches its surface through.
@@ -417,20 +415,10 @@ const OVERLAYS: &[Entry] = &[
         paint: paint_mcp_approval,
         sink: Sink::Buffer,
     },
-    // --- the error modal is the frame's one early exit ----------------------
-    Entry {
-        name: "error_modal",
-        visible: visible_error_modal,
-        paint: paint_error_modal,
-        sink: Sink::Frame,
-    },
     // --- post-pass, and the topmost surfaces --------------------------------
-    Entry {
-        name: "notification_banner",
-        visible: visible_notification_banner,
-        paint: paint_notification_banner,
-        sink: Sink::Frame,
-    },
+    // (P4-2: the error_modal and notification_banner entries are gone —
+    // errors are inline transcript cards, transient feedback is the
+    // status-line notice with the 3s TTL.)
     Entry {
         name: "selection_highlight",
         visible: always_visible,
@@ -474,16 +462,6 @@ fn visible_permission_dialog(app: &App, _ctx: &mut FrameCtx) -> bool {
 
 /// The error modal keys off the *current* notification's kind, not off an
 /// overlay flag.
-fn visible_error_modal(app: &App, _ctx: &mut FrameCtx) -> bool {
-    matches!(app.notifications.current(), Some(n) if n.kind == NotificationKind::Error)
-}
-
-/// Non-error notifications render as toast banners, but not while a modal owns
-/// the screen. `is_modal_open` is read here, at the point in paint order the
-/// pre-refactor code read it — after the error-modal branch.
-fn visible_notification_banner(app: &App, _ctx: &mut FrameCtx) -> bool {
-    !is_modal_open(app) && app.notifications.current().is_some()
-}
 
 /// The one impure guard, and the reason `FrameCtx` reaches guards by `&mut`.
 ///
@@ -657,38 +635,6 @@ fn paint_mcp_approval(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 /// so the banner, the three selection passes, the debug overlay and every
 /// post-draw pass are skipped exactly as the pre-refactor early return skipped
 /// them.
-fn paint_error_modal(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    if let Some(notif) = app.notifications.current()
-        && notif.kind == NotificationKind::Error
-    {
-        let is_welcome_screen = app.messages.is_empty()
-            && app.streaming_text.is_empty()
-            && app.streaming_thinking.is_empty()
-            && app.tool_use_blocks.is_empty();
-        render_error_modal(
-            frame,
-            ctx.size,
-            notif,
-            app.error_modal_scroll_offset,
-            // [port-decision] footer_right_column_area has no producer in the
-            // ported chrome (operant's footer bar was chrome-owned and deleted at
-            // iter-649; the ported bottom band has no right-column concept). A
-            // zero rect is render_error_modal's own documented fallback placement —
-            // half-screen, anchored to the frame's right — not a missing value, so
-            // inventing a column here would move the modal for no reason.
-            app.footer_right_column_area.get(),
-            is_welcome_screen,
-        );
-        ctx.stop = true;
-    }
-}
-
-fn paint_notification_banner(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    if !is_modal_open(app) && app.notifications.current().is_some() {
-        render_notification_banner(frame, &app.notifications, ctx.size);
-    }
-}
-
 /// Post-render pass: inverts the selected cells and writes `app.selection_text`.
 fn paint_selection_highlight(frame: &mut Frame, app: &App, _ctx: &mut FrameCtx) {
     apply_selection_highlight(frame, app);
@@ -781,8 +727,6 @@ mod tests {
         ("export_dialog", Sink::Frame),
         ("context_viz", Sink::Frame),
         ("mcp_approval", Sink::Buffer),
-        ("error_modal", Sink::Frame),
-        ("notification_banner", Sink::Frame),
         ("selection_highlight", Sink::Frame),
         ("selection_row_cache", Sink::Frame),
         ("context_menu", Sink::Frame),
@@ -901,29 +845,6 @@ mod tests {
     /// banner and the selection passes would start painting over it; if it
     /// moved later, the debug overlay would cover it.
     #[test]
-    fn the_error_modal_stops_the_ladder_where_the_ladder_used_to_end() {
-        let stop_row = OVERLAYS
-            .iter()
-            .position(|e| e.name == "error_modal")
-            .expect("the error modal has a row");
-        assert_eq!(
-            OVERLAYS[stop_row + 1].name,
-            "notification_banner",
-            "the row after the error modal must be the banner — that pair is the \
-             early exit's boundary"
-        );
-        assert_eq!(
-            OVERLAYS.last().map(|e| e.name),
-            Some("debug_overlay"),
-            "the debug overlay is topmost and must stay last"
-        );
-        assert_eq!(
-            OVERLAYS[0].name, "usage_overlay",
-            "the usage overlay is the first operant-owned overlay — it paints \
-             over the ported chrome's own bands (the old base_fill row moved to \
-             the chrome at iter-649)"
-        );
-    }
 
     /// Both sinks are actually in use. If a future change routed every row
     /// through one of them, the sink column would be decoration and this would

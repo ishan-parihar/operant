@@ -728,7 +728,8 @@ fn load_sessions_preserves_snapshot_saved_when_journal_meta_omits_saved() {
     });
     session.save().expect("save saved session");
 
-    let snapshot = crate::tui::operant_app::session::session_path(&session.id).expect("session path");
+    let snapshot =
+        crate::tui::operant_app::session::session_path(&session.id).expect("session path");
     let journal = crate::tui::operant_app::session::session_journal_path_from_snapshot(&snapshot);
     std::fs::write(
         journal,

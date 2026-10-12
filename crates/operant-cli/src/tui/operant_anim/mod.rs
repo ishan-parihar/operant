@@ -106,7 +106,6 @@ pub fn sample_signal(
     }
 }
 
-
 pub fn shape_char_3x3(pattern: u16, brightness: f32) -> char {
     if pattern == 0 {
         return ' ';
@@ -341,11 +340,7 @@ mod tests {
     use super::*;
 
     fn bufs(sw: usize, sh: usize) -> (Vec<bool>, Vec<f32>, Vec<f32>) {
-        (
-            vec![false; sw * sh],
-            vec![0.0; sw * sh],
-            vec![0.0; sw * sh],
-        )
+        (vec![false; sw * sh], vec![0.0; sw * sh], vec![0.0; sw * sh])
     }
 
     /// Same elapsed, same inputs → bit-identical buffers. The deleted

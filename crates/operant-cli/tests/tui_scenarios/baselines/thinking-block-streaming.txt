@@ -1,7 +1,7 @@
 
-                                                                  ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                                                                  ▌ ──────────────────────────────────────────────── ▐
-                                                                  ▌                                                  ▐
+
+
+
 
 
 
@@ -23,9 +23,9 @@
 
  First part of the answer. Second part of the answer. That is the whole answer.
 
-
 1>
                                                                          ~ 19/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
 
 
 

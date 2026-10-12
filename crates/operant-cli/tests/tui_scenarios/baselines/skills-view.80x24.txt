@@ -14,7 +14,7 @@
   │   8    axi                                     0.1.0                     │
 1>│   9    baoyu-infographic                       1.56.1                    │
   │   10   blogwatcher                             2.0.0                     │re
-  │   11   briefing                                0.1.0                     │
+  │   11   claude-code                             2.2.1                     │
   │Clean AI-generated code slop with a regression-safe, deletion-first work… │
   │ ↑/↓ navigate · Enter inspect · Esc close                                 │
   │                                                                          │

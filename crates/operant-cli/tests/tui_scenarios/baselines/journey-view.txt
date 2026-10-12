@@ -7,7 +7,7 @@
 
                ┌────────────────────────────────────────────────────────────────────────────────────────┐
                │ Journey — skills + memories                                                            │
-               │┌ Skills (101) ────────────────────────────┐┌ Memories (0) ────────────────────────────┐│
+               │┌ Skills (100) ────────────────────────────┐┌ Memories (0) ────────────────────────────┐│
                ││ Name                     Category       V││No memories stored yet.                   ││
                ││                                          ││                                          ││
                ││›ai-slop-cleaner                         0││Memories accumulate as you use operant.   ││
@@ -20,16 +20,16 @@
  ~             ││ axi                                     0││                                          ││
                ││ baoyu-infographic                       1││                                          ││
                ││ blogwatcher                             2││                                          ││
-1>             ││ briefing                                0││                                          ││
-               ││ calendar                 productivity   1││                                          ││Offline Capture
-               ││ claude-code                             2││                                          ││
+1>             ││ calendar                 productivity   1││                                          ││
+               ││ claude-code                             2││                                          ││Offline Capture
                ││ claude-design                           1││                                          ││
                ││ codebase-inspection                     1││                                          ││
                ││ codex                                   1││                                          ││
+               ││ comfyui                  creative       5││                                          ││
                ││                                          ││                                          ││
                ││                                          ││                                          ││
                │└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
-               │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 101 skills · 0 memory · 125 edges · 6│
+               │↑/↓ navigate · Tab switch · Esc close · [Skills] │ 100 skills · 0 memory · 125 edges · 6│
                └────────────────────────────────────────────────────────────────────────────Esc to close┘
 
 

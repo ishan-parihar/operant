@@ -259,7 +259,7 @@ impl CronDb {
             CREATE INDEX IF NOT EXISTS idx_cron_deliveries_job
                 ON cron_deliveries(job_id, id);
     "#,
-];
+    ];
 
     fn setup_schema(&self) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -777,12 +777,7 @@ impl CronDb {
         conn.execute(
             "INSERT INTO cron_deliveries (job_id, created_at, target, payload)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                job_id,
-                chrono::Utc::now().to_rfc3339(),
-                target,
-                payload
-            ],
+            params![job_id, chrono::Utc::now().to_rfc3339(), target, payload],
         )
         .map_err(|e| Error::Agent(format!("Failed to record cron delivery: {}", e)))?;
         Ok(conn.last_insert_rowid())
@@ -888,9 +883,7 @@ impl CronDb {
             .map_err(|e| Error::Agent(format!("Failed to reclaim deliveries: {}", e)))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(
-                row.map_err(|e| Error::Agent(format!("Failed to read delivery row: {}", e)))?,
-            );
+            out.push(row.map_err(|e| Error::Agent(format!("Failed to read delivery row: {}", e)))?);
         }
         Ok(out)
     }
@@ -1379,7 +1372,9 @@ mod tests {
         assert!(runs[0].success);
 
         // The new surface is live on the migrated db.
-        let id = db.record_cron_delivery("j", "telegram:123", "hello").unwrap();
+        let id = db
+            .record_cron_delivery("j", "telegram:123", "hello")
+            .unwrap();
         assert!(id > 0);
     }
 
@@ -1388,7 +1383,9 @@ mod tests {
         let (db, _dir) = test_db();
         let id = db.record_cron_delivery("j1", "telegram:1", "p").unwrap();
 
-        let s1 = db.mark_delivery_attempt(id, 3, Some("send failed")).unwrap();
+        let s1 = db
+            .mark_delivery_attempt(id, 3, Some("send failed"))
+            .unwrap();
         assert_eq!(s1, "pending", "first attempt keeps the row pending");
         let s2 = db.mark_delivery_attempt(id, 3, None).unwrap();
         assert_eq!(s2, "pending", "second attempt keeps the row pending");
@@ -1432,7 +1429,8 @@ mod tests {
 
         db.mark_delivery_outcome(id2, true, None).unwrap();
         assert!(
-            !db.mark_delivery_outcome(id, false, Some("late report")).unwrap(),
+            !db.mark_delivery_outcome(id, false, Some("late report"))
+                .unwrap(),
             "a failure report after delivery is ignored"
         );
     }
@@ -1440,7 +1438,9 @@ mod tests {
     #[test]
     fn delivery_reclaim_respects_the_horizon_and_batch_bound() {
         let (db, _dir) = test_db();
-        let fresh = db.record_cron_delivery("j3", "telegram:3", "fresh").unwrap();
+        let fresh = db
+            .record_cron_delivery("j3", "telegram:3", "fresh")
+            .unwrap();
         db.mark_delivery_attempt(fresh, 3, None).unwrap();
         let old = db.record_cron_delivery("j3", "telegram:3", "old").unwrap();
 

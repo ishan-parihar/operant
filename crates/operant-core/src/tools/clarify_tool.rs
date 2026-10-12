@@ -148,11 +148,13 @@ mod tests {
             .await;
 
         assert!(!result.success, "unattended clarify must fail fast");
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("unattended"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unattended")
+        );
     }
 
     #[tokio::test]

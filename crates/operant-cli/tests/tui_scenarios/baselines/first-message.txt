@@ -1,7 +1,7 @@
 
-                                                                  ▌ ℹ Response complete · /copy to copy · Ctr…  esc  ▐
-                                                                  ▌ ──────────────────────────────────────────────── ▐
-                                                                  ▌                                                  ▐
+
+
+
 
 
 
@@ -23,9 +23,9 @@
 
  1› Hello from the first message                                                                                       │
 
-
 2>
                                                                          ~ 13/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
 
 
 
