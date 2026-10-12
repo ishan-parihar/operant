@@ -103,6 +103,10 @@ impl App {
                 // that was in flight when the call was parsed: the reservation
                 // mirrors flush_streamed_assistant_message's push condition
                 // exactly, so a slot is reserved iff the flush will fill it.
+                // (iter-785, glitch 2: order is preserved WITHOUT flushing
+                // here — the live tails render into the reserved slot via
+                // display_messages' slot splice, and the seam keeps the
+                // AG|ENTS.md word intact across the tool_call delta.)
                 let text_slot = if self.streaming_text.trim().is_empty()
                     && self.streaming_thinking.trim().is_empty()
                 {

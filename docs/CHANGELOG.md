@@ -542,6 +542,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-785 — glitch 2 fixed: thinking that precedes a tool call now
+  renders ABOVE the tool row.** Root cause: with P0-2's deferred flush
+  (the AG|ENTS.md seam fix), a tool row settled into the Body section
+  while its preceding thinking was still live in the mutable Streaming
+  section — which renders BELOW Body — so the live viewport and emitted
+  scrollback both showed tool-before-thinking, inverting the stream
+  order. Fix (render layer, flush timing untouched): display_messages
+  splices the live tails INTO the slot the ToolStart reservation
+  promised — immediately before the reserved tool row (identified by
+  after_index exceeding the committed messages). Once the boundary flush
+  commits them, the reservation stops matching and the committed message
+  takes over the slot — nothing double-renders. The seam test stays green
+  in its ORIGINAL form (ToolStart still never flushes mid-response).
+  Regression test: thinking_preceding_a_tool_renders_above_the_tool_row.
+  Live-verified: read-file turn renders user → thinking → ✓ aft_read →
+  answer. Suite 1751/0; corpus 0-drift.
 - **iter-784 — glitch 1 fixed: no more shredded/duplicated streaming text
   in terminal-scrollback.** Root cause: the adapter pushed the LIVE
   streaming rows (thinking + text) into `display_messages`, which feeds the

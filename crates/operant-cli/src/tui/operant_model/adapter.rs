@@ -107,6 +107,25 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     let mut out = Vec::with_capacity(
         app.messages.len() + app.tool_use_blocks.len() + app.system_annotations.len(),
     );
+    // (iter-785, glitch 2) Live tails (thinking + text) render at the slot
+    // the ToolStart reservation promised — immediately BEFORE the first
+    // reserved tool row — so thinking that preceded a call never renders
+    // below the call's row. A tool row is "reserved" when its after_index
+    // counted the still-live tails (after_index > committed messages).
+    // Rows here feed the viewport ONLY while the tails are live; once the
+    // boundary flush commits them, after_index <= messages.len() and the
+    // committed message takes over the slot — the reserved row stops
+    // matching, so nothing double-renders.
+    let live_slot_rows = live_tail_rows(app);
+    // Reserved rows are identifiable by id: a block whose after_index
+    // counted the still-live tails (after_index > committed messages).
+    let reserved_ids: Vec<&str> = app
+        .tool_use_blocks
+        .iter()
+        .filter(|b| b.after_index > app.messages.len() && b.after_index > 0)
+        .map(|b| b.id.as_str())
+        .collect();
+    let reserved = !reserved_ids.is_empty();
     if let Some(annotations) = annotations_after.remove(&0) {
         out.extend(annotations.into_iter().map(system_annotation_row));
     }
@@ -126,9 +145,66 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     // partials must never be frozen into native scrollback — they render in
     // the mutable Streaming section via prepare_streaming_cached (which now
     // carries both the thinking tail and the answer text).
+    // (iter-785) No reserved slot: the tails are the live streaming tail of
+    // the frame — handled by the mutable Streaming section
+    // (prepare_streaming_cached), NOT here. Never render them as settled
+    // Body rows (iter-781 invariant).
+    // (iter-785) Splice the live tails immediately BEFORE the first
+    // reserved tool row — the position the ToolStart reservation promised.
+    // The reservation is identifiable by content: a row whose after_index
+    // exceeded the committed messages. Only rows from THIS loop carry it.
     let _ = (&app.streaming_thinking, &app.streaming_text);
+    if let (true, Some(rows)) = (reserved, live_slot_rows) {
+        let reserved_row = out.iter().position(|r| {
+            r.tool_data
+                .as_ref()
+                .is_some_and(|td| reserved_ids.contains(&td.id.as_str()))
+        });
+        if let Some(pos) = reserved_row {
+            let pos = pos.max(1); // never above the user prompt
+            for (i, row) in rows.into_iter().enumerate() {
+                out.insert(pos + i, row);
+            }
+        } else {
+            // Reserved row not in `out` yet (it trails below): the tails
+            // render above it by extending first.
+            out.extend(rows);
+        }
+    }
     out.extend(trailing_tool_rows);
     out
+}
+
+/// Live thinking/text rows for the ToolStart slot splice (glitch 2).
+/// Sentinel-wrapped per the iter-780 contract so the markdown renderer
+/// styles thinking dim+italic.
+fn live_tail_rows(app: &App) -> Option<Vec<DisplayMessage>> {
+    let thinking = app.streaming_thinking.as_str();
+    let text = app.streaming_text.as_str();
+    if thinking.trim().is_empty() && text.trim().is_empty() {
+        return None;
+    }
+    let mut rows = Vec::new();
+    if !thinking.is_empty() {
+        let mut wrapped = String::new();
+        let parts: Vec<&str> = thinking.split('\n').collect();
+        let (complete, partial) = parts.split_at(parts.len().saturating_sub(1));
+        for line in complete {
+            wrapped.push_str(&crate::tui::operant_render_core::reasoning_line_markup(
+                line,
+            ));
+        }
+        if let Some(tail) = partial.first() {
+            wrapped.push_str(&crate::tui::operant_render_core::reasoning_partial_markup(
+                tail,
+            ));
+        }
+        rows.push(DisplayMessage::reasoning(wrapped));
+    }
+    if !text.is_empty() {
+        rows.push(DisplayMessage::assistant(text.to_string()));
+    }
+    Some(rows)
 }
 
 fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
@@ -372,6 +448,39 @@ mod tests {
 
         let rows = display_messages(&app);
         assert_eq!(rows[0].tool_data.as_ref().unwrap().input, Value::Null);
+    }
+
+    #[test]
+    fn thinking_preceding_a_tool_renders_above_the_tool_row() {
+        // (iter-785, glitch 2) Live thinking that streamed BEFORE a tool call
+        // renders at the ToolStart slot reservation — ABOVE the tool row —
+        // not below it as a trailing live tail.
+        let mut app = make_app();
+        app.messages.push(Message::user("read it".to_string()));
+        // ToolStart reserved a slot for the live tails: after_index counted
+        // them (messages.len() + 1).
+        app.tool_use_blocks.push(tool_block("t1", "read", 2));
+        app.streaming_thinking = "The user wants me to read it".to_string();
+
+        let rows = display_messages(&app);
+        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
+        assert_eq!(
+            roles,
+            ["user", "reasoning", "tool"],
+            "thinking renders above the reserved tool row"
+        );
+        // Once the boundary flush commits the thinking, the reservation no
+        // longer matches (after_index == messages.len()) and the committed
+        // message takes over the slot.
+        app.streaming_thinking.clear();
+        app.messages
+            .push(Message::assistant_blocks(vec![ContentBlock::Thinking {
+                thinking: "The user wants me to read it".to_string(),
+                signature: String::new(),
+            }]));
+        let rows = display_messages(&app);
+        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
+        assert_eq!(roles, ["user", "reasoning", "tool"]);
     }
 
     #[test]
