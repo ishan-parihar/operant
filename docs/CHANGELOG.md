@@ -542,6 +542,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-778 — post-P4-2 remaining-gaps outline** (`docs/plan-2026-10-12-tui-remaining-gaps-outline.md`):
+  all four live complaints now closed; the queue reduces to the 62
+  fall-through commands (four honest tiers: wire-only aliases, port-decision
+  unregisters, real-feature seams, registry noise), the P4-6 slow-frame
+  audit, and BUGS.md D-1 doc-debt. Supersedes the 2026-10-11 outline.
 - **iter-774 — P4-2: the notification overlay system is purged — jcode's
   status-notice mechanism replaces it.** User complaint #1 (legacy
   notification overlays) closed: the every-response "Response complete ·
