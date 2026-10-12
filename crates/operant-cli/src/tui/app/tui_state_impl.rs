@@ -164,6 +164,9 @@ impl TuiState for App {
     fn streaming_text(&self) -> &str {
         &self.streaming_text
     }
+    fn streaming_thinking(&self) -> &str {
+        &self.streaming_thinking
+    }
 
     fn pinned_todos_payload(&self) -> Option<&str> {
         // [port-decision] RESOLVED (P4-3, 2026-10-10): the ToolComplete(todo)

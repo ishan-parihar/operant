@@ -847,7 +847,12 @@ fn prepare_messages_inner(app: &dyn TuiState, width: u16, height: u16) -> Prepar
     // Reasoning traces in `current` mode are anchored display messages inside
     // the body now; no separate retained/collapsing trace section exists.
     let reasoning_prepared = Arc::new(empty_prepared_messages());
-    let has_streaming = app.is_processing() && !app.streaming_text().is_empty();
+    // (iter-781) The Streaming section carries BOTH live tails — the
+    // thinking trace and the answer text. Thinking-only streams (before the
+    // first Content delta) must open the section too, or the emitter sees a
+    // fully-settled frame and freezes thinking partials into scrollback.
+    let has_streaming = app.is_processing()
+        && (!app.streaming_text().is_empty() || !app.streaming_thinking().is_empty());
     let stream_prefix_blank = has_streaming
         && (!body_prepared.wrapped_lines.is_empty()
             || !batch_progress_prepared.wrapped_lines.is_empty()
@@ -2356,7 +2361,8 @@ fn prepare_streaming_cached(
     prefix_blank: bool,
 ) -> PreparedMessages {
     let streaming = app.streaming_text();
-    if streaming.is_empty() {
+    let thinking = app.streaming_thinking();
+    if streaming.is_empty() && thinking.is_empty() {
         return empty_prepared_messages();
     }
 
@@ -2372,6 +2378,34 @@ fn prepare_streaming_cached(
         display_width
     };
     let mut md_lines = app.render_streaming_markdown(content_width);
+    // (iter-781) Live thinking tail rides in the same mutable section,
+    // ABOVE the answer text (jcode renders reasoning above the answer in
+    // the streaming buffer). Sentinel-wrapped at storage time so the
+    // markdown path styles it dim+italic (iter-780 contract).
+    if !thinking.is_empty() {
+        let mut wrapped_thinking = String::new();
+        let parts: Vec<&str> = thinking.split('\n').collect();
+        let (complete, partial) = parts.split_at(parts.len().saturating_sub(1));
+        for line in complete {
+            wrapped_thinking.push_str(&crate::tui::operant_render_core::reasoning_line_markup(
+                line,
+            ));
+        }
+        if let Some(tail) = partial.first() {
+            wrapped_thinking.push_str(&crate::tui::operant_render_core::reasoning_partial_markup(
+                tail,
+            ));
+        }
+        let thinking_lines = crate::tui::operant_app::markdown::render_markdown_with_width(
+            &wrapped_thinking,
+            Some(content_width),
+        );
+        let thinking_len = thinking_lines.len();
+        md_lines.splice(0..0, thinking_lines);
+        if !streaming.is_empty() {
+            md_lines.insert(thinking_len, Line::from(""));
+        }
+    }
     if centered {
         markdown::recenter_structured_blocks_for_display(&mut md_lines, display_width);
     }

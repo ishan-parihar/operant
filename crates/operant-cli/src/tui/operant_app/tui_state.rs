@@ -123,6 +123,12 @@ pub trait TuiState {
     /// Version counter for display_messages (monotonic, increments on mutation)
     fn display_messages_version(&self) -> u64;
     fn streaming_text(&self) -> &str;
+    /// Live thinking/reasoning tail for the in-flight turn. Renders in the
+    /// mutable Streaming section (never the settled Body) so the scrollback
+    /// emitter can never freeze a partial into native history.
+    fn streaming_thinking(&self) -> &str {
+        ""
+    }
     /// JSON payload for the pinned todo band rendered at the top of the chat
     /// viewport when `display.pin_todos` is enabled. `None` when the feature
     /// is off or the session has no todos.

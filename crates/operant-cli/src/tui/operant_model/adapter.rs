@@ -120,32 +120,13 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
             out.extend(annotations.into_iter().map(system_annotation_row));
         }
     }
-    if !app.streaming_thinking.is_empty() {
-        // Live thinking tail renders dim+italic like jcode (glitch 3):
-        // complete lines wrap via reasoning_line_markup (each terminates
-        // with \n), the trailing partial line via reasoning_partial_markup —
-        // sentinel applied at STORAGE time (jcode reasoning_region.rs:190
-        // contract); the markdown renderer keys dim+italic off the sentinel.
-        // NOT format_reasoning_markup: that is mode-gated for PERSISTED
-        // reasoning (Off/Current hide it); the live tail must always show.
-        let mut wrapped = String::new();
-        let parts: Vec<&str> = app.streaming_thinking.split('\n').collect();
-        let (complete, partial) = parts.split_at(parts.len().saturating_sub(1));
-        for line in complete {
-            wrapped.push_str(&crate::tui::operant_render_core::reasoning_line_markup(
-                line,
-            ));
-        }
-        if let Some(tail) = partial.first() {
-            wrapped.push_str(&crate::tui::operant_render_core::reasoning_partial_markup(
-                tail,
-            ));
-        }
-        out.push(DisplayMessage::reasoning(wrapped));
-    }
-    if !app.streaming_text.is_empty() {
-        out.push(DisplayMessage::assistant(app.streaming_text.clone()));
-    }
+    // (iter-781) Live streaming rows (thinking + text) deliberately do NOT
+    // appear here: display_messages feeds the settled Body section, and the
+    // scrollback emitter treats every Body row as settled history. Live
+    // partials must never be frozen into native scrollback — they render in
+    // the mutable Streaming section via prepare_streaming_cached (which now
+    // carries both the thinking tail and the answer text).
+    let _ = (&app.streaming_thinking, &app.streaming_text);
     out.extend(trailing_tool_rows);
     out
 }
@@ -482,27 +463,24 @@ mod tests {
     }
 
     #[test]
-    fn streaming_partials_emit_trailing_rows() {
+    fn streaming_partials_do_not_pollute_display_messages() {
+        // (iter-781) Live streaming rows must NOT appear in display_messages:
+        // that vec feeds the settled Body section, and the scrollback emitter
+        // freezes every Body row into native history. Live thinking/text
+        // partials belong to the mutable Streaming section only
+        // (prepare_streaming_cached reads them via the TuiState accessors).
         let mut app = make_app();
         app.messages.push(Message::user("hi".to_string()));
         app.streaming_thinking = "pondering".to_string();
         app.streaming_text = "so far".to_string();
 
         let rows = display_messages(&app);
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[1].role, "reasoning");
-        // The live thinking tail is stored sentinel-wrapped too (same
-        // contract as committed rows; trailing partial carries no \n).
         assert_eq!(
-            rows[1].content,
-            format!(
-                "*{}pondering{}*",
-                crate::tui::operant_render_core::REASONING_SENTINEL,
-                crate::tui::operant_render_core::REASONING_SENTINEL
-            )
+            rows.len(),
+            1,
+            "live tails must not render as settled Body rows"
         );
-        assert_eq!(rows[2].role, "assistant");
-        assert_eq!(rows[2].content, "so far");
+        assert_eq!(rows[0].role, "user");
     }
 
     #[test]

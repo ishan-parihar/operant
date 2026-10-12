@@ -542,6 +542,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-784 — glitch 1 fixed: no more shredded/duplicated streaming text
+  in terminal-scrollback.** Root cause: the adapter pushed the LIVE
+  streaming rows (thinking + text) into `display_messages`, which feeds the
+  settled Body section — and the scrollback emitter treats every Body row
+  as settled history. Each growing frame's partial text froze into native
+  scrollback at its then-current width (`The` / `The wi` / `I` / `A fleeting
+  g` — the exact shredding the user reported), then the viewport re-rendered
+  the same indices. Fix (jcode's model): live rows render in the MUTABLE
+  Streaming section only — `prepare_streaming_cached` now carries the
+  thinking tail (sentinel-wrapped, dim+italic per iter-780) above the
+  answer text; `has_streaming` opens the section during thinking-only
+  phases too; the adapter no longer emits live rows into Body
+  (`streaming_partials_do_not_pollute_display_messages` pins the
+  invariant). Live-verified: poem turn → scrollback holds prompt,
+  committed thinking, complete poem — no fragments; emit trace showed 0
+  emissions during streaming. Suite 1750/0; corpus 0-drift.
 - **iter-779 — glitch 3 fixed: thinking text now renders dim+italic
   (shaded) in BOTH the live stream and committed history.** Root cause:
   the adapter stored `streaming_thinking` and committed
