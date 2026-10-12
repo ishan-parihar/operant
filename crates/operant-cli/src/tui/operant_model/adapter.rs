@@ -121,7 +121,27 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
         }
     }
     if !app.streaming_thinking.is_empty() {
-        out.push(DisplayMessage::reasoning(app.streaming_thinking.clone()));
+        // Live thinking tail renders dim+italic like jcode (glitch 3):
+        // complete lines wrap via reasoning_line_markup (each terminates
+        // with \n), the trailing partial line via reasoning_partial_markup —
+        // sentinel applied at STORAGE time (jcode reasoning_region.rs:190
+        // contract); the markdown renderer keys dim+italic off the sentinel.
+        // NOT format_reasoning_markup: that is mode-gated for PERSISTED
+        // reasoning (Off/Current hide it); the live tail must always show.
+        let mut wrapped = String::new();
+        let parts: Vec<&str> = app.streaming_thinking.split('\n').collect();
+        let (complete, partial) = parts.split_at(parts.len().saturating_sub(1));
+        for line in complete {
+            wrapped.push_str(&crate::tui::operant_render_core::reasoning_line_markup(
+                line,
+            ));
+        }
+        if let Some(tail) = partial.first() {
+            wrapped.push_str(&crate::tui::operant_render_core::reasoning_partial_markup(
+                tail,
+            ));
+        }
+        out.push(DisplayMessage::reasoning(wrapped));
     }
     if !app.streaming_text.is_empty() {
         out.push(DisplayMessage::assistant(app.streaming_text.clone()));
@@ -177,7 +197,17 @@ fn expand_message(message: &Message) -> Vec<DisplayMessage> {
                         flush_text_acc(&mut rows, &mut text_acc, &message.role);
                         match other {
                             ContentBlock::Thinking { thinking, .. } => {
-                                rows.push(DisplayMessage::reasoning(thinking.clone()));
+                                // Committed thinking must render dim+italic like
+                                // the live stream: wrap through the shared
+                                // reasoning markup (sentinel-wrapped lines) —
+                                // the markdown renderer keys dim+italic off the
+                                // sentinel. Raw text renders as plain body text
+                                // (glitch 3, 2026-10-12).
+                                rows.push(DisplayMessage::reasoning(
+                                    crate::tui::operant_app::session::format_reasoning_markup(
+                                        thinking,
+                                    ),
+                                ));
                             }
                             ContentBlock::SystemAPIError { message, .. } => {
                                 rows.push(DisplayMessage::error(message.clone()));
@@ -303,7 +333,17 @@ mod tests {
         let rows = display_messages(&app);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].role, "reasoning");
-        assert_eq!(rows[0].content, "let me think");
+        // Committed thinking is stored sentinel-wrapped (glitch 3,
+        // 2026-10-12): the markdown renderer keys dim+italic off
+        // REASONING_SENTINEL; raw text rendered as plain body text.
+        assert_eq!(
+            rows[0].content,
+            format!(
+                "*{}let me think{}*  \n\n",
+                crate::tui::operant_render_core::REASONING_SENTINEL,
+                crate::tui::operant_render_core::REASONING_SENTINEL
+            )
+        );
         assert_eq!(rows[1].role, "assistant");
         assert_eq!(rows[1].content, "answer");
     }
@@ -451,7 +491,16 @@ mod tests {
         let rows = display_messages(&app);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[1].role, "reasoning");
-        assert_eq!(rows[1].content, "pondering");
+        // The live thinking tail is stored sentinel-wrapped too (same
+        // contract as committed rows; trailing partial carries no \n).
+        assert_eq!(
+            rows[1].content,
+            format!(
+                "*{}pondering{}*",
+                crate::tui::operant_render_core::REASONING_SENTINEL,
+                crate::tui::operant_render_core::REASONING_SENTINEL
+            )
+        );
         assert_eq!(rows[2].role, "assistant");
         assert_eq!(rows[2].content, "so far");
     }

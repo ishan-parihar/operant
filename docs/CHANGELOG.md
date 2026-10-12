@@ -542,6 +542,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-779 — glitch 3 fixed: thinking text now renders dim+italic
+  (shaded) in BOTH the live stream and committed history.** Root cause:
+  the adapter stored `streaming_thinking` and committed
+  `ContentBlock::Thinking` rows RAW; the markdown renderer keys dim+italic
+  off the REASONING_SENTINEL, so unmarked thinking rendered as plain body
+  text. Live tail now wraps complete lines via `reasoning_line_markup` and
+  the trailing partial via `reasoning_partial_markup` (no mode gating —
+  the live tail always shows); committed rows route through the
+  previously-dead-on-this-path `format_reasoning_markup` (mode-gated:
+  Off/Current hide persisted reasoning, matching the reload path's
+  existing semantics). Both adapter tests pinned to the sentinel
+  contract; style goldens reshaped (C8C8C3 plain → 646464+italic dim),
+  re-proven deterministic, corpus 0-drift. Suite 1750/0.
 - **iter-778 — post-P4-2 remaining-gaps outline** (`docs/plan-2026-10-12-tui-remaining-gaps-outline.md`):
   all four live complaints now closed; the queue reduces to the 62
   fall-through commands (four honest tiers: wire-only aliases, port-decision

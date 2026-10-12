@@ -1356,7 +1356,7 @@ pub const DEFAULT_VISIBLE_COMPACTED_HISTORY_MESSAGES: usize = 64;
 ///   reasoning is hidden on re-render (the live block already streamed and was
 ///   discarded once the model answered), matching the ephemeral live behavior.
 /// - `Full`: every reasoning line is shown (classic behavior).
-fn format_reasoning_markup(text: &str) -> String {
+pub(in crate::tui) fn format_reasoning_markup(text: &str) -> String {
     if text.trim().is_empty() {
         return String::new();
     }
