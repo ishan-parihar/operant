@@ -372,12 +372,10 @@ impl App {
                 // recovery land in the same frame.
                 self.restore_failed_input_to_composer();
                 let err_msg = format!("Error: {}", error);
-                self.push_assistant_message(err_msg.clone());
+                // Single source of truth per event (P4-2 spec step 4): the
+                // inline Error card is THE transcript surface — no duplicate
+                // assistant row, no modal. The status line carries recovery.
                 self.push_notice(NotificationKind::Error, err_msg);
-                // The restore notice deliberately lands LAST: the error is
-                // in the transcript card and the assistant row; the status
-                // line's job after a failed turn is telling the user their
-                // text is back in the composer.
                 self.set_status_notice("Prompt restored to the composer — the turn failed.");
             }
 
