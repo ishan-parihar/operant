@@ -18,8 +18,14 @@
 //! respects the runtime toggle (default ON; env `OPERANT_REDACT_SECRETS=0`
 //! or [`set_redact_enabled`] can disable it, mirroring hermes's
 //! `HERMES_REDACT_SECRETS`).
+//!
+//! Also carries the PII id-hashing helpers (`redact_id`,
+//! [`redact_chat_id`]) — folded here from the former one-caller `pii.rs`
+//! (iter-781): hashing IDs is display-time redaction, same family as
+//! `mask_secret`.
 
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,6 +90,21 @@ pub fn mask_secret(value: &str, head: usize, tail: usize, floor: usize) -> Strin
     out.push_str("...");
     out.extend(chars[n - tail_n..].iter());
     out
+}
+
+/// Redact a user ID to a privacy-safe hash prefix.
+pub fn redact_id(raw_id: &str) -> String {
+    let hash = Sha256::digest(raw_id.as_bytes());
+    format!("user_{}", &hex::encode(hash)[..12])
+}
+
+/// Redact a chat/channel ID to a privacy-safe hash prefix.
+pub fn redact_chat_id(raw_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"chat:");
+    hasher.update(raw_id.as_bytes());
+    let hash = hasher.finalize();
+    format!("chat_{}", &hex::encode(hash)[..12])
 }
 
 /// Compiled regexes applied in order. Each captures the full secret span;
@@ -453,6 +474,21 @@ pub fn redact_api_message_content(message: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_id_deterministic() {
+        let a = redact_id("12345");
+        let b = redact_id("12345");
+        assert_eq!(a, b);
+        assert!(a.starts_with("user_"));
+        assert_ne!(redact_id("12345"), redact_id("67890"));
+    }
+
+    #[test]
+    fn redact_chat_id_prefix() {
+        let a = redact_chat_id("group_abc");
+        assert!(a.starts_with("chat_"));
+    }
 
     #[test]
     fn mask_secret_preserves_head_tail() {

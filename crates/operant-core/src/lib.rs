@@ -94,7 +94,6 @@ pub mod observer;
 pub mod org;
 pub mod parser;
 pub mod persistence_seam;
-pub mod pii;
 pub mod platform;
 pub mod plugins;
 pub mod pool_adapter;

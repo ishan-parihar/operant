@@ -582,7 +582,7 @@ impl MemoryManager {
         block
     }
 
-    /// Search memories by content or tags
+    /// Search memories by id, content, or tags
     pub async fn search(&self, query: &str) -> Vec<MemoryBlock> {
         let query_lower = query.to_lowercase();
         let memories = self.long_term.read().await;
@@ -590,7 +590,8 @@ impl MemoryManager {
         memories
             .values()
             .filter(|m| {
-                m.content.to_lowercase().contains(&query_lower)
+                m.id.to_lowercase().contains(&query_lower)
+                    || m.content.to_lowercase().contains(&query_lower)
                     || m.tags
                         .iter()
                         .any(|t| t.to_lowercase().contains(&query_lower))
@@ -845,6 +846,24 @@ mod tests {
 
         let results = manager.search("mode").await;
         assert_eq!(results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_search_matches_id() {
+        // iter-780: `operant memory search <id>` returned nothing — search
+        // only matched content/tags. IDs are the handle `list` shows, so
+        // they must match too.
+        let manager = MemoryManager::new();
+        manager
+            .store(MemoryBlock::new(
+                "ponytail_smoke_001",
+                "fact",
+                "unrelated content here",
+            ))
+            .await;
+        let results = manager.search("ponytail_smoke").await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "ponytail_smoke_001");
     }
 
     #[tokio::test]

@@ -71,8 +71,16 @@ pub enum ContextSubcommand {
 pub async fn handle_context_command(config: &AppConfig, cmd: ContextSubcommand) -> Result<()> {
     match cmd {
         ContextSubcommand::Status => {
-            let engine = engine_from_config(config)?;
-            print!("{}", status_report(&engine)?);
+            // Compact (default) has no DAG to inspect — report the live
+            // session store instead of erroring (iter-780: `context status`
+            // failed out of the box with `expected "lcm"`). LCM keeps the
+            // full DAG report.
+            if config.agent.context_engine.as_str() == "lcm" {
+                let engine = engine_from_config(config)?;
+                print!("{}", status_report(&engine)?);
+            } else {
+                print!("{}", compact_status_report(config)?);
+            }
         }
         ContextSubcommand::Recall {
             query,
@@ -245,6 +253,22 @@ fn status_report(engine: &LcmContextEngine) -> Result<String> {
             newest.0, newest.1, nodes
         ));
     }
+    Ok(out)
+}
+
+/// Compact-engine status: no DAG exists, so report the live session store
+/// (message rows + active sessions). Keeps `context status` useful on the
+/// default engine instead of erroring (iter-780).
+fn compact_status_report(config: &AppConfig) -> Result<String> {
+    let db =
+        operant_core::database::Database::init(config.database_path.clone())
+            .context("Failed to open database")?;
+    let sessions = db.list_sessions(10_000).unwrap_or_default();
+    let mut out = String::new();
+    out.push_str("Compact context engine (deterministic decay + eviction)\n");
+    out.push_str(&format!("  db path     : {}\n", config.database_path.display()));
+    out.push_str(&format!("  sessions    : {}\n", sessions.len()));
+    out.push_str("  lossless DAG : off (set agent.context_engine = \"lcm\" for DAG status)\n");
     Ok(out)
 }
 

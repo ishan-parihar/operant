@@ -1721,7 +1721,7 @@ fn build_session_context(
     ));
     ctx.push_str(&format!(
         "Channel: {}\n",
-        operant_core::pii::redact_chat_id(channel_id)
+        operant_core::redaction::redact_chat_id(channel_id)
     ));
     if let Some(tid) = thread_id {
         ctx.push_str(&format!("Topic/thread: {tid}\n"));
