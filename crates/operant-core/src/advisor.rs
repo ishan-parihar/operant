@@ -204,6 +204,7 @@ pub fn spawn_advisor(
             if messages.len() <= cursor {
                 // No new material since the last review (loop guard's other
                 // face: same turn re-emitted, or snapshot raced).
+                tracing::trace!("advisor: no new material (cursor {cursor})");
                 continue;
             }
             let delta = &messages[cursor.min(messages.len())..];
@@ -240,13 +241,28 @@ pub fn spawn_advisor(
             .await
             {
                 Ok(Ok(r)) => r,
-                _ => continue, // advisory side turn: degrade to silence
+                Ok(Err(e)) => {
+                    // Advisory side turn: degrade to silence, never block the
+                    // session — but say WHY (route flakes are the top silent
+                    // kill for the advisor chain; without this line the E2E
+                    // symptom is just "no note arrived").
+                    tracing::warn!(error = %e, model = %advisor_model, "advisor side-call failed");
+                    continue;
+                }
+                Err(_) => {
+                    tracing::warn!(model = %advisor_model, "advisor side-call timed out (120s)");
+                    continue;
+                }
             };
             let text = reply
                 .choices
                 .iter()
                 .find_map(|c| c.message.content.clone())
                 .unwrap_or_default();
+            if text.trim().is_empty() {
+                tracing::debug!(model = %advisor_model, "advisor reply was empty — nothing to extract");
+                continue;
+            }
             for note in extract_notes(&text) {
                 if let Some(hazard) = quarantine_hazard(&note) {
                     tracing::warn!(
