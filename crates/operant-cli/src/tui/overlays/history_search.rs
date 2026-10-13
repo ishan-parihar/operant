@@ -11,23 +11,13 @@
 // ============================================================================
 
 // ---------------------------------------------------------------------------
-// HistoryEntry — wrapper with optional timestamp
+// HistoryEntry
 // ---------------------------------------------------------------------------
 
-pub(crate) fn current_unix_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-/// A single history entry with an optional Unix timestamp and pinned state.
+/// A single history entry and its pinned state.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub text: String,
-    /// Unix timestamp (seconds since epoch) when this entry was recorded.
-    /// `None` for legacy entries without timestamps.
-    pub timestamp: Option<u64>,
     /// Whether this entry has been pinned by the user.  Pinned entries always
     /// appear at the top of the history overlay list and are persisted to
     /// `~/.operant/history_pins.json`.
@@ -35,31 +25,11 @@ pub struct HistoryEntry {
 }
 
 impl HistoryEntry {
-    /// Create a legacy entry without a timestamp.
+    /// An unpinned entry.
     pub fn legacy(text: String) -> Self {
         Self {
             text,
-            timestamp: None,
             pinned: false,
-        }
-    }
-
-    /// Human-readable relative time: "just now", "2m ago", "3h ago", "2d ago", etc.
-    pub fn relative_time(&self) -> String {
-        let ts = match self.timestamp {
-            None => return String::new(),
-            Some(t) => t,
-        };
-        let now = current_unix_secs();
-        let delta = now.saturating_sub(ts);
-        if delta < 60 {
-            "just now".to_string()
-        } else if delta < 3600 {
-            format!("{}m ago", delta / 60)
-        } else if delta < 86400 {
-            format!("{}h ago", delta / 3600)
-        } else {
-            format!("{}d ago", delta / 86400)
         }
     }
 }

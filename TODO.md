@@ -16,10 +16,10 @@ in `## Review`, which autonomous mode never touches.
 - Large pastes reach the model, not their placeholder (iter-800)
 - Copy is clean document text: logical lines, no gutters, no tool rows (iter-801)
 - Copy carries no chrome: system cards rejoin; code, quote, table as text (iter-802)
-- Tool-loop guardrails warn the model and stop the turn cleanly (iter-804)
-- Selection highlights only the text a copy carries (iter-805)
-- oh-my-pi shortcuts, conflict-checked; `[tui] external_editor` (iter-806)
-- Essential commands wired (`/compact`, `/cancel`, `/transcript`, `/changelog`, `/refresh-model-list`, `/auth`, `/goals`); jcode-only commands removed (iter-807)
+- Tool-loop guardrails warn the model and stop the turn cleanly (iter-805)
+- Selection highlights only the text a copy carries (iter-806)
+- oh-my-pi shortcuts, conflict-checked; `[tui] external_editor` (iter-807)
+- Essential commands wired (`/compact`, `/cancel`, `/transcript`, `/changelog`, `/refresh-model-list`, `/auth`, `/goals`); jcode-only commands removed (iter-808)
 
 ## Pending
 

@@ -2166,7 +2166,7 @@ fn scroll_bookmark_should_toggle_and_restore() {
     app.auto_scroll = false;
     paint_frame_at_top(&mut app, 42);
 
-    // Alt+G (Ctrl+G is the external editor since iter-806).
+    // Alt+G (Ctrl+G is the external editor since iter-807).
     app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::ALT));
     assert_eq!(app.scroll_offset, 42, "first press only arms");
     assert!(

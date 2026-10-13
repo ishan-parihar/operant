@@ -124,6 +124,11 @@ PINNED_ENV = {
     # Merged into disabled_animation_names() at render time; real users keep
     # the empty default (all animations on).
     "OPERANT_DISABLED_ANIMATIONS": "signal,prompt_entry",
+    # The performance tier is auto-detected from host load; under a loaded
+    # machine it drops to "reduced" and the header gains `perf:reduced`, so
+    # every golden flaked with the build load around it. Pinned to the tier
+    # the goldens were captured at (perf.rs honours OPERANT_PERF_TIER first).
+    "OPERANT_PERF_TIER": "full",
     # Fixed, not inherited: see the PATH note above for why this is the pin
     # that decides whether the corpus is reproducible at all.
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

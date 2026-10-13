@@ -20,7 +20,7 @@
  ~
 
  Trying a tool that will fail.
-   ✓ shell · 3 tok
+   ✗ shell · 4 tok [Alt] [⇧] [S]
 
  The shell command exited 3.
 

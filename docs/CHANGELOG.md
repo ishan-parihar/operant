@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **iter-806 — TUI shortcuts (oh-my-pi parity), conflict-checked.**
+- **iter-807 — TUI shortcuts (oh-my-pi parity), conflict-checked.**
   `Ctrl+G` edits the prompt in an external editor, set by the new
   `[tui] external_editor` (falls back to `$VISUAL`, `$EDITOR`, `vi`). The scroll
   bookmark moved to `Alt+G`. `Alt+P` cycles the configured models (`model` +
@@ -487,7 +487,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **iter-805 — TUI selection highlights only the text a copy carries.** Two
+- **iter-806 — TUI selection highlights only the text a copy carries.** Two
   painters ran: jcode's line-level `highlight_line_selection` (text columns
   only) was handed SCREEN columns, and a post-render pass then repainted every
   selected row edge to edge, lighting up the `1›` gutter, padding and tool
@@ -498,7 +498,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a copied answer no longer carries them. Table cells that wrap merge
   back into their row instead of becoming extra TSV rows.
 
-- **iter-804 — agentic core: tool-loop guardrails warn the MODEL and stop the
+- **iter-805 — agentic core: tool-loop guardrails warn the MODEL and stop the
   turn cleanly; no guardrail text in answers.** Warnings were emitted as
   answer `Content`, so they glued onto the reply, and the model never saw them,
   which is why it kept looping. They now ride the tool result the model reads
@@ -645,7 +645,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **iter-807 — essential commands wired, jcode-only commands removed,
+- **iter-808 — essential commands wired, jcode-only commands removed,
   autonomous ledger restored.** These had been registered but replied "not
   wired": `/compact` (folds the agent's stored history with the store-safe
   micro-compaction, `OperantAgent::compact_history_now`; recent turns stay

@@ -11,23 +11,18 @@
 │    /swarm-prompt  Open the active swarm routing prompt in your editor                                                │
 │    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)                             │
 │    /fast [on|off|status|default ...]  Toggle fast mode                                                               │
-│    /transport <mode>  Set connection transport (auto|https|websocket)                                                │
-│    /alignment [status|centered|left]  Show or persist text alignment preference                                      │
 │    /compact-notifications [status|on|off]  Collapse swarm/file-activity notifications to one line                    │
 │    /show-agentgrep-output [status|on|off]  Render full agentgrep search output inline in chat                        │
 │    /config  Show active configuration                                                                                │
 │    /config init  Create default config file                                                                          │
 │    /config edit  Open config in $EDITOR                                                                              │
 │    /voice  Voice input: speak, then send (Ctrl+Space)                                                                │
-│    /dictate  Run configured external dictation                                                                       │
 │    /git [status]  Show branch and working tree status for the repo                                                   │
 │    /context  Show the full session context snapshot                                                                  │
 │    /skills  Show loaded skills and operant-endorsed recommendations                                                  │
 │    /info  Show session info and token usage                                                                          │
 │    /keys  Show keybinding conflicts with your terminal/OS                                                            │
-│    /reset usage limits openai  Review a banked reset, then confirm or cancel                                         │
 │    /usage  Show connected provider usage limits                                                                      │
-│    /support  Email support with diagnostics prefilled                                                                │
 │    /version  Show version and build details                                                                          │
 │    /changelog  Show recent changes in this build                                                                     │
 │                                                                                                                      │
@@ -37,4 +32,9 @@
 │                                                                                                                      │
 │    /clear  Clear conversation and start fresh                                                                        │
 │    /compact  Summarize old messages to free context                                                                  │
+│    /rewind  Show numbered history, /rewind N to rewind                                                               │
+│    /fix  Attempt recovery when model cannot continue                                                                 │
+│    /plan [goal]  Draft a plan-only proposal as a plan card (no edits)                                                │
+│    /improve  Autonomously improve the repo until returns diminish                                                    │
+│    /improve resume  Resume the last saved improve loop/plan                                                          │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────────────────────────┘

@@ -200,10 +200,6 @@ impl OperantAgent {
         self.conversation.read().await.clone()
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Manual compaction (`/compact`): fold the stored conversation's older
     /// completed exchanges with the same store-safe micro-compaction the
     /// soft threshold uses (`context_management::micro_compact`) — the
@@ -258,6 +254,10 @@ impl OperantAgent {
     /// global slot. A session that was already handed back to the store on a
     /// retarget keeps its own transcript, so two sessions can no longer wipe
     /// each other by sharing one agent.
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     pub async fn clear_history(&self) {
         // Notify memory provider of session end before clearing.
         // This fires at actual session boundaries so the graph captures
