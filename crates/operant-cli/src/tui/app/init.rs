@@ -260,6 +260,7 @@ impl App {
             permission_rx: None,
             pending_permission_response_tx: None,
             run_complete_rx: None,
+            run_error_surfaced: false,
             agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,

@@ -486,18 +486,19 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition"
     )]
-    async fn observe_guardrail_results(&self, results: &[ToolResult]) {
+    async fn observe_guardrail_results(&self, results: &mut [ToolResult]) {
         use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
 
         // Phase 1 (sync, under the lock): classify every result. The lock
         // is dropped before any await so no other arm can block on it.
-        let mut notices: Vec<(String, GuardrailDecision, Option<RepeatPattern>)> = Vec::new();
+        let mut notices: Vec<(usize, String, GuardrailDecision, Option<RepeatPattern>)> =
+            Vec::new();
         {
             let mut g = self
                 .tool_guardrails
                 .lock()
                 .expect("tool_guardrails lock poisoned");
-            for r in results {
+            for (idx, r) in results.iter().enumerate() {
                 if r.content
                     .starts_with(crate::tool_guardrails::SKIP_MESSAGE_PREFIX)
                 {
@@ -506,15 +507,18 @@ impl OperantAgent {
                 let decision = g.observe_result(&r.name, &r.content, r.success);
                 let is_halt = matches!(decision, GuardrailDecision::Halt(_));
                 let pattern = g.last_pattern();
-                notices.push((r.name.clone(), decision, pattern));
+                notices.push((idx, r.name.clone(), decision, pattern));
                 if is_halt {
                     break;
                 }
             }
         }
 
-        // Phase 2 (async, lock-free): surface warnings and halts.
-        for (name, decision, pattern) in notices {
+        // Phase 2 (async, lock-free). hermes `_append_guardrail_observation`:
+        // the guidance rides the tool RESULT the model reads next — a warning
+        // the model never sees cannot change its course. The operator gets a
+        // Notice (a system annotation), never answer text.
+        for (idx, name, decision, pattern) in notices {
             match decision {
                 GuardrailDecision::Allow | GuardrailDecision::Skip => {}
                 GuardrailDecision::Warn => {
@@ -523,28 +527,29 @@ impl OperantAgent {
                         pattern = ?pattern,
                         "Post-result guardrail ladder — warning model"
                     );
-                    self.emit(AgentEvent::Content {
-                        text: crate::tool_guardrails::pattern_warning_message(
-                            &name,
-                            pattern.as_ref(),
-                        ),
-                    })
-                    .await;
+                    let message =
+                        crate::tool_guardrails::pattern_warning_message(&name, pattern.as_ref());
+                    append_guidance(&mut results[idx], "Tool loop warning", &message);
+                    self.emit(AgentEvent::Notice { text: message }).await;
                 }
                 GuardrailDecision::Halt(summary) => {
                     warn!(
                         tool = %name,
                         "Guardrail ladder exhausted — halting the turn: {summary}"
                     );
-                    // Same machinery as a user Ctrl-C / steer request-stop:
-                    // the loop's interrupt checks stop the turn after this
-                    // iteration; the summary lands as the final content.
-                    self.interrupt_flag.trigger();
-                    self.emit(AgentEvent::Content { text: summary }).await;
+                    append_guidance(&mut results[idx], "Tool loop hard stop", &summary);
+                    if let Ok(mut halt) = self.guardrail_halt.lock() {
+                        halt.get_or_insert(summary);
+                    }
                     return;
                 }
             }
         }
+    }
+
+    /// Take the guardrail halt recorded this iteration, if any.
+    pub(crate) fn take_guardrail_halt(&self) -> Option<String> {
+        self.guardrail_halt.lock().ok().and_then(|mut h| h.take())
     }
 
     /// Guardian-LLM classification for one flagged tool call (hermes
@@ -699,6 +704,11 @@ impl OperantAgent {
         // ── Phase 1: Pre-flight (sequential) ────────────────────────────
         let mut pending: Vec<(usize, ToolCall, serde_json::Value)> = Vec::new();
         let mut early_results: Vec<Option<ToolResult>> = vec![None; tool_calls.len()];
+        // Pre-flight rejections build results with no name; the guardrail
+        // keys its ladders on the name, so every rejection used to pool under
+        // tool "" (2026-10-13: "Tool '' has failed 12 times"). Stamped back
+        // from the call at collection.
+        let call_names: Vec<String> = tool_calls.iter().map(|c| c.function.name.clone()).collect();
         // T6: within-batch dedupe (hermes `_deduplicate_tool_calls`) — only
         // the first occurrence of each (tool, arguments) pair in a single
         // assistant message executes; exact duplicates are skipped with a
@@ -713,6 +723,20 @@ impl OperantAgent {
                 early_results[idx] = Some(ToolResult::error(
                     &tool_call.id,
                     "Skipped: interrupted by user (Ctrl-C)".to_string(),
+                ));
+                continue;
+            }
+
+            // A call with no function name cannot run; say so plainly instead
+            // of a "tool not found" for the empty string.
+            if tool_call.function.name.trim().is_empty() {
+                warn!("Tool call with an empty function name — refused");
+                early_results[idx] = Some(ToolResult::error_with_name(
+                    "(unnamed)",
+                    &tool_call.id,
+                    "This tool call had no function name, so nothing ran. Re-issue it \
+                     with the exact name of the tool you meant to call."
+                        .to_string(),
                 ));
                 continue;
             }
@@ -1316,8 +1340,8 @@ impl OperantAgent {
             // All tools were handled in pre-flight (errors/blocked/denied)
             // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
             // future was cancelled. Use flatten() to gracefully skip None.)
-            let results: Vec<ToolResult> = early_results.into_iter().flatten().collect();
-            self.observe_guardrail_results(&results).await;
+            let mut results = stamp_result_names(early_results, &call_names);
+            self.observe_guardrail_results(&mut results).await;
             return Ok(results);
         }
 
@@ -1507,8 +1531,8 @@ impl OperantAgent {
         // Collect results in original order
         // (iter-141 — fixed A20/A21: was .unwrap() which panics if a
         // future was cancelled. Use flatten() to gracefully skip None.)
-        let results: Vec<ToolResult> = early_results.into_iter().flatten().collect();
-        self.observe_guardrail_results(&results).await;
+        let mut results = stamp_result_names(early_results, &call_names);
+        self.observe_guardrail_results(&mut results).await;
         Ok(results)
     }
 
@@ -1552,4 +1576,35 @@ fn normalized_tool_args(tool_call: &ToolCall) -> String {
     } else {
         tool_call.function.arguments.clone()
     }
+}
+
+/// Append guardrail guidance to the part of a tool result the model reads:
+/// the content of a success, the error text of a failure.
+fn append_guidance(result: &mut ToolResult, label: &str, message: &str) {
+    let note = format!("\n\n[{label}: {message}]");
+    if result.success {
+        result.content.push_str(&note);
+    } else {
+        let error = result.error.get_or_insert_with(|| "Error".to_string());
+        error.push_str(&note);
+    }
+}
+
+/// Collect results in call order, stamping each nameless result with its
+/// call's name (empty names become "(unnamed)").
+fn stamp_result_names(early: Vec<Option<ToolResult>>, call_names: &[String]) -> Vec<ToolResult> {
+    early
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, result)| {
+            let mut result = result?;
+            if result.name.is_empty() {
+                result.name = match call_names.get(idx).map(|n| n.trim()) {
+                    Some(name) if !name.is_empty() => name.to_string(),
+                    _ => "(unnamed)".to_string(),
+                };
+            }
+            Some(result)
+        })
+        .collect()
 }

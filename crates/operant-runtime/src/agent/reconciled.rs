@@ -1482,6 +1482,7 @@ fn translate_event(event: &AgentEvent, sink: &mut TurnSink) -> Option<TurnEvent>
         | AgentEvent::Error { .. }
         | AgentEvent::RateLimitNotice { .. }
         | AgentEvent::BackgroundReview { .. }
+        | AgentEvent::Notice { .. }
         | AgentEvent::AsyncDelegation { .. }
         | AgentEvent::CompactionStarted { .. }
         | AgentEvent::CompactionCompleted { .. }

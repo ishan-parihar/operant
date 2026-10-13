@@ -296,6 +296,13 @@ pub enum AgentEvent {
         /// The review summary text.
         summary: String,
     },
+    /// A runtime notice for the operator — NOT model output (e.g. a tool-loop
+    /// guardrail warning). Frontends render it as a system annotation; it must
+    /// never be appended to the assistant's answer text.
+    Notice {
+        /// The notice text.
+        text: String,
+    },
     /// A background delegation completed (hermes `async_delegation.py` parity).
     /// Emitted from the spawned background child task so the CLI/TUI can
     /// surface the outcome to the user.
@@ -512,6 +519,11 @@ pub struct OperantAgent {
     /// retry budget measures time since PROGRESS, so healthy streaming time
     /// never counts against the retries a later drop earns.
     stream_progress_at: std::sync::Mutex<Option<std::time::Instant>>,
+    /// Set when the tool-loop guardrail halts the turn (hermes
+    /// `_tool_guardrail_halt_decision`): the run loop ends the turn with a
+    /// controlled reply after this iteration's results are recorded. Never
+    /// the user-interrupt flag — a halt is the agent's decision, not Ctrl-C.
+    guardrail_halt: std::sync::Mutex<Option<String>>,
     /// R4: per-turn tracker of identical tool-call repeats (hermes
     /// tool_guardrails.py parity). Guards against retry storms where the
     /// model calls the same tool with identical args repeatedly. Reset at
@@ -2873,6 +2885,114 @@ mod tests {
             }
             _ => panic!("Expected ToolPermissionRequest variant"),
         }
+    }
+
+    /// Agent wired to an event channel, for tests that inspect emissions.
+    fn agent_with_event_rx() -> (OperantAgent, mpsc::Receiver<AgentEvent>) {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let (event_tx, event_rx) = mpsc::channel::<AgentEvent>(256);
+        let db = Database::init(std::env::temp_dir().join(format!(
+            "test_guardrail_{}_{}.sqlite",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )))
+        .unwrap();
+        let agent = OperantAgent::with_events(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+            event_tx,
+        );
+        (agent, event_rx)
+    }
+
+    fn call(id: usize, name: &str) -> ToolCall {
+        ToolCall {
+            id: format!("call_{id}"),
+            function: crate::client::ToolCallFunction {
+                name: name.to_string(),
+                arguments: format!("{{\"n\":{id}}}"),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn guardrail_warnings_reach_the_model_and_halts_are_not_interrupts() {
+        // 2026-10-13 live paste: "⚠ Tool 'process' has failed 8 times…" was
+        // emitted as answer Content (glued into the reply, never seen by the
+        // model) and the halt fired the USER interrupt flag ("Interrupted by
+        // user" ×2). hermes `_append_guardrail_observation` parity: guidance
+        // rides the tool result; the operator gets a Notice; a halt is
+        // recorded for a controlled turn end.
+        let (agent, mut rx) = agent_with_event_rx();
+        let mut last = Vec::new();
+        for i in 0..crate::tool_guardrails::FAILURE_HALT_THRESHOLD {
+            last = agent
+                .execute_tools(vec![call(i, "zz_no_such_tool")])
+                .await
+                .unwrap();
+            assert_eq!(
+                last[0].name, "zz_no_such_tool",
+                "preflight results carry the call's name"
+            );
+            if i + 1 == crate::tool_guardrails::FAILURE_WARN_THRESHOLD {
+                let error = last[0].error.clone().unwrap_or_default();
+                assert!(
+                    error.contains("[Tool loop warning:"),
+                    "warning rides the result: {error}"
+                );
+            }
+        }
+        let error = last[0].error.clone().unwrap_or_default();
+        assert!(error.contains("[Tool loop hard stop:"), "{error}");
+        assert!(
+            !agent.interrupt_flag.is_triggered(),
+            "a halt is not a user interrupt"
+        );
+        assert!(
+            agent.take_guardrail_halt().is_some(),
+            "halt recorded for the run loop"
+        );
+        let mut notices = 0;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::Content { text } => {
+                    panic!("guardrail text leaked as answer content: {text}")
+                }
+                AgentEvent::Notice { .. } => notices += 1,
+                _ => {}
+            }
+        }
+        assert!(notices >= 1, "the operator is told via Notice");
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_without_a_name_is_refused_by_name() {
+        let (agent, _rx) = agent_with_event_rx();
+        let results = agent.execute_tools(vec![call(0, "  ")]).await.unwrap();
+        assert_eq!(results[0].name, "(unnamed)");
+        assert!(!results[0].success);
+        assert!(
+            results[0]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("no function name"))
+        );
+    }
+
+    #[test]
+    fn guardrail_halt_reply_is_plain_language() {
+        let reply = super::run::guardrail_halt_reply(
+            "Stopping: `process` has failed 12 times in a row this turn with no progress.",
+        );
+        assert!(reply.starts_with("I stopped this turn"));
+        assert!(reply.contains("`process` has failed 12 times"));
+        assert!(!reply.contains("Stopping:"));
     }
 
     // ── R2 loop-budget helpers (request_timeout ceiling + reasoning floor) ──

@@ -484,6 +484,9 @@ impl OperantAgent {
         // time never counts — 2026-10-13: a stream cut after 60s of output
         // gave up with "0 retries over 60s".
         let mut last_stream_failure: Option<std::time::Instant> = None;
+        // A halt recorded by an earlier turn that ended on another path must
+        // not end this one.
+        let _ = self.take_guardrail_halt();
         // Plan 006: empty-content retry counter is the shared
         // EmptyResponseCounter from agent/turn_rules.rs — same logic the
         // runtime Agent uses (no more silent divergence on max_retries).
@@ -2082,6 +2085,38 @@ impl OperantAgent {
                     if let Some(footer) = file_mutation_verifier_footer(&messages) {
                         tracing::warn!(footer = %footer, "File mutation advisory");
                     }
+
+                    // ── Tool-loop guardrail halt (hermes controlled halt) ──
+                    // The results (with the hard-stop guidance) are recorded
+                    // above, so history stays valid; the turn then ends with
+                    // a plain reply — a normal turn end, not an error and not
+                    // a user interrupt.
+                    if let Some(summary) = self.take_guardrail_halt() {
+                        let reply = Message::assistant(guardrail_halt_reply(&summary));
+                        messages.push(reply.clone());
+                        self.add_message(reply.clone()).await;
+                        warn!(
+                            "{}",
+                            TurnDiagnostics {
+                                exit_reason: TurnExitReason::CircuitBreaker,
+                                model: self.model(),
+                                api_calls: iteration,
+                                max_iterations: self.config.max_iterations,
+                                budget_used: self.iteration_budget.used(),
+                                budget_max: self.iteration_budget.max_total(),
+                                tool_turns: total_tool_calls,
+                                response_len: reply.content.len(),
+                                session_id: session_id.clone(),
+                            }
+                            .log_message()
+                        );
+                        self.emit(AgentEvent::Done {
+                            message: reply.clone(),
+                            reason: TurnExitReason::CircuitBreaker,
+                        })
+                        .await;
+                        return Ok(reply);
+                    }
                 }
                 Err(e) => {
                     // ── Turn diagnostics (error exit) ─────────────────────
@@ -2573,4 +2608,14 @@ impl OperantAgent {
 
         Ok(messages)
     }
+}
+
+/// The user-facing reply for a guardrail halt (hermes
+/// `_toolguard_controlled_halt_response`): what stopped, and how to go on.
+pub(super) fn guardrail_halt_reply(summary: &str) -> String {
+    let cause = summary.strip_prefix("Stopping: ").unwrap_or(summary);
+    format!(
+        "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
+         Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
+    )
 }

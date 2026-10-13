@@ -307,17 +307,21 @@ impl App {
         match rx.try_recv() {
             Ok(result) => {
                 self.is_streaming = false;
-                if let Err(e) = result {
+                if let Err(e) = result
+                    && !self.run_error_surfaced
+                {
                     self.handle_agent_event(AgentEvent::Error {
                         error: e.user_message(),
                     });
                 }
+                self.run_error_surfaced = false;
                 self.run_complete_rx = None;
                 self.agent_task_handle.take(); // Clear completed handle.
                 true
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                 self.is_streaming = false;
+                self.run_error_surfaced = false;
                 self.run_complete_rx = None;
                 self.agent_task_handle.take(); // Clear completed handle.
                 true

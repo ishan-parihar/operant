@@ -515,6 +515,10 @@ pub struct App {
     pub pending_permission_response_tx:
         Option<tokio::sync::oneshot::Sender<operant_core::agent::ToolPermissionResponse>>,
     pub run_complete_rx: Option<tokio::sync::oneshot::Receiver<operant_core::error::Result<()>>>,
+    /// An `AgentEvent::Error` already surfaced for the run in flight. The
+    /// core both emits the event and returns the `Err`; the completion drain
+    /// surfaces the `Err` only when no event did (one card per failure).
+    pub run_error_surfaced: bool,
     /// Handle to the background agent task. Aborted on Escape so the task
     /// actually stops instead of continuing to run in the background.
     pub agent_task_handle: Option<tokio::task::JoinHandle<()>>,

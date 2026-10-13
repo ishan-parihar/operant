@@ -474,6 +474,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-804 — agentic core: tool-loop guardrails warn the MODEL and stop the
+  turn cleanly; no guardrail text in answers.** Warnings were emitted as
+  answer `Content`, so they glued onto the reply, and the model never saw them,
+  which is why it kept looping. They now ride the tool result the model reads
+  next (hermes `_append_guardrail_observation`), and the operator gets a new
+  `AgentEvent::Notice` rendered as an annotation. A halt no longer fires the
+  user-interrupt flag ("Interrupted by user" ×2, prompt restored). It ends the
+  turn with a plain-language reply after the results are recorded. Preflight
+  rejections carry their call's name (they pooled under tool `""`), and a call
+  with no name is refused as `(unnamed)`. The TUI shows one error card per
+  failed run (the event plus the returned `Err` made two), keeps the streamed
+  partial answer on error, shows a user stop as a quiet "Turn stopped.", and
+  tool rows show `✗` for failed calls and `○` while pending (both read `✓`).
+
 - **iter-802 — TUI copy carries no chrome: system cards rejoin, code/quote/table
   copy as document text.** System and error cards are pre-wrapped by their
   renderer, so each row was its own logical line and a copied card broke

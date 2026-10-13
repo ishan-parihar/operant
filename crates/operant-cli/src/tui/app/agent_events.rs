@@ -380,12 +380,21 @@ impl App {
             }
 
             AgentEvent::Error { error } => {
+                self.run_error_surfaced = true;
                 self.is_streaming = false;
                 self.turn_state = TurnState::Idle;
                 self.spinner_verb = None;
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
+                // Keep what already streamed: the partial reply stays
+                // readable above the card instead of vanishing.
+                self.flush_streamed_assistant_message();
                 self.invalidate_transcript();
+                // A user stop is not a failure: one quiet notice, no error
+                // card, no prompt restore.
+                if is_user_interrupt(&error) {
+                    self.clear_failed_input_recovery();
+                    self.push_system_message("Turn stopped.".to_string(), SystemMessageStyle::Info);
+                    return;
+                }
                 // Give the prompt back before the error is surfaced. This is
                 // the arm the error modal is drawn from, so the message and the
                 // recovery land in the same frame.
@@ -491,6 +500,13 @@ impl App {
                 // Permission requests are drained by the dedicated permission_rx
                 // task. This event is a duplicate — skip it.
                 let _ = (tool_name, description);
+            }
+
+            AgentEvent::Notice { text } => {
+                // Runtime notices (tool-loop guardrail warnings) are status
+                // for the operator, never answer text: a system annotation
+                // between rows, not appended to the streaming answer.
+                self.push_system_message(text, SystemMessageStyle::Info);
             }
 
             AgentEvent::BackgroundReview { summary } => {
@@ -616,4 +632,13 @@ impl App {
             }
         }
     }
+}
+
+/// The core's user-interrupt error texts: the run loop's interrupt exit
+/// (`agent/run.rs`) and the in-flight abort (`agent/events.rs`), possibly
+/// wrapped as "Agent error: …" by the run-completion drain.
+fn is_user_interrupt(error: &str) -> bool {
+    error
+        .trim_start_matches("Agent error: ")
+        .starts_with("Interrupted by user")
 }

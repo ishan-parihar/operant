@@ -4049,6 +4049,9 @@ pub(crate) fn render_tool_message(
 
     let (icon, icon_color) = if is_partial_batch {
         ("⚠", rgb(214, 184, 92))
+    } else if msg.content == crate::tui::operant_model::TOOL_PENDING_PREVIEW {
+        // Queued/running: no outcome yet, so neither ✓ nor ✗.
+        ("○", rgb(150, 150, 150))
     } else if is_error {
         ("✗", rgb(220, 100, 100))
     } else {

@@ -44,7 +44,7 @@ pub(crate) mod vendor_types;
 mod wrapped_line_map;
 
 #[allow(unused_imports)]
-pub use adapter::{display_messages, live_tool_rows};
+pub use adapter::{TOOL_PENDING_PREVIEW, display_messages, live_tool_rows};
 #[allow(unused_imports)]
 pub use anchor::{
     Anchor, ContentPos, anchor_at_row, content_pos_at_row, message_row_ranges, resolve,

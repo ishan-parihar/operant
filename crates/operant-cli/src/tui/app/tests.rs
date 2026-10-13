@@ -3938,3 +3938,105 @@ fn copy_strips_code_quote_and_table_chrome() {
         "HEADSTART\n\nTool\tStatus\nenv_probe\tok\n\nfn main() {\n    println!(\"hi\");\n}\n\nquoted line\n\nTAILEND"
     );
 }
+
+fn error_cards(app: &App) -> usize {
+    app.system_annotations
+        .iter()
+        .filter(|a| a.style == SystemMessageStyle::Error)
+        .count()
+}
+
+#[test]
+fn notices_are_annotations_not_answer_text() {
+    // 2026-10-13 paste: guardrail warnings glued onto the answer.
+    use operant_core::agent::AgentEvent;
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Content {
+        text: "The answer.".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::Notice {
+        text: "⚠ Tool 'process' has failed 8 times".to_string(),
+    });
+    assert_eq!(app.streaming_text, "The answer.");
+    assert!(
+        app.system_annotations
+            .iter()
+            .any(|a| a.text.contains("has failed 8 times"))
+    );
+}
+
+#[test]
+fn one_error_card_per_failed_run_and_the_partial_answer_survives() {
+    use operant_core::agent::AgentEvent;
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.handle_agent_event(AgentEvent::Content {
+        text: "PARTIAL reply".to_string(),
+    });
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_complete_rx = Some(rx);
+    // The core emits the event AND returns the Err.
+    app.handle_agent_event(AgentEvent::Error {
+        error: "provider exploded".to_string(),
+    });
+    tx.send(Err(operant_core::error::Error::Agent(
+        "provider exploded".to_string(),
+    )))
+    .unwrap();
+    assert!(app.drain_run_complete());
+    assert_eq!(error_cards(&app), 1, "one card per failure");
+    assert!(
+        app.messages
+            .iter()
+            .any(|m| m.text_content().contains("PARTIAL reply")),
+        "the streamed partial stays in the transcript"
+    );
+}
+
+#[test]
+fn a_user_stop_is_a_quiet_notice_not_an_error() {
+    use operant_core::agent::AgentEvent;
+    let mut app = make_app();
+    app.handle_agent_event(AgentEvent::Error {
+        error: "Interrupted by user".to_string(),
+    });
+    assert_eq!(error_cards(&app), 0);
+    assert!(
+        app.system_annotations
+            .iter()
+            .any(|a| a.text == "Turn stopped.")
+    );
+}
+
+#[test]
+fn tool_rows_show_failure_and_pending_from_app_status() {
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    let block = |id: &str, status, preview: Option<&str>| ToolUseBlock {
+        id: id.to_string(),
+        name: "process".to_string(),
+        after_index: 1,
+        status,
+        output_preview: preview.map(str::to_string),
+        input_json: "{}".to_string(),
+    };
+    app.tool_use_blocks
+        .push(block("t1", ToolStatus::Error, Some("process exited")));
+    app.tool_use_blocks
+        .push(block("t2", ToolStatus::Running, None));
+    app.tool_use_blocks
+        .push(block("t3", ToolStatus::Done, Some("ok")));
+    let rows = crate::tui::operant_model::display_messages(&app);
+    let content = |id: &str| {
+        rows.iter()
+            .find(|r| r.tool_data.as_ref().is_some_and(|t| t.id == id))
+            .map(|r| r.content.clone())
+            .unwrap()
+    };
+    assert_eq!(content("t1"), "✗ process exited");
+    assert_eq!(
+        content("t2"),
+        crate::tui::operant_model::TOOL_PENDING_PREVIEW
+    );
+    assert_eq!(content("t3"), "ok");
+}

@@ -133,6 +133,7 @@ impl OperantAgent {
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
             stream_progress_at: std::sync::Mutex::new(None),
+            guardrail_halt: std::sync::Mutex::new(None),
             tool_guardrails: std::sync::Mutex::new({
                 let mut tracker = crate::tool_guardrails::ToolGuardrailTracker::new();
                 tracker.add_exempt_tools(guardrail_exempt);
@@ -212,6 +213,7 @@ impl OperantAgent {
             interrupt_flag: crate::interrupt::InterruptFlag::new(),
             thinking_timeout_hit: std::sync::atomic::AtomicBool::new(false),
             stream_progress_at: std::sync::Mutex::new(None),
+            guardrail_halt: std::sync::Mutex::new(None),
             tool_guardrails: std::sync::Mutex::new({
                 let mut tracker = crate::tool_guardrails::ToolGuardrailTracker::new();
                 tracker.add_exempt_tools(guardrail_exempt);

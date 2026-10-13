@@ -178,9 +178,34 @@ fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
     DisplayMessage::system(annotation.text.clone())
 }
 
+/// Content of a tool row whose call has not produced output yet; the
+/// renderer shows a pending icon for it instead of `✓`.
+pub const TOOL_PENDING_PREVIEW: &str = "\u{2026}";
+
 fn display_message_from_tool_block(block: &ToolUseBlock) -> DisplayMessage {
+    use crate::tui::app::ToolStatus;
+    let preview = block.output_preview.clone().unwrap_or_default();
+    // The renderer infers ✓/✗ from the content, so the app-side status has
+    // to be legible there: a failed call whose output does not read as a
+    // failure gets the `✗` marker the inference keys on (2026-10-13: every
+    // failed `process` call rendered ✓).
+    let content = match block.status {
+        ToolStatus::Error
+            if !crate::tui::operant_model::tool_display::tool_output_looks_failed(&preview) =>
+        {
+            if preview.trim().is_empty() {
+                "✗ failed".to_string()
+            } else {
+                format!("✗ {preview}")
+            }
+        }
+        status if status.is_pending() && preview.trim().is_empty() => {
+            TOOL_PENDING_PREVIEW.to_string()
+        }
+        _ => preview,
+    };
     DisplayMessage::tool(
-        block.output_preview.clone().unwrap_or_default(),
+        content,
         ToolCall {
             id: block.id.clone(),
             name: block.name.clone(),
