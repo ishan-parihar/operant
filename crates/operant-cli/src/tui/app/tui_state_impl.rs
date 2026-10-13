@@ -1005,19 +1005,35 @@ impl TuiState for App {
         use crate::tui::operant_ui::copy_selection::{
             CopySelectionPane, CopySelectionPoint, CopySelectionRange,
         };
-        // Selection points are `(col, content_line)` in scroll-stable content
-        // space (iter-672) — exactly jcode's `(abs_line, column)` model.
-        let (anchor_col, anchor_line) = self.selection_anchor?;
-        let (focus_col, focus_line) = self.selection_focus?;
-        let point = |line: usize, col: u16| CopySelectionPoint {
+        // Selection points are `(screen col, content_line)` (iter-672);
+        // jcode's range is `(abs_line, TEXT column)` with an exclusive end,
+        // so normalise and convert here — handing it screen columns shifted
+        // the highlight off the text.
+        let anchor = self.selection_anchor?;
+        let focus = self.selection_focus?;
+        let (start, end) = if (anchor.1, anchor.0) <= (focus.1, focus.0) {
+            (anchor, focus)
+        } else {
+            (focus, anchor)
+        };
+        let area_x = self.last_selectable_area.get().x;
+        let text_col = |line: usize, col: u16| {
+            crate::tui::operant_ui::chat_text_col(line, col)
+                .unwrap_or_else(|| col.saturating_sub(area_x) as usize)
+        };
+        let point = |line: usize, column: usize| CopySelectionPoint {
             pane: CopySelectionPane::Chat,
             abs_line: line,
-            column: col as usize,
+            column,
         };
         Some(CopySelectionRange {
-            start: point(anchor_line, anchor_col),
-            end: point(focus_line, focus_col),
+            start: point(start.1, text_col(start.1, start.0)),
+            end: point(end.1, text_col(end.1, end.0.saturating_add(1))),
         })
+    }
+
+    fn copy_selection_line_selectable(&self, abs_line: usize) -> bool {
+        crate::tui::render::selection::selection_line_selectable(self, abs_line)
     }
 
     fn copy_selection_status(

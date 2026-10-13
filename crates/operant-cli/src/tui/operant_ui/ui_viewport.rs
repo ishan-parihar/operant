@@ -975,6 +975,9 @@ pub(super) fn draw_messages(
 
         for abs_idx in start.abs_line.max(scroll)..=end.abs_line.min(visible_end.saturating_sub(1))
         {
+            if !app.copy_selection_line_selectable(abs_idx) {
+                continue;
+            }
             let rel_idx = abs_idx.saturating_sub(scroll);
             if let Some(line) = visible_lines.get_mut(rel_idx) {
                 let copy_start = prepared.wrapped_copy_offset(abs_idx).unwrap_or(0);

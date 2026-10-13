@@ -550,6 +550,11 @@ pub trait TuiState {
     fn copy_selection_mode(&self) -> bool;
     /// Current in-app copy selection range, if any.
     fn copy_selection_range(&self) -> Option<CopySelectionRange>;
+    /// Whether the chat selection paints (and copies) wrapped line
+    /// `abs_line`; interface rows are skipped inside text selections.
+    fn copy_selection_line_selectable(&self, _abs_line: usize) -> bool {
+        true
+    }
     /// Persistent status for in-app copy selection mode.
     fn copy_selection_status(&self) -> Option<CopySelectionStatus>;
     /// Whether the first-run onboarding empty state is being previewed in this session.

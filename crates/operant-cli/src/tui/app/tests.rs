@@ -4040,3 +4040,86 @@ fn tool_rows_show_failure_and_pending_from_app_status() {
     );
     assert_eq!(content("t3"), "ok");
 }
+
+fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::render_app(f, app))
+        .unwrap();
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn highlight_covers_only_the_text_a_copy_carries() {
+    // 2026-10-13: the selection painted every row edge to edge — the `1›`
+    // gutter, padding and tool rows lit up although copy drops them.
+    let mut app = make_app();
+    app.messages
+        .push(Message::user("PROMPTTEXT here".to_string()));
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "bash".to_string(),
+        after_index: 1,
+        status: ToolStatus::Done,
+        output_preview: Some("done".to_string()),
+        input_json: r#"{"command":"echo TOOLROW"}"#.to_string(),
+    });
+    app.messages
+        .push(Message::assistant("ANSWERTEXT body".to_string()));
+    let plain = render_buffer(&app);
+    let (p, a) = (frame_line_of("PROMPTTEXT"), frame_line_of("ANSWERTEXT"));
+    let area = app.last_selectable_area.get();
+    app.selection_anchor = Some((area.x, p));
+    app.selection_focus = Some((area.x + area.width - 1, a));
+    let lit = render_buffer(&app);
+    let row_of = |needle: &str| {
+        (0..plain.area.height)
+            .find(|&y| {
+                (0..plain.area.width)
+                    .map(|x| plain[(x, y)].symbol().to_string())
+                    .collect::<String>()
+                    .contains(needle)
+            })
+            .unwrap()
+    };
+    let highlighted = |y: u16| -> String {
+        (0..plain.area.width)
+            .filter(|&x| plain[(x, y)].style() != lit[(x, y)].style())
+            .map(|x| plain[(x, y)].symbol().to_string())
+            .collect()
+    };
+    let prompt_lit = highlighted(row_of("PROMPTTEXT"));
+    assert!(prompt_lit.contains("PROMPTTEXT"), "{prompt_lit:?}");
+    assert!(
+        !prompt_lit.contains('›'),
+        "the prompt gutter is not text: {prompt_lit:?}"
+    );
+    assert_eq!(
+        highlighted(row_of("TOOLROW")),
+        "",
+        "tool rows are not selectable"
+    );
+    assert!(highlighted(row_of("ANSWERTEXT")).contains("ANSWERTEXT"));
+}
+
+#[test]
+fn copy_merges_wrapped_table_cells_and_skips_error_cards() {
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    let long = "stored and read back successfully with timestamp ".repeat(4);
+    app.messages.push(Message::assistant(format!(
+        "TABLESTART\n\n| # | Result |\n|---|---|\n| 1 | {long}END |\n| 2 | short |"
+    )));
+    app.push_system_message("Error: CARDTEXT".to_string(), SystemMessageStyle::Error);
+    app.messages
+        .push(Message::assistant("AFTERCARD".to_string()));
+    let _ = screen_rows(&app);
+    let (a, b) = (frame_line_of("TABLESTART"), frame_line_of("AFTERCARD"));
+    let text = select_lines(&mut app, a, b);
+    assert!(
+        text.contains(&format!("1\t{long}END")),
+        "a wrapped cell stays one TSV row: {text:?}"
+    );
+    assert!(text.contains("2\tshort"));
+    assert!(!text.contains("CARDTEXT"), "error cards are UI: {text:?}");
+}
