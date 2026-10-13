@@ -474,6 +474,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-800 — TUI: large pastes reach the model.** A paste of 3+ lines
+  or more than 150 chars shows as `[Pasted ~N lines #K]` in the composer and
+  is stored in `PromptInputState.paste_contents`, but nothing read the
+  store back: the model received the placeholder text. `take()` now expands
+  every placeholder from the store before the submission leaves the
+  composer, so the turn, history and failed-turn restore all carry the
+  real text.
+
 - **iter-799 — agentic core: long streams no longer die at `timeout_secs`,
   and a drop always earns its retries.** `[client] timeout_secs` was applied
   as reqwest's *total* timeout on the streaming request, which covers the

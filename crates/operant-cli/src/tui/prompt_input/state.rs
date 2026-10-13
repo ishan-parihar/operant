@@ -112,8 +112,12 @@ impl PromptInputState {
     }
 
     /// Take the current text, clearing the input.
+    /// Large pastes are shown as placeholders; the taken text carries the
+    /// real content (2026-10-13: the store was never read, so the model got
+    /// "[Pasted ~N lines #K]").
     pub fn take(&mut self) -> String {
-        let text = self.text.clone();
+        let text = expand_paste_placeholders(&self.text, &self.paste_contents);
+        self.paste_contents.clear();
         self.clear();
         text
     }

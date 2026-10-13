@@ -48,8 +48,29 @@ pub fn handle_paste(content: &str, paste_counter: &mut u32) -> (String, Option<S
         return (content.to_string(), None);
     }
     *paste_counter += 1;
-    let placeholder = format!("[Pasted ~{} lines #{}]", line_count, paste_counter);
-    (placeholder, Some(content.to_string()))
+    (
+        paste_placeholder(content, *paste_counter),
+        Some(content.to_string()),
+    )
+}
+
+/// The composer token standing in for paste `id` (its line count is derived
+/// from the content, so the token can always be rebuilt from the store).
+fn paste_placeholder(content: &str, id: u32) -> String {
+    format!("[Pasted ~{} lines #{}]", content.lines().count(), id)
+}
+
+/// Swap every paste placeholder in `text` back for its stored content. The
+/// placeholder keeps the composer readable; the model must get the paste.
+pub fn expand_paste_placeholders(
+    text: &str,
+    contents: &std::collections::HashMap<u32, String>,
+) -> String {
+    let mut out = text.to_string();
+    for (id, content) in contents {
+        out = out.replace(&paste_placeholder(content, *id), content);
+    }
+    out
 }
 
 /// Normalize a pasted string into a filesystem path if it looks like one.

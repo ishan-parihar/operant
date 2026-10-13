@@ -218,6 +218,31 @@ fn paste_three_lines_triggers_placeholder() {
 }
 
 #[test]
+fn submitting_a_large_paste_sends_the_pasted_text_not_the_placeholder() {
+    // 2026-10-13: the placeholder reached the model verbatim — the stored
+    // paste was never read back at submit.
+    let mut state = PromptInputState::new();
+    state.paste("Look at this: ");
+    let big = "line one\nline two\nline three\n".repeat(3);
+    state.paste(&big);
+    state.paste(" and this ");
+    state.paste(&"x".repeat(200));
+    assert!(
+        state.text.contains("[Pasted ~"),
+        "composer shows placeholders"
+    );
+    let sent = state.take();
+    assert_eq!(
+        sent,
+        format!("Look at this: {big} and this {}", "x".repeat(200))
+    );
+    assert!(
+        state.paste_contents.is_empty(),
+        "the store clears with the composer"
+    );
+}
+
+#[test]
 fn paste_two_lines_inline() {
     let mut counter = 0u32;
     // 2 lines, ≤150 chars → inserted verbatim
