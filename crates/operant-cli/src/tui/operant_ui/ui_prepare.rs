@@ -1395,6 +1395,75 @@ impl BodyAcc {
         self.line_copy_offsets.push(0);
     }
 
+    /// Push rows a renderer already wrapped so each maps into its AUTHORED
+    /// source line: one raw line per source line, each row a column span of
+    /// it, leading whitespace as the row's copy offset. Copy then joins the
+    /// rows of one source line instead of breaking where the renderer wrapped.
+    /// Any row not found verbatim in the source (markdown-rendered or
+    /// decorated text) falls the whole block back to one raw line per row.
+    fn push_rows_mapped_to_source(&mut self, rows: Vec<Line<'static>>, source: &str) {
+        use unicode_width::UnicodeWidthStr;
+        let src: Vec<&str> = source
+            .split('\n')
+            .map(|l| l.trim_end_matches('\r'))
+            .collect();
+        let mut plan: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(rows.len());
+        let (mut k, mut cursor) = (0usize, 0usize);
+        for row in &rows {
+            let text = ui::line_plain_text(row);
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                if cursor > 0 {
+                    k += 1;
+                    cursor = 0;
+                }
+                if src.get(k).is_none_or(|l| !l.trim().is_empty()) {
+                    plan.clear();
+                    break;
+                }
+                plan.push((k, 0, 0, 0));
+                k += 1;
+                continue;
+            }
+            let found = loop {
+                let Some(line) = src.get(k) else { break None };
+                if let Some(pos) = line[cursor..].find(trimmed) {
+                    break Some(cursor + pos);
+                }
+                k += 1;
+                cursor = 0;
+            };
+            let Some(start) = found else {
+                plan.clear();
+                break;
+            };
+            let start_col = src[k][..start].width();
+            let lead = text.width() - text.trim_start().width();
+            plan.push((k, start_col, start_col + trimmed.width(), lead));
+            cursor = start + trimmed.len();
+        }
+        if plan.len() != rows.len() {
+            for row in rows {
+                self.push_auto(row);
+            }
+            return;
+        }
+        let mut raw_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (row, (k, start_col, end_col, lead)) in rows.into_iter().zip(plan) {
+            let raw_line = *raw_of.entry(k).or_insert_with(|| {
+                self.raw_plain_lines.push(src[k].to_string());
+                self.raw_plain_lines.len() - 1
+            });
+            self.lines.push(row);
+            self.line_raw_overrides.push(Some(WrappedLineMap {
+                raw_line,
+                start_col,
+                end_col,
+            }));
+            self.line_copy_offsets.push(lead);
+        }
+    }
+
     /// Push a blank separator line. Routed through `push_auto` so it seeds a
     /// (empty) raw and keeps the raw array contiguous.
     fn push_blank(&mut self) {
@@ -1633,9 +1702,15 @@ fn render_message_into(
                 app.diff_mode(),
                 render_system_message,
             );
-            for line in cached {
-                acc.push_auto(align_if_unset(line, align));
-            }
+            let rows = cached
+                .into_iter()
+                .map(|line| align_if_unset(line, align))
+                .collect();
+            // System/error cards pre-wrap to width; map the rows back onto
+            // the authored lines so copy rejoins them (2026-10-13: a copied
+            // error card broke mid-sentence at the terminal width).
+            let source = super::messages::normalize_system_content_for_display(&msg.content);
+            acc.push_rows_mapped_to_source(rows, &source);
         }
         // Terminal-style clear spacer (Ctrl+L): N blank rows that push the
         // prior transcript up out of the viewport while keeping it in

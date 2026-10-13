@@ -474,6 +474,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-802 — TUI copy carries no chrome: system cards rejoin, code/quote/table
+  copy as document text.** System and error cards are pre-wrapped by their
+  renderer, so each row was its own logical line and a copied card broke
+  mid-sentence. The rows now map back onto the authored lines
+  (`BodyAcc::push_rows_mapped_to_source`). Code blocks copy without the
+  `┌─ lang` / `└─` frame and `│ ` gutter, blockquotes without their bars,
+  and tables as tab-separated cells with the `──┼──` rule dropped, so they paste
+  as real cells in Docs, Word and Sheets.
+
 - **iter-801 — TUI copy is clean document text (jcode raw-line model).**
   Drag-select copied the selection's edge rows from *wrapped* screen rows,
   so text broke wherever it soft-wrapped and gutter prefixes came along.

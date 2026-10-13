@@ -95,6 +95,11 @@ the body renders these rows. When present, it overrides the copied text for that
 An edge that lands inside such a row takes the whole row's copy text. Columns inside
 box-drawing chrome have no meaningful text slice.
 
+**B4 — DROPPED during execution.** Copying an assistant message's markdown
+source pastes `**bold**` and backticks literally into Word/Docs, which is the
+manual editing the user wants gone. Drag copy stays rendered plain text (jcode
+semantics). B3 instead emits plain text: code without fences, quotes without
+markers, tables as tab-separated cells (paste as real cells). Original item:
 **B4. Whole-message selection copies the source.** When a selection covers an
 assistant message from its first to its last row, emit `DisplayMessage.content`
 verbatim (the model's markdown, exact and document-ready). This is cheap, exact, and
@@ -123,7 +128,22 @@ the placeholder (observed live: the model replied about "Pasted ~1 lines #1").
   when recalling history), then clear the map. jcode does the same expansion on send.
 - Verify: test that pastes 200 chars and submits; the submitted text equals the pasted text.
 
-## D. Carry-overs
+## D. Found during execution (live smoke test, step A binary)
+
+- **Guardrail halt reads as a user interrupt + failed turn.** `process_tool`'s
+  `GuardrailDecision::Halt` (`agent/stream.rs:542`) triggers the USER interrupt
+  flag, so the loop emits `Error { "Interrupted by user" }` and returns
+  `Err("Interrupted by user")`: two error cards plus "Prompt restored — the turn
+  failed", for a halt the agent chose. Needs its own stop reason (a final
+  content message, turn ends Ok).
+- **Guardrail warnings glue into the answer.** `⚠ Tool 'x' has failed N times…`
+  is emitted as raw `Content` with no separator, so it runs into the model's
+  sentence and into the next warning. These should be system annotations, not
+  answer text.
+- **Failed tools render `✓`.** `web_search` failed (missing tool group) and
+  every failed `process` call showed `✓ process`.
+
+## E. Carry-overs
 
 - Live-verify the iter-795 (local) fixes once item 0 lands: rows render once while
   tools run; Current reasoning hides at the next prompt.

@@ -45,7 +45,7 @@ fn width_stable_system_title<'a>(normal: &'a str, stable: &'a str) -> &'a str {
     }
 }
 
-fn normalize_system_content_for_display(content: &str) -> Cow<'_, str> {
+pub(super) fn normalize_system_content_for_display(content: &str) -> Cow<'_, str> {
     let sanitized = strip_ansi_escape_sequences(content);
     if !prefer_width_stable_system_glyphs() {
         return Cow::Owned(sanitized);

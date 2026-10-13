@@ -347,10 +347,17 @@ fn raw_selection_text(
         .filter(|&line| !keep(line))
         .filter_map(|line| frame.wrapped_line_map(line).map(|m| m.raw_line))
         .collect();
+    let subs = chrome_free_substitutions(frame, first, last, start_raw, end_raw);
 
     let mut lines: Vec<String> = Vec::new();
     for raw in start_raw..=end_raw {
         if dropped.contains(&raw) {
+            continue;
+        }
+        if let Some(sub) = subs.get(&raw) {
+            if let Some(text) = sub {
+                lines.push(text.clone());
+            }
             continue;
         }
         let text = frame.raw_plain_line(raw).unwrap_or("");
@@ -378,6 +385,82 @@ fn raw_selection_text(
         lines.push(piece.to_string());
     }
     Some(lines.join("\n").trim().to_string())
+}
+
+/// Raw lines whose rendered form is interface chrome around document text,
+/// mapped to the text a copy should carry (`None` = drop the line):
+/// - code block: frame rows (`┌─ lang`, `└─`) drop, body rows lose the `│ `
+///   gutter;
+/// - blockquote: every `│ ` gutter level is stripped;
+/// - table: the `──┼──` rule drops, rows become tab-separated cells (pastes
+///   as real cells in Docs, Word and Sheets).
+fn chrome_free_substitutions(
+    frame: &crate::tui::operant_model::PreparedChatFrame,
+    first: usize,
+    last: usize,
+    start_raw: usize,
+    end_raw: usize,
+) -> std::collections::HashMap<usize, Option<String>> {
+    use crate::tui::operant_markdown::CopyTargetKind;
+    let mut subs = std::collections::HashMap::new();
+    for target in frame.copy_targets.iter() {
+        let is_code = matches!(target.kind, CopyTargetKind::CodeBlock { .. });
+        if !(is_code || matches!(target.kind, CopyTargetKind::Blockquote)) {
+            continue;
+        }
+        let rows = target.start_line.max(first)..target.end_line.min(last + 1);
+        for row in rows {
+            let Some(map) = frame.wrapped_line_map(row) else {
+                continue;
+            };
+            let text = frame.raw_plain_line(map.raw_line).unwrap_or("");
+            let sub = if is_code && (text.starts_with('┌') || text.starts_with('└')) {
+                None
+            } else if is_code {
+                Some(
+                    text.strip_prefix("│ ")
+                        .or(text.strip_prefix('│'))
+                        .unwrap_or(text)
+                        .to_string(),
+                )
+            } else {
+                let mut body = text;
+                while let Some(rest) = body.strip_prefix("│ ").or(body.strip_prefix('│')) {
+                    body = rest;
+                }
+                Some(body.to_string())
+            };
+            subs.insert(map.raw_line, sub);
+        }
+    }
+    // Tables: a rule line made only of `─`/`┼` with the header above it and
+    // body rows below, each carrying one fewer `│` than the rule has columns.
+    let is_rule = |t: &str| t.contains('┼') && t.chars().all(|c| matches!(c, '─' | '┼' | ' '));
+    for rule in start_raw..=end_raw {
+        let Some(rule_text) = frame.raw_plain_line(rule) else {
+            continue;
+        };
+        if !is_rule(rule_text) {
+            continue;
+        }
+        let bars = rule_text.matches('┼').count();
+        let row_of = |raw: usize| {
+            frame
+                .raw_plain_line(raw)
+                .filter(|t| t.matches('│').count() == bars)
+                .map(|t| t.split('│').map(str::trim).collect::<Vec<_>>().join("\t"))
+        };
+        subs.insert(rule, None);
+        if let Some(header) = rule.checked_sub(1).and_then(row_of) {
+            subs.insert(rule - 1, Some(header));
+        }
+        let mut raw = rule + 1;
+        while let Some(row) = row_of(raw) {
+            subs.insert(raw, Some(row));
+            raw += 1;
+        }
+    }
+    subs
 }
 
 /// Render a right-click context menu at the specified position.

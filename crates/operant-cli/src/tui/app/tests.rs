@@ -3901,3 +3901,40 @@ fn copy_slices_exact_columns_on_wrapped_rows() {
     app.selection_focus = Some((col + 6, line));
     assert_eq!(app.refresh_selection_text(), "MIDWORD");
 }
+
+#[test]
+fn copy_rejoins_pre_wrapped_system_cards_into_authored_lines() {
+    // 2026-10-13: a copied error card broke mid-sentence at the terminal
+    // width — system rows are pre-wrapped by their renderer, so each row was
+    // its own "logical" line. Rows now map back onto the authored lines.
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    let err = "CARDSTART The model provider's stream died mid-response and did not recover after 0 retries over 60s (Network error: error decoding response body). Your message was not lost — reply 'continue' to retry it. CARDEND";
+    app.push_system_message(err.to_string(), SystemMessageStyle::Error);
+    let note = "NOTESTART first authored line\n\nthird authored line NOTEEND";
+    app.push_system_message(note.to_string(), SystemMessageStyle::Info);
+    let _ = screen_rows(&app);
+    let (c0, c1) = (frame_line_of("CARDSTART"), frame_line_of("CARDEND"));
+    assert!(c1 > c0, "the card must wrap for this test");
+    assert_eq!(select_lines(&mut app, c0, c1), err);
+    let (n0, n1) = (frame_line_of("NOTESTART"), frame_line_of("NOTEEND"));
+    assert_eq!(select_lines(&mut app, n0, n1), note);
+}
+
+#[test]
+fn copy_strips_code_quote_and_table_chrome() {
+    // Copy is document text: no `┌─ lang` frames, `│ ` gutters or box-drawn
+    // table rules. Tables copy as tab-separated cells.
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.messages.push(Message::assistant(
+        "HEADSTART\n\n| Tool | Status |\n|---|---|\n| env_probe | ok |\n\n```rust\nfn main() {\n    println!(\"hi\");\n}\n```\n\n> quoted line\n\nTAILEND"
+            .to_string(),
+    ));
+    let _ = screen_rows(&app);
+    let (a, b) = (frame_line_of("HEADSTART"), frame_line_of("TAILEND"));
+    assert_eq!(
+        select_lines(&mut app, a, b),
+        "HEADSTART\n\nTool\tStatus\nenv_probe\tok\n\nfn main() {\n    println!(\"hi\");\n}\n\nquoted line\n\nTAILEND"
+    );
+}
