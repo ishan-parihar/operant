@@ -199,6 +199,7 @@ pub fn spawn_advisor(
                 Err(_) => break,
             };
             let _ = end;
+            tracing::debug!(model = %advisor_model, "advisor woke on turn end");
             let messages = snapshot();
             let cursor = st.cursor.load(Ordering::Relaxed) as usize;
             if messages.len() <= cursor {
