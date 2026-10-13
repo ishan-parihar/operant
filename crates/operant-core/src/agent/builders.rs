@@ -547,6 +547,50 @@ impl OperantAgent {
         Arc::clone(&self.steer_queue)
     }
 
+    /// Attach the always-on advisor watchdog (omp `coding-agent/src/advisor/`
+    /// parity). One-line host wiring mirroring [`Self::attach_recap_engine`]:
+    /// the agent provides the bus, client config, model, and conversation
+    /// snapshot; the host passes only the `[advisor]` config. Notes surface
+    /// through the agent's event channel as [`AgentEvent::BackgroundReview`]
+    /// with an `⚑ advisor:` prefix — never into the acting agent's context.
+    /// No-op when `advisor.enabled` is false (default).
+    pub fn attach_advisor(
+        &mut self,
+        config: crate::advisor::AdvisorConfig,
+        base: crate::client::ClientConfig,
+    ) {
+        if !config.enabled {
+            return;
+        }
+        if self.turn_end_bus.is_none() {
+            self.turn_end_bus = Some(crate::turn_end::TurnEndBus::new());
+        }
+        let bus = self.turn_end_bus.clone().unwrap_or_default();
+        let rx = bus.subscribe();
+        let model = self.effective_model().to_string();
+        let conversation = Arc::clone(&self.conversation);
+        let event_tx = self.event_tx.clone();
+        crate::advisor::spawn_advisor(
+            config,
+            base,
+            model,
+            rx,
+            move || {
+                conversation
+                    .try_read()
+                    .map(|c| c.clone())
+                    .unwrap_or_default()
+            },
+            move |note| {
+                if let Some(tx) = &event_tx {
+                    let _ = tx.try_send(AgentEvent::BackgroundReview {
+                        summary: format!("⚑ advisor ({}): {}", note.advisor, note.text),
+                    });
+                }
+            },
+        );
+    }
+
     /// Attach the idle-recap engine (omp `recap.*` parity).
     ///
     /// One-line host wiring: the agent owns everything the engine needs —
@@ -560,7 +604,10 @@ impl OperantAgent {
     /// No-op-friendly by design: `idle == 0` returns a disconnected handle
     /// (the config-off state costs one channel allocation), and hosts that
     /// never call it keep the pre-seam behavior byte-for-byte.
-    pub fn attach_recap_engine(&mut self, idle: std::time::Duration) -> crate::recap::RecapActivity {
+    pub fn attach_recap_engine(
+        &mut self,
+        idle: std::time::Duration,
+    ) -> crate::recap::RecapActivity {
         if self.turn_end_bus.is_none() {
             self.turn_end_bus = Some(crate::turn_end::TurnEndBus::new());
         }

@@ -43,6 +43,7 @@
 pub mod accessibility;
 pub mod acp;
 pub mod active_sessions;
+mod advisor;
 pub mod aft_bridge;
 pub mod agent;
 pub mod approval;

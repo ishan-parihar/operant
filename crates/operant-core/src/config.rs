@@ -38,6 +38,12 @@ pub struct AppConfig {
     pub terminal_backend: TerminalBackend,
     pub auxiliary_models: AuxiliaryModels,
     pub moa: MoaSettings,
+    /// Always-on transcript watchdog (`[advisor]` section, omp
+    /// `coding-agent/src/advisor/` parity). Distinct from MoA: MoA is a
+    /// per-turn fan-out amplifier; the advisor is an incremental reviewer
+    /// that notes concerns after each completed turn without joining the
+    /// acting agent's context.
+    pub advisor: crate::advisor::AdvisorConfig,
     pub checkpoints: CheckpointsSettings,
     /// Plan 016 / Phase 0 config surface for `operant-harness`. Dark-merged:
     /// `enabled` defaults to `false` and no provider is mounted unless the
@@ -120,6 +126,7 @@ impl Default for AppConfig {
             pk: PkSettings::default(),
             auxiliary_models: AuxiliaryModels::default(),
             moa: MoaSettings::default(),
+            advisor: crate::advisor::AdvisorConfig::default(),
             database_path,
             providers: operant_config::providers::ProvidersConfig::default(),
             command_allowlist: Vec::new(),

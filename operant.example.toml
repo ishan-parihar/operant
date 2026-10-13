@@ -139,6 +139,22 @@ creation_nudge_interval = 10
 # 0 = disabled. Default 240.
 recap_idle_seconds = 240
 
+# [advisor] — always-on transcript watchdog (omp advisor/ parity).
+# Distinct from [moa]: MoA fans out per turn; the advisor reviews the
+# incremental transcript delta after each completed turn and surfaces short
+# notes of concern. Notes NEVER enter the acting agent's context.
+[advisor]
+enabled = false
+# Optional model overrides — empty = use the primary model's route.
+# [advisor.model]
+# model = ""
+# base_url = ""
+# api_key = ""
+# Freeform extra instructions for the advisor.
+# instructions = ""
+# Consecutive-identical-note suppression streak (default 3).
+# suppress_streak = 3
+
 [autonomous]
 interval_secs = 300
 todo_path = "TODO.md"

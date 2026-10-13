@@ -503,6 +503,10 @@ impl TuiApp {
                     let idle = config.agent.recap_idle_seconds;
                     let activity = agent.attach_recap_engine(std::time::Duration::from_secs(idle));
                     self.app.recap_activity = Some(activity);
+                    // Advisor watchdog (omp advisor/ parity): always-on
+                    // transcript reviewer emitting `⚑ advisor:` notes when
+                    // `[advisor] enabled = true`. Disabled by default.
+                    agent.attach_advisor(config.advisor.clone(), crate::client_config(&config));
                     Some(std::sync::Arc::new(agent.with_permissions(permission_tx)))
                 }
                 Err(e) => {

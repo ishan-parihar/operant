@@ -233,7 +233,7 @@ fn slot_label(slot: &AuxiliaryModelConfig) -> String {
 
 /// Build a client for one MoA slot: seed from the main client config, then
 /// override base_url/api_key when the slot pins them.
-fn slot_client(base: &ClientConfig, slot: &AuxiliaryModelConfig) -> OpenAIClient {
+pub(crate) fn slot_client(base: &ClientConfig, slot: &AuxiliaryModelConfig) -> OpenAIClient {
     let mut cfg = base.clone();
     if let Some(base_url) = &slot.base_url
         && !base_url.trim().is_empty()
