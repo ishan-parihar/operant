@@ -542,6 +542,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-794 — docs: senior-developer handoff + AGENTS.md visual-layer
+  discipline sections.** `docs/2026-10-13-tui-visual-layer-handoff.md`
+  codifies the live duplication complaint (reasoning-draft interleave),
+  what is already fixed (iters 780/784/789/790/792), the two open
+  render-side suspects, the full file-path reference map (ours + vendored
+  jcode), repro recipes, and process discipline. AGENTS.md gains a "TUI
+  visual layer — architecture + working discipline" section (one-renderer
+  invariant, mutable-Streaming rule, three-state reasoning mode + the
+  process-global cell's test-serialization requirement, scroll-mode
+  selection contract, tool-row anchoring) and a "TUI debug + live-repro
+  tooling" section; the Rust Code Standards header now mandates reading the
+  relevant `rust-best-practices` chapters (canonical copy at
+  `/home/ishanp/.agents/skills/rust-best-practices/`) in the same turn as
+  writing code. A duplicate iter-792 label exists on origin/main (peer
+  raced the same number — `feat(iter-792)` vs `fix(iter-792)`); per the
+  append-only rule both stay and this is the collision note.
 - **iter-792 — reasoning display honors its config at last (jcode
   ReasoningDisplayMode contract): the "duplicated final message" was the
   model's reasoning draft rendering as body text.** Root cause chain (live

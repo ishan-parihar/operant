@@ -628,10 +628,18 @@ When touching memory code: return the typed `Error`, not `anyhow`; never add
 
 ## Rust Code Standards (baseline for every new/edited Rust in this repo)
 
-This project follows the Apollo GraphQL Rust best-practices handbook (the
-`rust-best-practices` skill is the working copy of these rules). The gate
-scripts already enforce part of it mechanically; the rest is reviewer
-expectation. Read this section before writing code, not after.
+This project follows the Apollo GraphQL Rust best-practices handbook. The
+canonical working copy lives at
+`/home/ishanp/.agents/skills/rust-best-practices/` (`SKILL.md` + ten
+chapters under `references/`). **Read the relevant chapters in the same turn
+you write or review code** — this is a working discipline for every agent
+on this repo, not a reference of last resort:
+- ch1 idioms/borrowing, ch2 clippy, ch3 performance, ch4 error handling,
+  ch5 testing, ch6 generics/dispatch, ch7 type-state, ch8 comments/docs,
+  ch9 pointers/Send-Sync, ch10 benchmarking-without-fitting.
+The gate scripts enforce part of it mechanically; the rest is reviewer
+expectation. Read this section (and the chapters it names) before writing
+code, not after.
 
 ### Ownership & borrowing
 
@@ -801,6 +809,67 @@ suggestions, tui
 - Session caching: `clear_history` only on session change (iter-49)
 - Anthropic `cache_control` breakpoints (iter-54)
 - 7 dead dialogs deleted (iter-58); 7 remaining are alive via `.open()`
+
+#### TUI visual layer — architecture + working discipline (2026-10-13)
+
+The jcode-parity port is the ground design: reference source at
+`../parent-projects/jcode/crates/jcode-tui/src/tui/`. Invariants an agent
+MUST know before touching the render layer:
+
+- **One renderer.** `display_messages()`
+  (`tui/operant_model/adapter.rs`) is THE flatten layer;
+  `tui/operant_ui/ui_prepare.rs` is THE frame assembly. `build_transcript_turns`
+  (`tui/transcript_turn.rs`) has no live consumers — treat it as dead code;
+  do not "fix" bugs by editing it.
+- **Live partials never enter settled rows.** Streaming text/thinking render
+  only in the mutable Streaming section (`has_streaming` gate in ui_prepare
+  ~:850). Anything committed to `App.messages` becomes emittable scrollback;
+  anything live must stay mutable or it double-renders at two wrap widths
+  (the 2026-10-12 "shredded fragments" family — iter-784/789).
+- **Reasoning display mode is a three-state contract** (jcode
+  `ReasoningDisplayMode`): `Off` (never accumulate), `Current` (live-only,
+  ephemeral — dropped at flush), `Full` (persisted classic). The mode
+  resolves through a process-global RwLock override cell in
+  `tui/operant_app/config_shim.rs` fed from `[display] show_reasoning` at
+  boot (main.rs) and flipped live by `/thinking-display`. Tests that touch
+  it must run sequential (one merged test) — parallel test threads race on
+  the cell. Thinking is stored sentinel-wrapped (iter-780); the renderer
+  keys dim+italic off `REASONING_SENTINEL`, never off role names.
+- **Terminal-scroll mode** (`[tui] terminal_scroll_mode = true`): inline
+  viewport, no alt-screen, mouse capture OFF — selection is native terminal
+  select-and-copy over emitted history (deliberate). The scrollback emitter
+  (`tui/app/scroll_emit.rs`) is append-only with a watermark; Ctrl+L
+  never resets it. `insert_before` is inert on the headless sim's
+  TestBackend — scrollback behavior is live-verify only.
+- **Tool rows anchor by arrival** (`after_index`), committed thinking
+  rides `ContentBlock::Thinking`, and a tool call mid-response reserves a
+  slot the live tail splices into (iter-789) — do not add flushes at
+  ToolStart; the seam test `tool_start_mid_stream_must_not_split_assistant_text`
+  pins why.
+- **Registered slash commands can never fall through to the model** — the
+  not-wired catch-all (iter-790) covers both dispatch loops; the corpus
+  `command_sweep.py` must stay 106/106.
+- **Selection**: app-mode drag paint clamps to the chat band (iter-672);
+  the `selection-highlight` scenario's notes document the boot-dialog
+  Down-swallow — a click that closes a dialog is correct, not a bug.
+
+#### TUI debug + live-repro tooling
+- Headless: `operant -c <pinned.toml> tui debug simulate --keys '<enter>'
+  --mouse '<left,x,y><drag,x,y>'` — drives the real event handlers against
+  a TestBackend. Corpus: `crates/operant-cli/tests/tui_scenarios/`
+  (`_run.py`; `OPERANT_BIN` must point at a FRESH debug build; `prove`
+  writes goldens, `verify` gates them; the journey-view/skills-view 4-drift
+  baseline is pre-existing peer drift).
+- Live: tmux `-L <fresh-socket>` sessions, 110x45;
+  `OPENAI_BASE_URL=http://localhost:20129/v1` (omp gateway →
+  poolside/laguna — the only local provider emitting the reasoning triad;
+  mid-stream deaths render as single error cards and retry via `continue`).
+  Event capture: `OPERANT_TUI_DEBUG=1 OPERANT_TUI_EVENT_LOG=<path>` — ring
+  dumps on clean `/quit` only. `/tmp` is tmpreaper-swept: recreate test
+  configs (copy `~/.operant/operant.toml`, MERGE `[tui]` keys — duplicate
+  TOML tables are parse errors) before each repro.
+- Rebuild the debug binary after every edit before testing — stale cached
+  binaries produced false regression readings twice this session.
 
 ### Web Dashboard
 - Dashboard server: axum + `TcpListener::bind` + `axum::serve`
