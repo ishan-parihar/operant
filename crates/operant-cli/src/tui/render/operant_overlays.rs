@@ -72,9 +72,7 @@ use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::model_picker::render_model_picker;
-use crate::tui::overlays::{
-    render_global_search, render_history_search_overlay, render_rewind_flow,
-};
+use crate::tui::overlays::{render_global_search, render_rewind_flow};
 use crate::tui::session_branching::render_session_branching;
 use crate::tui::session_browser::render_session_browser;
 use crate::tui::settings_screen::render_settings_screen;
@@ -175,7 +173,6 @@ macro_rules! overlay_visible_guards {
 overlay_visible_guards!(
     is_visible_usage_overlay => usage_overlay,
     is_visible_rewind_flow => rewind_flow,
-    is_visible_history_search_overlay => history_search_overlay,
     is_visible_settings_screen => settings_screen,
     is_visible_theme_screen => theme_screen,
     is_visible_stats_dialog => stats_dialog,
@@ -233,12 +230,6 @@ const OVERLAYS: &[Entry] = &[
         name: "rewind_flow",
         visible: is_visible_rewind_flow,
         paint: paint_rewind_flow,
-        sink: Sink::Frame,
-    },
-    Entry {
-        name: "history_search_overlay",
-        visible: is_visible_history_search_overlay,
-        paint: paint_history_search_overlay,
         sink: Sink::Frame,
     },
     Entry {
@@ -491,15 +482,6 @@ fn paint_rewind_flow(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_rewind_flow(frame, &app.rewind_flow, ctx.size);
 }
 
-fn paint_history_search_overlay(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_history_search_overlay(
-        frame,
-        &app.history_search_overlay,
-        &app.prompt_input.history,
-        ctx.size,
-    );
-}
-
 fn paint_settings_screen(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_settings_screen(frame, &app.settings_screen, ctx.size);
 }
@@ -697,7 +679,6 @@ mod tests {
         ("usage_overlay", Sink::Frame),
         ("permission_dialog", Sink::Frame),
         ("rewind_flow", Sink::Frame),
-        ("history_search_overlay", Sink::Frame),
         ("settings_screen", Sink::Frame),
         ("theme_screen", Sink::Frame),
         ("stats_dialog", Sink::Buffer),

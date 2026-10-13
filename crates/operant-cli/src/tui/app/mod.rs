@@ -156,6 +156,20 @@ pub struct App {
     /// spawns the command with inherited stdio, waits for it, then re-enters
     /// alt screen + raw mode and clears this field.
     pub pending_shell_command: Option<Vec<String>>,
+    /// Ctrl+G asked for the external editor; the run loop opens it before
+    /// the next frame (it needs the terminal to suspend and restore).
+    pub pending_external_editor: bool,
+    /// Mouse capture was enabled at setup (not `--no-mouse`, not scroll
+    /// mode) — the editor suspend restores exactly that state.
+    pub mouse_capture_active: bool,
+    /// Full output of each completed tool call, by call id. The row shows a
+    /// 3-line preview; Ctrl+O expands the latest row to this text.
+    pub tool_full_outputs: std::collections::HashMap<String, String>,
+    /// The tool row Ctrl+O expanded, if any.
+    pub expanded_tool_id: Option<String>,
+    /// Stable Alt+P cycle list (`[agent] model` + `fallback_models`),
+    /// captured on first use — `set_model` rewrites `config.agent.model`.
+    pub model_cycle: Vec<String>,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.
@@ -985,6 +999,12 @@ impl App {
             // of waiting for the next Enter. (iter-326 — 'r' acts now.)
             if self.take_pending_mcp_reconnect() {
                 self.start_mcp_reconnect();
+            }
+
+            // Ctrl+G: edit the prompt in the external editor. Runs here, not
+            // in the key handler, because it must suspend the terminal.
+            if std::mem::take(&mut self.pending_external_editor) && !self.is_simulating {
+                self.run_external_editor(terminal);
             }
 
             // Drain MCP reconnect status messages from the background

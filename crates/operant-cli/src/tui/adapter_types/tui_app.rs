@@ -463,6 +463,7 @@ impl TuiApp {
             // audit — /mouse mentioned a --no-mouse flag that didn't exist.)
             if !self.no_mouse {
                 execute!(stdout, crossterm::event::EnableMouseCapture)?;
+                self.app.mouse_capture_active = true;
             }
             // Enable focus-change reporting so the TUI can pause animations and
             // drop the redraw cadence when the window is backgrounded (Phase 2.3).

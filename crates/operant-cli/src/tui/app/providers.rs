@@ -216,6 +216,41 @@ impl App {
         model.to_string()
     }
 
+    /// Alt+P: switch this session to the next configured model
+    /// (`[agent] model` + `fallback_models`). In-session only — the picker
+    /// (Ctrl+A) is what persists a choice.
+    pub(crate) fn cycle_configured_model(&mut self) {
+        if self.model_cycle.is_empty() {
+            let mut models: Vec<String> = Vec::new();
+            for model in std::iter::once(&self.config.agent.model)
+                .chain(self.config.agent.fallback_models.iter())
+            {
+                if !model.trim().is_empty() && !models.contains(model) {
+                    models.push(model.clone());
+                }
+            }
+            self.model_cycle = models;
+        }
+        if self.model_cycle.len() < 2 {
+            self.set_status_notice(
+                "Only one model configured — add [agent] fallback_models to cycle.".to_string(),
+            );
+            return;
+        }
+        let next = self
+            .model_cycle
+            .iter()
+            .position(|m| *m == self.model_name)
+            .map_or(0, |i| (i + 1) % self.model_cycle.len());
+        let model = self.model_cycle[next].clone();
+        self.set_model(model.clone());
+        self.set_status_notice(format!(
+            "Model: {model} ({}/{})",
+            next + 1,
+            self.model_cycle.len()
+        ));
+    }
+
     /// Update the active model name (also updates config + cost tracker).
     pub fn set_model(&mut self, model: String) {
         if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {

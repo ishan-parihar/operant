@@ -83,7 +83,7 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
         if live && is_reserved(app, block) {
             continue;
         }
-        let row = display_message_from_tool_block(block);
+        let row = display_message_from_tool_block(app, block);
         // Arrival anchoring (iter-668): a block created when `after_index`
         // messages existed renders after message `after_index - 1` — i.e.
         // exactly where the call happened in the stream. `after_index == 0`
@@ -160,7 +160,7 @@ pub fn live_tool_rows(app: &App) -> Vec<DisplayMessage> {
     app.tool_use_blocks
         .iter()
         .filter(|b| is_reserved(app, b))
-        .map(display_message_from_tool_block)
+        .map(|b| display_message_from_tool_block(app, b))
         .collect()
 }
 
@@ -182,9 +182,30 @@ fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
 /// renderer shows a pending icon for it instead of `✓`.
 pub const TOOL_PENDING_PREVIEW: &str = "\u{2026}";
 
-fn display_message_from_tool_block(block: &ToolUseBlock) -> DisplayMessage {
+/// Lines an expanded (Ctrl+O) tool row shows before eliding the rest.
+const EXPANDED_TOOL_MAX_LINES: usize = 400;
+
+fn display_message_from_tool_block(app: &App, block: &ToolUseBlock) -> DisplayMessage {
     use crate::tui::app::ToolStatus;
-    let preview = block.output_preview.clone().unwrap_or_default();
+    let expanded = app
+        .expanded_tool_id
+        .as_deref()
+        .filter(|id| *id == block.id)
+        .and_then(|id| app.tool_full_outputs.get(id));
+    let preview = match expanded {
+        Some(full) => {
+            let lines: Vec<&str> = full.lines().collect();
+            let mut text = lines[..lines.len().min(EXPANDED_TOOL_MAX_LINES)].join("\n");
+            if lines.len() > EXPANDED_TOOL_MAX_LINES {
+                text.push_str(&format!(
+                    "\n\u{2026} {} more lines",
+                    lines.len() - EXPANDED_TOOL_MAX_LINES
+                ));
+            }
+            text
+        }
+        None => block.output_preview.clone().unwrap_or_default(),
+    };
     // The renderer infers ✓/✗ from the content, so the app-side status has
     // to be legible there: a failed call whose output does not read as a
     // failure gets the `✗` marker the inference keys on (2026-10-13: every

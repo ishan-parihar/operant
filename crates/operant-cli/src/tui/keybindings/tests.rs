@@ -406,3 +406,65 @@ fn the_literal_extractor_ignores_comments_quotes_in_chars_and_lifetimes() {
         rust_string_literals(lifetime)
     );
 }
+
+#[test]
+fn the_default_keymap_has_no_conflicts() {
+    // One key, one action, per context — including Global bindings, which
+    // apply in every context. Deliberate overrides are listed here.
+    let allowed_overrides = [
+        (
+            BindingContext::VimCommand,
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        ),
+        (
+            BindingContext::VimSearch,
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        ),
+    ];
+    let contexts = [
+        BindingContext::Global,
+        BindingContext::Prompt,
+        BindingContext::Transcript,
+        BindingContext::Dialog,
+        BindingContext::VimNormal,
+        BindingContext::VimInsert,
+        BindingContext::VimVisual,
+        BindingContext::VimVisualLine,
+        BindingContext::VimVisualBlock,
+        BindingContext::VimCommand,
+        BindingContext::VimSearch,
+        BindingContext::Completion,
+    ];
+    let mut conflicts = Vec::new();
+    for context in contexts {
+        let mut seen: std::collections::HashMap<(KeyCode, KeyModifiers), &KeyBinding> =
+            std::collections::HashMap::new();
+        for binding in DEFAULT_KEYBINDINGS.get_bindings(context) {
+            let key = (binding.key, binding.modifiers);
+            if let Some(prev) = seen.get(&key) {
+                if prev.action != binding.action
+                    && !allowed_overrides.contains(&(context, binding.key, binding.modifiers))
+                {
+                    conflicts.push(format!(
+                        "{context:?} {:?}+{:?}: {:?} ({:?}) vs {:?} ({:?})",
+                        binding.modifiers,
+                        binding.key,
+                        prev.action,
+                        prev.description,
+                        binding.action,
+                        binding.description
+                    ));
+                }
+            } else {
+                seen.insert(key, binding);
+            }
+        }
+    }
+    assert!(
+        conflicts.is_empty(),
+        "conflicting bindings:\n  {}",
+        conflicts.join("\n  ")
+    );
+}

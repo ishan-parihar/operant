@@ -54,6 +54,7 @@ pub mod input_history;
 // transcript renderers arrive; `expect` rather than `allow` so it fails
 // loudly the moment W3 wires in. The module's own tests read its items, so
 // the expectation is cfg-gated off in test builds (same as copy_targets).
+pub mod external_editor;
 pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;

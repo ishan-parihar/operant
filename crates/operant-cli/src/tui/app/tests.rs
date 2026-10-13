@@ -2166,7 +2166,8 @@ fn scroll_bookmark_should_toggle_and_restore() {
     app.auto_scroll = false;
     paint_frame_at_top(&mut app, 42);
 
-    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    // Alt+G (Ctrl+G is the external editor since iter-806).
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::ALT));
     assert_eq!(app.scroll_offset, 42, "first press only arms");
     assert!(
         app.status_message
@@ -2177,7 +2178,7 @@ fn scroll_bookmark_should_toggle_and_restore() {
 
     // Reader wanders off, then asks to come back.
     app.scroll_offset = 5;
-    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::ALT));
     assert_eq!(app.scroll_offset, 42, "second press restores the bookmark");
     assert!(
         app.status_message
@@ -2189,7 +2190,7 @@ fn scroll_bookmark_should_toggle_and_restore() {
     // It is a toggle, not a sticky mark: the third press arms again at the
     // current spot instead of jumping back a second time.
     app.scroll_offset = 7;
-    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::ALT));
     assert_eq!(app.scroll_offset, 7);
     assert!(
         app.status_message
@@ -4122,4 +4123,73 @@ fn copy_merges_wrapped_table_cells_and_skips_error_cards() {
     );
     assert!(text.contains("2\tshort"));
     assert!(!text.contains("CARDTEXT"), "error cards are UI: {text:?}");
+}
+
+#[test]
+fn new_composer_keys_do_what_they_say() {
+    // Ctrl+G queues the external editor (run by the loop, which owns the
+    // terminal); Alt+G is the scroll bookmark now.
+    let mut app = make_app();
+    app.handle_key_event(press_key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    assert!(app.pending_external_editor);
+
+    // F5 with an empty composer resubmits the last prompt.
+    let mut app = make_app();
+    app.prompt_input.history.push("run the tests".to_string());
+    assert!(app.handle_key_event(press_key(KeyCode::F(5), KeyModifiers::NONE)));
+    assert_eq!(app.prompt_input.text, "run the tests");
+    // …and never while a turn is streaming.
+    let mut app = make_app();
+    app.prompt_input.history.push("x".to_string());
+    app.is_streaming = true;
+    assert!(!app.handle_key_event(press_key(KeyCode::Char('r'), KeyModifiers::ALT)));
+
+    // Alt+P cycles model + fallback_models, in session only.
+    let mut app = make_app();
+    app.config.agent.model = "m-one".to_string();
+    app.config.agent.fallback_models = vec!["m-two".to_string(), "m-one".to_string()];
+    app.model_name = "m-one".to_string();
+    app.handle_key_event(press_key(KeyCode::Char('p'), KeyModifiers::ALT));
+    assert_eq!(app.model_name, "m-two");
+    app.handle_key_event(press_key(KeyCode::Char('p'), KeyModifiers::ALT));
+    assert_eq!(
+        app.model_name, "m-one",
+        "deduplicated two-model cycle wraps"
+    );
+}
+
+#[test]
+fn ctrl_o_expands_the_latest_tool_output_and_collapses_it_again() {
+    use operant_core::agent::AgentEvent;
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "t1".to_string(),
+        name: "bash".to_string(),
+        arguments: "{}".to_string(),
+    });
+    let full: String = (1..=10).map(|i| format!("line {i}\n")).collect();
+    app.handle_agent_event(AgentEvent::ToolError {
+        tool_call_id: "t1".to_string(),
+        name: "bash".to_string(),
+        error: full.clone(),
+    });
+    let content = |app: &App| {
+        crate::tui::operant_model::display_messages(app)
+            .into_iter()
+            .find(|r| r.role == "tool")
+            .map(|r| r.content)
+            .unwrap()
+    };
+    assert!(
+        !content(&app).contains("line 10"),
+        "collapsed shows the preview"
+    );
+    app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(
+        content(&app).contains("line 10"),
+        "expanded shows the full output"
+    );
+    app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(!content(&app).contains("line 10"));
 }

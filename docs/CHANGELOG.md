@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-806 — TUI shortcuts (oh-my-pi parity), conflict-checked.**
+  `Ctrl+G` edits the prompt in an external editor, set by the new
+  `[tui] external_editor` (falls back to `$VISUAL`, `$EDITOR`, `vi`). The scroll
+  bookmark moved to `Alt+G`. `Alt+P` cycles the configured models (`model` +
+  `fallback_models`, in session only). `F5`/`Alt+R` retry: they resubmit the
+  composer, or the last prompt. `Ctrl+O` expands or collapses the latest tool
+  output (bounded to the last 64 calls, 256 KB each). `Ctrl+R` history search
+  now lists newest-first, with each prompt once and pins kept while typing,
+  and draws one renderer: the legacy floating panel that duplicated the
+  inline bar is gone. Every composer chord is now in the `/keys` catalogue,
+  and `the_default_keymap_has_no_conflicts` fails on any key bound to two
+  actions in one context.
+
 - **iter-732 — tool_guardrails: duplicate-progress spam pinned across
   the output batch reset (outline v5 §1 row 4 remainder):** the audit
   behind this slice found row 4 mis-specified — the `no_progress/

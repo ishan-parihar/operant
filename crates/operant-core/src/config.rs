@@ -722,6 +722,11 @@ pub struct TuiSettings {
     pub refresh_rate_ms: u64,
     pub compact_width: u16,
     pub medium_width: u16,
+    /// Command the composer opens with Ctrl+G (the prompt text is edited in
+    /// a temp file passed as the last argument). Empty = `$VISUAL`, then
+    /// `$EDITOR`, then `vi`. Arguments are whitespace-separated, e.g.
+    /// `"code --wait"`.
+    pub external_editor: String,
 }
 
 impl Default for TuiSettings {
@@ -737,6 +742,7 @@ impl Default for TuiSettings {
             refresh_rate_ms: 80,
             compact_width: 96,
             medium_width: 120,
+            external_editor: String::new(),
         }
     }
 }

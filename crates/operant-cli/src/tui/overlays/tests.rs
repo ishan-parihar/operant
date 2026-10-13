@@ -142,8 +142,26 @@ fn subseq_score_sorts_correctly_in_overlay() {
     hs.push_char('g', &history);
     hs.push_char('i', &history);
     hs.push_char('t', &history);
-    // First match should be "git commit" (snapshot_idx 1, higher score)
-    assert_eq!(hs.matches[0].snapshot_idx, 1);
+    // First match should be "git commit" (higher score); the snapshot is
+    // newest-first, so the history's last entry is snapshot index 0.
+    assert_eq!(hs.snapshot[hs.matches[0].snapshot_idx].text, "git commit");
+}
+
+#[test]
+fn history_search_is_newest_first_and_unique() {
+    // Ctrl+R preselects the most recent prompt, and a prompt sent twice
+    // appears once (at its latest position).
+    let history: Vec<String> = ["old", "middle", "old", "newest"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let hs = HistorySearchOverlay::open(&history);
+    let order: Vec<&str> = hs
+        .matches
+        .iter()
+        .map(|m| hs.snapshot[m.snapshot_idx].text.as_str())
+        .collect();
+    assert_eq!(order, ["newest", "old", "middle"]);
 }
 
 // --- HistoryEntry timestamp tests ---------------------------------

@@ -1283,8 +1283,44 @@ impl App {
             // Toggles: first press remembers the current spot, second press
             // jumps back to it and disarms. The status row names the state so
             // the toggle is discoverable without opening the help overlay.
+            // Ctrl+G: edit the prompt in the external editor (oh-my-pi
+            // `app.editor.external`); the scroll bookmark moved to Alt+G.
             KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.pending_external_editor = true;
+            }
+            KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.toggle_scroll_bookmark();
+            }
+            // Alt+P: cycle the configured models (`[agent] model` +
+            // `fallback_models`) for this session; Ctrl+A is the full picker.
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.cycle_configured_model();
+            }
+            // F5 / Alt+R: retry — resubmit the composer (a failed turn puts
+            // its prompt back there) or, when empty, the last prompt sent.
+            KeyCode::F(5) | KeyCode::Char('r')
+                if key.code == KeyCode::F(5) || key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if self.is_streaming {
+                    return false;
+                }
+                if self.prompt_input.text.trim().is_empty() {
+                    match self.prompt_input.history.last().cloned() {
+                        Some(last) => {
+                            self.prompt_input.text = last;
+                            self.prompt_input.cursor = self.prompt_input.text.len();
+                        }
+                        None => {
+                            self.set_status_notice("Nothing to retry yet.".to_string());
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+            // Ctrl+O: expand / collapse the latest tool row's full output.
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_latest_tool_expansion();
             }
 
             // ---- Context menu (Ctrl+Shift+M) ----------------------------

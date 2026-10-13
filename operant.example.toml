@@ -206,6 +206,10 @@ prompt_placeholder = "Ask anything... \"Fix a TODO in the codebase\""
 # refresh_rate_ms = 80
 compact_width = 96
 medium_width = 120
+# Editor for the composer (Ctrl+G edits the prompt in it; saving loads the
+# text back). Empty = $VISUAL, then $EDITOR, then vi. Arguments allowed,
+# e.g. "code --wait" or "nvim -c 'set ft=markdown'" (whitespace-split).
+external_editor = ""
 
 # P5-1 terminal-scrollback mode (2026-10-10 design doc): render in the main
 # buffer with an inline bottom viewport instead of the alternate screen — the

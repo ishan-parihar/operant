@@ -3,17 +3,8 @@
 // Extracted from the overlays.rs monolith. Includes HistoryEntry,
 // pinned-entry persistence (~/.operant/history_pins.json), fuzzy
 // subsequence scoring, the HistorySearchOverlay state machine, and
-// the floating-panel renderer.
-
-use super::*;
-use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
-
-use crate::tui::vendor::style::theme;
+// the floating-panel renderer was retired: the prompt's inline history bar
+// (`operant_ui::ui_input::draw_prompt_history_search_overlay`) renders it.
 
 // ============================================================================
 // HistorySearchOverlay
@@ -213,8 +204,6 @@ pub struct MatchEntry {
     /// Index of this entry in the `snapshot` held by `HistorySearchOverlay`.
     pub snapshot_idx: usize,
     pub score: f32,
-    /// Byte positions in `entry.text` that were matched (for highlighting).
-    pub highlight_positions: Vec<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -253,11 +242,7 @@ impl HistorySearchOverlay {
     /// Open with a `&[String]` slice (legacy callers).  All entries are
     /// treated as legacy (no timestamp).
     pub fn open(history: &[String]) -> Self {
-        let entries: Vec<HistoryEntry> = history
-            .iter()
-            .map(|s| HistoryEntry::legacy(s.clone()))
-            .collect();
-        Self::open_with_entries(entries)
+        Self::open_with_entries(newest_first_unique(history))
     }
 
     /// Open with a pre-built `Vec<HistoryEntry>` (timestamp-aware callers).
@@ -328,13 +313,11 @@ impl HistorySearchOverlay {
                     Some(MatchEntry {
                         snapshot_idx: i,
                         score: 0.0,
-                        highlight_positions: Vec::new(),
                     })
                 } else {
-                    subsequence_score(&q, &entry.text).map(|(score, positions)| MatchEntry {
+                    subsequence_score(&q, &entry.text).map(|(score, _)| MatchEntry {
                         snapshot_idx: i,
                         score,
-                        highlight_positions: positions,
                     })
                 }
             })
@@ -375,9 +358,13 @@ impl HistorySearchOverlay {
         // Simple strategy: replace snapshot with legacy entries from `history`.
         // (A more sophisticated approach would merge by text, but keeping it
         // simple avoids complexity and matches the current call-site pattern.)
-        self.snapshot = history
-            .iter()
-            .map(|s| HistoryEntry::legacy(s.clone()))
+        let pinned_texts = load_pinned_texts();
+        self.snapshot = newest_first_unique(history)
+            .into_iter()
+            .map(|mut e| {
+                e.pinned = pinned_texts.contains(&e.text);
+                e
+            })
             .collect();
         self.recompute_matches();
     }
@@ -430,225 +417,15 @@ impl HistorySearchOverlay {
     }
 }
 
-/// Render the history search floating panel.
-pub fn render_history_search_overlay(
-    frame: &mut Frame,
-    overlay: &HistorySearchOverlay,
-    history: &[String],
-    area: Rect,
-) {
-    if !overlay.visible {
-        return;
-    }
-
-    const VISIBLE_MATCHES: usize = 8;
-    let match_count = overlay.matches.len().max(1);
-    let rows = VISIBLE_MATCHES.min(match_count) as u16;
-    // Content-derived height: the query row, a blank, up to `VISIBLE_MATCHES`
-    // match rows, a blank and the navigation footer — plus the modal's own
-    // chrome (two border rows and the title row). `modal_frame` owns the clamp
-    // and the readable floor, so this states only the desired size.
-    let layout = modal_frame(
-        frame,
-        area,
-        &ModalSpec {
-            title: "History Search",
-            hint: HINT_ESC,
-            width: 72,
-            height: rows + 7,
-            header_height: 1,
-            footer_height: 0,
-            ..Default::default()
-        },
-    );
-    // The clamped width: a row truncated to `dialog_width` has to agree with
-    // the frame the primitive just laid out.
-    let dialog_width = layout.dialog_area.width;
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    // --- Search query line ---------------------------------------------------
-    let result_count_str = format!("{} results", overlay.matches.len());
-    lines.push(Line::from(vec![
-        Span::raw("  Search: "),
-        Span::styled(
-            overlay.query.clone(),
-            Style::default()
-                .fg(theme_colors::text())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("\u{2588}", Style::default().fg(theme_colors::text())),
-        Span::raw("  "),
-        Span::styled(
-            result_count_str,
-            Style::default()
-                .fg(theme::dim_color())
-                .add_modifier(Modifier::ITALIC),
-        ),
-    ]));
-    lines.push(Line::from(""));
-
-    if overlay.matches.is_empty() {
-        lines.push(Line::from(vec![Span::styled(
-            "  (no matches)",
-            Style::default().fg(theme::dim_color()),
-        )]));
-    } else {
-        let start = overlay
-            .selected_idx
-            .saturating_sub(VISIBLE_MATCHES / 2)
-            .min(overlay.matches.len().saturating_sub(VISIBLE_MATCHES));
-        let end = (start + VISIBLE_MATCHES).min(overlay.matches.len());
-
-        for (display_i, match_entry) in overlay.matches[start..end].iter().enumerate() {
-            let real_i = start + display_i;
-            let is_selected = real_i == overlay.selected_idx;
-
-            // Resolve snapshot entry (for text, timestamp, pinned state).
-            let snap_entry: Option<&HistoryEntry> = overlay.snapshot.get(match_entry.snapshot_idx);
-
-            // Resolve entry text: prefer snapshot, fall back to passed-in history.
-            let entry_text: &str = snap_entry
-                .map(|e| e.text.as_str())
-                .or_else(|| history.get(match_entry.snapshot_idx).map(String::as_str))
-                .unwrap_or("");
-
-            let is_pinned = snap_entry.is_some_and(|e| e.pinned);
-
-            // Relative timestamp (right-aligned suffix)
-            let time_suffix: String = snap_entry
-                .map(|e| {
-                    let t = e.relative_time();
-                    if t.is_empty() {
-                        t
-                    } else {
-                        format!(" · {}", t)
-                    }
-                })
-                .unwrap_or_default();
-
-            // Pin star shown to the left of pinned entries: "★ " (2 chars wide)
-            // Available width for the entry text
-            let pin_prefix_width: usize = if is_pinned { 2 } else { 0 };
-            let prefix_width: usize = 4 + pin_prefix_width; // "    " or "  ► " + optional "★ "
-            let time_width = UnicodeWidthStr::width(time_suffix.as_str());
-            let max_text_chars =
-                (dialog_width as usize).saturating_sub(prefix_width + time_width + 2);
-
-            let (prefix, base_style) = if is_selected {
-                (
-                    "  \u{25BA} ",
-                    Style::default()
-                        .fg(theme_colors::accent())
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                ("    ", Style::default().fg(theme_colors::text()))
-            };
-
-            // Build highlighted spans for the entry text
-            let text_spans = build_highlighted_spans(
-                entry_text,
-                &match_entry.highlight_positions,
-                max_text_chars,
-                base_style,
-                is_selected,
-            );
-
-            let mut row_spans: Vec<Span> = vec![Span::raw(prefix)];
-
-            // Pin star badge (shown for all pinned entries)
-            if is_pinned {
-                row_spans.push(Span::styled(
-                    "\u{2605} ", // ★
-                    Style::default()
-                        .fg(theme_colors::warning())
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-
-            row_spans.extend(text_spans);
-            if !time_suffix.is_empty() {
-                row_spans.push(Span::styled(
-                    time_suffix,
-                    Style::default()
-                        .fg(theme::dim_color())
-                        .add_modifier(Modifier::ITALIC),
-                ));
-            }
-
-            lines.push(Line::from(row_spans));
-        }
-    }
-
-    // Footer hint bar (below the match list). The dismissal hint now lives on
-    // the bottom border as `HINT_ESC`, so this row keeps the navigation prose.
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        "  \u{2191}\u{2193} navigate  \u{00b7}  Enter select  \u{00b7}  p pin/unpin",
-        Style::default()
-            .fg(theme::dim_color())
-            .add_modifier(Modifier::ITALIC),
-    )]));
-
-    frame.render_widget(Paragraph::new(lines), layout.body_area);
-}
-
-/// Build a list of `Span`s for `text`, highlighting the bytes at
-/// `highlight_positions` in yellow. Text is truncated to `max_chars`.
-fn build_highlighted_spans<'a>(
-    text: &str,
-    highlight_positions: &[usize],
-    max_chars: usize,
-    base_style: Style,
-    _is_selected: bool,
-) -> Vec<Span<'a>> {
-    // Collect char-level info (byte offset, char)
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-
-    // Convert highlight byte-positions to a set of byte offsets for O(1) lookup
-    let hl_set: std::collections::HashSet<usize> = highlight_positions.iter().copied().collect();
-
-    let mut spans: Vec<Span<'a>> = Vec::new();
-    let mut current_text = String::new();
-    let mut current_highlighted = false;
-    let mut truncated = false;
-
-    for (char_count, (byte_off, ch)) in chars.iter().enumerate() {
-        if char_count >= max_chars {
-            truncated = true;
-            break;
-        }
-        let is_hl = hl_set.contains(byte_off);
-        if is_hl != current_highlighted && !current_text.is_empty() {
-            let style = if current_highlighted {
-                Style::default()
-                    .fg(theme_colors::warning())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                base_style
-            };
-            spans.push(Span::styled(current_text.clone(), style));
-            current_text.clear();
-        }
-        current_highlighted = is_hl;
-        current_text.push(*ch);
-    }
-    if !current_text.is_empty() {
-        let style = if current_highlighted {
-            Style::default()
-                .fg(theme_colors::warning())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            base_style
-        };
-        spans.push(Span::styled(current_text, style));
-    }
-    if truncated {
-        spans.push(Span::styled(
-            "…".to_string(),
-            Style::default().fg(theme::dim_color()),
-        ));
-    }
-    spans
+/// History (oldest → newest) as search entries newest-first, each prompt
+/// once at its most recent position — Ctrl+R preselects the latest match,
+/// and score ties keep recency order (the sort is stable).
+fn newest_first_unique(history: &[String]) -> Vec<HistoryEntry> {
+    let mut seen = std::collections::HashSet::new();
+    history
+        .iter()
+        .rev()
+        .filter(|text| seen.insert(text.as_str()))
+        .map(|text| HistoryEntry::legacy(text.clone()))
+        .collect()
 }
