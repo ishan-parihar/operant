@@ -128,6 +128,12 @@ pub enum Error {
     #[error("Incomplete SSE message")]
     IncompleteSseMessage,
 
+    /// The response stream went silent: no bytes for `idle_secs` while the
+    /// body was still open. A stall, not a length cap — a stream may run as
+    /// long as it keeps producing data. Retryable like a transport drop.
+    #[error("The model provider's stream stalled: no data for {idle_secs}s")]
+    StreamStalled { idle_secs: u64 },
+
     /// The provider's response stream died mid-body and the turn's retry
     /// budget ran out before a re-issue succeeded.
     ///
@@ -227,6 +233,7 @@ impl Error {
         match self {
             Error::Network(_)
             | Error::IncompleteSseMessage
+            | Error::StreamStalled { .. }
             | Error::ToolTimeout { .. }
             | Error::IncompleteXml { .. }
             | Error::RateLimited { .. } => true,

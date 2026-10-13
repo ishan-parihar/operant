@@ -92,7 +92,7 @@ impl Failover {
     ///   is the right target.
     pub fn classify(err: &Error) -> Self {
         let (classified, retry_after) = match err {
-            Error::Network(_) => (
+            Error::Network(_) | Error::StreamStalled { .. } => (
                 ClassifiedError {
                     reason: FailoverReason::Timeout,
                     status_code: None,
@@ -157,8 +157,10 @@ impl Failover {
             ),
         };
 
-        let advance_model_chain = matches!(err, Error::Network(_) | Error::RateLimited { .. })
-            || matches!(err, Error::Provider { status, .. } if *status >= 500);
+        let advance_model_chain = matches!(
+            err,
+            Error::Network(_) | Error::StreamStalled { .. } | Error::RateLimited { .. }
+        ) || matches!(err, Error::Provider { status, .. } if *status >= 500);
         let switch_provider = classified.is_auth()
             || matches!(
                 classified.reason,

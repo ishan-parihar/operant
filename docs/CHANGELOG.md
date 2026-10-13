@@ -474,6 +474,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-799 — agentic core: long streams no longer die at `timeout_secs`,
+  and a drop always earns its retries.** `[client] timeout_secs` was applied
+  as reqwest's *total* timeout on the streaming request, which covers the
+  whole body: every turn that streamed longer than 60s (reasoning plus tool
+  calls) was cut mid-body as `error decoding response body`. The run loop
+  also wrapped the whole stream in the 120s `request_timeout` ceiling.
+  Streams now use a client with no total timeout. The header wait is bounded
+  by the model's effective timeout, and the body by a per-chunk idle limit in
+  both the client (`ChatStreamResponse::with_idle_timeout`) and
+  `process_stream`. A silent stream ends as the new retryable
+  `Error::StreamStalled`. The 45s stream-retry budget was started at turn
+  start, so a cut after 60s of healthy output gave up with "0 retries".
+  It now measures one unbroken run of failures and re-arms on stream
+  progress. Mock-SSE tests pin both: a 1.3s dripping stream outlives a 1s
+  timeout, and silence ends as a stall.
+
 - **iter-797 — TUI: thinking, text and tool rows no longer render twice while tools
   run (2026-10-13 duplication).** A ToolStart that reserved a slot for the
   live thinking/text spliced them into the settled Body *and* the Streaming

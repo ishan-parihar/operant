@@ -76,7 +76,27 @@ impl OperantAgent {
         // looks truncated instead of the agent eating the blame silently.
         let mut dropped_events: u32 = 0;
 
-        while let Some(chunk_result) = stream.next().await {
+        // Per-chunk idle limit (the loop request budget, reasoning floor
+        // included): a stream may run as long as it keeps producing data, but
+        // a silent one ends as a retryable stall. Replaces the old total
+        // ceiling around this whole call, which cut long healthy streams.
+        let idle = self.loop_request_timeout();
+        loop {
+            let chunk_result = match tokio::time::timeout(idle, stream.next()).await {
+                Ok(Some(chunk_result)) => chunk_result,
+                Ok(None) => break,
+                Err(_) => {
+                    warn!(
+                        idle_secs = idle.as_secs(),
+                        "Stream stalled — no chunk within the idle limit"
+                    );
+                    stream_error = Some(Error::StreamStalled {
+                        idle_secs: idle.as_secs(),
+                    });
+                    break;
+                }
+            };
+            self.note_stream_progress();
             // `/stop` has to be able to cut a stream that is already flowing.
             // Without this the SSE loop ran to completion regardless of the flag,
             // so a stop only took effect between tool calls — which is exactly the

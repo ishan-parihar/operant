@@ -36,7 +36,47 @@ impl OperantAgent {
     where
         F: std::future::Future<Output = crate::error::Result<T>>,
     {
-        let budget = self.loop_request_timeout();
+        self.race_interrupt(fut, Some(self.loop_request_timeout()))
+            .await
+    }
+
+    /// Stamp stream progress: a chunk arrived.
+    pub(crate) fn note_stream_progress(&self) {
+        if let Ok(mut at) = self.stream_progress_at.lock() {
+            *at = Some(std::time::Instant::now());
+        }
+    }
+
+    /// When the current/last stream last made progress.
+    pub(crate) fn stream_progress_at(&self) -> Option<std::time::Instant> {
+        self.stream_progress_at.lock().ok().and_then(|at| *at)
+    }
+
+    /// Run a stream consumption racing only the interrupt flag. A stream has
+    /// no total ceiling — it may run as long as it keeps producing data; the
+    /// idle limit lives inside `process_stream` (per chunk).
+    pub(crate) async fn call_interruptible<F, T>(&self, fut: F) -> crate::error::Result<T>
+    where
+        F: std::future::Future<Output = crate::error::Result<T>>,
+    {
+        self.race_interrupt(fut, None).await
+    }
+
+    async fn race_interrupt<F, T>(
+        &self,
+        fut: F,
+        budget: Option<std::time::Duration>,
+    ) -> crate::error::Result<T>
+    where
+        F: std::future::Future<Output = crate::error::Result<T>>,
+    {
+        let ceiling = async move {
+            match budget {
+                Some(budget) => tokio::time::sleep(budget).await,
+                None => std::future::pending::<()>().await,
+            }
+            budget.unwrap_or_default()
+        };
         // T2: race the request against BOTH the budget ceiling and the
         // interrupt flag so a Ctrl-C on the one-shot path aborts the
         // in-flight request instead of waiting for it (or the timeout) to
@@ -57,7 +97,7 @@ impl OperantAgent {
         };
         tokio::select! {
             result = fut => result,
-            _ = tokio::time::sleep(budget) => {
+            budget = ceiling => {
                 warn!(budget = ?budget, "LLM request exceeded loop request_timeout ceiling");
                 Err(crate::error::Error::Agent(format!(
                     "request timed out after {budget:?} (loop request_timeout ceiling)"

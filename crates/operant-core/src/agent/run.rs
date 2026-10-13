@@ -478,6 +478,12 @@ impl OperantAgent {
         // first attempt is the one that costs the most when the provider is
         // dead-but-accepting. See `agent/stream_retry_budget.rs` for why 45s.
         let mut stream_retry_budget = self::stream_retry_budget::StreamRetryBudget::new();
+        // When the last mid-stream failure happened. The budget measures one
+        // unbroken run of failures: a failure that follows fresh stream
+        // progress (or is the turn's first) re-arms it, so healthy streaming
+        // time never counts — 2026-10-13: a stream cut after 60s of output
+        // gave up with "0 retries over 60s".
+        let mut last_stream_failure: Option<std::time::Instant> = None;
         // Plan 006: empty-content retry counter is the shared
         // EmptyResponseCounter from agent/turn_rules.rs — same logic the
         // runtime Agent uses (no more silent divergence on max_retries).
@@ -860,10 +866,7 @@ impl OperantAgent {
                     // interrupt flag, so a Ctrl-C mid-stream aborts the
                     // request immediately instead of waiting for the turn
                     // to finish.
-                    match self
-                        .call_with_loop_timeout(self.process_stream(stream))
-                        .await
-                    {
+                    match self.call_interruptible(self.process_stream(stream)).await {
                         Ok(processed) => break processed,
                         Err(e) => {
                             // T2: never classify/retry an interrupt-aborted
@@ -888,6 +891,16 @@ impl OperantAgent {
                             // testable without a live agent and a live
                             // provider. See `agent/stream_retry_budget.rs`.
                             let attempts_left = !retry_state.is_exhausted();
+                            let progressed_since_failure =
+                                match (last_stream_failure, self.stream_progress_at()) {
+                                    (None, _) => true,
+                                    (Some(failed), Some(progress)) => progress > failed,
+                                    (Some(_), None) => false,
+                                };
+                            if progressed_since_failure {
+                                stream_retry_budget.reset();
+                            }
+                            last_stream_failure = Some(std::time::Instant::now());
                             let decision = stream_retry_budget::decide_stream_retry(
                                 retryable,
                                 !stream_retry_budget.exhausted(),

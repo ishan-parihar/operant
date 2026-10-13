@@ -508,6 +508,10 @@ pub struct OperantAgent {
     /// loop appends thinking-timeout guidance to the final error message once
     /// retries are exhausted — mirrors hermes thinking_timeout_guidance.py.
     thinking_timeout_hit: std::sync::atomic::AtomicBool,
+    /// When `process_stream` last received a chunk. The run loop's stream
+    /// retry budget measures time since PROGRESS, so healthy streaming time
+    /// never counts against the retries a later drop earns.
+    stream_progress_at: std::sync::Mutex<Option<std::time::Instant>>,
     /// R4: per-turn tracker of identical tool-call repeats (hermes
     /// tool_guardrails.py parity). Guards against retry storms where the
     /// model calls the same tool with identical args repeatedly. Reset at

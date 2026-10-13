@@ -4,6 +4,7 @@
 //! Supports Server-Sent Events for streaming responses.
 //! Supports reasoning_content for extended-thinking models.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
@@ -62,11 +63,29 @@ impl From<&ClientSettings> for ClientConfig {
     }
 }
 
+/// HTTP client for streaming requests: connect timeout only, no total
+/// timeout (see `OpenAIClient::stream_http_client`).
+fn stream_http_client(config: &ClientConfig) -> Client {
+    Client::builder()
+        .connect_timeout(config.timeout)
+        .build()
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to build streaming HTTP client, falling back to default");
+            Client::new()
+        })
+}
+
 /// OpenAI-compatible client for chat completions
 #[derive(Debug, Clone)]
 pub struct OpenAIClient {
     config: ClientConfig,
     http_client: Client,
+    /// Streaming requests only. Carries NO total timeout: reqwest's
+    /// `timeout` runs until the body finishes, so it cut every stream longer
+    /// than `timeout_secs` (2026-10-13: every tool turn died at exactly 60s
+    /// with "error decoding response body"). Streams are bounded by the
+    /// header wait and a per-chunk idle limit instead (`chat_streaming`).
+    stream_http_client: Client,
     /// Token-bucket rate limiter keyed by model name.
     rate_limiter: RateLimiter,
     /// Runtime API-key override for credential-pool rotation (hermes
@@ -109,6 +128,7 @@ impl OpenAIClient {
         );
 
         Self {
+            stream_http_client: stream_http_client(&config),
             config,
             http_client,
             rate_limiter,
@@ -124,6 +144,7 @@ impl OpenAIClient {
         );
 
         Self {
+            stream_http_client: stream_http_client(&config),
             config,
             http_client,
             rate_limiter,
@@ -385,17 +406,19 @@ impl OpenAIClient {
             // budget even though the failure was transient. Providers like
             // kilo.ai's gateway frequently drop connections before the first
             // byte arrives, so this is a real production path.
-            let response = match self
-                .http_client
+            // The wait for response headers is bounded by the model's
+            // effective timeout; the body is then bounded per chunk (idle),
+            // never in total — a long healthy stream must not be cut.
+            let idle = self.effective_timeout(model);
+            let send = self
+                .stream_http_client
                 .post(url.clone())
                 .headers(headers.clone())
                 .json(&request)
-                .timeout(self.effective_timeout(model))
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                Err(e) => {
+                .send();
+            let response = match tokio::time::timeout(idle, send).await {
+                Ok(Ok(response)) => response,
+                Ok(Err(e)) => {
                     if attempt < max_retries {
                         let delay_s = exponential_backoff_secs(attempt, base_delay, max_delay);
                         warn!(
@@ -410,13 +433,22 @@ impl OpenAIClient {
                     }
                     return Err(Error::Network(e.into()));
                 }
+                Err(_) => {
+                    if attempt < max_retries {
+                        warn!(model = %model, attempt, idle_secs = idle.as_secs(), "No response headers in time, retrying");
+                        continue;
+                    }
+                    return Err(Error::StreamStalled {
+                        idle_secs: idle.as_secs(),
+                    });
+                }
             };
 
             let status = response.status();
             if status.is_success() {
                 debug!("Streaming connection established");
                 let stream = response.bytes_stream();
-                return Ok(ChatStreamResponse::new(stream));
+                return Ok(ChatStreamResponse::new(stream).with_idle_timeout(idle));
             }
 
             let body = read_bounded_error_body(response).await;
@@ -1222,6 +1254,12 @@ pub struct ChatStreamResponse {
     /// the user otherwise (observed live: corrupted streams yield empty or
     /// truncated turns with zero signal).
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Longest silence tolerated between body chunks; `None` = unbounded.
+    idle_timeout: Option<Duration>,
+    /// Armed while waiting for the next chunk; re-armed on every chunk.
+    idle_deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    /// Set once a stall was reported, so the stream then ends.
+    stalled: bool,
 }
 
 impl ChatStreamResponse {
@@ -1233,7 +1271,18 @@ impl ChatStreamResponse {
             buffer: String::new(),
             pending_bytes: Vec::new(),
             dropped: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            idle_timeout: None,
+            idle_deadline: None,
+            stalled: false,
         }
+    }
+
+    /// End the stream with `Error::StreamStalled` when no body bytes arrive
+    /// for `idle`. The clock restarts on every chunk, so stream length is
+    /// unbounded while data keeps flowing.
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle_timeout = Some(idle);
+        self
     }
 
     /// Shared counter of SSE payloads dropped for failing to parse.
@@ -1249,6 +1298,9 @@ impl Stream for ChatStreamResponse {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+        if this.stalled {
+            return Poll::Ready(None);
+        }
 
         loop {
             let mut dropped_here = 0u32;
@@ -1261,7 +1313,24 @@ impl Stream for ChatStreamResponse {
                 return Poll::Ready(Some(event));
             }
 
-            match Pin::new(&mut this.inner).poll_next(cx) {
+            let polled = Pin::new(&mut this.inner).poll_next(cx);
+            if let Some(idle) = this.idle_timeout {
+                if polled.is_pending() {
+                    let deadline = this
+                        .idle_deadline
+                        .get_or_insert_with(|| Box::pin(tokio::time::sleep(idle)));
+                    if deadline.as_mut().poll(cx).is_ready() {
+                        this.stalled = true;
+                        return Poll::Ready(Some(Err(Error::StreamStalled {
+                            idle_secs: idle.as_secs(),
+                        })));
+                    }
+                } else {
+                    // Any progress (bytes, error, end) disarms the clock.
+                    this.idle_deadline = None;
+                }
+            }
+            match polled {
                 Poll::Ready(Some(Ok(bytes))) => {
                     // Incremental UTF-8 decode: a multibyte char split across
                     // chunk boundaries must not drop either half.
@@ -1865,6 +1934,119 @@ Connection: close
         server.abort();
         assert_eq!(events, 2, "both duplicated deltas must be yielded");
         assert_eq!(got, "HelloHello", "duplicated deltas append, never drop");
+    }
+
+    /// Serve an SSE body without Content-Length, one event per `(delay,
+    /// content)` step, then hold the socket open for `hold` before closing.
+    async fn drip_sse_server(
+        steps: Vec<(u64, &'static str)>,
+        hold: Duration,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+                    )
+                    .await;
+                for (delay_ms, content) in steps {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    let event = format!(
+                        "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"demo\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{content}\"}},\"finish_reason\":null}}]}}\n\n"
+                    );
+                    if sock.write_all(event.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+                tokio::time::sleep(hold).await;
+                let _ = sock.write_all(b"data: [DONE]\n\n").await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (addr, server)
+    }
+
+    fn drip_client(addr: std::net::SocketAddr, timeout: Duration) -> OpenAIClient {
+        OpenAIClient::new(ClientConfig {
+            base_url: format!("http://{addr}"),
+            api_key: Some("test-key".into()),
+            timeout,
+            max_context_length: 8000,
+            rate_limit: crate::config::RateLimitSettings {
+                max_retries: 1,
+                base_delay_secs: 0,
+                max_delay_secs: 1,
+                bucket_capacity: 100,
+                bucket_refill_rate: 100.0,
+            },
+            prompt_cache_ttl: Default::default(),
+        })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chat_streaming_outlives_timeout_while_data_flows() {
+        // 2026-10-13: `timeout_secs` was a reqwest TOTAL timeout on the
+        // streaming request, so every stream longer than it died mid-body
+        // ("error decoding response body" at exactly 60s). A stream that
+        // keeps producing data must run past the timeout.
+        use futures::StreamExt;
+        let (addr, server) = drip_sse_server(
+            vec![(0, "A"), (400, "B"), (400, "C"), (400, "D")],
+            Duration::from_millis(100),
+        )
+        .await;
+        let client = drip_client(addr, Duration::from_secs(1));
+        let mut stream = client
+            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("stream should connect");
+        let mut got = String::new();
+        while let Some(chunk) = stream.next().await {
+            let event = chunk.expect("no chunk may fail while data keeps flowing");
+            if let Some(content) = event.choices.first().and_then(|c| c.delta.content.clone()) {
+                got.push_str(&content);
+            }
+        }
+        server.abort();
+        assert_eq!(got, "ABCD", "a 1.3s stream must survive a 1s timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chat_streaming_reports_a_silent_stream_as_stalled() {
+        use futures::StreamExt;
+        let (addr, server) = drip_sse_server(vec![(0, "A")], Duration::from_secs(5)).await;
+        let client = drip_client(addr, Duration::from_millis(500));
+        let mut stream = client
+            .chat_streaming("demo", &[Message::user("hi")], None, None, None)
+            .await
+            .expect("stream should connect");
+        let mut got = String::new();
+        let mut stalled = false;
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(event) => {
+                    if let Some(content) =
+                        event.choices.first().and_then(|c| c.delta.content.clone())
+                    {
+                        got.push_str(&content);
+                    }
+                }
+                Err(Error::StreamStalled { .. }) => stalled = true,
+                Err(other) => panic!("expected a stall, got {other}"),
+            }
+        }
+        server.abort();
+        assert_eq!(got, "A");
+        assert!(
+            stalled,
+            "silence past the idle limit must end the stream as a stall"
+        );
+        assert!(Error::StreamStalled { idle_secs: 0 }.is_transient());
     }
 
     #[test]
