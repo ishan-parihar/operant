@@ -95,7 +95,10 @@ pub fn spawn_recap_engine(
             let quiet = tokio::time::sleep(idle);
             tokio::select! {
                 () = quiet => {}
-                Some(()) = act_rx.recv() => continue, // activity: re-arm on next turn end
+                Some(()) = act_rx.recv() => {
+                    tracing::debug!(session = %session_id, "recap cancelled by activity");
+                    continue; // activity: re-arm on next turn end
+                }
                 else => continue,
             }
             // Snapshot the transcript now — consistent prefix, read once.
@@ -108,7 +111,14 @@ pub fn spawn_recap_engine(
             let request = ChatRequest::new(model.clone(), view).with_stream(false);
             let reply = match client.chat(request).await {
                 Ok(r) => r,
-                Err(_) => continue, // side turn: degrade to silence, never block the session
+                Err(e) => {
+                    // Side turn: degrade to silence, never block the session —
+                    // but say WHY (route flakes are the top silent-kill cause
+                    // for the recap chain; without this line the E2E symptom
+                    // is just "nothing arrived").
+                    tracing::warn!(error = %e, session = %session_id, "recap side-turn call failed");
+                    continue;
+                }
             };
             let text = reply
                 .choices
@@ -119,6 +129,7 @@ pub fn spawn_recap_engine(
             if text.is_empty() {
                 continue;
             }
+            tracing::debug!(session = %session_id, "recap delivered to host callback");
             deliver(Recap { session_id, text });
         }
     });
@@ -173,7 +184,9 @@ mod tests {
         let delivered = Arc::new(Mutex::new(Vec::<Recap>::new()));
         let d2 = delivered.clone();
         let engine = spawn_recap_engine(
-            Arc::new(FixedClient("goal: testing; task: recap engine; next: verify")),
+            Arc::new(FixedClient(
+                "goal: testing; task: recap engine; next: verify",
+            )),
             "m".to_string(),
             Duration::from_millis(10),
             rx,
