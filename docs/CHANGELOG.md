@@ -542,6 +542,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-790 — command backlog closed at the dispatch layer: no
+  registered command can fall through to the model as prompt text.**
+  Sweep was 48/106: 58 registered names (split, splitview, account, zzz,
+  commit, swarm, …) neither the TUI intercept nor the command registry
+  handled, so typing them submitted "/split" to the LLM as a prompt. Fix:
+  a not-wired catch-all in BOTH dispatch loops (interactive + headless
+  sim) — a REGISTERED name (hidden aliases included, via the new
+  registered_command_names_including_hidden accessor) that no handler
+  claims is consumed with an honest "/x is registered but not wired in
+  operant yet — see /help" notice instead of silently paying a model
+  turn. Unregistered text still submits normally. The headless sim now
+  mirrors the interactive dispatch (registry fallback + catch-all), so
+  command_sweep.py measures production behavior: **106/106 consumed.**
+  Suite 1751/0; corpus 0-drift.
 - **iter-785 — glitch 2 fixed: thinking that precedes a tool call now
   renders ABOVE the tool row.** Root cause: with P0-2's deferred flush
   (the AG|ENTS.md seam fix), a tool row settled into the Body section

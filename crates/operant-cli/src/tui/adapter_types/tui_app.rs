@@ -680,6 +680,24 @@ impl TuiApp {
                             }
                             continue;
                         }
+                        // (iter-790, command backlog) A REGISTERED command name
+                        // that neither the TUI intercept nor the registry
+                        // handles must never fall through to the model as
+                        // prompt text (the "broken commands" complaint): the
+                        // autocomplete advertised it, so consuming it with
+                        // an honest notice beats silently sending "/split" to
+                        // the LLM. Unregistered text still submits normally.
+                        if crate::tui::operant_app::app::registered_command_names_including_hidden()
+                            .any(|name| name.trim_start_matches('/') == cmd)
+                        {
+                            self.app.push_system_message(
+                                format!(
+                                    "/{cmd} is registered but not wired in operant yet — see /help for working commands"
+                                ),
+                                crate::tui::app::SystemMessageStyle::Info,
+                            );
+                            continue;
+                        }
                     }
 
                     if let Some(ref agent) = agent {
@@ -1007,6 +1025,31 @@ impl TuiApp {
                         let (cmd, args) = crate::input::parse_slash_command(&input);
                         if self.app.handle_tui_command(cmd, args) {
                             self.app.clear_failed_input_recovery();
+                            continue;
+                        }
+                        // Mirror the interactive loop exactly (registry
+                        // fallback + registered-name catch-all) so the
+                        // simulator is faithful and the command sweep
+                        // measures the same dispatch as production.
+                        if let Some(canonical) = self.app.command_registry.resolve(cmd) {
+                            let result = self.app.command_registry.execute(canonical, args).await;
+                            if let crate::commands::CommandResult::Message(output) = result {
+                                self.app.push_system_message(
+                                    output,
+                                    crate::tui::app::SystemMessageStyle::Info,
+                                );
+                            }
+                            continue;
+                        }
+                        if crate::tui::operant_app::app::registered_command_names_including_hidden()
+                            .any(|name| name.trim_start_matches('/') == cmd)
+                        {
+                            self.app.push_system_message(
+                                format!(
+                                    "/{cmd} is registered but not wired in operant yet — see /help for working commands"
+                                ),
+                                crate::tui::app::SystemMessageStyle::Info,
+                            );
                             continue;
                         }
                     }

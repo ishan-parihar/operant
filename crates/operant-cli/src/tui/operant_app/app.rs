@@ -442,6 +442,14 @@ pub(crate) fn registered_command_entries() -> impl Iterator<Item = (&'static str
         .map(|command| (command.name, command.help))
 }
 
+/// Every registered name INCLUDING hidden commands (iter-790: the
+/// not-wired catch-all must recognize hidden aliases like `/split` too —
+/// the autocomplete shows them, so submitting one must not fall through to
+/// the model as prompt text either).
+pub(crate) fn registered_command_names_including_hidden() -> impl Iterator<Item = &'static str> {
+    REGISTERED_COMMANDS.iter().map(|command| command.name)
+}
+
 // [port-decision] shell/ slash-command input probes (batch-3): ui_input.rs:41,47
 // reference these two helpers. Their upstream implementations (input.rs:87-92,
 // slash_command_parser.rs:26-124) port verbatim below; `scan_slash_tokens`
