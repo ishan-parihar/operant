@@ -142,8 +142,7 @@ impl OperantAgent {
         final_response: Option<&Message>,
         review_fired: bool,
     ) -> Result<Message> {
-        let grace_request = ChatRequest::new(self.effective_model(), messages.to_vec())
-            .with_stream(self.config.stream);
+        let grace_request = self.fitted_request(&self.effective_model(), messages, Vec::new());
 
         let grace_result = if self.config.stream {
             let stream = self.client.chat_streaming(grace_request).await?;
@@ -736,9 +735,7 @@ impl OperantAgent {
                 }
             }
 
-            let request = ChatRequest::new(self.effective_model(), messages.clone())
-                .with_tools(tools)
-                .with_stream(self.config.stream);
+            let request = self.fitted_request(&self.effective_model(), &messages, tools);
 
             // Emit LlmRequest observer event
             if let Some(ref obs) = self.observer {
@@ -792,9 +789,7 @@ impl OperantAgent {
                             // Rebuild request with compressed messages
                             let tools = self.tools_for_turn(&messages).await;
                             let retry_request =
-                                ChatRequest::new(self.effective_model(), messages.clone())
-                                    .with_tools(tools)
-                                    .with_stream(self.config.stream);
+                                self.fitted_request(&self.effective_model(), &messages, tools);
                             self.client.chat_streaming(retry_request).await?
                         } else if classified.should_rotate_credential
                             && !retry_state.rotate_attempted
@@ -819,9 +814,7 @@ impl OperantAgent {
                                 .await;
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
-                                    ChatRequest::new(self.effective_model(), messages.clone())
-                                        .with_tools(tools)
-                                        .with_stream(self.config.stream);
+                                    self.fitted_request(&self.effective_model(), &messages, tools);
                                 self.client.chat_streaming(retry_request).await?
                             } else {
                                 warn!("No more credentials to rotate — returning original error");
@@ -913,9 +906,7 @@ impl OperantAgent {
                                 );
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
-                                    ChatRequest::new(self.effective_model(), messages.clone())
-                                        .with_tools(tools)
-                                        .with_stream(self.config.stream);
+                                    self.fitted_request(&self.effective_model(), &messages, tools);
                                 stream = self
                                     .call_with_loop_timeout(
                                         self.client.chat_streaming(retry_request),
@@ -1007,9 +998,7 @@ impl OperantAgent {
                             .await;
                             let tools = self.tools_for_turn(&messages).await;
                             let retry_request =
-                                ChatRequest::new(self.effective_model(), messages.clone())
-                                    .with_tools(tools)
-                                    .with_stream(self.config.stream);
+                                self.fitted_request(&self.effective_model(), &messages, tools);
                             self.call_with_loop_timeout(self.client.chat(retry_request))
                                 .await?
                         } else if classified.should_rotate_credential
@@ -1034,9 +1023,7 @@ impl OperantAgent {
                                 .await;
                                 let tools = self.tools_for_turn(&messages).await;
                                 let retry_request =
-                                    ChatRequest::new(self.effective_model(), messages.clone())
-                                        .with_tools(tools)
-                                        .with_stream(self.config.stream);
+                                    self.fitted_request(&self.effective_model(), &messages, tools);
                                 self.call_with_loop_timeout(self.client.chat(retry_request))
                                     .await?
                             } else {

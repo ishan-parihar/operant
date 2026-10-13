@@ -58,6 +58,84 @@ pub fn estimate_total_tokens(messages: &[Message]) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// output-token fitting (omp `output-budget.ts` parity, iter-792)
+// ---------------------------------------------------------------------------
+
+/// Smallest output cap the fitter considers worth requesting (omp
+/// `MIN_FITTED_OUTPUT_TOKENS`). Not a hard floor here: when the room itself
+/// shrinks below this, the fitter still requests the room — a 400 rejection
+/// (what requesting MIN inside a smaller window produces) loses the whole
+/// call, while a tiny admissible cap lets compaction rescue the next turn.
+/// The constant documents the point at which a session should compact
+/// rather than keep fitting.
+pub const MIN_FITTED_OUTPUT_TOKENS: u32 = 1024;
+
+/// Absolute headway subtracted from the remaining room before fitting (omp
+/// `OUTPUT_FIT_HEADWAY_TOKENS`, measured there against a 262,144-token host:
+/// fitted caps landed +11 to +42 tokens over the true count and were rejected
+/// 400 — 64 covers the observed drift with margin). Covers chat-template
+/// framing and reasoning wrappers no local count can see.
+pub const OUTPUT_FIT_HEADWAY_TOKENS: u32 = 64;
+
+/// Local prompt estimates are padded by 1/this before sizing the cap (omp
+/// `PROMPT_ESTIMATE_MARGIN_DIVISOR`): the local chars/4 heuristic can
+/// disagree with the provider's tokenizer by a few percent, and
+/// undercounting reproduces the request-rejection this fitter exists to
+/// prevent. A provider-REPORTED anchor is exact and skips this margin.
+const PROMPT_ESTIMATE_MARGIN_DIVISOR: u32 = 10;
+
+/// Fit an output-token cap so `prompt + output` stays inside the model's
+/// context window.
+///
+/// Chat-Completions providers (OpenAI, DeepSeek, vLLM, aroute) reject a
+/// request whose prompt tokens + `max_tokens` exceed the window — every
+/// such request fails with a 400 BEFORE generation starts, long before
+/// compaction would rescue it, and side turns (advisor, recap, background
+/// review) have no overflow-recovery path at all. omp derived this fitter
+/// from exactly that incident class (`output-budget.ts`); the constants are
+/// theirs, measured, and cited in provenance above.
+///
+/// * `window` — the model's context window (0 or absent = unknown → no fit).
+/// * `prompt_tokens` — provider-reported prompt size when one is fresh
+///   (`estimate_current_tokens`'s `prefer_reported` already resolves this),
+///   else the local `estimate_total_tokens` heuristic.
+/// * `prompt_is_reported` — true when `prompt_tokens` came from the
+///   provider's own usage report (skip the 10% margin); false when it is a
+///   local estimate (apply it).
+///
+/// Returns the fitted cap, or `None` when no fitting is possible/needed
+/// (no window known, prompt unknown, or the requested cap already fits).
+/// Callers apply the result as `max_tokens = fitted` on the request.
+pub fn fit_output_tokens(
+    requested: Option<u32>,
+    window: usize,
+    prompt_tokens: usize,
+    prompt_is_reported: bool,
+) -> Option<u32> {
+    if window == 0 || prompt_tokens == 0 {
+        return None;
+    }
+    let padded = if prompt_is_reported {
+        prompt_tokens
+    } else {
+        prompt_tokens + prompt_tokens / PROMPT_ESTIMATE_MARGIN_DIVISOR as usize
+    };
+    let room = window
+        .saturating_sub(padded)
+        .saturating_sub(OUTPUT_FIT_HEADWAY_TOKENS as usize);
+    let room_u32 = u32::try_from(room).ok()?;
+    match requested {
+        // No cap requested: providers default to their own (often huge)
+        // max_tokens, which is exactly the rejection shape. Fit to the room.
+        None => Some(room_u32),
+        // Requested cap already fits: leave it untouched — the caller's
+        // preference is respected, zero behavior change for small prompts.
+        Some(req) if req <= room_u32 => None,
+        Some(_) => Some(room_u32),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // tool_use / tool_result correlation
 // ---------------------------------------------------------------------------
 
@@ -920,6 +998,73 @@ pub fn manage_context(
 mod tests {
     use super::*;
     use crate::client::{Message, Role};
+
+    // ── output-token fitting (iter-792) ────────────────────────────────
+
+    /// The incident shape this fitter exists to prevent: a large requested
+    /// cap (or provider default) plus a big prompt exceeds the window and
+    /// the provider 400s the request before generation. The fitter must
+    /// shrink the cap to window − prompt − headway.
+    #[test]
+    fn fit_output_tokens_shrinks_an_oversized_cap() {
+        // window 128k, prompt 120k reported: 8k room minus 64 headway.
+        let fitted = fit_output_tokens(Some(32_768), 128_000, 120_000, true);
+        assert_eq!(fitted, Some(128_000 - 120_000 - 64));
+    }
+
+    /// A requested cap that already fits is left untouched — the fitter is
+    /// a guard, not a reducer; small prompts keep their caller preference.
+    #[test]
+    fn fit_output_tokens_leaves_a_fitting_cap_alone() {
+        assert_eq!(fit_output_tokens(Some(4096), 128_000, 1_000, true), None);
+        // None-requested on a small prompt: the whole room is the cap.
+        assert_eq!(fit_output_tokens(None, 128_000, 1_000, true), Some(126_936));
+    }
+
+    /// No cap requested: fit the largest useful cap so the provider's own
+    /// (often window-sized) default can never produce a rejected request.
+    #[test]
+    fn fit_output_tokens_fits_a_cap_when_none_requested() {
+        // 100k reported, window 128k → 27,936 room → floor 1024 applies? No:
+        // 27,936 > 1024, so the fitted cap is the full room.
+        let fitted = fit_output_tokens(None, 128_000, 100_000, true);
+        assert_eq!(fitted, Some(128_000 - 100_000 - 64));
+    }
+
+    /// The floor: when the room shrinks below 1024 the fitter still requests
+    /// the room itself — requesting more reproduces the 400-rejection class;
+    /// the tiny-but-admissible cap lets the turn land and compaction rescue
+    /// the next one.
+    #[test]
+    fn fit_output_tokens_requests_the_room_when_it_shrinks() {
+        let fitted = fit_output_tokens(Some(8192), 128_000, 127_500, true);
+        assert_eq!(fitted, Some(436)); // 128000-127500-64 = 436 < 1024
+        // exactly at the floor boundary:
+        let fitted = fit_output_tokens(Some(8192), 128_000, 126_912, true);
+        assert_eq!(fitted, Some(1024));
+        assert_eq!(MIN_FITTED_OUTPUT_TOKENS, 1024);
+    }
+
+    /// Local (heuristic) prompt counts get the 10% margin; provider-reported
+    /// counts are exact and skip it. Same arithmetic, two trust levels.
+    #[test]
+    fn fit_output_tokens_pads_local_estimates_only() {
+        // 100k local → padded 110k → room 17,936.
+        let local = fit_output_tokens(Some(32_768), 128_000, 100_000, false);
+        assert_eq!(local, Some(128_000 - 110_000 - 64));
+        // 100k reported → room 27,936.
+        let reported = fit_output_tokens(Some(32_768), 128_000, 100_000, true);
+        assert_eq!(reported, Some(128_000 - 100_000 - 64));
+        assert!(local.unwrap() < reported.unwrap());
+    }
+
+    /// Unknown window / unknown prompt: no fit, no behavior change. The
+    /// fitter must never invent a cap when it cannot see the room.
+    #[test]
+    fn fit_output_tokens_no_op_without_window_or_prompt() {
+        assert_eq!(fit_output_tokens(Some(4096), 0, 100, true), None);
+        assert_eq!(fit_output_tokens(Some(4096), 128_000, 0, true), None);
+    }
 
     fn make_msg(role: Role, content: impl Into<String>) -> Message {
         Message::new(role, content.into())

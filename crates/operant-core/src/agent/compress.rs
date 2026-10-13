@@ -1,6 +1,7 @@
 //! `compress` — method-group impl block extracted verbatim from agent/mod.rs.
 
 use crate::client::{Message, Role, Usage};
+use crate::schema::ToolSchema;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -426,6 +427,45 @@ impl OperantAgent {
                 .load(std::sync::atomic::Ordering::Relaxed),
             crate::context_management::estimate_total_tokens(messages),
         )
+    }
+
+    /// Build the LLM request with the output-token cap fitted to the context
+    /// window (omp `output-budget.ts` parity, iter-792).
+    ///
+    /// Chat-Completions providers reject a request whose prompt + `max_tokens`
+    /// exceeds the window — a 400 BEFORE generation that the reactive
+    /// overflow-compressor can never rescue (and side turns have no recovery
+    /// at all). This sizes `max_tokens` to `window − prompt − headway` so the
+    /// request is always admissible; a cap that already fits is left alone.
+    /// `prompt_is_reported` follows `estimate_current_tokens`'s preference:
+    /// the provider's own count is exact (no margin), the heuristic is padded
+    /// by 10% so undercounting cannot reproduce the rejection.
+    pub(crate) fn fitted_request(
+        &self,
+        model: &str,
+        messages: &[Message],
+        tools: Vec<ToolSchema>,
+    ) -> ChatRequest {
+        let prompt = self.estimate_current_tokens(messages);
+        let reported = self
+            .last_prompt_tokens
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0;
+        let request = ChatRequest::new(model.to_string(), messages.to_vec())
+            .with_tools(tools)
+            .with_stream(self.config.stream);
+        match crate::context_management::fit_output_tokens(
+            request.max_tokens,
+            self.config.context_window,
+            prompt,
+            reported,
+        ) {
+            Some(fitted) => ChatRequest {
+                max_tokens: Some(fitted),
+                ..request
+            },
+            None => request,
+        }
     }
 
     /// Apply the tool-result spend guard to one tool output before it joins the
