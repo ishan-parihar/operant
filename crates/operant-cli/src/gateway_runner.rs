@@ -1941,6 +1941,26 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         Some(memory.clone()),
     )
     .await?;
+    // Idle recap + advisor on the GATEWAY agent too (iters 793/794 wired
+    // the TUI only — the flagship surface for both is a Telegram user
+    // stepping away, so the gateway agent is where the engines earn their
+    // keep). Delivery rides the same event channel the consumer task below
+    // already drains; its BackgroundReview arm (added with this change)
+    // sends the note/recap to the ACTIVE channel — no new plumbing.
+    //
+    // Recap activity: the handler's inbound-message path notifies the
+    // handle on every user message (cancel-on-activity, omp parity).
+    //
+    // Cron agent: deliberately NOT given the engines. Its turns are
+    // unattended seat cycles — no user is watching a cron transcript, a
+    // 240s-idle recap would fire into an empty channel, and the advisor
+    // would double LLM spend on every org seat tick. The TUI and the live
+    // gateway chat are the interactive surfaces; that is where the
+    // engines run.
+    let mut agent = agent;
+    let idle = app_config.agent.recap_idle_seconds;
+    let gateway_recap_activity = agent.attach_recap_engine(std::time::Duration::from_secs(idle));
+    agent.attach_advisor(app_config.advisor.clone(), crate::client_config(app_config));
     // Wire the permission channel so the agent can request approval for
     // dangerous tools (bash, file_write, file_edit). Without this, the
     // agent runs tools silently. (Bug #1 from iter-98 audit.)
@@ -2778,6 +2798,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // starts a fresh chronological message.
                     progress_tracker.close_group(&key);
                 }
+                AgentEvent::BackgroundReview { summary } => {
+                    // Advisor notes (⚑) and idle recaps (※) arriving on the
+                    // GATEWAY: deliver to the active channel as their own
+                    // message — the Telegram twin of the TUI card. When no
+                    // channel is active (no user is mid-chat) the note is
+                    // dropped: a recap fired from an idle DM session still
+                    // has that DM as the active channel, so in practice the
+                    // only drop case is a cold boot with no session yet.
+                    let msg = OutgoingMessage::new(&channel_id, &summary).with_thread_id(thread_id);
+                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                }
                 AgentEvent::IterationComplete { .. } => {
                     // Segment break (hermes MessageStop/_NEW_SEGMENT parity):
                     // finalize this writing block as its own message and
@@ -3174,6 +3205,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         let stream_delivery_for_turns = stream_delivery_for_dispatch.clone();
         let current_channel_for_turns = current_channel.clone();
         let telegram_token_for_turns = telegram_token.clone();
+        // Idle-recap cancel handle (omp parity): cloned per turn so the
+        // dispatch loop's original stays valid — same Arc-free clone
+        // discipline as the channel clones above.
+        let recap_activity_for_turns = gateway_recap_activity.clone();
         // A live handle on each running turn's interrupt flag, so `/stop` has
         // real machinery to signal: the agent's run loop already polls this
         // exact flag. A `()` here — which is what this used to be — meant there
@@ -3532,6 +3567,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let current_channel = current_channel_for_turns.clone();
                         let telegram_token = telegram_token_for_turns.clone();
                         let done_tx = turn_done_tx.clone();
+                        let recap_activity_for_turn = recap_activity_for_turns.clone();
                         tokio::spawn(async move {
                     // Wrap the turn body for error resilience — a single message
                     // processing error will not crash the whole gateway.
@@ -3694,6 +3730,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     );
                     *current_channel.lock().await =
                         Some((platform.clone(), channel_id.clone(), msg.thread_id));
+
+                    // ── 5.5b Cancel any pending idle recap ─────────────────
+                    // User activity arrived: the recap exists to greet a
+                    // returning user, never to interrupt one (omp parity —
+                    // same contract as the TUI's submit_user_message).
+                    recap_activity_for_turn.notify();
+                    // (notify is a try_send on the shared channel — the per-turn
+                    // clone keeps the dispatch loop's original valid.)
 
                     // ── 5.6 Per-turn .env reload for credential rotation ─────────
                     operant_core::env_passthrough::reload_dotenv();
