@@ -2,7 +2,6 @@
 
 use crate::tui::app::{App, ContextMenuKind};
 use crate::tui::operant_app::tui_state::TuiState as _;
-use crate::tui::operant_model::{DisplayMessage, PreparedChatFrame};
 use crate::tui::theme_colors;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -11,83 +10,6 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 use unicode_width::UnicodeWidthStr;
-
-/// Clean-copy text for a run of fully-covered transcript lines, rebuilt from
-/// the pre-wrap source so wrapped fragments rejoin into their logical line
-/// with the ORIGINAL spacing (2026-10-09 live-audit P1-6: cell-based copy
-/// reflowed nothing — every hard-wrapped row copied as its own line with the
-/// wrap padding baked in, and tool-status rows copied as text).
-///
-/// Lines owned by a `tool` display message are skipped: the copied text is
-/// the conversation's TEXT, not the ✓-status chrome. The filter needs the
-/// per-message `message_boundaries` to line up with `messages`; when they
-/// don't (synthetic/partial bodies) the filter degrades to include-everything
-/// rather than misclassify.
-///
-/// Returns `None` when any covered line lacks map data (e.g. a synthetic
-/// body) — the caller falls back to cell extraction for the whole run.
-pub(crate) fn reflowed_selection_text(
-    frame: &PreparedChatFrame,
-    messages: &[DisplayMessage],
-    from_line: usize,
-    to_line: usize,
-) -> Option<String> {
-    use crate::tui::operant_model::WrappedLineMap;
-
-    let mut text = String::new();
-    // The raw line the previous emitted group came from, so a new logical
-    // line starts a new output line.
-    // Keyed by (section, raw_line): raw indices are section-local, so equal
-    // indices in adjacent sections are different logical lines.
-    let mut prev_raw: Option<(usize, usize)> = None;
-    let mut wrote_any = false;
-
-    'lines: for line in from_line..=to_line {
-        // Find the section owning this content line.
-        let (section_idx, section) = frame.sections.iter().enumerate().find(|(_, s)| {
-            line >= s.line_start && line < s.line_start + s.prepared.wrapped_lines.len()
-        })?;
-        let local = line - section.line_start;
-        let prepared = &section.prepared;
-        let map: WrappedLineMap = *prepared.wrapped_line_map.get(local)?;
-        let raw = prepared.raw_plain_lines.get(map.raw_line)?;
-
-        // Tool-row filter: the owning message via cumulative boundaries.
-        if prepared.message_boundaries.len() == messages.len() {
-            if let Some(owner) = prepared
-                .message_boundaries
-                .iter()
-                .position(|b| b.wrapped_len > local)
-            {
-                if messages.get(owner).is_some_and(|m| m.role == "tool") {
-                    // Skip the whole group: mark so the next text line does not
-                    // merge with the one before the skipped chrome.
-                    prev_raw = None;
-                    continue 'lines;
-                }
-            }
-        }
-
-        if prev_raw != Some((section_idx, map.raw_line)) {
-            if wrote_any {
-                text.push('\n');
-            }
-            prev_raw = Some((section_idx, map.raw_line));
-            wrote_any = true;
-        }
-
-        // Char-column slice of the source line: WrappedLineMap columns are
-        // char offsets into the raw line (the renderer records them while
-        // wrapping), so slice on char boundaries.
-        let start = map.start_col.min(raw.chars().count());
-        let end = map.end_col.min(raw.chars().count()).max(start);
-        for (i, ch) in raw.chars().enumerate().skip(start).take(end - start) {
-            let _ = i;
-            text.push(ch);
-        }
-    }
-    Some(text)
-}
 
 pub(crate) fn cache_selectable_row_text(frame: &mut Frame, app: &App) {
     let selectable_area = app.last_selectable_area.get();
@@ -310,18 +232,22 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
     *app.selection_text.borrow_mut() = selection_copy_text(app);
 }
 
-/// The text a drag selection copies, extracted synchronously from the last
-/// drawn frame (jcode `copy_selection_text` model) — not from painted cells.
-/// Callers on the input path (mouse release) get the CURRENT selection even
-/// when no frame was drawn since the last drag event, and a selection that
-/// extends past the viewport copies in full.
+/// Display messages whose rows are interface chrome, not conversation text:
+/// a selection that also covers conversation text never copies them.
+const UI_ROLES: &[&str] = &["tool", "meta", "usage", "swarm", "background_task"];
+
+/// The text a drag selection copies — clean document text, the jcode model
+/// (`ui/copy_selection.rs::copy_selection_text_from_raw_lines_base`): both
+/// endpoints map through the frame's `wrapped_line_map` to (logical line,
+/// column), and whole LOGICAL lines are copied, so soft wraps never become
+/// line breaks and gutter prefixes (`1›`, hanging indents) never copy.
 ///
-/// Edge lines slice at the dragged columns; fully-covered interior lines
-/// copy from the pre-wrap source (clean copy, P1-6: wrapped fragments
-/// rejoin, tool-status rows drop out), falling back to the wrapped rows when
-/// the frame lacks map data.
+/// Rows that are interface chrome — tool/status rows, and the header, which
+/// carries no line map — are dropped when the selection also covers
+/// conversation text; a selection entirely inside them copies them as shown.
+/// Extracted synchronously from the last drawn frame, so release, Ctrl+C and
+/// copy mode always see the current selection, including off-screen parts.
 pub(crate) fn selection_copy_text(app: &App) -> String {
-    use crate::tui::operant_ui::chat_line_copy_slice as slice;
     let (Some(anchor), Some(focus)) = (app.selection_anchor, app.selection_focus) else {
         return String::new();
     };
@@ -333,34 +259,125 @@ pub(crate) fn selection_copy_text(app: &App) -> String {
     } else {
         (focus, anchor)
     };
-    let count = crate::tui::operant_ui::chat_copy_line_count();
+    let Some(frame) = crate::tui::operant_ui::last_chat_frame() else {
+        return String::new();
+    };
+    let count = frame.total_wrapped_lines;
     if count == 0 {
         return String::new();
     }
     let end_line = end.1.min(count - 1);
     let start_line = start.1.min(end_line);
-    if start_line == end_line {
-        return slice(start_line, Some(start.0), Some(end.0)).unwrap_or_default();
-    }
-    let mut parts = vec![slice(start_line, Some(start.0), None).unwrap_or_default()];
-    if end_line >= start_line + 2 {
-        let interior = crate::tui::operant_ui::last_chat_frame()
-            .as_deref()
-            .and_then(|f| {
-                reflowed_selection_text(f, app.display_messages(), start_line + 1, end_line - 1)
-            })
-            .unwrap_or_else(|| {
-                (start_line + 1..end_line)
-                    .map(|line| slice(line, None, None).unwrap_or_default())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            });
-        if !interior.is_empty() {
-            parts.push(interior);
+
+    let messages = app.display_messages();
+    let ui_row = |line: usize| {
+        frame.wrapped_line_map(line).is_none()
+            || frame
+                .message_index_at_line(line)
+                .and_then(|i| messages.get(i))
+                .is_some_and(|m| UI_ROLES.contains(&m.role.as_str()))
+    };
+    let all_ui = (start_line..=end_line).all(ui_row);
+    let keep = |line: usize| all_ui || !ui_row(line);
+    let Some(first) = (start_line..=end_line).find(|&l| keep(l)) else {
+        return String::new();
+    };
+    let last = (start_line..=end_line)
+        .rev()
+        .find(|&l| keep(l))
+        .unwrap_or(first);
+    // An endpoint dropped as chrome moves inward to a line edge.
+    let from_col = (first == start_line).then_some(start.0);
+    let to_col = (last == end_line).then_some(end.0);
+
+    match raw_selection_text(&frame, first, last, from_col, to_col, &keep) {
+        Some(text) => text,
+        // No line map at an endpoint (all-chrome selection): copy the rows
+        // as displayed, minus gutter prefixes.
+        None => {
+            use crate::tui::operant_ui::chat_line_copy_slice as slice;
+            (first..=last)
+                .map(|line| {
+                    let from = if line == first { from_col } else { None };
+                    let to = if line == last { to_col } else { None };
+                    slice(line, from, to).unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim_end()
+                .to_string()
         }
     }
-    parts.push(slice(end_line, None, Some(end.0)).unwrap_or_default());
-    parts.join("\n").trim_end().to_string()
+}
+
+/// Copy logical (raw) lines between two selection endpoints. `from_col` /
+/// `to_col` are inclusive SCREEN columns on the first / last wrapped line
+/// (`None` = that line's edge). Raw lines owned by rows `keep` rejects are
+/// skipped. `None` when an endpoint has no line map.
+fn raw_selection_text(
+    frame: &crate::tui::operant_model::PreparedChatFrame,
+    first: usize,
+    last: usize,
+    from_col: Option<u16>,
+    to_col: Option<u16>,
+    keep: &dyn Fn(usize) -> bool,
+) -> Option<String> {
+    use crate::tui::operant_ui::{chat_text_col, display_col_slice, line_display_width};
+    // jcode `raw_selection_point`: wrapped display column → raw column.
+    let raw_point = |line: usize, screen_col: Option<u16>, at_end: bool| {
+        let map = frame.wrapped_line_map(line)?;
+        let copy_start = frame.wrapped_copy_offset(line).unwrap_or(0);
+        let segment = map.end_col.saturating_sub(map.start_col);
+        let local = match screen_col {
+            Some(col) => chat_text_col(line, col)?
+                .saturating_sub(copy_start)
+                .min(segment),
+            None if at_end => segment,
+            None => 0,
+        };
+        Some((map.raw_line, map.start_col + local))
+    };
+    let (start_raw, start_col) = raw_point(first, from_col, false)?;
+    // Inclusive screen column → exclusive end.
+    let (end_raw, end_col) = raw_point(last, to_col.map(|c| c.saturating_add(1)), true)?;
+    if end_raw < start_raw {
+        return None;
+    }
+    let dropped: std::collections::HashSet<usize> = (first..=last)
+        .filter(|&line| !keep(line))
+        .filter_map(|line| frame.wrapped_line_map(line).map(|m| m.raw_line))
+        .collect();
+
+    let mut lines: Vec<String> = Vec::new();
+    for raw in start_raw..=end_raw {
+        if dropped.contains(&raw) {
+            continue;
+        }
+        let text = frame.raw_plain_line(raw).unwrap_or("");
+        let width = line_display_width(text);
+        let from = if raw == start_raw {
+            start_col.min(width)
+        } else {
+            0
+        };
+        let to = if raw == end_raw {
+            end_col.min(width)
+        } else {
+            width
+        };
+        let piece = if to > from {
+            display_col_slice(text, from, to)
+        } else {
+            ""
+        };
+        let piece = piece.trim_end();
+        // Dropping a chrome row must not leave a double blank line.
+        if piece.is_empty() && lines.last().is_some_and(|l| l.is_empty()) {
+            continue;
+        }
+        lines.push(piece.to_string());
+    }
+    Some(lines.join("\n").trim().to_string())
 }
 
 /// Render a right-click context menu at the specified position.
@@ -485,114 +502,6 @@ mod tests {
         buf.set_string(0, 0, text, Style::default());
         buf
     }
-
-    // -- P1-6: reflowed clean copy ----------------------------------------
-
-    use crate::tui::operant_model::vendor_types::ToolCall;
-    use crate::tui::operant_model::{MessageBoundary, PreparedMessages, PreparedSectionKind};
-    use ratatui::text::Line;
-    use std::sync::Arc;
-
-    fn prepared_body(
-        raws: Vec<&str>,
-        maps: Vec<(usize, usize, usize)>,
-        boundaries: Vec<(u64, usize)>,
-    ) -> Arc<PreparedMessages> {
-        Arc::new(PreparedMessages {
-            wrapped_lines: maps.iter().map(|_| Line::from("x")).collect(),
-            wrapped_plain_lines: Arc::new(Vec::new()),
-            wrapped_copy_offsets: Arc::new(Vec::new()),
-            raw_plain_lines: Arc::new(raws.into_iter().map(str::to_string).collect()),
-            wrapped_line_map: Arc::new(
-                maps.iter()
-                    .map(|&(raw, s, e)| crate::tui::operant_model::WrappedLineMap {
-                        raw_line: raw,
-                        start_col: s,
-                        end_col: e,
-                    })
-                    .collect(),
-            ),
-            wrapped_user_indices: Vec::new(),
-            wrapped_user_prompt_starts: Vec::new(),
-            wrapped_user_prompt_ends: Vec::new(),
-            user_prompt_texts: Vec::new(),
-            image_regions: Vec::new(),
-            edit_tool_ranges: Vec::new(),
-            copy_targets: Vec::new(),
-            message_boundaries: boundaries
-                .into_iter()
-                .map(|(h, len)| MessageBoundary {
-                    msg_hash: h,
-                    wrapped_len: len,
-                    raw_len: 0,
-                    user_prompt_len: 0,
-                })
-                .collect(),
-            mermaid_pending_epoch: None,
-        })
-    }
-
-    fn frame_of(p: Arc<PreparedMessages>) -> PreparedChatFrame {
-        PreparedChatFrame::from_sections(vec![(PreparedSectionKind::Body, p)])
-    }
-
-    #[test]
-    fn reflow_joins_wrapped_fragments_into_the_logical_line() {
-        // One raw line hard-wrapped into two rows: the copy must rejoin them
-        // with the source's own spacing, not the wrap padding.
-        let raw = "The quick brown fox jumps";
-        let f = frame_of(prepared_body(
-            vec![raw],
-            vec![(0, 0, 12), (0, 12, 25)],
-            vec![(1, 2)],
-        ));
-        let msgs = vec![DisplayMessage::assistant(raw)];
-        assert_eq!(
-            reflowed_selection_text(&f, &msgs, 0, 1).as_deref(),
-            Some("The quick brown fox jumps")
-        );
-    }
-
-    #[test]
-    fn reflow_separates_logical_lines_and_drops_tool_chrome() {
-        // Two assistant lines around a tool status row: the copy carries the
-        // text lines only, chrome excluded.
-        let f = frame_of(prepared_body(
-            vec!["line one", "\u{2713} aft_read \u{b7} 33 tok", "line two"],
-            vec![(0, 0, 8), (1, 0, 18), (2, 0, 8)],
-            vec![(1, 1), (2, 2), (3, 3)],
-        ));
-        let msgs = vec![
-            DisplayMessage::assistant("line one"),
-            DisplayMessage::tool(
-                "\u{2713} aft_read \u{b7} 33 tok",
-                ToolCall {
-                    id: "c1".into(),
-                    name: "aft_read".into(),
-                    input: serde_json::Value::Null,
-                    intent: None,
-                    thought_signature: None,
-                },
-            ),
-            DisplayMessage::assistant("line two"),
-        ];
-        assert_eq!(
-            reflowed_selection_text(&f, &msgs, 0, 2).as_deref(),
-            Some("line one\nline two")
-        );
-    }
-
-    #[test]
-    fn reflow_falls_back_to_none_without_map_data() {
-        let mut p = prepared_body(vec!["x"], vec![(0, 0, 1)], vec![(1, 1)]);
-        let f = frame_of(p.clone());
-        let msgs = vec![DisplayMessage::assistant("x")];
-        Arc::make_mut(&mut p).wrapped_line_map = Arc::new(Vec::new());
-        let f = PreparedChatFrame::from_sections(vec![(PreparedSectionKind::Body, p)]);
-        assert_eq!(reflowed_selection_text(&f, &msgs, 0, 0), None);
-    }
-
-    // -- The blend --------------------------------------------------------
 
     #[test]
     fn blend_at_zero_is_the_identity() {

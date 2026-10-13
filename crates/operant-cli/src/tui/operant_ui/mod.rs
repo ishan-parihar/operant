@@ -2709,19 +2709,36 @@ pub(crate) fn chat_line_copy_slice(
         copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)?;
     let text = snapshot.wrapped_plain_line(abs_line)?;
     let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+    let start = from_col
+        .and_then(|col| chat_text_col(abs_line, col))
+        .unwrap_or(0)
+        .max(copy_start);
+    let end = to_col
+        .and_then(|col| chat_text_col(abs_line, col.saturating_add(1)))
+        .unwrap_or_else(|| line_display_width(text));
+    if end <= start {
+        return Some(String::new());
+    }
+    Some(display_col_slice(text, start, end).trim_end().to_string())
+}
+
+/// SCREEN column → display column within chat content line `abs_line`,
+/// resolved against the last drawn frame (content-area origin + that row's
+/// left margin), clamped to the line. The gutter prefix is NOT excluded.
+pub(crate) fn chat_text_col(abs_line: usize, screen_col: u16) -> Option<usize> {
+    let snapshot =
+        copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)?;
+    let text = snapshot.wrapped_plain_line(abs_line)?;
     // Left margins are recorded per visible row; off-screen rows carry none.
     let margin = abs_line
         .checked_sub(snapshot.scroll)
         .and_then(|row| snapshot.left_margins.get(row).copied())
         .unwrap_or(0);
     let origin = snapshot.content_area.x.saturating_add(margin);
-    let rel = |col: u16| clamp_display_col(text, col.saturating_sub(origin) as usize);
-    let start = from_col.map_or(0, rel).max(copy_start);
-    let end = to_col.map_or(line_display_width(text), |col| rel(col.saturating_add(1)));
-    if end <= start {
-        return Some(String::new());
-    }
-    Some(display_col_slice(text, start, end).trim_end().to_string())
+    Some(clamp_display_col(
+        text,
+        screen_col.saturating_sub(origin) as usize,
+    ))
 }
 
 /// Wrapped-line count of the last drawn chat frame's copy snapshot.

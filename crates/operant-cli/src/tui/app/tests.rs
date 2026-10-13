@@ -3812,3 +3812,92 @@ fn selection_copy_is_synchronous_and_not_clamped_to_the_viewport() {
     app.selection_focus = Some((col + 5, bottom));
     assert_eq!(app.refresh_selection_text(), "LINE29");
 }
+
+/// First frame line whose plain text contains `needle`.
+fn frame_line_of(needle: &str) -> usize {
+    let frame = crate::tui::operant_ui::last_chat_frame().expect("frame drawn");
+    (0..frame.total_wrapped_lines)
+        .find(|&l| {
+            frame
+                .wrapped_plain_line(l)
+                .is_some_and(|t| t.contains(needle))
+        })
+        .unwrap_or_else(|| panic!("{needle} not in frame"))
+}
+
+fn select_lines(app: &mut App, first: usize, last: usize) -> String {
+    let area = app.last_selectable_area.get();
+    app.selection_anchor = Some((area.x, first));
+    app.selection_focus = Some((area.x + area.width - 1, last));
+    app.refresh_selection_text()
+}
+
+#[test]
+fn copy_joins_soft_wraps_and_drops_gutters_like_jcode() {
+    // 2026-10-13 copy parity: soft-wrapped rows copied as separate lines and
+    // the prompt gutter (`1›`) came along. Copy is logical lines, text only.
+    let mut app = make_app();
+    let prompt = "PROMPTSTART ".to_string() + &"prompt words ".repeat(14) + "PROMPTEND";
+    let para = "PARASTART ".to_string() + &"alpha beta gamma delta ".repeat(10) + "PARAEND";
+    app.messages.push(Message::user(prompt.clone()));
+    app.messages.push(Message::assistant(para.clone()));
+    let _ = screen_rows(&app);
+    let (p0, p1) = (frame_line_of("PROMPTSTART"), frame_line_of("PROMPTEND"));
+    let (a0, a1) = (frame_line_of("PARASTART"), frame_line_of("PARAEND"));
+    assert!(p1 > p0 && a1 > a0, "both must soft-wrap for this test");
+
+    assert_eq!(
+        select_lines(&mut app, p0, p1),
+        prompt,
+        "prompt: one line, no 1›"
+    );
+    assert_eq!(select_lines(&mut app, a0, a1), para, "paragraph: one line");
+    assert_eq!(
+        select_lines(&mut app, p0, a1),
+        format!("{prompt}\n\n{para}"),
+        "logical lines keep their blank separator"
+    );
+}
+
+#[test]
+fn copy_drops_tool_rows_unless_only_tool_rows_are_selected() {
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.messages
+        .push(Message::assistant("BEFORE text".to_string()));
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "bash".to_string(),
+        after_index: 2,
+        status: ToolStatus::Done,
+        output_preview: Some("TOOLOUT".to_string()),
+        input_json: r#"{"command":"echo TOOLCMD"}"#.to_string(),
+    });
+    app.messages
+        .push(Message::assistant("AFTER text".to_string()));
+    let _ = screen_rows(&app);
+    let (b, t, a) = (
+        frame_line_of("BEFORE"),
+        frame_line_of("TOOLCMD"),
+        frame_line_of("AFTER"),
+    );
+    assert!(b < t && t < a);
+    assert_eq!(select_lines(&mut app, b, a), "BEFORE text\n\nAFTER text");
+    let only_tool = select_lines(&mut app, t, t);
+    assert!(only_tool.contains("TOOLCMD"), "{only_tool:?}");
+}
+
+#[test]
+fn copy_slices_exact_columns_on_wrapped_rows() {
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    let para = "alpha ".repeat(30) + "MIDWORD tail";
+    app.messages.push(Message::assistant(para));
+    let rows = screen_rows(&app);
+    let line = frame_line_of("MIDWORD");
+    let row = rows_containing(&rows, "MIDWORD")[0];
+    let col = rows[row].find("MIDWORD").unwrap() as u16;
+    app.selection_anchor = Some((col, line));
+    app.selection_focus = Some((col + 6, line));
+    assert_eq!(app.refresh_selection_text(), "MIDWORD");
+}

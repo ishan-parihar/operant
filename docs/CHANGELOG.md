@@ -474,6 +474,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-801 — TUI copy is clean document text (jcode raw-line model).**
+  Drag-select copied the selection's edge rows from *wrapped* screen rows,
+  so text broke wherever it soft-wrapped and gutter prefixes came along.
+  Both endpoints now map through the frame's `wrapped_line_map` to
+  (logical line, column), and whole logical lines are copied, as jcode's
+  `copy_selection_text_from_raw_lines_base` does: a wrapped paragraph or prompt
+  pastes as one line, without the `1›` gutter. Interface rows (tool/status rows,
+  and the header, which carries no line map) are dropped when the
+  selection also covers conversation text. A selection entirely inside them
+  still copies them. Replaces the edge/interior split and the P1-6 reflow
+  helper.
+
 - **iter-800 — TUI: large pastes reach the model.** A paste of 3+ lines
   or more than 150 chars shows as `[Pasted ~N lines #K]` in the composer and
   is stored in `PromptInputState.paste_contents`, but nothing read the
