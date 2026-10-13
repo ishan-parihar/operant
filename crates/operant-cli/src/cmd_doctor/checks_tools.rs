@@ -449,6 +449,71 @@ pub fn run_platform_checks(
     }
 
     // =====================================================================
+    // C'. Gateway Runtime — is the thing that serves Telegram/Discord/…
+    // actually running? The user-facing symptom this answers is "the bot
+    // never replies": a stopped gateway unit with a healthy config looks
+    // identical to a config bug unless something checks the process. No
+    // unit and no process is an issue when channels are enabled (a
+    // configured-but-dead gateway silently eats every inbound message);
+    // systemctl missing entirely stays an advisory.
+    // =====================================================================
+    let any_channel_enabled = config.gateway.telegram_enabled
+        || config.gateway.discord_enabled
+        || config.gateway.slack_enabled
+        || config.gateway.whatsapp_enabled
+        || config.gateway.email_enabled
+        || config.gateway.webhooks_enabled
+        || config.gateway.sms_twilio_enabled;
+    if any_channel_enabled {
+        match std::process::Command::new("systemctl")
+            .args(["--user", "is-active", "operant-gateway"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+        {
+            Ok(out) => {
+                let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if state == "active" {
+                    check_ok("gateway service", "(systemd unit active)");
+                } else if state.is_empty() {
+                    // No user unit by that name: not installed as a service.
+                    // A bare `operant gateway run` process still counts.
+                    let pgrep = std::process::Command::new("pgrep")
+                        .args(["-x", "operant"])
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                        .map(|o| !o.stdout.is_empty())
+                        .unwrap_or(false);
+                    if pgrep {
+                        check_ok(
+                            "gateway service",
+                            "(operant process running, no systemd unit)",
+                        );
+                    } else {
+                        check_fail(
+                            "gateway service",
+                            "(no systemd unit and no operant process)",
+                        );
+                        issues.push(
+                            "Gateway channels are enabled but nothing is running — start it with `operant gateway run` or `systemctl --user start operant-gateway`".to_string(),
+                        );
+                    }
+                } else {
+                    check_fail("gateway service", &format!("(systemd unit: {state})"));
+                    issues.push(format!(
+                        "Gateway systemd unit is '{state}' — restart with `systemctl --user restart operant-gateway`"
+                    ));
+                }
+            }
+            Err(_) => check_warn(
+                "gateway service",
+                "(systemctl not found — cannot check gateway unit)",
+            ),
+        }
+    }
+
+    // =====================================================================
     // D. Skills Hub
     // =====================================================================
     section_header("Skills Hub");

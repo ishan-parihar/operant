@@ -263,6 +263,53 @@ async fn probe_apikey_provider(
     }
 }
 
+/// Telegram gateway probe — resolves the configured bot token to its actual
+/// identity via `getMe`.
+///
+/// This exists because a token mismatch is invisible to every other check:
+/// `TELEGRAM_BOT_TOKEN` is just a string in `.env`, the gateway starts happily
+/// with any well-formed token, and the failure surfaces only at runtime as
+/// getUpdates 409 contention (another box polling the same bot) or replies
+/// arriving from the wrong bot. Observed 2026-10-13: the configured token
+/// belonged to @ip_zeroclaw_bot while testing targeted @ip_operant_testing_bot
+/// — no doctor check could have named that, so this one does.
+async fn probe_telegram_bot(token: String) -> ProbeResult {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return ProbeResult::warn("Telegram bot", "(could not create HTTP client)"),
+    };
+    match client
+        .get(format!("https://api.telegram.org/bot{token}/getMe"))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            if status != 200 {
+                return ProbeResult::fail_with(
+                    "Telegram bot",
+                    &format!("(getMe HTTP {status})"),
+                    "Check TELEGRAM_BOT_TOKEN in ~/.operant/.env",
+                );
+            }
+            match resp.json::<serde_json::Value>().await {
+                Ok(v) => {
+                    let username = v
+                        .pointer("/result/username")
+                        .and_then(|u| u.as_str())
+                        .unwrap_or("<unknown>");
+                    ProbeResult::ok_with("Telegram bot", &format!("(@{username})"))
+                }
+                Err(_) => ProbeResult::warn("Telegram bot", "(getMe returned non-JSON)"),
+            }
+        }
+        Err(e) => ProbeResult::warn("Telegram bot", &format!("({e})")),
+    }
+}
+
 /// **Section D** – AWS Bedrock credential check.
 ///
 /// Rust does not include a first-class AWS SDK, so this probe simply verifies
@@ -429,6 +476,16 @@ pub async fn run_api_checks(config: &AppConfig, issues: &mut Vec<String>) {
 
     // D. AWS Bedrock
     handles.push(tokio::spawn(probe_bedrock()));
+
+    // D'. Telegram bot identity — resolves the configured token to the bot
+    // it actually authenticates as. Catches wrong-token configs (the gateway
+    // would otherwise start fine and fail only at runtime, as 409 contention
+    // against whichever box holds the right token).
+    if config.gateway.telegram_enabled {
+        if let Some(token) = config.gateway.telegram_token.clone() {
+            handles.push(tokio::spawn(probe_telegram_bot(token)));
+        }
+    }
 
     // -- Collect all results ----------------------------------------------------
     let mut results: Vec<ProbeResult> = Vec::with_capacity(handles.len());

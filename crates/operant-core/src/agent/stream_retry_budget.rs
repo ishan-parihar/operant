@@ -177,6 +177,20 @@ impl StreamRetryBudget {
         self.started.elapsed()
     }
 
+    /// Restart the clock. Called when a stream call completes with a parsed
+    /// response: everything before it was productive tool work, not stall,
+    /// so the 45s bound must judge only the drop ladder that follows.
+    /// Without this, a long multi-tool turn (cron org seats: 60+ tool
+    /// turns, ~13 min) arrives at its first stream drop with the budget
+    /// already exhausted and gives up with `attempts: 0` — the ladder is
+    /// refused before it ever runs (observed 2026-10-13, elapsed 790s vs
+    /// budget 45s). The 2026-09-29 chat incident this module was built for
+    /// had no tool turns, so per-turn and per-stream-call clocks coincided
+    /// there; they diverge the moment a turn does real work.
+    pub fn reset(&mut self) {
+        self.started = Instant::now();
+    }
+
     /// True once the ladder has spent [`STREAM_DROP_RETRY_BUDGET`] re-issuing
     /// a stream that keeps dying. The caller must stop retrying and surface
     /// the failure rather than starting another attempt.
@@ -407,6 +421,30 @@ mod tests {
         let budget = StreamRetryBudget::new();
         assert!(!budget.exhausted());
         assert!(budget.remaining() <= STREAM_DROP_RETRY_BUDGET);
+    }
+
+    /// A long multi-tool turn must not arrive at its first stream drop with
+    /// the budget already spent. This is the 2026-10-13 cron-seat incident:
+    /// 67 tool turns (~790s) of productive work, then the first drop was
+    /// refused with `attempts: 0` because the per-turn clock pre-exhausted
+    /// the 45s bound. `reset()` on every parsed response is what makes the
+    /// bound about *stall* again.
+    #[test]
+    fn reset_rearms_the_budget_after_productive_tool_work() {
+        let mut budget = StreamRetryBudget::started_at(Instant::now() - Duration::from_secs(790));
+        assert!(
+            budget.exhausted(),
+            "pre-fix shape: 790s of tool work exhausts the per-turn clock"
+        );
+        budget.reset();
+        assert!(
+            !budget.exhausted(),
+            "post-fix shape: the ladder must judge only the stall that follows"
+        );
+        assert!(
+            budget.remaining() > STREAM_DROP_RETRY_BUDGET - Duration::from_millis(100),
+            "reset restores the full allowance (modulo scheduling epsilon)"
+        );
     }
 
     /// The bound must sit under the gateway's 60s "Still working..."

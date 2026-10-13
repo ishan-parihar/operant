@@ -478,7 +478,7 @@ impl OperantAgent {
         // attempt count. Started here — at the first attempt — because the
         // first attempt is the one that costs the most when the provider is
         // dead-but-accepting. See `agent/stream_retry_budget.rs` for why 45s.
-        let stream_retry_budget = self::stream_retry_budget::StreamRetryBudget::new();
+        let mut stream_retry_budget = self::stream_retry_budget::StreamRetryBudget::new();
         // Plan 006: empty-content retry counter is the shared
         // EmptyResponseCounter from agent/turn_rules.rs — same logic the
         // runtime Agent uses (no more silent divergence on max_retries).
@@ -1078,6 +1078,15 @@ impl OperantAgent {
                     turn_spend_tokens += usage_tokens;
                     // Reset retry state on successful LLM response.
                     retry_state.reset_on_success();
+                    // A parsed response proves everything the turn spent
+                    // before this stream call was productive tool work, not
+                    // stream stall. Restart the wall-clock ladder so a later
+                    // drop in a long multi-tool turn (cron org seats run 60+
+                    // tool turns) still earns its retries instead of being
+                    // cut at attempts:0 by elapsed time it did not spend
+                    // stalling (observed 2026-10-13: elapsed_secs=790,
+                    // budget_secs=45, attempts:0 — give-up on first drop).
+                    stream_retry_budget.reset();
 
                     // ── Truncation continuation (T1 — hermes parity) ──────
                     // When the provider reports a cut-off response
