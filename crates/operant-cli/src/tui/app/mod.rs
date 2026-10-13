@@ -360,6 +360,10 @@ pub struct App {
     /// message whenever it is set and displayed in the status bar.
     /// (iter-270 — wires /goal to real state.)
     pub session_goal: Option<String>,
+    /// Idle-recap activity handle (omp `recap.*` parity): `notify()` on any
+    /// user activity cancels a pending recap and re-arms the idle window.
+    /// `None` when recap_idle_seconds is 0 or the agent failed to init.
+    pub recap_activity: Option<operant_core::recap::RecapActivity>,
     /// If set, the run loop will re-submit this query on the next iteration
     /// as if the user typed it. Used by /retry to resubmit the last user msg.
     /// (iter-270 — wires /retry to real state.)

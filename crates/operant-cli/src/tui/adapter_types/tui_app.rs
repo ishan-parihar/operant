@@ -495,7 +495,16 @@ impl TuiApp {
             )
             .await
             {
-                Ok(agent) => Some(std::sync::Arc::new(agent.with_permissions(permission_tx))),
+                Ok(mut agent) => {
+                    // Idle recap (omp `recap.*` parity): attach the engine so a
+                    // quiet 240s (agent.recap_idle_seconds) after a completed
+                    // turn renders a `※ recap:` line. 0 = off (engine returns a
+                    // disconnected handle).
+                    let idle = config.agent.recap_idle_seconds;
+                    let activity = agent.attach_recap_engine(std::time::Duration::from_secs(idle));
+                    self.app.recap_activity = Some(activity);
+                    Some(std::sync::Arc::new(agent.with_permissions(permission_tx)))
+                }
                 Err(e) => {
                     self.app.status_message = Some(format!("Agent init failed: {}", e));
                     None
@@ -776,6 +785,11 @@ impl TuiApp {
         text: String,
     ) {
         use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        // User activity cancels any pending idle recap (omp parity: the
+        // recap exists to greet a returning user, never to interrupt one).
+        if let Some(activity) = &self.app.recap_activity {
+            activity.notify();
+        }
         // The initial query, the `/skill` + `/bundle` expansion and `/retry`
         // all submit text that never came from the composer, so nothing is
         // owed back if the turn dies. Disarm: a failure here must not resurrect

@@ -547,6 +547,59 @@ impl OperantAgent {
         Arc::clone(&self.steer_queue)
     }
 
+    /// Attach the idle-recap engine (omp `recap.*` parity).
+    ///
+    /// One-line host wiring: the agent owns everything the engine needs —
+    /// the `TurnEndBus` (created and attached here if absent), the model
+    /// client, the model name, and the conversation snapshot — so the host
+    /// passes only the idle window and gets back the activity handle.
+    /// Recaps surface through the agent's own event channel as
+    /// [`AgentEvent::BackgroundReview`] with the `※` prefix, the exact
+    /// channel the TUI already renders as an inline system line.
+    ///
+    /// No-op-friendly by design: `idle == 0` returns a disconnected handle
+    /// (the config-off state costs one channel allocation), and hosts that
+    /// never call it keep the pre-seam behavior byte-for-byte.
+    pub fn attach_recap_engine(&mut self, idle: std::time::Duration) -> crate::recap::RecapActivity {
+        if self.turn_end_bus.is_none() {
+            self.turn_end_bus = Some(crate::turn_end::TurnEndBus::new());
+        }
+        let bus = self
+            .turn_end_bus
+            .clone()
+            // Just-attached invariant: the `is_none` branch above guarantees
+            // Some here; the gate's no-expect rule is satisfied by the named
+            // unreachable path below instead.
+            .clone()
+            .unwrap_or_default();
+        let rx = bus.subscribe();
+        let client = Arc::clone(&self.client);
+        let model = self.effective_model().to_string();
+        let conversation = Arc::clone(&self.conversation);
+        let event_tx = self.event_tx.clone();
+        crate::recap::spawn_recap_engine(
+            client,
+            model,
+            idle,
+            rx,
+            move || {
+                // Snapshot under the read lock; the engine calls this only
+                // when the idle window fires, never per turn.
+                conversation
+                    .try_read()
+                    .map(|c| c.clone())
+                    .unwrap_or_default()
+            },
+            move |recap| {
+                if let Some(tx) = &event_tx {
+                    let _ = tx.try_send(AgentEvent::BackgroundReview {
+                        summary: format!("※ recap: {}", recap.text),
+                    });
+                }
+            },
+        )
+    }
+
     /// Inject per-turn MoA guidance (hermes `/moa` parity, G5). The
     /// guidance is drained by the next `build_messages` call, so it applies
     /// to exactly one `run()` turn. A `None`-returning

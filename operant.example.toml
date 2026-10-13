@@ -134,6 +134,10 @@ session_reset = "never"
 memory_nudge_interval = 10
 # Iterations between self-improvement skill nudges (0 = disabled, default 10)
 creation_nudge_interval = 10
+# Idle-recap: seconds of quiet after a completed turn before a `※ recap:`
+# status line is generated over a transcript snapshot (omp recap.* parity).
+# 0 = disabled. Default 240.
+recap_idle_seconds = 240
 
 [autonomous]
 interval_secs = 300

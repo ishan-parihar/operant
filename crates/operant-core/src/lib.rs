@@ -101,6 +101,7 @@ pub mod process_registry;
 pub mod profile;
 pub mod rate_limiter;
 pub mod reasoning_timeouts;
+pub mod recap;
 pub mod redaction;
 pub mod retrieval;
 pub mod runtime_adapter;

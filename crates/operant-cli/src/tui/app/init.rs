@@ -170,6 +170,7 @@ impl App {
             // (iter-209: file_history + current_turn init deleted)
             slash_usage: crate::tui::slash_usage::UsageStore::load(),
             session_goal: None,
+            recap_activity: None,
             pending_retry_query: None,
             pending_user_message: None,
             plan_mode: false,

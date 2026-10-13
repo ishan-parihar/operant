@@ -471,6 +471,16 @@ pub struct BehaviorSettings {
     #[serde(default = "default_creation_nudge_interval")]
     pub creation_nudge_interval: usize,
 
+    /// Idle-recap (omp `recap.*` parity): when the terminal/gateway has been
+    /// idle this many seconds after a completed turn, an ephemeral
+    /// side-channel LLM call renders a ~40-word "where the session stands"
+    /// recap over a snapshot of the transcript (never the live context) and
+    /// surfaces it as a dim `※ recap:` line in the TUI (and as a message on
+    /// gateway channels). Any user activity cancels the pending recap.
+    /// 0 = disabled. Default 240s (omp's `recap.idleSeconds`).
+    #[serde(default = "default_recap_idle_seconds")]
+    pub recap_idle_seconds: u64,
+
     /// Context engine used to assemble the per-call message list.
     ///   - `"compact"` (default): deterministic decay + `evict_to_budget`
     ///     (current behavior — lossy when over budget).
@@ -556,6 +566,10 @@ fn default_creation_nudge_interval() -> usize {
     10
 }
 
+fn default_recap_idle_seconds() -> u64 {
+    240
+}
+
 fn default_context_engine() -> String {
     "compact".to_string()
 }
@@ -607,6 +621,7 @@ impl Default for BehaviorSettings {
             fallback_on_errors: true,
             memory_nudge_interval: 10,
             creation_nudge_interval: 10,
+            recap_idle_seconds: 240,
             context_engine: "compact".to_string(),
             context_lcm_db: None,
             context_lcm_tail_tokens: 12_000,
