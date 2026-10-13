@@ -31,6 +31,13 @@ pub enum SystemMessageStyle {
     /// Inline error card (P4-2): the persistent surface for errors —
     /// inspectable and scrollable in the transcript, no overlay modal.
     Error,
+    /// Advisor note card (omp `advisor-message.ts` parity): a dim-flagged
+    /// concern line from the transcript watchdog. Distinct from Info so the
+    /// reader can scan advisor judgements apart from status chatter.
+    Advisor,
+    /// Idle recap notice (omp `RecapNotice` parity): dim italic — a
+    /// transcript thought, not a status event.
+    Recap,
 }
 
 /// A synthetic system annotation inserted between conversation messages.

@@ -49,12 +49,48 @@ pub(crate) fn render_system_annotation_lines(
         return;
     }
 
+    // Advisor note card (omp `advisor-message.ts` parity): a flag glyph +
+    // warning-tinted text — a judgement on the transcript, visually distinct
+    // from status chatter so the reader can scan for it.
+    if ann.style == SystemMessageStyle::Advisor {
+        lines.push(Line::from(vec![
+            Span::styled("  â ", Style::default().fg(theme::warning_color())),
+            Span::styled(
+                ann.text.clone(),
+                Style::default().fg(theme::warning_color()),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        return;
+    }
+
+    // Idle recap notice (omp `RecapNotice` parity): dim italic — the recap
+    // stays in the transcript like a thought, never an alert.
+    if ann.style == SystemMessageStyle::Recap {
+        lines.push(Line::from(vec![
+            Span::styled("  ※ ", Style::default().fg(theme::dim_color())),
+            Span::styled(
+                ann.text.clone(),
+                Style::default()
+                    .fg(theme::dim_color())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        return;
+    }
+
     let (text_color, border_color) = match ann.style {
         SystemMessageStyle::Info => (theme::dim_color(), theme::dim_color()),
         SystemMessageStyle::Compact => (theme::dim_color(), theme::dim_color()),
         // Error card (P4-2): theme error color keeps the row legible as a
         // failure without resurrecting the overlay modal.
         SystemMessageStyle::Error => (theme::error_color(), theme::error_color()),
+        // Advisor/Recap return early above; the match stays exhaustive for
+        // future styles added without an early-return shape.
+        SystemMessageStyle::Advisor | SystemMessageStyle::Recap => {
+            (theme::dim_color(), theme::dim_color())
+        }
     };
 
     // Centred, padded rule: "â”€â”€â”€ text â”€â”€â”€"

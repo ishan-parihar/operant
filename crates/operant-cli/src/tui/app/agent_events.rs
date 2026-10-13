@@ -495,7 +495,16 @@ impl App {
             }
 
             AgentEvent::BackgroundReview { summary } => {
-                self.push_system_message(summary, SystemMessageStyle::Info);
+                // Advisor notes and idle recaps share the BackgroundReview
+                // channel (both are side-channel LLM output); the prefix the
+                // engine stamps picks the card style.
+                if summary.starts_with("⚑") {
+                    self.push_system_message(summary, SystemMessageStyle::Advisor);
+                } else if summary.starts_with("※") {
+                    self.push_system_message(summary, SystemMessageStyle::Recap);
+                } else {
+                    self.push_system_message(summary, SystemMessageStyle::Info);
+                }
             }
 
             AgentEvent::AsyncDelegation {
