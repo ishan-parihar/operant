@@ -4193,3 +4193,80 @@ fn ctrl_o_expands_the_latest_tool_output_and_collapses_it_again() {
     app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::CONTROL));
     assert!(!content(&app).contains("line 10"));
 }
+
+#[test]
+fn essential_commands_are_wired() {
+    let mut app = make_app();
+    // /compact queues the fold for TuiApp (which holds the agent) — never
+    // mid-turn.
+    app.is_streaming = true;
+    assert!(app.handle_tui_command("compact", ""));
+    assert!(!app.pending_compact);
+    app.is_streaming = false;
+    assert!(app.handle_tui_command("compact", ""));
+    assert!(app.pending_compact);
+
+    // /goals reads the autonomous ledger.
+    let dir = std::env::temp_dir().join(format!("operant-goals-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ledger = dir.join("TODO.md");
+    std::fs::write(
+        &ledger,
+        "## Implemented\n- done thing\n\n## Pending\n- GOALMARK first\n- second\n",
+    )
+    .unwrap();
+    app.config.autonomous.todo_path = ledger.clone();
+    assert!(app.handle_tui_command("goals", ""));
+    let note = app.system_annotations.last().unwrap().text.clone();
+    assert!(
+        note.contains("2 pending · 1 implemented") && note.contains("GOALMARK"),
+        "{note}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(app.handle_tui_command("changelog", ""));
+    assert!(
+        app.system_annotations
+            .last()
+            .unwrap()
+            .text
+            .starts_with("Recent changes:")
+    );
+    assert!(app.handle_tui_command("auth", ""));
+    assert!(
+        app.system_annotations
+            .last()
+            .unwrap()
+            .text
+            .starts_with("Auth:")
+    );
+    assert!(app.handle_tui_command("cancel", ""));
+}
+
+#[test]
+fn jcode_only_commands_are_not_registered() {
+    let registered: Vec<&str> = crate::tui::operant_app::app::registered_command_entries()
+        .map(|(name, _)| name)
+        .collect();
+    for gone in [
+        "/account",
+        "/zzz",
+        "/selfdev",
+        "/subscription",
+        "/catchup",
+        "/telemetry",
+        "/update-sim",
+    ] {
+        assert!(!registered.contains(&gone), "{gone} is still registered");
+    }
+    for kept in [
+        "/compact",
+        "/cancel",
+        "/transcript",
+        "/changelog",
+        "/goals",
+        "/auth",
+    ] {
+        assert!(registered.contains(&kept), "{kept} must stay registered");
+    }
+}

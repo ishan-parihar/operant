@@ -204,6 +204,53 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
+    /// Manual compaction (`/compact`): fold the stored conversation's older
+    /// completed exchanges with the same store-safe micro-compaction the
+    /// soft threshold uses (`context_management::micro_compact`) — the
+    /// protected head and recent tail stay verbatim, tool pairs never split.
+    /// Runs until nothing more folds. Returns `(messages_before,
+    /// messages_after)` and emits the usual Compaction events.
+    pub async fn compact_history_now(&self) -> (usize, usize) {
+        use crate::context_management as cm;
+        let (before, tokens_before, after, tokens_after) = {
+            let mut conv = self.conversation.write().await;
+            let before = conv.len();
+            let tokens_before = cm::estimate_total_tokens(&conv);
+            // Each fold replaces an exchange with one marker; stop when a fold
+            // no longer shrinks the store (nothing left but markers/tail).
+            loop {
+                let len = conv.len();
+                if cm::micro_compact(
+                    &mut conv,
+                    cm::MICRO_COMPACTION_HEAD_KEEP,
+                    cm::MICRO_COMPACTION_TAIL_KEEP,
+                    cm::MICRO_COMPACTION_FOLD_MAX_CHARS,
+                )
+                .is_none()
+                    || conv.len() >= len
+                {
+                    break;
+                }
+            }
+            (
+                before,
+                tokens_before,
+                conv.len(),
+                cm::estimate_total_tokens(&conv),
+            )
+        };
+        self.emit(AgentEvent::CompactionStarted { tokens_before })
+            .await;
+        self.emit(AgentEvent::CompactionCompleted {
+            tokens_before,
+            tokens_after,
+            messages_before: before,
+            messages_after: after,
+        })
+        .await;
+        (before, after)
+    }
+
     /// Clear the conversation for the **current session** and reset per-session
     /// state. Called on /new, /reset, and session switches.
     ///

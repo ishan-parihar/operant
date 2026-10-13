@@ -657,6 +657,7 @@ impl TuiApp {
                             // turn is started, so there is no failure to
                             // restore the text from.
                             self.app.clear_failed_input_recovery();
+                            Self::run_pending_agent_actions(&mut self.app, agent.as_ref()).await;
                             // If the slash command set a pending shell command,
                             // we need to run it on the NEXT iteration — but
                             // app.run() will block waiting for input. To avoid
@@ -1044,6 +1045,7 @@ impl TuiApp {
                         let (cmd, args) = crate::input::parse_slash_command(&input);
                         if self.app.handle_tui_command(cmd, args) {
                             self.app.clear_failed_input_recovery();
+                            Self::run_pending_agent_actions(&mut self.app, agent.as_ref()).await;
                             continue;
                         }
                         // Mirror the interactive loop exactly (registry
@@ -1146,6 +1148,31 @@ impl TuiApp {
         let events = self.app.debug_hub.event_bus().recent(1000);
         let capture_status = self.app.debug_hub.frame_capture_status();
         Ok((events, self.app, screen, capture_status, style_dump))
+    }
+}
+
+impl TuiApp {
+    /// Agent-side work a slash command asked for (it needs the agent, which
+    /// the app does not hold): `/compact` folds the stored conversation.
+    async fn run_pending_agent_actions(
+        app: &mut crate::tui::app::App,
+        agent: Option<&std::sync::Arc<operant_core::agent::OperantAgent>>,
+    ) {
+        if std::mem::take(&mut app.pending_compact) {
+            let Some(agent) = agent else {
+                app.set_status_notice("No agent attached — nothing to compact.".to_string());
+                return;
+            };
+            let (before, after) = agent.compact_history_now().await;
+            let text = if after < before {
+                format!(
+                    "Compacted context: {before} → {after} messages (recent turns kept verbatim)."
+                )
+            } else {
+                "Nothing to compact yet — the history is all recent turns.".to_string()
+            };
+            app.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
+        }
     }
 }
 

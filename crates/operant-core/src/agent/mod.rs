@@ -2985,6 +2985,45 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn compact_history_now_folds_old_exchanges_and_keeps_the_tail() {
+        let (agent, _rx) = agent_with_event_rx();
+        for i in 0..20 {
+            agent
+                .add_message(Message::user(format!("question {i} {}", "x".repeat(200))))
+                .await;
+            agent
+                .add_message(Message::assistant(format!(
+                    "answer {i} {}",
+                    "y".repeat(200)
+                )))
+                .await;
+        }
+        let tail_before: Vec<String> = agent
+            .conversation()
+            .await
+            .iter()
+            .rev()
+            .take(crate::context_management::MICRO_COMPACTION_TAIL_KEEP)
+            .map(|m| m.content.clone())
+            .collect();
+        let (before, after) = agent.compact_history_now().await;
+        assert_eq!(before, 40);
+        assert!(after < before, "older exchanges fold: {before} -> {after}");
+        let tail_after: Vec<String> = agent
+            .conversation()
+            .await
+            .iter()
+            .rev()
+            .take(crate::context_management::MICRO_COMPACTION_TAIL_KEEP)
+            .map(|m| m.content.clone())
+            .collect();
+        assert_eq!(tail_before, tail_after, "recent turns stay verbatim");
+        // Idempotent once nothing more folds.
+        let (again_before, again_after) = agent.compact_history_now().await;
+        assert_eq!(again_before, again_after);
+    }
+
     #[test]
     fn guardrail_halt_reply_is_plain_language() {
         let reply = super::run::guardrail_halt_reply(

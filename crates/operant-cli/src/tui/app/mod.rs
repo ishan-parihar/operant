@@ -170,6 +170,9 @@ pub struct App {
     /// Stable Alt+P cycle list (`[agent] model` + `fallback_models`),
     /// captured on first use — `set_model` rewrites `config.agent.model`.
     pub model_cycle: Vec<String>,
+    /// `/compact` asked the agent to fold its stored history; run by
+    /// `TuiApp` (which holds the agent) right after the command.
+    pub pending_compact: bool,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.

@@ -207,14 +207,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "Toggle fast mode",
     ));
     lines.push(help_entry(
-        "/transport <mode>",
-        "Set connection transport (auto|https|websocket)",
-    ));
-    lines.push(help_entry(
-        "/alignment [status|centered|left]",
-        "Show or persist text alignment preference",
-    ));
-    lines.push(help_entry(
         "/compact-notifications [status|on|off]",
         "Collapse swarm/file-activity notifications to one line",
     ));
@@ -229,7 +221,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/voice",
         "Voice input: speak, then send (Ctrl+Space)",
     ));
-    lines.push(help_entry("/dictate", "Run configured external dictation"));
     lines.push(help_entry(
         "/git [status]",
         "Show branch and working tree status for the repo",
@@ -247,15 +238,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/keys",
         "Show keybinding conflicts with your terminal/OS",
     ));
-    lines.push(help_entry(
-        "/reset usage limits openai",
-        "Review a banked reset, then confirm or cancel",
-    ));
     lines.push(help_entry("/usage", "Show connected provider usage limits"));
-    lines.push(help_entry(
-        "/support",
-        "Email support with diagnostics prefilled",
-    ));
     lines.push(help_entry("/version", "Show version and build details"));
     lines.push(help_entry(
         "/changelog",
@@ -282,10 +265,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "Attempt recovery when model cannot continue",
     ));
     lines.push(help_entry(
-        "/poke",
-        "Poke model to resume with incomplete todos (on/off/status)",
-    ));
-    lines.push(help_entry(
         "/plan [goal]",
         "Draft a plan-only proposal as a plan card (no edits)",
     ));
@@ -306,50 +285,14 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "Resume the last saved refactor loop/plan",
     ));
     lines.push(help_entry(
-        "/splitview [on|off|status]",
-        "Mirror the current chat in the side panel",
-    ));
-    lines.push(help_entry(
         "/fork [prompt]",
-        "Fork session into a new window (alias: /split)",
-    ));
-    lines.push(help_entry(
-        "/transfer",
-        "Open a fresh session with only compacted context + copied todos",
-    ));
-    lines.push(help_entry(
-        "/workspace [status|on|off|add]",
-        "Enable and manage the Niri-style session workspace",
-    ));
-    lines.push(help_entry(
-        "/catchup [next|list]",
-        "Jump to finished sessions and open a Catch Up brief",
-    ));
-    lines.push(help_entry(
-        "/back",
-        "Return to the previous Catch Up source session",
+        "Fork session into a new window",
     ));
     lines.push(help_entry("/resume", "Browse and resume previous sessions"));
-    lines.push(help_entry(
-        "/active",
-        "Manage live sessions: see which are working vs ready",
-    ));
-    lines.push(help_entry(
-        "/catchup [next]",
-        "Jump into finished sessions with a side-panel brief",
-    ));
-    lines.push(help_entry(
-        "/back",
-        "Return to the previous Catch Up session",
-    ));
     lines.push(help_entry("/save [label]", "Bookmark session for /resume"));
     lines.push(help_entry(
         "/rename <name>|--clear",
         "Set or clear current session name",
-    ));
-    lines.push(help_entry(
-        "/unsave",
-        "Remove bookmark from current session",
     ));
 
     lines.push(Line::from(""));
@@ -380,18 +323,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/login [provider]",
         "Interactive or direct login",
     ));
-    lines.push(help_entry(
-        "/account",
-        "Open combined Claude/OpenAI account picker",
-    ));
-    lines.push(help_entry(
-        "/subscription",
-        "Inspect operant subscription scaffold",
-    ));
-    lines.push(help_entry(
-        "/subscribe",
-        "Why and how to subscribe to operant",
-    ));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -404,10 +335,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/restart",
         "Restart with current binary (no build)",
     ));
-    lines.push(help_entry(
-        "/rebuild",
-        "Full update (git pull + build + tests)",
-    ));
     if app.is_remote_mode() {
         lines.push(help_entry("/client-reload", "Force reload client binary"));
         lines.push(help_entry("/server-reload", "Force reload server binary"));
@@ -416,10 +343,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
             "Continue every interrupted live session that would auto-resume",
         ));
     }
-    lines.push(help_entry(
-        "/debug-visual",
-        "Enable visual debugging for TUI issues",
-    ));
     lines.push(help_entry("/quit", "Exit operant"));
 
     // The sections above are hand-curated for ordering, but they drift as

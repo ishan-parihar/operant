@@ -645,6 +645,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-807 — essential commands wired, jcode-only commands removed,
+  autonomous ledger restored.** These had been registered but replied "not
+  wired": `/compact` (folds the agent's stored history with the store-safe
+  micro-compaction, `OperantAgent::compact_history_now`; recent turns stay
+  verbatim), `/cancel` (the Esc stop), `/transcript` (markdown into
+  `~/.operant/transcripts/`, opened in the external editor), `/changelog`,
+  `/refresh-model-list` (drops the catalog cache and re-fetches), `/auth`, and
+  `/goals` (the autonomous `TODO.md` ledger). 40 jcode-only commands are
+  unregistered and gone from `/help`: accounts and subscriptions, the
+  `/z*` premium commands, dictation, screenshots, selfdev, split view,
+  telemetry, catch-up, workspace, and similar. The repo-root `TODO.md` (deleted in
+  iter-101, so every autonomous tick was skipping) is back with `## Implemented`,
+  `## Pending`, and a parser-ignored `## Review` for owner decisions.
+
 - **iter-797 — TUI reasoning display defaults to `current` (jcode semantics).**
   `[agent] show_reasoning = true` (and the unset default) now means: the
   turn's thinking commits where it streamed and is hidden once the next

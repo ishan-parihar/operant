@@ -9,8 +9,8 @@
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:History Search",
-    "contains:results"
+    "contains:(history search)",
+    "contains:Esc cancel"
   ],
   "baseline": "history-search-overlay.txt",
   "style_baseline": "history-search-overlay.style.txt",

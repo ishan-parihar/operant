@@ -181,9 +181,9 @@ impl CommandOutcome {
 }
 
 #[derive(Debug, Clone)]
-struct TodoLedger {
-    implemented: Vec<String>,
-    pending: Vec<String>,
+pub(crate) struct TodoLedger {
+    pub(crate) implemented: Vec<String>,
+    pub(crate) pending: Vec<String>,
 }
 
 impl TodoLedger {
@@ -1009,7 +1009,7 @@ Full TODO.md contents:\n{}\n\n{}",
     )
 }
 
-fn parse_todo_ledger(raw: &str) -> TodoLedger {
+pub(crate) fn parse_todo_ledger(raw: &str) -> TodoLedger {
     enum Section {
         None,
         Implemented,
@@ -1252,6 +1252,7 @@ fn read_output(stream: Option<impl Read>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::collections::VecDeque;
     use std::process::Command;
     use std::sync::atomic::AtomicU64;
@@ -1259,6 +1260,20 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn the_repo_task_ledger_parses_and_keeps_review_items_out() {
+        // The repo-root TODO.md is autonomous mode's ledger. It must parse,
+        // and owner-decision items under `## Review` must never reach the
+        // pending list autonomous mode works on.
+        let ledger = parse_todo_ledger(include_str!("../../../TODO.md"));
+        assert!(!ledger.implemented.is_empty());
+        assert!(
+            ledger.pending.iter().all(|item| !item.contains("/commit")),
+            "Review items leaked into Pending: {:?}",
+            ledger.pending
+        );
+    }
 
     #[derive(Debug, Default)]
     struct FakeCommandExecutor {

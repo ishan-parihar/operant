@@ -266,6 +266,7 @@ impl App {
             tool_full_outputs: std::collections::HashMap::new(),
             expanded_tool_id: None,
             model_cycle: Vec::new(),
+            pending_compact: false,
             agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,

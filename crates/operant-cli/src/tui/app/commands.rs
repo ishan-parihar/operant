@@ -778,7 +778,157 @@ impl App {
                 true
             }
 
-            "compact" => false,
+            // /compact — fold older completed exchanges of the agent's stored
+            // history (recent turns stay verbatim). Runs after this returns:
+            // the agent lives in TuiApp (`run_pending_agent_actions`).
+            "compact" => {
+                if self.is_streaming {
+                    self.set_status_notice(
+                        "A turn is running — run /compact after it finishes.".to_string(),
+                    );
+                } else {
+                    self.pending_compact = true;
+                    self.set_status_notice("Compacting context…".to_string());
+                }
+                true
+            }
+            // /cancel — the Esc-while-streaming stop, as a command.
+            "cancel" => {
+                if self.is_streaming {
+                    self.cancel_streaming_turn();
+                } else {
+                    self.set_status_notice("Nothing is running.".to_string());
+                }
+                true
+            }
+            // /transcript — write the session transcript (markdown) to
+            // ~/.operant/transcripts/ and open it in the external editor.
+            "transcript" => {
+                let dir = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(".operant")
+                    .join("transcripts");
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                let path = dir.join(format!("transcript-{stamp}.md"));
+                let markdown = crate::tui::export_dialog::export_as_markdown(
+                    &self.messages,
+                    self.session_title.as_deref(),
+                );
+                match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, markdown)) {
+                    Ok(()) => {
+                        let mut argv = crate::tui::external_editor::resolve_command(
+                            &self.config.tui.external_editor,
+                        );
+                        argv.push(path.display().to_string());
+                        self.pending_shell_command = Some(argv);
+                        self.set_status_notice(format!("Transcript: {}", path.display()));
+                    }
+                    Err(e) => {
+                        self.set_status_notice(format!("Could not write the transcript: {e}"))
+                    }
+                }
+                true
+            }
+            // /changelog — the newest entries of this build's changelog.
+            "changelog" => {
+                const CHANGELOG: &str = include_str!("../../../../../docs/CHANGELOG.md");
+                let titles: Vec<String> = CHANGELOG
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("- **"))
+                    .map(|rest| {
+                        let title = rest
+                            .split("**")
+                            .next()
+                            .unwrap_or(rest)
+                            .trim_end_matches(':');
+                        format!("• {}", title.trim())
+                    })
+                    .take(12)
+                    .collect();
+                self.push_system_message(
+                    format!("Recent changes:\n{}", titles.join("\n")),
+                    crate::tui::app::enums::SystemMessageStyle::Info,
+                );
+                true
+            }
+            // /refresh-model-list — drop the cached catalog and re-fetch the
+            // active provider's live model list (the picker opens on it).
+            "refresh-model-list" => {
+                let cache = dirs::cache_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("operant")
+                    .join("models.json");
+                let _ = std::fs::remove_file(&cache);
+                crate::tui::operant_app::provider::catalog_scheduler::bump_catalog_generation();
+                if self.credentials_live() {
+                    let provider = self.active_provider.clone().unwrap_or_default();
+                    self.open_model_picker_for_provider(&provider, None);
+                    self.set_status_notice("Refreshing the model catalog…".to_string());
+                } else {
+                    self.connect_dialog.open();
+                    self.set_status_notice("Connect a provider to fetch its models.".to_string());
+                }
+                true
+            }
+            // /auth — where credentials come from right now.
+            "auth" => {
+                let provider = self
+                    .active_provider
+                    .clone()
+                    .unwrap_or_else(|| "(default)".to_string());
+                let env_or_config = crate::tui::adapter_types::config::resolve_api_key().is_some();
+                let stored = self.auth_store.has_any_key();
+                let summary = format!(
+                    "Auth: provider {provider} · credentials {} · env/config key: {} · stored keys: {} — /login to add or change keys",
+                    if self.credentials_live() {
+                        "live"
+                    } else {
+                        "absent"
+                    },
+                    if env_or_config { "yes" } else { "no" },
+                    if stored { "yes" } else { "no" },
+                );
+                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
+                true
+            }
+            // /goals — the autonomous task ledger (`[autonomous] todo_path`,
+            // TODO.md): what autonomous mode will work on next.
+            "goals" => {
+                let path = std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(&self.config.autonomous.todo_path);
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(raw) => {
+                        let ledger = crate::autonomous::parse_todo_ledger(&raw);
+                        let mut lines = vec![format!(
+                            "Goals ({}): {} pending · {} implemented",
+                            path.display(),
+                            ledger.pending.len(),
+                            ledger.implemented.len()
+                        )];
+                        lines.extend(
+                            ledger
+                                .pending
+                                .iter()
+                                .take(15)
+                                .map(|item| format!("• {item}")),
+                        );
+                        if ledger.pending.len() > 15 {
+                            lines.push(format!("… {} more", ledger.pending.len() - 15));
+                        }
+                        lines.join("\n")
+                    }
+                    Err(_) => format!(
+                        "No task ledger at {} — autonomous mode is idle. Add a `## Pending` list to it.",
+                        path.display()
+                    ),
+                };
+                self.push_system_message(text, crate::tui::app::enums::SystemMessageStyle::Info);
+                true
+            }
             "copy" => {
                 // Copy last assistant message to clipboard. Attempt arboard; fall back to notification.
                 let last = self

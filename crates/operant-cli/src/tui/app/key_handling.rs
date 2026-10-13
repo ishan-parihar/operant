@@ -1169,19 +1169,7 @@ impl App {
         match key.code {
             // ---- ESC: cancel streaming (status bar advertises "esc interrupt") ----
             KeyCode::Esc if self.is_streaming => {
-                self.is_streaming = false;
-                self.spinner_verb = None;
-                // Flush in-flight streaming text to messages BEFORE snapshot
-                // so the response is preserved in the transcript.
-                self.flush_streamed_assistant_message();
-                self.set_status_notice("Cancelled.".to_string());
-                // Abort the background agent task so it actually stops.
-                if let Some(handle) = self.agent_task_handle.take() {
-                    handle.abort();
-                }
-                // Snapshot AFTER flushing so tool trail is preserved.
-                self.complete_current_turn_snapshot(true);
-                self.tool_use_blocks.clear();
+                self.cancel_streaming_turn();
             }
 
             // ---- Quit / cancel ----------------------------------------

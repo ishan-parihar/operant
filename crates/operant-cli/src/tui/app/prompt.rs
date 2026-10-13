@@ -14,6 +14,24 @@ impl App {
         }
     }
 
+    /// Stop the running turn (Esc while streaming, `/cancel`): keep what
+    /// streamed, abort the agent task, close the turn snapshot.
+    pub(crate) fn cancel_streaming_turn(&mut self) {
+        self.is_streaming = false;
+        self.spinner_verb = None;
+        // Flush in-flight streaming text to messages BEFORE snapshot
+        // so the response is preserved in the transcript.
+        self.flush_streamed_assistant_message();
+        self.set_status_notice("Cancelled.".to_string());
+        // Abort the background agent task so it actually stops.
+        if let Some(handle) = self.agent_task_handle.take() {
+            handle.abort();
+        }
+        // Snapshot AFTER flushing so tool trail is preserved.
+        self.complete_current_turn_snapshot(true);
+        self.tool_use_blocks.clear();
+    }
+
     /// Keep a finished call's full output for Ctrl+O. Bounded for long
     /// sessions: only the most recent tool calls are kept, each capped.
     pub(super) fn remember_tool_output(&mut self, id: &str, text: &str) {
