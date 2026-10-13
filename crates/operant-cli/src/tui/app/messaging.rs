@@ -7,7 +7,7 @@ impl App {
         clippy::unwrap_used,
         reason = "invariant guaranteed by surrounding validation"
     )]
-    pub(super) fn flush_streamed_assistant_message(&mut self) {
+    pub(crate) fn flush_streamed_assistant_message(&mut self) {
         if self.streaming_text.trim().is_empty() && self.streaming_thinking.trim().is_empty() {
             self.streaming_text.clear();
             self.streaming_thinking.clear();
@@ -18,7 +18,15 @@ impl App {
         let text = std::mem::take(&mut self.streaming_text);
 
         let mut blocks = Vec::new();
-        if !thinking.trim().is_empty() {
+        if !thinking.trim().is_empty()
+            // Current mode is ephemeral (jcode anchor_current_reasoning_
+            // block): the reasoning trace streamed live and does not
+            // persist into the committed transcript. Full keeps it.
+            && crate::tui::operant_app::config_shim::config()
+                .display
+                .reasoning_display()
+                == crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full
+        {
             blocks.push(ContentBlock::Thinking {
                 thinking,
                 signature: String::new(),

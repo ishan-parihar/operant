@@ -53,7 +53,16 @@ impl App {
                     self.flush_streamed_assistant_message();
                     self.streaming_thinking.clear();
                 }
-                self.streaming_thinking.push_str(&content);
+                // Off never shows reasoning anywhere (jcode
+                // ReasoningDisplayMode::Off): don't even accumulate — the
+                // live tail and the commit path both stay empty.
+                if crate::tui::operant_app::config_shim::config()
+                    .display
+                    .reasoning_display()
+                    != crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off
+                {
+                    self.streaming_thinking.push_str(&content);
+                }
                 self.invalidate_transcript();
             }
 
@@ -311,6 +320,13 @@ impl App {
                     let mut blocks = Vec::new();
                     if let Some(reasoning) = &message.reasoning
                         && !reasoning.trim().is_empty()
+                        // Current mode is ephemeral (jcode anchor_current_
+                        // reasoning_block): the trace streamed live and is
+                        // never persisted to the transcript. Full keeps it.
+                        && crate::tui::operant_app::config_shim::config()
+                            .display
+                            .reasoning_display()
+                            == crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full
                     {
                         blocks.push(ContentBlock::Thinking {
                             thinking: reasoning.clone(),

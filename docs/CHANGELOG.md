@@ -542,6 +542,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+- **iter-792 — reasoning display honors its config at last (jcode
+  ReasoningDisplayMode contract): the "duplicated final message" was the
+  model's reasoning draft rendering as body text.** Root cause chain (live
+  repro: rivers query — numbered draft list above the same prose answer):
+  (a) the display shim's `config()` was a `LazyLock` of hardcoded defaults
+  that never read the user's TOML, so `reasoning_display()` was frozen at
+  `Full` and `/thinking-display off` changed nothing visible; (b) the CLI
+  DisplayConfig default `show_reasoning = Some(false)` silently overrode
+  the core default `true` at layering; (c) `Off`/`Current` had no live
+  behavior anywhere. Fixes: a runtime override cell bridges
+  `[display] show_reasoning` (and `/thinking-display off|current|full`
+  flips) into the shim resolver; `Off` skips reasoning accumulation
+  entirely; `Current` is ephemeral per jcode's
+  `anchor_current_reasoning_block` — the trace streams live (dim+italic,
+  iter-780 sentinel) and never persists to the committed transcript;
+  `Full` keeps classic behavior. CLI default now `None` (unset → core
+  `true`, jcode parity). Regression contract test is single-test
+  sequential (the override cell is process-global; parallel test threads
+  race on it). Live-verified: thinking renders `rgb(100,100,100)`+italic
+  distinct from the `rgb(200,200,195)` answer.
 - **iter-790 — command backlog closed at the dispatch layer: no
   registered command can fall through to the model as prompt text.**
   Sweep was 48/106: 58 registered names (split, splitview, account, zzz,

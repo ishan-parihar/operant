@@ -2819,6 +2819,20 @@ async fn main() -> Result<()> {
     );
     let effective_rich_output = loaded.config.tui.rich_output && !is_gateway_daemon;
 
+    // Bridge [display] show_reasoning into the TUI display shim before any
+    // TUI launch: the shim's static snapshot never reads TOML, so the
+    // reasoning display mode rides the runtime override cell. Unset keeps
+    // the shim default (Full, jcode-classic); false = Off.
+    {
+        use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+        let mode = match cli_config.display.show_reasoning {
+            Some(true) => Some(ReasoningDisplayMode::Full),
+            Some(false) => Some(ReasoningDisplayMode::Off),
+            None => None,
+        };
+        config_shim::set_reasoning_display_override(mode);
+    }
+
     init_logging(
         cli.verbose,
         cli.log_level.as_deref(),

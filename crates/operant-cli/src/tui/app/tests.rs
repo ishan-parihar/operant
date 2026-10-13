@@ -1370,6 +1370,11 @@ fn thinking_display_defaults_on_and_the_command_toggles_it() {
         app.thinking_display_on,
         "current is the same vendored trace mode as full"
     );
+    // The command flips a process-global display-mode cell (the config shim
+    // snapshot is static and cannot see App state). Tests share a process:
+    // leave the cell at the snapshot default (None = shim default Full) so
+    // later tests that assert committed-reasoning rendering are not poisoned.
+    crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
 }
 
 #[test]

@@ -677,7 +677,12 @@ impl Default for DisplayConfig {
             busy_input_mode: Some("interrupt".to_string()),
             tui_auto_resume_recent: Some(false),
             bell_on_complete: Some(false),
-            show_reasoning: Some(false),
+            // Unset by default (jcode parity: reasoning display defaults ON
+            // upstream). Some(false) here used to override the core default
+            // `true` at layering, silently hiding every reasoning trace in
+            // the TUI — the frozen shim then forced Full regardless. Absent
+            // means the core agent.show_reasoning (true) decides.
+            show_reasoning: None,
             streaming: Some(false),
             final_response_markdown: Some("strip".to_string()),
             persistent_output: Some(true),

@@ -1327,8 +1327,28 @@ impl App {
             "thinking-display" | "thinking" => {
                 let mode = args.trim();
                 match mode {
-                    "off" => self.thinking_display_on = false,
-                    "full" | "current" | "on" => self.thinking_display_on = true,
+                    "off" => {
+                        self.thinking_display_on = false;
+                        // Live flip: committed reasoning stops rendering
+                        // immediately (the shim resolver reads this cell).
+                        crate::tui::operant_app::config_shim::replace_reasoning_display_override(
+                            Some(crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off),
+                        );
+                    }
+                    "current" => {
+                        self.thinking_display_on = true;
+                        crate::tui::operant_app::config_shim::replace_reasoning_display_override(
+                            Some(
+                                crate::tui::operant_app::config_shim::ReasoningDisplayMode::Current,
+                            ),
+                        );
+                    }
+                    "full" | "on" => {
+                        self.thinking_display_on = true;
+                        crate::tui::operant_app::config_shim::replace_reasoning_display_override(
+                            Some(crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full),
+                        );
+                    }
                     "" => {}
                     other => {
                         self.set_status_notice(format!(

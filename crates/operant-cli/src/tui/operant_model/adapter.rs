@@ -375,6 +375,63 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_mode_contract_current_and_off() {
+        // One test, sequential sections: the display-mode override is a
+        // process-global cell and parallel test threads would race on it.
+        // Section 1 — Current is ephemeral (jcode anchor_current_reasoning_
+        // block): the trace streams live but never persists; the flush
+        // commits ONLY the answer text.
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+            crate::tui::operant_app::config_shim::ReasoningDisplayMode::Current,
+        ));
+        let mut app = crate::tui::app::tests::make_app();
+        app.streaming_thinking = "draft answer is 4".to_string();
+        app.streaming_text = "2 + 2 = 4.".to_string();
+        app.flush_streamed_assistant_message();
+        assert_eq!(app.messages.len(), 1, "Current mode commits one message");
+        let blocks = app.messages[0].content_blocks();
+        assert!(
+            blocks
+                .iter()
+                .all(|b| !matches!(b, ContentBlock::Thinking { .. })),
+            "Current mode must not persist the thinking block"
+        );
+
+        // Section 2 — Off never shows reasoning anywhere: the handler
+        // must not even accumulate it into the live buffer.
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+            crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off,
+        ));
+        let mut app = crate::tui::app::tests::make_app();
+        app.handle_agent_event(operant_core::agent::AgentEvent::Thinking {
+            content: "secret thought".to_string(),
+        });
+        assert!(
+            app.streaming_thinking.is_empty(),
+            "Off mode must not accumulate reasoning into the live tail"
+        );
+
+        // Section 3 — Full keeps the classic behavior (guard against
+        // overshoot): the flush persists the thinking block.
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+            crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full,
+        ));
+        let mut app = crate::tui::app::tests::make_app();
+        app.streaming_thinking = "kept trace".to_string();
+        app.streaming_text = "answer".to_string();
+        app.flush_streamed_assistant_message();
+        let blocks = app.messages[0].content_blocks();
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Thinking { .. })),
+            "Full mode must persist the thinking block (classic behavior)"
+        );
+
+        // Restore the snapshot default so later tests are not poisoned.
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
+    }
+
     fn thinking_block_becomes_reasoning_row() {
         let mut app = make_app();
         app.messages.push(Message::assistant_blocks(vec![

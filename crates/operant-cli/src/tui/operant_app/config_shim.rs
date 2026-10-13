@@ -38,7 +38,7 @@
 //! upstream call sites (session_picker loading_tests) compile and stay
 //! semantically inert against the constant snapshot.
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 pub use crate::tui::operant_model::vendor_types::DiffDisplayMode;
 
@@ -222,6 +222,13 @@ pub struct DisplayConfig {
     /// Explicit reasoning display mode. Upstream display.rs:39, default at
     /// :137 (`Some(Full)`).
     pub reasoning_display: Option<ReasoningDisplayMode>,
+    /// [port-adaptation] Runtime override for the reasoning mode, set by
+    /// the TUI at boot from the parsed AppConfig ([display]
+    /// show_reasoning) and flipped live by /thinking-display. The static
+    /// LazyLock snapshot cannot see App state, so the override rides in a
+    /// process-wide cell the resolver reads after the file-level field.
+    /// `None` = no override (snapshot default wins).
+    pub reasoning_display_override: Option<ReasoningDisplayMode>,
     /// [port-adaptation] Operant-only, not upstream: the rotating 💡 hint
     /// rail in the status strip. Default OFF — operant's status row already
     /// carries state (spinner, token meter, tool status), and the 2026-10-09
@@ -237,11 +244,24 @@ impl DisplayConfig {
     /// boolean (true => Full, false => Off) when unset.
     /// Verbatim from crates/operant-config-types/src/display.rs:174-:183.
     pub fn reasoning_display(&self) -> ReasoningDisplayMode {
+        // Runtime override (boot config + /thinking-display) wins over the
+        // frozen snapshot — the snapshot is a LazyLock of defaults that
+        // never reads the user's TOML.
+        if let Some(mode) = self.reasoning_display_override() {
+            return mode;
+        }
         self.reasoning_display.unwrap_or(if self.show_thinking {
             ReasoningDisplayMode::Full
         } else {
             ReasoningDisplayMode::Off
         })
+    }
+
+    fn reasoning_display_override(&self) -> Option<ReasoningDisplayMode> {
+        REASONING_DISPLAY_OVERRIDE
+            .read()
+            .ok()
+            .and_then(|cell| *cell)
     }
 }
 
@@ -267,6 +287,7 @@ impl Default for DisplayConfig {
             diff_mode: DiffDisplayMode::default(),
             show_thinking: true,
             reasoning_display: Some(ReasoningDisplayMode::Full),
+            reasoning_display_override: None,
             performance: "auto".to_string(),
             copy_badge_alt_label: String::new(),
             show_tips: false,
@@ -308,6 +329,25 @@ impl Config {
     /// the snapshot is a LazyLock constant with no file-backed cache, so this
     /// is a deliberate no-op; re-visit when the cutover wires a real config.
     pub fn invalidate_cache() {}
+}
+
+/// Process-wide reasoning-mode override. `None` until the TUI boots; set
+/// once from the parsed AppConfig, then flipped by /thinking-display.
+static REASONING_DISPLAY_OVERRIDE: std::sync::RwLock<Option<ReasoningDisplayMode>> =
+    std::sync::RwLock::new(None);
+
+/// Set the process-wide reasoning display mode. Idempotent: first call
+/// wins at the OnceLock level; later calls replace the stored value (the
+/// cell holds `Option<Option<...>>` — presence vs value).
+pub fn set_reasoning_display_override(mode: Option<ReasoningDisplayMode>) {
+    if let Ok(mut cell) = REASONING_DISPLAY_OVERRIDE.write() {
+        *cell = mode;
+    }
+}
+
+/// Replace the stored override (used by /thinking-display for live flips).
+pub fn replace_reasoning_display_override(mode: Option<ReasoningDisplayMode>) {
+    set_reasoning_display_override(mode);
 }
 
 /// Shape-compatible stand-in for jcode's `crate::config::config()`.
