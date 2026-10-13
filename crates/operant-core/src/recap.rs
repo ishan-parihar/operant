@@ -91,6 +91,14 @@ pub fn spawn_recap_engine(
                 Err(_) => break, // channel closed: agent dropped, engine exits
             };
             let session_id = end.session_id.clone();
+            // Drain stale activity before arming: a notify that queued while
+            // the turn was RUNNING (e.g. the gateway's turn-start cancel for
+            // this very turn) must not cancel the window that opens at this
+            // turn's end. Only activity arriving AFTER the arm cancels.
+            // (Observed live: turn-start notify queued at 18:40:53, engine
+            // armed at 18:40:56, buffered notify cancelled the window 9ms
+            // in — the recap never fired once across three E2E windows.)
+            while act_rx.try_recv().is_ok() {}
             // Idle window: fire only if no activity lands inside it.
             let quiet = tokio::time::sleep(idle);
             tokio::select! {
@@ -224,10 +232,45 @@ mod tests {
             move |r| d2.lock().push(r),
         );
         bus.emit("sess-2", 1, 0, "done");
-        // Signal activity well inside the 200ms window.
+        // Let the engine arm its 200ms window first — a notify that lands
+        // BEFORE the arm is a stale pre-turn notification, drained by the
+        // engine (see stale_notify_does_not_cancel). Only activity arriving
+        // INSIDE the window cancels.
+        tokio::time::sleep(Duration::from_millis(50)).await;
         engine.notify();
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert!(delivered.lock().is_empty(), "activity must cancel");
+        drop(engine);
+    }
+
+    /// A notification that queued while the turn was still RUNNING (the
+    /// gateway notifies at turn START — its cancel contract targets the
+    /// PREVIOUS window, never the one this turn's end opens) must not
+    /// cancel the fresh window. Observed live 2026-10-13: turn-start
+    /// notify queued, engine armed 3s later, buffered notify cancelled the
+    /// recap 9ms in — the recap never fired across three E2E windows.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_notify_does_not_cancel() {
+        let bus = crate::turn_end::TurnEndBus::new();
+        let rx = bus.subscribe();
+        let delivered = Arc::new(Mutex::new(Vec::<Recap>::new()));
+        let d2 = delivered.clone();
+        let engine = spawn_recap_engine(
+            Arc::new(FixedClient("goal: g; task: t; next: n")),
+            "m".to_string(),
+            Duration::from_millis(100),
+            rx,
+            || vec![Message::user("x")],
+            move |r| d2.lock().push(r),
+        );
+        // Notify BEFORE the turn ends — the queued activity is stale by the
+        // time the engine arms at the turn end below.
+        engine.notify();
+        bus.emit("sess-3", 1, 0, "done");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let got = delivered.lock();
+        assert_eq!(got.len(), 1, "stale pre-turn notify must NOT cancel");
+        drop(got);
         drop(engine);
     }
 
