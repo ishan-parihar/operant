@@ -1208,7 +1208,7 @@ impl App {
                     }
                 }
                 // If text is selected, copy it to clipboard instead of quitting.
-                let sel_text = self.selection_text.borrow().clone();
+                let sel_text = self.refresh_selection_text();
                 if self.selection_anchor.is_some() && !sel_text.is_empty() {
                     // Text is selected: copy to clipboard.
                     let outcome = crate::tui::clipboard::copy(&sel_text);

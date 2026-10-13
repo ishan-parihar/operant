@@ -1347,6 +1347,7 @@ fn todo_tool_result_populates_the_live_store_and_todos_command_toggles_the_band(
 
 #[test]
 fn thinking_display_defaults_on_and_the_command_toggles_it() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
     // P4-4 (2026-10-09 v2 outline): jcode parity — thinking renders by
     // default (default_file.rs:175 show_thinking = true) and
     // /thinking-display toggles the trace surfaces off and back on.
@@ -2140,101 +2141,6 @@ fn tool_error_boundary_must_flush_iteration_text() {
     assert!(
         first.contains("Trying the tool."),
         "pre-error text is preserved as its own message: {first}"
-    );
-}
-
-// ---- Batched tool-call grouping ----
-//
-// A concurrent batch (6 same-name calls in one turn) must render as one block
-// with a progress meter, not as N undifferentiated siblings. The two cases
-// that matter for correctness are the merge itself and the boundary it must
-// never cross.
-use crate::tui::render::tools::{render_tool_group_lines, tool_group_ranges};
-use crate::tui::transcript_turn::build_transcript_turns;
-
-/// Drive one call through the real event path: the first `ToolStart` means
-/// "parsed" (Queued), the pool's re-announcement means the permit is held
-/// (Running). Emitting the same `AgentEvent` twice is how a real call reaches
-/// Running, so the tests use it rather than hand-building blocks.
-fn start_tool(app: &mut App, id: &str, name: &str, arguments: &str) {
-    let event = AgentEvent::ToolStart {
-        tool_call_id: id.to_string(),
-        name: name.to_string(),
-        arguments: arguments.to_string(),
-    };
-    app.handle_agent_event(event.clone());
-    app.handle_agent_event(event);
-}
-
-#[test]
-fn tool_group_should_merge_adjacent_same_name_blocks() {
-    let mut app = make_app();
-    app.messages
-        .push(Message::user("read the tree".to_string()));
-    start_tool(&mut app, "call_1", "read", r#"{"file_path":"src/a.rs"}"#);
-    start_tool(&mut app, "call_2", "read", r#"{"file_path":"src/b.rs"}"#);
-    // The double ToolStart is a state transition, not two tools: still one
-    // block per call id, so there is nothing to double-count.
-    assert_eq!(app.tool_use_blocks.len(), 2, "one block per call id");
-
-    let turns = build_transcript_turns(&app);
-    assert_eq!(turns.len(), 1);
-    let turn = &turns[0];
-    let groups = tool_group_ranges(&turn.tool_blocks, turn.assistant_messages.len());
-    assert_eq!(groups.len(), 1, "adjacent same-name calls form one group");
-    assert_eq!(groups[0], 0..2, "the group covers both calls");
-
-    // The group renders as one block: a progress-meter header plus one status
-    // row per sub-call, not two sibling blocks.
-    let mut lines = Vec::new();
-    render_tool_group_lines(&mut lines, &turn.tool_blocks[0..2], 0);
-    assert_eq!(lines.len(), 3, "one header + one row per sub-call");
-    let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(header.contains("read"), "header names the tool: {header}");
-    assert!(
-        header.contains("0/2 done"),
-        "header carries the progress meter: {header}"
-    );
-    assert!(
-        header.contains("running:"),
-        "header names what is still running: {header}"
-    );
-    // Per-sub-call rows identify each call, and both are running.
-    for (row, path) in lines[1..].iter().zip(["src/a.rs", "src/b.rs"]) {
-        let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains(path), "row names its call: {text}");
-    }
-}
-
-#[test]
-fn tool_group_should_not_merge_across_user_message_boundary() {
-    let mut app = make_app();
-    app.messages.push(Message::user("read a".to_string()));
-    start_tool(&mut app, "call_1", "read", r#"{"file_path":"src/a.rs"}"#);
-    app.messages.push(Message::user("read b".to_string()));
-    start_tool(&mut app, "call_2", "read", r#"{"file_path":"src/b.rs"}"#);
-    assert_eq!(app.tool_use_blocks.len(), 2);
-
-    let turns = build_transcript_turns(&app);
-    assert_eq!(turns.len(), 2, "one turn per user message");
-    assert_eq!(turns[0].tool_blocks.len(), 1);
-    assert_eq!(turns[1].tool_blocks.len(), 1);
-
-    // Grouping is per turn, so two same-name calls on either side of a user
-    // message stay two groups of one. A transcript-global grouping that ignored
-    // the turn would collapse them into a single group of two and fail here.
-    let batch_sizes: Vec<usize> = turns
-        .iter()
-        .flat_map(|turn| {
-            tool_group_ranges(&turn.tool_blocks, turn.assistant_messages.len())
-                .into_iter()
-                .map(|group| group.len())
-        })
-        .collect();
-    assert_eq!(
-        batch_sizes,
-        vec![1, 1],
-        "same-name calls in different turns must not batch together"
     );
 }
 
@@ -3757,4 +3663,152 @@ fn auth_status_derives_slots_from_env_keys_when_provider_unset() {
             "a stored anthropic key with no provider id must mark anthropic configured"
         );
     })
+}
+
+/// Render `app` once and return the screen as one string per row.
+fn screen_rows(app: &App) -> Vec<String> {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|f| crate::tui::render::render_app(f, app))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+fn rows_containing(rows: &[String], needle: &str) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, r)| r.contains(needle))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn live_tails_render_once_while_a_tool_is_reserved() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+    crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+        crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full,
+    ));
+    // 2026-10-13 duplication: a ToolStart that reserved a slot for the live
+    // tails used to splice them into the Body AND render them again in the
+    // Streaming section — every thinking/text line showed twice until the
+    // first tool settled.
+    use operant_core::agent::AgentEvent;
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.handle_agent_event(AgentEvent::Thinking {
+        content: "THINKMARK plan the call".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::Content {
+        text: "TEXTMARK running it".to_string(),
+    });
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "t1".to_string(),
+        name: "bash".to_string(),
+        arguments: r#"{"command":"echo TOOLMARK"}"#.to_string(),
+    });
+
+    let rows = screen_rows(&app);
+    let think = rows_containing(&rows, "THINKMARK");
+    let text = rows_containing(&rows, "TEXTMARK");
+    let tool = rows_containing(&rows, "bash $ echo TOOLMARK");
+    assert_eq!(think.len(), 1, "thinking renders once: {rows:#?}");
+    assert_eq!(text.len(), 1, "text renders once: {rows:#?}");
+    assert_eq!(tool.len(), 1, "tool row renders once: {rows:#?}");
+    assert!(
+        think[0] < text[0] && text[0] < tool[0],
+        "stream order thinking < text < tool: {rows:#?}"
+    );
+
+    // The tool settles: the boundary flush commits the tails, the row
+    // returns to the Body at its anchor — still once each, same order.
+    app.handle_agent_event(AgentEvent::ToolError {
+        tool_call_id: "t1".to_string(),
+        name: "bash".to_string(),
+        error: "boom".to_string(),
+    });
+    let rows = screen_rows(&app);
+    let text = rows_containing(&rows, "TEXTMARK");
+    let tool = rows_containing(&rows, "bash $ echo TOOLMARK");
+    assert_eq!(text.len(), 1, "committed text renders once: {rows:#?}");
+    assert_eq!(tool.len(), 1, "settled tool row renders once: {rows:#?}");
+    assert!(text[0] < tool[0], "tool stays below its text: {rows:#?}");
+    crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
+}
+
+#[test]
+fn empty_flush_releases_the_tool_slot_reservation() {
+    let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+    // A mid-turn flip to Off drops a thinking-only iteration at flush, so
+    // nothing is pushed; the slot ToolStart reserved must be released or the
+    // tool row later anchors BELOW the next message (the final answer).
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "read".to_string(),
+        after_index: 2,
+        status: ToolStatus::Done,
+        output_preview: None,
+        input_json: "{}".to_string(),
+    });
+    // Off: no Text, no persisted Thinking — the "0 blocks" arm.
+    app.streaming_thinking = "x".to_string();
+    crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+        crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off,
+    ));
+    app.flush_streamed_assistant_message();
+    crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
+    assert_eq!(app.messages.len(), 1);
+    assert_eq!(app.tool_use_blocks[0].after_index, 1);
+}
+
+#[test]
+fn selection_copy_is_synchronous_and_not_clamped_to_the_viewport() {
+    // 2026-10-13 copy parity: the release handler used to copy the text the
+    // render pass scraped from painted cells — one frame late (a fast
+    // Drag…Up batch copied nothing) and clamped to the visible window.
+    let mut app = make_app();
+    app.messages.push(Message::user("go".to_string()));
+    let body: Vec<String> = (0..30).map(|i| format!("LINE{i:02} words")).collect();
+    app.messages.push(Message::assistant(body.join("\n\n")));
+    // Draw once with NO selection: the render pass has nothing to scrape.
+    let rows = screen_rows(&app);
+    let frame = crate::tui::operant_ui::last_chat_frame().expect("frame drawn");
+    let line_of = |needle: &str| {
+        (0..frame.total_wrapped_lines)
+            .find(|&l| {
+                frame
+                    .wrapped_plain_line(l)
+                    .is_some_and(|t| t.contains(needle))
+            })
+            .unwrap_or_else(|| panic!("{needle} not in frame"))
+    };
+    let (top, bottom) = (line_of("LINE03"), line_of("LINE29"));
+    assert!(
+        rows_containing(&rows, "LINE03").is_empty(),
+        "LINE03 must be scrolled off screen for this test: {rows:#?}"
+    );
+
+    // Selection set after the last draw, spanning off-screen lines.
+    let area = app.last_selectable_area.get();
+    app.selection_anchor = Some((area.x, top));
+    app.selection_focus = Some((area.x + area.width - 1, bottom));
+    let text = app.refresh_selection_text();
+    assert!(text.starts_with("LINE03 words"), "{text:?}");
+    assert!(text.contains("LINE15 words"), "interior copies: {text:?}");
+    assert!(text.ends_with("LINE29 words"), "{text:?}");
+
+    // Exact column slice on one visible line.
+    let row = rows_containing(&rows, "LINE29")[0];
+    let col = rows[row].find("LINE29").unwrap() as u16;
+    app.selection_anchor = Some((col, bottom));
+    app.selection_focus = Some((col + 5, bottom));
+    assert_eq!(app.refresh_selection_text(), "LINE29");
 }

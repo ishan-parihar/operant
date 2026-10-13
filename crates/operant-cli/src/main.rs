@@ -2821,12 +2821,14 @@ async fn main() -> Result<()> {
 
     // Bridge [display] show_reasoning into the TUI display shim before any
     // TUI launch: the shim's static snapshot never reads TOML, so the
-    // reasoning display mode rides the runtime override cell. Unset keeps
-    // the shim default (Full, jcode-classic); false = Off.
+    // reasoning display mode rides the runtime override cell. true (and
+    // unset, via the shim default) = Current: the turn's trace stays where it
+    // streamed until the next prompt (jcode); false = Off. `/thinking-display
+    // full` keeps every trace.
     {
         use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
         let mode = match cli_config.display.show_reasoning {
-            Some(true) => Some(ReasoningDisplayMode::Full),
+            Some(true) => Some(ReasoningDisplayMode::Current),
             Some(false) => Some(ReasoningDisplayMode::Off),
             None => None,
         };

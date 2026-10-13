@@ -129,6 +129,12 @@ pub trait TuiState {
     fn streaming_thinking(&self) -> &str {
         ""
     }
+    /// Tool rows reserved for the live tail (their call arrived while the
+    /// thinking/text above them was still streaming). Rendered in the
+    /// Streaming section below the tails, never in the Body.
+    fn live_tool_rows(&self) -> Vec<DisplayMessage> {
+        Vec::new()
+    }
     /// JSON payload for the pinned todo band rendered at the top of the chat
     /// viewport when `display.pin_todos` is enabled. `None` when the feature
     /// is off or the session has no todos.

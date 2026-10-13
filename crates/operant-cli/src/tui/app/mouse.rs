@@ -129,6 +129,21 @@ impl App {
     // Projection goes through the last rendered scroll, exactly like jcode's
     // `copy_point_from_screen`.
 
+    /// Re-extract the current drag selection's text from the frame on screen
+    /// and store it in `selection_text` (the cell the status line and the
+    /// context menu read). Returns the text.
+    /// Falls back to the stored text when extraction yields nothing (no
+    /// frame drawn yet, e.g. headless) — that text belongs to this same
+    /// selection, since a new Down clears it.
+    pub(super) fn refresh_selection_text(&self) -> String {
+        let text = crate::tui::render::selection::selection_copy_text(self);
+        if text.is_empty() {
+            return self.selection_text.borrow().clone();
+        }
+        *self.selection_text.borrow_mut() = text.clone();
+        text
+    }
+
     /// Screen row inside the selectable area → scroll-stable content line.
     /// Returns the input row as-is when the area is empty (unselectable state).
     pub(super) fn content_line_of_screen_row(&self, screen_row: u16) -> usize {
@@ -183,7 +198,7 @@ impl App {
     /// Copy the current selection and report it, leaving the selection intact
     /// (copy mode is a copy mode, not a one-shot).
     pub fn copy_current_selection(&mut self) {
-        let sel_text = self.selection_text.borrow().clone();
+        let sel_text = self.refresh_selection_text();
         if sel_text.is_empty() {
             self.set_status_notice("Nothing selected to copy.".to_string());
             return;
@@ -1070,12 +1085,10 @@ impl App {
                             Some((clamped_col, self.content_line_of_screen_row(clamped_row)));
                         self.click_count = 0; // Reset on drag to prevent further double-clicks
                         // Stream the selection to the clipboard as it grows.
-                        // `selection_text` is filled by the renderer from the
-                        // previous frame, so this trails the pointer by one
-                        // frame — imperceptible, and it avoids re-extracting
-                        // the text the renderer already has.
+                        // Extracted now, from the frame on screen — never the
+                        // previous render's text, which trails the pointer.
                         if self.copy_mode_active() {
-                            let sel_text = self.selection_text.borrow().clone();
+                            let sel_text = self.refresh_selection_text();
                             crate::tui::clipboard::copy_selection_live(&sel_text);
                         }
                     }
@@ -1087,7 +1100,7 @@ impl App {
                 // selection first — the last drag frame may not have moved the
                 // text, and the user is done dragging now.
                 if self.copy_mode_active() && self.selection_anchor != self.selection_focus {
-                    let sel_text = self.selection_text.borrow().clone();
+                    let sel_text = self.refresh_selection_text();
                     crate::tui::clipboard::copy_selection_live(&sel_text);
                     return;
                 }
@@ -1099,7 +1112,11 @@ impl App {
                     // copies on release — there is no opt-out setting — and the
                     // highlight stays visible until the next click, so a
                     // successful copy does not look like it failed.
-                    let sel_text = self.selection_text.borrow().clone();
+                    // The text is extracted synchronously: a fast drag can
+                    // deliver Drag…Up in one event batch with no frame drawn
+                    // in between, so the render pass's copy would be stale
+                    // (often empty — a silent no-copy).
+                    let sel_text = self.refresh_selection_text();
                     if !sel_text.is_empty() {
                         let outcome = crate::tui::clipboard::copy(&sel_text);
                         if outcome.is_copied() {

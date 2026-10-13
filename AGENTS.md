@@ -818,22 +818,25 @@ MUST know before touching the render layer:
 
 - **One renderer.** `display_messages()`
   (`tui/operant_model/adapter.rs`) is THE flatten layer;
-  `tui/operant_ui/ui_prepare.rs` is THE frame assembly. `build_transcript_turns`
-  (`tui/transcript_turn.rs`) has no live consumers — treat it as dead code;
-  do not "fix" bugs by editing it.
+  `tui/operant_ui/ui_prepare.rs` is THE frame assembly. Every row renders in
+  exactly ONE section — never both Body and Streaming (the 2026-10-13
+  duplication was a row in both). `tests::live_tails_render_once_while_a_tool_is_reserved`
+  pins it against the drawn screen.
 - **Live partials never enter settled rows.** Streaming text/thinking render
   only in the mutable Streaming section (`has_streaming` gate in ui_prepare
   ~:850). Anything committed to `App.messages` becomes emittable scrollback;
   anything live must stay mutable or it double-renders at two wrap widths
   (the 2026-10-12 "shredded fragments" family — iter-784/789).
 - **Reasoning display mode is a three-state contract** (jcode
-  `ReasoningDisplayMode`): `Off` (never accumulate), `Current` (live-only,
-  ephemeral — dropped at flush), `Full` (persisted classic). The mode
+  `ReasoningDisplayMode`): `Off` (never accumulate), `Current` (commits in
+  place; the adapter hides a turn's traces once the next user prompt lands —
+  the default, and what `show_reasoning = true` maps to), `Full` (every
+  trace stays). The mode
   resolves through a process-global RwLock override cell in
   `tui/operant_app/config_shim.rs` fed from `[display] show_reasoning` at
-  boot (main.rs) and flipped live by `/thinking-display`. Tests that touch
-  it must run sequential (one merged test) — parallel test threads race on
-  the cell. Thinking is stored sentinel-wrapped (iter-780); the renderer
+  boot (main.rs) and flipped live by `/thinking-display`. Tests that set or
+  depend on it hold `config_shim::reasoning_override_test_guard()` —
+  parallel test threads race on the cell. Thinking is stored sentinel-wrapped (iter-780); the renderer
   keys dim+italic off `REASONING_SENTINEL`, never off role names.
 - **Terminal-scroll mode** (`[tui] terminal_scroll_mode = true`): inline
   viewport, no alt-screen, mouse capture OFF — selection is native terminal
@@ -842,14 +845,19 @@ MUST know before touching the render layer:
   never resets it. `insert_before` is inert on the headless sim's
   TestBackend — scrollback behavior is live-verify only.
 - **Tool rows anchor by arrival** (`after_index`), committed thinking
-  rides `ContentBlock::Thinking`, and a tool call mid-response reserves a
-  slot the live tail splices into (iter-789) — do not add flushes at
+  rides `ContentBlock::Thinking`, and a tool call mid-response is
+  "reserved" (`after_index > messages.len()`): while the tails stream it
+  renders in the Streaming section below them (`adapter::live_tool_rows`),
+  never in the Body — do not add flushes at
   ToolStart; the seam test `tool_start_mid_stream_must_not_split_assistant_text`
   pins why.
 - **Registered slash commands can never fall through to the model** — the
   not-wired catch-all (iter-790) covers both dispatch loops; the corpus
   `command_sweep.py` must stay 106/106.
 - **Selection**: app-mode drag paint clamps to the chat band (iter-672);
+  the copied TEXT is extracted synchronously from the drawn frame
+  (`render::selection::selection_copy_text`), never from painted cells —
+  those lag a frame and only cover the viewport;
   the `selection-highlight` scenario's notes document the boot-dialog
   Down-swallow — a click that closes a dialog is correct, not a bug.
 

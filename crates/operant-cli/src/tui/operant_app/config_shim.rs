@@ -102,8 +102,8 @@ pub enum ReasoningDisplayMode {
     Off,
     /// Keep every reasoning trace in the transcript (classic behavior).
     Full,
-    /// Show only the *current* reasoning live; collapse it once the model
-    /// commits an assistant message or tool call, then show the next one.
+    /// Show the current turn's reasoning, anchored where it streamed; drop it
+    /// once the next user prompt lands (jcode `clear_turn_reasoning_traces`).
     Current,
 }
 
@@ -251,7 +251,7 @@ impl DisplayConfig {
             return mode;
         }
         self.reasoning_display.unwrap_or(if self.show_thinking {
-            ReasoningDisplayMode::Full
+            ReasoningDisplayMode::Current
         } else {
             ReasoningDisplayMode::Off
         })
@@ -286,7 +286,7 @@ impl Default for DisplayConfig {
             external_sessions: true,
             diff_mode: DiffDisplayMode::default(),
             show_thinking: true,
-            reasoning_display: Some(ReasoningDisplayMode::Full),
+            reasoning_display: Some(ReasoningDisplayMode::Current),
             reasoning_display_override: None,
             performance: "auto".to_string(),
             copy_badge_alt_label: String::new(),
@@ -335,6 +335,16 @@ impl Config {
 /// once from the parsed AppConfig, then flipped by /thinking-display.
 static REASONING_DISPLAY_OVERRIDE: std::sync::RwLock<Option<ReasoningDisplayMode>> =
     std::sync::RwLock::new(None);
+
+/// Serialises tests that read or write the process-global override cell —
+/// parallel test threads otherwise race on it. Hold the guard for the whole
+/// test, and reset the cell to `None` before dropping it.
+#[cfg(test)]
+pub(crate) fn reasoning_override_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Set the process-wide reasoning display mode. Idempotent: first call
 /// wins at the OnceLock level; later calls replace the stored value (the

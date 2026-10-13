@@ -167,6 +167,9 @@ impl TuiState for App {
     fn streaming_thinking(&self) -> &str {
         &self.streaming_thinking
     }
+    fn live_tool_rows(&self) -> Vec<DisplayMessage> {
+        crate::tui::operant_model::live_tool_rows(self)
+    }
 
     fn pinned_todos_payload(&self) -> Option<&str> {
         // [port-decision] RESOLVED (P4-3, 2026-10-10): the ToolComplete(todo)

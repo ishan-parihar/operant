@@ -2695,6 +2695,41 @@ pub(crate) fn copy_pane_first_visible_point(
     })
 }
 
+/// Copy text of one chat content line between two SCREEN columns
+/// (inclusive; `None` = line edge), read synchronously from the last drawn
+/// frame's copy snapshot — never from the painted cell buffer, which lags a
+/// frame and only covers the visible window. The gutter prefix
+/// (`wrapped_copy_offset`) is excluded and trailing spaces trimmed.
+pub(crate) fn chat_line_copy_slice(
+    abs_line: usize,
+    from_col: Option<u16>,
+    to_col: Option<u16>,
+) -> Option<String> {
+    let snapshot =
+        copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)?;
+    let text = snapshot.wrapped_plain_line(abs_line)?;
+    let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
+    // Left margins are recorded per visible row; off-screen rows carry none.
+    let margin = abs_line
+        .checked_sub(snapshot.scroll)
+        .and_then(|row| snapshot.left_margins.get(row).copied())
+        .unwrap_or(0);
+    let origin = snapshot.content_area.x.saturating_add(margin);
+    let rel = |col: u16| clamp_display_col(text, col.saturating_sub(origin) as usize);
+    let start = from_col.map_or(0, rel).max(copy_start);
+    let end = to_col.map_or(line_display_width(text), |col| rel(col.saturating_add(1)));
+    if end <= start {
+        return Some(String::new());
+    }
+    Some(display_col_slice(text, start, end).trim_end().to_string())
+}
+
+/// Wrapped-line count of the last drawn chat frame's copy snapshot.
+pub(crate) fn chat_copy_line_count() -> usize {
+    copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)
+        .map_or(0, |snapshot| snapshot.wrapped_plain_line_count())
+}
+
 // [port-source] ui.rs:2369-2436
 pub(crate) fn copy_selection_text(
     range: crate::tui::operant_ui::copy_selection::CopySelectionRange,

@@ -123,7 +123,6 @@ pub mod slash_usage;
 pub mod space;
 pub mod stats_dialog;
 pub mod terminal_setup;
-pub mod transcript_turn;
 pub mod virtual_list;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
 pub mod free_mode_dialog;

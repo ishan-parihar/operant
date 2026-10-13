@@ -717,6 +717,8 @@ pub struct TuiSettings {
     pub show_iterations: bool,
     pub landing_title: String,
     pub prompt_placeholder: String,
+    /// Accepted for config compatibility (`deny_unknown_fields`) but unread:
+    /// the TUI paces frames adaptively (`tui::redraw::redraw_interval`).
     pub refresh_rate_ms: u64,
     pub compact_width: u16,
     pub medium_width: u16,

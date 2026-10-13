@@ -327,8 +327,7 @@ pub(crate) type ToolGroup = std::ops::Range<usize>;
 /// block `i` held an assistant message, so `i` is causally *after* that text and
 /// must not be folded into the group above it.
 ///
-/// Callers pass a single turn's blocks — `build_transcript_turns` already
-/// partitions `tool_use_blocks` per user message — so a group can never span a
+/// Callers pass a single turn's blocks, so a group can never span a
 /// user-message boundary or a turn, and the append-only order is preserved.
 pub(crate) fn tool_group_ranges(
     tool_blocks: &[&ToolUseBlock],

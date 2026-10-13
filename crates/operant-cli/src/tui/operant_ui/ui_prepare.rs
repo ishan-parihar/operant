@@ -2422,6 +2422,32 @@ fn prepare_streaming_cached(
     for line in md_lines {
         lines.push(align_if_unset(line, align));
     }
+    // Tool calls that arrived while the tails above were streaming render
+    // directly below them, through the Body's own row renderer — and only
+    // here: the adapter keeps them out of the Body while the tails are live.
+    let live_tools = app.live_tool_rows();
+    if !live_tools.is_empty() {
+        let ctx = BodyRenderCtx {
+            app,
+            width,
+            centered,
+            prompt_number_offset: app.compacted_hidden_user_prompts(),
+            total_prompts: app.display_user_message_count(),
+            pending_count: input_ui::pending_prompt_count(app),
+            anchored_images: super::inline_image_ui::resolve_anchored_items_cached(app),
+            inline_images_visible: app.inline_images_visible(),
+            messages: &live_tools,
+            swarm_members: app.swarm_members_for_transcript(),
+        };
+        let mut acc = BodyAcc {
+            body_has_content: true,
+            ..BodyAcc::default()
+        };
+        for (idx, msg) in live_tools.iter().enumerate() {
+            render_message_into(&ctx, &mut acc, msg, idx);
+        }
+        lines.extend(acc.lines);
+    }
 
     let mut prepared = wrap_lines(lines, &[], &[], &[], width);
     stamp_mermaid_pending(&mut prepared, mermaid_epoch_before);

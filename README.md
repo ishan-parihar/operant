@@ -209,6 +209,7 @@ base_url = "https://api.openai.com/v1"
 model = "gpt-4"
 fallbacks = [ { model = "gpt-4o-mini" } ]
 max_iterations = 20
+show_reasoning = true # TUI: thinking stays until your next prompt; /thinking-display full|current|off
 
 [memory]
 provider = "memory-wire"      # or "builtin"

@@ -36,13 +36,15 @@ pub(crate) fn reflowed_selection_text(
 
     let mut text = String::new();
     // The raw line the previous emitted group came from, so a new logical
-    // line starts a new output line; `usize::MAX` seeds "no group yet".
-    let mut prev_raw: usize = usize::MAX;
+    // line starts a new output line.
+    // Keyed by (section, raw_line): raw indices are section-local, so equal
+    // indices in adjacent sections are different logical lines.
+    let mut prev_raw: Option<(usize, usize)> = None;
     let mut wrote_any = false;
 
     'lines: for line in from_line..=to_line {
         // Find the section owning this content line.
-        let section = frame.sections.iter().find(|s| {
+        let (section_idx, section) = frame.sections.iter().enumerate().find(|(_, s)| {
             line >= s.line_start && line < s.line_start + s.prepared.wrapped_lines.len()
         })?;
         let local = line - section.line_start;
@@ -60,17 +62,17 @@ pub(crate) fn reflowed_selection_text(
                 if messages.get(owner).is_some_and(|m| m.role == "tool") {
                     // Skip the whole group: mark so the next text line does not
                     // merge with the one before the skipped chrome.
-                    prev_raw = usize::MAX;
+                    prev_raw = None;
                     continue 'lines;
                 }
             }
         }
 
-        if map.raw_line != prev_raw {
+        if prev_raw != Some((section_idx, map.raw_line)) {
             if wrote_any {
                 text.push('\n');
             }
-            prev_raw = map.raw_line;
+            prev_raw = Some((section_idx, map.raw_line));
             wrote_any = true;
         }
 
@@ -257,7 +259,8 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
         .saturating_sub(1);
 
     // Clamp columns into the frame; clamp lines into the visible window so a
-    // partially offscreen selection paints (and copies) its visible part.
+    // partially offscreen selection paints its visible part. (The copy text
+    // is NOT clamped — `selection_copy_text` reads the whole frame.)
     let anchor = (
         anchor.0.clamp(selectable_area.x, max_col),
         anchor.1.clamp(first_visible, visible_end.saturating_sub(1)),
@@ -274,29 +277,8 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
         (focus, anchor)
     };
 
-    // Clean-copy (P1-6): interior fully-covered lines copy from the pre-wrap
-    // source via the frame's line map — wrapped fragments rejoin into
-    // logical lines with original spacing and tool-status rows drop out.
-    // Must be read before the mutable buffer borrow below. When the frame
-    // lacks map data the run degrades to full cell extraction (the loop
-    // below) exactly as before.
-    let use_reflow = end.1 >= start.1.saturating_add(2);
-    let interior_text = if use_reflow {
-        crate::tui::operant_ui::last_chat_frame()
-            .as_deref()
-            .and_then(|f| {
-                reflowed_selection_text(f, app.display_messages(), start.1 + 1, end.1 - 1)
-            })
-    } else {
-        None
-    };
-    let use_reflow = interior_text.is_some();
-
     let buf = frame.buffer_mut();
-    let mut text = String::new();
-    let mut wrote_interior = false;
-    let last_line = end.1;
-    for line in start.1..=last_line {
+    for line in start.1..=end.1 {
         let row = selectable_area.y + (line - scroll) as u16;
         let col_from = if line == start.1 {
             start.0
@@ -308,37 +290,8 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
         // paint half of it; pull the whole glyph in first.
         let (col_from, col_to) =
             expand_selection_columns(buf, row, col_from, col_to, selectable_area.x);
-        // Interior lines with reflow data are painted (highlighted) but their
-        // copy text comes from the pre-wrap source, spliced in once between
-        // the two cell-extracted edge lines.
-        let collect_cells = if use_reflow {
-            line == start.1 || line == end.1
-        } else {
-            true
-        };
-        if use_reflow && !collect_cells && !wrote_interior {
-            // First skipped interior line: emit the source-rebuilt block.
-            // The start edge above has already emitted its cell text.
-            while text.ends_with(|c: char| c.is_whitespace()) {
-                text.pop();
-            }
-            text.push('\n');
-            if let Some(int) = interior_text.as_deref() {
-                text.push_str(int);
-            }
-            wrote_interior = true;
-        }
-        let mut line_text = String::new();
         for col in col_from..=col_to {
             if let Some(cell) = buf.cell_mut((col, row)) {
-                let sym = cell.symbol().to_owned();
-                if collect_cells {
-                    line_text.push_str(if sym.is_empty() || sym == "\0" {
-                        " "
-                    } else {
-                        &sym
-                    });
-                }
                 // Highlight: the cell's own background blended toward the theme
                 // accent and its own foreground pulled toward white. Rebuilt from
                 // the cell's existing style rather than Style::default() so bold,
@@ -352,26 +305,62 @@ pub(crate) fn apply_selection_highlight(frame: &mut Frame, app: &App) {
                 cell.set_style(new_style);
             }
         }
-        if collect_cells && wrote_interior && line == end.1 {
-            // The reflow block ends without a newline; separate it from the
-            // end edge's cell text before that text appends.
-            text.push('\n');
-        }
-        if collect_cells {
-            text.push_str(&line_text);
-        }
-        if line < last_line && collect_cells {
-            // Trim trailing spaces from line before newline
-            while text.ends_with(' ') {
-                text.pop();
-            }
-            text.push('\n');
+    }
+    // Same frame the snapshot was recorded from, so paint and text agree.
+    *app.selection_text.borrow_mut() = selection_copy_text(app);
+}
+
+/// The text a drag selection copies, extracted synchronously from the last
+/// drawn frame (jcode `copy_selection_text` model) — not from painted cells.
+/// Callers on the input path (mouse release) get the CURRENT selection even
+/// when no frame was drawn since the last drag event, and a selection that
+/// extends past the viewport copies in full.
+///
+/// Edge lines slice at the dragged columns; fully-covered interior lines
+/// copy from the pre-wrap source (clean copy, P1-6: wrapped fragments
+/// rejoin, tool-status rows drop out), falling back to the wrapped rows when
+/// the frame lacks map data.
+pub(crate) fn selection_copy_text(app: &App) -> String {
+    use crate::tui::operant_ui::chat_line_copy_slice as slice;
+    let (Some(anchor), Some(focus)) = (app.selection_anchor, app.selection_focus) else {
+        return String::new();
+    };
+    if anchor == focus {
+        return String::new();
+    }
+    let (start, end) = if (anchor.1, anchor.0) <= (focus.1, focus.0) {
+        (anchor, focus)
+    } else {
+        (focus, anchor)
+    };
+    let count = crate::tui::operant_ui::chat_copy_line_count();
+    if count == 0 {
+        return String::new();
+    }
+    let end_line = end.1.min(count - 1);
+    let start_line = start.1.min(end_line);
+    if start_line == end_line {
+        return slice(start_line, Some(start.0), Some(end.0)).unwrap_or_default();
+    }
+    let mut parts = vec![slice(start_line, Some(start.0), None).unwrap_or_default()];
+    if end_line >= start_line + 2 {
+        let interior = crate::tui::operant_ui::last_chat_frame()
+            .as_deref()
+            .and_then(|f| {
+                reflowed_selection_text(f, app.display_messages(), start_line + 1, end_line - 1)
+            })
+            .unwrap_or_else(|| {
+                (start_line + 1..end_line)
+                    .map(|line| slice(line, None, None).unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+        if !interior.is_empty() {
+            parts.push(interior);
         }
     }
-    while text.ends_with(|c: char| c.is_whitespace()) {
-        text.pop();
-    }
-    *app.selection_text.borrow_mut() = text;
+    parts.push(slice(end_line, None, Some(end.0)).unwrap_or_default());
+    parts.join("\n").trim_end().to_string()
 }
 
 /// Render a right-click context menu at the specified position.

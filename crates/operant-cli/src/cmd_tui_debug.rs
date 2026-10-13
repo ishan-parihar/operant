@@ -1329,18 +1329,16 @@ fn evaluate_assertions(app: &crate::tui::app::App, assertions_str: &str) -> Resu
 /// adding serde derives to the core event type.
 ///
 /// Four variants do NOT map to an `AgentEvent` because the TUI receives them
-/// on channels rather than the event stream: `User` seeds the transcript turn
-/// that `build_transcript_turns` anchors on, and `PermissionRequest` /
+/// on channels rather than the event stream: `User` seeds the user message
+/// tool rows anchor after, and `PermissionRequest` /
 /// `UserQuestion` / `BackgroundTask` feed the same plumbing the live agent
 /// feeds. `into_agent_event` returns `None` for those; `run_headless`
 /// dispatches them by hand.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum MockAgentEvent {
-    /// A user turn. `build_transcript_turns` starts a new turn at every
-    /// `Role::User` message, and tool blocks are only partitioned onto a turn
-    /// that has one — so a script with tool events but no `user` event paints
-    /// no tool block at all.
+    /// A user turn: pushes a `Role::User` message. Tool rows anchor after the
+    /// message that preceded the call, so scripts should open with one.
     User {
         text: String,
     },

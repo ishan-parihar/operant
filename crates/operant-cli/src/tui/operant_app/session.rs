@@ -1373,6 +1373,12 @@ pub(in crate::tui) fn format_reasoning_markup(text: &str) -> String {
         }
         crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full => {}
     }
+    reasoning_markup(text)
+}
+
+/// Sentinel-wrapped dim+italic markup for a reasoning trace, with no
+/// display-mode gate — callers that know the turn context decide visibility.
+pub(in crate::tui) fn reasoning_markup(text: &str) -> String {
     let mut out = String::new();
     for line in text.split('\n') {
         out.push_str(&crate::tui::operant_render_core::reasoning_line_markup(

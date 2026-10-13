@@ -113,8 +113,8 @@ impl App {
                 // mirrors flush_streamed_assistant_message's push condition
                 // exactly, so a slot is reserved iff the flush will fill it.
                 // (iter-785, glitch 2: order is preserved WITHOUT flushing
-                // here — the live tails render into the reserved slot via
-                // display_messages' slot splice, and the seam keeps the
+                // here — reserved rows render in the Streaming section below
+                // the live tails (adapter::live_tool_rows), and the seam keeps the
                 // AG|ENTS.md word intact across the tool_call delta.)
                 let text_slot = if self.streaming_text.trim().is_empty()
                     && self.streaming_thinking.trim().is_empty()
@@ -320,13 +320,12 @@ impl App {
                     let mut blocks = Vec::new();
                     if let Some(reasoning) = &message.reasoning
                         && !reasoning.trim().is_empty()
-                        // Current mode is ephemeral (jcode anchor_current_
-                        // reasoning_block): the trace streamed live and is
-                        // never persisted to the transcript. Full keeps it.
+                        // Full and Current commit the trace (see
+                        // flush_streamed_assistant_message); Off never shows it.
                         && crate::tui::operant_app::config_shim::config()
                             .display
                             .reasoning_display()
-                            == crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full
+                            != crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off
                     {
                         blocks.push(ContentBlock::Thinking {
                             thinking: reasoning.clone(),

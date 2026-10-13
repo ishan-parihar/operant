@@ -19,13 +19,14 @@ impl App {
 
         let mut blocks = Vec::new();
         if !thinking.trim().is_empty()
-            // Current mode is ephemeral (jcode anchor_current_reasoning_
-            // block): the reasoning trace streamed live and does not
-            // persist into the committed transcript. Full keeps it.
+            // Full and Current both commit the trace where it streamed
+            // (jcode anchor_current_reasoning_block); the adapter hides
+            // Current traces once the next user prompt lands. Off never
+            // accumulates — this guards a mid-turn flip to Off.
             && crate::tui::operant_app::config_shim::config()
                 .display
                 .reasoning_display()
-                == crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full
+                != crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off
         {
             blocks.push(ContentBlock::Thinking {
                 thinking,
@@ -37,7 +38,18 @@ impl App {
         }
 
         let msg = match blocks.len() {
-            0 => return,
+            0 => {
+                // Nothing to commit (Current mode dropped a thinking-only
+                // iteration). Release the slot ToolStart reserved for these
+                // tails, or the tool rows stay "reserved" and later anchor
+                // below whatever message is pushed next.
+                let committed = self.messages.len();
+                for block in &mut self.tool_use_blocks {
+                    block.after_index = block.after_index.min(committed);
+                }
+                self.invalidate_transcript();
+                return;
+            }
             1 => match blocks.pop().unwrap() {
                 ContentBlock::Text { text } => Message::assistant(text),
                 block => Message::assistant_blocks(vec![block]),

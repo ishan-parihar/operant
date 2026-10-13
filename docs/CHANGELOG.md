@@ -474,6 +474,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-797 — TUI: thinking, text and tool rows no longer render twice while tools
+  run (2026-10-13 duplication).** A ToolStart that reserved a slot for the
+  live thinking/text spliced them into the settled Body *and* the Streaming
+  section rendered them again, so everything above a running tool showed
+  twice until the first tool settled. Reserved tool rows now render once,
+  in the Streaming section below the live tails
+  (`operant_model::live_tool_rows`); they return to the Body at their
+  anchor when the boundary flush commits the tails. A flush that commits
+  nothing (mid-turn `/thinking-display off`) now releases the reservation,
+  so the tool row can no longer jump below the final answer.
+- **iter-797 — TUI: drag-select copies what you selected, every time.** Release used
+  to copy text scraped from the *previous* frame's painted cells — a fast
+  drag (Drag…Up in one event batch) copied nothing, and a selection longer
+  than the viewport copied only its visible part. The text is now extracted
+  synchronously from the drawn frame on release, Ctrl+C and copy-mode
+  copy (`render::selection::selection_copy_text`); interior lines keep the
+  clean source reflow, which no longer merges lines across the Body /
+  Streaming boundary.
+
 - **iter-745 — BUGS.md S7 closed: the ping-pong rung classifies an
   identical-output alternation as no-progress, and result streaks hash
   through the canonicalising fingerprint.** Two fixes in
@@ -542,6 +561,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -p operant-core` build.
 
 ### Changed
+
+- **iter-797 — TUI reasoning display defaults to `current` (jcode semantics).**
+  `[agent] show_reasoning = true` (and the unset default) now means: the
+  turn's thinking commits where it streamed and is hidden once the next
+  user prompt lands — previously `full`, which kept every turn's draft
+  above every answer. `/thinking-display full` restores the old behavior;
+  `/thinking-display` now reports the active mode.
+- **iter-797 — `[tui] refresh_rate_ms` is documented as ignored.** It was never read
+  (frame pacing is adaptive); it stays accepted so existing configs still
+  parse under `deny_unknown_fields`.
+
 - **iter-794 — docs: senior-developer handoff + AGENTS.md visual-layer
   discipline sections.** `docs/2026-10-13-tui-visual-layer-handoff.md`
   codifies the live duplication complaint (reasoning-draft interleave),
@@ -1523,6 +1553,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before any row is written, with the refusal naming why.
 
 ### Removed
+
+- **iter-797 — `tui::transcript_turn`** (`build_transcript_turns`, `reasoning_heading`):
+  a second transcript model with no production consumer; the adapter is
+  the single path. Its two grouping tests went with it.
 
 - **iter-664 — the dead channels dispatch orchestrator (audit-r2 plan §2,
   Option A)**: `start_channels` (the only pub entry), the dispatch chain

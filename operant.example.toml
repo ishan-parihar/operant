@@ -72,6 +72,9 @@ context_window = 128000
 # output either way. `0` disables. Default: 50000.
 # max_tool_result_chars = 50000
 max_healing_attempts = 3
+# Model reasoning in the TUI. true = the current turn's thinking stays where
+# it streamed and is hidden once you send the next prompt (jcode "current").
+# false = never shown. `/thinking-display full` keeps every turn's thinking.
 show_reasoning = true
 tool_progress = "auto"
 context_compression = false
@@ -198,7 +201,9 @@ show_tool_calls = true
 show_iterations = true
 landing_title = "HERMES"
 prompt_placeholder = "Ask anything... \"Fix a TODO in the codebase\""
-refresh_rate_ms = 80
+# Accepted for compatibility but IGNORED: the TUI frame cadence is adaptive
+# (fast while streaming, slower when idle or unfocused). Safe to delete.
+# refresh_rate_ms = 80
 compact_width = 96
 medium_width = 120
 

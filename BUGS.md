@@ -485,6 +485,35 @@ or parallelism.
   Untraced — no sibling identified.
 - **Unowned**: same posture as K-1 — own iteration, do not fold into org work.
 
+### K-3 — Terminal-scroll mode's row-count watermark assumes an append-only Body (OPEN, P3, scroll mode only)
+
+`emit_settled_transcript_rows` (`tui/app/scroll_emit.rs`) emits
+`[watermark, committed_prefix)` by **row count**. That is only correct while
+every row above the watermark keeps its height, and it does not: a tool row
+grows when `ToolComplete` fills `output_preview`, and `Current` reasoning
+traces disappear from the Body once the next user prompt lands. Either shift
+makes the next emission slice misaligned rows (duplicated or skipped lines in
+native scrollback).
+
+- **Scope**: `[tui] terminal_scroll_mode = true` only (default `false`); the
+  alt-screen TUI never calls `insert_before`.
+- **Found**: 2026-10-13 visual-layer audit (by reading the code, not a live
+  repro); not the 2026-10-13 duplication complaint, which was alt-screen.
+- **Next step**: key the watermark on settled *message* boundaries
+  (`PreparedMessages.message_boundaries`) instead of rows, or freeze emitted
+  rows' heights. Live-verify only — `insert_before` is inert on TestBackend.
+
+### K-4 — `cargo test -p operant-cli --no-default-features` does not compile (OPEN, unowned)
+
+`gateway_runner.rs:3888` calls `operant_runtime::agent::reconciled::core_observer_from_config`
+unconditionally (iter-772, `38443eab`), but `operant-runtime` is only a
+dependency under the `agent-runtime` feature: `error[E0433]: cannot find
+module or crate operant_runtime`. The default-features build is unaffected.
+The TUI-only suite command in the 2026-10-13 handoff uses this flag set.
+
+- **Next step**: gate the call (and the observer) on `agent-runtime`, or
+  route through the no-op observer when the feature is off.
+
 ## Wave 3 — Org session substrate (2026-10-01)
 
 ### W3-1 — One global conversation per agent; concurrent gateway chats wiped each other (FIXED iter-548)

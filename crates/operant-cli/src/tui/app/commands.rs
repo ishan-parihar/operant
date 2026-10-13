@@ -1319,9 +1319,8 @@ impl App {
             // list arrives from the todo tool's results; /todos only chooses
             // whether the pinned card is shown.
             // P4-4 (2026-10-09 v2 outline): jcode's /thinking-display
-            // (off|full|current). The vendored tree implements one trace
-            // mode, so `full` and `current` both show it; the words stay so
-            // the muscle memory ports.
+            // (off|full|current). current = the turn's traces until the next
+            // prompt; full = every trace; off = none.
             // "thinking" alias: the registered surface name is /thinking
             // (command registry); the muscle-memory ports cover it.
             "thinking-display" | "thinking" => {
@@ -1357,11 +1356,16 @@ impl App {
                         return true;
                     }
                 }
-                let summary = match (self.thinking_display_on, mode) {
-                    (true, "") => "Thinking display: on (full/current)".to_string(),
-                    (true, _) => "Thinking display: on".to_string(),
-                    (false, _) => "Thinking display: off".to_string(),
-                };
+                let summary = format!(
+                    "Thinking display: {}",
+                    format!(
+                        "{:?}",
+                        crate::tui::operant_app::config_shim::config()
+                            .display
+                            .reasoning_display()
+                    )
+                    .to_lowercase()
+                );
                 self.set_status_notice(summary.clone());
                 self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 self.invalidate_transcript();

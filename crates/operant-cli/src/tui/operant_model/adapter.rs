@@ -18,7 +18,8 @@
 //! | `ContentBlock::ToolResult` | `tool_text(extracted text)` |
 //! | `App::tool_use_blocks` entry (side registry) | `tool(output_preview.unwrap_or_default(), ToolCall{id, name, input: parse(input_json)})`, placed at its arrival anchor: after message `after_index - 1`, before message `after_index` (so a call that ran between two assistant messages renders between them) |
 //! | `SystemAnnotation` | `system(text)`, interleaved at its `after_index` |
-//! | `App::streaming_thinking` / `streaming_text` | trailing `reasoning` / `assistant` rows while non-empty |
+//! | `App::streaming_thinking` / `streaming_text` | none — rendered once, in the mutable Streaming section (iter-781) |
+//! | `ToolUseBlock` reserved for live tails | none while the tails stream — see [`live_tool_rows`] |
 //!
 //! ## Named-unmapped (no `DisplayMessage` equivalent — named, never silently dropped)
 //!
@@ -51,11 +52,8 @@
 //!
 //! Ordering note (iter-668): tool rows splice at their arrival anchor —
 //! after the message that preceded the call — so text↔tool interleaving
-//! renders in true stream order. This walks
-//! `App::messages` directly rather than reusing
-//! `transcript_turn::build_transcript_turns`, because turns drop
-//! `Role::System` messages and orphan tool blocks when no turn exists; this
-//! walk drops nothing.
+//! renders in true stream order. This walks `App::messages` directly and
+//! drops nothing (no `Role::System` message, no orphan tool block).
 //!
 //! Call this on a `transcript_version` bump, not per frame: it clones content
 //! into owned rows by design (mirroring jcode's own
@@ -77,7 +75,14 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     let mut tool_rows_after: HashMap<usize, Vec<DisplayMessage>> = HashMap::new();
     let mut tool_rows_before: Vec<DisplayMessage> = Vec::new();
     let mut trailing_tool_rows: Vec<DisplayMessage> = Vec::new();
+    let live = tails_live(app);
     for block in &app.tool_use_blocks {
+        // Reserved rows belong to the live tail while it streams — they
+        // render in the mutable Streaming section, below the thinking/text
+        // that preceded them (see `live_tool_rows`).
+        if live && is_reserved(app, block) {
+            continue;
+        }
         let row = display_message_from_tool_block(block);
         // Arrival anchoring (iter-668): a block created when `after_index`
         // messages existed renders after message `after_index - 1` — i.e.
@@ -107,31 +112,27 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     let mut out = Vec::with_capacity(
         app.messages.len() + app.tool_use_blocks.len() + app.system_annotations.len(),
     );
-    // (iter-785, glitch 2) Live tails (thinking + text) render at the slot
-    // the ToolStart reservation promised — immediately BEFORE the first
-    // reserved tool row — so thinking that preceded a call never renders
-    // below the call's row. A tool row is "reserved" when its after_index
-    // counted the still-live tails (after_index > committed messages).
-    // Rows here feed the viewport ONLY while the tails are live; once the
-    // boundary flush commits them, after_index <= messages.len() and the
-    // committed message takes over the slot — the reserved row stops
-    // matching, so nothing double-renders.
-    let live_slot_rows = live_tail_rows(app);
-    // Reserved rows are identifiable by id: a block whose after_index
-    // counted the still-live tails (after_index > committed messages).
-    let reserved_ids: Vec<&str> = app
-        .tool_use_blocks
-        .iter()
-        .filter(|b| b.after_index > app.messages.len() && b.after_index > 0)
-        .map(|b| b.id.as_str())
-        .collect();
-    let reserved = !reserved_ids.is_empty();
     if let Some(annotations) = annotations_after.remove(&0) {
         out.extend(annotations.into_iter().map(system_annotation_row));
     }
     out.extend(tool_rows_before);
+    // Reasoning visibility (jcode ReasoningDisplayMode): Full shows every
+    // committed trace; Current keeps the current turn's traces anchored where
+    // they streamed and drops them once the next user prompt lands (jcode
+    // `clear_turn_reasoning_traces`) — render-time, so no message is removed
+    // and no anchor index shifts; Off shows none.
+    let mode = crate::tui::operant_app::config_shim::config()
+        .display
+        .reasoning_display();
+    let last_user = app.messages.iter().rposition(|m| m.role == Role::User);
     for (index, message) in app.messages.iter().enumerate() {
-        out.extend(expand_message(message));
+        use crate::tui::operant_app::config_shim::ReasoningDisplayMode;
+        let show_thinking = match mode {
+            ReasoningDisplayMode::Full => true,
+            ReasoningDisplayMode::Current => last_user.is_none_or(|user| index > user),
+            ReasoningDisplayMode::Off => false,
+        };
+        out.extend(expand_message(message, show_thinking));
         if let Some(rows) = tool_rows_after.remove(&index) {
             out.extend(rows);
         }
@@ -139,72 +140,38 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
             out.extend(annotations.into_iter().map(system_annotation_row));
         }
     }
-    // (iter-781) Live streaming rows (thinking + text) deliberately do NOT
-    // appear here: display_messages feeds the settled Body section, and the
-    // scrollback emitter treats every Body row as settled history. Live
-    // partials must never be frozen into native scrollback — they render in
-    // the mutable Streaming section via prepare_streaming_cached (which now
-    // carries both the thinking tail and the answer text).
-    // (iter-785) No reserved slot: the tails are the live streaming tail of
-    // the frame — handled by the mutable Streaming section
-    // (prepare_streaming_cached), NOT here. Never render them as settled
-    // Body rows (iter-781 invariant).
-    // (iter-785) Splice the live tails immediately BEFORE the first
-    // reserved tool row — the position the ToolStart reservation promised.
-    // The reservation is identifiable by content: a row whose after_index
-    // exceeded the committed messages. Only rows from THIS loop carry it.
-    let _ = (&app.streaming_thinking, &app.streaming_text);
-    if let (true, Some(rows)) = (reserved, live_slot_rows) {
-        let reserved_row = out.iter().position(|r| {
-            r.tool_data
-                .as_ref()
-                .is_some_and(|td| reserved_ids.contains(&td.id.as_str()))
-        });
-        if let Some(pos) = reserved_row {
-            let pos = pos.max(1); // never above the user prompt
-            for (i, row) in rows.into_iter().enumerate() {
-                out.insert(pos + i, row);
-            }
-        } else {
-            // Reserved row not in `out` yet (it trails below): the tails
-            // render above it by extending first.
-            out.extend(rows);
-        }
-    }
+    // (iter-781) Live thinking/text never appear here: this vec feeds the
+    // settled Body section. They render once, in the mutable Streaming
+    // section (prepare_streaming_cached), followed by `live_tool_rows`.
     out.extend(trailing_tool_rows);
     out
 }
 
-/// Live thinking/text rows for the ToolStart slot splice (glitch 2).
-/// Sentinel-wrapped per the iter-780 contract so the markdown renderer
-/// styles thinking dim+italic.
-fn live_tail_rows(app: &App) -> Option<Vec<DisplayMessage>> {
-    let thinking = app.streaming_thinking.as_str();
-    let text = app.streaming_text.as_str();
-    if thinking.trim().is_empty() && text.trim().is_empty() {
-        return None;
+/// Tool rows whose ToolStart reserved a slot for the still-live tails
+/// (after_index counted them). While the tails stream, these render in the
+/// Streaming section directly below the tails — one renderer per row, and
+/// thinking that preceded a call still renders above the call (iter-785).
+/// Once the boundary flush commits the tails, `after_index <=
+/// messages.len()` and the rows return to the Body at their anchor.
+pub fn live_tool_rows(app: &App) -> Vec<DisplayMessage> {
+    if !tails_live(app) {
+        return Vec::new();
     }
-    let mut rows = Vec::new();
-    if !thinking.is_empty() {
-        let mut wrapped = String::new();
-        let parts: Vec<&str> = thinking.split('\n').collect();
-        let (complete, partial) = parts.split_at(parts.len().saturating_sub(1));
-        for line in complete {
-            wrapped.push_str(&crate::tui::operant_render_core::reasoning_line_markup(
-                line,
-            ));
-        }
-        if let Some(tail) = partial.first() {
-            wrapped.push_str(&crate::tui::operant_render_core::reasoning_partial_markup(
-                tail,
-            ));
-        }
-        rows.push(DisplayMessage::reasoning(wrapped));
-    }
-    if !text.is_empty() {
-        rows.push(DisplayMessage::assistant(text.to_string()));
-    }
-    Some(rows)
+    app.tool_use_blocks
+        .iter()
+        .filter(|b| is_reserved(app, b))
+        .map(display_message_from_tool_block)
+        .collect()
+}
+
+/// Same predicate as the Streaming section's `has_streaming` gate in
+/// `ui_prepare`, so a row excluded from the Body is always rendered there.
+fn tails_live(app: &App) -> bool {
+    app.is_streaming && (!app.streaming_thinking.is_empty() || !app.streaming_text.is_empty())
+}
+
+fn is_reserved(app: &App, block: &ToolUseBlock) -> bool {
+    block.after_index > app.messages.len()
 }
 
 fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
@@ -235,7 +202,7 @@ fn parse_tool_input(input_json: &str) -> Value {
 /// to at most one row, so a message expands to a run of rows. Consecutive
 /// `Text` blocks join into a single row in the message's own role; every
 /// other block flushes that accumulator and emits its own row.
-fn expand_message(message: &Message) -> Vec<DisplayMessage> {
+fn expand_message(message: &Message, show_thinking: bool) -> Vec<DisplayMessage> {
     match &message.content {
         MessageContent::Text(text) => vec![role_row(&message.role, text.clone())],
         MessageContent::Blocks(blocks) => {
@@ -253,6 +220,7 @@ fn expand_message(message: &Message) -> Vec<DisplayMessage> {
                     other => {
                         flush_text_acc(&mut rows, &mut text_acc, &message.role);
                         match other {
+                            ContentBlock::Thinking { .. } if !show_thinking => {}
                             ContentBlock::Thinking { thinking, .. } => {
                                 // Committed thinking must render dim+italic like
                                 // the live stream: wrap through the shared
@@ -261,9 +229,7 @@ fn expand_message(message: &Message) -> Vec<DisplayMessage> {
                                 // sentinel. Raw text renders as plain body text
                                 // (glitch 3, 2026-10-12).
                                 rows.push(DisplayMessage::reasoning(
-                                    crate::tui::operant_app::session::format_reasoning_markup(
-                                        thinking,
-                                    ),
+                                    crate::tui::operant_app::session::reasoning_markup(thinking),
                                 ));
                             }
                             ContentBlock::SystemAPIError { message, .. } => {
@@ -376,25 +342,33 @@ mod tests {
 
     #[test]
     fn reasoning_mode_contract_current_and_off() {
+        let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
         // One test, sequential sections: the display-mode override is a
         // process-global cell and parallel test threads would race on it.
-        // Section 1 — Current is ephemeral (jcode anchor_current_reasoning_
-        // block): the trace streams live but never persists; the flush
-        // commits ONLY the answer text.
+        // Section 1 — Current (jcode anchor_current_reasoning_block +
+        // clear_turn_reasoning_traces): the trace commits where it streamed
+        // and renders for its own turn; the next user prompt hides it.
         crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
             crate::tui::operant_app::config_shim::ReasoningDisplayMode::Current,
         ));
         let mut app = crate::tui::app::tests::make_app();
+        app.messages.push(Message::user("what is 2+2".to_string()));
         app.streaming_thinking = "draft answer is 4".to_string();
         app.streaming_text = "2 + 2 = 4.".to_string();
         app.flush_streamed_assistant_message();
-        assert_eq!(app.messages.len(), 1, "Current mode commits one message");
-        let blocks = app.messages[0].content_blocks();
-        assert!(
-            blocks
-                .iter()
-                .all(|b| !matches!(b, ContentBlock::Thinking { .. })),
-            "Current mode must not persist the thinking block"
+        let roles = |app: &App| -> Vec<String> {
+            display_messages(app).into_iter().map(|r| r.role).collect()
+        };
+        assert_eq!(
+            roles(&app),
+            ["user", "reasoning", "assistant"],
+            "Current shows the current turn's trace"
+        );
+        app.messages.push(Message::user("thanks".to_string()));
+        assert_eq!(
+            roles(&app),
+            ["user", "assistant", "user"],
+            "the next prompt hides the previous turn's trace"
         );
 
         // Section 2 — Off never shows reasoning anywhere: the handler
@@ -508,36 +482,38 @@ mod tests {
     }
 
     #[test]
-    fn thinking_preceding_a_tool_renders_above_the_tool_row() {
-        // (iter-785, glitch 2) Live thinking that streamed BEFORE a tool call
-        // renders at the ToolStart slot reservation — ABOVE the tool row —
-        // not below it as a trailing live tail.
+    fn reserved_tool_row_moves_to_the_live_tail_while_tails_stream() {
+        let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+        // (iter-785 order, 2026-10-13 one-renderer fix) A tool row whose
+        // ToolStart reserved a slot for the live tails is NOT a Body row
+        // while the tails stream — it renders in the Streaming section,
+        // below them. Rendering it (and the tails) in both places was the
+        // 2026-10-13 duplication.
         let mut app = make_app();
         app.messages.push(Message::user("read it".to_string()));
         // ToolStart reserved a slot for the live tails: after_index counted
         // them (messages.len() + 1).
         app.tool_use_blocks.push(tool_block("t1", "read", 2));
+        app.is_streaming = true;
         app.streaming_thinking = "The user wants me to read it".to_string();
 
-        let rows = display_messages(&app);
-        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
-        assert_eq!(
-            roles,
-            ["user", "reasoning", "tool"],
-            "thinking renders above the reserved tool row"
-        );
+        let roles = |rows: Vec<DisplayMessage>| -> Vec<String> {
+            rows.into_iter().map(|r| r.role).collect()
+        };
+        assert_eq!(roles(display_messages(&app)), ["user"]);
+        assert_eq!(roles(live_tool_rows(&app)), ["tool"]);
+
         // Once the boundary flush commits the thinking, the reservation no
-        // longer matches (after_index == messages.len()) and the committed
-        // message takes over the slot.
+        // longer matches (after_index == messages.len()) and the row returns
+        // to the Body after the committed message.
         app.streaming_thinking.clear();
         app.messages
             .push(Message::assistant_blocks(vec![ContentBlock::Thinking {
                 thinking: "The user wants me to read it".to_string(),
                 signature: String::new(),
             }]));
-        let rows = display_messages(&app);
-        let roles: Vec<&str> = rows.iter().map(|r| r.role.as_str()).collect();
-        assert_eq!(roles, ["user", "reasoning", "tool"]);
+        assert_eq!(roles(display_messages(&app)), ["user", "reasoning", "tool"]);
+        assert!(live_tool_rows(&app).is_empty());
     }
 
     #[test]
