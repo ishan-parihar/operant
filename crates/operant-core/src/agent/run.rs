@@ -506,6 +506,20 @@ impl OperantAgent {
         }
 
         loop {
+            // ── Pause gate (omp `pause.ts` parity) ─────────────────────
+            // The global estop (`operant pause`) must freeze the running
+            // turn, not just new work: poll at the two action boundaries
+            // (pre-model-call here, pre-tool-batch below) and hold until
+            // disengaged. One stat per second while held; a turn that
+            // never pauses pays exactly one extra stat per boundary.
+            while crate::estop::is_engaged() {
+                warn!(
+                    reason = ?crate::estop::state().reason,
+                    "Pause gate engaged — holding before next model call"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
             // ── Iteration budget enforcement ────────────────────────────
             // Consume one iteration from the thread-safe budget counter before
             // starting the loop body. This matches hermes-agent's
@@ -1599,6 +1613,18 @@ impl OperantAgent {
                         }
                         h.finish()
                     };
+
+                    // ── Pause gate, second boundary ─────────────────────
+                    // Same hold as the pre-model-call gate: the estop freezes
+                    // the turn before the tool batch fires (the only other
+                    // point where the agent performs observable work).
+                    while crate::estop::is_engaged() {
+                        warn!(
+                            reason = ?crate::estop::state().reason,
+                            "Pause gate engaged — holding before tool batch"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
 
                     // Execute tools and add results
                     let tool_results = self.execute_tools(tool_calls).await?;
