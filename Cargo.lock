@@ -5084,6 +5084,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "operant-os"
+version = "0.2.1"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "operant-plugins"
 version = "0.2.1"
 dependencies = [

@@ -91,6 +91,10 @@ pub struct AppConfig {
     /// no observer, byte-identical behavior.
     #[serde(default)]
     pub observability: operant_config::schema::ObservabilityConfig,
+    /// `[holon]` — org-mode surface (docs/agentic-os/, phase B+). Off by
+    /// default: invariant 5, the personal agent is byte-identical.
+    #[serde(default)]
+    pub holon: HolonSettings,
 }
 
 impl Default for AppConfig {
@@ -130,6 +134,7 @@ impl Default for AppConfig {
             database_path,
             providers: operant_config::providers::ProvidersConfig::default(),
             command_allowlist: Vec::new(),
+            holon: HolonSettings::default(),
         }
     }
 }
@@ -270,6 +275,33 @@ impl Default for SocializationSettings {
             schedule: "0 30 9 * * *".to_string(),
             turn_budget: 3,
             pairs: Vec::new(),
+        }
+    }
+}
+
+/// `[holon]` — operant as the runtime of a Holon organization
+/// (docs/agentic-os/, boundary doc §4.1). Phase B: only `enabled` and `home`
+/// are live (the read API behind `operant org`); later phases add the
+/// supervisor/runner/broker and Chair-channel keys here. `enabled = false`
+/// (default) is invariant 5: the personal agent is byte-identical, org
+/// surfaces off.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HolonSettings {
+    /// Master switch for every Holon-backed surface (org views, panels,
+    /// enforcement, supervisor). Off = personal mode, byte-identical.
+    #[serde(default)]
+    pub enabled: bool,
+    /// `$HOLON_HOME` — the Holon instance operant reads (and, from phase E,
+    /// drives). Its `work.db` is opened read-only through the read API.
+    #[serde(default)]
+    pub home: PathBuf,
+}
+
+impl Default for HolonSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            home: PathBuf::new(),
         }
     }
 }

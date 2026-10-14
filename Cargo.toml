@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/operant-api",
+    "crates/operant-os",
     "crates/operant-config",
     "crates/operant-core",
     "crates/operant-cli",

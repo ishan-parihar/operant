@@ -653,3 +653,17 @@ pairs = [
     ["crew-chief", "identity-warden"],
     ["hrmaster", "compass"],
 ]
+
+# [holon] — operant as the runtime of a Holon organization (docs/agentic-os/).
+# Phase B keys: `enabled` and `home` (the read API behind `operant org`).
+# Later phases add supervisor/runner/broker and Chair-channel keys here.
+# enabled = false (default) is invariant 5: the personal agent is
+# byte-identical — no org view, no panel, no enforcement, no supervisor.
+[holon]
+enabled = false
+# $HOLON_HOME of the instance operant reads. Its work.db is opened
+# READ-ONLY through Holon's published api_* views (migration work/0008);
+# Holon is the only writer of its databases. An instance whose read-API
+# version this operant build does not know is refused with a doctor line
+# and org mode stays off.
+# home = "~/holon"

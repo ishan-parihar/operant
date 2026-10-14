@@ -1,0 +1,16 @@
+[package]
+name = "operant-os"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operant as Holon's runtime: read-only org views, policy enforcement, run supervision, the Chair's channel (docs/agentic-os)"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile.workspace = true
