@@ -50,5 +50,5 @@ pub mod debug_hub;
 pub mod event_bus;
 pub mod overlay;
 
-pub use debug_hub::TuiDebugHub;
+pub use debug_hub::{FrameCapturePlan, TuiDebugHub};
 pub use event_bus::TuiEvent;

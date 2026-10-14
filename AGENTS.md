@@ -889,7 +889,10 @@ MUST know before touching the render layer:
 #### TUI debug + live-repro tooling
 - Headless: `operant -c <pinned.toml> tui debug simulate --keys '<enter>'
   --mouse '<left,x,y><drag,x,y>'` — drives the real event handlers against
-  a TestBackend. Corpus: `crates/operant-cli/tests/tui_scenarios/`
+  a TestBackend. Mid-stream oracles: `--frame-per-event` writes every
+  painted frame to `--capture-dir`; `--assert-screen 'count:NEEDLE==N'`
+  asserts an exact occurrence count on the final screen (duplicate-row
+  detection). Corpus: `crates/operant-cli/tests/tui_scenarios/`
   (`_run.py`; `OPERANT_BIN` must point at a FRESH debug build; `prove`
   writes goldens, `verify` gates them; the journey-view/skills-view 4-drift
   baseline is pre-existing peer drift).

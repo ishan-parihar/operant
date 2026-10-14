@@ -834,13 +834,15 @@ impl TuiApp {
     /// describe the same frame.
     ///
     /// `frame_capture` arms per-frame text capture inside the run loop: the
-    /// given 0-based painted-frame indices are written to `dir` as
-    /// `frame-<NNNN>.txt` as they are painted, which is the only way to reach
-    /// intermediate states (the loop exits *before* its last paint, so a
-    /// finished buffer can only ever show the final state). The returned
-    /// `Option<(requested, captured)>` reports which indices were actually
-    /// painted so the caller can fail instead of silently writing fewer files
-    /// than asked for.
+    /// plan's indices (or every painted frame when `plan.all`) are written to
+    /// `plan.dir` as `frame-<NNNN>.txt` as they are painted, which is the
+    /// only way to reach intermediate states (the loop exits *before* its
+    /// last paint, so a finished buffer can only ever show the final state).
+    /// The returned `Option<(requested, captured)>` reports which indices
+    /// were actually painted so the caller can fail instead of silently
+    /// writing fewer files than asked for. In `all` mode `requested` comes
+    /// back empty and the caller must skip the missing-frames check (the
+    /// total is unknowable up front).
     #[allow(clippy::too_many_arguments)]
     pub async fn run_headless(
         mut self,
@@ -849,7 +851,7 @@ impl TuiApp {
         agent_script: Option<Vec<crate::cmd_tui_debug::MockAgentEvent>>,
         size: (u16, u16),
         max_frames: Option<u64>,
-        frame_capture: Option<(Vec<u64>, std::path::PathBuf)>,
+        frame_capture: Option<crate::tui::debug::FrameCapturePlan>,
     ) -> anyhow::Result<(
         Vec<crate::tui::debug::TuiEvent>,
         crate::tui::app::App,
@@ -1029,8 +1031,12 @@ impl TuiApp {
         self.app.simulation_max_frames = max_frames;
         self.app.simulated_keys = keys;
         self.app.debug_hub.event_bus().set_enabled(true);
-        if let Some((frames, dir)) = frame_capture {
-            self.app.debug_hub.arm_frame_capture(frames, dir);
+        if let Some(plan) = frame_capture {
+            if plan.all {
+                self.app.debug_hub.arm_all_frames_capture(plan.dir);
+            } else {
+                self.app.debug_hub.arm_frame_capture(plan.indices, plan.dir);
+            }
         }
 
         loop {

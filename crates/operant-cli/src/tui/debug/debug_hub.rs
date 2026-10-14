@@ -47,8 +47,24 @@ struct Inner {
 #[derive(Debug, Clone)]
 pub struct FrameCapture {
     requested: std::collections::BTreeSet<u64>,
+    /// Capture every painted frame, ignoring `requested` (2026-10-14 batch
+    /// plan P2: `--frame-per-event` for mid-stream duplicate-row oracles).
+    /// The requested-set stays empty in this mode — the total frame count is
+    /// unknown before the run, and the sim's missing-frame check is skipped.
+    all: bool,
     dir: std::path::PathBuf,
     captured: std::collections::BTreeSet<u64>,
+}
+
+/// What the headless simulator asks the run loop to capture, built by the
+/// CLI layer (`--capture-frames` / `--frame-per-event`) and consumed by
+/// `run_headless`. A plan — not a bare `(Vec<u64>, PathBuf)` — because the
+/// all-frames mode has no index list at all.
+#[derive(Debug, Clone)]
+pub struct FrameCapturePlan {
+    pub indices: Vec<u64>,
+    pub all: bool,
+    pub dir: std::path::PathBuf,
 }
 
 impl TuiDebugHub {
@@ -147,9 +163,35 @@ impl TuiDebugHub {
         }
         *slot = Some(FrameCapture {
             requested: frames.into_iter().collect(),
+            all: false,
             dir,
             captured: std::collections::BTreeSet::new(),
         });
+    }
+
+    /// Arm capture of EVERY painted frame (`--frame-per-event`). The same
+    /// one-arm-per-hub rule applies. Total frame count is unknown up front,
+    /// so no missing-frame check is possible or wanted in this mode.
+    pub fn arm_all_frames_capture(&self, dir: std::path::PathBuf) {
+        let mut slot = self.inner.frame_capture.lock();
+        if slot.is_some() {
+            return;
+        }
+        *slot = Some(FrameCapture {
+            requested: std::collections::BTreeSet::new(),
+            all: true,
+            dir,
+            captured: std::collections::BTreeSet::new(),
+        });
+    }
+
+    /// `true` when the armed capture is in all-frames mode.
+    pub fn frame_capture_all(&self) -> bool {
+        self.inner
+            .frame_capture
+            .lock()
+            .as_ref()
+            .is_some_and(|c| c.all)
     }
 
     /// Called from the run loop with the *just-rendered* buffer, immediately
@@ -169,7 +211,7 @@ impl TuiDebugHub {
         // number of the frame just painted.
         let painted = self.inner.frame_count.load(Ordering::Relaxed);
         let index = painted.saturating_sub(1);
-        if !capture.requested.contains(&index) {
+        if !capture.all && !capture.requested.contains(&index) {
             return;
         }
         let path = capture.dir.join(format!("frame-{index:04}.txt"));

@@ -9,7 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **iter-814 — memory-wire auto-sync on every build; provenance surface
+- **iter-816 — tui debug simulate: --frame-per-event + count: screen
+  asserts (2026-10-14 batch, plan P2).** Mid-stream oracles for the harness
+  that plans 01/04/08/09 lean on: `--frame-per-event` writes every painted
+  frame to `--capture-dir` (all-flags mode on the hub, no sentinel index
+  list; the missing-frames check is skipped since the total is unknowable
+  up front), and `--assert-screen 'count:NEEDLE==N'` asserts an exact
+  non-overlapping occurrence count on the final screen — the duplicate-row
+  detection a contains/not-contains pair cannot express. The CLI→runner
+  seam now passes a `FrameCapturePlan { indices, all, dir }`. Corpus verify
+  green on the new binary (0 drift); frame-per-event proven live against
+  the stream-multi-chunk agent script.
+
+- **iter-815 — memory-wire auto-sync on every build; provenance surface
   (2026-10-14 batch, plan 11A).** `scripts/build.sh` is the single build
   entry point: it advances the memory-wire branch-tracking lock to upstream
   HEAD before every dev/test/release/deploy build (the old 1h throttle stamp

@@ -229,8 +229,16 @@ pub enum TuiDebugSubcommand {
         #[arg(long)]
         capture_frames: Option<String>,
 
-        /// Output directory for `--capture-frames` files (default
-        /// `tui-frames`). Created if missing.
+        /// Capture EVERY painted frame into `--capture-dir` (mid-stream
+        /// oracle primitive, 2026-10-14 batch plan P2: with a scripted agent
+        /// emitting tool events, the per-frame files are the evidence for
+        /// duplicate-row and misplaced-row defects that a final-screen
+        /// assert cannot see). Mutually exclusive with --capture-frames.
+        #[arg(long, conflicts_with = "capture_frames")]
+        frame_per_event: bool,
+
+        /// Output directory for `--capture-frames`/`--frame-per-event`
+        /// files (default `tui-frames`). Created if missing.
         #[arg(long)]
         capture_dir: Option<std::path::PathBuf>,
 
@@ -286,6 +294,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
             style_baseline,
             capture_frames,
             capture_dir,
+            frame_per_event,
             bypass_permissions,
         } => {
             debug_simulate(
@@ -306,6 +315,7 @@ pub async fn handle_tui_debug_command(config: &AppConfig, cmd: TuiDebugSubcomman
                     style_baseline,
                     capture_frames,
                     capture_dir,
+                    frame_per_event,
                     bypass_permissions,
                 },
             )
@@ -1487,6 +1497,7 @@ struct SimulateArgs {
     style_baseline: Option<std::path::PathBuf>,
     capture_frames: Option<String>,
     capture_dir: Option<std::path::PathBuf>,
+    frame_per_event: bool,
     bypass_permissions: bool,
 }
 
@@ -1528,25 +1539,44 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
         .as_deref()
         .map(parse_frame_index_list)
         .transpose()?;
-    let capture_dir = capture_requested
-        .as_ref()
-        .map(|_| args.capture_dir.clone().unwrap_or_else(default_capture_dir));
-    if let (Some(frames), Some(dir)) = (&capture_requested, &capture_dir)
-        && !frames.is_empty()
-    {
-        std::fs::create_dir_all(dir)
+    // --frame-per-event captures every painted frame: the plan carries an
+    // empty index list and `all`, and the missing-frames check is skipped
+    // (the total is unknown until the run ends).
+    let capture_plan = if args.frame_per_event {
+        let dir = args.capture_dir.clone().unwrap_or_else(default_capture_dir);
+        std::fs::create_dir_all(&dir)
             .map_err(|e| anyhow::anyhow!("Cannot create capture dir {:?}: {}", dir, e))?;
-        println!(
-            "Capturing {} frame(s) into {:?}: {:?}",
-            frames.len(),
+        println!("Capturing every frame into {dir:?} (--frame-per-event)");
+        Some(crate::tui::debug::FrameCapturePlan {
+            indices: Vec::new(),
+            all: true,
             dir,
-            frames
-        );
-    }
-    let frame_capture = match (capture_requested.clone(), capture_dir.clone()) {
-        (Some(frames), Some(dir)) if !frames.is_empty() => Some((frames, dir)),
-        _ => None,
+        })
+    } else {
+        capture_requested
+            .map(
+                |frames| -> anyhow::Result<crate::tui::debug::FrameCapturePlan> {
+                    let dir = args.capture_dir.clone().unwrap_or_else(default_capture_dir);
+                    if frames.is_empty() {
+                        anyhow::bail!("--capture-frames: index list is empty");
+                    }
+                    std::fs::create_dir_all(&dir).map_err(|e| {
+                        anyhow::anyhow!("Cannot create capture dir {:?}: {}", dir, e)
+                    })?;
+                    println!(
+                        "Capturing {} frame(s) into {dir:?}: {frames:?}",
+                        frames.len()
+                    );
+                    Ok(crate::tui::debug::FrameCapturePlan {
+                        indices: frames,
+                        all: false,
+                        dir,
+                    })
+                },
+            )
+            .transpose()?
     };
+    let capture_all = args.frame_per_event;
 
     let script = if let Some(ref path) = args.agent_script {
         let raw = std::fs::read_to_string(path)?;
@@ -1566,6 +1596,9 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
         args.bypass_permissions,
     )
     .await?;
+    // The dir outlives the plan (which moves into the runner) — hoisted
+    // here to feed the capture report below.
+    let capture_out_dir = capture_plan.as_ref().map(|p| p.dir.clone());
     let (events, app, screen, capture_status, style_dump) = tui_app
         .run_headless(
             parsed_keys,
@@ -1573,7 +1606,7 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
             script,
             dims,
             frame_cap,
-            frame_capture,
+            capture_plan,
         )
         .await?;
 
@@ -1607,28 +1640,39 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
 
     // Report per-frame capture outcome. A requested frame the run never
     // painted is an error: silently shipping fewer files than asked for is
-    // exactly the failure this harness exists to catch.
-    if let (Some((requested, captured)), Some(dir)) = (capture_status, capture_dir.as_deref()) {
-        let missing: Vec<u64> = requested
-            .iter()
-            .copied()
-            .filter(|i| !captured.contains(i))
-            .collect();
-        for index in &captured {
+    // exactly the failure this harness exists to catch. In --frame-per-event
+    // mode every painted frame is by definition captured, so only the count
+    // is reported.
+    if let Some((requested, captured)) = capture_status {
+        let dir = capture_out_dir.unwrap_or_else(default_capture_dir);
+        if capture_all {
             println!(
-                "Captured frame {} -> {:?}",
-                index,
-                dir.join(format!("frame-{index:04}.txt"))
+                "Captured {} frame(s) (every painted frame) into {:?}",
+                captured.len(),
+                dir
             );
-        }
-        if !missing.is_empty() {
-            anyhow::bail!(
-                "--capture-frames: run ended before frame(s) {:?} were painted ({} frame(s) \
-                 drawn in total). Re-run with an in-range index (0..{}), or raise --max-frames.",
-                missing,
-                app.debug_hub.frame_count(),
-                app.debug_hub.frame_count()
-            );
+        } else {
+            let missing: Vec<u64> = requested
+                .iter()
+                .copied()
+                .filter(|i| !captured.contains(i))
+                .collect();
+            for index in &captured {
+                println!(
+                    "Captured frame {} -> {:?}",
+                    index,
+                    dir.join(format!("frame-{index:04}.txt"))
+                );
+            }
+            if !missing.is_empty() {
+                anyhow::bail!(
+                    "--capture-frames: run ended before frame(s) {:?} were painted ({} frame(s) \
+                     drawn in total). Re-run with an in-range index (0..{}), or raise --max-frames.",
+                    missing,
+                    app.debug_hub.frame_count(),
+                    app.debug_hub.frame_count()
+                );
+            }
         }
     }
 
@@ -1944,13 +1988,44 @@ fn evaluate_screen_assertions(screen: &[String], assertions_str: &str) -> Result
         if clause.is_empty() {
             continue;
         }
+        // `count:NEEDLE==N`: the needle must occur exactly N times in the
+        // final screen (2026-10-14 batch plan P2). Parsed before the
+        // contains forms so `count:` never collides with a needle that
+        // happens to contain "contains:". Non-overlapping count — a row
+        // that renders twice counts twice, which is the duplicate-row
+        // oracle the plan needs.
+        if let Some(rest) = clause.strip_prefix("count:") {
+            let (needle_raw, expected) = rest.split_once("==").ok_or_else(|| {
+                anyhow::anyhow!("Invalid count assertion '{clause}': expected 'count:NEEDLE==N'")
+            })?;
+            let needle = needle_raw.trim();
+            let needle = needle
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| needle.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                .unwrap_or(needle);
+            if needle.is_empty() {
+                anyhow::bail!("Invalid count assertion '{clause}': needle is empty");
+            }
+            let expected: usize = expected.trim().parse().map_err(|_| {
+                anyhow::anyhow!("Invalid count assertion '{clause}': N is not a number")
+            })?;
+            let actual = haystack.match_indices(needle).count();
+            if actual != expected {
+                anyhow::bail!(
+                    "Screen count assertion failed: expected {expected} occurrence(s) of {needle:?}, found {actual}"
+                );
+            }
+            println!("  ✓ {clause}");
+            continue;
+        }
         let (negate, needle) = if let Some(rest) = clause.strip_prefix("not-contains:") {
             (true, rest)
         } else if let Some(rest) = clause.strip_prefix("contains:") {
             (false, rest)
         } else {
             anyhow::bail!(
-                "Invalid screen assertion '{}': expected 'contains:TEXT' or 'not-contains:TEXT'",
+                "Invalid screen assertion '{}': expected 'contains:TEXT', 'not-contains:TEXT', or 'count:NEEDLE==N'",
                 clause
             );
         };
@@ -1972,6 +2047,75 @@ fn evaluate_screen_assertions(screen: &[String], assertions_str: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `count:` screen assertions — the plan-P2 duplicate-row oracle form.
+    /// Counts non-overlapping occurrences; fails with a count mismatch.
+    #[test]
+    fn screen_count_assertion_counts_occurrences() {
+        let screen = vec![
+            "▶ Bash  list files".to_string(),
+            "  ok".to_string(),
+            "▶ Bash  list files".to_string(),
+        ];
+        assert!(evaluate_screen_assertions(&screen, "count:▶ Bash==2").is_ok());
+        assert!(evaluate_screen_assertions(&screen, "count:\"▶ Bash\"==2").is_ok());
+        // Mismatch must fail — this is the oracle's whole point.
+        assert!(evaluate_screen_assertions(&screen, "count:▶ Bash==1").is_err());
+        assert!(evaluate_screen_assertions(&screen, "count:missing-needle==0").is_ok());
+        // Malformed forms are rejected, not silently passed.
+        assert!(evaluate_screen_assertions(&screen, "count:needle=x").is_err());
+        assert!(evaluate_screen_assertions(&screen, "count:==3").is_err());
+    }
+
+    /// --frame-per-event arms all-frames capture: every painted frame lands
+    /// on disk with a sequential index, and the hub reports all-mode so the
+    /// caller skips the missing-frames check.
+    #[test]
+    fn all_frames_capture_writes_every_painted_frame() {
+        use crate::tui::debug::FrameCapturePlan;
+        let dir =
+            std::env::temp_dir().join(format!("operant-test-all-frames-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // The hub writes without creating directories — the CLI layer owns
+        // creation, so the test must do what `debug_simulate` does.
+        std::fs::create_dir_all(&dir).expect("create capture dir");
+        let hub = crate::tui::debug::TuiDebugHub::new(false);
+        hub.arm_all_frames_capture(dir.clone());
+        assert!(hub.frame_capture_all());
+
+        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 10, 1));
+        hub.record_frame(1.0, None);
+        hub.capture_frame(&buffer);
+        hub.record_frame(2.0, None);
+        hub.capture_frame(&buffer);
+
+        let status = hub.frame_capture_status();
+        let (requested, captured) = status.expect("armed");
+        assert!(requested.is_empty(), "all-mode reports no requested set");
+        assert_eq!(captured, vec![0, 1], "every painted frame captured");
+        let f0 = std::fs::read_to_string(dir.join("frame-0000.txt"));
+        assert!(f0.is_ok(), "frame file written: {f0:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The plan struct is the single shape the CLI hands to run_headless:
+    /// index mode and all mode both fit, so the seam has one type.
+    #[test]
+    fn frame_capture_plan_carries_both_modes() {
+        use crate::tui::debug::FrameCapturePlan;
+        let indexed = FrameCapturePlan {
+            indices: vec![0, 3],
+            all: false,
+            dir: std::path::PathBuf::from("/tmp/x"),
+        };
+        assert!(!indexed.all && indexed.indices.len() == 2);
+        let all = FrameCapturePlan {
+            indices: Vec::new(),
+            all: true,
+            dir: std::path::PathBuf::from("/tmp/x"),
+        };
+        assert!(all.all && all.indices.is_empty());
+    }
 
     /// Regression for the token-advance off-by-one: `close_idx` is relative to
     /// `chars[i..]`, so the old `i = close_idx + 1` only advanced the FIRST
