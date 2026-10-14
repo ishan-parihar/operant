@@ -201,6 +201,7 @@ impl App {
             bypass_permissions_dialog:
                 crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
             effort_picker: crate::tui::effort_picker::EffortPickerState::new(),
+            permissions_picker: crate::tui::permissions_picker::PermissionsPickerState::new(),
             key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState::new(),
             custom_provider_dialog:
                 crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),

@@ -971,6 +971,25 @@ impl TuiState for App {
             .then_some(self.help_overlay.scroll_offset as usize)
     }
 
+    fn help_overlay_content(&self) -> crate::tui::overlays::help::HelpOverlayContent {
+        self.help_overlay.content
+    }
+
+    fn help_filter(&self) -> String {
+        self.help_overlay.filter.clone()
+    }
+
+    fn keys_report_lines(&self, hotkeys: bool) -> Vec<String> {
+        let registry = &*crate::tui::keybindings::DEFAULT_KEYBINDINGS;
+        let report = registry.usage_report(&self.slash_usage);
+        let text = if hotkeys {
+            self.render_hotkeys_report(&report)
+        } else {
+            self.render_keys_report(registry, &report)
+        };
+        text.lines().map(str::to_string).collect()
+    }
+
     fn working_dir(&self) -> Option<String> {
         self.current_dir.clone()
     }

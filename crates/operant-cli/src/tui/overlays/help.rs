@@ -15,6 +15,18 @@ use ratatui::widgets::Paragraph;
 // HelpOverlay
 // ============================================================================
 
+/// What the overlay currently shows. 2026-10-14 batch, plan 10: /keys and
+/// /hotkeys open the SAME overlay machinery as /help (scroll, filter,
+/// Esc), but with the binding catalogue as content — rendered at the top
+/// (scroll 0), never as a bottom-dumped transcript message.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum HelpOverlayContent {
+    #[default]
+    Commands,
+    Keys,
+    Hotkeys,
+}
+
 /// State for the full-screen help overlay (? / F1 / /help).
 #[derive(Debug, Default)]
 pub struct HelpOverlay {
@@ -24,6 +36,8 @@ pub struct HelpOverlay {
     pub filter: String,
     /// Dynamically populated entries from the command registry.
     pub commands: Vec<HelpEntry>,
+    /// Which surface this overlay shows right now.
+    pub content: HelpOverlayContent,
 }
 
 /// A single command entry shown in the help overlay.
@@ -52,7 +66,11 @@ impl HelpOverlay {
 
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
-        if !self.visible {
+        if self.visible {
+            // Opening via ?/F1//help always shows the command catalogue;
+            // Keys/Hotkeys content is set only by open_keys/open_hotkeys.
+            self.content = HelpOverlayContent::Commands;
+        } else {
             // Reset state when closing
             self.scroll_offset = 0;
             self.filter.clear();
@@ -63,6 +81,23 @@ impl HelpOverlay {
         self.visible = false;
         self.scroll_offset = 0;
         self.filter.clear();
+        self.content = HelpOverlayContent::Commands;
+    }
+
+    /// Open showing the full binding catalogue (plan 10) — at the top.
+    pub fn open_keys(&mut self) {
+        self.visible = true;
+        self.scroll_offset = 0;
+        self.filter.clear();
+        self.content = HelpOverlayContent::Keys;
+    }
+
+    /// Open showing used/never-used chords (plan 10) — at the top.
+    pub fn open_hotkeys(&mut self) {
+        self.visible = true;
+        self.scroll_offset = 0;
+        self.filter.clear();
+        self.content = HelpOverlayContent::Hotkeys;
     }
 
     pub fn scroll_up(&mut self) {

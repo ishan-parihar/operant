@@ -16,7 +16,7 @@
 │    /skills  Show loaded skills and operant-endorsed recommendations                                                  │
 │    /info  Show session info and token usage                                                                          │
 │    /keys  Show keybinding conflicts with your terminal/OS                                                            │
-│    /usage  Show connected provider usage limits                                                                      │
+│    /stats  Show session token and cost stats                                                                         │
 │    /version  Show version and build details                                                                          │
 │    /changelog  Show recent changes in this build                                                                     │
 │                                                                                                                      │

@@ -189,6 +189,7 @@ overlay_visible_guards!(
     is_visible_bypass_permissions_dialog => bypass_permissions_dialog,
     is_visible_ask_user_dialog => ask_user_dialog,
     is_visible_effort_picker => effort_picker,
+    is_visible_permissions_picker => permissions_picker,
     is_visible_import_config_picker => import_config_picker,
     is_visible_connect_dialog => connect_dialog,
     is_visible_key_input_dialog => key_input_dialog,
@@ -326,6 +327,12 @@ const OVERLAYS: &[Entry] = &[
         name: "effort_picker",
         visible: is_visible_effort_picker,
         paint: paint_effort_picker,
+        sink: Sink::Frame,
+    },
+    Entry {
+        name: "permissions_picker",
+        visible: is_visible_permissions_picker,
+        paint: paint_permissions_picker,
         sink: Sink::Frame,
     },
     Entry {
@@ -551,6 +558,10 @@ fn paint_effort_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     crate::effort_picker::render_effort_picker(frame, &app.effort_picker, ctx.size);
 }
 
+fn paint_permissions_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
+    crate::permissions_picker::render_permissions_picker(frame, &app.permissions_picker, ctx.size);
+}
+
 fn paint_import_config_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.import_config_picker, ctx.size);
 }
@@ -695,6 +706,7 @@ mod tests {
         ("bypass_permissions_dialog", Sink::Frame),
         ("ask_user_dialog", Sink::Buffer),
         ("effort_picker", Sink::Frame),
+        ("permissions_picker", Sink::Frame),
         ("import_config_picker", Sink::Frame),
         ("connect_dialog", Sink::Frame),
         ("key_input_dialog", Sink::Frame),

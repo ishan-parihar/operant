@@ -32,7 +32,7 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Cancel,
                 context: BindingContext::Global,
-                description: "Cancel current operation",
+                description: "Quit application",
             },
             DefaultBinding {
                 key: KeyCode::Char('q'),
@@ -117,20 +117,12 @@ impl KeyBindingRegistry {
             },
             // Not a completion action. The dispatcher (app/key_handling.rs:1520)
             // cycles the permission mode Default -> AcceptEdits ->
-            // BypassPermissions -> Default. There is no completion cycling to
-            // do: the plain-Tab arm above ACCEPTS the selected suggestion
-            // rather than advancing to the next one. Catalogued as
-            // CompletionPrev, so /keys told users Shift+Tab navigated
-            // completions when it changed their permission posture — a
-            // security-relevant mislabel, since BypassPermissions is one of
-            // the three states.
-            DefaultBinding {
-                key: KeyCode::Tab,
-                modifiers: KeyModifiers::SHIFT,
-                action: KeyAction::Custom(5),
-                context: BindingContext::Prompt,
-                description: "Cycle permission mode",
-            },
+            // 2026-10-14 batch, plan 10: the Shift+Tab entry is GONE. The
+            // permission cycle it described was removed — two silent presses
+            // armed Bypass; /permissions is the explicit path now and Bypass
+            // always defers to the confirmation dialog. The chord is
+            // deliberately uncatalogued until plan 03 rebinds it to the
+            // reasoning-effort cycle.
             DefaultBinding {
                 key: KeyCode::Up,
                 modifiers: KeyModifiers::NONE,
@@ -195,6 +187,95 @@ impl KeyBindingRegistry {
                 action: KeyAction::Custom(4),
                 context: BindingContext::Global,
                 description: "Open session branch browser",
+            },
+            // 2026-10-14 batch, plan 10: the remaining real app chords, each
+            // dispatched on the keycode in `app/key_handling.rs` (never
+            // through the KeyAction registry) and catalogued here so /keys
+            // and the help overlay advertise only what actually exists.
+            // Every entry below was verified against its dispatch arm.
+            DefaultBinding {
+                key: KeyCode::PageUp,
+                modifiers: KeyModifiers::NONE,
+                action: KeyAction::Custom(6),
+                context: BindingContext::Global,
+                description: "Scroll transcript up 10",
+            },
+            DefaultBinding {
+                key: KeyCode::PageDown,
+                modifiers: KeyModifiers::NONE,
+                action: KeyAction::Custom(6),
+                context: BindingContext::Global,
+                description: "Scroll transcript down 10",
+            },
+            DefaultBinding {
+                key: KeyCode::Up,
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Custom(7),
+                context: BindingContext::Global,
+                description: "Fine scroll up 3",
+            },
+            DefaultBinding {
+                key: KeyCode::Down,
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Custom(7),
+                context: BindingContext::Global,
+                description: "Fine scroll down 3",
+            },
+            DefaultBinding {
+                key: KeyCode::Up,
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(8),
+                context: BindingContext::Global,
+                description: "Fast scroll up 20",
+            },
+            DefaultBinding {
+                key: KeyCode::Down,
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(8),
+                context: BindingContext::Global,
+                description: "Fast scroll down 20",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('g'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Custom(9),
+                context: BindingContext::Global,
+                description: "Toggle scroll bookmark",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('g'),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(9),
+                context: BindingContext::Global,
+                description: "Toggle scroll bookmark",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('p'),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(10),
+                context: BindingContext::Global,
+                description: "Cycle configured models",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Custom(11),
+                context: BindingContext::Global,
+                description: "Expand latest tool output",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('x'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Custom(12),
+                context: BindingContext::Global,
+                description: "Recall queued message",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('t'),
+                modifiers: KeyModifiers::CONTROL,
+                action: KeyAction::Custom(13),
+                context: BindingContext::Global,
+                description: "Toggle drag-select copy mode",
             },
             DefaultBinding {
                 key: KeyCode::Char('f'),

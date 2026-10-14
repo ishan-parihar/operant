@@ -77,6 +77,7 @@ pub(crate) use tui::mcp_view;
 pub(crate) use tui::messages;
 pub(crate) use tui::notifications;
 pub(crate) use tui::osc8;
+pub(crate) use tui::permissions_picker;
 pub(crate) use tui::prompt_input;
 pub(crate) use tui::settings_screen;
 pub(crate) use tui::theme_screen;

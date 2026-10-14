@@ -238,19 +238,8 @@ pub use report::{KeyUsageReport, os_conflict_reason, usage_key};
 pub static DEFAULT_KEYBINDINGS: LazyLock<KeyBindingRegistry> =
     LazyLock::new(KeyBindingRegistry::with_defaults);
 
-/// Load keybindings from config file (TOML) - returns defaults if file doesn't exist
-#[allow(dead_code)] // Still a stub: config loading lands with user-defined bindings
-pub fn load_keybindings_from_config(
-    _path: &std::path::Path,
-) -> Result<KeyBindingRegistry, Box<dyn std::error::Error>> {
-    Ok(KeyBindingRegistry::with_defaults())
-}
-
-/// Save keybindings to config file - placeholder for future implementation
-#[allow(dead_code)] // Paired stub with load_keybindings_from_config
-pub fn save_keybindings_to_config(
-    _registry: &KeyBindingRegistry,
-    _path: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
-}
+// (2026-10-14 batch, plan 10) load_keybindings_from_config /
+// save_keybindings_to_config deleted: both were no-op stubs with zero
+// callers — the registry ships defaults only, /keys displays them, and the
+// old /keybindings command that pointed at the nonexistent JSON file is
+// gone too.

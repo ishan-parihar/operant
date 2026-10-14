@@ -1035,10 +1035,10 @@ pub(super) fn draw_status(frame: &mut Frame, app: &dyn TuiState, area: Rect, pen
                     ));
                 }
 
-                spans.push(Span::styled(
-                    format!(" · {} bg", crate::tui::operant_app::keybind::alt_chord("B")),
-                    Style::default().fg(rgb(100, 100, 100)),
-                ));
+                // (2026-10-14 batch, plan 10) the "Alt+B bg" hint is gone —
+                // Alt+B is readline word-left in the composer, not a
+                // background-this-tool chord; advertising it here sent users
+                // to a key that does something else.
 
                 push_queued_suffix(&mut spans, &queued_suffix);
                 Line::from(spans)

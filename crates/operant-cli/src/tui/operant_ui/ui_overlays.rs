@@ -214,7 +214,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/keys",
         "Show keybinding conflicts with your terminal/OS",
     ));
-    lines.push(help_entry("/usage", "Show connected provider usage limits"));
+    lines.push(help_entry("/stats", "Show session token and cost stats"));
     lines.push(help_entry("/version", "Show version and build details"));
     lines.push(help_entry(
         "/changelog",
@@ -346,76 +346,33 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     lines.push(separator());
     lines.push(Line::from(""));
 
-    lines.push(Line::from(Span::styled("  Navigation", section_style)));
+    // ---- Keyboard: generated from the keybinding registry (plan 10) ----
+    // The hand-written Navigation/Diagrams/Input sections here were jcode's,
+    // advertising chords that do something else or nothing in operant
+    // (Ctrl+J "jump to prompt" is a newline; Ctrl+P "auto-poke" is global
+    // search; Ctrl+1..9 panel resize does not exist; Alt+S/A/X never
+    // dispatched). The registry is the single source of truth now: every
+    // described Global binding renders, and nothing else does.
+    lines.push(Line::from(Span::styled("  Keyboard", section_style)));
     lines.push(Line::from(""));
-    lines.push(key_entry("PageUp / PageDown", "Scroll history"));
-    lines.push(key_entry("Up / Down", "Scroll history (when input empty)"));
-    lines.push(key_entry(
-        "Ctrl+J / Ctrl+K",
-        "Jump to next / previous user prompt (also Ctrl+] / Ctrl+[)",
-    ));
-    lines.push(key_entry(
-        "Ctrl+Shift+J / Ctrl+Shift+K",
-        "Scroll history down / up one line",
-    ));
-    lines.push(key_entry(
-        "Cmd/Super+K / J",
-        "Jump to previous / next user prompt (macOS, if forwarded)",
-    ));
-    lines.push(key_entry("Ctrl+1..4", "Resize side panel to 25/50/75/100%"));
-    lines.push(key_entry(
-        "Ctrl+5..9",
-        "Jump by recency (5 = 5th most recent)",
-    ));
-
-    lines.push(Line::from(""));
-    lines.push(separator());
-    lines.push(Line::from(""));
-
-    lines.push(Line::from(Span::styled(
-        "  Diagrams & Diffs",
-        section_style,
-    )));
-    lines.push(Line::from(""));
-    #[cfg(any())]
-    // [port-decision] keybind registry not ported (side_panel_toggle_key_label); re-activate at cutover
-    lines.push(key_entry(
-        &crate::tui::operant_app::keybind::side_panel_toggle_key_label(),
-        "Cycle side panel: split, fullscreen, hidden",
-    ));
-    #[cfg(any())]
-    // [port-decision] keybind registry not ported (diagram_pane_visibility_key_label); re-activate at cutover
-    lines.push(key_entry(
-        &crate::tui::operant_app::keybind::diagram_pane_visibility_key_label(),
-        "Show/hide diagram pane",
-    ));
-    lines.push(key_entry(&alt("T"), "Toggle diagram position (side/top)"));
-    lines.push(key_entry(
-        &alt("Shift+I"),
-        "Show/hide inline images (persists)",
-    ));
-    lines.push(key_entry("Ctrl+H / Ctrl+L", "Focus chat / diagram / diffs"));
-    lines.push(key_entry(
-        "Ctrl+L / Cmd+L",
-        "Clear screen, history stays above (no pane focused)",
-    ));
-    lines.push(key_entry(
-        "Ctrl+Left / Right",
-        "Cycle diagrams (when diagram focused)",
-    ));
-    lines.push(key_entry("h/j/k/l / arrows", "Pan diagram (when focused)"));
-    lines.push(key_entry("[ / ]", "Zoom diagram (when focused)"));
-    lines.push(key_entry("+ / -", "Resize diagram pane"));
-    lines.push(key_entry(
-        &format!("{} / /diff", alt("G")),
-        "Cycle diff mode (Off/Inline/Pinned/File)",
-    ));
-    lines.push(key_entry("Shift+Tab", "Cycle favorited models"));
-    lines.push(key_entry("Ctrl+O", "Set default model (in /model picker)"));
-    lines.push(key_entry(
-        "Ctrl+N",
-        "Toggle favorite model (in /model picker)",
-    ));
+    {
+        use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+        for (context, binding) in DEFAULT_KEYBINDINGS.catalogue() {
+            if context != BindingContext::Global {
+                continue;
+            }
+            let Some(desc) = binding.description.as_deref() else {
+                continue;
+            };
+            // OS-conflicted chords (Ctrl+h/l etc.) are explained by /keys
+            // with the interception reason; the overlay skips them so the
+            // list stays honest about what a plain terminal delivers.
+            if crate::tui::keybindings::os_conflict_reason(&binding.chord()).is_some() {
+                continue;
+            }
+            lines.push(key_entry(&binding.chord().to_string(), desc));
+        }
+    }
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -423,98 +380,20 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
 
     lines.push(Line::from(Span::styled("  Input & Editing", section_style)));
     lines.push(Line::from(""));
-    lines.push(key_entry(
-        "Ctrl+C / Ctrl+D",
-        "Quit (press twice to confirm)",
-    ));
-    lines.push(key_entry("Ctrl+X", "Cut entire input line to clipboard"));
-    lines.push(key_entry(
-        "Ctrl+A",
-        "Copy visible chat viewport plus nearby context",
-    ));
-    lines.push(key_entry("Ctrl+U", "Clear input line"));
-    lines.push(key_entry("Ctrl+K", "Delete to end of input"));
-    lines.push(key_entry(
-        &format!("{} / {}", alt("Backspace"), alt("Delete")),
-        "Delete previous word in input",
-    ));
-    lines.push(key_entry(
-        "Cmd/Super+Backspace / Delete",
-        "Delete previous word in input",
-    ));
-    if cfg!(target_os = "macos") {
-        // On macOS, Cmd+Left/Right default to effort cycling; Home/End and
-        // Cmd+A/E still jump to the start/end of the input.
-        lines.push(key_entry("Home / End", "Move to start / end of input"));
-    } else {
-        lines.push(key_entry(
-            "Cmd/Super+Left / Right",
-            "Move to start / end of input",
-        ));
-    }
-    lines.push(key_entry("Cmd/Super+Z", "Undo input edit"));
-    lines.push(key_entry("Cmd/Super+X / V", "Cut input / paste clipboard"));
-    lines.push(key_entry("Ctrl+S", "Stash / pop input (save for later)"));
-    lines.push(key_entry("Ctrl+Backspace", "Delete previous word in input"));
-    lines.push(key_entry("Ctrl+B / Ctrl+F", "Move by word left / right"));
-    lines.push(key_entry("Ctrl+Left / Right", "Move by word left / right"));
-    lines.push(key_entry(
-        &format!("Shift+Enter / {}", alt("Enter")),
-        "Insert newline in input",
-    ));
-    lines.push(key_entry(
-        "Trailing \\ then Enter",
-        "Insert newline (fallback; run /terminal-setup to fix Shift+Enter)",
-    ));
-    lines.push(key_entry(
-        "Ctrl+Enter / Cmd+Enter",
-        "Use opposite send mode while processing",
-    ));
-    lines.push(key_entry("Ctrl+Up", "Retrieve pending message for editing"));
-    lines.push(key_entry("Ctrl+Tab / Ctrl+T", "Toggle queue mode"));
-    lines.push(key_entry(
-        "Ctrl+R",
-        "Search prompt history (across sessions)",
-    ));
-    lines.push(key_entry(
-        &format!("Ctrl+V / {}", alt("V")),
-        "Paste clipboard (text or image)",
-    ));
-    lines.push(key_entry(
-        &alt("A"),
-        "Quick-copy visible chat viewport plus nearby context",
-    ));
-    lines.push(key_entry(&alt("Y"), "Toggle chat selection/copy mode"));
-    lines.push(key_entry(&alt("S"), "Toggle typing scroll lock"));
-    lines.push(key_entry("Ctrl+P", "Toggle auto-poke for incomplete todos"));
-    lines.push(key_entry(&alt("X"), "Show/dismiss todo list card in chat"));
-    #[cfg(any())]
-    // [port-decision] keybind registry not ported (effort_switch_keys_label); re-activate at cutover
-    lines.push(key_entry(
-        &crate::tui::operant_app::keybind::effort_switch_keys_label(),
-        "Cycle effort (reasoning + swarm)",
-    ));
-    if cfg!(target_os = "macos") {
-        lines.push(key_entry(
-            &alt("Left / Right"),
-            &format!("Move by word in input (also {} / {})", alt("B"), alt("F")),
-        ));
-    }
-    if let Some(label) = app.dictation_key_label() {
-        lines.push(key_entry(&label, "Run configured dictation"));
-    }
-    #[cfg(any())]
-    // [port-decision] keybind registry not ported (load_open_resume_key); re-activate at cutover
-    if let Some(label) = crate::tui::operant_app::keybind::load_open_resume_key().label {
-        lines.push(key_entry(&label, "Open the /resume session picker"));
-    }
-    #[cfg(any())]
-    // [port-decision] keybind registry not ported (load_new_terminal_key); re-activate at cutover
-    if let Some(label) = crate::tui::operant_app::keybind::load_new_terminal_key().label {
-        lines.push(key_entry(
-            &label,
-            "Spawn new operant session in a new terminal",
-        ));
+    {
+        use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+        for (context, binding) in DEFAULT_KEYBINDINGS.catalogue() {
+            if context != BindingContext::Prompt {
+                continue;
+            }
+            let Some(desc) = binding.description.as_deref() else {
+                continue;
+            };
+            if crate::tui::keybindings::os_conflict_reason(&binding.chord()).is_some() {
+                continue;
+            }
+            lines.push(key_entry(&binding.chord().to_string(), desc));
+        }
     }
 
     lines.push(Line::from(""));
@@ -547,6 +426,66 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         ))
         .title_bottom(Line::from(Span::styled(
             " Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ",
+            Style::default().fg(dim_color()),
+        )))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(dim_color()));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .scroll((scroll as u16, 0));
+
+    frame.render_widget(paragraph, area);
+}
+
+/// The /keys and /hotkeys surfaces (2026-10-14 batch, plan 10): the same
+/// full-screen overlay machinery as /help, but the body is the binding
+/// catalogue report (single-sourced from the same report builders the
+/// commands use), opened at the top and filterable by chord text. Replaces
+/// the old bottom-dumped transcript message that opened below the fold.
+pub(super) fn draw_keys_overlay(frame: &mut Frame, area: Rect, scroll: usize, app: &dyn TuiState) {
+    clear_area(frame, area);
+
+    use crate::tui::overlays::help::HelpOverlayContent;
+    let hotkeys = app.help_overlay_content() == HelpOverlayContent::Hotkeys;
+    let filter = app.help_filter().to_lowercase();
+
+    let body_style = Style::default().fg(rgb(210, 210, 220));
+    let dim_style = Style::default().fg(dim_color());
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut matched = 0usize;
+    for raw in app.keys_report_lines(hotkeys) {
+        if !filter.is_empty() && !raw.to_lowercase().contains(&filter) {
+            continue;
+        }
+        matched += 1;
+        let style = if raw.starts_with('[') || raw.starts_with("⚠") {
+            Style::default()
+                .fg(accent_color())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            body_style
+        };
+        lines.push(Line::from(Span::styled(raw, style)));
+    }
+    if matched == 0 {
+        lines.push(Line::from(Span::styled(
+            format!(" no binding matches \"{filter}\""),
+            dim_style,
+        )));
+    }
+
+    let title = if hotkeys { " Hotkeys " } else { " Keys " };
+    let block = Block::default()
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(rgb(200, 200, 220))
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Line::from(Span::styled(
+            " Esc to close · type to filter chords · ↑/↓ scroll · /help for commands ",
             Style::default().fg(dim_color()),
         )))
         .borders(Borders::ALL)

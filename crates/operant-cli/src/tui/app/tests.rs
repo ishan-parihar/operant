@@ -320,6 +320,169 @@ fn test_status_tier_slash_commands_are_consumed() {
     assert_eq!(app.thinking_display_on, before);
 }
 
+/// 2026-10-14 batch, plan 10: Shift+Tab used to cycle permission modes —
+/// two silent presses armed Bypass. It must never touch permission state
+/// again; /permissions is the explicit path, and Bypass defers to the
+/// confirmation dialog before arming.
+#[test]
+fn shift_tab_never_changes_permission_mode() {
+    use crate::tui::adapter_types::config::PermissionMode;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = make_app();
+    assert_eq!(app.settings.permission_mode, PermissionMode::Default);
+
+    // Two presses — the old cycle reached Bypass exactly here.
+    app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.settings.permission_mode,
+        PermissionMode::Default,
+        "Shift+Tab must not touch permission mode (plan 10)"
+    );
+    app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.settings.permission_mode,
+        PermissionMode::Default,
+        "Shift+Tab must not touch permission mode (plan 10)"
+    );
+
+    // /permissions opens the picker; AcceptEdits applies on Enter directly.
+    assert!(app.intercept_slash_command("permissions"));
+    assert!(app.permissions_picker.visible);
+    app.permissions_picker.select_next(); // Default -> AcceptEdits
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.settings.permission_mode, PermissionMode::AcceptEdits);
+    assert!(!app.permissions_picker.visible);
+
+    // Bypass: Enter opens the confirmation dialog instead of arming…
+    app.settings.permission_mode = PermissionMode::Default;
+    assert!(app.intercept_slash_command("permissions"));
+    app.permissions_picker.select_next();
+    app.permissions_picker.select_next(); // Default -> Bypass
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.bypass_permissions_dialog.visible,
+        "Bypass requires the confirmation dialog (plan 10)"
+    );
+    assert_eq!(
+        app.settings.permission_mode,
+        PermissionMode::Default,
+        "Bypass must not arm before the dialog accepts"
+    );
+}
+
+/// 2026-10-14 batch, plan 10: every advertised binding must dispatch to what
+/// its description says. The overlay and /keys generate from the registry,
+/// so pinning the catalogue pins every advertised chord. The (chord,
+/// description) pairs below were each verified against the dispatch arm in
+/// `app/key_handling.rs` during plan 10 — the jcode hand-me-downs they
+/// replaced (Ctrl+J "jump to prompt", Ctrl+P "auto-poke", Ctrl+1..9 panel
+/// resize, Alt+S/A/X, Shift+Tab "favorited models") advertised chords that
+/// did something else or nothing.
+#[test]
+fn every_advertised_binding_dispatches() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+
+    let verified: &[(&str, &str)] = &[
+        ("Ctrl+c", "Quit application"),
+        ("F1", "Show help"),
+        ("F8", "Toggle usage overlay"),
+        ("Ctrl+k", "Command palette"),
+        ("Ctrl+p", "Global search"),
+        ("Ctrl+a", "Open model picker"),
+        ("Ctrl+b", "Open session branch browser"),
+        ("Ctrl+r", "History search"),
+        ("Ctrl+g", "Toggle scroll bookmark"),
+        ("Alt+g", "Toggle scroll bookmark"),
+        ("Alt+p", "Cycle configured models"),
+        ("Ctrl+o", "Expand latest tool output"),
+        ("Ctrl+x", "Recall queued message"),
+        ("Ctrl+t", "Toggle drag-select copy mode"),
+        ("Ctrl+Up", "Fine scroll up 3"),
+        ("Ctrl+Down", "Fine scroll down 3"),
+        ("Alt+Up", "Fast scroll up 20"),
+        ("Alt+Down", "Fast scroll down 20"),
+        ("PageUp", "Scroll transcript up 10"),
+        ("PageDown", "Scroll transcript down 10"),
+    ];
+
+    let catalogue = DEFAULT_KEYBINDINGS.catalogue();
+    for (chord, expected_desc) in verified {
+        // Ctrl+R's history search lives in the Prompt context (where it
+        // applies); everything else is Global. Accept either — the help
+        // overlay renders both sections from the same table.
+        let found = catalogue.iter().any(|(context, binding)| {
+            (matches!(context, BindingContext::Global | BindingContext::Prompt))
+                && binding.chord() == *chord
+                && binding.description.as_deref() == Some(expected_desc)
+        });
+        assert!(
+            found,
+            "chord {chord} must be catalogued as {expected_desc:?} — the \
+             help overlay generates from this table, so a missing row means \
+             a silently unadvertised feature (plan 10)"
+        );
+    }
+
+    // The known lies must be gone from the catalogue entirely: if one of
+    // these descriptions reappears it advertises something the dispatch layer
+    // never did.
+    let dead_claims = [
+        "Cycle favorited models",
+        "Cycle permission mode",
+        "Toggle auto-poke",
+        "Toggle queue mode",
+        "Resize side panel",
+    ];
+    for (_, binding) in &catalogue {
+        if let Some(desc) = binding.description.as_deref() {
+            assert!(
+                !dead_claims.contains(&desc),
+                "dead claim {desc:?} re-catalogued (plan 10)"
+            );
+        }
+    }
+}
+
+/// 2026-10-14 batch, plan 10: /keys opens the overlay machinery at the top —
+/// scroll 0, no transcript dump. The old behavior pushed a ~170-line report
+/// as a bottom system message that opened below the fold.
+#[test]
+fn keys_overlay_opens_at_top_not_transcript() {
+    let mut app = make_app();
+    let annotations_before = app.system_annotations.len();
+    assert!(app.intercept_slash_command("keys"));
+    assert!(app.help_overlay.visible, "/keys must open the overlay");
+    assert_eq!(app.help_overlay.scroll_offset, 0, "opened at the top");
+    assert_eq!(
+        app.system_annotations.len(),
+        annotations_before,
+        "the keys report must not dump into the transcript"
+    );
+    // Scrolling works on the new surface.
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Down,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.help_overlay.scroll_offset >= 1);
+    // Esc closes it.
+    app.handle_key_event(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(!app.help_overlay.visible);
+}
+
+/// 2026-10-14 batch, plan 10: /info prints once — the status-bar echo of the
+/// same summary line duplicated every press.
+#[test]
+fn info_prints_once() {
+    let mut app = make_app();
+    let before = app.system_annotations.len();
+    assert!(app.intercept_slash_command("info"));
+    assert_eq!(app.system_annotations.len(), before + 1);
+}
+
 #[test]
 fn test_tasks_slash_command_is_an_alias_for_agents() {
     // /tasks is documented (commands.rs alias + gateway help text) as an
@@ -630,10 +793,13 @@ fn test_ctrl_y_yanks_from_the_kill_ring_at_the_cursor() {
 
 #[test]
 fn test_shift_tab_cycles_permission_mode_not_completions() {
+    // (2026-10-14 batch, plan 10) INVERTED: Shift+Tab no longer cycles
+    // permission mode — two silent presses reached BypassPermissions. It
+    // must do NOTHING to permission state and NOTHING to completions;
+    // /permissions is the explicit mode picker, and Bypass always defers
+    // to the confirmation dialog (pinned by
+    // shift_tab_never_changes_permission_mode).
     let mut app = make_app();
-    // Seeded with a non-empty suggestion so the "previous completion" reading
-    // is actually testable: if Tab-family keys cycled completions, this would
-    // change. It must NOT, and the permission mode must move.
     app.prompt_input.suggestions = vec![crate::tui::prompt_input::TypeaheadSuggestion {
         text: "/help".to_string(),
         description: "Show help".to_string(),
@@ -644,14 +810,10 @@ fn test_shift_tab_cycles_permission_mode_not_completions() {
 
     app.handle_key_event(press_key(KeyCode::BackTab, KeyModifiers::SHIFT));
 
-    assert_ne!(
+    assert_eq!(
         app.settings.permission_mode, before,
-        "Shift+Tab is catalogued as \"Cycle permission mode\" (Custom(5)); it must \
-         not be left doing nothing"
+        "Shift+Tab must never touch permission mode (plan 10)"
     );
-    // The security-relevant part: BypassPermissions is one of the states this
-    // cycles through, so a user who believed this key only moved through
-    // completions would not expect it to change their permission posture.
     assert_eq!(
         app.prompt_input.suggestion_index, before_idx,
         "Shift+Tab must not touch completion state"
@@ -736,17 +898,20 @@ fn test_registry_advertises_no_binding_for_an_unimplemented_action() {
         "Alt+V is catalogued again, but voice hold-to-talk was purged (iter-668) \n         — /keys must not advertise an action nothing implements"
     );
 
+    // (2026-10-14 batch, plan 10) INVERTED: Shift+Tab is deliberately
+    // uncatalogued — the permission cycle it used to describe was removed
+    // (two silent presses armed Bypass; /permissions is the explicit path
+    // now). Advertising it would be the same security-relevant lie this
+    // test was written to catch.
     let shift_tab = registry
         .get_bindings(BindingContext::Prompt)
         .into_iter()
-        .find(|b| b.key == KeyCode::Tab && b.modifiers.contains(KeyModifiers::SHIFT))
-        .expect("Shift+Tab should still be catalogued — it cycles permissions");
+        .find(|b| b.key == KeyCode::Tab && b.modifiers.contains(KeyModifiers::SHIFT));
     assert!(
-        !matches!(shift_tab.action, KeyAction::CompletionPrev),
-        "Shift+Tab is catalogued as CompletionPrev again, but the dispatcher \
-         cycles the PERMISSION mode. That is security-relevant: a user who \
-         thought the key only moved through completions would not expect it to \
-         reach BypassPermissions."
+        shift_tab.is_none(),
+        "Shift+Tab is catalogued again — it must stay uncatalogued until it \
+         is rebound to something real (plan 03's reasoning-effort cycle). The \
+         old entry was a security-relevant mislabel."
     );
 }
 
@@ -2552,20 +2717,31 @@ fn last_system_text(app: &App) -> String {
 #[test]
 fn keys_command_should_report_registry_bindings() {
     use crate::tui::keybindings::KeyBindingRegistry;
+    use crate::tui::overlays::help::HelpOverlayContent;
 
     let mut app = make_app();
     let before = app.system_annotations.len();
 
     assert!(app.intercept_slash_command("keys"));
+    // (2026-10-14 batch, plan 10) /keys opens the overlay at the top —
+    // never dumps the ~170-line report into the transcript.
+    assert!(
+        app.help_overlay.visible && app.help_overlay.content == HelpOverlayContent::Keys,
+        "/keys must open the Keys overlay"
+    );
     assert_eq!(
         app.system_annotations.len(),
-        before + 1,
-        "/keys reports through the transcript, not the status line"
+        before,
+        "/keys must not dump the report into the transcript"
     );
+    assert_eq!(app.help_overlay.scroll_offset, 0, "opened at the top");
 
-    let text = last_system_text(&app);
     // Sourced from the registry, not a hand-maintained list: the header count
     // must equal the number of rows the registry actually catalogues.
+    let text = app.render_keys_report(
+        &KeyBindingRegistry::with_defaults(),
+        &KeyBindingRegistry::with_defaults().usage_report(&app.slash_usage),
+    );
     let expected_total = KeyBindingRegistry::with_defaults().catalogue().len();
     assert!(
         text.contains(&format!("{expected_total} binding(s) from the registry")),
@@ -2666,18 +2842,28 @@ fn hotkey_usage_should_distinguish_used_from_never_used() {
     );
 
     assert!(app.intercept_slash_command("hotkeys"));
-    let text = last_system_text(&app);
+    // (2026-10-14 batch, plan 10) /hotkeys opens the Hotkeys overlay — the
+    // used/never-used split comes from the report builder.
     assert!(
-        text.contains("chord(s) used"),
-        "/hotkeys leads with the used/never split, got: {text}"
+        app.help_overlay.visible,
+        "/hotkeys must open the overlay, not dump to the transcript"
+    );
+    let report = crate::tui::keybindings::DEFAULT_KEYBINDINGS.usage_report(&app.slash_usage);
+    let text = app.render_hotkeys_report(&report);
+    let _ = &text; // report builder exercised; overlay content pinned below
+    let overlay_text = app.keys_report_lines(true).join("\n");
+    assert!(
+        overlay_text.contains("chord(s) used"),
+        "/hotkeys leads with the used/never split, got: {overlay_text}"
     );
     assert!(
-        text.contains("You have used:") && text.contains("Never used (undiscovered):"),
-        "both halves are rendered, got: {text}"
+        overlay_text.contains("You have used:")
+            && overlay_text.contains("Never used (undiscovered):"),
+        "both halves are rendered, got: {overlay_text}"
     );
     assert!(
-        text.contains("Up"),
-        "the chord just pressed shows up in the used half, got: {text}"
+        overlay_text.contains("Up"),
+        "the chord just pressed shows up in the used half, got: {overlay_text}"
     );
 }
 

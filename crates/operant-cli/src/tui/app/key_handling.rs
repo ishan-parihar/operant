@@ -130,6 +130,40 @@ impl App {
             return false;
         }
 
+        // Permissions picker (/permissions) — 2026-10-14 batch, plan 10.
+        // Enter applies the highlighted mode; Bypass does NOT arm here —
+        // it routes through the bypass-permissions confirmation dialog,
+        // the same explicit gate the removed Shift+Tab cycle skipped.
+        if self.permissions_picker.visible {
+            use crate::tui::adapter_types::config::PermissionMode;
+            match key.code {
+                KeyCode::Esc => self.permissions_picker.close(),
+                KeyCode::Up | KeyCode::Char('k') => self.permissions_picker.select_prev(),
+                KeyCode::Down | KeyCode::Char('j') => self.permissions_picker.select_next(),
+                KeyCode::Enter => {
+                    let chosen = self.permissions_picker.current();
+                    self.permissions_picker.close();
+                    if chosen == PermissionMode::BypassPermissions {
+                        self.bypass_permissions_dialog.show();
+                    } else {
+                        // Label first — `chosen` moves into the setting below.
+                        let label = match &chosen {
+                            PermissionMode::Default => "Default permissions",
+                            PermissionMode::AcceptEdits => "Accept-edits mode",
+                            PermissionMode::BypassPermissions => {
+                                unreachable!("bypass routes through the confirmation dialog")
+                            }
+                            PermissionMode::Plan => "Plan mode",
+                        };
+                        self.settings.permission_mode = chosen;
+                        self.set_status_notice(label.to_string());
+                    }
+                }
+                _ => {}
+            }
+            return false;
+        }
+
         // Device code / browser auth dialog (GitHub Copilot, Anthropic OAuth)
         if self.device_auth_dialog.visible {
             match key.code {
@@ -1536,25 +1570,12 @@ impl App {
                 }
             }
 
-            // ---- Shift+Tab: cycle permission mode ----------------------
-            // Default → AcceptEdits → BypassPermissions → Default
-            // Mirrors TS bottom-left indicator cycling behaviour.
-            KeyCode::BackTab if !self.is_streaming => {
-                use crate::tui::adapter_types::config::PermissionMode;
-                self.settings.permission_mode = match self.settings.permission_mode {
-                    PermissionMode::Default => PermissionMode::AcceptEdits,
-                    PermissionMode::AcceptEdits => PermissionMode::BypassPermissions,
-                    PermissionMode::BypassPermissions => PermissionMode::Default,
-                    PermissionMode::Plan => PermissionMode::Default,
-                };
-                let label = match self.settings.permission_mode {
-                    PermissionMode::Default => "Default permissions",
-                    PermissionMode::AcceptEdits => "Accept-edits mode",
-                    PermissionMode::BypassPermissions => "Bypass permissions (dangerous)",
-                    PermissionMode::Plan => "Plan mode",
-                };
-                self.set_status_notice(label.to_string());
-            }
+            // ---- Shift+Tab ----------------------------------------------
+            // 2026-10-14 batch, plan 10: Shift+Tab no longer cycles permission
+            // mode — two silent presses reached Bypass. Permission modes are
+            // chosen explicitly via /permissions, and Bypass always defers
+            // to the confirmation dialog. Shift+Tab stays unbound here until
+            // plan 03 lands the reasoning-effort cycle on it.
 
             // ---- Submit ------------------------------------------------
             // Shift+Enter / Alt+Enter / Ctrl+Enter / Ctrl+J insert a literal

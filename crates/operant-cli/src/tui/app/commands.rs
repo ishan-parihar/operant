@@ -35,7 +35,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 33] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 34] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -66,6 +66,7 @@ impl App {
                 self.bypass_permissions_dialog.visible,
             ),
             ("effort_picker", self.effort_picker.visible),
+            ("permissions_picker", self.permissions_picker.visible),
             ("key_input_dialog", self.key_input_dialog.visible),
             (
                 "custom_provider_dialog",
@@ -171,7 +172,7 @@ impl App {
 
     /// Render `/keys`: the full active catalogue grouped by context, with the
     /// chords a terminal is likely to intercept flagged inline.
-    fn render_keys_report(
+    pub fn render_keys_report(
         &self,
         registry: &crate::tui::keybindings::KeyBindingRegistry,
         report: &crate::tui::keybindings::KeyUsageReport,
@@ -219,7 +220,10 @@ impl App {
 
     /// Render `/hotkeys`: chords you have pressed vs chords you never have.
     /// The never-used list is the point — it is the undiscovered surface.
-    fn render_hotkeys_report(&self, report: &crate::tui::keybindings::KeyUsageReport) -> String {
+    pub fn render_hotkeys_report(
+        &self,
+        report: &crate::tui::keybindings::KeyUsageReport,
+    ) -> String {
         let used = report.used.len();
         let mut out = format!(
             "Keybinding usage — {used} of {} chord(s) used, {} never used.\n",
@@ -542,7 +546,9 @@ impl App {
                     "operant v{} · model: {model} · provider: {provider} · title: {title}",
                     env!("CARGO_PKG_VERSION"),
                 );
-                self.set_status_notice(summary.clone());
+                // (2026-10-14 batch, plan 10) print once: the transcript
+                // annotation is the visible surface; the status-bar echo of
+                // the same line duplicated it.
                 self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 true
             }
@@ -953,6 +959,15 @@ impl App {
                 self.effort_picker.open(self.effort_level);
                 true
             }
+            "permissions" => {
+                // 2026-10-14 batch, plan 10: the explicit replacement for
+                // the removed Shift+Tab permission cycle. Bypass still
+                // defers to the confirmation dialog (key handling, not
+                // here, so the danger gate cannot be skipped).
+                self.permissions_picker
+                    .open(self.settings.permission_mode.clone());
+                true
+            }
             "doctor" => false,
             "rewind" => {
                 self.open_rewind_flow();
@@ -999,16 +1014,10 @@ impl App {
             // the model; until the panel lands, surface the latest tool
             // invocation (from tool_use_blocks) in the transcript.
             // (2026-10-14 batch, plan 02) "observe" removed — see above.
-            "keybindings" => {
-                // Open the keybindings.json file in the external editor
-                let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir()
-                    .join("keybindings.json");
-
-                if let Err(e) = open_file_externally(&keybindings_path) {
-                    eprintln!("Failed to open keybindings file: {}", e);
-                }
-                true
-            }
+            // (2026-10-14 batch, plan 10) /keybindings removed — it opened a
+            // keybindings.json the TUI never loads (load_keybindings_from_
+            // config is a stub); /keys is the real catalogue and /config
+            // edits settings.
             // /keys — the active binding catalogue, read from the registry.
             // /hotkeys — the same catalogue split by whether you have pressed
             // it. Distinct from /keybindings above, which edits the JSON file.
@@ -1018,12 +1027,16 @@ impl App {
                 // Flush here so a freshly-pressed chord is always reflected,
                 // rather than waiting for the next periodic flush.
                 self.slash_usage.save();
-                let text = if cmd == "keys" {
-                    self.render_keys_report(registry, &report)
+                // 2026-10-14 batch, plan 10: the catalogue renders as the
+                // help-overlay machinery with Keys/Hotkeys content, opened at
+                // the top — not as a bottom-dumped transcript message that
+                // opens below the fold.
+                if cmd == "keys" {
+                    self.help_overlay.open_keys();
                 } else {
-                    self.render_hotkeys_report(&report)
-                };
-                self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
+                    self.help_overlay.open_hotkeys();
+                }
+                self.show_help = self.help_overlay.visible;
                 true
             }
             // `?` is the help alias the registry advertises (and the core

@@ -3364,7 +3364,14 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
     }
 
     if let Some(scroll) = app.help_scroll() {
-        overlays::draw_help_overlay(frame, area, scroll, app);
+        // 2026-10-14 batch, plan 10: /keys and /hotkeys reuse the help-overlay
+        // machinery with binding-catalogue content (opened at the top),
+        // rendered by their own painter with chord filtering.
+        if app.help_overlay_content() == crate::tui::overlays::help::HelpOverlayContent::Commands {
+            overlays::draw_help_overlay(frame, area, scroll, app);
+        } else {
+            overlays::draw_keys_overlay(frame, area, scroll, app);
+        }
         finalize_frame_metrics(
             app,
             total_start,

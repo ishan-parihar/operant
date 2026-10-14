@@ -12,17 +12,22 @@ struct Tip {
 }
 
 fn all_tips() -> Vec<Tip> {
+    // 2026-10-14 batch, plan 10: the vendored jcode tips advertised features
+    // operant never had (Ctrl+J/K prompt jumps, ambient mode with emailed
+    // summaries, swarm auto-formation, Alt+B tool-backgrounding, Alt+G diff
+    // cycling, Shift+Tab favorited models). Every tip below names a chord or
+    // feature verified against the keybinding registry / dispatch arms.
     let mut tips = vec![
-        "Ctrl+J / Ctrl+K to jump between user prompts (Cmd+J / Cmd+K on macOS terminals that forward Command)",
-        "Ctrl+Shift+J / Ctrl+Shift+K to scroll the chat down and up one line",
-        "Ctrl+G to bookmark your scroll position - press again to teleport back",
-        "Swarms form automatically when multiple sessions share a repo - they coordinate plans, share context, and track file conflicts",
-        "Memories are stored in a graph with semantic embeddings - recall finds related facts even if you use different words",
-        "Ambient mode runs background cycles while you're away - maintaining memories, compacting context, and doing proactive work",
-        "Ambient cycles can email you a summary and you can reply with directives for the next run",
-        "Alt+B moves a long-running tool to the background - the agent continues and can check on it later with the `bg` tool",
+        "Ctrl+K opens the command palette — every registered command is one chord away",
+        "Ctrl+G or Alt+G toggles a scroll bookmark — press again to teleport back",
+        "PageUp / PageDown scroll 10 lines · Ctrl+Up/Down 3 · Alt+Up/Down 20",
+        "Ctrl+A opens the model picker · Alt+P cycles your configured models",
+        "Ctrl+T enters drag-select copy mode for exact text capture",
+        "Ctrl+O expands the latest tool row's full output",
+        "Ctrl+R searches prompt history across sessions",
+        "/permissions chooses the permission mode — Bypass always needs an explicit confirmation",
+        "/keys lists every real keybinding from the registry; /hotkeys shows which you use",
         "Most terminals can be configured to copy text on highlight - no Ctrl+C needed. Check your terminal's settings for 'copy on select'",
-        "Alt+G (or /diff) cycles diff mode: Off, Inline, Pinned, File. Shift+Tab cycles favorited models. Pinned shows all diffs in a side pane. File shows the full file with changes highlighted, synced to your scroll position",
     ];
     if crate::tui::operant_app::config_shim::config()
         .features

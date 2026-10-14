@@ -530,6 +530,16 @@ pub trait TuiState {
     fn changelog_scroll(&self) -> Option<usize>;
     /// Help overlay scroll offset (None = not showing)
     fn help_scroll(&self) -> Option<usize>;
+    /// What the help overlay shows when visible (2026-10-14 batch, plan 10):
+    /// the command catalogue, the full binding catalogue (/keys), or the
+    /// used/never-used split (/hotkeys).
+    fn help_overlay_content(&self) -> crate::tui::overlays::help::HelpOverlayContent;
+    /// The live filter string typed into the open overlay (plan 10: the dead
+    /// overlays/help.rs renderer ignored it; the keys surface applies it).
+    fn help_filter(&self) -> String;
+    /// The /keys or /hotkeys report body as plain lines, produced by the
+    /// same report builders the commands use (single source of truth).
+    fn keys_report_lines(&self, hotkeys: bool) -> Vec<String>;
     /// Working directory for this session
     // ---- Misc ----
     fn working_dir(&self) -> Option<String>;

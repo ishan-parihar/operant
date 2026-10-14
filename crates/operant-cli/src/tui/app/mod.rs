@@ -458,6 +458,7 @@ pub struct App {
     /// First-launch onboarding welcome dialog.
     /// Effort-level picker (/effort with no args).
     pub effort_picker: crate::tui::effort_picker::EffortPickerState,
+    pub permissions_picker: crate::tui::permissions_picker::PermissionsPickerState,
     /// API key input dialog (opened from /connect for key-based providers).
     pub key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState,
     /// Custom provider dialog for URL + API key input.

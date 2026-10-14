@@ -6,7 +6,7 @@
 //   - GlobalSearchState (ripgrep search dialog)
 
 mod global_search;
-mod help;
+pub mod help;
 mod history_search;
 mod layout;
 mod message_selector;

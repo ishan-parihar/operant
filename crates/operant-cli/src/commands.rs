@@ -982,15 +982,6 @@ impl CommandRegistry {
         self.defs.get(trimmed).map(|def| def.name)
     }
 
-    /// `true` when the name (or its alias target) has a live handler. A
-    /// `CommandDef` alone is not wiring — `execute` prints the "not yet
-    /// wired to a handler" fallback for defs without handlers, which is
-    /// exactly what the no-unwired-command test needs to distinguish.
-    pub fn has_handler(&self, name: &str) -> bool {
-        self.resolve(name)
-            .is_some_and(|c| self.handlers.contains_key(c))
-    }
-
     /// Execute a slash command by its canonical name.
     ///
     /// Returns a [`CommandResult`] expressing the command's intent as data.

@@ -255,6 +255,10 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "/triage",
         "Triage new GitHub issues and autonomously fix the safe ones",
     ),
+    RegisteredCommand::public(
+        "/permissions",
+        "Choose permission mode (bypass needs explicit confirm)",
+    ),
     RegisteredCommand::public("/transcript", "Open the current session transcript file"),
     RegisteredCommand::public("/review", "Launch a one-shot headed review session"),
     RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
@@ -291,13 +295,16 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/version", "Show current version"),
     RegisteredCommand::public("/changelog", "Show recent changes in this build"),
     RegisteredCommand::public("/info", "Show session info and tokens"),
-    RegisteredCommand::public("/usage", "Show connected provider usage limits"),
+    // (2026-10-14 batch, plan 10) /stats is the real command (opens the
+    // stats dialog); /usage only redirects there, so it demotes to a
+    // hidden alias instead of advertising "usage limits" it never shows.
+    RegisteredCommand::public("/stats", "Show session token and cost stats"),
+    RegisteredCommand::hidden("/usage", "Alias for /stats"),
     RegisteredCommand::public("/config", "Show or edit configuration"),
     RegisteredCommand::public(
         "/keys",
         "Show keybinding conflicts with your terminal and OS (/keys refresh to rescan)",
     ),
-    RegisteredCommand::hidden("/keybindings", "Alias for /keys"),
     RegisteredCommand::public(
         "/diff",
         "Cycle or set diff display mode (off/inline/full/file)",
