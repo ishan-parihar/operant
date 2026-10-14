@@ -18,6 +18,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod api;
+pub mod enforcement;
+pub mod policy;
 
 /// The read-API versions this build understands. A Holon database publishing a
 /// version outside this set is refused (the caller surfaces a doctor line and
@@ -48,6 +50,16 @@ pub enum Error {
     },
     #[error("holon read failed: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("policy.json missing at {0} — a Holon run always claims before it runs")]
+    PolicyMissing(std::path::PathBuf),
+    #[error("policy.json is not the shape Holon writes: {0}")]
+    PolicyParse(#[source] serde_json::Error),
+    #[error("policy.json version {0} is not known to this build (knows 1)")]
+    PolicyVersion(u32),
+    #[error("policy.json posture {0:?} is neither observe nor act")]
+    PolicyPosture(String),
+    #[error("holon enforcement could not mount: {0}")]
+    Enforcement(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

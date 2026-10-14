@@ -1197,6 +1197,53 @@ impl OperantAgent {
             }
 
             // Permission guard for dangerous tools (interactive — sequential)
+            //
+            // Phase C (docs/agentic-os/): a GOVERNED Escalate with no interactive
+            // channel attached — `operant run` builds the agent without a
+            // permission channel — must deny, never fall through to execution.
+            // The same holds for a governed call that needs a prompt: without a
+            // consumer the 120s wait would stall a headless run for nothing.
+            // The unattended arm above already covers the cron path; this guard
+            // covers the headless-run path. Ungoverned (`seat == None`) keeps
+            // today's behavior byte-identical: run whatever the tool config
+            // allows (invariant 5 — personal mode is untouched).
+            if let Some(SeatDecision::Escalate(why)) = &seat
+                && self.permission_tx.is_none()
+            {
+                warn!(tool = %name, "Tool call escalated by seat policy — no interactive approver attached: deny");
+                let session_id = self.session_id().unwrap_or_default();
+                let queued = self
+                    .seat_authority
+                    .as_ref()
+                    .map(|authority| authority.escalate(&session_id, &name, why))
+                    .unwrap_or_else(|| crate::org::seat_authority::QueuedAsk {
+                        escalation: None,
+                        note: String::from("could not be persisted (no seat authority attached)"),
+                    });
+                let reference = if queued.note.is_empty() {
+                    format!(
+                        "was queued as {}",
+                        queued
+                            .escalation
+                            .as_ref()
+                            .map(|e| e.request_id.as_str())
+                            .unwrap_or("(unrecorded)")
+                    )
+                } else {
+                    queued.note.clone()
+                };
+                early_results[idx] = Some(ToolResult::error(
+                    &tool_call.id,
+                    format!(
+                        "Permission denied by seat policy: {why}. No interactive \
+                         approver is attached to this run, so this \
+                         attempt is denied; the ask {reference} and the next \
+                         run consults the grant the approver mints"
+                    ),
+                ));
+                continue;
+            }
+
             if let Some(permission_tx) = &self.permission_tx {
                 // Whether this call prompts, and with what danger sentence.
                 // The ungoverned arm is today's logic, lifted unchanged:

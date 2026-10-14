@@ -1982,6 +1982,26 @@ pub(crate) async fn create_agent_without_events(
             threshold_percent: config.agent.context_compression_threshold,
             ..Default::default()
         });
+        // Phase C (docs/agentic-os/): a Holon run — HOLON_RUN_DIR carries the
+        // kernel's compiled policy.json — enforces that document through the
+        // seat-authority consult on every tool call. Not a Holon run (no env
+        // var, or the kernel predates policy.json): no authority, today's
+        // behavior byte-identical — invariant 5.
+        if let Some(authority) =
+            operant_os::enforcement::holon_authority(&operant_core::platform::operant_home())
+                .map_err(|e| anyhow::anyhow!("holon enforcement: {e}"))?
+        {
+            let seat = operant_os::enforcement::holon_seat();
+            tracing::info!(
+                seat = %seat,
+                "Holon run detected — policy.json enforcement mounted"
+            );
+            // the consult keys on the seat: name the employee the kernel
+            // exported so the run's policy row is the one consulted (the
+            // gateway sets this same field for its own turns)
+            agent.set_seat_id(seat);
+            agent = agent.with_seat_authority(Some(authority));
+        }
         if let Some(h) = core.harness.clone() {
             agent = agent.with_harness(h);
         }
