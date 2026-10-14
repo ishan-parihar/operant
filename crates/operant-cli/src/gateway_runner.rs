@@ -3736,6 +3736,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let gw = gw.clone();
                         let ch = channel_id.clone();
                         Some(tokio::spawn(async move {
+                            // iter-814: first indicator fires IMMEDIATELY — the
+                            // old loop consumed the interval's first tick, so a
+                            // 4s window at every turn start showed nothing and
+                            // users reported 'typing indicator not showing'.
+                            if gw.send_typing(&typing_platform, &ch, typing_thread_id).is_err() {
+                                return;
+                            }
                             let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
                             // Skip first immediate tick, send first after 4s
                             interval.tick().await;
