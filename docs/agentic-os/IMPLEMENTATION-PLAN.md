@@ -1,10 +1,18 @@
 # Implementation plan: operant as the organization's runtime
 
-Status: **proposed (2026-10-14)**. Phases A–I below. Each phase needs the owner's approval to
-start, and each lands as its own iterations under this repository's protocol (`AGENTS.md`):
-iter-N from `origin/main`, push, and deploy after code changes. Holon-side packages (H1–H11) are
-defined in Holon's `docs/design/2026-10-14-holon-operant-boundary.md` §5 and land in Holon's
-repository under its laws (stdlib, tests first, `lint --strict`).
+Status: **executing (started 2026-10-14, owner order "proceed with full-scale
+execution")**. Phases A–I below. Each phase lands as its own iterations under this
+repository's protocol (`AGENTS.md`): iter-N from `origin/main`, push, and deploy after
+code changes. Holon-side packages (H1–H11) are defined in Holon's
+`docs/design/2026-10-14-holon-operant-boundary.md` §5 and land in Holon's repository
+under its laws (stdlib, tests first, `lint --strict`).
+
+**Landed so far:** phase A (H1 adapter, Holon `3582f55`, conformance 5/5 live) ·
+phase B's read API (H2, Holon `3e8a0ca`) · operant-os crate + read-API client +
+`[holon]` config (operant `iter-822`) · `operant org holon` views (operant `iter-823`,
+smoked against the live `~/holon` instance). TUI panels are deferred behind the
+in-flight TUI wave that owns `tui/app/*` (fleet rule 3): the CLI views + `--json`
+carry the phase B surface until that wave closes.
 
 ## Where the code goes
 
