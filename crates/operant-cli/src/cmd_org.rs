@@ -839,7 +839,7 @@ pub async fn handle_org_command(config: &AppConfig, cmd: OrgSubcommand) -> Resul
             window_hours,
             dry_run,
         } => handle_synthesis(config, window_hours, dry_run),
-        OrgSubcommand::Holon(action) => handle_holon_action(config, action),
+        OrgSubcommand::Holon(action) => handle_holon_action(config, action).await,
     }
 }
 
@@ -881,6 +881,27 @@ pub enum HolonAction {
     },
     /// One compact org overview: departments, board, approvals
     Overview,
+
+    /// Phase E (CONTRACT §11): one supervision pass — claim the next ready
+    /// stage for the employee, run the body, hand it in. `--loop` keeps
+    /// supervising until interrupted. Requires [holon] supervise = true.
+    Supervise {
+        /// The employee to serve (defaults to [holon] supervise_employees,
+        /// served in order)
+        #[arg(long, value_name = "EMP_ID")]
+        employee: Option<String>,
+        /// Claim only this stage
+        #[arg(long)]
+        stage: Option<String>,
+        /// Keep supervising until interrupted (claim → run → hand in, repeat)
+        #[arg(long)]
+        r#loop: bool,
+    },
+
+    /// Phase E: fire the kernel's heartbeat once (`holon tick`) — sweeps,
+    /// notifications, due schedules. Wire to a cron or systemd timer;
+    /// every 2 minutes is the packaged cadence.
+    Tick,
 }
 
 /// Open the Holon read API or explain precisely why org mode is off.
@@ -898,7 +919,7 @@ fn holon_api(config: &AppConfig) -> Result<operant_os::api::HolonApi> {
         .map_err(|e| anyhow::anyhow!("holon read API unavailable: {e}"))
 }
 
-fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
+async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
     use operant_os::api::HolonApi;
 
     let api = holon_api(config)?;
@@ -908,9 +929,15 @@ fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
-                println!("{:<14} {:<14} {:<22} {:<10} {:<8}", "ID", "NAME", "TITLE", "DEPT", "STATUS");
+                println!(
+                    "{:<14} {:<14} {:<22} {:<10} {:<8}",
+                    "ID", "NAME", "TITLE", "DEPT", "STATUS"
+                );
                 for e in rows {
-                    println!("{:<14} {:<14} {:<22} {:<10} {:<8}", e.id, e.name, e.title, e.department, e.status);
+                    println!(
+                        "{:<14} {:<14} {:<22} {:<10} {:<8}",
+                        e.id, e.name, e.title, e.department, e.status
+                    );
                 }
             }
         }
@@ -919,14 +946,19 @@ fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
-                println!("{:<8} {:<30} {:<8} {:<8} {:<12} {:<10}", "STAGE", "WORK", "STATUS", "GRADE", "DEPT", "ASSIGNEE");
+                println!(
+                    "{:<8} {:<30} {:<8} {:<8} {:<12} {:<10}",
+                    "STAGE", "WORK", "STATUS", "GRADE", "DEPT", "ASSIGNEE"
+                );
                 for r in rows {
                     println!(
                         "{:<8} {:<30} {:<8} {:<8} {:<12} {:<10}",
                         r.stage,
                         truncate(&r.title, 30),
                         r.status,
-                        r.grade.map(|g| format!("G{g}")).unwrap_or_else(|| "-".into()),
+                        r.grade
+                            .map(|g| format!("G{g}"))
+                            .unwrap_or_else(|| "-".into()),
                         r.department.as_deref().unwrap_or("-"),
                         r.employee_id.as_deref().unwrap_or("-"),
                     );
@@ -958,7 +990,13 @@ fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
                 for m in rows {
-                    println!("{} {} -> {}: {}", m.ts, m.sender, m.to_ref, truncate(&m.body, 70));
+                    println!(
+                        "{} {} -> {}: {}",
+                        m.ts,
+                        m.sender,
+                        m.to_ref,
+                        truncate(&m.body, 70)
+                    );
                 }
             }
         }
@@ -993,9 +1031,67 @@ fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
             );
             for d in &depts {
                 let head = d.head.as_deref().unwrap_or("-");
-                let stages: usize = board.iter().filter(|b| b.department.as_deref() == Some(d.slug.as_str())).count();
+                let stages: usize = board
+                    .iter()
+                    .filter(|b| b.department.as_deref() == Some(d.slug.as_str()))
+                    .count();
                 println!("  {} — head {} · {} active stage(s)", d.slug, head, stages);
             }
+        }
+        HolonAction::Supervise {
+            employee,
+            stage,
+            r#loop,
+        } => {
+            let home = config.holon.home.clone();
+            let bin = config.holon.bin.clone();
+            let employees: Vec<String> = employee
+                .map(|e| vec![e])
+                .unwrap_or_else(|| config.holon.supervise_employees.clone());
+            if employees.is_empty() {
+                anyhow::bail!(
+                    "no employee to serve: pass --employee or set [holon] supervise_employees"
+                );
+            }
+            loop {
+                // one pass: every configured employee in order — the kernel
+                // enforces the employee's own max_concurrency on the claim;
+                // [holon] max_concurrent_runs is the daemon-side budget for
+                // the parallel mount
+                let mut ran = false;
+                for emp in &employees {
+                    // sequential pass: the kernel enforces the employee's own
+                    // max_concurrency on the claim; [holon] max_concurrent_runs
+                    // is the daemon-side budget for the parallel mount
+                    match operant_os::supervisor::supervise_one(
+                        &home,
+                        bin.as_deref(),
+                        emp,
+                        stage.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(true) => ran = true,
+                        Ok(false) => {}
+                        Err(e) => {
+                            eprintln!("supervise {emp}: {e}");
+                            ran = true; // an error is also progress to log — keep looping
+                        }
+                    }
+                }
+                if !r#loop {
+                    break;
+                }
+                if !ran {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                }
+            }
+        }
+        HolonAction::Tick => {
+            let home = config.holon.home.clone();
+            let bin = config.holon.bin.clone();
+            operant_os::run::tick(&home, bin.as_deref()).await?;
+            println!("tick fired");
         }
     }
     Ok(())

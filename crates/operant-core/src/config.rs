@@ -295,6 +295,31 @@ pub struct HolonSettings {
     /// drives). Its `work.db` is opened read-only through the read API.
     #[serde(default)]
     pub home: PathBuf,
+    /// Phase E: pin the kernel launcher (`bin/holon`). Empty = the PATH
+    /// `holon` (or `$HOLON_BIN`).
+    #[serde(default)]
+    pub bin: Option<String>,
+    /// Phase E: the run supervisor claims, spawns, heartbeats and hands in
+    /// (CONTRACT §11) for the employees `supervise_employees` names.
+    #[serde(default)]
+    pub supervise: bool,
+    /// Employees the supervisor serves, e.g. ["emp_01…"]. Required when
+    /// `supervise` is on.
+    #[serde(default)]
+    pub supervise_employees: Vec<String>,
+    /// Bodies the supervisor runs at once (the kernel enforces the
+    /// employee's own max_concurrency too).
+    #[serde(default = "default_max_concurrent_runs")]
+    pub max_concurrent_runs: usize,
+    /// Phase E: fire `holon tick` on the no-agent cron (every 2 minutes)
+    /// instead of a systemd timer — the clock belongs to the resident
+    /// runtime. When off, the kernel's own timer keeps ticking.
+    #[serde(default)]
+    pub clock: bool,
+}
+
+fn default_max_concurrent_runs() -> usize {
+    2
 }
 
 impl Default for HolonSettings {
@@ -302,6 +327,11 @@ impl Default for HolonSettings {
         Self {
             enabled: false,
             home: PathBuf::new(),
+            bin: None,
+            supervise: false,
+            supervise_employees: Vec::new(),
+            max_concurrent_runs: default_max_concurrent_runs(),
+            clock: false,
         }
     }
 }

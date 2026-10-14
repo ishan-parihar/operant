@@ -20,6 +20,8 @@
 pub mod api;
 pub mod enforcement;
 pub mod policy;
+pub mod run;
+pub mod supervisor;
 
 /// Read-API versions this build understands. v2 (holon 0010_event_triggers)
 /// keeps every view shape of v1 — api_triggers may simply carry event rows now
@@ -63,6 +65,8 @@ pub enum Error {
     PolicyPosture(String),
     #[error("holon enforcement could not mount: {0}")]
     Enforcement(String),
+    #[error("supervisor protocol: {0}")]
+    Protocol(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
