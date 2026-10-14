@@ -121,3 +121,62 @@ impl Trajectory {
         serde_json::to_string(self)
     }
 }
+
+/// Phase D (docs/agentic-os/, H4): the kernel-facing shape of a trajectory.
+///
+/// Holon reads `trajectory.json` as `{"steps": [{"thought", "tool", "args",
+/// "outcome"}]}` and compacts it into its gold standard (12 steps, 160 chars
+/// a field; empty strings are dropped there, emitted here so the step order
+/// is lossless). Pure: a [`Trajectory`] in, the JSON document out.
+pub fn holon_trajectory_json(traj: &Trajectory) -> serde_json::Value {
+    let steps: Vec<serde_json::Value> = traj
+        .steps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "thought": s.thought.clone().unwrap_or_default(),
+                "tool": s.action.clone().unwrap_or_default(),
+                "args": s.action_args.clone().unwrap_or_default(),
+                "outcome": s.observation.clone().unwrap_or_default(),
+            })
+        })
+        .collect();
+    serde_json::json!({ "steps": steps })
+}
+
+#[cfg(test)]
+mod holon_tests {
+    use super::*;
+
+    #[test]
+    fn holon_shape_matches_what_the_kernel_compacts() {
+        let mut t = Trajectory::new("id".to_string(), "sess".to_string(), "m".to_string());
+        t.add_step(TrajectoryStep {
+            step: 0,
+            thought: Some("need the file".into()),
+            action: Some("file_write".into()),
+            action_args: Some("{\"path\":\"a\"}".into()),
+            observation: Some("wrote 2 bytes".into()),
+            response: None,
+            success: true,
+        });
+        t.add_step(TrajectoryStep {
+            step: 1,
+            thought: Some("done".into()),
+            action: None,
+            action_args: None,
+            observation: None,
+            response: Some("finished".into()),
+            success: true,
+        });
+        let v = holon_trajectory_json(&t);
+        let steps = v["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["tool"], "file_write");
+        assert_eq!(steps[0]["outcome"], "wrote 2 bytes");
+        // a response step carries its thought; empty tool fields are "" — the
+        // kernel's compact_trajectory strips them, order preserved
+        assert_eq!(steps[1]["tool"], "");
+        assert_eq!(steps[1]["thought"], "done");
+    }
+}

@@ -103,6 +103,17 @@ impl OperantAgent {
 
         trajectory.calculate_tokens();
 
+        // Phase D (docs/agentic-os/, H4): a Holon run hands the kernel what the
+        // gold standard carries — trajectory.json in ITS shape (steps of
+        // thought/tool/args/outcome; the kernel compacts to 12) and, when the
+        // agent already wrote its result.json, the usage only the driver
+        // truthfully knows (tokens estimate, tool_calls, duration). The kernel's
+        // set_run_usage coalesces: this measurement wins over the envelope's
+        // claim. A personal run (no HOLON_RUN_DIR) keeps today's file untouched.
+        if let Some(run_dir) = std::env::var_os("HOLON_RUN_DIR") {
+            self.write_holon_run_files(run_dir.into(), &trajectory, messages);
+        }
+
         // Write to ~/.operant/trajectories/
         let trajectories_dir = crate::platform::operant_home().join("trajectories");
         if let Err(e) = std::fs::create_dir_all(&trajectories_dir) {
@@ -121,6 +132,69 @@ impl OperantAgent {
             Err(e) => {
                 warn!(error = %e, "Failed to serialize trajectory");
             }
+        }
+    }
+
+    /// Phase D (H4): write the kernel-facing run files. Never fatal — the
+    /// kernel drops a malformed trajectory and coalesces usage from its own
+    /// measurement when these are missing; the result envelope still decides
+    /// the run.
+    fn write_holon_run_files(
+        &self,
+        run_dir: std::path::PathBuf,
+        trajectory: &crate::trajectory::Trajectory,
+        messages: &[Message],
+    ) {
+        // trajectory.json in the kernel's shape (one definition:
+        // crate::trajectory::holon_trajectory_json — also unit-tested there)
+        let traj = crate::trajectory::holon_trajectory_json(trajectory);
+        if let Ok(text) = serde_json::to_string(&traj)
+            && let Err(e) = std::fs::write(run_dir.join("trajectory.json"), text)
+        {
+            warn!(error = %e, "failed to write trajectory.json");
+        }
+
+        // usage: only the driver knows the true spend. Merge into the agent's
+        // result.json when it wrote one (the kernel's set_run_usage prefers
+        // this over the envelope's self-report); when it submitted through
+        // the kernel's MCP there is nothing to patch and the kernel measures
+        // its own. duration_s is the kernel's own run-row measurement —
+        // the trajectory carries no start mark, so the driver leaves it null.
+        let result_path = run_dir.join("result.json");
+        let Ok(existing) = std::fs::read_to_string(&result_path) else {
+            return;
+        };
+        let Ok(mut env) = serde_json::from_str::<serde_json::Value>(&existing) else {
+            warn!(path = %result_path.display(), "result.json is not JSON — usage left unpatched");
+            return;
+        };
+        let Some(obj) = env.as_object_mut() else {
+            return;
+        };
+        let (tokens_in, tokens_out) = messages.iter().fold((0usize, 0usize), |(i, o), m| {
+            let est = m.content.len() / 4;
+            if m.role == crate::client::Role::Assistant {
+                (i, o + est)
+            } else {
+                (i + est, o)
+            }
+        });
+        obj.insert(
+            "usage".to_string(),
+            serde_json::json!({
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "cost": null,
+                "tool_calls": trajectory.tool_calls,
+                "duration_s": null,
+            }),
+        );
+        if let Ok(text) = serde_json::to_string_pretty(&env)
+            && let Err(e) = std::fs::write(&result_path, text)
+        {
+            warn!(error = %e, "failed to patch result.json usage");
+        } else {
+            info!(path = %result_path.display(), "driver usage patched into result.json");
         }
     }
 

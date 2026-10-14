@@ -21,10 +21,13 @@ pub mod api;
 pub mod enforcement;
 pub mod policy;
 
-/// The read-API versions this build understands. A Holon database publishing a
+/// Read-API versions this build understands. v2 (holon 0010_event_triggers)
+/// keeps every view shape of v1 — api_triggers may simply carry event rows now
+/// (the `pattern` column holds the event pattern where a cron held the
+/// schedule); the client reads both identically. A Holon database publishing a
 /// version outside this set is refused (the caller surfaces a doctor line and
 /// org mode stays off — a newer Holon must not be read through stale view shapes).
-pub const KNOWN_API_VERSIONS: &[&str] = &["1"];
+pub const KNOWN_API_VERSIONS: &[&str] = &["1", "2"];
 
 /// Errors surfaced by the org-runtime seam. Degrade, don't die: every consumer
 /// turns these into a doctor line or a helpful error, never a dead turn.
