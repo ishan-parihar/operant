@@ -128,6 +128,13 @@ pub mod voice;
 pub mod write_approval;
 pub mod write_origin;
 
+/// The memory-wire git rev this binary was compiled against, read from the
+/// workspace Cargo.lock by build.rs (plan 11A, 2026-10-14 batch). Displayed by
+/// `operant --version` and `operant doctor`; `"unknown"` only when the lock
+/// was absent at compile time. Short form: use `&MEMORY_WIRE_REV[..7.min(..)]`
+/// — doctor's helper does that for you.
+pub const MEMORY_WIRE_REV: &str = env!("OPERANT_MEMORY_WIRE_REV");
+
 pub use observer::{ConsoleObserver, Observer, ObserverEvent, ObserverMetric};
 pub use runtime_adapter::{NativeRuntime, RuntimeAdapter};
 

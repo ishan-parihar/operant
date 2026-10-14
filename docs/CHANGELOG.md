@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-814 — memory-wire auto-sync on every build; provenance surface
+  (2026-10-14 batch, plan 11A).** `scripts/build.sh` is the single build
+  entry point: it advances the memory-wire branch-tracking lock to upstream
+  HEAD before every dev/test/release/deploy build (the old 1h throttle stamp
+  in `scripts/check.sh` let builds silently compile an 18-commit-old
+  dependency). `--offline`/`MEMORY_WIRE_NO_SYNC=1` skip the sync and never
+  break an offline build; `--strict` fails deploy builds on sync failure;
+  `--sync-only` is the explicit advance. The locked rev is baked into the
+  binary from `Cargo.lock` via `build.rs`: `operant --version` prints it
+  (`0.2.1 (memory-wire 84580d5)`), `operant version --detailed` prints the
+  full rev, and `operant doctor` compares the compiled rev with upstream
+  main and reports up-to-date / behind. `scripts/check.sh` and
+  `scripts/sync-vendors.sh` delegate their sync here — one sync code path.
+  The lock moved from `0017859e` (0.5.1) to `84580d57` (0.7.0). Fake-cargo
+  ordering test: `scripts/tests/build_sh_test.sh` (5 assertions).
+
 - **iter-807 — TUI shortcuts (oh-my-pi parity), conflict-checked.**
   `Ctrl+G` edits the prompt in an external editor, set by the new
   `[tui] external_editor` (falls back to `$VISUAL`, `$EDITOR`, `vi`). The scroll

@@ -27,7 +27,10 @@ rev_of() { # $1 = package name in Cargo.lock
 echo "== revs before =="
 echo "  memory-wire:  $(rev_of memory-wire)"
 
-cargo update -p memory-wire
+# Delegate the update to scripts/build.sh (plan 11A): one sync code path.
+# --strict because this script's whole purpose IS the sync — a failure here
+# must fail the script, unlike a dev/test gate which continues on the lock.
+"$(dirname "$0")/build.sh" --sync-only --strict
 
 echo "== revs after =="
 echo "  memory-wire:  $(rev_of memory-wire)"

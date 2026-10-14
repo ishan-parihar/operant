@@ -81,34 +81,15 @@ cd "$DIR/.."
 
 # memory-wire persistent-latest (user-ordered): advance the branch-tracking
 # `memory-wire` dep to upstream HEAD before building, so the tree always
-# compiles the newest source. Stamped (default 1h TTL) so this is not a
-# network call per invocation; silent on any failure (offline, no git, auth)
-# so an unreachable upstream never breaks a local build — the lock simply
-# stays at its last-good rev. `MEMORY_WIRE_NO_SYNC=1` skips unconditionally.
-# Cost, stated not hidden: a successful advance CAN change what gets compiled
-# versus the last build (that is the point), and a breaking upstream release
-# fails the build loudly until pinned. See crates/operant-core/Cargo.toml.
-sync_memory_wire() {
-    [ "${MEMORY_WIRE_NO_SYNC:-0}" = "1" ] && return 0
-    local ttl="${MEMORY_WIRE_SYNC_TTL_SECS:-3600}"
-    local cache="${XDG_CACHE_HOME:-$HOME/.cache}/operant"
-    local stamp="$cache/memory-wire-sync-stamp"
-    local now
-    now=$(date +%s)
-    if [ -f "$stamp" ]; then
-        local last
-        last=$(cat "$stamp" 2>/dev/null || echo 0)
-        if [ "$((now - last))" -lt "$ttl" ] 2>/dev/null; then
-            return 0
-        fi
-    fi
-    if cargo update -p memory-wire >/dev/null 2>&1; then
-        mkdir -p "$cache" 2>/dev/null
-        echo "$now" > "$stamp" 2>/dev/null || true
-    fi
-    return 0
-}
-sync_memory_wire
+# compiles the newest source. Since the 2026-10-14 batch (plan 11A) this
+# delegates to scripts/build.sh --sync-only — ONE sync code path for dev,
+# test, release and deploy, with NO stamp throttle (the 1h TTL let
+# release/deploy builds silently compile an 18-commit-old memory-wire).
+# build.sh honors MEMORY_WIRE_NO_SYNC=1, prints old→new, and never fails a
+# check build on an unreachable upstream — the lock stays at its last-good
+# rev. A breaking upstream release fails the build loudly until pinned. See
+# crates/operant-core/Cargo.toml.
+"$DIR/build.sh" --sync-only
 
 # `doc` is a shortcut for the rustdoc gate, not a passthrough: ci.yml:140 runs
 # `cargo doc --workspace --no-deps --all-features` under RUSTDOCFLAGS=-Dwarnings,

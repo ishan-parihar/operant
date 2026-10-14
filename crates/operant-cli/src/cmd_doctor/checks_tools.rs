@@ -48,6 +48,43 @@ fn cmd_check(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// `git ls-remote <url> <ref>` with a wall-clock cap; returns the resolved
+/// commit hash. Polls `try_wait` and kills on deadline because
+/// std::process::Command has no native timeout — a hung network route must
+/// not hang `operant doctor`.
+fn ls_remote_head(url: &str, git_ref: &str, timeout_secs: u64) -> Option<String> {
+    use std::io::Read as _;
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new("git")
+        .args(["ls-remote", url, git_ref])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) => return None,
+            Ok(None) if Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(_) => return None,
+        }
+    }
+    // Single ~100-byte line; the pipe cannot fill, so post-exit read is safe.
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    out.split_whitespace()
+        .next()
+        .filter(|h| h.len() == 40 && h.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_string)
+}
+
 #[expect(
     clippy::expect_used,
     reason = "invariant guaranteed by surrounding validation"
@@ -674,6 +711,36 @@ pub fn run_platform_checks(
                         &format!("(not configured — set {generic_var} in .env)"),
                     );
                 }
+            }
+        }
+    }
+
+    // -- memory-wire provenance (2026-10-14 batch, plan 11A) --
+    // The binary bakes the locked memory-wire git rev (operant-core build.rs
+    // reads Cargo.lock). Compare with upstream main so drift is visible:
+    // "behind upstream" means the binary predates the newest upstream commit
+    // — run scripts/build.sh (which syncs the lock before every build).
+    {
+        let rev = operant_core::MEMORY_WIRE_REV;
+        let short: String = rev.chars().take(7).collect();
+        match ls_remote_head("https://github.com/ishan-parihar/memory-wire", "main", 5) {
+            Some(head) if head == rev => {
+                check_ok(
+                    "memory-wire",
+                    &format!("{short} (up to date with upstream main)"),
+                );
+            }
+            Some(head) => {
+                let head_short: String = head.chars().take(7).collect();
+                check_warn(
+                    "memory-wire behind upstream",
+                    &format!("(built {short}, upstream main {head_short}; run scripts/build.sh)"),
+                );
+            }
+            None => {
+                check_info(&format!(
+                    "memory-wire {short} (upstream check skipped: git unavailable or network timeout)"
+                ));
             }
         }
     }

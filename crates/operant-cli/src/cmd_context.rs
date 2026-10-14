@@ -260,13 +260,15 @@ fn status_report(engine: &LcmContextEngine) -> Result<String> {
 /// (message rows + active sessions). Keeps `context status` useful on the
 /// default engine instead of erroring (iter-780).
 fn compact_status_report(config: &AppConfig) -> Result<String> {
-    let db =
-        operant_core::database::Database::init(config.database_path.clone())
-            .context("Failed to open database")?;
+    let db = operant_core::database::Database::init(config.database_path.clone())
+        .context("Failed to open database")?;
     let sessions = db.list_sessions(10_000).unwrap_or_default();
     let mut out = String::new();
     out.push_str("Compact context engine (deterministic decay + eviction)\n");
-    out.push_str(&format!("  db path     : {}\n", config.database_path.display()));
+    out.push_str(&format!(
+        "  db path     : {}\n",
+        config.database_path.display()
+    ));
     out.push_str(&format!("  sessions    : {}\n", sessions.len()));
     out.push_str("  lossless DAG : off (set agent.context_engine = \"lcm\" for DAG status)\n");
     Ok(out)

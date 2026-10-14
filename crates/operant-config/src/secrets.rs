@@ -276,7 +276,7 @@ fn generate_random_key() -> Vec<u8> {
     ChaCha20Poly1305::generate_key(&mut OsRng).to_vec()
 }
 
-/// Write a secret file owner-only (0o600) on Unix in a single `open(2)` — 
+/// Write a secret file owner-only (0o600) on Unix in a single `open(2)` —
 /// a plain `fs::write` followed by `set_permissions` leaves a window where
 /// the umask default (typically 0644) exposes the key (same fix as
 /// `operant-channels`' matrix/wechat writers).

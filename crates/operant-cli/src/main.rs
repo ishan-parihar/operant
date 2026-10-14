@@ -123,11 +123,23 @@ enum LogTarget {
     File,
 }
 
+/// The full `--version` string: semver plus the compiled memory-wire rev
+/// (plan 11A) so a deployed binary always reports which upstream memory-wire
+/// it carries. A compile-time literal built from build.rs's rustc-env
+/// (clap's `version` attribute only accepts 'static strings; the project
+/// forbids Box::leak, so the build owns this data).
+const FULL_VERSION_LINE: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (memory-wire ",
+    env!("OPERANT_MEMORY_WIRE_REV_SHORT"),
+    ")"
+);
+
 #[derive(Debug, Parser)]
 #[command(
     name = "operant",
     about = "Operant-RS: A high-performance ReAct agent framework",
-    version,
+    version = FULL_VERSION_LINE,
     subcommand_negates_reqs = true
 )]
 struct Cli {

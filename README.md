@@ -21,7 +21,7 @@
 git clone https://github.com/ishan-parihar/operant.git && cd operant
 
 ./scripts/install.sh          # release build → /usr/local/bin/operant
-# or: cargo build --release -p operant-cli
+# or: scripts/build.sh --release
 
 operant setup                 # interactive wizard: provider, memory, TTS, gateway
 operant chat                  # start chatting (TUI)

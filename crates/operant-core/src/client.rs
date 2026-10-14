@@ -1600,9 +1600,7 @@ fn dedup_reasoning_keys(body: &mut serde_json::Map<String, serde_json::Value>) {
         .get("reasoning_content")
         .is_some_and(|rc| !rc.is_null());
     let has_reasoning = body.get("reasoning").is_some_and(|r| !r.is_null());
-    let has_context = body
-        .get("reasoning_context")
-        .is_some_and(|r| !r.is_null());
+    let has_context = body.get("reasoning_context").is_some_and(|r| !r.is_null());
     if has_preferred {
         body.remove("reasoning");
         body.remove("reasoning_context");

@@ -29,4 +29,39 @@ fn main() {
     cc::Build::new()
         .file("espeak_audio_stubs.c")
         .compile("espeak_audio_stubs");
+
+    // memory-wire provenance (2026-10-14 batch, plan 11A): bake the exact git
+    // rev of the memory-wire dependency into the binary, read from the
+    // workspace Cargo.lock at compile time. The lock is the single authority
+    // for what was compiled, so `operant --version` and `operant doctor` can
+    // report drift from upstream main without guessing. "unknown" (not a
+    // build failure) when the lock is absent — cargo always resolves one
+    // before compiling, so this is a vendored-dist edge case only.
+    println!("cargo:rerun-if-changed=../../Cargo.lock");
+    println!(
+        "cargo:rustc-env=OPERANT_MEMORY_WIRE_REV={}",
+        memory_wire_lock_rev().unwrap_or_else(|| "unknown".to_string())
+    );
+}
+
+/// Extract the locked git rev of the `memory-wire` package from the workspace
+/// Cargo.lock: the 40-hex tail of its `source = "git+…#<rev>"` line. The
+/// lock's block order is name → version → source, and dependency lists are
+/// quoted strings (never `name = …`), so the first block whose name line
+/// matches is unambiguous. An earlier flat rewrite returned on the first
+/// non-source line inside the block (version precedes source) and so always
+/// read "unknown" — the `--version` smoke test caught it.
+fn memory_wire_lock_rev() -> Option<String> {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let root = std::path::Path::new(&manifest).parent()?.parent()?;
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).ok()?;
+    lock.lines()
+        .skip_while(|l| !l.starts_with("name = \"memory-wire\""))
+        .take_while(|l| !l.starts_with("[[package]]"))
+        .find_map(|l| {
+            l.strip_prefix("source = ")
+                .and_then(|rest| rest.trim_matches('"').rsplit('#').next())
+                .filter(|rev| rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_string)
+        })
 }

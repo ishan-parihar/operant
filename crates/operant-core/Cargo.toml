@@ -79,9 +79,11 @@ image = { workspace = true }
 # Baked-in engines (not subprocess): memory-wire replaces agentmemory.
 # sourcehound_mcp HELD OUT — see below.
 #
-# memory-wire tracks `main` — user-ordered persistent-latest. Every dev-loop
-# build (via scripts/check.sh) advances the lock to the branch HEAD when the
-# network allows, so this tree always compiles the newest memory-wire source.
+# memory-wire tracks `main` — user-ordered persistent-latest. Every build
+# (via scripts/build.sh, which scripts/check.sh and scripts/sync-vendors.sh
+# delegate to; no throttle stamp since the 2026-10-14 batch, plan 11A)
+# advances the lock to the branch HEAD when the network allows, so this tree
+# always compiles the newest memory-wire source.
 # The price is stated plainly: a floating branch means an upstream release can
 # break this build with no commit here (it happened 2026-09-29, when a release
 # required a newer `anyhow` than the lock held). That failure is loud, not

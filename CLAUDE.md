@@ -1,5 +1,18 @@
 # CLAUDE.md
 
+> **AGENTS.md is the single source of truth for working in this repository.**
+> Read it top-to-bottom first; this file is a Claude-Code-specific supplement,
+> not a substitute. Where the two disagree, AGENTS.md wins (release line,
+> verification commands, release procedure, iteration protocol).
+
+## Build entry point
+
+**All builds go through `scripts/build.sh`** — it applies the dev env,
+advances the memory-wire git-dependency lock to upstream HEAD first, then runs
+cargo. `--release` for release builds, `--offline` to skip the sync,
+`--strict` to fail on sync failure (deploy), `--sync-only` for just the lock
+advance. Regression test: `scripts/tests/build_sh_test.sh`.
+
 ## Operant Project Context
 
 - Current release line: `0.1.4`

@@ -76,7 +76,7 @@ git log origin/main -1 --oneline    # must print your new commit
 df -h /                                    # a worktree target/ costs ~17G; storage-critical box
 git worktree add --detach ~/worktrees/deploy-<iter> origin/main
 ( cd ~/worktrees/deploy-<iter> && git submodule update --init --recursive \
-    && cargo build --release -p operant-cli )
+    && scripts/build.sh --release )
 # Deploy to BOTH install paths (2026-10-05 lesson): the user's PATH and the
 # gateway systemd unit resolve ~/.local/bin/operant; /usr/local/bin is the
 # convention target. A running daemon holds the old inode open — `cp` fails
@@ -306,7 +306,7 @@ gitignore is doing its job; leave them alone.
   workflow is `workflow_dispatch`-only: no push and no tag triggers anything.
   Release procedure: write the dated `## [X.Y.Z]` section, commit, push the
   tag `vX.Y.Z` (marks the release, builds nothing), then locally
-  `cargo build --release -p operant-cli`, package the artifacts, and publish
+  `scripts/build.sh --release`, package the artifacts, and publish
   with `gh release create vX.Y.Z --notes-file <extracted section> <artifacts>`.
   Do NOT re-add push/tag triggers without quota to spend.
 - GitHub Actions RUNS are banned — not reads. No workflow runs, no dispatch,
@@ -503,6 +503,31 @@ export CARGO_INCREMENTAL=0
 # 4. For fresh environments, run provision first:
 /home/z/my-project/operant/scripts/provision-build-deps.sh
 ```
+
+### Build entry point — scripts/build.sh (2026-10-14 batch, plan 11A)
+
+**Every build — dev, test gates, release, deploy — goes through
+`scripts/build.sh`.** It applies the dev env, advances the memory-wire lock
+to upstream HEAD first (persistent-latest, no throttle stamp), then runs the
+cargo command:
+
+```bash
+scripts/build.sh                    # cargo build -p operant-cli --bin operant
+scripts/build.sh --release         # release build, still syncs first
+scripts/build.sh test -p operant-core --lib   # any cargo subcommand
+scripts/build.sh --sync-only       # just the memory-wire lock advance
+```
+
+- `--offline` (or `MEMORY_WIRE_NO_SYNC=1`) skips the sync — offline upstream
+  never breaks a local build; the lock stays at its last-good rev.
+- `--strict` makes a failed sync a failure — deploy builds use this.
+- `scripts/check.sh` and `scripts/sync-vendors.sh` delegate their sync here;
+  there is exactly ONE sync code path.
+- The locked rev is baked into the binary (`operant_core::MEMORY_WIRE_REV`,
+  from Cargo.lock via build.rs): `operant --version` prints it, and
+  `operant doctor` reports up-to-date/behind versus upstream main.
+- Fake-cargo regression test: `scripts/tests/build_sh_test.sh` (asserts the
+  sync precedes the build, --offline/--strict semantics).
 
 ### Compile Strategy (read this — it saves 10+ minutes per iteration)
 
@@ -1034,7 +1059,7 @@ git pull --ff-only
 source scripts/dev-env.sh
 
 # 2. Build the release binary (slow first time, ~5 min incremental).
-cargo build --release
+scripts/build.sh --release
 
 # 3. Run tests for the area you're touching.
 cargo test -p operant-core --lib
