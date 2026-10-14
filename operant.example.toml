@@ -445,6 +445,24 @@ provider = "kokoro"
 # voice = "af_sky"   # provider-specific voice id
 enabled = false
 
+# ── Holon (docs/agentic-os/) — operant as the organization's runtime ─────
+# Off by default: every Holon-backed surface (org views, policy enforcement,
+# supervisor) is inert in personal mode, byte-identical to mainline.
+[holon]
+enabled = false
+# $HOLON_HOME — the instance operant reads (read API) and drives (supervisor)
+home = ""
+# pin the kernel launcher; empty = the PATH `holon` (or $HOLON_BIN)
+#bin = "~/holon/bin/holon"
+# phase E: the run supervisor (CONTRACT §11) — claims, spawns, heartbeats,
+# hands in for these employees. supervise_employees is required when on.
+supervise = false
+supervise_employees = []
+max_concurrent_runs = 2
+# fire `holon tick` on the no-agent cron (every 2 minutes) instead of a
+# systemd timer — the clock belongs to the resident runtime
+clock = false
+
 [memory]
 # provider: agentmemory (default) | builtin
 # - agentmemory: hybrid semantic memory via the agentmemory server (BM25 + vector + graph).
