@@ -589,6 +589,7 @@ impl OperantAgent {
                 if let Some(tx) = &event_tx {
                     let _ = tx.try_send(AgentEvent::BackgroundReview {
                         summary: format!("⚑ advisor ({}): {}", note.advisor, note.text),
+                        session_id: note.session_id.clone(),
                     });
                 }
             },
@@ -645,6 +646,7 @@ impl OperantAgent {
                 if let Some(tx) = &event_tx {
                     let _ = tx.try_send(AgentEvent::BackgroundReview {
                         summary: format!("※ recap: {}", recap.text),
+                        session_id: recap.session_id.clone(),
                     });
                 }
             },

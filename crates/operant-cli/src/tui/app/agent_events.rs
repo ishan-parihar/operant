@@ -511,7 +511,7 @@ impl App {
                 self.push_system_message(text, SystemMessageStyle::Info);
             }
 
-            AgentEvent::BackgroundReview { summary } => {
+            AgentEvent::BackgroundReview { summary, .. } => {
                 // Advisor notes and idle recaps share the BackgroundReview
                 // channel (both are side-channel LLM output); the prefix the
                 // engine stamps picks the card style.

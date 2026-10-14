@@ -463,6 +463,23 @@ pub(crate) fn seat_policy_db() -> Option<Arc<operant_core::org::seat_policy_db::
     guard.clone()
 }
 
+/// Resolve the delivery target for a background event (advisor/recap/
+/// self-improvement note), given the session's pinned channel and the
+/// global last-active slot. Order: the session's own pin wins; a session
+/// without a pin (empty tag, or entry expired with its turn) falls back
+/// to the slot; nothing anywhere = drop (cold boot). Extracted pure so the
+/// routing contract is testable without a live gateway (iter-812).
+fn resolve_background_target(
+    session_id: &str,
+    pinned: Option<CurrentChannel>,
+    slot: Option<CurrentChannel>,
+) -> Option<CurrentChannel> {
+    if session_id.is_empty() {
+        return slot;
+    }
+    pinned.or(slot)
+}
+
 /// Derive the gateway agent's stable session id (and therefore the chat's
 /// SEAT under the genome) from a routing key. Extracted from the turn
 /// dispatcher so `/permissions` computes the SAME seat the running agent
@@ -1806,6 +1823,14 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // topic the user sent from (hermes topic-reply parity).
     let current_channel: Arc<Mutex<Option<CurrentChannel>>> = Arc::new(Mutex::new(None));
 
+    // session_id -> (platform, channel_id, thread_id) for BACKGROUND events
+    // (advisor/recap/self-improvement notes). These fire after the turn
+    // ends, when the global `current_channel` slot may already point at
+    // another session's thread — the registry pins each session's notes to
+    // its own topic (iter-812, fixes cross-thread note delivery).
+    let session_channels: Arc<Mutex<HashMap<String, CurrentChannel>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
     // (platform, channel_id) -> streamed message id. Set by the event
     // receiver when the first streaming chunk is delivered; the dispatch
     // loop consumes it after route_message so the final response is NOT
@@ -2515,6 +2540,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // parity). Also drains AgentEvent::Content for streaming
     // progressive-edit (iter-100 — closes Bug #12 from iter-98 audit).
     let gw_for_events = gw.clone();
+    let session_channels_for_events = session_channels.clone();
     let current_channel_for_events = current_channel.clone();
     let stream_delivery_for_events = stream_delivery.clone();
     let exit_reasons_for_events = exit_reasons.clone();
@@ -2798,16 +2824,46 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     // starts a fresh chronological message.
                     progress_tracker.close_group(&key);
                 }
-                AgentEvent::BackgroundReview { summary } => {
+                AgentEvent::BackgroundReview {
+                    summary,
+                    session_id,
+                } => {
                     // Advisor notes (⚑) and idle recaps (※) arriving on the
-                    // GATEWAY: deliver to the active channel as their own
-                    // message — the Telegram twin of the TUI card. When no
-                    // channel is active (no user is mid-chat) the note is
-                    // dropped: a recap fired from an idle DM session still
-                    // has that DM as the active channel, so in practice the
-                    // only drop case is a cold boot with no session yet.
-                    let msg = OutgoingMessage::new(&channel_id, &summary).with_thread_id(thread_id);
-                    let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                    // GATEWAY: deliver to the session's OWN thread — not the
+                    // global last-active slot. These fire AFTER the turn
+                    // ends; on multi-thread chats (Telegram forum topics,
+                    // concurrent sessions) the slot can already point at
+                    // another session's topic, which delivered notes into
+                    // the wrong thread (observed live 2026-10-14, iter-812).
+                    //
+                    // Resolution order: (1) the session registry entry the
+                    // turn wrote at its start; (2) fall back to the current
+                    // slot (legacy emitters with an empty tag, single-DM
+                    // setups where both are identical).
+                    let pinned_channel = session_channels_for_events
+                        .lock()
+                        .await
+                        .get(&session_id)
+                        .cloned();
+                    let slot_channel = current_channel_for_events.lock().await.clone();
+                    let target =
+                        resolve_background_target(&session_id, pinned_channel, slot_channel);
+                    match target {
+                        Some((platform, channel_id, thread_id)) => {
+                            let msg = OutgoingMessage::new(&channel_id, &summary)
+                                .with_thread_id(thread_id);
+                            let _ = gw_for_events.send_message_return_id(&platform, msg).await;
+                        }
+                        None => {
+                            // No session entry and no active channel: the
+                            // session never had a turn this boot. Drop —
+                            // same cold-boot contract as before.
+                            tracing::debug!(
+                                session = %session_id,
+                                "BackgroundReview dropped: no channel for session"
+                            );
+                        }
+                    }
                 }
                 AgentEvent::IterationComplete { .. } => {
                     // Segment break (hermes MessageStop/_NEW_SEGMENT parity):
@@ -3568,6 +3624,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         let telegram_token = telegram_token_for_turns.clone();
                         let done_tx = turn_done_tx.clone();
                         let recap_activity_for_turn = recap_activity_for_turns.clone();
+                        let session_pins_for_turns = session_pins.clone();
+                        let session_channels_for_turns = session_channels.clone();
                         tokio::spawn(async move {
                     // Wrap the turn body for error resilience — a single message
                     // processing error will not crash the whole gateway.
@@ -3731,6 +3789,19 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     *current_channel.lock().await =
                         Some((platform.clone(), channel_id.clone(), msg.thread_id));
 
+                    // 5.5a Pin this session's delivery target for BACKGROUND
+                    // events (advisor/recap/self-improvement notes — iter-812).
+                    // They fire after the turn ends, when the global slot above
+                    // may already point at another session's thread; the
+                    // registry routes each note to its OWN topic.
+                    let turn_session_id = session_pins_for_turns
+                        .get(&session_key)
+                        .unwrap_or_else(|| derived_gateway_session_id(&session_key));
+                    session_channels_for_turns.lock().await.insert(
+                        turn_session_id.clone(),
+                        (platform.clone(), channel_id.clone(), msg.thread_id),
+                    );
+
                     // ── 5.5b Cancel any pending idle recap ─────────────────
                     // User activity arrived: the recap exists to greet a
                     // returning user, never to interrupt one (omp parity —
@@ -3853,6 +3924,15 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     if let Some(handle) = keepalive_handle {
                         handle.abort();
                     }
+                    // ── Turn end: drop this session's background-event entry
+                    // (iter-812). The channel binding lives exactly as long as
+                    // the session has produced a turn this boot; a note firing
+                    // after cleanup falls back to the current slot — identical
+                    // to the pre-812 behavior for cold sessions.
+                    session_channels_for_turns
+                        .lock()
+                        .await
+                        .remove(&turn_session_id);
 
                     Ok(())
                 }
@@ -5099,6 +5179,42 @@ mod turn_state_tests {
         let channel_ids: Vec<&str> = interrupted.iter().map(|(id, _, _)| id.as_str()).collect();
         assert!(channel_ids.contains(&"slack_channel_1"));
         assert!(channel_ids.contains(&"discord_channel_2"));
+    }
+
+    /// iter-812 — background events (advisor/recap/self-improvement notes)
+    /// must route to the SESSION's channel, never the global last-active
+    /// slot when both exist and disagree. This is the wrong-thread bug:
+    /// a note from session A (topic 42) fired after session B's turn
+    /// started, and the old single-slot `current_channel` delivered it
+    /// into B's thread (observed live 2026-10-14).
+    #[test]
+    fn background_events_route_to_the_sessions_own_channel() {
+        let sess_a_pin = ("telegram".to_string(), "chat-1".to_string(), Some(42));
+        let other_slot = ("telegram".to_string(), "chat-1".to_string(), Some(7));
+
+        // The owning session's pin wins over a disagreeing global slot.
+        let target =
+            resolve_background_target("gw_a", Some(sess_a_pin.clone()), Some(other_slot.clone()));
+        assert_eq!(target, Some(sess_a_pin.clone()), "session pin must win");
+
+        // No pin (entry expired with the turn) — fall back to the slot.
+        let target = resolve_background_target("gw_a", None, Some(other_slot.clone()));
+        assert_eq!(
+            target,
+            Some(other_slot.clone()),
+            "fallback to the active slot"
+        );
+
+        // Legacy emitters with an empty tag: slot only.
+        let target = resolve_background_target("", Some(sess_a_pin), Some(other_slot.clone()));
+        assert_eq!(
+            target,
+            Some(("telegram".to_string(), "chat-1".to_string(), Some(7))),
+            "empty tag ignores pins"
+        );
+
+        // Cold boot: nothing anywhere — drop.
+        assert_eq!(resolve_background_target("gw_a", None, None), None);
     }
 
     /// iter-691 — the restart reaper's CLOSE path. A pending row closed as

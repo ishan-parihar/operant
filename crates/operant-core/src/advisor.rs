@@ -127,6 +127,10 @@ pub struct AdvisorNote {
     pub advisor: String,
     /// The note text, one line.
     pub text: String,
+    /// Session whose turn produced the note (iter-812: the gateway routes
+    /// background events by this tag — a note fired after the turn ends
+    /// must reach the session's thread, not the global last-active slot).
+    pub session_id: String,
 }
 
 /// Handle the advisor uses to observe the primary. All state lives here so
@@ -198,6 +202,7 @@ pub fn spawn_advisor(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(_) => break,
             };
+            let session_id = end.session_id.clone();
             let _ = end;
             tracing::debug!(model = %advisor_model, "advisor woke on turn end");
             let messages = snapshot();
@@ -285,6 +290,7 @@ pub fn spawn_advisor(
                 deliver(AdvisorNote {
                     advisor: advisor_label.clone(),
                     text: note,
+                    session_id: session_id.clone(),
                 });
             }
         }

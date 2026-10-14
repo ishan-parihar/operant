@@ -552,6 +552,7 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                         let _ = tx
                             .send(AgentEvent::BackgroundReview {
                                 summary: notification,
+                                session_id: session_id.clone(),
                             })
                             .await;
                     }

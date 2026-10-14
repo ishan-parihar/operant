@@ -292,9 +292,19 @@ pub enum AgentEvent {
     /// nudge). Emitted from the spawned review task so the CLI/TUI can
     /// surface the summary to the user — mirrors hermes-agent's
     /// `💾 Self-improvement review: {summary}` print.
+    ///
+    /// `session_id` (iter-812): the session whose turn produced the review.
+    /// Background events fire AFTER the turn ends — the gateway's global
+    /// `current_channel` slot can already point at another session's
+    /// thread by then, which delivered advisor/recap/review notes into the
+    /// wrong Telegram topic (observed live 2026-10-14). Hosts route by
+    /// this tag, falling back to the last-known channel for legacy
+    /// emitters that don't set it.
     BackgroundReview {
         /// The review summary text.
         summary: String,
+        /// Owning session (``gw_<hash>`` / ``emp-cron_*``); empty = untagged.
+        session_id: String,
     },
     /// A runtime notice for the operator — NOT model output (e.g. a tool-loop
     /// guardrail warning). Frontends render it as a system annotation; it must

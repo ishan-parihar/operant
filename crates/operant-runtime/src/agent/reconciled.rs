@@ -3289,6 +3289,7 @@ mod facade_tests {
             (
                 AgentEvent::BackgroundReview {
                     summary: "s".into(),
+                    session_id: String::new(),
                 },
                 None,
             ),
