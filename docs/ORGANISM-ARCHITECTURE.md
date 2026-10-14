@@ -1,5 +1,9 @@
 # Organism OS — Ratified Architecture (owner-validated, iter-609)
 
+> **Proposed supersession (2026-10-14, pending the owner):** Holon supersedes the organism this
+> document ports. What operant keeps from it and what retires to Holon is decided module by module
+> in `docs/agentic-os/ORG-LAYER-DISPOSITION.md`; read that first.
+
 > **Status: RATIFIED.** This is the validated plan of record for the organism
 > layer. Every session working on it reads this file first. Amendments go
 > through the owner, land here, then release as their own iterations.

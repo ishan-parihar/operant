@@ -1,33 +1,26 @@
 # Holon integration (proposed, 2026-10-14)
 
-**Holon** is the Chair's agentic operating system. It is a stdlib-Python kernel, separate from
-operant, at `github.com/ishan-parihar/holon`. It holds the organization:
-- departments, persistent employees and their authority;
-- one work graph (plan, approve, execute, verify), with rubrics, gold standards and versioned
-  playbooks;
-- objectives, memory promotion, and healing.
+**Holon** is the owner's agentic operating system: a stdlib-Python kernel at
+`github.com/ishan-parihar/holon` that holds the organization. It supersedes the legacy Hermes
+organism that `crates/operant-core/src/org/` ports. Operant becomes the organization's runtime:
+the employees' bodies, enforcement, metering, the clock, events and the owner's channel.
 
-It supersedes the legacy Hermes organism that `crates/operant-core/src/org/` ports.
+The plan is in **`docs/agentic-os/`**:
+- `README.md`: index and reading order;
+- `BOUNDARY.md`: what operant owns natively, in Rust; Rust versus Python; the two modes;
+- `ORG-LAYER-DISPOSITION.md`: every org module marked keep, rewire or retire;
+- `IMPLEMENTATION-PLAN.md`: phases A–I across both repositories.
 
-The audit and phased plan are in Holon's repository: `docs/design/2026-10-14-operant-integration.md`.
-Read it before changing operant's org layer, its cron cast, or anything Holon would drive.
+Holon's side is in its `docs/design/2026-10-14-holon-operant-boundary.md` (canonical rule,
+interfaces) and `2026-10-14-operant-integration.md` (audit, decision).
 
-## The proposal in brief
+Read them before changing:
+- the org layer;
+- the cron cast;
+- the kanban;
+- the curator and skill nudges;
+- the kernel sidecar;
+- anything Holon would drive.
 
-- **Holon runs as a sidecar kernel; operant is its primary body.** Holon drives operant runs
-  through an adapter (`operant -c <posture> run --no-stream -s <identity> -q <brief>`), with
-  Holon's MCP server mounted (`holon mcp`, authenticated by `HOLON_RUN_TOKEN`).
-- **Native seams in operant**, behind a `holon` feature, active only inside a Holon run
-  (`HOLON_RUN_TOKEN` and `HOLON_RUN_DIR` set):
-  - enforce the approved plan per tool call, through `org/seat_policy.rs::decide`;
-  - turn skill and memory nudges and `skill_manage` writes into result annotations instead of
-    live edits;
-  - record the trajectory into the run directory;
-  - report usage.
-- **The Telegram gateway becomes the Chair's channel** for Holon: approvals, notes and deliveries.
-- **One organization.** The cast seats map onto Holon departments and kernel mechanisms; the cast
-  crons are replaced by Holon routines. The org stores (`operant_kanban.db`,
-  `operant_decisions.db`) are kept as an archive and are never deleted.
-
-Status: **awaiting the Chair's decision.** Nothing here changes operant's behavior until a phase is
-approved. Each phase updates this file in the same iteration.
+Status: **awaiting the owner's decision.** Nothing changes operant's behavior until a phase is
+approved.

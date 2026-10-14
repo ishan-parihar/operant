@@ -1,5 +1,9 @@
 # Organism authority, memory, and the CEO loop — architecture design
 
+> **Proposed supersession (2026-10-14, pending the owner):** Holon supersedes the organism this
+> document ports. What operant keeps from it and what retires to Holon is decided module by module
+> in `docs/agentic-os/ORG-LAYER-DISPOSITION.md`; read that first.
+
 > **Status:** design, revised after code review. 2026-10-01.
 > **Revised.** §4 was **wrong about the substrate** and has been rewritten.
 > See [`ORG-AUTHORITY-DESIGN-REVIEW.md`](ORG-AUTHORITY-DESIGN-REVIEW.md) for
