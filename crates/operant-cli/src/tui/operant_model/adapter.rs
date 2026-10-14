@@ -76,6 +76,11 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
     let mut tool_rows_before: Vec<DisplayMessage> = Vec::new();
     let mut trailing_tool_rows: Vec<DisplayMessage> = Vec::new();
     let live = tails_live(app);
+    // (plan 08) Tool-call visibility: when hidden, each contiguous run of
+    // tool rows collapses to one dim summary row. The collapse happens at
+    // flatten time, so the toggle is instant and the underlying blocks are
+    // untouched.
+    let tool_rows_hidden = !app.show_tool_calls;
     for block in &app.tool_use_blocks {
         // Reserved rows belong to the live tail while it streams — they
         // render in the mutable Streaming section, below the thinking/text
@@ -99,6 +104,13 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
                 .or_default()
                 .push(row);
         }
+    }
+    if tool_rows_hidden {
+        collapse_tool_runs(&mut tool_rows_before);
+        for rows in tool_rows_after.values_mut() {
+            collapse_tool_runs(rows);
+        }
+        collapse_tool_runs(&mut trailing_tool_rows);
     }
 
     let mut annotations_after: HashMap<usize, Vec<&SystemAnnotation>> = HashMap::new();
@@ -157,11 +169,18 @@ pub fn live_tool_rows(app: &App) -> Vec<DisplayMessage> {
     if !tails_live(app) {
         return Vec::new();
     }
-    app.tool_use_blocks
+    let mut rows: Vec<DisplayMessage> = app
+        .tool_use_blocks
         .iter()
         .filter(|b| is_reserved(app, b))
         .map(|b| display_message_from_tool_block(app, b))
-        .collect()
+        .collect();
+    // (plan 08) hidden tool activity collapses in the Streaming section
+    // too — the same summary row shape as the Body.
+    if !app.show_tool_calls {
+        collapse_tool_runs(&mut rows);
+    }
+    rows
 }
 
 /// Same predicate as the Streaming section's `has_streaming` gate in
@@ -176,6 +195,48 @@ fn is_reserved(app: &App, block: &ToolUseBlock) -> bool {
 
 fn system_annotation_row(annotation: &SystemAnnotation) -> DisplayMessage {
     DisplayMessage::system(annotation.text.clone())
+}
+
+/// (plan 08) Collapse each contiguous run of tool rows into one dim
+/// summary row: `▸ 3 tool calls · read_file, shell, grep (Alt+O to show)`,
+/// with a failure count when any call errored. The row is system-styled,
+/// so copy already treats it as a UI row (`UI_ROLES` includes "system").
+fn collapse_tool_runs(rows: &mut Vec<DisplayMessage>) {
+    let mut collapsed: Vec<DisplayMessage> = Vec::with_capacity(rows.len());
+    let mut run: Vec<&DisplayMessage> = Vec::new();
+    let flush = |run: &mut Vec<&DisplayMessage>, out: &mut Vec<DisplayMessage>| {
+        if run.is_empty() {
+            return;
+        }
+        let count = run.len();
+        let failed = run.iter().filter(|r| r.content.contains('✗')).count();
+        let names: Vec<String> = run
+            .iter()
+            // Tool rows carry their call name in `tool_data` (the jcode
+            // model shape), not in `title`.
+            .filter_map(|r| r.tool_data.as_ref().map(|c| c.name.clone()))
+            .collect();
+        let text = if failed > 0 {
+            format!("▸ {count} tool calls · {failed} failed (Alt+O to show)")
+        } else {
+            format!(
+                "▸ {count} tool calls · {} (Alt+O to show)",
+                names.join(", ")
+            )
+        };
+        out.push(DisplayMessage::system(text));
+        run.clear();
+    };
+    for row in rows.iter() {
+        if row.role == "tool" {
+            run.push(row);
+        } else {
+            flush(&mut run, &mut collapsed);
+            collapsed.push(row.clone());
+        }
+    }
+    flush(&mut run, &mut collapsed);
+    *rows = collapsed;
 }
 
 /// Content of a tool row whose call has not produced output yet; the

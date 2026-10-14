@@ -1488,8 +1488,9 @@ impl App {
                     )
                     .to_lowercase()
                 );
-                self.set_status_notice(summary.clone());
-                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
+                // (plan 08) transient notice only — the transcript echo
+                // duplicated the status bar line.
+                self.set_status_notice(summary);
                 self.invalidate_transcript();
                 true
             }

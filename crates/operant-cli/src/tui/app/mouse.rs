@@ -179,8 +179,7 @@ impl App {
             self.scroll_offset,
             self.auto_scroll,
         );
-        self.status_message =
-            Some("Copy mode: drag to select (Esc or Ctrl+T to exit).".to_string());
+        self.status_message = Some("Copy mode: drag to select (Esc or Alt+Y to exit).".to_string());
     }
 
     /// Turn copy mode off and restore scroll offset, tail-follow and the

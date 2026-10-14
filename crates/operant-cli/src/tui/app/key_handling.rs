@@ -1046,6 +1046,11 @@ impl App {
                 KeyCode::Char('t') if ctrl => {
                     self.exit_copy_mode();
                 }
+                // (plan 08) copy mode moved from Ctrl+T (the thinking toggle)
+                // to Alt+Y — the exit chord follows the entry chord.
+                KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
+                    self.exit_copy_mode();
+                }
                 KeyCode::Char('c') if ctrl => {
                     self.copy_current_selection();
                 }
@@ -1104,11 +1109,13 @@ impl App {
         }
 
         // Clear any active text selection on key press, except the chords
-        // that act *on* a selection: Ctrl+C copies it, Ctrl+T enters copy mode
-        // (which has to hand the prior selection back on exit).
+        // that act *on* a selection: Ctrl+C copies it, Alt+Y enters copy
+        // mode (which has to hand the prior selection back on exit).
+        // (plan 08: copy mode moved from Ctrl+T — the thinking toggle now.)
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         let is_copy = key.code == KeyCode::Char('c') && ctrl;
-        let is_copy_mode = key.code == KeyCode::Char('t') && ctrl;
+        let is_copy_mode = key.code == KeyCode::Char('y') && alt;
         if !is_copy && !is_copy_mode && self.selection_anchor.is_some() {
             self.selection_anchor = None;
             self.selection_focus = None;
@@ -1340,6 +1347,15 @@ impl App {
                 }
                 return true;
             }
+            // Ctrl+Shift+O (plan 08): toggle tool-call visibility — must sit
+            // ABOVE the plain Ctrl+O arm, which would otherwise win on the
+            // same char+CONTROL when the terminal reports Shift too.
+            KeyCode::Char('o')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.toggle_tool_visibility();
+            }
             // Ctrl+O: expand / collapse the latest tool row's full output.
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_latest_tool_expansion();
@@ -1464,14 +1480,20 @@ impl App {
             // ---- Drag-select copy mode (Ctrl+T) -------------------------
             // Every other Ctrl letter in the composer is taken (a b c d g k
             // n p r s u w x y z); t is the one that reads as "text".
+            // ---- Thinking / tool visibility (plan 08) -----------------
+            // Ctrl+T is the thinking toggle (oh-my-pi parity); copy mode
+            // moved to Alt+Y. Ctrl+Shift+O's arm sits above plain Ctrl+O;
+            // Alt+O is the everywhere fallback — same action either way.
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.enter_copy_mode();
+                self.toggle_thinking();
+            }
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.toggle_tool_visibility();
             }
 
             // ---- Alt/Meta key text editing operations -------------------
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => {
-                self.prompt_input.yank_pop();
-                self.refresh_prompt_input();
+                self.enter_copy_mode();
             }
             KeyCode::Backspace if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.prompt_input.delete_word_backward();

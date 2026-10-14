@@ -82,6 +82,42 @@ pub(crate) struct ScrollMemory {
 }
 
 impl App {
+    /// Ctrl+T (plan 08) — toggle the thinking display. Hiding remembers the
+    /// current non-Off mode; the next press restores it. Transient status
+    /// notice only: a key toggle must not write a transcript message.
+    pub(crate) fn toggle_thinking(&mut self) {
+        use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+
+        let effective = config_shim::config().display.reasoning_display();
+        let next = if effective == ReasoningDisplayMode::Off {
+            self.remembered_reasoning_mode
+        } else {
+            self.remembered_reasoning_mode = effective;
+            ReasoningDisplayMode::Off
+        };
+        config_shim::replace_reasoning_display_override(Some(next));
+        self.thinking_display_on = next != ReasoningDisplayMode::Off;
+        let notice = if next == ReasoningDisplayMode::Off {
+            "Thinking hidden".to_string()
+        } else {
+            format!("Thinking shown ({:?})", next).to_lowercase()
+        };
+        self.set_status_notice(notice);
+        self.invalidate_transcript();
+    }
+
+    /// Ctrl+Shift+O / Alt+O (plan 08) — collapse tool-call rows behind one
+    /// summary row, or restore them.
+    pub(crate) fn toggle_tool_visibility(&mut self) {
+        self.show_tool_calls = !self.show_tool_calls;
+        self.set_status_notice(if self.show_tool_calls {
+            "Tool calls shown".to_string()
+        } else {
+            "Tool calls hidden (Alt+O to show)".to_string()
+        });
+        self.invalidate_transcript();
+    }
+
     /// Ctrl+G — arm a bookmark at the current position, or jump back to the
     /// armed one and disarm it.
     pub(crate) fn toggle_scroll_bookmark(&mut self) {

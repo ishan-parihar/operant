@@ -554,7 +554,21 @@ impl TuiState for App {
     }
 
     fn status_notice(&self) -> Option<String> {
-        self.status_message.clone()
+        // (plan 08) hidden-state indicator: prepend the persistent markers so
+        // hidden mode is never a mystery once the transient notice fades.
+        let mut markers = Vec::new();
+        if !self.thinking_display_on {
+            markers.push("thinking off");
+        }
+        if !self.show_tool_calls {
+            markers.push("tools hidden");
+        }
+        match (self.status_message.clone(), markers.is_empty()) {
+            (Some(msg), true) => Some(msg),
+            (Some(msg), false) => Some(format!("{} · {}", markers.join(" · "), msg)),
+            (None, false) => Some(markers.join(" · ")),
+            (None, true) => None,
+        }
     }
 
     fn show_thinking(&self) -> bool {

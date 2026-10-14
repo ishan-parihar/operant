@@ -275,7 +275,33 @@ impl KeyBindingRegistry {
                 modifiers: KeyModifiers::CONTROL,
                 action: KeyAction::Custom(13),
                 context: BindingContext::Global,
-                description: "Toggle drag-select copy mode",
+                description: "Toggle thinking display",
+            },
+            // Plan 08: tool-call visibility. Ctrl+Shift+O needs kitty-style
+            // reporting (already requested at boot); Alt+O is the fallback
+            // for terminals that report the shifted form as plain Ctrl+O.
+            DefaultBinding {
+                key: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+                action: KeyAction::Custom(14),
+                context: BindingContext::Global,
+                description: "Toggle tool-call visibility",
+            },
+            DefaultBinding {
+                key: KeyCode::Char('o'),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(14),
+                context: BindingContext::Global,
+                description: "Toggle tool-call visibility",
+            },
+            // Plan 08: copy mode moved here from Ctrl+T (the thinking
+            // toggle now); Alt+Y yank-pop is dropped from the defaults.
+            DefaultBinding {
+                key: KeyCode::Char('y'),
+                modifiers: KeyModifiers::ALT,
+                action: KeyAction::Custom(15),
+                context: BindingContext::Global,
+                description: "Toggle copy mode",
             },
             DefaultBinding {
                 key: KeyCode::Char('f'),

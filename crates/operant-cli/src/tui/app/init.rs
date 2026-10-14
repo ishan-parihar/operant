@@ -64,6 +64,7 @@ impl App {
         >();
         // P5-2: read before `config` moves into the struct literal.
         let terminal_scroll_mode = config.tui.terminal_scroll_mode;
+        let show_tool_calls = config.tui.show_tool_calls;
         let app = Self {
             config,
             settings,
@@ -132,6 +133,9 @@ impl App {
             thinking_display_on: crate::tui::operant_app::config_shim::config()
                 .display
                 .show_thinking,
+            show_tool_calls,
+            remembered_reasoning_mode:
+                crate::tui::operant_app::config_shim::ReasoningDisplayMode::Current,
             new_messages_while_scrolled: 0,
             token_warning_threshold_shown: 0,
             session_start: std::time::Instant::now(),

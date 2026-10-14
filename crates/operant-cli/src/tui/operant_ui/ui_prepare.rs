@@ -667,7 +667,7 @@ fn prepare_active_batch_progress(
     wrap_lines_with_map(lines, &[], &[], &[], &[], &[], width, &[], &[], &[])
 }
 
-pub(super) fn prepare_messages(
+pub(crate) fn prepare_messages(
     app: &dyn TuiState,
     width: u16,
     height: u16,
@@ -2453,6 +2453,19 @@ fn prepare_streaming_cached(
         display_width
     };
     let mut md_lines = app.render_streaming_markdown(content_width);
+    // (plan 08) "Thinking off" must hide LIVE thinking too, not just the
+    // committed rows — before this gate the Streaming section rendered
+    // streaming_thinking unconditionally, so thinking kept flowing on
+    // screen while "off". Ctrl+T flips the same override cell.
+    let thinking = if crate::tui::operant_app::config_shim::config()
+        .display
+        .reasoning_display()
+        == crate::tui::operant_app::config_shim::ReasoningDisplayMode::Off
+    {
+        ""
+    } else {
+        thinking
+    };
     // (iter-781) Live thinking tail rides in the same mutable section,
     // ABOVE the answer text (jcode renders reasoning above the answer in
     // the streaming buffer). Sentinel-wrapped at storage time so the

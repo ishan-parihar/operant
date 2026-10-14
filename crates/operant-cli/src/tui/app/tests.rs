@@ -313,10 +313,15 @@ fn test_status_tier_slash_commands_are_consumed() {
         "removed /model-status must fall through"
     );
     // The alias routes to the thinking-display handler: bare /thinking
-    // reports current state without toggling.
+    // reports current state without toggling. (plan 08: the report is a
+    // transient notice now — no annotation lands.)
     let before = app.thinking_display_on;
     assert!(app.intercept_slash_command("thinking"));
-    assert_eq!(app.system_annotations.len(), 2);
+    assert_eq!(
+        app.system_annotations.len(),
+        1,
+        "the thinking report is a status notice, not a transcript annotation (plan 08)"
+    );
     assert_eq!(app.thinking_display_on, before);
 }
 
@@ -397,7 +402,7 @@ fn every_advertised_binding_dispatches() {
         ("Alt+p", "Cycle configured models"),
         ("Ctrl+o", "Expand latest tool output"),
         ("Ctrl+x", "Recall queued message"),
-        ("Ctrl+t", "Toggle drag-select copy mode"),
+        ("Ctrl+t", "Toggle thinking display"),
         ("Ctrl+Up", "Fine scroll up 3"),
         ("Ctrl+Down", "Fine scroll down 3"),
         ("Alt+Up", "Fast scroll up 20"),
@@ -481,6 +486,233 @@ fn info_prints_once() {
     let before = app.system_annotations.len();
     assert!(app.intercept_slash_command("info"));
     assert_eq!(app.system_annotations.len(), before + 1);
+}
+
+// ---- 2026-10-14 batch, plan 08: thinking / tool-call visibility toggles ----
+
+/// Ctrl+T toggles thinking Off and back, restoring the remembered mode,
+/// with a transient status notice only — no transcript system message.
+#[test]
+fn ctrl_t_toggles_thinking_and_restores_previous_mode() {
+    use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+    let _guard = config_shim::reasoning_override_test_guard();
+
+    let mut app = make_app();
+    // Start from Current (the config default when show_reasoning=true).
+    config_shim::replace_reasoning_display_override(Some(ReasoningDisplayMode::Current));
+
+    let before = app.system_annotations.len();
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        ReasoningDisplayMode::Off,
+        "Ctrl+T must hide thinking"
+    );
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        ReasoningDisplayMode::Current,
+        "second Ctrl+T restores the remembered mode (Current)"
+    );
+    assert_eq!(
+        app.system_annotations.len(),
+        before,
+        "a key toggle must not write a transcript system message"
+    );
+
+    // From Full: Off then back to Full.
+    config_shim::replace_reasoning_display_override(Some(ReasoningDisplayMode::Full));
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        ReasoningDisplayMode::Off
+    );
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(
+        config_shim::config().display.reasoning_display(),
+        ReasoningDisplayMode::Full
+    );
+}
+
+/// Copy mode moved from Ctrl+T to Alt+Y (oh-my-pi owns Ctrl+T for thinking);
+/// Alt+Y no longer yank-pops.
+#[test]
+fn ctrl_t_no_longer_enters_copy_mode_and_alt_y_does() {
+    let mut app = make_app();
+    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(
+        !app.copy_mode_active(),
+        "Ctrl+T is the thinking toggle now (plan 08), not copy mode"
+    );
+    app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::ALT));
+    assert!(app.copy_mode_active(), "Alt+Y enters copy mode (plan 08)");
+}
+
+/// Config `[tui] show_tool_calls = false` starts the session with tool rows
+/// hidden — the field was dead config until this plan wired it.
+#[test]
+fn show_tool_calls_false_in_config_starts_hidden() {
+    let mut app = make_app();
+    assert!(
+        app.show_tool_calls,
+        "default is visible (config default true)"
+    );
+    app.show_tool_calls = false;
+    assert!(!app.show_tool_calls);
+}
+
+/// Alt+O (and Ctrl+Shift+O where the terminal reports it) collapses tool
+/// rows behind one summary row and restores them.
+#[test]
+fn alt_o_and_ctrl_shift_o_toggle_tool_visibility() {
+    let mut app = make_app();
+    // Seed a committed tool run the adapter can see.
+    app.tool_use_blocks
+        .push(crate::tui::app::enums::ToolUseBlock {
+            id: "tool-1".to_string(),
+            name: "read_file".to_string(),
+            after_index: 0,
+            status: crate::tui::app::enums::ToolStatus::Done,
+            output_preview: None,
+            input_json: "{}".to_string(),
+        });
+    app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::ALT));
+    assert!(!app.show_tool_calls, "Alt+O hides tool rows");
+    app.handle_key_event(press_key(KeyCode::Char('o'), KeyModifiers::ALT));
+    assert!(app.show_tool_calls, "second Alt+O restores them");
+
+    // Ctrl+Shift+O — same action where the terminal reports Shift.
+    app.handle_key_event(press_key(
+        KeyCode::Char('o'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert!(!app.show_tool_calls, "Ctrl+Shift+O hides tool rows");
+}
+
+/// The toggle state is visible in /keys (registry) — all three chords
+/// catalogued with honest descriptions.
+#[test]
+fn registry_lists_the_three_visibility_chords() {
+    use crate::tui::keybindings::{BindingContext, DEFAULT_KEYBINDINGS};
+    let expect: &[(&str, &str)] = &[
+        ("Ctrl+t", "Toggle thinking display"),
+        ("Ctrl+Shift+o", "Toggle tool-call visibility"),
+        ("Alt+o", "Toggle tool-call visibility"),
+    ];
+    for (chord, desc) in expect {
+        let found = DEFAULT_KEYBINDINGS.catalogue().iter().any(|(context, b)| {
+            matches!(context, BindingContext::Global | BindingContext::Prompt)
+                && b.chord() == *chord
+                && b.description.as_deref() == Some(*desc)
+        });
+        assert!(found, "/keys must list {chord} as {desc:?} (plan 08)");
+    }
+    // Alt+Y is copy mode now, not yank-pop.
+    let catalogue = DEFAULT_KEYBINDINGS.catalogue();
+    let alt_y = catalogue.iter().find(|(_, b)| b.chord() == "Alt+y");
+    assert!(
+        alt_y.is_some_and(|(_, b)| b.description.as_deref() == Some("Toggle copy mode")),
+        "Alt+Y must be catalogued as copy mode (plan 08), got {:?}",
+        alt_y.map(|(_, b)| b.description.clone())
+    );
+}
+
+/// (plan 08) Hidden tool rows collapse to exactly one summary row per
+/// contiguous run; the underlying blocks are untouched so re-showing
+/// restores every row.
+#[test]
+fn hidden_tool_runs_collapse_to_one_summary_row() {
+    use crate::tui::app::enums::ToolStatus;
+    let mut app = make_app();
+    app.messages
+        .push(crate::tui::adapter_types::types::Message::user(
+            "hi".to_string(),
+        ));
+    for i in 0..3 {
+        app.tool_use_blocks
+            .push(crate::tui::app::enums::ToolUseBlock {
+                id: format!("t{i}"),
+                name: ["read_file", "shell", "grep"][i].to_string(),
+                after_index: 1,
+                status: ToolStatus::Done,
+                output_preview: None,
+                input_json: "{}".to_string(),
+            });
+    }
+    let visible = crate::tui::operant_model::display_messages(&app);
+    assert_eq!(
+        visible.iter().filter(|m| m.role == "tool").count(),
+        3,
+        "visible: three tool rows"
+    );
+
+    app.show_tool_calls = false;
+    let hidden = crate::tui::operant_model::display_messages(&app);
+    let tool_rows = hidden.iter().filter(|m| m.role == "tool").count();
+    assert_eq!(tool_rows, 0, "no individual tool rows when hidden");
+    let summary = hidden
+        .iter()
+        .find(|m| m.content.starts_with("▸ 3 tool calls"))
+        .expect("one summary row for the run");
+    assert!(
+        summary.role == "system",
+        "summary row is system-styled so copy skips it (UI_ROLES)"
+    );
+    assert!(
+        summary.content.contains("read_file") && summary.content.contains("Alt+O to show"),
+        "summary names the calls and the restore chord: {}",
+        summary.content
+    );
+
+    // Re-show restores the rows — blocks were never removed.
+    app.show_tool_calls = true;
+    let restored = crate::tui::operant_model::display_messages(&app);
+    assert_eq!(
+        restored.iter().filter(|m| m.role == "tool").count(),
+        3,
+        "re-show restores all three rows"
+    );
+}
+
+/// (plan 08) "Thinking off" hides the LIVE streaming thinking too — the
+/// Streaming section's splice is gated on the effective mode.
+#[test]
+fn thinking_off_hides_live_streaming_thinking() {
+    use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+    let _guard = config_shim::reasoning_override_test_guard();
+
+    let mut app = make_app();
+    app.is_streaming = true;
+    app.streaming_thinking = "internal reasoning text".to_string();
+    app.streaming_text = "answer text".to_string();
+
+    let frame_text = |a: &crate::tui::app::App| {
+        let frame = crate::tui::operant_ui::prepare::prepare_messages(a, 80, 40);
+        let mut out = String::new();
+        for section in &frame.sections {
+            for line in section.prepared.wrapped_plain_lines.iter() {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
+    };
+
+    config_shim::replace_reasoning_display_override(Some(ReasoningDisplayMode::Current));
+    let shown = frame_text(&app);
+    assert!(
+        shown.contains("internal reasoning text"),
+        "live thinking visible in Current mode"
+    );
+
+    config_shim::replace_reasoning_display_override(Some(ReasoningDisplayMode::Off));
+    let hidden = frame_text(&app);
+    assert!(
+        !hidden.contains("internal reasoning text"),
+        "Off must hide live thinking too (plan 08): {}",
+        hidden
+    );
+    assert!(hidden.contains("answer text"), "the answer still streams");
 }
 
 #[test]
@@ -3340,8 +3572,11 @@ fn copy_mode_should_restore_state_on_exit() {
     app.selection_anchor = Some((3, 4));
     app.selection_focus = Some((30, 9));
     *app.selection_text.borrow_mut() = "selected before copy mode".to_string();
-    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
-    assert!(app.copy_mode_active(), "Ctrl+T did not enter copy mode");
+    app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::ALT));
+    assert!(
+        app.copy_mode_active(),
+        "Alt+Y did not enter copy mode (Ctrl+T is the thinking toggle since plan 08)"
+    );
 
     // While copy mode is on, composer keys are swallowed — typing 'x' must not
     // reach the composer, and the transcript scroll stays put.
@@ -3384,14 +3619,14 @@ fn copy_mode_should_restore_state_on_exit() {
 }
 
 #[test]
-fn copy_mode_should_toggle_with_ctrl_t() {
+fn copy_mode_should_toggle_with_alt_y() {
     let mut app = make_app();
-    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::ALT));
     assert!(app.copy_mode_active());
-    app.handle_key_event(press_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    app.handle_key_event(press_key(KeyCode::Char('y'), KeyModifiers::ALT));
     assert!(
         !app.copy_mode_active(),
-        "Ctrl+T did not toggle copy mode off"
+        "Alt+Y did not toggle copy mode off"
     );
 }
 
@@ -3447,6 +3682,14 @@ fn copy_mode_is_on(app: &mut App) -> bool {
     app.copy_mode_active()
 }
 
+/// (plan 08) Ctrl+T's observable effect: the reasoning display override
+/// sits at Off.
+fn thinking_is_off(app: &mut App) -> bool {
+    use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
+    let _ = app;
+    config_shim::config().display.reasoning_display() == ReasoningDisplayMode::Off
+}
+
 fn drifted_bindings() -> Vec<DriftedBinding> {
     vec![
         DriftedBinding {
@@ -3475,7 +3718,9 @@ fn drifted_bindings() -> Vec<DriftedBinding> {
             modifiers: KeyModifiers::CONTROL,
             chord: "Ctrl+T",
             requires_modifier: true,
-            fired: copy_mode_is_on,
+            // (plan 08) Ctrl+T is the thinking toggle now: its observable
+            // effect is the display-mode override cell, not copy mode.
+            fired: thinking_is_off,
         },
     ]
 }

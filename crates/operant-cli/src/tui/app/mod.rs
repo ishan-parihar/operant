@@ -243,6 +243,14 @@ pub struct App {
     /// still exist as display messages — history is not rewritten, the
     /// reasoning rows just prepare zero lines.
     pub thinking_display_on: bool,
+    /// Whether tool-call rows render (2026-10-14 batch, plan 08). When
+    /// false, contiguous tool runs collapse to one dim summary row. Wired
+    /// from `[tui] show_tool_calls` at init — the field was dead config
+    /// before this.
+    pub show_tool_calls: bool,
+    /// The reasoning mode to restore when Ctrl+T flips Off back on (plan
+    /// 08): the last non-Off effective mode, defaulting to Current.
+    pub remembered_reasoning_mode: crate::tui::operant_app::config_shim::ReasoningDisplayMode,
     /// Count of messages that arrived while the user was scrolled up.
     pub new_messages_while_scrolled: usize,
 
