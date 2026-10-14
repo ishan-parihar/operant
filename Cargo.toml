@@ -45,6 +45,7 @@ operant-hardware = { path = "crates/operant-hardware" }
 operant-tool-call-parser = { path = "crates/operant-tool-call-parser" }
 operant-tool-planning = { path = "crates/operant-tool-planning" }
 operant-harness = { path = "crates/operant-harness" }
+operant-os = { path = "crates/operant-os" }
 
 # Async runtime
 tokio = { version = "1.36", features = ["full"] }

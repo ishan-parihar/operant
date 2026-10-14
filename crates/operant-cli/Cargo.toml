@@ -16,6 +16,7 @@ path = "src/main.rs"
 # Core library
 operant-core = { path = "../operant-core" }
 operant-harness = { workspace = true }
+operant-os = { workspace = true }
 
 # Optional subsystem crates — feature-gated like operant
 # operant-channels is a feature carrier: this crate never names it, but the

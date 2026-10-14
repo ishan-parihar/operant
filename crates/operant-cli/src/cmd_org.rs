@@ -463,6 +463,11 @@ pub enum OrgSubcommand {
         #[arg(long, action = clap::ArgAction::SetTrue)]
         dry_run: bool,
     },
+
+    /// Views over a Holon organization through its published read API
+    /// (docs/agentic-os/ phase B). Read-only; requires [holon] enabled.
+    #[command(subcommand)]
+    Holon(HolonAction),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -834,6 +839,174 @@ pub async fn handle_org_command(config: &AppConfig, cmd: OrgSubcommand) -> Resul
             window_hours,
             dry_run,
         } => handle_synthesis(config, window_hours, dry_run),
+        OrgSubcommand::Holon(action) => handle_holon_action(config, action),
+    }
+}
+
+/// Views over the Holon organization (docs/agentic-os/ phase B): the
+/// read-API panels at the CLI. Every one is read-only — the published
+/// api_* views are the only surface, and writes to the org go through
+/// Holon itself (boundary law S1). Off unless [holon] enabled (invariant 5).
+#[derive(Debug, Clone, Subcommand)]
+pub enum HolonAction {
+    /// The roster: employees with departments and managers
+    Roster {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// The board: ready and running stages
+    Board {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pending approvals with their plans
+    Approvals {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Unacked messages
+    Messages {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Routine triggers (cron patterns today; events land in phase F)
+    Triggers {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// One compact org overview: departments, board, approvals
+    Overview,
+}
+
+/// Open the Holon read API or explain precisely why org mode is off.
+fn holon_api(config: &AppConfig) -> Result<operant_os::api::HolonApi> {
+    if !config.holon.enabled {
+        anyhow::bail!(
+            "org mode is off: set [holon] enabled = true in operant.toml \
+             (docs/agentic-os/README.md — invariant 5: off is byte-identical personal mode)"
+        );
+    }
+    if config.holon.home.as_os_str().is_empty() {
+        anyhow::bail!("org mode needs [holon] home set to the Holon instance ($HOLON_HOME)");
+    }
+    operant_os::api::HolonApi::open(std::path::Path::new(&config.holon.home))
+        .map_err(|e| anyhow::anyhow!("holon read API unavailable: {e}"))
+}
+
+fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
+    use operant_os::api::HolonApi;
+
+    let api = holon_api(config)?;
+    match action {
+        HolonAction::Roster { json } => {
+            let rows = api.employees()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                println!("{:<14} {:<14} {:<22} {:<10} {:<8}", "ID", "NAME", "TITLE", "DEPT", "STATUS");
+                for e in rows {
+                    println!("{:<14} {:<14} {:<22} {:<10} {:<8}", e.id, e.name, e.title, e.department, e.status);
+                }
+            }
+        }
+        HolonAction::Board { json } => {
+            let rows = api.board()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                println!("{:<8} {:<30} {:<8} {:<8} {:<12} {:<10}", "STAGE", "WORK", "STATUS", "GRADE", "DEPT", "ASSIGNEE");
+                for r in rows {
+                    println!(
+                        "{:<8} {:<30} {:<8} {:<8} {:<12} {:<10}",
+                        r.stage,
+                        truncate(&r.title, 30),
+                        r.status,
+                        r.grade.map(|g| format!("G{g}")).unwrap_or_else(|| "-".into()),
+                        r.department.as_deref().unwrap_or("-"),
+                        r.employee_id.as_deref().unwrap_or("-"),
+                    );
+                }
+            }
+        }
+        HolonAction::Approvals { json } => {
+            let rows = api.approvals()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                if rows.is_empty() {
+                    println!("no pending approvals");
+                }
+                for a in rows {
+                    println!(
+                        "{} · G{} · {} — {}",
+                        a.id,
+                        a.grade.unwrap_or(4),
+                        a.department.as_deref().unwrap_or("-"),
+                        truncate(&a.title, 60)
+                    );
+                }
+            }
+        }
+        HolonAction::Messages { json } => {
+            let rows = api.messages()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                for m in rows {
+                    println!("{} {} -> {}: {}", m.ts, m.sender, m.to_ref, truncate(&m.body, 70));
+                }
+            }
+        }
+        HolonAction::Triggers { json } => {
+            let rows = api.triggers()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                for t in rows {
+                    println!(
+                        "{} · {} · {} — {}{}",
+                        t.id,
+                        t.trigger_kind,
+                        t.pattern,
+                        t.employee.as_deref().unwrap_or("-"),
+                        if t.enabled { "" } else { " (disabled)" }
+                    );
+                }
+            }
+        }
+        HolonAction::Overview => {
+            let depts = api.departments()?;
+            let board = api.board()?;
+            let approvals = api.approvals()?;
+            let employees = api.employees()?;
+            println!(
+                "{} departments · {} employees · {} stages on the board · {} approvals pending",
+                depts.len(),
+                employees.len(),
+                board.len(),
+                approvals.len()
+            );
+            for d in &depts {
+                let head = d.head.as_deref().unwrap_or("-");
+                let stages: usize = board.iter().filter(|b| b.department.as_deref() == Some(d.slug.as_str())).count();
+                println!("  {} — head {} · {} active stage(s)", d.slug, head, stages);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{cut}…")
     }
 }
 

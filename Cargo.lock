@@ -4821,6 +4821,7 @@ dependencies = [
  "operant-hardware",
  "operant-harness",
  "operant-memory",
+ "operant-os",
  "operant-plugins",
  "operant-runtime",
  "operant-tools",
