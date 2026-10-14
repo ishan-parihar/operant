@@ -471,33 +471,9 @@ impl App {
             // /model-status — status-tier (command backlog tier 1):
             // one-line model health flash in the status bar. /status keeps
             // the full transcript annotation.
-            "model-status" => {
-                let model = if self.model_name.is_empty() {
-                    "(unset)".to_string()
-                } else {
-                    self.model_name.clone()
-                };
-                let provider = self
-                    .active_provider
-                    .clone()
-                    .unwrap_or_else(|| "(default)".to_string());
-                let creds = if self.credentials_live() {
-                    "live"
-                } else {
-                    "absent"
-                };
-                let streaming = if self.is_streaming {
-                    "streaming"
-                } else {
-                    "idle"
-                };
-                let summary = format!(
-                    "Model: {model} · provider: {provider} · credentials: {creds} · {streaming}"
-                );
-                self.set_status_notice(summary.clone());
-                self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
-                true
-            }
+            // (2026-10-14 batch, plan 02) "model-status" and "observe" were
+            // dead commands — removed from the registry; their arms went with
+            // them. Their status surface lives on via /status and /info.
             "session" | "resume" => {
                 self.session_browser.open(vec![]);
                 self.session_list_pending = true;
@@ -1022,28 +998,7 @@ impl App {
             // chrome yet. A registered surface must never fall through to
             // the model; until the panel lands, surface the latest tool
             // invocation (from tool_use_blocks) in the transcript.
-            "observe" => {
-                let ctx = self.tool_use_blocks.iter().rev().find_map(|b| {
-                    b.output_preview
-                        .as_ref()
-                        .map(|p| {
-                            format!(
-                                "{}: {}",
-                                b.name,
-                                crate::tui::render::utils::truncate_end(p, 200)
-                            )
-                        })
-                        .or_else(|| Some(format!("{} (no output preview)", b.name)))
-                });
-                let text = match ctx {
-                    Some(c) => format!("Observe (side panel pending) — last tool: {c}"),
-                    None => {
-                        "Observe (side panel pending) — no tool calls yet this session.".to_string()
-                    }
-                };
-                self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
-                true
-            }
+            // (2026-10-14 batch, plan 02) "observe" removed — see above.
             "keybindings" => {
                 // Open the keybindings.json file in the external editor
                 let keybindings_path = crate::tui::adapter_types::config::Settings::config_dir()
@@ -1071,6 +1026,10 @@ impl App {
                 self.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
                 true
             }
+            // `?` is the help alias the registry advertises (and the core
+            // def lists under "help"); the 2026-10-14 no-unwired test caught
+            // it landing the core fallback. Route it like `commands` does.
+            "?" => return self.intercept_slash_command_with_args_impl("help", args),
             "help" => {
                 // Toggle the help overlay (same as pressing `?` or F1).
                 // Bug #8 from iter-82 audit: previously only opened (never

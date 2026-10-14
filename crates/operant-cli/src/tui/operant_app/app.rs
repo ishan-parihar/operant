@@ -204,6 +204,10 @@ struct RegisteredCommand {
     name: &'static str,
     help: &'static str,
     hidden: bool,
+    /// Remote-mode-only commands (bridge-connected sessions forward them to
+    /// the remote side; locally they are not dispatched and must be excluded
+    /// from the no-unwired-command sweep — 2026-10-14 batch, plan 02).
+    remote_only: bool,
 }
 
 impl RegisteredCommand {
@@ -212,6 +216,7 @@ impl RegisteredCommand {
             name,
             help,
             hidden: false,
+            remote_only: false,
         }
     }
 
@@ -220,6 +225,7 @@ impl RegisteredCommand {
             name,
             help,
             hidden: false,
+            remote_only: true,
         }
     }
 
@@ -228,6 +234,7 @@ impl RegisteredCommand {
             name,
             help,
             hidden: true,
+            remote_only: false,
         }
     }
 }
@@ -238,79 +245,23 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/commands", "Alias for /help"),
     RegisteredCommand::public("/model", "List or switch models"),
     RegisteredCommand::public("/models", "Alias for /model"),
-    RegisteredCommand::public(
-        "/provider-test-coverage",
-        "Show live-test evidence for the current provider/model",
-    ),
-    RegisteredCommand::hidden("/model-status", "Alias for /provider-test-coverage"),
     RegisteredCommand::public("/refresh-model-list", "Refresh provider model catalogs"),
     RegisteredCommand::public("/agents", "Configure models for agent roles"),
-    RegisteredCommand::public(
-        "/swarm-prompt",
-        "Open the active swarm routing prompt in your editor",
-    ),
-    RegisteredCommand::public("/subagent", "Launch a subagent manually"),
-    RegisteredCommand::public("/observe", "Show the latest tool context in the side panel"),
     RegisteredCommand::public("/todos", "Show the session todo list as a card in the chat"),
     RegisteredCommand::hidden("/todo", "Alias for /todos"),
-    RegisteredCommand::public("/btw", "Ask a side question in the side panel"),
-    RegisteredCommand::public("/ssh", "Connect to a remote machine using system SSH"),
-    RegisteredCommand::public("/git", "Show git status for the session working directory"),
     RegisteredCommand::public("/hotkeys", "List hotkeys with your personal usage"),
     RegisteredCommand::public("/terminal-setup", "Fix Shift+Enter newlines"),
-    RegisteredCommand::public("/commit", "Make logical commits from current changes"),
-    RegisteredCommand::public(
-        "/merge",
-        "Merge current branch into main/master and switch to it (no push)",
-    ),
-    RegisteredCommand::public(
-        "/commit-push",
-        "Make logical commits from current changes, then push",
-    ),
-    RegisteredCommand::hidden("/commit-and-push", "Alias for /commit-push"),
-    RegisteredCommand::public(
-        "/fast-release",
-        "Publish Linux immediately from the warm selfdev cache; CI adds other platforms",
-    ),
-    RegisteredCommand::public(
-        "/fast-macos-release",
-        "Publish a prepared macOS arm64 build immediately; CI adds other platforms",
-    ),
-    RegisteredCommand::public("/remote", "Reach this session from another machine"),
-    RegisteredCommand::public(
-        "/merge-remote-release",
-        "Merge into main/master, validate, push, and release remotely",
-    ),
-    RegisteredCommand::public(
-        "/remote-release",
-        "Push the release tag immediately; CI builds and publishes every platform",
-    ),
-    RegisteredCommand::hidden("/cut-release", "Alias for /fast-release"),
-    RegisteredCommand::hidden("/commit-push-release", "Alias for /cut-release"),
     RegisteredCommand::public(
         "/triage",
         "Triage new GitHub issues and autonomously fix the safe ones",
     ),
     RegisteredCommand::public("/transcript", "Open the current session transcript file"),
-    RegisteredCommand::public("/subagent-model", "Show/change subagent model policy"),
     RegisteredCommand::public("/review", "Launch a one-shot headed review session"),
     RegisteredCommand::public("/judge", "Launch a one-shot headed judge session"),
     #[cfg(any())]
     // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
     RegisteredCommand::public("/effort", crate::tui::operant_app::keybind::EFFORT_HELP),
     RegisteredCommand::public("/fast", "Toggle fast mode"),
-    RegisteredCommand::public(
-        "/compact-notifications",
-        "Show/toggle single-line swarm/file-activity notifications",
-    ),
-    RegisteredCommand::public(
-        "/show-agentgrep-output",
-        "Show/toggle full agentgrep search output inline in chat",
-    ),
-    RegisteredCommand::public(
-        "/tool-call-details",
-        "Show/toggle dimmed technical details on tool rows with an intent",
-    ),
     RegisteredCommand::public(
         "/thinking-display",
         "Show/hide the model's thinking text (off/full/current)",
@@ -327,15 +278,11 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/refactor", "Run a safe refactor loop"),
     RegisteredCommand::public("/compact", "Compact context"),
     RegisteredCommand::public("/fix", "Recover when the model cannot continue"),
-    RegisteredCommand::public("/voice", "Voice input: speak, then send (Ctrl+Space)"),
     RegisteredCommand::public("/memory", "Toggle memory feature"),
-    RegisteredCommand::public("/test", "Verify a claim/current changes with layered tests"),
     RegisteredCommand::public(
-        "/initiatives",
-        "Open initiatives overview / resume tracked initiatives",
+        "/goals",
+        "Show goals and pending initiatives from the autonomous ledger",
     ),
-    RegisteredCommand::public("/goals", "Legacy alias for /initiatives"),
-    RegisteredCommand::public("/swarm", "Toggle swarm feature"),
     RegisteredCommand::public("/context", "Show the full session context snapshot"),
     RegisteredCommand::public(
         "/skills",
@@ -345,12 +292,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/changelog", "Show recent changes in this build"),
     RegisteredCommand::public("/info", "Show session info and tokens"),
     RegisteredCommand::public("/usage", "Show connected provider usage limits"),
-    RegisteredCommand::public(
-        "/productivity",
-        "Generate a shareable usage report + dashboard image",
-    ),
     RegisteredCommand::public("/config", "Show or edit configuration"),
-    RegisteredCommand::public("/log", "Mark the current location in the operant logs"),
     RegisteredCommand::public(
         "/keys",
         "Show keybinding conflicts with your terminal and OS (/keys refresh to rescan)",
@@ -360,30 +302,17 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "/diff",
         "Cycle or set diff display mode (off/inline/full/file)",
     ),
-    RegisteredCommand::public(
-        "/onboarding-preview",
-        "Preview the first-run onboarding screen",
-    ),
-    RegisteredCommand::public(
-        "/onboarding-sim",
-        "Walk through every first-run onboarding screen (Alt+5 reset, Cmd+5 toggle)",
-    ),
     RegisteredCommand::public("/reload", "Reload into newest available binary"),
-    RegisteredCommand::public("/restart", "Restart with current binary"),
     RegisteredCommand::public("/update", "Background update and auto reload"),
     RegisteredCommand::public("/resume", "Open session picker"),
     RegisteredCommand::public("/sessions", "Alias for /resume"),
     RegisteredCommand::public("/session", "Alias for /resume"),
-    RegisteredCommand::public("/back", "Return to the previous Catch Up session"),
     RegisteredCommand::public("/save", "Bookmark session for easy access"),
     RegisteredCommand::public("/rename", "Rename current session"),
-    RegisteredCommand::public("/fork", "Fork session into a new window (optional prompt)"),
     RegisteredCommand::public("/quit", "Exit operant"),
     RegisteredCommand::public("/auth", "Show authentication status"),
     RegisteredCommand::public("/login", "Login to a provider"),
     RegisteredCommand::public("/logout", "Log out of a provider"),
-    RegisteredCommand::remote("/client-reload", "Force reload client binary"),
-    RegisteredCommand::remote("/server-reload", "Force reload server binary"),
     RegisteredCommand::remote(
         "/continue",
         "Continue every interrupted live session that would auto-resume",
@@ -408,6 +337,18 @@ pub(crate) fn registered_command_entries() -> impl Iterator<Item = (&'static str
 /// the model as prompt text either).
 pub(crate) fn registered_command_names_including_hidden() -> impl Iterator<Item = &'static str> {
     REGISTERED_COMMANDS.iter().map(|command| command.name)
+}
+
+/// Registered names that must dispatch LOCALLY: everything except the
+/// remote-only rows (bridge-connected sessions forward those to the remote
+/// side). The no-unwired-command sweep iterates this — flagging /continue
+/// as dead in a local session would be a false positive (2026-10-14 batch,
+/// plan 02).
+pub(crate) fn locally_dispatchable_command_names() -> impl Iterator<Item = &'static str> {
+    REGISTERED_COMMANDS
+        .iter()
+        .filter(|command| !command.remote_only)
+        .map(|command| command.name)
 }
 
 // [port-decision] shell/ slash-command input probes (batch-3): ui_input.rs:41,47

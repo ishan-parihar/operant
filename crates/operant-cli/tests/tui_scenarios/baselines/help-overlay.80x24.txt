@@ -6,19 +6,19 @@
 │    /help <command>  Show details for one command                             │
 │    /model  List or switch models                                             │
 │    /model <name>  Switch to a different model                                │
-│    /provider-test-coverage  Show live-test evidence for the current provider/│
 │    /agents  Configure models for agent roles                                 │
-│    /swarm-prompt  Open the active swarm routing prompt in your editor        │
 │    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|│
 │    /fast [on|off|status|default ...]  Toggle fast mode                       │
-│    /compact-notifications [status|on|off]  Collapse swarm/file-activity notif│
-│    /show-agentgrep-output [status|on|off]  Render full agentgrep search outpu│
 │    /config  Show active configuration                                        │
 │    /config init  Create default config file                                  │
 │    /config edit  Open config in $EDITOR                                      │
-│    /voice  Voice input: speak, then send (Ctrl+Space)                        │
-│    /git [status]  Show branch and working tree status for the repo           │
 │    /context  Show the full session context snapshot                          │
 │    /skills  Show loaded skills and operant-endorsed recommendations          │
 │    /info  Show session info and token usage                                  │
+│    /keys  Show keybinding conflicts with your terminal/OS                    │
+│    /usage  Show connected provider usage limits                              │
+│    /version  Show version and build details                                  │
+│    /changelog  Show recent changes in this build                             │
+│                                                                              │
+│  ─────────────────────────────────────────────────                           │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘

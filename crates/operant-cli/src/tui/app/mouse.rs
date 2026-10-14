@@ -494,8 +494,10 @@ impl App {
             ContextMenuItem::Fork => {
                 if let ContextMenuKind::Message { message_index } = kind {
                     let branch_point = message_index + 1;
+                    // /fork was removed in the 2026-10-14 dead-command sweep
+                    // (plan 02) — /branch is the same feature and is wired.
                     self.prompt_input
-                        .replace_text(format!("/fork {}", branch_point));
+                        .replace_text(format!("/branch {}", branch_point));
                     self.set_status_notice(format!(
                         "Fork at message {} - press Enter to confirm",
                         branch_point

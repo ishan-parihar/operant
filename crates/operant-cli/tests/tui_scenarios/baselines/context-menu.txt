@@ -19,15 +19,15 @@
  ● anthropic(key)
  ~╭──────╮
   │ Copy │
- C╰──────╯voice is not yet wired to a handler. Description: Toggle voice mode
+ 1╰──────╯                                                                                                             │
 
-1>
-                                                                                               ~ API key Offline Capture
+ Error: Agent error: Credential pool for provider ‘openai’ has no available keys — no API key is configured for
+ it. Run operant setup to configure a provider, or set that provider’s key in the environment (for example
+ OPENAI_API_KEY).
 
-
-
-
-
+Prompt restored to the composer — the turn failed.
+2> /voice
+                                                                          ~ 1/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

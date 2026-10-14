@@ -6,18 +6,12 @@
 │    /help <command>  Show details for one command                                                                     │
 │    /model  List or switch models                                                                                     │
 │    /model <name>  Switch to a different model                                                                        │
-│    /provider-test-coverage  Show live-test evidence for the current provider/model                                   │
 │    /agents  Configure models for agent roles                                                                         │
-│    /swarm-prompt  Open the active swarm routing prompt in your editor                                                │
 │    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)                             │
 │    /fast [on|off|status|default ...]  Toggle fast mode                                                               │
-│    /compact-notifications [status|on|off]  Collapse swarm/file-activity notifications to one line                    │
-│    /show-agentgrep-output [status|on|off]  Render full agentgrep search output inline in chat                        │
 │    /config  Show active configuration                                                                                │
 │    /config init  Create default config file                                                                          │
 │    /config edit  Open config in $EDITOR                                                                              │
-│    /voice  Voice input: speak, then send (Ctrl+Space)                                                                │
-│    /git [status]  Show branch and working tree status for the repo                                                   │
 │    /context  Show the full session context snapshot                                                                  │
 │    /skills  Show loaded skills and operant-endorsed recommendations                                                  │
 │    /info  Show session info and token usage                                                                          │
@@ -37,4 +31,10 @@
 │    /plan [goal]  Draft a plan-only proposal as a plan card (no edits)                                                │
 │    /improve  Autonomously improve the repo until returns diminish                                                    │
 │    /improve resume  Resume the last saved improve loop/plan                                                          │
+│    /refactor  Run a safe refactor loop with independent review                                                       │
+│    /refactor resume  Resume the last saved refactor loop/plan                                                        │
+│    /resume  Browse and resume previous sessions                                                                      │
+│    /save [label]  Bookmark session for /resume                                                                       │
+│    /rename <name>|--clear  Set or clear current session name                                                         │
+│                                                                                                                      │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────────────────────────┘

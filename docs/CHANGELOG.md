@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-817 — dead-command removal: 35 unwired slash commands purged
+  (2026-10-14 batch, plan 02).** The iter-811 sweep's finding is now
+  structurally impossible: 31 planned removals (/commit, /git, /test,
+  /swarm, /subagent, /ssh, /remote, all commit/push/release variants,
+  /initiatives, /onboarding-*, /productivity, /provider-test-coverage,
+  /model-status, /compact-notifications, /show-agentgrep-output,
+  /tool-call-details, /btw, /voice, /fork, /restart, /observe, …) plus
+  /?, /log, /back, /client-reload, /server-reload surfaced by the new
+  stronger test. The right-click Fork menu item now fills /branch (the
+  wired twin) instead of the removed /fork. The orphaned
+  provider-test-coverage render chain went with its command:
+  draw_model_status_overlay, model_status_line_style, the live_tests
+  classifier module, and the model_status_overlay trait method (no
+  override existed — the overlay could never show). New wiring invariant
+  tests: `no_registered_tui_command_is_unwired` (drives every locally
+  dispatchable name through the live handler wiring, asserts no
+  not-wired notice; `registered_command_names_including_hidden` rows are
+  now tagged remote_only so bridge-forwarded commands like /continue
+  are not false-positives) and `removed_commands_are_absent`. The
+  313-line inline command-handler block in the TuiApp create path was
+  extracted to `register_tui_command_handlers` so tests can mirror the
+  live registry wiring exactly. `command_sweep.py`: 46/46 consumed, 0
+  fall-through. Corpus re-proven (7 goldens, deltas verified
+  removal-attributable before acceptance); full bin suite 1755/1755.
+
 - **iter-816 — tui debug simulate: --frame-per-event + count: screen
   asserts (2026-10-14 batch, plan P2).** Mid-stream oracles for the harness
   that plans 01/04/08/09 lean on: `--frame-per-event` writes every painted

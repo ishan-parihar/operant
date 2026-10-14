@@ -284,40 +284,39 @@ async fn test_agent_flow_slash_commands_resolve_in_registry() {
 
 #[test]
 fn test_dialog_tier_slash_commands_are_consumed() {
-    // /login, /logout, and /observe previously fell through to the model
-    // as literal prompt text ("init"|"login"|"logout" => false; observe
-    // unhandled). Tier-2 dialog commands must intercept: login opens the
-    // connect dialog, logout opens it with the keys-location notice,
-    // observe surfaces the latest tool_use_block (or the no-calls note).
+    // /login and /logout previously fell through to the model as literal
+    // prompt text; they must intercept (connect dialog). /observe was
+    // removed in the 2026-10-14 dead-command sweep (plan 02) — unregistered
+    // names must fall through to the model per the iter-790 design.
     let mut app = make_app();
     assert!(app.intercept_slash_command("login"));
     assert!(app.connect_dialog.visible);
     assert!(app.intercept_slash_command("logout"));
-    let before = app.system_annotations.len();
-    assert!(app.intercept_slash_command("observe"));
-    assert_eq!(app.system_annotations.len(), before + 1);
+    assert!(
+        !app.intercept_slash_command("observe"),
+        "removed /observe must fall through"
+    );
 }
 
 #[test]
 fn test_status_tier_slash_commands_are_consumed() {
-    // /info, /model-status, and the /thinking alias previously fell
-    // through to the model as literal prompt text (command sweep: 37/106
-    // consumed). Tier-1 status commands must intercept and flash the
-    // status bar instead.
+    // /info and the /thinking alias previously fell through to the model as
+    // literal prompt text. Tier-1 status commands must intercept and land a
+    // transcript annotation. /model-status was removed in the 2026-10-14
+    // dead-command sweep (plan 02) and must now fall through like any
+    // unregistered name.
     let mut app = make_app();
-    // status_message alone renders only inside mid-turn spinner lines
-    // (ProcessingStatus::Connecting/Thinking) — an idle session would show
-    // nothing. Each command must also land a transcript annotation, the
-    // /status precedent.
-    assert!(app.intercept_slash_command("model-status"));
-    assert_eq!(app.system_annotations.len(), 1);
     assert!(app.intercept_slash_command("info"));
-    assert_eq!(app.system_annotations.len(), 2);
+    assert_eq!(app.system_annotations.len(), 1);
+    assert!(
+        !app.intercept_slash_command("model-status"),
+        "removed /model-status must fall through"
+    );
     // The alias routes to the thinking-display handler: bare /thinking
     // reports current state without toggling.
     let before = app.thinking_display_on;
     assert!(app.intercept_slash_command("thinking"));
-    assert_eq!(app.system_annotations.len(), 3);
+    assert_eq!(app.system_annotations.len(), 2);
     assert_eq!(app.thinking_display_on, before);
 }
 
@@ -410,7 +409,9 @@ fn test_context_menu_fork_targets_clicked_message() {
         ContextMenuKind::Message { message_index: 1 },
     );
 
-    assert_eq!(app.prompt_input.text, "/fork 2");
+    // (2026-10-14 batch, plan 02) /fork was removed with the dead-command
+    // sweep; the menu now fills /branch — the same feature, actually wired.
+    assert_eq!(app.prompt_input.text, "/branch 2");
     assert_eq!(
         app.status_message.as_deref(),
         Some("Fork at message 2 - press Enter to confirm")
@@ -4268,5 +4269,98 @@ fn jcode_only_commands_are_not_registered() {
         "/auth",
     ] {
         assert!(registered.contains(&kept), "{kept} must stay registered");
+    }
+}
+
+/// 2026-10-14 batch, plan 02: no REGISTERED command may sit unwired — the
+/// class the iter-811 sweep found printing "/x is registered but not wired
+/// in operant yet" (groups A/B) and "not yet wired to a handler" (group C).
+/// Drives the real dispatch per name, under a multi_thread runtime because
+/// the registry fallback path uses `block_in_place`. Two failure modes:
+/// (a) `handle_tui_command` returns false — the sim layer would print the
+/// "registered but not wired" notice; (b) the command resolves to a core
+/// def with no handler — execute() lands the "not yet wired to a handler"
+/// fallback as a system annotation. Both are advertised-but-dead.
+#[tokio::test(flavor = "multi_thread")]
+async fn no_registered_tui_command_is_unwired() {
+    let mut app = make_app();
+    // Mirror the live TuiApp wiring (tui_app.rs): the registry handlers and
+    // the agent-flow handlers are registered at app assembly, not in
+    // `CommandRegistry::new()`. The test App skips that assembly, so without
+    // this the test would misreport wired commands as dead.
+    crate::tui::adapter_types::tui_app::register_tui_command_handlers(&mut app.command_registry);
+    crate::tui::adapter_types::tui_app::register_agent_flow_handlers(&mut app.command_registry);
+    for name in crate::tui::operant_app::app::locally_dispatchable_command_names() {
+        let bare = name.trim_start_matches('/');
+        let before = app.system_annotations.len();
+        let handled = app.handle_tui_command(bare, "");
+        assert!(
+            handled,
+            "/{bare} is registered but not intercepted — the sim layer would print the not-wired notice (plan 02)"
+        );
+        // /clear and friends wipe system_annotations mid-loop; clamp the
+        // window to whatever survived.
+        let start = before.min(app.system_annotations.len());
+        for note in &app.system_annotations[start..] {
+            assert!(
+                !note.text.contains("not yet wired to a handler"),
+                "/{bare} landed the not-yet-wired fallback: {} (plan 02)",
+                note.text
+            );
+        }
+    }
+}
+
+/// 2026-10-14 batch, plan 02: the dead commands from the iter-811 sweep
+/// (named by the user, the same-class sweep finds, and the registry-fallback
+/// stragglers) must be gone from the TUI registry and from the curated
+/// /help entries. Keep the CommandDef for gateway-shared commands (/restart,
+/// /background) — absence is asserted on the TUI registry only.
+#[test]
+fn removed_commands_are_absent() {
+    let registered: Vec<&str> =
+        crate::tui::operant_app::app::registered_command_names_including_hidden().collect();
+    let gone = [
+        // Group A — named by the user
+        "/commit",
+        "/commit-and-push",
+        "/commit-push-release",
+        "/cut-release",
+        "/git",
+        "/test",
+        "/swarm",
+        "/subagent",
+        "/subagent-model",
+        "/ssh",
+        "/remote",
+        // Group B — same class, found by the sweep
+        "/commit-push",
+        "/merge",
+        "/merge-remote-release",
+        "/remote-release",
+        "/fast-release",
+        "/fast-macos-release",
+        "/swarm-prompt",
+        "/initiatives",
+        "/onboarding-preview",
+        "/onboarding-sim",
+        "/productivity",
+        "/provider-test-coverage",
+        "/model-status",
+        "/compact-notifications",
+        "/show-agentgrep-output",
+        "/tool-call-details",
+        // Group C — core-registry fallback stragglers
+        "/btw",
+        "/voice",
+        "/fork",
+        "/restart",
+        "/observe",
+    ];
+    for name in gone {
+        assert!(
+            !registered.contains(&name),
+            "{name} is still registered (plan 02)"
+        );
     }
 }

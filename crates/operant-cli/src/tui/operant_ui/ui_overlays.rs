@@ -189,15 +189,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     ));
     lines.push(help_entry("/model", "List or switch models"));
     lines.push(help_entry("/model <name>", "Switch to a different model"));
-    lines.push(help_entry(
-        "/provider-test-coverage",
-        "Show live-test evidence for the current provider/model",
-    ));
     lines.push(help_entry("/agents", "Configure models for agent roles"));
-    lines.push(help_entry(
-        "/swarm-prompt",
-        "Open the active swarm routing prompt in your editor",
-    ));
     lines.push(help_entry(
         "/effort <level>",
         "Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)",
@@ -206,25 +198,9 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/fast [on|off|status|default ...]",
         "Toggle fast mode",
     ));
-    lines.push(help_entry(
-        "/compact-notifications [status|on|off]",
-        "Collapse swarm/file-activity notifications to one line",
-    ));
-    lines.push(help_entry(
-        "/show-agentgrep-output [status|on|off]",
-        "Render full agentgrep search output inline in chat",
-    ));
     lines.push(help_entry("/config", "Show active configuration"));
     lines.push(help_entry("/config init", "Create default config file"));
     lines.push(help_entry("/config edit", "Open config in $EDITOR"));
-    lines.push(help_entry(
-        "/voice",
-        "Voice input: speak, then send (Ctrl+Space)",
-    ));
-    lines.push(help_entry(
-        "/git [status]",
-        "Show branch and working tree status for the repo",
-    ));
     lines.push(help_entry(
         "/context",
         "Show the full session context snapshot",
@@ -284,10 +260,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/refactor resume",
         "Resume the last saved refactor loop/plan",
     ));
-    lines.push(help_entry(
-        "/fork [prompt]",
-        "Fork session into a new window",
-    ));
     lines.push(help_entry("/resume", "Browse and resume previous sessions"));
     lines.push(help_entry("/save [label]", "Bookmark session for /resume"));
     lines.push(help_entry(
@@ -302,15 +274,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     lines.push(Line::from(Span::styled("  Memory & Swarm", section_style)));
     lines.push(Line::from(""));
     lines.push(help_entry("/memory [on|off]", "Toggle memory features"));
-    lines.push(help_entry(
-        "/test [claim]",
-        "Run layered verification and produce proof",
-    ));
-    lines.push(help_entry(
-        "/initiatives",
-        "Open initiatives overview / resume an initiative",
-    ));
-    lines.push(help_entry("/swarm [on|off]", "Toggle swarm features"));
 
     lines.push(Line::from(""));
     lines.push(separator());
@@ -331,13 +294,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     lines.push(Line::from(Span::styled("  System", section_style)));
     lines.push(Line::from(""));
     lines.push(help_entry("/reload", "Reload to newer binary if available"));
-    lines.push(help_entry(
-        "/restart",
-        "Restart with current binary (no build)",
-    ));
     if app.is_remote_mode() {
-        lines.push(help_entry("/client-reload", "Force reload client binary"));
-        lines.push(help_entry("/server-reload", "Force reload server binary"));
         lines.push(help_entry(
             "/continue",
             "Continue every interrupted live session that would auto-resume",
@@ -602,74 +559,11 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
     frame.render_widget(paragraph, area);
 }
 
-pub(super) fn draw_model_status_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    scroll: usize,
-    content: &str,
-) {
-    clear_area(frame, area);
-
-    let title_style = Style::default()
-        .fg(accent_color())
-        .add_modifier(Modifier::BOLD);
-    let text_style = Style::default().fg(rgb(210, 210, 220));
-    let dim_style = Style::default().fg(dim_color());
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled("  Model Status", title_style)));
-    lines.push(Line::from(Span::styled(
-        "  Live verification evidence for provider/model behavior in operant",
-        dim_style,
-    )));
-    lines.push(Line::from(""));
-
-    for raw in content.lines() {
-        if let Some(title) = raw.strip_prefix("# ") {
-            lines.push(Line::from(Span::styled(format!("  {title}"), title_style)));
-        } else if let Some(title) = raw.strip_prefix("## ") {
-            lines.push(Line::from(Span::styled(format!("  {title}"), title_style)));
-        } else if raw.trim().is_empty() {
-            lines.push(Line::from(""));
-        } else {
-            lines.push(Line::from(Span::styled(
-                format!("  {raw}"),
-                model_status_line_style(raw, text_style),
-            )));
-        }
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  ↑/↓ scroll, PgUp/PgDn page, c copy report, q/Esc close",
-        dim_style,
-    )));
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" /provider-test-coverage "),
-        )
-        .scroll((scroll.min(u16::MAX as usize) as u16, 0));
-    frame.render_widget(paragraph, area);
-}
-
-fn model_status_line_style(raw: &str, default: Style) -> Style {
-    // Reuse the same semantic classification the CLI uses so the TUI overlay
-    // and `jcode provider-test-coverage` stay color-consistent.
-    use crate::tui::operant_app::live_tests::CoverageLineStyle;
-    match crate::tui::operant_app::live_tests::classify_provider_test_coverage_line(raw) {
-        CoverageLineStyle::Title => Style::default()
-            .fg(accent_color())
-            .add_modifier(Modifier::BOLD),
-        CoverageLineStyle::Pass => Style::default().fg(rgb(120, 220, 150)),
-        CoverageLineStyle::Fail => Style::default().fg(rgb(240, 110, 110)),
-        CoverageLineStyle::Warn => Style::default().fg(rgb(235, 190, 105)),
-        CoverageLineStyle::Dim => Style::default().fg(dim_color()),
-        CoverageLineStyle::Plain => default,
-    }
-}
+// (2026-10-14 batch, plan 02) `draw_model_status_overlay` and its
+// `model_status_line_style` helper were the orphaned rendering path of the
+// dead /provider-test-coverage command: `model_status_overlay()` had no
+// override anywhere, so the overlay could never show. Deleted with the
+// command, along with the live_tests classifier module it alone consumed.
 
 pub(super) fn draw_debug_overlay(
     frame: &mut Frame,

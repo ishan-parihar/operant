@@ -24,10 +24,10 @@
 
  The file header is # operant.
 
- Command /voice is not yet wired to a handler. Description: Toggle voice mode
+ 2› /voice                                                                                                             │
 
-2>
-                                                                         ~ 25/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+3>
+                                                                         ~ 27/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
 
 
 

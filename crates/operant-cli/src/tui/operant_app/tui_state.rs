@@ -530,10 +530,6 @@ pub trait TuiState {
     fn changelog_scroll(&self) -> Option<usize>;
     /// Help overlay scroll offset (None = not showing)
     fn help_scroll(&self) -> Option<usize>;
-    /// Model status overlay scroll offset and markdown content (None = not showing)
-    fn model_status_overlay(&self) -> Option<(usize, &str)> {
-        None
-    }
     /// Working directory for this session
     // ---- Misc ----
     fn working_dir(&self) -> Option<String>;

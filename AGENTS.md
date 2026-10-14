@@ -878,7 +878,9 @@ MUST know before touching the render layer:
   pins why.
 - **Registered slash commands can never fall through to the model** — the
   not-wired catch-all (iter-790) covers both dispatch loops; the corpus
-  `command_sweep.py` must stay 106/106.
+  `command_sweep.py` must report every registry command consumed (46/46 as
+  of the 2026-10-14 dead-command sweep, plan 02) and the unit test
+  `no_registered_tui_command_is_unwired` pins the same invariant statically.
 - **Selection**: app-mode drag paint clamps to the chat band (iter-672);
   the copied TEXT is extracted synchronously from the drawn frame
   (`render::selection::selection_copy_text`), never from painted cells —

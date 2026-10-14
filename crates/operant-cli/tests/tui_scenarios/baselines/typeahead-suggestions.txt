@@ -28,7 +28,7 @@
 /retry  Retry the last message (resend to agent)
 /undo  Back up N user turns and re-prompt (default 1)
 /title  Set a title for the current session
-/handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.)  +83 more
+/handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.)  +82 more
 
 
 

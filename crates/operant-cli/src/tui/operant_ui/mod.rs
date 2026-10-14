@@ -3375,18 +3375,8 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         return;
     }
 
-    if let Some((scroll, content)) = app.model_status_overlay() {
-        overlays::draw_model_status_overlay(frame, area, scroll, content);
-        finalize_frame_metrics(
-            app,
-            total_start,
-            Duration::ZERO,
-            total_start.elapsed(),
-            None,
-        );
-        return;
-    }
-
+    // (2026-10-14 batch, plan 02) the model-status overlay dispatch is gone
+    // with its orphaned renderer (see ui_overlays.rs note).
     // [port-decision] session_picker_overlay / login_picker_overlay /
     //   account_picker_overlay: no operant equivalent — the three overlay
     //   methods are excised from the ported TuiState trait (see

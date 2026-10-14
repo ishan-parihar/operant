@@ -49,316 +49,7 @@ impl TuiApp {
         let cost_tracker = Arc::new(CostTracker::new());
 
         let mut command_registry = CommandRegistry::new();
-        // Register handlers for commands that were previously falling through to the agent
-        struct CompactHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for CompactHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Context compaction is handled automatically by the agent.")
-            }
-        }
-        command_registry
-            .register_handler("compact", Box::new(CompactHandler))
-            .ok();
-
-        struct DoctorHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for DoctorHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                let mut report = String::from("Operant Diagnostics:\n");
-                report.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
-                report.push_str(&format!(
-                    "  Config dir: {:?}\n",
-                    crate::tui::adapter_types::config::Settings::config_dir()
-                ));
-                let api_key_set = std::env::var("ANTHROPIC_API_KEY").is_ok()
-                    || std::env::var("OPENAI_API_KEY").is_ok();
-                report.push_str(&format!("  API key configured: {}\n", api_key_set));
-                report.push_str("  Status: OK\n");
-                CommandResult::message(report)
-            }
-        }
-        command_registry
-            .register_handler("doctor", Box::new(DoctorHandler))
-            .ok();
-
-        struct InitHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for InitHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                let agentic_dir = std::path::PathBuf::from("AGENTS.md");
-                if agentic_dir.exists() {
-                    CommandResult::message("AGENTS.md already exists in this project.")
-                } else {
-                    match std::fs::write(&agentic_dir, "# Project Agent Memory\n\n") {
-                        Ok(_) => CommandResult::message("Created AGENTS.md in current directory."),
-                        Err(e) => {
-                            CommandResult::message(format!("Failed to create AGENTS.md: {}", e))
-                        }
-                    }
-                }
-            }
-        }
-        command_registry
-            .register_handler("init", Box::new(InitHandler))
-            .ok();
-
-        struct LoginHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for LoginHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(
-                    "Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...",
-                )
-            }
-        }
-        command_registry
-            .register_handler("login", Box::new(LoginHandler))
-            .ok();
-
-        struct LogoutHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for LogoutHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Clear your API key: unset ANTHROPIC_API_KEY OPENAI_API_KEY")
-            }
-        }
-        command_registry
-            .register_handler("logout", Box::new(LogoutHandler))
-            .ok();
-
-        struct RefreshHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for RefreshHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Provider auth and model caches cleared.")
-            }
-        }
-        command_registry
-            .register_handler("refresh", Box::new(RefreshHandler))
-            .ok();
-
-        struct ProvidersHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for ProvidersHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                let auth = AuthStore::load();
-                let mut report = String::from("Available providers:\n");
-                for p in crate::provider::PROVIDERS {
-                    let has_key = auth.api_key_for(p.name).is_some();
-                    let env_key = !p.env_var.is_empty() && std::env::var(p.env_var).is_ok();
-                    let configured = has_key || env_key;
-                    report.push_str(&format!(
-                        "  {}: {}\n",
-                        p.display_name,
-                        if configured {
-                            "configured"
-                        } else {
-                            "not configured"
-                        }
-                    ));
-                }
-                report.push_str("\nUsage: /provider <name> — switch LLM provider");
-                CommandResult::message(report)
-            }
-        }
-        command_registry
-            .register_handler("providers", Box::new(ProvidersHandler))
-            .ok();
-
-        struct StatusHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for StatusHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                let model = std::env::var("OPERANT_MODEL").unwrap_or_else(|_| "gpt-4".to_string());
-                let anthropic = std::env::var("ANTHROPIC_API_KEY").is_ok();
-                let openai = std::env::var("OPENAI_API_KEY").is_ok();
-                CommandResult::message(format!(
-                    "Session Status:\n  Model: {}\n  Anthropic: {}\n  OpenAI: {}",
-                    model,
-                    if anthropic {
-                        "configured"
-                    } else {
-                        "not configured"
-                    },
-                    if openai {
-                        "configured"
-                    } else {
-                        "not configured"
-                    }
-                ))
-            }
-        }
-        command_registry
-            .register_handler("status", Box::new(StatusHandler))
-            .ok();
-
-        struct VersionHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for VersionHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(format!("operant v{}", env!("CARGO_PKG_VERSION")))
-            }
-        }
-        command_registry
-            .register_handler("version", Box::new(VersionHandler))
-            .ok();
-
-        struct TimeHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for TimeHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
-            }
-        }
-        command_registry
-            .register_handler("time", Box::new(TimeHandler))
-            .ok();
-
-        struct DebugHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for DebugHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                let mut info = String::from("Debug Info:\n");
-                info.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
-                info.push_str(&format!(
-                    "  Config dir: {:?}\n",
-                    crate::tui::adapter_types::config::Settings::config_dir()
-                ));
-                info.push_str(&format!(
-                    "  Rust version: {}\n",
-                    env!("CARGO_PKG_RUST_VERSION")
-                ));
-                CommandResult::message(info)
-            }
-        }
-        command_registry
-            .register_handler("debug", Box::new(DebugHandler))
-            .ok();
-
-        // (iter-270: NewHandler, HistoryHandler, RetryHandler, UndoHandler,
-        // StopHandler removed — these commands are now intercepted in
-        // app.rs intercept_slash_command_with_args_impl and directly
-        // mutate App state. The registry fallback path is no longer reached.)
-
-        struct CompressHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for CompressHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Context compaction is handled automatically by the agent.")
-            }
-        }
-        command_registry
-            .register_handler("compress", Box::new(CompressHandler))
-            .ok();
-
-        // (iter-270: RollbackHandler removed — /rollback is intercepted in app.rs)
-        // (iter-270: BranchHandler removed — /branch falls through to /session browser)
-        // (iter-270: GoalHandler removed — /goal is intercepted in app.rs)
-        // (iter-270: YoloHandler removed — /yolo is intercepted in app.rs)
-        // (iter-270: PersonalityHandler removed — /personality is intercepted in app.rs)
-        // (iter-270: ReasoningHandler removed — /reasoning is intercepted in app.rs)
-        // (iter-270: SkillsHandler removed — /skills is intercepted in app.rs)
-        // (iter-270: CreditsHandler removed — /credits is intercepted in app.rs)
-        // (iter-270: BillingHandler removed — /billing is intercepted in app.rs)
-        // (iter-270: SessionsHandler removed — /sessions is intercepted in app.rs)
-
-        struct ProviderHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for ProviderHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                if ctx.args.is_empty() {
-                    CommandResult::message("Usage: /provider <name> — switch LLM provider")
-                } else {
-                    CommandResult::message(format!("Provider switched to: {}", ctx.args))
-                }
-            }
-        }
-        command_registry
-            .register_handler("provider", Box::new(ProviderHandler))
-            .ok();
-
-        struct ToolsHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for ToolsHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(
-                    "Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.",
-                )
-            }
-        }
-        command_registry
-            .register_handler("tools", Box::new(ToolsHandler))
-            .ok();
-
-        struct BundlesHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for BundlesHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(
-                    "Skill bundles: curated sets of skills for specific workflows. (No bundles installed)",
-                )
-            }
-        }
-        command_registry
-            .register_handler("bundles", Box::new(BundlesHandler))
-            .ok();
-
-        struct UsageHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for UsageHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(
-                    "Token usage and rate limits are displayed in the stats dialog. Use /stats to view.",
-                )
-            }
-        }
-        command_registry
-            .register_handler("usage", Box::new(UsageHandler))
-            .ok();
-
-        struct InsightsHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for InsightsHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(
-                    "Insights: session analysis and conversation statistics. Use /stats for details.",
-                )
-            }
-        }
-        command_registry
-            .register_handler("insights", Box::new(InsightsHandler))
-            .ok();
-
-        struct UpdateHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for UpdateHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(format!(
-                    "Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.",
-                    env!("CARGO_PKG_VERSION")
-                ))
-            }
-        }
-        command_registry
-            .register_handler("update", Box::new(UpdateHandler))
-            .ok();
-
-        struct WhoamiHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for WhoamiHandler {
-            async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message("Access level: admin (local TUI session)")
-            }
-        }
-        command_registry
-            .register_handler("whoami", Box::new(WhoamiHandler))
-            .ok();
-
-        // ── Tier 3: agent-flow commands ──────────────────────────────────
-        // Registered in the slash surface but historically unhandled — they
-        // fell through the TUI intercept AND the registry, landing in the
-        // model as literal prompt text. See register_agent_flow_handlers.
+        register_tui_command_handlers(&mut command_registry);
         register_agent_flow_handlers(&mut command_registry);
 
         let mut app =
@@ -1343,4 +1034,322 @@ pub(crate) fn register_agent_flow_handlers(registry: &mut crate::commands::Comma
     registry
         .register_handler("triage", Box::new(TriageHandler))
         .ok();
+}
+
+pub(crate) fn register_tui_command_handlers(
+    command_registry: &mut crate::commands::CommandRegistry,
+) {
+    // (2026-10-14 batch, plan 02) extracted from the create path so the
+    // no-unwired-command test can mirror the LIVE handler wiring —
+    // a bare `CommandRegistry::new()` lacks all of these and would
+    // misreport wired commands as dead.
+    use crate::commands::{CommandContext, CommandHandler, CommandResult};
+    // Register handlers for commands that were previously falling through to the agent
+    struct CompactHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for CompactHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message("Context compaction is handled automatically by the agent.")
+        }
+    }
+    command_registry
+        .register_handler("compact", Box::new(CompactHandler))
+        .ok();
+
+    struct DoctorHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for DoctorHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            let mut report = String::from("Operant Diagnostics:\n");
+            report.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
+            report.push_str(&format!(
+                "  Config dir: {:?}\n",
+                crate::tui::adapter_types::config::Settings::config_dir()
+            ));
+            let api_key_set = std::env::var("ANTHROPIC_API_KEY").is_ok()
+                || std::env::var("OPENAI_API_KEY").is_ok();
+            report.push_str(&format!("  API key configured: {}\n", api_key_set));
+            report.push_str("  Status: OK\n");
+            CommandResult::message(report)
+        }
+    }
+    command_registry
+        .register_handler("doctor", Box::new(DoctorHandler))
+        .ok();
+
+    struct InitHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for InitHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            let agentic_dir = std::path::PathBuf::from("AGENTS.md");
+            if agentic_dir.exists() {
+                CommandResult::message("AGENTS.md already exists in this project.")
+            } else {
+                match std::fs::write(&agentic_dir, "# Project Agent Memory\n\n") {
+                    Ok(_) => CommandResult::message("Created AGENTS.md in current directory."),
+                    Err(e) => CommandResult::message(format!("Failed to create AGENTS.md: {}", e)),
+                }
+            }
+        }
+    }
+    command_registry
+        .register_handler("init", Box::new(InitHandler))
+        .ok();
+
+    struct LoginHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for LoginHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(
+                "Set your API key: export ANTHROPIC_API_KEY=sk-... or export OPENAI_API_KEY=sk-...",
+            )
+        }
+    }
+    command_registry
+        .register_handler("login", Box::new(LoginHandler))
+        .ok();
+
+    struct LogoutHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for LogoutHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message("Clear your API key: unset ANTHROPIC_API_KEY OPENAI_API_KEY")
+        }
+    }
+    command_registry
+        .register_handler("logout", Box::new(LogoutHandler))
+        .ok();
+
+    struct RefreshHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for RefreshHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message("Provider auth and model caches cleared.")
+        }
+    }
+    command_registry
+        .register_handler("refresh", Box::new(RefreshHandler))
+        .ok();
+
+    struct ProvidersHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for ProvidersHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            let auth = AuthStore::load();
+            let mut report = String::from("Available providers:\n");
+            for p in crate::provider::PROVIDERS {
+                let has_key = auth.api_key_for(p.name).is_some();
+                let env_key = !p.env_var.is_empty() && std::env::var(p.env_var).is_ok();
+                let configured = has_key || env_key;
+                report.push_str(&format!(
+                    "  {}: {}\n",
+                    p.display_name,
+                    if configured {
+                        "configured"
+                    } else {
+                        "not configured"
+                    }
+                ));
+            }
+            report.push_str("\nUsage: /provider <name> — switch LLM provider");
+            CommandResult::message(report)
+        }
+    }
+    command_registry
+        .register_handler("providers", Box::new(ProvidersHandler))
+        .ok();
+
+    struct StatusHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for StatusHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            let model = std::env::var("OPERANT_MODEL").unwrap_or_else(|_| "gpt-4".to_string());
+            let anthropic = std::env::var("ANTHROPIC_API_KEY").is_ok();
+            let openai = std::env::var("OPENAI_API_KEY").is_ok();
+            CommandResult::message(format!(
+                "Session Status:\n  Model: {}\n  Anthropic: {}\n  OpenAI: {}",
+                model,
+                if anthropic {
+                    "configured"
+                } else {
+                    "not configured"
+                },
+                if openai {
+                    "configured"
+                } else {
+                    "not configured"
+                }
+            ))
+        }
+    }
+    command_registry
+        .register_handler("status", Box::new(StatusHandler))
+        .ok();
+
+    struct VersionHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for VersionHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(format!("operant v{}", env!("CARGO_PKG_VERSION")))
+        }
+    }
+    command_registry
+        .register_handler("version", Box::new(VersionHandler))
+        .ok();
+
+    struct TimeHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for TimeHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
+        }
+    }
+    command_registry
+        .register_handler("time", Box::new(TimeHandler))
+        .ok();
+
+    struct DebugHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for DebugHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            let mut info = String::from("Debug Info:\n");
+            info.push_str(&format!("  Version: {}\n", env!("CARGO_PKG_VERSION")));
+            info.push_str(&format!(
+                "  Config dir: {:?}\n",
+                crate::tui::adapter_types::config::Settings::config_dir()
+            ));
+            info.push_str(&format!(
+                "  Rust version: {}\n",
+                env!("CARGO_PKG_RUST_VERSION")
+            ));
+            CommandResult::message(info)
+        }
+    }
+    command_registry
+        .register_handler("debug", Box::new(DebugHandler))
+        .ok();
+
+    // (iter-270: NewHandler, HistoryHandler, RetryHandler, UndoHandler,
+    // StopHandler removed — these commands are now intercepted in
+    // app.rs intercept_slash_command_with_args_impl and directly
+    // mutate App state. The registry fallback path is no longer reached.)
+
+    struct CompressHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for CompressHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message("Context compaction is handled automatically by the agent.")
+        }
+    }
+    command_registry
+        .register_handler("compress", Box::new(CompressHandler))
+        .ok();
+
+    // (iter-270: RollbackHandler removed — /rollback is intercepted in app.rs)
+    // (iter-270: BranchHandler removed — /branch falls through to /session browser)
+    // (iter-270: GoalHandler removed — /goal is intercepted in app.rs)
+    // (iter-270: YoloHandler removed — /yolo is intercepted in app.rs)
+    // (iter-270: PersonalityHandler removed — /personality is intercepted in app.rs)
+    // (iter-270: ReasoningHandler removed — /reasoning is intercepted in app.rs)
+    // (iter-270: SkillsHandler removed — /skills is intercepted in app.rs)
+    // (iter-270: CreditsHandler removed — /credits is intercepted in app.rs)
+    // (iter-270: BillingHandler removed — /billing is intercepted in app.rs)
+    // (iter-270: SessionsHandler removed — /sessions is intercepted in app.rs)
+
+    struct ProviderHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for ProviderHandler {
+        async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
+            if ctx.args.is_empty() {
+                CommandResult::message("Usage: /provider <name> — switch LLM provider")
+            } else {
+                CommandResult::message(format!("Provider switched to: {}", ctx.args))
+            }
+        }
+    }
+    command_registry
+        .register_handler("provider", Box::new(ProviderHandler))
+        .ok();
+
+    struct ToolsHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for ToolsHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(
+                "Available tools: memory, web_search, web_fetch, bash, and more. Use /toolsets for the full list.",
+            )
+        }
+    }
+    command_registry
+        .register_handler("tools", Box::new(ToolsHandler))
+        .ok();
+
+    struct BundlesHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for BundlesHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(
+                "Skill bundles: curated sets of skills for specific workflows. (No bundles installed)",
+            )
+        }
+    }
+    command_registry
+        .register_handler("bundles", Box::new(BundlesHandler))
+        .ok();
+
+    struct UsageHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for UsageHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(
+                "Token usage and rate limits are displayed in the stats dialog. Use /stats to view.",
+            )
+        }
+    }
+    command_registry
+        .register_handler("usage", Box::new(UsageHandler))
+        .ok();
+
+    struct InsightsHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for InsightsHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(
+                "Insights: session analysis and conversation statistics. Use /stats for details.",
+            )
+        }
+    }
+    command_registry
+        .register_handler("insights", Box::new(InsightsHandler))
+        .ok();
+
+    struct UpdateHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for UpdateHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(format!(
+                "Current version: {}. Check https://github.com/operant-ai/operant-rs for updates.",
+                env!("CARGO_PKG_VERSION")
+            ))
+        }
+    }
+    command_registry
+        .register_handler("update", Box::new(UpdateHandler))
+        .ok();
+
+    struct WhoamiHandler;
+    #[async_trait::async_trait]
+    impl CommandHandler for WhoamiHandler {
+        async fn execute(&self, _ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message("Access level: admin (local TUI session)")
+        }
+    }
+    command_registry
+        .register_handler("whoami", Box::new(WhoamiHandler))
+        .ok();
+
+    // ── Tier 3: agent-flow commands ──────────────────────────────────
+    // Registered in the slash surface but historically unhandled — they
+    // fell through the TUI intercept AND the registry, landing in the
+    // model as literal prompt text. See register_agent_flow_handlers.
 }

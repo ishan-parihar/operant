@@ -195,9 +195,10 @@ fn model_picker_top_hint(
             )
         });
     if is_swarm_agent_model_picker {
-        return Some(
-            " swarm routing is configured by a prompt · /swarm-prompt to edit the active file",
-        );
+        // /swarm-prompt was removed with the dead command sweep (plan 02);
+        // the hint now names the mechanism, not a command that no longer
+        // exists.
+        return Some(" swarm routing is configured by a prompt file");
     }
 
     // The favorite/default hotkeys now work in both the focused picker and the
@@ -1414,7 +1415,7 @@ mod tests {
         }
 
         let hint = model_picker_top_hint(&picker).expect("swarm picker should show prompt hint");
-        assert!(hint.contains("/swarm-prompt"));
+        assert!(hint.contains("prompt file"));
         assert!(hint.contains("configured by a prompt"));
     }
 

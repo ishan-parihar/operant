@@ -32,7 +32,6 @@ pub mod import;
 pub mod info_widget;
 pub mod keybind;
 pub mod layout_utils;
-pub mod live_tests;
 pub mod logging;
 pub mod markdown;
 pub mod memory;

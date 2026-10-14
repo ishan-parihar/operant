@@ -529,7 +529,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Branch the current session (explore a different path)",
         "Session",
     )
-    .with_aliases(&["fork"])
     .with_args("[name]"),
     CommandDef::new(
         "compress",
@@ -557,7 +556,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         .with_args("[session|always]"),
     CommandDef::new("deny", "Deny a pending dangerous command", "Session").gateway_only(),
     CommandDef::new("background", "Run a prompt in the background", "Session")
-        .with_aliases(&["bg", "btw"])
+        .with_aliases(&["bg"])
         .with_args("<prompt>"),
     CommandDef::new("agents", "Show active agents and running tasks", "Session")
         .with_aliases(&["tasks"]),
@@ -674,7 +673,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .cli_only()
     .with_args("[kaomoji|emoji|unicode|ascii]"),
-    CommandDef::new("voice", "Toggle voice mode", "Configuration").with_args("[on|off|tts|status]"),
     CommandDef::new(
         "busy",
         "Control what Enter does while Operant is working",
@@ -984,6 +982,15 @@ impl CommandRegistry {
         self.defs.get(trimmed).map(|def| def.name)
     }
 
+    /// `true` when the name (or its alias target) has a live handler. A
+    /// `CommandDef` alone is not wiring — `execute` prints the "not yet
+    /// wired to a handler" fallback for defs without handlers, which is
+    /// exactly what the no-unwired-command test needs to distinguish.
+    pub fn has_handler(&self, name: &str) -> bool {
+        self.resolve(name)
+            .is_some_and(|c| self.handlers.contains_key(c))
+    }
+
     /// Execute a slash command by its canonical name.
     ///
     /// Returns a [`CommandResult`] expressing the command's intent as data.
@@ -1173,7 +1180,7 @@ impl TuiCategory {
 /// Return the TUI category for a given command name.
 pub fn tui_category(name: &str) -> &'static str {
     match name {
-        "connect" | "model" | "fast" | "effort" | "voice" | "provider" => {
+        "connect" | "model" | "fast" | "effort" | "provider" => {
             TuiCategory::ModelAndProvider.as_str()
         }
         "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
@@ -1961,13 +1968,15 @@ mod tests {
     }
 
     #[test]
-    fn test_branch_alias_fork() {
+    fn test_branch_has_no_dead_alias() {
+        // 2026-10-14 batch, plan 02: the 'fork' alias was dead in the TUI and
+        // only fed the "not yet wired" fallback — removed with the command.
         let map = build_command_map();
+        assert!(map.contains_key("branch"));
         assert!(
-            map.contains_key("fork"),
-            "Alias 'fork' must resolve to 'branch'"
+            !map.contains_key("fork"),
+            "dead alias 'fork' must stay gone"
         );
-        assert_eq!(map.get("fork").unwrap().name, "branch");
     }
 
     #[test]
@@ -1988,11 +1997,8 @@ mod tests {
             "Alias 'bg' must resolve to 'background'"
         );
         assert_eq!(map.get("bg").unwrap().name, "background");
-        assert!(
-            map.contains_key("btw"),
-            "Alias 'btw' must resolve to 'background'"
-        );
-        assert_eq!(map.get("btw").unwrap().name, "background");
+        // 2026-10-14 batch, plan 02: 'btw' was a dead alias — removed.
+        assert!(!map.contains_key("btw"), "dead alias 'btw' must stay gone");
     }
 
     #[test]
