@@ -286,6 +286,9 @@ gitignore is doing its job; leave them alone.
 ## Operant Project Context
 
 - Current release line: `0.2.1`
+- **Holon** (the Chair's agentic OS, a separate Python kernel) is proposed as operant's
+  organization, with operant as its primary body: read `docs/HOLON-INTEGRATION.md` before
+  changing `operant-core/src/org/`, the cron cast, or anything Holon would drive
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is
