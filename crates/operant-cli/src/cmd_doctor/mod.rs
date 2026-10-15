@@ -51,6 +51,10 @@ fn doctor_exit_code(issues: &[String], _manual_issues: &[String]) -> i32 {
 
 /// Dispatch handle — called from `main.rs` for `operant doctor [--fix] [--json]`.
 pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) -> Result<()> {
+    // H10: enter json mode BEFORE any check runs — every display helper
+    // suppresses its prints, so `doctor --json`'s stdout is exactly one
+    // JSON document (a smoke check parses it whole).
+    check_result::set_json_mode(json);
     if fix {
         return checks_fix::cmd_fix(config).await;
     }
@@ -75,8 +79,14 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
             Severity::Ok => {}
         }
     }
-    section_header("Diagnostics");
-    print!("{}", operant_core::doctor::render_text(&engine_results));
+    // H10 (docs/agentic-os/): `doctor --json` is a smoke check — its stdout
+    // must be EXACTLY one JSON document. Every human-readable print gates on
+    // `!json` (the section headers and the text render used to leak into
+    // the stream and break parsers).
+    if !json {
+        section_header("Diagnostics");
+        print!("{}", operant_core::doctor::render_text(&engine_results));
+    }
 
     if json {
         let result = serde_json::json!({

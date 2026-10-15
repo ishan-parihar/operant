@@ -433,16 +433,19 @@ pub async fn run_api_checks(config: &AppConfig, issues: &mut Vec<String>) {
         + usize::from(active_probe.is_some()) // C': configured custom endpoint
         + 1; // D: AWS Bedrock
 
-    // Dim status line shown while probes are in-flight.
-    print!(
-        "  {}",
-        style(format!(
-            "Running {} connectivity checks in parallel…",
-            total_probes
-        ))
-        .dim()
-    );
-    let _ = std::io::stdout().flush();
+    // Dim status line shown while probes are in-flight. Suppressed in json
+    // mode (H10): doctor --json's stdout is exactly one JSON document.
+    if !super::check_result::json_mode_enabled() {
+        print!(
+            "  {}",
+            style(format!(
+                "Running {} connectivity checks in parallel…",
+                total_probes
+            ))
+            .dim()
+        );
+        let _ = std::io::stdout().flush();
+    }
 
     // -- Spawn all probes concurrently ------------------------------------------
     let mut handles: Vec<tokio::task::JoinHandle<ProbeResult>> = Vec::new();

@@ -2,13 +2,42 @@
 //!
 //! Mirrors the Python `check_ok` / `check_warn` / `check_fail` / `check_info`
 //! helpers from `operant-agent/operant_cli/doctor.py`.
+//!
+//! H10 (docs/agentic-os/): `doctor --json` is a smoke check — stdout must
+//! be EXACTLY one JSON document. Every helper here consults
+//! [`json_mode`]: with it on, prints are suppressed everywhere at once;
+//! the check bodies stay untouched (they still collect issues).
 
 use console::style;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether doctor runs in --json mode: every display helper is a no-op.
+/// Set once by the dispatch handle before any check runs.
+pub static JSON_MODE: AtomicBool = AtomicBool::new(false);
+
+/// Enter (or leave) json mode. All display helpers suppress their prints
+/// while it is on — `doctor --json`'s stdout is one JSON document.
+pub fn set_json_mode(on: bool) {
+    JSON_MODE.store(on, Ordering::SeqCst);
+}
+
+fn json_mode() -> bool {
+    JSON_MODE.load(Ordering::SeqCst)
+}
+
+/// For sibling modules that print directly (checks_api's progress line):
+/// the same suppression the helpers carry.
+pub fn json_mode_enabled() -> bool {
+    json_mode()
+}
 
 /// Print a passed check line.
 ///
 /// Output: `  ✓ <label> <detail>` (detail in dim style).
 pub fn check_ok(label: &str, detail: &str) {
+    if json_mode() {
+        return;
+    }
     let icon = style("✓").green();
     if detail.is_empty() {
         println!("  {} {}", icon, label);
@@ -21,6 +50,9 @@ pub fn check_ok(label: &str, detail: &str) {
 ///
 /// Output: `  ⚠ <label> <detail>` (detail in dim style).
 pub fn check_warn(label: &str, detail: &str) {
+    if json_mode() {
+        return;
+    }
     let icon = style("⚠").yellow();
     if detail.is_empty() {
         println!("  {} {}", icon, label);
@@ -33,6 +65,9 @@ pub fn check_warn(label: &str, detail: &str) {
 ///
 /// Output: `  ✗ <label> <detail>` (detail in dim style).
 pub fn check_fail(label: &str, detail: &str) {
+    if json_mode() {
+        return;
+    }
     let icon = style("✗").red();
     if detail.is_empty() {
         println!("  {} {}", icon, label);
@@ -45,6 +80,9 @@ pub fn check_fail(label: &str, detail: &str) {
 ///
 /// Output: `    → <text>` (text in cyan).
 pub fn check_info(text: &str) {
+    if json_mode() {
+        return;
+    }
     println!("  {} {}", style("→").cyan(), text);
 }
 
@@ -52,6 +90,9 @@ pub fn check_info(text: &str) {
 ///
 /// Output: `◆ <title>` (bold, cyan) with a preceding blank line.
 pub fn section_header(title: &str) {
+    if json_mode() {
+        return;
+    }
     println!();
     println!("{}", style(format!("◆ {}", title)).cyan().bold());
 }
