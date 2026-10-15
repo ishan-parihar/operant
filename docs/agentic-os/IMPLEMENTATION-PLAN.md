@@ -12,7 +12,21 @@ phase B's read API (H2, Holon `3e8a0ca`) · operant-os crate + read-API client +
 `[holon]` config (operant `iter-822`) · `operant org holon` views (operant `iter-823`,
 smoked against the live `~/holon` instance). TUI panels are deferred behind the
 in-flight TUI wave that owns `tui/app/*` (fleet rule 3): the CLI views + `--json`
-carry the phase B surface until that wave closes.
+carry the phase B surface until that wave closes. · phase C (H3/H5 Holon `0d69b71`;
+operant `iter-825` policy.json enforcement + the headless-Escalate guard) ·
+phase D (H4 Holon `a1ae585`; operant `iter-826` trajectory.json + driver usage) ·
+phase E (H6 Holon `a76fd08`; operant `iter-827` supervisor — live full cycle —
+`iter-830` native Holon tools) · phase F (H7/H8 Holon `25cdce3`+`5c02c03`;
+operant `iter-831` events + chair + Notion webhook arm, smoked live) ·
+phase G (H9 Holon `b07f292`; operant `iter-833` archive + RETIRE gates) ·
+phase H (H10 Holon `adf9d3f`; operant `iter-834` doctor --json smoke-clean).
+
+**Pending owner decisions:** G+1's module deletion (one release after G by design —
+the org-mode day must first prove zero new rows in the archived tables) and the
+supersession banners' flip from "proposed" to ratified; H11's Python-organ
+retirement (the VPS still runs ZeroClaw). The runner/broker Rust ports are
+deliberately unported — the Python fallback serves the non-operant deployments
+H11 will eventually retire.
 
 ## Where the code goes
 
