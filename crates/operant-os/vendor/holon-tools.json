@@ -260,10 +260,16 @@
      "positional": true
     },
     "intent": {
-     "type": "string"
+     "type": "string",
+     "description": "text, '-' for stdin, or @file"
     },
     "acceptance": {
-     "type": "string"
+     "type": "string",
+     "description": "text, '-' for stdin, or @file"
+    },
+    "service": {
+     "type": "string",
+     "description": "a declared service (K-5): validated against the genome registry, and named in the request so the performer knows which entry point to run"
     },
     "priority": {
      "type": "integer",

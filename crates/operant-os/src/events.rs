@@ -59,9 +59,12 @@ pub async fn match_and_fire(
             .wait_with_output()
             .await
             .map_err(|e| crate::Error::Protocol(format!("routine fire {}: {e}", t.id)))?;
+        // H-13: the kernel reports a cooldown skip as rc 3 (NOTHING) —
+        // a skip is NOT a firing; only rc 0 counts (O-15's fix: the
+        // counter feeds the operator's "fired once per cooldown" check).
         if out.status.success() {
             fired += 1;
-        } else {
+        } else if out.status.code() != Some(3) {
             tracing::warn!(
                 schedule = %t.id,
                 status = ?out.status.code(),

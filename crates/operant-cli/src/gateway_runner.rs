@@ -1624,9 +1624,18 @@ fn holon_notion_hook(app_config: &AppConfig) -> Option<operant_core::gateway::Ho
         return None;
     }
     let home = app_config.holon.home.clone();
-    // explicit [holon] notion_script wins; else the kernel's installed
-    // adapter location under the instance home
-    let fallback = home.join("adapters").join("notion").join("holon_notion.py");
+    // explicit [holon] notion_script wins; else the kernel checkout that
+    // `bin` points into (<bin>/../adapters/notion/holon_notion.py —
+    // O-16: the live instance home holds notion.json, not the script),
+    // else the instance-home location for installed instances.
+    let bin_fallback = app_config
+        .holon
+        .bin
+        .as_deref()
+        .and_then(|b| std::path::Path::new(b).parent())
+        .map(|p| p.join("adapters").join("notion").join("holon_notion.py"));
+    let home_fallback = home.join("adapters").join("notion").join("holon_notion.py");
+    let fallback = bin_fallback.filter(|p| p.exists()).unwrap_or(home_fallback);
     let script = match &app_config.holon.notion_script {
         Some(p) if p.exists() => p.clone(),
         _ if fallback.exists() => fallback,
@@ -3457,6 +3466,78 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                 // outcome — the authoritative "a turn actually
                                 // started" event is the one in
                                 // `GatewayMessageHandler::handle`.
+                                // ── W5 (audit O-14): the Chair's channel ──
+                                // When org mode is on, a message from one of
+                                // Holon's configured Chair identities is the
+                                // OWNER speaking to the organization: classify
+                                // it through the kernel (Holon owns the
+                                // classifier), and a chair-command goes to the
+                                // kernel instead of the model. Anyone else
+                                // stays chat — exactly as before.
+                                if app_config_clone.holon.enabled {
+                                    match operant_os::chair::is_chair(
+                                        &app_config_clone.holon.home,
+                                        app_config_clone.holon.bin.as_deref(),
+                                        &platform,
+                                        &msg.user_id,
+                                    )
+                                    .await
+                                    {
+                                        Ok(true) => {
+                                            let reply = operant_os::chair::dispatch_message(
+                                                &app_config_clone.holon.home,
+                                                app_config_clone.holon.bin.as_deref(),
+                                                &msg.content,
+                                            )
+                                            .await;
+                                            let text = match reply {
+                                                Ok(t) => t,
+                                                Err(e) => format!("chair command failed: {e}"),
+                                            };
+                                            let response = OutgoingMessage::new(&msg.channel_id, text)
+                                                .with_thread_id(msg.thread_id);
+                                            gw.send_to_platform(&platform, response).await?;
+                                            return Ok(true);
+                                        }
+                                        Ok(false) => {} // not the Chair: chat as usual
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "chair identity check degraded — treating sender as chat"
+                                            );
+                                        }
+                                    }
+
+                                    // W5 (O-15): every channel message is an
+                                    // event source. The kernel's event
+                                    // triggers match against it; a match fires
+                                    // its routine (payload on stdin, cooldown
+                                    // enforced kernel-side). Fire-and-forget:
+                                    // a trigger problem never blocks the turn.
+                                    let ev_home = app_config_clone.holon.home.clone();
+                                    let ev_bin = app_config_clone.holon.bin.clone();
+                                    let ev_text = msg.content.clone();
+                                    tokio::spawn(async move {
+                                        match operant_os::events::match_and_fire(
+                                            &ev_home,
+                                            ev_bin.as_deref(),
+                                            &ev_text,
+                                        )
+                                        .await
+                                        {
+                                            Ok(fired) if fired > 0 => tracing::info!(
+                                                fired,
+                                                "event triggers fired for an inbound message"
+                                            ),
+                                            Ok(_) => {}
+                                            Err(e) => tracing::warn!(
+                                                error = %e,
+                                                "event intake degraded"
+                                            ),
+                                        }
+                                    });
+                                }
+
                                 tracing::info!(
                                     user = %msg.user_id,
                                     platform = %platform,

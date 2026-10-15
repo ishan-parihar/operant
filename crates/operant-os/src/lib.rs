@@ -35,7 +35,9 @@ pub mod tools;
 /// schedule); the client reads both identically. A Holon database publishing a
 /// version outside this set is refused (the caller surfaces a doctor line and
 /// org mode stays off — a newer Holon must not be read through stale view shapes).
-pub const KNOWN_API_VERSIONS: &[&str] = &["1", "2"];
+/// v3 (the hardening wave) adds the guards/genome-era views without
+/// changing any v1/v2 shape — the client reads all three identically.
+pub const KNOWN_API_VERSIONS: &[&str] = &["1", "2", "3"];
 
 /// Errors surfaced by the org-runtime seam. Degrade, don't die: every consumer
 /// turns these into a doctor line or a helpful error, never a dead turn.
