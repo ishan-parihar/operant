@@ -86,3 +86,40 @@ pub fn holon_budget_cap(run_dir: &std::path::Path) -> Option<u64> {
     let doc: serde_json::Value = serde_json::from_str(&policy).ok()?;
     doc.pointer("/budget/tokens")?.as_u64()
 }
+
+/// W6 (audit O-22, invariant 4): in a Holon run, learning writes become
+/// annotations in the run directory — never files in the operant home.
+/// One JSON line per annotation, keyed by kind: `skill_changes`,
+/// `learnings`, `proposals` — the driver's end-of-run writer merges them
+/// into result.json the way refusals merge (kernel H-03 reads them as
+/// the run's learning record).
+pub fn record_learning_annotation(
+    run_dir: &std::path::Path,
+    kind: &str,
+    payload: serde_json::Value,
+) {
+    use std::io::Write;
+    let line = serde_json::json!({ "kind": kind, "payload": payload });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(run_dir.join("learning.jsonl"))
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
+/// W6: whether this process is a Holon run AND its annotations dir.
+pub fn holon_learning_sink() -> Option<std::path::PathBuf> {
+    crate::platform::holon_run_dir()
+}
+
+/// W6: a run's recorded learning annotations (empty when none).
+pub fn read_learning_annotations(run_dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let Ok(text) = std::fs::read_to_string(run_dir.join("learning.jsonl")) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}

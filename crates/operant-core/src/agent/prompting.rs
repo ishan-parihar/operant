@@ -199,6 +199,12 @@ impl OperantAgent {
         if !refusals.is_empty() {
             obj.insert("refusals".to_string(), serde_json::Value::Array(refusals));
         }
+        // W6: learning annotations (skill_changes / learnings / proposals)
+        // merge the same way — O-22's contract is the result envelope.
+        let learning: Vec<serde_json::Value> = crate::org::read_learning_annotations(&run_dir);
+        if !learning.is_empty() {
+            obj.insert("learnings".to_string(), serde_json::Value::Array(learning));
+        }
 
         obj.insert(
             "usage".to_string(),

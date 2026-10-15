@@ -134,8 +134,11 @@ pub async fn handle_cron_command(
             // routine instead of creating a local cron. One command printed,
             // ready to paste (the kernel's classifier vets the proposal).
             if config.holon.enabled {
+                // O-23: Holon's real argv — a positional title, --intent
+                // and --dept required, --cron the 5/6-field schedule.
+                let dept = "eng";
                 let mut proposal = format!(
-                    "holon routine add --name {name:?} --cron {schedule:?} --command {command:?}"
+                    "holon routine add {name:?} --intent {command:?} --dept {dept} --cron {schedule:?}"
                 );
                 if let Some(n) = repeat {
                     proposal.push_str(&format!(" --recurring {n}"));

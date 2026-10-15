@@ -83,6 +83,27 @@ impl OperantTool for MemoryStoreTool {
             }
         };
 
+        // W6 (audit O-22, invariant 4): a Holon run never writes the
+        // personal memory store — the organization's memory is Holon's.
+        // The fact lands as a `learnings` annotation for the result; the
+        // kernel's own memory carries it from there.
+        if let Some(run_dir) = crate::org::holon_learning_sink() {
+            crate::org::record_learning_annotation(
+                &run_dir,
+                "learnings",
+                serde_json::json!({
+                    "tool": "memory_store",
+                    "key": args.key,
+                    "content": args.content,
+                    "kind": args.block_type,
+                }),
+            );
+            return ToolResult::success(
+                "memory_store",
+                "Recorded as a learning annotation for this run's result (learnings) — a Holon run does not write the personal memory store; the kernel's memory is the organization's.",
+            );
+        }
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)

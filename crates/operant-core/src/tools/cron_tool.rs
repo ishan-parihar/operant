@@ -89,11 +89,15 @@ impl CronTool {
             let prompt = args.prompt.clone().unwrap_or_default();
             return Ok(ToolResult::success(
                 "cron",
+                // O-23: the kernel's real argv — a positional title, --intent
+                // and --dept required, --cron the schedule — and an AGENT
+                // reports it in its result's `proposals`, because routine
+                // add is Chair-only.
                 format!(
                     "This is a Holon run: recurring work belongs to the organization. \
-                     Propose it as a routine (the Chair approves) with the \
-                     `holon routine add --name {name:?} --cron {schedule:?} --command {prompt:?}` \
-                     command — the kernel's classifier vets the proposal."
+                     Report this as a proposal in your result's `proposals`: \
+                     routine add {name:?} --intent {prompt:?} --dept <slug> --cron {schedule:?} \
+                     (the Chair approves routines; an agent cannot add one)."
                 ),
             ));
         }

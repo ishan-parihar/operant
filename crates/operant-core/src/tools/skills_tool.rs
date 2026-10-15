@@ -1645,6 +1645,32 @@ impl OperantTool for SkillManageTool {
             Err(e) => return ToolResult::error("skill_manage", format!("Invalid args: {}", e)),
         };
 
+        // W6 (audit O-22, invariant 4): a Holon run never writes the
+        // operant home's skills — the change lands as an annotation in
+        // the run directory and the model is told to expect it in the
+        // result. A personal session writes skills exactly as before.
+        if let Some(run_dir) = crate::org::holon_learning_sink()
+            && matches!(
+                parsed.action.as_str(),
+                "create" | "edit" | "patch" | "delete" | "write_file" | "remove_file"
+            )
+        {
+            let payload = serde_json::json!({
+                "tool": "skill_manage",
+                "action": parsed.action,
+                "name": parsed.name,
+                "summary": parsed.content.as_deref().map(|c| c.chars().take(2000).collect::<String>()),
+            });
+            crate::org::record_learning_annotation(&run_dir, "skill_changes", payload);
+            return ToolResult::success(
+                "skill_manage",
+                format!(
+                    "Skill change '{}' recorded as an annotation for this run's result (skill_changes) — a Holon run does not write the skill store; the kernel's registered skill flow applies verified changes.",
+                    parsed.name
+                ),
+            );
+        }
+
         match parsed.action.as_str() {
             "create" => self.action_create(&parsed).await,
             "edit" => self.action_edit(&parsed).await,
