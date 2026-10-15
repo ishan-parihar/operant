@@ -1,7 +1,10 @@
 # Boundary: what operant owns as an agentic OS
 
-Status: **proposed (2026-10-14)**. The canonical rule and the full ownership table are in Holon's
-`docs/design/2026-10-14-holon-operant-boundary.md`. This file is operant's side: what operant must
+Status: **adopted; implementation executing.** `AUDIT-2026-10-15.md` §2 tracks each invariant's
+real state. The canonical rule and the full ownership table are in Holon's design record
+`docs/design/2026-10-14-holon-operant-boundary.md`. That record now lives in the private
+`holon-personal` overlay; the public Holon repository carries the interfaces in
+`docs/CONTRACT.md` §§1, 8–12. This file is operant's side: what operant must
 do natively, in Rust, so that the organization runs *in* it, and what it must not keep, so that
 there is only one organization.
 

@@ -21,6 +21,17 @@ operant `iter-831` events + chair + Notion webhook arm, smoked live) ·
 phase G (H9 Holon `b07f292`; operant `iter-833` archive + RETIRE gates) ·
 phase H (H10 Holon `adf9d3f`; operant `iter-834` doctor --json smoke-clean).
 
+**Audit 2026-10-15 (`AUDIT-2026-10-15.md`): "landed" above means landed as code, not as a
+working system.** In a real Holon run:
+- policy enforcement, `trajectory.json` and usage never switch on: operant reads `HOLON_RUN_DIR`,
+  and the kernel exports `HOLON_BRIEF_DIR` (O-01);
+- the native tools are not registered for bodies, and two of them always fail (O-03, O-04);
+- the Chair channel and event intake have no caller (O-14, O-15);
+- the supervisor is a CLI loop, and there is no clock (O-12, O-13).
+
+Four security gaps (O-07 … O-10) block turning org mode on. The next iterations are the audit's
+work packages W1–W8, in its §5 order. Org mode stays off on every box until W1 and W2 land.
+
 **Pending owner decisions:** G+1's module deletion (one release after G by design —
 the org-mode day must first prove zero new rows in the archived tables) and the
 supersession banners' flip from "proposed" to ratified; H11's Python-organ

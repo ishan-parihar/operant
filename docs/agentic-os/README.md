@@ -1,7 +1,9 @@
 # Operant as an agentic OS, with Holon
 
-Status: **proposed (2026-10-14)**, awaiting the owner. Until a phase is approved, operant behaves
-exactly as it does today.
+Status: **executing** (owner order, 2026-10-14). Phases A–H are landed as code, but the
+integration does not yet engage in a real run. **Read `AUDIT-2026-10-15.md` first:** it has what
+works, what does not, and the next work packages (W1–W8). With `[holon] enabled = false` (every
+box today), operant behaves exactly as before.
 
 Operant and **Holon** will ship as one package that runs the owner's organization.
 - **Holon** is a stdlib-Python kernel (`github.com/ishan-parihar/holon`) that holds the
@@ -21,7 +23,9 @@ There is one organization, one owner per capability and one writer per database.
    retire, with what replaces it and the test that proves it.
 3. **`IMPLEMENTATION-PLAN.md`**: phases A–I covering both repositories: Rust work packages,
    Holon's matching Python packages, config, acceptance tests, and the order.
-4. In Holon's repository:
+4. **`AUDIT-2026-10-15.md`**: the phases as built against this plan. It has findings O-01 …
+   O-32, the invariants' real state, and work packages W1–W8: the next iterations.
+5. In Holon's repository:
    - `docs/design/2026-10-14-holon-operant-boundary.md` is the canonical rule, the ownership
      table, the measurements and the interfaces: the read API, the run protocol, the contract
      additions;
