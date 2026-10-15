@@ -27,13 +27,66 @@ pub enum DebugSubcommand {
         /// Report ID or paste URL to delete
         id: String,
     },
+    /// Report this process's memory footprint, subsystem by subsystem
+    /// (plan 07.1): RSS of self, the memory-wire store's on-disk size,
+    /// and the retained-tool-output budget headroom.
+    Memory,
 }
 
 pub async fn handle_debug_command(config: &AppConfig, cmd: DebugSubcommand) -> Result<()> {
     match cmd {
         DebugSubcommand::Share { local, no_upload } => cmd_share(config, local, no_upload).await?,
         DebugSubcommand::Delete { id } => cmd_delete(config, &id).await?,
+        DebugSubcommand::Memory => cmd_memory(config).await?,
     }
+    Ok(())
+}
+
+/// (plan 07.1) `operant debug memory` — the footprint triage surface. One
+/// process, three numbers: this process's RSS (its own /proc), the
+/// memory-wire store's on-disk size (the durable footprint), and the
+/// retained-tool-output headroom (the in-App budget from iter-850, only
+/// meaningful inside a TUI session — a CLI invocation reports the static
+/// cap). Numbers, not gauges: the doc (docs/MEMORY_BUDGET.md) carries the
+/// budget table and measurement method.
+async fn cmd_memory(_config: &AppConfig) -> Result<()> {
+    let rss_kb = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines().find(|l| l.starts_with("VmRSS:")).and_then(|l| {
+                l.split_whitespace()
+                    .nth(1)
+                    .and_then(|n| n.parse::<u64>().ok())
+            })
+        });
+    let rss_line = rss_kb
+        .map(|kb| format!("{} KB ({:.1} MB)", kb, kb as f64 / 1024.0))
+        .unwrap_or_else(|| "unavailable (not linux)".to_string());
+    println!("this process RSS : {rss_line}");
+
+    let home = operant_core::platform::operant_home();
+    let db = home.join("memory_wire.sqlite");
+    let db_line = std::fs::metadata(&db)
+        .ok()
+        .map(|m| {
+            format!(
+                "{} bytes ({:.1} MB)",
+                m.len(),
+                m.len() as f64 / (1024.0 * 1024.0)
+            )
+        })
+        .unwrap_or_else(|| "no store yet".to_string());
+    println!("memory-wire store: {db_line}");
+
+    // Children spawned by this process (a running agent/gateway session
+    // carries aft + MCP children) — the count is the footprint multiplier
+    // the shared-services plan (07.2) targets.
+    let children = std::fs::read_dir("/proc/self/task")
+        .map(|d| d.count())
+        .unwrap_or(0);
+    println!("threads           : {children}");
+    println!();
+    println!("Budget table + measurement method: docs/MEMORY_BUDGET.md");
     Ok(())
 }
 
