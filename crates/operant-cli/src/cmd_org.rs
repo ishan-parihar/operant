@@ -432,6 +432,7 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
                     "no employee to serve: pass --employee or set [holon] supervise_employees"
                 );
             }
+            let mut errored = false;
             loop {
                 // one pass: every configured employee in order — the kernel
                 // enforces the employee's own max_concurrency on the claim;
@@ -454,14 +455,22 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
                         Ok(false) => {}
                         Err(e) => {
                             eprintln!("supervise {emp}: {e}");
-                            ran = true; // an error is also progress to log — keep looping
+                            // O-12: an error is NOT progress — a persistent
+                            // failure (missing holon, bad home) used to set
+                            // ran = true and spin with no sleep, re-spawning
+                            // the kernel in a tight loop. Errors back off.
+                            errored = true;
                         }
                     }
                 }
                 if !r#loop {
                     break;
                 }
-                if !ran {
+                if errored {
+                    // O-12: back off on failure — a missing kernel must not
+                    // become a hot loop of prepare attempts
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                } else if !ran {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 }
             }

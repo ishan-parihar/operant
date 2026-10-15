@@ -117,26 +117,56 @@ pub async fn run_body(
     // lease renews every 20 minutes, not every 10 seconds (the audit
     // counted ~360 spurious Python spawns per run at the fixed rate).
     let cadence = lease_third(&prepared.lease_until).await;
+    // O-12 (CONTRACT §4): the stop-after-submit poll runs on its OWN short
+    // cadence — the kernel's contract says a handed-in body is stopped
+    // "within a minute", and piggybacking on the heartbeat cadence made a
+    // 20-minute-lease body squat its slot that long after submitting.
+    // 15s keeps it under the minute without a Python spawn storm.
+    let poll = Duration::from_secs(15);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(prepared.timeout_s.max(1));
+    let mut stopped_after_submit = false;
+    let mut next_heartbeat = tokio::time::Instant::now() + cadence;
     let status: Option<std::process::ExitStatus> = loop {
+        let next_poll = tokio::time::Instant::now() + poll;
         tokio::select! {
             st = child.wait() => break Some(st
                 .map_err(|e| crate::Error::Protocol(format!("wait driver: {e}")))?),
-            _ = tokio::time::sleep(cadence) => {
+            _ = tokio::time::sleep_until(next_poll) => {
                 if tokio::time::Instant::now() >= deadline {
                     // O-12: the whole process group goes — `sh` alone dying
                     // leaves the body's grandchildren running
                     let _ = kill_process_group(&mut child).await;
                     break None;
                 }
-                if let Err(e) = heartbeat(config_home, bin, &prepared.run, &token).await {
-                    tracing::warn!(run = %prepared.run, error = %e, "heartbeat failed (continuing)");
+                // a body that handed its result in itself (`holon submit` /
+                // `holon_submit`, a defer-submit that records and holds
+                // verify) has nothing left to do; a run that left "running"
+                // means the result is in or the lease was reclaimed — kill
+                // the group and free the slot.
+                match run_status(config_home, bin, &prepared.run).await {
+                    Ok(false) => {
+                        tracing::info!(run = %prepared.run, "run handed in — stopping the body");
+                        let _ = kill_process_group(&mut child).await;
+                        stopped_after_submit = true;
+                        break None;
+                    }
+                    Ok(true) => {}
+                    Err(e) => tracing::debug!(run = %prepared.run, error = %e, "run show failed (continuing)"),
+                }
+                if tokio::time::Instant::now() >= next_heartbeat {
+                    if let Err(e) = heartbeat(config_home, bin, &prepared.run, &token).await {
+                        tracing::warn!(run = %prepared.run, error = %e, "heartbeat failed (continuing)");
+                    }
+                    next_heartbeat = tokio::time::Instant::now() + cadence;
                 }
             }
         }
     };
     let exit = match status {
         Some(st) => st.code().unwrap_or(-1),
+        // stopped-after-submit is the GOOD stop: the kernel's own submit
+        // has the result; report a clean exit, not a timeout kill
+        None if stopped_after_submit => 0,
         // timed out at the driver's own ceiling: report a non-zero exit; the
         // kernel records the breach the same way a killed dispatcher would
         None => 137,
@@ -145,9 +175,6 @@ pub async fn run_body(
     // the kernel's published schema before the run hands in — a warning
     // here is the drift's first signal (the kernel's own submit remains
     // the authority). The stage comes from the run's policy document.
-    if let Some(run_dir) = prepared.env.get("HOLON_RUN_DIR") {
-        let _ = run_dir; // the brief dir is the same directory (H-01)
-    }
     if let Some(brief_dir) = prepared.brief_md.parent() {
         if let Ok(policy_text) = std::fs::read_to_string(brief_dir.join("policy.json"))
             && let Ok(policy) = serde_json::from_str::<serde_json::Value>(&policy_text)
@@ -159,7 +186,14 @@ pub async fn run_body(
         }
     }
 
-    finish(config_home, bin, &prepared.run, exit).await?;
+    // A stop-after-submit body already handed in itself (the kernel's
+    // `submit` records the result and moves the run on) — calling `run
+    // finish` now would hit the kernel's TransitionError ("nothing to
+    // finish"). The finish call is the DRIVER-path hand-in; the self-submit
+    // path is complete without it.
+    if !stopped_after_submit {
+        finish(config_home, bin, &prepared.run, exit).await?;
+    }
     Ok(exit)
 }
 
@@ -202,6 +236,38 @@ pub async fn supervise_one(
             Ok(true)
         }
     }
+}
+
+/// O-12 (CONTRACT §4): whether the run is still in "running". `run show`
+/// is an any-actor read; the status leaving "running" means the result is
+/// in (self-submit) or the lease was reclaimed — either way the body's
+/// slot is over.
+async fn run_status(config_home: &Path, bin: Option<&str>, run: &str) -> crate::Result<bool> {
+    let mut cmd = crate::run::holon_cmd(config_home, bin);
+    cmd.args(["--json", "run", "show", run]);
+    let out = cmd
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .map_err(|e| crate::Error::Protocol(format!("run show: {e}")))?;
+    if !out.status.success() {
+        return Err(crate::Error::Protocol(format!(
+            "run show exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    #[derive(serde::Deserialize)]
+    struct Shell {
+        run: RunRow,
+    }
+    #[derive(serde::Deserialize)]
+    struct RunRow {
+        status: String,
+    }
+    let shell: Shell = serde_json::from_slice(&out.stdout)
+        .map_err(|e| crate::Error::Protocol(format!("run show output: {e}")))?;
+    Ok(shell.run.status == "running")
 }
 
 /// O-12: kill the body's whole process group (the spawn used

@@ -104,12 +104,20 @@ async fn tick_once(home: &Path, bin: Option<&str>) -> crate::Result<()> {
 /// The resident supervisor loop: claim what is ready, run it under the
 /// concurrency budget, hand it in, repeat. An empty pass sleeps; an
 /// error backs off (floor 1s, ceiling 60s, reset on success).
+///
+/// O-12: `max_concurrent_runs` is a real bound — bodies run as spawned
+/// tasks holding semaphore permits, not sequential awaits (the inline
+/// await made the semaphore decorative: concurrency was always 1). A
+/// pass collects the spawned handles and waits for them before looping,
+/// so a claim is never issued while the previous pass's bodies still
+/// hold slots the loop would double-count.
 async fn supervise_loop(home: &Path, bin: Option<&str>, employees: &[String], max: usize) -> ! {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max));
     let mut backoff = Duration::from_secs(1);
     loop {
         let mut ran = false;
         let mut errored = false;
+        let mut handles = Vec::new();
         for employee in employees {
             match prepare(home, bin, employee, None, None).await {
                 Ok(Some(prepared)) => {
@@ -119,12 +127,15 @@ async fn supervise_loop(home: &Path, bin: Option<&str>, employees: &[String], ma
                         Ok(p) => p,
                         Err(_) => break,
                     };
-                    let r = run_body(home, bin, &prepared).await;
-                    drop(permit);
-                    if let Err(e) = r {
-                        errored = true;
-                        tracing::warn!(employee = %employee, error = %e, "supervised body failed");
-                    }
+                    let home = home.to_path_buf();
+                    let bin = bin.map(str::to_string);
+                    handles.push(tokio::spawn(async move {
+                        let r = run_body(&home, bin.as_deref(), &prepared).await;
+                        drop(permit);
+                        if let Err(e) = r {
+                            tracing::warn!(run = %prepared.run, error = %e, "supervised body failed");
+                        }
+                    }));
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -132,6 +143,12 @@ async fn supervise_loop(home: &Path, bin: Option<&str>, employees: &[String], ma
                     tracing::warn!(employee = %employee, error = %e, "prepare failed");
                 }
             }
+        }
+        // wait for this pass's bodies before the next claim round: the
+        // kernel's own concurrency guard plus our semaphore keep the
+        // invariants; the loop itself never stacks unbounded passes
+        for h in handles {
+            let _ = h.await;
         }
         if errored {
             tracing::warn!(?backoff, "supervise pass errored — backing off");
