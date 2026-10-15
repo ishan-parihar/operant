@@ -2322,9 +2322,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             // ── Cron / Scheduling ──
             "cron" | "todo" | "kanban" => "\u{23F0}",
             // ── Browser ──
-            "browser" | "browser_dialog" | "browser_cdp" | "browser_camofox_state" => {
-                "\u{1F5A5}\u{FE0F}"
-            }
+            "browser" | "browser_dialog" | "browser_cdp" => "\u{1F5A5}\u{FE0F}",
             // ── Approval / Clarify ──
             "approval_request" | "clarify" | "verify_task" => "\u{2753}",
             // ── Communication ──
@@ -2410,9 +2408,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 "todo" | "kanban" => &["action", "task_id", "title"],
                 // Browser
                 "browser" => &["action", "url", "command"],
-                "browser_dialog" | "browser_cdp" | "browser_camofox_state" => {
-                    &["action", "command"]
-                }
+                "browser_dialog" | "browser_cdp" => &["action", "command"],
                 // Approval / Clarify
                 "approval_request" | "verify_task" => &["tool_name", "description"],
                 "clarify" => &["question", "choices"],

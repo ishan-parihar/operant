@@ -375,7 +375,6 @@ pub struct BrowserConfig {
     pub cdp_url: Option<String>,
     pub dialog_policy: Option<String>,
     pub dialog_timeout_s: Option<u64>,
-    pub camofox: CamofoxConfig,
 }
 
 impl Default for BrowserConfig {
@@ -390,21 +389,6 @@ impl Default for BrowserConfig {
             cdp_url: Some(String::new()),
             dialog_policy: Some("must_respond".to_string()),
             dialog_timeout_s: Some(300),
-            camofox: CamofoxConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CamofoxConfig {
-    pub managed_persistence: Option<bool>,
-}
-
-impl Default for CamofoxConfig {
-    fn default() -> Self {
-        Self {
-            managed_persistence: Some(false),
         }
     }
 }

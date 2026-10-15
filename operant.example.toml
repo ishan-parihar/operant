@@ -477,16 +477,10 @@ provider = "memory-wire"
 enabled = true
 
 [browser]
-# provider: sourcehound (default) | camofox | browserbase | browser-use | firecrawl
-# - sourcehound:  sourcehound browser engine over MCP; sourcehound owns the engine,
-#                 its profile cookie jar, and the DevTools endpoint operant attaches to
-# - camofox:     local anti-detection browser REST API (CAMOFOX_URL)
-# - browserbase: cloud (BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID)
-# - browser-use: cloud AI agent (BROWSER_USE_API_KEY)
-# - firecrawl:   scrape API (FIRECRAWL_API_KEY)
-# NOTE: the code default is "sourcehound" (see BrowserSettings::default).
-# Uncomment to override it explicitly.
-# provider = "sourcehound"
+# (plan 11C2) sourcehound is the only browser engine; the old provider
+# choices (camofox, browserbase, browser-use, firecrawl, obscura,
+# lightpanda) are accepted-with-warning in existing configs and ignored.
+# The engine installs/updates with: operant update --integrations
 
 # ── Advanced sections (uncomment to configure) ───────────────────────────────
 # These are power-user features. Most users don't need them.

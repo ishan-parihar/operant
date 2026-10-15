@@ -14,7 +14,6 @@ use crate::tools::{SessionSearchTool, ToolRegistry};
 use std::path::Path;
 use std::sync::Arc;
 
-pub use super::browser_camofox_state::CamofoxStateTool;
 pub use super::browser_cdp_tool::BrowserCdpTool;
 pub use super::browser_dialog_tool::BrowserDialogTool;
 pub use super::browser_tool::BrowserTool;
@@ -75,7 +74,6 @@ pub async fn register_builtin_tools(
     kanban_db: Arc<KanbanDb>,
     mcp_manager: Option<McpManager>,
 ) -> Result<()> {
-    registry.register(CamofoxStateTool).await?;
     registry.register(BrowserTool).await?;
     registry.register(CheckpointTool::new()).await?;
     registry.register(FileReadTool).await?;
@@ -256,7 +254,6 @@ pub fn builtin_tool_names() -> Vec<&'static str> {
     vec![
         "approval_request",
         "browser",
-        "browser_camofox_state",
         "checkpoint",
         "clarify",
         "code_execution",

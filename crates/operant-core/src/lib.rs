@@ -144,10 +144,7 @@ pub use agent::{AgentConfig, AgentEvent, FallbackModelClient, OperantAgent};
 pub use approval::{
     ApprovalContext, ApprovalGuard, ApprovalMode, ApprovalVerdict, RiskLevel, check_tool_approval,
 };
-pub use browser_provider::{
-    BrowserProvider, BrowserUseProvider, BrowserbaseProvider, CamofoxProvider, FirecrawlProvider,
-    build_browser_provider,
-};
+pub use browser_provider::{BrowserProvider, build_browser_provider};
 pub use client::{Message, OpenAIClient};
 pub use config::{
     AppConfig, AutonomousSettings, BehaviorSettings, ClientSettings, CodeExecutionSettings,

@@ -12,7 +12,6 @@ pub mod aft_tools;
 // only reachable at the sealed `pub(crate)` seam. Integration-test crates
 // are external, so the file lives here under cfg(test) instead.
 pub mod async_delegation;
-pub mod browser_camofox_state;
 pub mod browser_cdp_tool;
 pub mod browser_dialog_tool;
 pub mod browser_tool;

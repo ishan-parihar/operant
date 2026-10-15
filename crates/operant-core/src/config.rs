@@ -1548,8 +1548,23 @@ impl Default for MemorySettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BrowserSettings {
-    /// Browser provider name
+    /// Browser provider name — (plan 11C2) accepted for config
+    /// compatibility and IGNORED: sourcehound is the only engine. A
+    /// non-default value warns once at load.
     pub provider: String,
+}
+
+impl BrowserSettings {
+    /// (plan 11C2 migration) warn once when a non-sourcehound provider is
+    /// configured — the value is accepted but ignored.
+    pub fn warn_legacy_keys(&self) {
+        if !self.provider.eq_ignore_ascii_case("sourcehound") {
+            eprintln!(
+                "warning: [browser] provider = {:?} is ignored — sourcehound is the only browser engine now. Remove the key from operant.toml.",
+                self.provider
+            );
+        }
+    }
 }
 
 impl Default for BrowserSettings {
@@ -2016,6 +2031,8 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // (plan 11C1) one-time migration warnings for the retired web-search
     // provider keys — the config still parses, the user is told once.
     config.tools.web.warn_legacy_keys();
+    // (plan 11C2) [browser] provider is accepted-and-ignored now.
+    config.browser.warn_legacy_keys();
 
     Ok(LoadedConfig { config, source })
 }
@@ -2678,13 +2695,9 @@ wonderful_unknown_key = 42
     /// `BrowserSettings::default()` returned `obscura`, and omitted `obscura`
     /// from the list entirely — so the one provider a fresh install actually
     /// uses was undocumented, and the documented default was wrong. The
-    /// existing `example_toml_parses` covers `agent`, `tui` and `autonomous`
-    /// but nothing here, which is how the drift survived. Two properties:
-    ///
-    /// 1. The value marked `(default)` is the one the code defaults to.
-    /// 2. Every provider the example names is genuinely accepted by
-    ///    `build_browser_provider`. An unknown name silently falls back to
-    ///    sourcehound, so a typo would otherwise be invisible.
+    /// (plan 11C2) The [browser] section documents sourcehound-only: the
+    /// provider alternatives are gone, the section must not advertise a
+    /// provider choice anymore.
     #[test]
     fn example_toml_documents_the_real_browser_default_and_providers() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2702,41 +2715,17 @@ wonderful_unknown_key = 42
             .split("\n[")
             .next()
             .expect("[browser] section is empty");
-        let list_line = block
-            .lines()
-            .find(|l| l.trim_start().starts_with("# provider:"))
-            .expect("[browser] section has no `# provider:` list line");
-
-        let mut documented_default: Option<&str> = None;
-        for entry in list_line
-            .trim_start()
-            .trim_start_matches("# provider:")
-            .split('|')
-            .map(str::trim)
-        {
-            let name = entry.trim_end_matches("(default)").trim();
-            assert!(!name.is_empty(), "empty provider entry in: {list_line}");
-
-            let built = crate::browser_provider::build_browser_provider(name);
-            assert_eq!(
-                built.name(),
-                name,
-                "operant.example.toml documents browser provider `{name}`, which \
-                 build_browser_provider does not accept — it silently falls back \
-                 to `{}`",
-                built.name()
-            );
-            if entry.contains("(default)") {
-                documented_default = Some(name);
-            }
-        }
-
-        assert_eq!(
-            documented_default,
-            Some(BrowserSettings::default().provider.as_str()),
-            "operant.example.toml marks a different browser provider as the \
-             default than BrowserSettings::default() returns ({:?})",
-            BrowserSettings::default().provider
+        // No provider list line anymore — the section says sourcehound is
+        // the only engine.
+        assert!(
+            !block
+                .lines()
+                .any(|l| l.trim_start().starts_with("# provider:")),
+            "[browser] must not document a provider choice (11C2)"
+        );
+        assert!(
+            block.contains("sourcehound"),
+            "[browser] names the sourcehound engine"
         );
     }
 

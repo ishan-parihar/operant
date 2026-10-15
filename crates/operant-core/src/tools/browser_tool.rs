@@ -1,15 +1,9 @@
 //! Browser Automation Tool for Operant-RS
 //!
-//! This tool provides browser automation capabilities using multiple backend providers.
-//! It allows the agent to navigate to URLs, take snapshots, and interact with page elements.
-//!
-//! Supported providers (configured via `browser.provider` in config.toml):
-//! - `sourcehound` (default) - sourcehound MCP server (`sourcehound mcp`),
-//!   driving cloakctl for navigation and scraping
-//! - `camofox` - Camofox REST API (`CAMOFOX_URL`)
-//! - `browserbase` - Browserbase cloud (`BROWSERBASE_API_KEY`)
-//! - `browser-use` - Browser Use cloud (`BROWSER_USE_API_KEY`)
-//! - `firecrawl` - Firecrawl scrape API (`FIRECRAWL_API_KEY`)
+//! Browser automation over the sourcehound engine (the only backend —
+//! plan 11C2): navigate to URLs, take snapshots, and interact with page
+//! elements through the sourcehound MCP server (cloakctl-driven,
+//! CDP-capable).
 //!
 //! ## Troubleshooting
 //! The `sourcehound` provider needs no download — it needs the `sourcehound`
@@ -233,14 +227,9 @@ impl OperantTool for BrowserTool {
     }
 
     fn description(&self) -> &str {
-        "Browser automation tool for navigating and interacting with websites. \
-         Supports multiple providers configured via browser.provider in config.toml:\n\
-         - sourcehound (default): sourcehound MCP server (cloakctl-driven navigation)\n\
-         - camofox: Camofox REST API (CAMOFOX_URL)\n\
-         - browserbase: Browserbase cloud (BROWSERBASE_API_KEY)\n\
-         - browser-use: Browser Use cloud (BROWSER_USE_API_KEY)\n\
-         - firecrawl: Firecrawl scrape API (FIRECRAWL_API_KEY)\n\
-         Commands: navigate (url), snapshot, click (selector), type (selector, text),\n\
+        "Browser automation tool for navigating and interacting with websites \
+         over the sourcehound engine (the only backend). Commands: navigate \
+         (url), snapshot, click (selector), type (selector, text),\n\
          scroll (text=direction), accessibility_tree. Use snapshot to read a page.\n\
          Cookie commands: cookies_import (cookie_file=<cookies.txt|JSON path> or <browser name>),\n\
          cookies_list, cookies_clear — import cookies from Chrome/Brave/Edge/Firefox so\n\
