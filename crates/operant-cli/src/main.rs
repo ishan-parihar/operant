@@ -2296,16 +2296,13 @@ async fn load_repo_memory_manager() -> Result<(MemoryManager, Option<Arc<dyn Mem
 pub(crate) async fn load_memory_manager(
     storage_dir: PathBuf,
 ) -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
+    // (plan 11C3) memory-wire is the ONLY engine. The MemoryManager half of
+    // this pair is now inert plumbing the agent still accepts (kept so the
+    // D-5 threading compiles; nothing reads it into prompts anymore), and
+    // the one-time MEMORY.md/USER.md import runs inside the factory. The
+    // concrete provider is built here so the memory tools' global can hold
+    // the same handle the agent recalls through.
     let memory_manager = MemoryManager::with_storage_dir(storage_dir.clone());
-    memory_manager
-        .load_from_disk()
-        .await
-        .context("Failed to load long-term memory")?;
-
-    // Route the memory tools (memory_store/search/recall) through this injected
-    // manager so tool-writes land in the store that gets injected into the
-    // prompt (hermes parity — one coherent memory surface).
-    operant_core::tools::memory_tools::set_active_memory_manager(memory_manager.clone()).await;
 
     let cfg = operant_core::config::runtime_config();
     if cfg.memory.enabled && cfg.memory.provider != "builtin" && cfg.memory.provider != "disabled" {
@@ -2331,18 +2328,35 @@ pub(crate) async fn load_memory_manager(
             });
             return Ok((memory_manager, Some(plugin_provider)));
         }
-        let provider =
-            operant_core::memory_provider::build_memory_provider(&cfg.memory.provider, storage_dir);
-        let name = provider.name().to_string();
-        let init = provider.clone();
-        // Initialize in the background (spawns/warms the agentmemory server);
-        // failures are non-fatal.
-        tokio::spawn(async move {
-            if let Err(e) = init.initialize("main").await {
-                tracing::warn!(provider = %name, error = %e, "Memory provider init failed");
+        // (plan 11C3) build the CONCRETE provider so the memory tools'
+        // global holds the same handle the agent recalls through, then
+        // coerce for the trait-object return. The [memory] provider name
+        // warning fires at config load (MemorySettings::warn_legacy_keys).
+        match operant_core::memory_wire::MemoryWireProvider::new(storage_dir.clone()) {
+            Ok(concrete) => {
+                let _ = concrete.import_legacy_files(&storage_dir);
+                let concrete = std::sync::Arc::new(concrete);
+                operant_core::tools::memory_tools::set_active_memory_provider(
+                    std::sync::Arc::clone(&concrete),
+                )
+                .await;
+                let provider: Arc<dyn MemoryProvider> = concrete;
+                let name = provider.name().to_string();
+                let init = provider.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = init.initialize("main").await {
+                        tracing::warn!(provider = %name, error = %e, "Memory provider init failed");
+                    }
+                });
+                Ok((memory_manager, Some(provider)))
             }
-        });
-        Ok((memory_manager, Some(provider)))
+            Err(e) => {
+                // No provider (memory off for the session): the tools'
+                // honest no-backend error is the contract.
+                tracing::error!(error = %e, "memory provider init failed — memory disabled");
+                Ok((memory_manager, None))
+            }
+        }
     } else {
         Ok((memory_manager, None))
     }

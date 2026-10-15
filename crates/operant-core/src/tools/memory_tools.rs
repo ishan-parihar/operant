@@ -6,8 +6,6 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -16,58 +14,39 @@ use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 use std::sync::LazyLock;
 
-fn memory_file_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".operant")
-        .join("memory")
-        .join("tool_memories.json")
+/// (plan 11C3) Global handle to the live memory-wire provider — the ONE
+/// memory backend. Set once at agent construction by the CLI so the memory
+/// tools write into the same store the provider recalls from. When unset
+/// (unit tests, standalone use) the tools report that memory is not
+/// attached instead of silently writing to a fallback nobody reads.
+pub(crate) static ACTIVE_MEMORY_PROVIDER: LazyLock<
+    RwLock<Option<std::sync::Arc<crate::memory_wire::MemoryWireProvider>>>,
+> = LazyLock::new(|| RwLock::new(None));
+
+/// Register the active provider for the memory tools.
+pub async fn set_active_memory_provider(
+    provider: std::sync::Arc<crate::memory_wire::MemoryWireProvider>,
+) {
+    *ACTIVE_MEMORY_PROVIDER.write().await = Some(provider);
 }
 
-/// Global handle to the live MemoryManager (the injected MEMORY.md store).
-///
-/// Set once at agent construction by the CLI so the memory tools write into
-/// the same store that `build_memory_context` injects into the prompt
-/// (hermes parity: one coherent memory surface). When unset (unit tests,
-/// standalone use) the tools fall back to the legacy JSON file store.
-pub(crate) static ACTIVE_MEMORY_MANAGER: LazyLock<RwLock<Option<crate::memory::MemoryManager>>> =
-    LazyLock::new(|| RwLock::new(None));
-
-/// Register the active injected store for the memory tools.
-pub async fn set_active_memory_manager(manager: crate::memory::MemoryManager) {
-    *ACTIVE_MEMORY_MANAGER.write().await = Some(manager);
+/// (plan 11C3) A snapshot of the active provider handle (distillation and
+/// other background writers).
+pub async fn active_memory_provider()
+-> Option<std::sync::Arc<crate::memory_wire::MemoryWireProvider>> {
+    ACTIVE_MEMORY_PROVIDER.read().await.clone()
 }
 
-fn load_store() -> HashMap<String, MemoryEntry> {
-    let path = memory_file_path();
-    match std::fs::read_to_string(&path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => HashMap::new(),
-    }
+/// Test hook: detach the active provider so cross-module tests don't leak
+/// their handle into each other.
+pub async fn clear_active_memory_provider_for_tests() {
+    *ACTIVE_MEMORY_PROVIDER.write().await = None;
 }
 
-fn save_store(store: &HashMap<String, MemoryEntry>) {
-    let path = memory_file_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(
-        &path,
-        serde_json::to_string_pretty(store).unwrap_or_default(),
-    );
-}
-
-static MEMORY_STORE: LazyLock<Arc<RwLock<HashMap<String, MemoryEntry>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(load_store())));
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MemoryEntry {
-    content: String,
-    block_type: String,
-    importance: u8,
-    tags: Vec<String>,
-    created_at: i64,
-}
+/// Cross-module test lock: every test that attaches or clears the ACTIVE
+/// provider holds this (the tools' TEST_GUARD covers only this module —
+/// distillation.rs's test needs the same serialization).
+pub static PROVIDER_TEST_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Tool for storing a memory
 pub struct MemoryStoreTool;
@@ -109,52 +88,33 @@ impl OperantTool for MemoryStoreTool {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        // Route through the injected MemoryManager when one is active so the
-        // memory lands in the store that gets injected into the prompt
-        // (hermes parity). Fall back to the legacy JSON store otherwise.
-        if let Some(manager) = ACTIVE_MEMORY_MANAGER.read().await.clone() {
-            let block = crate::memory::MemoryBlock::new(
-                args.key.clone(),
-                args.block_type
-                    .clone()
-                    .unwrap_or_else(|| "general".to_string()),
-                args.content.clone(),
-            )
-            .importance(args.importance.unwrap_or(50).min(100))
-            .tags(args.tags.clone().unwrap_or_default());
-            manager.store(block).await;
-            let _ = manager.save_to_disk().await;
-            return ToolResult::success(
+        // (plan 11C3) one backend: the memory-wire provider. The key and
+        // type ride as tags so they stay queryable.
+        let Some(provider) = ACTIVE_MEMORY_PROVIDER.read().await.clone() else {
+            return ToolResult::error(
+                "memory_store",
+                "No memory backend attached in this session.".to_string(),
+            );
+        };
+        let mut tags = args.tags.clone().unwrap_or_default();
+        tags.push(format!("key:{}", args.key));
+        if let Some(block_type) = args.block_type.clone() {
+            tags.push(format!("type:{block_type}"));
+        }
+        match provider.retain_fact(&args.content, &tags) {
+            Some(_) => ToolResult::success(
                 "memory_store",
                 serde_json::json!({
                     "key": args.key,
                     "stored": true,
                     "timestamp": now
                 }),
-            );
+            ),
+            None => ToolResult::error(
+                "memory_store",
+                "Memory backend failed to store the fact (see logs).".to_string(),
+            ),
         }
-
-        let entry = MemoryEntry {
-            content: args.content.clone(),
-            block_type: args.block_type.unwrap_or_else(|| "general".to_string()),
-            importance: args.importance.unwrap_or(50).min(100),
-            tags: args.tags.unwrap_or_default(),
-            created_at: now,
-        };
-
-        let mut store = MEMORY_STORE.write().await;
-        store.insert(args.key.clone(), entry);
-        save_store(&store);
-        drop(store);
-
-        ToolResult::success(
-            "memory_store",
-            serde_json::json!({
-                "key": args.key,
-                "stored": true,
-                "timestamp": now
-            }),
-        )
     }
 }
 
@@ -193,73 +153,27 @@ impl OperantTool for MemorySearchTool {
         let max_results = args.max_results.unwrap_or(10).min(50);
         let query_lower = args.query.to_lowercase();
 
-        // Route through the injected MemoryManager when active so search hits
-        // the same store that feeds the prompt (hermes parity).
-        if let Some(manager) = ACTIVE_MEMORY_MANAGER.read().await.clone() {
-            let results: Vec<serde_json::Value> = manager
-                .search(&args.query)
-                .await
-                .into_iter()
-                .take(max_results)
-                .map(|block| {
-                    serde_json::json!({
-                        "key": block.id,
-                        "content": block.content,
-                        "block_type": block.block_type,
-                        "importance": block.importance,
-                        "tags": block.tags,
-                        "created_at": block.created_at,
-                        "relevance": if block.content.to_lowercase().contains(&query_lower) { 1.0 } else { 0.5 }
-                    })
-                })
-                .collect();
-            return ToolResult::success(
+        let max_results = args.max_results.unwrap_or(10).min(50);
+
+        // (plan 11C3) one backend: semantic recall over memory-wire.
+        let Some(provider) = ACTIVE_MEMORY_PROVIDER.read().await.clone() else {
+            return ToolResult::error(
                 "memory_search",
-                serde_json::json!({
-                    "query": args.query,
-                    "results": results,
-                    "count": results.len()
-                }),
+                "No memory backend attached in this session.".to_string(),
             );
-        }
-
-        let store = MEMORY_STORE.read().await;
-        let mut results = Vec::new();
-
-        for (key, entry) in store.iter() {
-            let content_match = entry.content.to_lowercase().contains(&query_lower);
-            let tag_match = entry
-                .tags
-                .iter()
-                .any(|t| t.to_lowercase().contains(&query_lower));
-            let type_match = entry.block_type.to_lowercase().contains(&query_lower);
-
-            if content_match || tag_match || type_match {
-                results.push(serde_json::json!({
-                    "key": key,
-                    "content": entry.content,
-                    "block_type": entry.block_type,
-                    "importance": entry.importance,
-                    "tags": entry.tags,
-                    "created_at": entry.created_at,
-                    "relevance": if content_match { 1.0 } else { 0.5 }
-                }));
-
-                if results.len() >= max_results {
-                    break;
-                }
-            }
-        }
-
-        // Sort by relevance (content match first)
-        results.sort_by(|a, b| {
-            let relevance_a = a["relevance"].as_f64().unwrap_or(0.0);
-            let relevance_b = b["relevance"].as_f64().unwrap_or(0.0);
-            relevance_b
-                .partial_cmp(&relevance_a)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
+        };
+        let hits = provider.recall_text(&args.query, max_results);
+        let results: Vec<serde_json::Value> = hits
+            .lines()
+            .filter(|l| l.starts_with("- "))
+            .take(max_results)
+            .map(|l| {
+                serde_json::json!({
+                    "content": l.trim_start_matches("- "),
+                    "relevance": 1.0
+                })
+            })
+            .collect();
         ToolResult::success(
             "memory_search",
             serde_json::json!({
@@ -302,48 +216,30 @@ impl OperantTool for MemoryRecallTool {
             }
         };
 
-        let store = MEMORY_STORE.read().await;
-
-        // Route through the injected MemoryManager when active (hermes parity).
-        if let Some(manager) = ACTIVE_MEMORY_MANAGER.read().await.clone() {
-            match manager.get(&args.key).await {
-                Some(block) => ToolResult::success(
-                    "memory_recall",
-                    serde_json::json!({
-                        "key": block.id,
-                        "content": block.content,
-                        "block_type": block.block_type,
-                        "importance": block.importance,
-                        "tags": block.tags,
-                        "created_at": block.created_at,
-                        "found": true
-                    }),
-                ),
-                None => ToolResult::error(
-                    "memory_recall",
-                    format!("Memory with key '{}' not found", args.key),
-                ),
-            }
-        } else {
-            match store.get(&args.key) {
-                Some(entry) => ToolResult::success(
-                    "memory_recall",
-                    serde_json::json!({
-                        "key": args.key,
-                        "content": entry.content,
-                        "block_type": entry.block_type,
-                        "importance": entry.importance,
-                        "tags": entry.tags,
-                        "created_at": entry.created_at,
-                        "found": true
-                    }),
-                ),
-                None => ToolResult::error(
-                    "memory_recall",
-                    format!("Memory with key '{}' not found", args.key),
-                ),
-            }
+        // (plan 11C3) one backend: semantic recall keyed by the asked-for
+        // key — memory-wire has no by-id get, and a semantic match on the
+        // key is the honest equivalent (the store tag carries key:<id>).
+        let Some(provider) = ACTIVE_MEMORY_PROVIDER.read().await.clone() else {
+            return ToolResult::error(
+                "memory_recall",
+                "No memory backend attached in this session.".to_string(),
+            );
+        };
+        let hits = provider.recall_text(&args.key, 5);
+        if hits.trim().is_empty() {
+            return ToolResult::error(
+                "memory_recall",
+                format!("Memory with key '{}' not found", args.key),
+            );
         }
+        ToolResult::success(
+            "memory_recall",
+            serde_json::json!({
+                "key": args.key,
+                "content": hits,
+                "found": true
+            }),
+        )
     }
 }
 
@@ -352,7 +248,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // Serializes tests that touch ACTIVE_MEMORY_MANAGER so a routing test
+    // Serializes tests that touch ACTIVE_MEMORY_PROVIDER so a routing test
     // doesn't leak its global hook into parallel legacy tests.
     static TEST_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -381,25 +277,28 @@ mod tests {
     }
 
     #[tokio::test]
+    /// (plan 11C3) no legacy JSON fallback anymore: with no provider
+    /// attached, store/recall/search report it instead of silently
+    /// writing to a store nobody reads.
     async fn test_memory_store_and_recall() {
-        let _guard = TEST_GUARD.lock().await;
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        clear_active_memory_provider_for_tests().await;
         let store = MemoryStoreTool;
         let recall = MemoryRecallTool;
 
-        // Store a memory
         let store_result = store
             .execute(
                 json!({"key": "test_key", "content": "test content"}),
                 ToolContext::default(),
             )
             .await;
-        assert!(store_result.success);
+        assert!(!store_result.success, "no backend = honest error");
+        assert!(store_result.error.unwrap().contains("No memory backend"));
 
-        // Recall it
         let recall_result = recall
             .execute(json!({"key": "test_key"}), ToolContext::default())
             .await;
-        assert!(recall_result.success);
+        assert!(!recall_result.success, "no backend = honest error");
     }
 
     #[tokio::test]
@@ -411,42 +310,50 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_search_empty() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        clear_active_memory_provider_for_tests().await;
         let tool = MemorySearchTool;
         let result = tool
             .execute(json!({"query": "nonexistent"}), ToolContext::default())
             .await;
-        assert!(result.success);
+        assert!(!result.success, "no backend = honest error, not empty list");
     }
 
     #[tokio::test]
     async fn test_memory_recall_not_found() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        clear_active_memory_provider_for_tests().await;
         let tool = MemoryRecallTool;
         let result = tool
             .execute(json!({"key": "nonexistent_key"}), ToolContext::default())
             .await;
-        assert!(!result.success); // Returns error when key not found
-        assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("not found"));
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("No memory backend"));
     }
 
+    /// (plan 11C3) The tools route through the ONE backend: the memory-wire
+    /// provider. A real provider over a temp store; store + recall land in
+    /// the same store the provider recalls from.
     #[tokio::test]
-    async fn test_memory_tools_route_through_active_manager() {
-        let _guard = TEST_GUARD.lock().await;
-        let dir = std::env::temp_dir().join(format!("operant-mm-test-{}", std::process::id()));
+    async fn memory_tools_route_through_the_provider() {
+        let _guard = PROVIDER_TEST_GUARD.lock().await;
+        let dir = std::env::temp_dir().join(format!("operant-mw-tool-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let manager = crate::memory::MemoryManager::with_storage_dir(dir.clone());
-        manager.load_from_disk().await.unwrap();
-
-        set_active_memory_manager(manager.clone()).await;
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        set_active_memory_provider(provider.clone()).await;
 
         let store = MemoryStoreTool;
         let result = store
             .execute(
-                json!({"key": "routed_key", "content": "routed content", "importance": 70}),
+                json!({"key": "routed_key", "content": "routed unique content for routing test"}),
                 ToolContext::default(),
             )
             .await;
-        assert!(result.success, "store should succeed via active manager");
+        assert!(
+            result.success,
+            "store should succeed via the provider: {result:?}"
+        );
 
         let recall = MemoryRecallTool;
         let recall_result = recall
@@ -454,19 +361,19 @@ mod tests {
             .await;
         assert!(
             recall_result.success,
-            "recall via active manager: {:?}",
-            recall_result
+            "recall via the provider: {recall_result:?}"
         );
-
-        let got = manager.get("routed_key").await;
+        let found = crate::memory_wire::MemoryWireProvider::recall_text(
+            &provider,
+            "routed unique content",
+            5,
+        );
         assert!(
-            got.is_some(),
-            "memory should land in the injected manager store"
+            !found.trim().is_empty(),
+            "the fact is in the shared store: {found:?}"
         );
-        assert_eq!(got.unwrap().importance, 70);
 
-        // reset the hook so other tests keep using the JSON fallback
-        *ACTIVE_MEMORY_MANAGER.write().await = None;
+        *ACTIVE_MEMORY_PROVIDER.write().await = None;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

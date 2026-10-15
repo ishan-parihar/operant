@@ -113,6 +113,10 @@ where
 pub struct MemoryWireProvider<S: Store = SqliteStore> {
     service: Arc<MemoryService<S>>,
     bank: String,
+    /// (plan 11C3) False when the on-disk open failed and `new` fell back
+    /// to an in-memory store — the legacy import must not rename the
+    /// user's MEMORY.md against a store that dies with the process.
+    persistent: bool,
 }
 
 impl<S: Store> MemoryWireProvider<S> {
@@ -121,6 +125,7 @@ impl<S: Store> MemoryWireProvider<S> {
         Self {
             service: Arc::new(service),
             bank: bank.into(),
+            persistent: false,
         }
     }
 
@@ -147,7 +152,7 @@ impl<S: Store> MemoryWireProvider<S> {
     /// Recall for a query, returning a formatted text block. Uses
     /// `recall_with_weights` (not plain `recall`) so the fusion weights are
     /// explicit and can be tuned without changing the call shape.
-    fn recall_text(&self, query: &str, limit: usize) -> String {
+    pub fn recall_text(&self, query: &str, limit: usize) -> String {
         if query.trim().is_empty() {
             return String::new();
         }
@@ -180,7 +185,7 @@ impl<S: Store> MemoryWireProvider<S> {
     }
 
     /// Retain a standalone fact (the `memory_save` tool / `on_memory_write`).
-    fn retain_fact(&self, content: &str, tags: &[String]) -> Option<String> {
+    pub fn retain_fact(&self, content: &str, tags: &[String]) -> Option<String> {
         if content.trim().is_empty() {
             return None;
         }
@@ -200,12 +205,13 @@ impl MemoryWireProvider<SqliteStore> {
     /// store: an unreadable database file should cost persistence, not memory
     /// for the rest of the process. `Err` is reserved for the case where even
     /// the in-memory store cannot be constructed, which the caller
-    /// (`build_memory_provider`) handles by degrading to `BuiltinProvider`.
+    /// (`build_memory_provider`) handles by degrading to a no-op provider.
     pub fn new(storage_dir: PathBuf) -> Result<Self> {
         let db_path = storage_dir.join("memory_wire.sqlite");
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let mut persistent = true;
         let store = match SqliteStore::open(&db_path) {
             Ok(store) => store,
             Err(e) => {
@@ -214,6 +220,7 @@ impl MemoryWireProvider<SqliteStore> {
                     error = %e,
                     "memory_wire on-disk store unavailable — falling back to in-memory store"
                 );
+                persistent = false;
                 SqliteStore::open_in_memory()
                     .map_err(|e| Error::Agent(format!("memory_wire store open failed: {e}")))?
             }
@@ -221,6 +228,40 @@ impl MemoryWireProvider<SqliteStore> {
         Ok(Self {
             service: Arc::new(MemoryService::new(store)),
             bank: DEFAULT_BANK.to_string(),
+            persistent,
+        })
+    }
+
+    /// (plan 11C3) The one-time MEMORY.md/USER.md import. The storage dir
+    /// is the legacy files' home (the same place MemoryManager wrote them),
+    /// so the provider that replaces the file store is the one that
+    /// migrates its data. Only runs against a PERSISTENT store — a failed
+    /// sqlite open degraded to in-memory, and renaming the user's files
+    /// after retaining into a store that dies with the process would lose
+    /// their data.
+    pub fn import_legacy_files(&self, storage_dir: &std::path::Path) -> std::io::Result<usize> {
+        if !self.persistent {
+            tracing::warn!(
+                "memory-wire store is in-memory (degraded) — legacy MEMORY.md import skipped; retrying next start"
+            );
+            return Ok(0);
+        }
+        let service = Arc::clone(&self.service);
+        let bank = self.bank.clone();
+        crate::memory_import::import_legacy_files(storage_dir, |content, tags| {
+            guard("import_legacy", || {
+                service.retain_tagged(&bank, &content, None, &tags)
+            })
+            .is_some()
+        })
+        .map(|imported| {
+            if imported > 0 {
+                tracing::info!(
+                    count = imported,
+                    "imported legacy MEMORY.md/USER.md entries into memory-wire"
+                );
+            }
+            imported
         })
     }
 }

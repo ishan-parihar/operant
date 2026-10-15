@@ -181,6 +181,10 @@ impl OperantAgent {
 
         // then merge usage into the agent's result.json when it wrote one
         // (set_run_usage prefers the driver either way)
+        // O-17: the recorded refusals merge into the result — the
+        // kernel treats them as blockers, not breaches (H-03).
+        let refusals = crate::org::read_refusals(&run_dir);
+
         let result_path = run_dir.join("result.json");
         let Ok(existing) = std::fs::read_to_string(&result_path) else {
             return;
@@ -192,6 +196,9 @@ impl OperantAgent {
         let Some(obj) = env.as_object_mut() else {
             return;
         };
+        if !refusals.is_empty() {
+            obj.insert("refusals".to_string(), serde_json::Value::Array(refusals));
+        }
 
         obj.insert(
             "usage".to_string(),
@@ -213,16 +220,12 @@ impl OperantAgent {
     }
 
     pub(crate) fn spawn_session_distillation(&self, history: Vec<Message>) {
-        let Some(memory_manager) = self.memory_manager.clone() else {
-            return;
-        };
-
+        // (plan 11C3) no memory_manager gate anymore — distillation writes
+        // through the process's memory-wire provider (checked inside).
         let client = self.client.clone();
         let model = self.config.model.clone();
         tokio::spawn(async move {
-            if let Err(error) =
-                distill_session_to_memory(client, model, memory_manager, history).await
-            {
+            if let Err(error) = distill_session_to_memory(client, model, history).await {
                 warn!(error = %error, "Session distillation failed");
             }
         });

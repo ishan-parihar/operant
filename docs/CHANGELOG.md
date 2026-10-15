@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-846 — memory is memory-wire only (plan 11C3).** Six parallel
+  memory layers collapse to one engine. BuiltinProvider and the
+  agentmemory aliases are deleted: `build_memory_provider` builds
+  memory-wire for every configured name (unknown names warn once at
+  config load, alongside agentmemory_auto_spawn), and an init failure
+  degrades to a no-op provider — memory is unavailable for the session,
+  never a silent file fallback. The `<long_term_memory>` prompt block is
+  GONE: memory reached the prompt twice (the file-backed block AND the
+  provider's semantic recall); now only the provider recalls
+  (`<memory_context>`). The memory tools (store/search/recall) route
+  through the ONE provider — their legacy JSON fallback deleted, and with
+  no backend attached they report it honestly instead of writing to a
+  store nobody reads. Session distillation retains through the provider
+  too (the old path wrote MEMORY.md, which nothing injects anymore).
+  **One-time importer**: on the first start after upgrade, MEMORY.md and
+  USER.md entries are parsed with the same §-format that wrote them and
+  retained into memory-wire tagged `[imported, …]`, then the files are
+  renamed `*.imported` (kept — the rollback path; the rename is the
+  idempotency marker). No-data-loss contract: a failing retain or an
+  in-memory (degraded) store leaves the files untouched for the next
+  start. Config: `[memory] provider` accepted-with-warning; example.toml
+  documents the single engine.
+
 - **iter-840 — one binary updater for sourcehound and aft (plan 11B).**
   The two auto-update paths (single-binary sourcehound, versioned-cache
   aft) each carried their own download/verify/replace logic, neither

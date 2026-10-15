@@ -85,6 +85,7 @@ pub mod kanban;
 pub mod mcp;
 pub mod mcp_oauth;
 pub mod memory;
+pub mod memory_import;
 pub mod memory_provider;
 pub mod memory_wire;
 pub mod migrations;
@@ -183,7 +184,7 @@ pub use gateway_session::{
 };
 pub use mcp::{McpClient, McpNamespacedTool, McpStdioClient, McpTool, McpTransport};
 pub use memory::{MemoryBlock, MemoryManager, Session, UserProfile};
-pub use memory_provider::{BuiltinProvider, MemoryProvider, build_memory_provider};
+pub use memory_provider::{MemoryProvider, build_memory_provider};
 pub use memory_wire::MemoryWireProvider;
 pub use parser::ToolCallParser;
 pub use platform::PlatformInfo;

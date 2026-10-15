@@ -1496,6 +1496,26 @@ pub struct MemorySettings {
 }
 
 impl MemorySettings {
+    /// (plan 11C3 migration) memory-wire is the only engine — warn once
+    /// when a non-default provider name (or the removed agentmemory
+    /// spawn keys) is configured.
+    pub fn warn_legacy_keys(&self) {
+        if !matches!(
+            self.provider.as_str(),
+            "memory-wire" | "memory_wire" | "memory" | ""
+        ) {
+            eprintln!(
+                "warning: [memory] provider = {:?} is ignored — memory-wire is the only memory engine now. Remove the key from operant.toml.",
+                self.provider
+            );
+        }
+        if self.agentmemory_auto_spawn.unwrap_or(false) {
+            eprintln!(
+                "warning: [memory] agentmemory_auto_spawn is removed — the agentmemory server era is over. Remove the key from operant.toml."
+            );
+        }
+    }
+
     /// The resolved `@agentmemory/agentmemory@<version>` package spec used
     /// by the auto-spawner — configured pin or the pinned default, never
     /// `@latest`.
@@ -2033,6 +2053,8 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     config.tools.web.warn_legacy_keys();
     // (plan 11C2) [browser] provider is accepted-and-ignored now.
     config.browser.warn_legacy_keys();
+    // (plan 11C3) [memory] provider is accepted-and-ignored now.
+    config.memory.warn_legacy_keys();
 
     Ok(LoadedConfig { config, source })
 }

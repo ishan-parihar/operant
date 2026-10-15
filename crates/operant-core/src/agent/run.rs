@@ -2365,15 +2365,12 @@ impl OperantAgent {
         // change each turn, so they're a separate message that doesn't
         // bust the frozen prefix's cache entry.
         let mut volatile_suffix = String::new();
-        if let Some(memory_manager) = &self.memory_manager {
-            let memory_context = memory_manager.build_memory_context(2048).await;
-            let memory_context = memory_context.trim();
-            if !memory_context.is_empty() {
-                volatile_suffix.push_str("\n\n<long_term_memory>\n");
-                volatile_suffix.push_str(memory_context);
-                volatile_suffix.push_str("\n</long_term_memory>");
-            }
-        }
+        // (plan 11C3) the file-backed <long_term_memory> block is GONE —
+        // memory reaches the prompt only through the provider's semantic
+        // recall below (<memory_context>). The old block injected
+        // MEMORY.md/USER.md text in addition to the provider's recall,
+        // double-counting memory and fragmenting the surface; the one-time
+        // importer migrated those files' entries into the provider's store.
 
         // Memory provider: per-turn semantic recall (prefetch).
 

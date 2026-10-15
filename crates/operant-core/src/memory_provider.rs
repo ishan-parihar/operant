@@ -330,69 +330,8 @@ pub trait MemoryProvider: Send + Sync {
 
 // ---------------------------------------------------------------------------
 // Builtin — wraps existing MemoryManager (MEMORY.md / USER.md)
-// ---------------------------------------------------------------------------
 
-pub struct BuiltinProvider {
-    manager: crate::memory::MemoryManager,
-}
-
-impl BuiltinProvider {
-    pub fn new(manager: crate::memory::MemoryManager) -> Self {
-        Self { manager }
-    }
-}
-
-#[async_trait]
-impl MemoryProvider for BuiltinProvider {
-    fn name(&self) -> &str {
-        "builtin"
-    }
-    fn is_available(&self) -> bool {
-        true
-    }
-
-    async fn initialize(&self, session_id: &str) -> Result<()> {
-        self.manager.load_from_disk().await?;
-        self.manager.start_session(session_id).await;
-        Ok(())
-    }
-
-    async fn system_prompt_block(&self) -> String {
-        "Built-in file memory active (MEMORY.md / USER.md).".to_string()
-    }
-
-    async fn prefetch(&self, _query: &str) -> String {
-        self.manager.build_memory_context(2000).await
-    }
-
-    async fn sync_turn(&self, user: &str, _assistant: &str) -> Result<()> {
-        self.manager
-            .add_message(crate::client::Message::user(user))
-            .await;
-        Ok(())
-    }
-
-    fn on_turn_start(&self, turn_number: usize, _message: &str) {
-        tracing::debug!(turn_number, "BuiltinProvider: turn started");
-    }
-
-    fn on_session_end(&self, _messages: &[crate::client::Message]) {
-        tracing::debug!("BuiltinProvider: session ended — no extraction needed");
-    }
-
-    fn on_session_switch(&self, _new_session_id: &str, _parent_session_id: &str, _reset: bool) {
-        tracing::debug!("BuiltinProvider: session switched");
-    }
-
-    fn on_memory_write(&self, action: &str, target: &str, content: &str) {
-        tracing::debug!(
-            action,
-            target,
-            content_len = content.len(),
-            "BuiltinProvider: memory write mirrored"
-        );
-    }
-}
+// (plan 11C3) BuiltinProvider is deleted — memory-wire is the only engine.
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -413,33 +352,56 @@ pub fn build_memory_provider(
     provider_name: &str,
     storage_dir: std::path::PathBuf,
 ) -> Arc<dyn MemoryProvider> {
-    match provider_name {
-        // "agentmemory"/"memory_wire" → MemoryWireProvider (in-process
-        // memory_wire). If the store can't be opened at construction it
-        // degrades gracefully at call time (see memory_wire.rs) rather than
-        // panicking.
-        "agentmemory" | "memory_wire" | "memory-wire" => {
-            match crate::memory_wire::MemoryWireProvider::new(storage_dir.clone()) {
-                Ok(provider) => Arc::new(provider),
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        "memory_wire provider init failed; falling back to BuiltinProvider"
-                    );
-                    Arc::new(BuiltinProvider::new(
-                        crate::memory::MemoryManager::with_storage_dir(storage_dir),
-                    ))
-                }
-            }
+    // (plan 11C3) memory-wire is the ONLY provider. The name argument is
+    // accepted so existing configs keep loading; anything other than the
+    // memory-wire family warns once (the legacy `builtin` selection is the
+    // important case — the user's own config may still say it).
+    if !matches!(
+        provider_name,
+        "memory-wire" | "memory_wire" | "agentmemory" | "memory" | ""
+    ) {
+        eprintln!(
+            "warning: [memory] provider = {provider_name:?} is ignored — memory-wire is the only memory engine now. Remove the key from operant.toml."
+        );
+    }
+    match crate::memory_wire::MemoryWireProvider::new(storage_dir.clone()) {
+        Ok(provider) => {
+            // The one-time MEMORY.md/USER.md import rides construction: the
+            // provider that replaces the file store migrates its data.
+            // Failures are logged inside (never rename on a failed retain).
+            let _ = provider.import_legacy_files(&storage_dir);
+            Arc::new(provider)
         }
-        // "builtin", "disabled", and any other value → BuiltinProvider.
-        // Old provider names (tdg/hindsight/retaindb/mem0/local-vector) also
-        // land here — they're treated as unknown and silently downgraded to
-        // BuiltinProvider with no error, since the user's config may still
-        // reference them after upgrading.
-        _ => Arc::new(BuiltinProvider::new(
-            crate::memory::MemoryManager::with_storage_dir(storage_dir),
-        )),
+        Err(e) => {
+            // No fallback anymore (BuiltinProvider is deleted): memory
+            // degrades to unavailable for this session — the agent's
+            // degrade-don't-die contract turns it into empty prefetches.
+            tracing::error!(
+                error = %e,
+                "memory_wire provider init failed — memory disabled for this session"
+            );
+            Arc::new(NoopProvider)
+        }
+    }
+}
+
+/// (plan 11C3) The init-failure stand-in: every operation is a miss. This
+/// keeps the `Arc<dyn MemoryProvider>` contract (the agent loop calls
+/// prefetch/sync_turn unconditionally) without resurrecting a file store.
+struct NoopProvider;
+
+#[async_trait]
+impl MemoryProvider for NoopProvider {
+    fn name(&self) -> &str {
+        "unavailable"
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    async fn initialize(&self, _session_id: &str) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -447,44 +409,13 @@ pub fn build_memory_provider(
 mod tests {
     use super::*;
 
+    /// (plan 11C3) the ONE-engine contract: every name — known aliases and
+    /// unknown/retired values alike — builds the memory-wire provider (or
+    /// the no-op stand-in on init failure). The builtin fallback is gone.
     #[test]
-    fn test_build_builtin() {
-        let p = build_memory_provider("builtin", std::path::PathBuf::from("/tmp"));
-        assert_eq!(p.name(), "builtin");
-    }
-
-    #[test]
-    fn test_build_unknown_falls_back_to_builtin() {
+    fn test_build_unknown_lands_on_memory_wire() {
         let p = build_memory_provider("unknown", std::path::PathBuf::from("/tmp"));
-        assert_eq!(p.name(), "builtin");
-    }
-
-    // Old provider names that were removed should silently fall back to
-    // builtin, not error or panic.
-    #[test]
-    fn test_build_removed_providers_fall_back_to_builtin() {
-        for old in &[
-            "tdg",
-            "hindsight",
-            "retaindb",
-            "mem0",
-            "local-vector",
-            "local_vector",
-        ] {
-            let p = build_memory_provider(old, std::path::PathBuf::from("/tmp"));
-            assert_eq!(
-                p.name(),
-                "builtin",
-                "old provider '{}' should fall back to builtin",
-                old
-            );
-        }
-    }
-
-    #[test]
-    fn test_build_disabled_falls_back_to_builtin() {
-        let p = build_memory_provider("disabled", std::path::PathBuf::from("/tmp"));
-        assert_eq!(p.name(), "builtin");
+        assert_eq!(p.name(), "memory_wire");
     }
 
     #[tokio::test]
@@ -493,14 +424,14 @@ mod tests {
         // availability via the cached flag (check_health default) and be
         // always-ready for the /mcp reconnect warm-up (ensure_server
         // default). (iter-326 — native agent-memory lifecycle.)
-        let p = build_memory_provider("builtin", std::path::PathBuf::from("/tmp"));
+        let p = build_memory_provider("memory-wire", std::path::PathBuf::from("/tmp"));
         assert!(
             p.check_health().await,
-            "builtin default check_health must report is_available()"
+            "memory-wire check_health must report is_available()"
         );
         assert!(
             p.ensure_server().await,
-            "builtin default ensure_server must be always-ready"
+            "memory-wire ensure_server must be always-ready"
         );
     }
 

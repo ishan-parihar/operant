@@ -565,6 +565,9 @@ pub struct OperantAgent {
     /// When triggered, the agent loop exits at the next iteration boundary
     /// and tool execution is aborted via `flag.check()`.
     pub(crate) interrupt_flag: crate::interrupt::InterruptFlag,
+    /// O-19: provider-reported tokens this Holon run has spent — enforced
+    /// against the policy's budget cap in `emit_usage_and_cost`.
+    pub(crate) holon_tokens_spent: std::sync::atomic::AtomicU64,
     /// R2: set when a stream error on a known reasoning model fired with no
     /// content arrived yet (upstream idle-killed the thinking phase). The run
     /// loop appends thinking-timeout guidance to the final error message once
@@ -1559,6 +1562,11 @@ mod tests {
         use crate::agent::clients::openai::OpenAIModelClient;
         use crate::client::OpenAIClient;
 
+        // (plan 11C3) the <long_term_memory> block is GONE — memory reaches
+        // the prompt only through the provider's semantic recall. The old
+        // MemoryManager-injected block is the behavior this test pinned and
+        // the plan deleted; with a manager attached and the provider absent,
+        // the prompt carries NO file-backed memory text.
         let memory_manager = MemoryManager::new();
         memory_manager
             .store(
@@ -1579,10 +1587,6 @@ mod tests {
         .with_memory_manager(memory_manager);
 
         let messages = agent.build_messages("test-session").await.unwrap();
-        // iter-39: the system prompt is now split into a frozen prefix
-        // (base prompt + skills) and a volatile suffix (memory + workspace
-        // context). Long-term memory lands in the second system message,
-        // not the first. Concatenate all system message content to check.
         let system: String = messages
             .iter()
             .filter(|m| m.role == crate::client::Role::System)
@@ -1590,9 +1594,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(system.contains("<long_term_memory>"));
-        assert!(system.contains("[fact] User prefers concise answers"));
-        assert!(system.contains("</long_term_memory>"));
+        assert!(
+            !system.contains("<long_term_memory>"),
+            "the file-backed block is gone (plan 11C3)"
+        );
     }
 
     // ── Wave-4 ordered preflight ladder ────────────────────────────────

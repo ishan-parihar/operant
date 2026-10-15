@@ -10,15 +10,17 @@ use tracing::debug;
 use crate::agent::{ChatRequest, ModelClient};
 use crate::client::{Message, Role};
 use crate::error::{Error, Result};
-use crate::memory::{MemoryBlock, MemoryManager};
 
 const DISTILLATION_SYSTEM_DIRECTIVE: &str = "Analyze the conversation history. Extract ONLY permanent, durable knowledge, rules, and user preferences. Ignore ephemeral bugs, narrative, or code snippets. Output ONLY a JSON array of strings containing these concise facts.";
 
-/// Distill durable facts from a completed session and persist them to long-term memory.
+/// Distill durable facts from a completed session and persist them to
+/// long-term memory — through the ONE backend (plan 11C3): the memory-wire
+/// provider. The old MemoryManager write path is gone with the
+/// <long_term_memory> prompt block; distilling into a file nobody reads
+/// was a dead write.
 pub async fn distill_session_to_memory(
     client: Arc<dyn ModelClient>,
     model: String,
-    memory_manager: MemoryManager,
     history: Vec<Message>,
 ) -> Result<usize> {
     if history.is_empty() {
@@ -53,21 +55,23 @@ pub async fn distill_session_to_memory(
             continue;
         }
 
-        let block = MemoryBlock::new(
-            distilled_memory_id(trimmed, stored),
-            "fact",
-            trimmed.to_string(),
-        )
-        .importance(90)
-        .tags(vec!["distilled".to_string(), "long_term".to_string()]);
-        memory_manager.store(block).await;
-        stored += 1;
+        // (plan 11C3) retain into the memory-wire provider's active
+        // instance — the same store the tools and recall use.
+        let provider = crate::tools::memory_tools::active_memory_provider().await;
+        match provider {
+            Some(provider) => {
+                provider.retain_fact(trimmed, &["distilled".to_string(), "long_term".to_string()]);
+                stored += 1;
+            }
+            None => {
+                // No provider attached (standalone use): report it rather
+                // than silently dropping the distilled facts.
+                return Err(Error::Agent(
+                    "distillation found no attached memory provider".to_string(),
+                ));
+            }
+        }
     }
-
-    memory_manager
-        .save_to_disk()
-        .await
-        .map_err(|error| Error::Agent(format!("Failed to persist distilled memory: {}", error)))?;
 
     debug!(stored, "Distilled session facts into long-term memory");
     Ok(stored)
@@ -198,13 +202,17 @@ mod tests {
             prompt_cache_ttl: Default::default(),
         });
         let client: Arc<dyn ModelClient> = Arc::new(OpenAIModelClient::new(raw_client));
+        // Cross-module lock: this test attaches the process-global provider.
+        let _guard = crate::tools::memory_tools::PROVIDER_TEST_GUARD.lock().await;
         let dir = test_dir("persist");
-        let memory_manager = MemoryManager::with_storage_dir(dir.clone());
+        // (plan 11C3) distillation retains through the active provider.
+        let provider =
+            std::sync::Arc::new(crate::memory_wire::MemoryWireProvider::new(dir.clone()).unwrap());
+        crate::tools::memory_tools::set_active_memory_provider(provider.clone()).await;
 
         let stored = distill_session_to_memory(
             client,
             "demo".to_string(),
-            memory_manager.clone(),
             vec![
                 Message::user("Please be concise in future answers."),
                 Message::assistant("Understood."),
@@ -214,9 +222,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(stored, 2);
-        assert_eq!(memory_manager.search("concise").await.len(), 1);
-        assert!(dir.join("MEMORY.md").exists());
+        // Both distilled facts are recallable from the shared store.
+        let hits = provider.recall_text("concise", 5);
+        assert!(!hits.trim().is_empty(), "distilled fact landed: {hits:?}");
 
+        crate::tools::memory_tools::clear_active_memory_provider_for_tests().await;
         let _ = std::fs::remove_dir_all(dir);
     }
 }

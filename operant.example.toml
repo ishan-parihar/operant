@@ -456,23 +456,11 @@ enabled = false
 # Off by default: every Holon-backed surface (org views, policy enforcement,
 # supervisor) is inert in personal mode, byte-identical to mainline.
 [memory]
-# provider: agentmemory (default) | builtin
-# - agentmemory: hybrid semantic memory via the agentmemory server (BM25 + vector + graph).
-#                Operant auto-spawns `npx @agentmemory/agentmemory` on :3111 when needed
-#                and, when this provider is active, auto-registers the
-#                `@agentmemory/mcp` server natively under [mcp.servers] so the
-#                full 53-tool memory surface is available to every agent path
-# agentmemory_version pins the npm package for every spawn (auto-spawn + MCP
-# entries); default is the pinned 0.9.29. Never `@latest` — a cold boot must
-# not fetch whatever npm serves and run it with your privileges.
-# agentmemory_version = "0.9.29"
-#                (CLI, gateway, runtime agent) — no manual MCP config needed.
-#                Lifecycle parity with the hermes-agent memory plugin:
-#                session/start on init, observe on sync_turn, session/end on
-#                exit, context on pre-compress, remember-mirror on memory writes.
-# provider: memory-wire (default) | builtin
-# - memory-wire: in-process memory-wire engine (retain/recall); replaces agentmemory
-# - builtin:     file-backed MEMORY.md / USER.md in the operant home directory
+# (plan 11C3) memory-wire is the only memory engine, in-process:
+# retain/recall over a bank-isolated sqlite store. The old provider
+# choices (agentmemory, builtin) are accepted-with-warning in existing
+# configs and ignored; existing MEMORY.md/USER.md files are imported once
+# on the first start after the upgrade (renamed *.imported).
 provider = "memory-wire"
 enabled = true
 
