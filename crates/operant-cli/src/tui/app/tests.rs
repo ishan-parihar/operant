@@ -972,6 +972,32 @@ fn thinking_off_hides_live_streaming_thinking() {
     assert!(hidden.contains("answer text"), "the answer still streams");
 }
 
+/// (plan 07.1) Regression for the tool_full_outputs budget: 40
+/// remembered outputs of 120KB each would be 4.8MB under the old
+/// 64×256KB shape — the 4MB total budget must evict oldest-first.
+#[test]
+fn tool_output_budget_evicts_oldest_first() {
+    use crate::tui::app::enums::ToolUseBlock;
+    let mut app = make_app();
+    let blob = "x".repeat(120 * 1024);
+    for i in 0..40 {
+        app.tool_use_blocks.push(ToolUseBlock {
+            id: format!("call-{i}"),
+            name: "bash".to_string(),
+            after_index: 0,
+            status: crate::tui::app::enums::ToolStatus::Done,
+            output_preview: None,
+            input_json: String::new(),
+        });
+        app.remember_tool_output(&format!("call-{i}"), &blob);
+    }
+    let total: usize = app.tool_full_outputs.values().map(|v| v.len()).sum();
+    assert!(total <= 4 * 1024 * 1024, "budget exceeded: {total}");
+    // Newest survived, oldest evicted.
+    assert!(app.tool_full_outputs.contains_key("call-39"));
+    assert!(!app.tool_full_outputs.contains_key("call-0"));
+}
+
 #[test]
 fn test_tasks_slash_command_is_an_alias_for_agents() {
     // /tasks is documented (commands.rs alias + gateway help text) as an

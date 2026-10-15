@@ -62,10 +62,13 @@ impl App {
     }
 
     /// Keep a finished call's full output for Ctrl+O. Bounded for long
-    /// sessions: only the most recent tool calls are kept, each capped.
+    /// sessions (plan 07.1): 32 most-recent calls, each capped at 128KB,
+    /// with a 4MB TOTAL budget — evict oldest-first beyond it. The old
+    /// 64×256KB shape let a tool-heavy session park 16MB in the App.
     pub(super) fn remember_tool_output(&mut self, id: &str, text: &str) {
-        const KEEP_CALLS: usize = 64;
-        const MAX_BYTES: usize = 256 * 1024;
+        const KEEP_CALLS: usize = 32;
+        const MAX_BYTES: usize = 128 * 1024;
+        const TOTAL_BUDGET: usize = 4 * 1024 * 1024;
         let mut kept = text.to_string();
         if kept.len() > MAX_BYTES {
             let mut cut = MAX_BYTES;
@@ -76,6 +79,8 @@ impl App {
             kept.push_str("\n\u{2026} (truncated)");
         }
         self.tool_full_outputs.insert(id.to_string(), kept);
+
+        // Count-budget: keep only the most recent KEEP_CALLS by block order.
         if self.tool_full_outputs.len() > KEEP_CALLS {
             let recent: std::collections::HashSet<&str> = self
                 .tool_use_blocks
@@ -86,6 +91,32 @@ impl App {
                 .collect();
             self.tool_full_outputs
                 .retain(|id, _| recent.contains(id.as_str()));
+        }
+
+        // Byte-budget: even 32 outputs can exceed the total (128KB each =
+        // 4MB exactly at cap; truncated outputs make this a no-op unless
+        // the per-entry cap rises again). Evict oldest-first.
+        let mut total: usize = self
+            .tool_full_outputs
+            .values()
+            .map(|v| v.len())
+            .sum::<usize>();
+        let mut oldest = self.tool_use_blocks.iter().map(|b| b.id.clone());
+        while total > TOTAL_BUDGET {
+            match oldest.next() {
+                Some(victim) => {
+                    if let Some(removed) = self.tool_full_outputs.remove(&victim) {
+                        total -= removed.len();
+                    }
+                }
+                // No block order left (unusual): drop by insertion order is
+                // unavailable on the map — clear the rest; the budget is the
+                // harder invariant.
+                None => {
+                    self.tool_full_outputs.clear();
+                    break;
+                }
+            }
         }
     }
 
