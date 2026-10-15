@@ -141,6 +141,12 @@ impl PlatformAdapter for WebhookAdapter {
 
         // Build the axum router
         let app = Router::new()
+            // Red-team F-4 (2026-10-15): an explicit body cap — a webhook
+            // route fronts the public internet and pipes into a kernel
+            // adapter; axum's default 2MB boundary left a boundary-size
+            // request able to kill the serve task. 1MB with a clean 413;
+            // the notion adapter's real events are a few KB.
+            .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
             .route("/health", get(|| async { "ok" }))
             .route(
                 "/webhook/{route}",
@@ -189,6 +195,26 @@ impl PlatformAdapter for WebhookAdapter {
                         Option<HolonHook>,
                     )>,
                           body: axum::body::Bytes| async move {
+                        // Red-team F-4 (2026-10-15): a Content-Length over 1MB is
+                        // refused BEFORE the body streams — an oversized POST
+                        // was observed killing the whole gateway silently
+                        // (systemd journal: no panic, no signal, process gone).
+                        // The header is always present for sized bodies; a
+                        // chunked stream without one still hits the
+                        // DefaultBodyLimit layer above.
+                        if let Some(len) = headers
+                            .get(axum::http::header::CONTENT_LENGTH)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse::<u64>().ok())
+                            && len > 1024 * 1024
+                        {
+                            warn!(route = %route, len, "webhook body over 1MB refused");
+                            return (
+                                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                                "body over 1MB",
+                            )
+                                .into_response();
+                        }
                         // ────────────────────────────────────────────────────────
                         // URL Verification Handshakes (iter-131)
                         // ────────────────────────────────────────────────────────
