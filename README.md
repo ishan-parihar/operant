@@ -74,7 +74,7 @@ operant
 │   ├── operant-cli          TUI (ratatui) · commands · app adapter
 │   ├── operant-tools        built-in tool implementations
 │   ├── operant-providers    LLM provider adapters
-│   ├── operant-memory       memory backends (memory-wire / builtin / …)
+│   ├── operant-memory       memory backends (memory-wire — the one engine)
 │   ├── operant-plugins      WASM plugin bridge
 │   ├── operant-gateway      messaging gateway (telegram, discord, …)
 │   ├── operant-channels     channel orchestrator
@@ -92,7 +92,7 @@ operant
 
 | Capability | Implementation |
 |---|---|
-| **Memory** | `memory-wire` in-process hybrid semantic memory (BM25 + token-overlap), panic-guarded; or `builtin` file memory (`MEMORY.md` / `USER.md`) |
+| **Memory** | `memory-wire` in-process hybrid semantic memory (BM25 + token-overlap), panic-guarded — the one engine (legacy `MEMORY.md`/`USER.md` import once on upgrade) |
 | **Tools** | 70+ JSON-schema tools: fs, git, web (sourcehound search/scrape/extract/crawl), browser (CDP), shell, code, http, memory, skills, cron, kanban, process, notes, checkpoints |
 | **Browser** | Stealth **sourcehound** — the engine's own profile cookie jar and DevTools endpoint, driven over MCP and shared with the web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
@@ -212,13 +212,13 @@ max_iterations = 20
 show_reasoning = true # TUI: thinking stays until your next prompt; /thinking-display full|current|off
 
 [memory]
-provider = "memory-wire"      # or "builtin"
+provider = "memory-wire"      # the only engine; other names warn + are ignored
 
 [tools.web]
-preferred_provider = "sourcehound"   # or tavily | exa | searxng | duckduckgo
+preferred_provider = "sourcehound"   # the only web engine; other names warn + are ignored
 
 [browser]
-provider = "sourcehound"      # or lightpanda | camofox | browserbase | browser-use | firecrawl
+provider = "sourcehound"      # the only browser engine; other names warn + are ignored
 
 [skills]
 autoload = true
@@ -249,6 +249,8 @@ See [`operant.example.toml`](operant.example.toml) for the full reference — ev
 | `operant gateway start` | Messaging gateway (telegram, discord, slack, whatsapp) |
 | `operant plugins list` | WASM plugins |
 | `operant doctor` / `operant status` | Health checks and system overview |
+| `operant update integrations` | Force-check sourcehound/aft updates (auto: first use per session, 6h throttle) |
+| `operant debug memory` | This process's memory footprint: RSS, store size, thread count |
 
 `operant --help` lists the full set (sessions, checkpoints, profiles, auth, completion, backups, SOPs, hardware, and more).
 

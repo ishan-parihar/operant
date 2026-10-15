@@ -113,3 +113,35 @@ Change any of them before implementation starts.
 
 - Plan 07 phase 3 (thin client, one server process for all sessions): decide after phase
   2's measurements.
+
+## Execution status (2026-10-15)
+
+Landed iterations live in `docs/CHANGELOG.md` under `[Unreleased]`. This index
+is the plan→iteration map:
+
+| Plan | Status | Iterations |
+|---|---|---|
+| 11A build entry + provenance | **done** | 815 |
+| P2 sim infra (frame-per-event, count asserts) | **done** | 816 |
+| 02 dead commands | **done** | 817 |
+| 10 shortcut/overlay coherence | **done** | 820 |
+| 08 visibility toggles | **done** | 821 |
+| 03 reasoning effort (end-to-end) | **done** | 829 |
+| 04 cancel preserves context | **done** | 832 (live Esc-during-tool red-team pending provider) |
+| 01 duplicate tool rows | **oracles + S1b/S2/S3/S4 code done** (836); S1/S2 live verdicts pending provider | 836 |
+| 05 rewind (core + selector) | **done** (live 3-turn proof pending provider) | 829, 838, 839 |
+| 09 native scroll (step 1, K-3) | **done**; steps 2-7 pending live verification | 839 |
+| 11B binary updater | **done** | 841 |
+| 11C1 web providers purge | **done** | 842 |
+| 11C2 browser purge | **done** | 843 |
+| 11C3 memory-wire only | **done** | 846 |
+| 07.1 footprint (drains, reap, budgets, measurement, debug surface) | **done** (lazy MCP folded into 07.2) | 848, 850, 851 |
+| 11E core seam (bank_for) | **done**; seat wiring blocked on the org/ rebuild | 856 |
+| 07.2 shared services | pending (gateway zone in flight) | — |
+| 06 context management P0-P5 | pending (prompting/compress in flight) | — |
+| 11D crate audit | pending (last by order) | — |
+
+Live-provider red-team items (S1/S2 glyph verdicts, Esc-during-sleep-20,
+3-turn rewind, native-scroll live) run when the model provider stabilizes;
+the harness for each is documented in session note #10 and the batch
+corpus covers every headless-verifiable claim.
