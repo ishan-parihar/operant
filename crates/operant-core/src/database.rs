@@ -939,6 +939,40 @@ impl Database {
         Ok(messages)
     }
 
+    /// (plan 05) The parent of a session, if it is a fork.
+    pub fn session_parent(&self, session_id: &str) -> Result<Option<String>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT parent_session_id FROM sessions WHERE id = ?1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare parent lookup: {}", e)))?;
+        let mut rows = stmt
+            .query_map(params![session_id], |row| row.get::<_, Option<String>>(0))
+            .map_err(|e| Error::Agent(format!("Failed to query parent: {}", e)))?;
+        if let Some(r) = rows.next() {
+            Ok(r.map_err(|e| Error::Agent(format!("Parent row error: {}", e)))?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// (plan 05) The direct children of a session (forks of it), id + title.
+    pub fn child_sessions(&self, session_id: &str) -> Result<Vec<(String, Option<String>)>> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare("SELECT id, title FROM sessions WHERE parent_session_id = ?1")
+            .map_err(|e| Error::Agent(format!("Failed to prepare child lookup: {}", e)))?;
+        let rows = stmt
+            .query_map(params![session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| Error::Agent(format!("Failed to query children: {}", e)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| Error::Agent(format!("Child row error: {}", e)))?);
+        }
+        Ok(out)
+    }
+
     /// List recent sessions (for session_search_tool).
     pub fn list_sessions(&self, limit: usize) -> Result<Vec<DatabaseSession>> {
         let conn = self.lock_conn()?;

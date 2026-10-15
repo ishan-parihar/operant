@@ -164,110 +164,56 @@ fn history_search_is_newest_first_and_unique() {
     assert_eq!(order, ["newest", "old", "middle"]);
 }
 
-// --- MessageSelectorOverlay ---------------------------------------
+// --- RewindSelectorState (plan 05; the old MessageSelector/RewindFlow
+// modal-list tests went with the components) -----------------------------
 
 #[test]
-fn message_selector_open_selects_last() {
-    let msgs = vec![
-        SelectorMessage {
-            idx: 0,
-            role: "user".to_string(),
-            preview: "hi".to_string(),
-            has_tool_use: false,
+fn rewind_selector_defaults_closed_and_opens_on_last() {
+    let mut sel = crate::tui::rewind_selector::RewindSelectorState::default();
+    assert!(!sel.visible);
+    sel.entries = vec![
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 1,
+            text: "one".to_string(),
+            compacted: false,
         },
-        SelectorMessage {
-            idx: 1,
-            role: "assistant".to_string(),
-            preview: "hello".to_string(),
-            has_tool_use: false,
-        },
-    ];
-    let sel = MessageSelectorOverlay::open(msgs);
-    assert_eq!(sel.selected_idx, 1);
-}
-
-#[test]
-fn message_selector_navigate() {
-    let msgs = vec![
-        SelectorMessage {
-            idx: 0,
-            role: "user".to_string(),
-            preview: "a".to_string(),
-            has_tool_use: false,
-        },
-        SelectorMessage {
-            idx: 1,
-            role: "assistant".to_string(),
-            preview: "b".to_string(),
-            has_tool_use: false,
-        },
-        SelectorMessage {
-            idx: 2,
-            role: "user".to_string(),
-            preview: "c".to_string(),
-            has_tool_use: false,
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 2,
+            text: "two".to_string(),
+            compacted: false,
         },
     ];
-    let mut sel = MessageSelectorOverlay::open(msgs);
-    // starts at last
-    assert_eq!(sel.selected_idx, 2);
+    sel.open();
+    assert!(sel.visible);
+    assert_eq!(sel.selected, 1, "opens on the last turn");
     sel.select_prev();
-    assert_eq!(sel.selected_idx, 1);
+    assert_eq!(sel.selected, 0);
     sel.select_next();
-    assert_eq!(sel.selected_idx, 2);
+    assert_eq!(sel.selected, 1);
+    // select_next clamps at the end.
     sel.select_next();
-    assert_eq!(sel.selected_idx, 0);
-}
-
-// --- RewindFlowOverlay -------------------------------------------
-
-#[test]
-fn rewind_flow_confirm_advances_step() {
-    let msgs = vec![SelectorMessage {
-        idx: 0,
-        role: "user".to_string(),
-        preview: "hi".to_string(),
-        has_tool_use: false,
-    }];
-    let mut flow = RewindFlowOverlay::new();
-    flow.open(msgs);
-    let idx = flow.confirm_selection().unwrap();
-    assert_eq!(idx, 0);
-    assert!(matches!(
-        flow.step,
-        RewindStep::Confirming { message_idx: 0 }
-    ));
+    assert_eq!(sel.selected, 1);
+    sel.close();
+    assert!(!sel.visible);
 }
 
 #[test]
-fn rewind_flow_accept_closes() {
-    let msgs = vec![SelectorMessage {
-        idx: 3,
-        role: "user".to_string(),
-        preview: "test".to_string(),
-        has_tool_use: false,
-    }];
-    let mut flow = RewindFlowOverlay::new();
-    flow.open(msgs);
-    flow.confirm_selection();
-    let result = flow.accept_confirm().unwrap();
-    assert_eq!(result, 3);
-    assert!(!flow.visible);
-}
-
-#[test]
-fn rewind_flow_reject_returns_to_selector() {
-    let msgs = vec![SelectorMessage {
-        idx: 0,
-        role: "user".to_string(),
-        preview: "x".to_string(),
-        has_tool_use: false,
-    }];
-    let mut flow = RewindFlowOverlay::new();
-    flow.open(msgs);
-    flow.confirm_selection();
-    assert!(matches!(flow.step, RewindStep::Confirming { .. }));
-    flow.reject_confirm();
-    assert_eq!(flow.step, RewindStep::Selecting);
-    assert!(flow.visible);
+fn rewind_selector_filter_matches_case_insensitive() {
+    let mut sel = crate::tui::rewind_selector::RewindSelectorState::default();
+    sel.entries = vec![
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 1,
+            text: "Fix the login bug".to_string(),
+            compacted: false,
+        },
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 2,
+            text: "Refactor the parser".to_string(),
+            compacted: false,
+        },
+    ];
+    sel.filter = "LOGIN".to_string();
+    assert_eq!(sel.filtered_indices(), vec![0]);
+    sel.filter.clear();
+    assert_eq!(sel.filtered_indices(), vec![0, 1]);
 }

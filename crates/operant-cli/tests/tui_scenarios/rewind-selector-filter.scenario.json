@@ -1,0 +1,18 @@
+{
+  "name": "rewind-selector-filter",
+  "surface": "crates/operant-cli/src/tui/rewind_selector.rs::filtered_indices + filter bar",
+  "opens_with": "(/rewind then f opens the filter)",
+  "keys": "/rewind<enter>fparser",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == true"
+  ],
+  "assert_screen": [
+    "contains:filter: parser",
+    "contains:Rewind to a previous prompt"
+  ],
+  "deterministic": true,
+  "baseline": "rewind-selector-filter.txt",
+  "style_baseline": "rewind-selector-filter.style.txt",
+  "notes": "2026-10-14 batch, plan 05: the filter bar. f opens it, typed text shows live in the header (filter: parser). Pairs with rewind-selector.txt — the two goldens pin the closed and open filter surfaces."
+}

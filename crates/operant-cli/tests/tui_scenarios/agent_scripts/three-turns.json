@@ -1,0 +1,10 @@
+[
+  {"type":"user","text":"first prompt about login"},
+  {"type":"thinking","content":"Considering the login flow."},
+  {"type":"content","text":"The login flow looks fine."},
+  {"type":"user","text":"second prompt about the parser"},
+  {"type":"content","text":"The parser needs a refactor."},
+  {"type":"user","text":"third prompt about the cache"},
+  {"type":"content","text":"The cache is coherent."},
+  {"type":"done","text":"Turn complete."}
+]

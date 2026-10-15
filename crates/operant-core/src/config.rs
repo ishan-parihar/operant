@@ -850,6 +850,15 @@ pub struct TuiSettings {
     /// `$EDITOR`, then `vi`. Arguments are whitespace-separated, e.g.
     /// `"code --wait"`.
     pub external_editor: String,
+    /// (plan 05) What a DOUBLE Esc on an empty composer does when not
+    /// streaming: "rewind" opens the fullscreen rewind selector (the
+    /// default), "none" leaves Esc with its single-press meanings only.
+    #[serde(default = "default_double_escape_action")]
+    pub double_escape_action: String,
+}
+
+fn default_double_escape_action() -> String {
+    "rewind".to_string()
 }
 
 impl Default for TuiSettings {
@@ -866,6 +875,7 @@ impl Default for TuiSettings {
             compact_width: 96,
             medium_width: 120,
             external_editor: String::new(),
+            double_escape_action: default_double_escape_action(),
         }
     }
 }

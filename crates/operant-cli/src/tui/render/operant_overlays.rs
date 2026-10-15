@@ -45,12 +45,8 @@
 use ratatui::Frame;
 
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::widgets::Block;
 
 use crate::tui::app::App;
-use crate::tui::background_tasks::{self, BackgroundTask};
-use crate::tui::theme_colors;
 use crate::tui::vendor::style::theme;
 
 // The surface render functions, imported from their own modules. The table
@@ -72,7 +68,7 @@ use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
 use crate::tui::model_picker::render_model_picker;
-use crate::tui::overlays::{render_global_search, render_rewind_flow};
+use crate::tui::overlays::render_global_search;
 use crate::tui::session_branching::render_session_branching;
 use crate::tui::session_browser::render_session_browser;
 use crate::tui::settings_screen::render_settings_screen;
@@ -172,7 +168,6 @@ macro_rules! overlay_visible_guards {
 
 overlay_visible_guards!(
     is_visible_usage_overlay => usage_overlay,
-    is_visible_rewind_flow => rewind_flow,
     is_visible_settings_screen => settings_screen,
     is_visible_theme_screen => theme_screen,
     is_visible_stats_dialog => stats_dialog,
@@ -190,6 +185,7 @@ overlay_visible_guards!(
     is_visible_ask_user_dialog => ask_user_dialog,
     is_visible_effort_picker => effort_picker,
     is_visible_permissions_picker => permissions_picker,
+    is_visible_rewind_selector => rewind_selector,
     is_visible_import_config_picker => import_config_picker,
     is_visible_connect_dialog => connect_dialog,
     is_visible_key_input_dialog => key_input_dialog,
@@ -225,12 +221,6 @@ const OVERLAYS: &[Entry] = &[
         name: "permission_dialog",
         visible: visible_permission_dialog,
         paint: paint_permission_dialog,
-        sink: Sink::Frame,
-    },
-    Entry {
-        name: "rewind_flow",
-        visible: is_visible_rewind_flow,
-        paint: paint_rewind_flow,
         sink: Sink::Frame,
     },
     Entry {
@@ -333,6 +323,12 @@ const OVERLAYS: &[Entry] = &[
         name: "permissions_picker",
         visible: is_visible_permissions_picker,
         paint: paint_permissions_picker,
+        sink: Sink::Frame,
+    },
+    Entry {
+        name: "rewind_selector",
+        visible: is_visible_rewind_selector,
+        paint: paint_rewind_selector,
         sink: Sink::Frame,
     },
     Entry {
@@ -485,10 +481,6 @@ fn paint_permission_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     }
 }
 
-fn paint_rewind_flow(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_rewind_flow(frame, &app.rewind_flow, ctx.size);
-}
-
 fn paint_settings_screen(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_settings_screen(frame, &app.settings_screen, ctx.size);
 }
@@ -560,6 +552,12 @@ fn paint_effort_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 
 fn paint_permissions_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     crate::permissions_picker::render_permissions_picker(frame, &app.permissions_picker, ctx.size);
+}
+
+fn paint_rewind_selector(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
+    // (plan 05) the selector paints the WHOLE area — it is a fullscreen
+    // surface, and it draws the real transcript through the body renderer.
+    crate::tui::rewind_selector::draw_rewind_selector(frame, ctx.size, app);
 }
 
 fn paint_import_config_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {

@@ -43,9 +43,7 @@ use crate::tui::import_config_dialog::ImportConfigDialogState;
 use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
 use crate::tui::model_picker::{EffortLevel, ModelPickerState};
 use crate::tui::notifications::NotificationKind;
-use crate::tui::overlays::{
-    GlobalSearchState, HelpOverlay, HistorySearchOverlay, RewindFlowOverlay, SelectorMessage,
-};
+use crate::tui::overlays::{GlobalSearchState, HelpOverlay, HistorySearchOverlay};
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
 use crate::tui::render;
 use crate::tui::session_browser::SessionBrowserState;
@@ -195,6 +193,24 @@ pub struct App {
     /// agent-touching tick runs `repair_after_abort` with the captured
     /// partial.
     pub pending_repair: bool,
+    /// (plan 05) Rewind fork requested from the selector: the turn id to
+    /// fork at. `run_pending_agent_actions` executes it.
+    pub pending_rewind: Option<u64>,
+    /// (plan 05) Preview requested for the selector's current selection.
+    pub pending_rewind_preview: bool,
+    /// (plan 05) Timestamp of the last bare Esc — the double-Esc window
+    /// (500 ms) for opening the rewind selector.
+    pub last_esc_at: Option<std::time::Instant>,
+    /// (plan 05) `/rewind <n>` awaiting y/n confirmation in the status
+    /// line; the number is the prompt to rewind before.
+    pub pending_rewind_confirm: Option<usize>,
+    /// (plan 05) `[tui] double_escape_action` ("rewind" default, "none"
+    /// disables): seeded from the TOML at TuiApp create; the App itself has
+    /// no config handle.
+    pub double_escape_action: String,
+    /// (plan 05) Ctrl+B opened the branch browser — populate the fork tree
+    /// from the agent's DB on the next pending-actions pass.
+    pub pending_branch_list: bool,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.
@@ -336,9 +352,9 @@ pub struct App {
     pub history_search_overlay: HistorySearchOverlay,
     /// Global ripgrep search / quick-open overlay.
     pub global_search: GlobalSearchState,
-    /// Message selector used by /rewind.
-    /// Multi-step rewind flow overlay.
-    pub rewind_flow: RewindFlowOverlay,
+    /// (plan 05) Fullscreen /rewind selector — the real transcript with the
+    /// selected user turn outlined and the tail-to-drop dimmed.
+    pub rewind_selector: crate::tui::rewind_selector::RewindSelectorState,
     /// Bridge connection state.
     /// Active notification queue.
     /// Scroll offset for error modal text (in lines).

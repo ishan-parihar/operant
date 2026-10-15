@@ -47,13 +47,16 @@ impl TuiApp {
         }
 
         let cost_tracker = Arc::new(CostTracker::new());
-
         let mut command_registry = CommandRegistry::new();
         register_tui_command_handlers(&mut command_registry);
         register_agent_flow_handlers(&mut command_registry);
 
+        // (plan 05) `[tui] double_escape_action` from the TOML — hoisted
+        // BEFORE the config moves into App::new.
+        let double_escape_action = app_config.tui.double_escape_action.clone();
         let mut app =
             crate::tui::app::App::new(app_config, settings, cost_tracker, command_registry);
+        app.double_escape_action = double_escape_action;
 
         // Share the runtime-metrics registry with the footer so stream-drop
         // retries and memory-sync failures render as a status pill. The same
@@ -886,6 +889,112 @@ impl TuiApp {
                 );
             } else {
                 app.pending_repair_partial = None;
+            }
+        }
+        // (plan 05) Ctrl+B: populate the branch browser with the current
+        // session's fork tree (parent + children) from the agent's DB.
+        if std::mem::take(&mut app.pending_branch_list) {
+            if let Some(agent) = agent {
+                let current = agent.session_id().unwrap_or_default();
+                let mut branches = Vec::new();
+                if let Ok(parent) = agent.database().session_parent(&current) {
+                    if let Some(parent) = parent {
+                        let short: String = parent.chars().take(8).collect();
+                        branches.push(crate::tui::session_branching::BranchInfo {
+                            id: parent.clone(),
+                            name: format!("{short} (parent)"),
+                            created_at: String::new(),
+                            is_current: false,
+                        });
+                    }
+                }
+                if let Ok(children) = agent.database().child_sessions(&current) {
+                    for (id, title) in children {
+                        let label = title.unwrap_or_else(|| {
+                            format!("{} (fork)", id.chars().take(8).collect::<String>())
+                        });
+                        branches.push(crate::tui::session_branching::BranchInfo {
+                            id,
+                            name: label,
+                            created_at: String::new(),
+                            is_current: false,
+                        });
+                    }
+                }
+                let at = app.session_branching.branch_at_message;
+                app.session_branching.open(branches, at);
+            }
+        }
+        // (plan 05) rewind selector: sync marks from the agent while open
+        // (or while a /rewind <n> confirmation is pending — the numeric
+        // path resolves against the mark list without opening the UI),
+        // service the preview request, execute the fork on Enter.
+        if app.rewind_selector.visible || app.pending_rewind_confirm.is_some() {
+            if let Some(agent) = agent {
+                let marks: Vec<(u64, String)> = agent
+                    .rewind_marks()
+                    .into_iter()
+                    .map(|m| (m.turn_id, m.text))
+                    .collect();
+                let display_texts = app.user_prompt_texts_for_filter();
+                app.rewind_selector.sync_marks(marks, &display_texts);
+                if std::mem::take(&mut app.pending_rewind_preview) {
+                    if let Some(turn_id) = app.rewind_selector.selected_turn_id() {
+                        match agent.preview_rewind(turn_id).await {
+                            Ok((prefix, tokens)) => {
+                                app.rewind_selector.preview = Some((prefix.len(), tokens));
+                            }
+                            Err(e) => {
+                                app.rewind_selector.notice = Some(e.to_string());
+                                app.rewind_selector.preview = None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(turn_id) = app.pending_rewind.take() {
+            let Some(agent) = agent else {
+                app.rewind_selector.notice = Some("No agent attached — cannot rewind.".to_string());
+                return;
+            };
+            match agent.rewind_to_turn(turn_id).await {
+                Ok(outcome) => {
+                    // Rebuild the display from the agent's forked store —
+                    // display and context from one source.
+                    let conv = agent.conversation().await;
+                    app.messages.clear();
+                    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+                    for m in conv {
+                        let role = match m.role {
+                            operant_core::client::Role::User => Role::User,
+                            operant_core::client::Role::Assistant => Role::Assistant,
+                            operant_core::client::Role::System => Role::System,
+                            operant_core::client::Role::Tool => Role::System,
+                        };
+                        app.messages.push(Message {
+                            role,
+                            content: MessageContent::Text(m.content),
+                        });
+                    }
+                    // Tool rows and annotations of the removed turns are gone
+                    // with the display they belonged to.
+                    app.tool_use_blocks.clear();
+                    app.system_annotations.clear();
+                    app.rewind_selector.close();
+                    app.invalidate_transcript();
+                    // oh-my-pi behaviour: the rewound prompt comes back to
+                    // the composer, ready to edit and resend.
+                    app.set_prompt_text(outcome.prompt_text.clone());
+                    let short: String = outcome.new_session_id.chars().take(8).collect();
+                    app.set_status_notice(format!(
+                        "Rewound {} turn(s) · previous path kept as session {short}",
+                        outcome.removed_turns
+                    ));
+                }
+                Err(e) => {
+                    app.rewind_selector.notice = Some(e.to_string());
+                }
             }
         }
         // (plan 03) effort change first: the agent applies it to the very

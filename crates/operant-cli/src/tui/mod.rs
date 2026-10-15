@@ -55,6 +55,7 @@ pub mod image_render;
 pub mod input;
 pub mod input_history;
 pub mod permissions_picker;
+pub mod rewind_selector;
 // W1 seam of docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md: jcode's message
 // data model (`DisplayMessage`, prepared chat frames, viewport anchors,
 // tool-name display helpers), ported verbatim from jcode @ 0a9dc7805. It

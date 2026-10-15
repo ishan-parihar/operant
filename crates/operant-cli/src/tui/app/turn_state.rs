@@ -119,31 +119,34 @@ impl App {
         self.scroll_accel.round() as usize
     }
 
-    /// Open the rewind flow with the current message list converted to
-    /// `SelectorMessage` entries.
-    pub fn open_rewind_flow(&mut self) {
-        let selector_msgs: Vec<SelectorMessage> = self
-            .messages
-            .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                let text = m.get_all_text();
-                let preview: String = text.chars().take(80).collect();
-                let has_tool_use = !m.get_tool_use_blocks().is_empty();
-                SelectorMessage {
-                    idx: i,
-                    role: format!("{:?}", m.role).to_lowercase(),
-                    preview,
-                    has_tool_use,
-                }
-            })
-            .collect();
-        self.rewind_flow.open(selector_msgs);
+    /// (plan 05) Open the fullscreen rewind selector. Entries sync from
+    /// the agent's marks on the next pending-actions pass (the marks live
+    /// in the agent; the App has no handle here).
+    pub fn open_rewind_selector(&mut self) {
+        self.rewind_selector.open();
     }
 
     // -------------------------------------------------------------------
     // Event handling
     // -------------------------------------------------------------------
+
+    /// (plan 05) Queue a preview for the selector's current selection. The
+    /// preview is an agent call (`preview_rewind`), so it rides the
+    /// pending-actions pass.
+    pub fn queue_rewind_preview(&mut self) {
+        self.pending_rewind_preview = true;
+    }
+
+    /// (plan 05) The display user-prompt texts in order, for the rewind
+    /// selector's filter and compacted-turn detection (marks carry the full
+    /// prompt; display rows are the same text as committed).
+    pub fn user_prompt_texts_for_filter(&self) -> Vec<String> {
+        self.messages
+            .iter()
+            .filter(|m| matches!(m.role, crate::tui::adapter_types::types::Role::User))
+            .map(|m| m.get_all_text())
+            .collect()
+    }
 
     /// Persist `has_completed_onboarding = true` to the settings file.
     /// Best-effort: failures are silently ignored to not disrupt the session.

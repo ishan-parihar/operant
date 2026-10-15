@@ -596,6 +596,12 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
+    /// (plan 05) The agent's DB handle — the TUI's branch browser reads
+    /// parent/child sessions for the fork tree.
+    pub fn database(&self) -> &crate::database::Database {
+        &self.database
+    }
+
     /// Get the current model name (effective model = override or config).
     pub fn model(&self) -> String {
         self.model_override

@@ -2645,6 +2645,16 @@ fn prepare_streaming_cached(
     prepared
 }
 
+/// (plan 05) Read-only body build for the rewind selector's preview: the
+/// real transcript through the normal body renderer, no caching — the
+/// selector is transient and must never pollute cache keys.
+pub(crate) fn prepare_body_for_overlay(
+    app: &dyn TuiState,
+    width: u16,
+) -> crate::tui::operant_model::PreparedMessages {
+    prepare_body(app, width, false)
+}
+
 pub(super) fn prepare_body(
     app: &dyn TuiState,
     width: u16,

@@ -695,6 +695,131 @@ async fn watchdog_aborts_after_deadline() {
     );
 }
 
+/// 2026-10-14 batch, plan 05: /rewind opens the fullscreen selector; the
+/// filter narrows entries case-insensitively and Enter jumps to the first
+/// match; Esc closes.
+#[test]
+fn rewind_selector_open_filter_and_escape() {
+    let mut app = make_app();
+    assert!(app.intercept_slash_command("rewind"));
+    assert!(app.rewind_selector.visible, "/rewind opens the selector");
+
+    // f opens the filter; typing narrows.
+    app.handle_key_event(press_key(KeyCode::Char('f'), KeyModifiers::NONE));
+    assert!(app.rewind_selector.filter_open, "f opens the filter");
+    app.rewind_selector.entries = vec![
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 1,
+            text: "Fix the login bug".to_string(),
+            compacted: false,
+        },
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 2,
+            text: "Refactor the parser".to_string(),
+            compacted: false,
+        },
+    ];
+    app.handle_key_event(press_key(KeyCode::Char('L'), KeyModifiers::NONE));
+    app.handle_key_event(press_key(KeyCode::Char('O'), KeyModifiers::NONE));
+    assert_eq!(app.rewind_selector.filter, "LO");
+    assert_eq!(app.rewind_selector.filtered_indices(), vec![0]);
+
+    // Enter closes the filter (jumps to first match).
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(!app.rewind_selector.filter_open);
+    assert_eq!(app.rewind_selector.selected, 0);
+
+    // Esc closes the selector.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.rewind_selector.visible);
+}
+
+/// 2026-10-14 batch, plan 05: double-Esc on an empty composer opens the
+/// selector (within 500 ms, not streaming); a single Esc does not; while
+/// streaming it does not.
+#[test]
+fn double_escape_opens_rewind_selector() {
+    let mut app = make_app();
+    // Single Esc: nothing opens.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.rewind_selector.visible, "a single Esc opens nothing");
+    // Second Esc within the window: selector opens.
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        app.rewind_selector.visible,
+        "the second Esc within 500 ms opens the selector"
+    );
+    app.rewind_selector.close();
+
+    // While streaming, Esc cancels the turn instead (plan 04) — never the
+    // selector.
+    app.is_streaming = true;
+    let flag = operant_core::interrupt::InterruptFlag::new();
+    app.agent_interrupt = Some(flag.clone());
+    app.last_esc_at = None;
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(flag.is_triggered(), "streaming Esc triggers the interrupt");
+    assert!(
+        !app.rewind_selector.visible,
+        "never the selector while streaming"
+    );
+
+    // "none" disables the double-Esc action entirely.
+    app.is_streaming = false;
+    app.agent_interrupt = None;
+    app.double_escape_action = "none".to_string();
+    app.last_esc_at = None;
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    app.handle_key_event(press_key(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.rewind_selector.visible,
+        "double_escape_action = \"none\" leaves Esc inert"
+    );
+}
+
+/// 2026-10-14 batch, plan 05: Enter on a compacted mark refuses with the
+/// inline notice; on a live mark it queues the fork (pending_rewind).
+#[test]
+fn rewind_selector_enter_gates_on_compacted_and_streams() {
+    let mut app = make_app();
+    app.intercept_slash_command("rewind");
+    app.rewind_selector.entries = vec![
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 1,
+            text: "folded away".to_string(),
+            compacted: true,
+        },
+        crate::tui::rewind_selector::RewindEntry {
+            turn_id: 2,
+            text: "live turn".to_string(),
+            compacted: false,
+        },
+    ];
+    // Select the compacted entry.
+    app.rewind_selector.selected = 0;
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        app.rewind_selector
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("compaction")),
+        "compacted entries explain instead of forking"
+    );
+    assert!(app.pending_rewind.is_none());
+
+    // Live entry: the fork is queued for the agent pass.
+    app.rewind_selector.selected = 1;
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.pending_rewind, Some(2));
+
+    // While streaming, Enter refuses.
+    app.pending_rewind = None;
+    app.is_streaming = true;
+    app.rewind_selector.selected = 1;
+    app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.pending_rewind.is_none(), "no fork while a turn runs");
+}
+
 #[test]
 fn alt_o_and_ctrl_shift_o_toggle_tool_visibility() {
     let mut app = make_app();

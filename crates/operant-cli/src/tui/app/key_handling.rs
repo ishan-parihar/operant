@@ -1028,9 +1028,9 @@ impl App {
         }
 
         // Privacy screen intercepts keys
-        // Rewind flow overlay intercepts keys first
-        if self.rewind_flow.visible {
-            return self.handle_rewind_flow_key(key);
+        // Rewind selector intercepts keys first (plan 05)
+        if self.rewind_selector.visible {
+            return self.handle_rewind_selector_key(key);
         }
 
         // Help overlay intercepts keys next
@@ -1256,6 +1256,53 @@ impl App {
                 self.cancel_streaming_turn();
             }
 
+            // ---- /rewind <n> confirmation ---------------------------------
+            // (plan 05) y/n in the status line; any other key cancels it.
+            KeyCode::Char('y') | KeyCode::Char('Y') if self.pending_rewind_confirm.is_some() => {
+                let n = self.pending_rewind_confirm.take();
+                // Turn n → mark index n-1 (marks are prompt-ordered).
+                if let Some(n) = n {
+                    let marks_len = self.rewind_selector.entries.len();
+                    if n == 0 || n > marks_len {
+                        self.set_status_notice(format!("No prompt #{n} to rewind to."));
+                    } else {
+                        let entry = self.rewind_selector.entries[n - 1].clone();
+                        if entry.compacted {
+                            self.set_status_notice(
+                                "That turn was folded by compaction — pick a later one."
+                                    .to_string(),
+                            );
+                        } else {
+                            self.pending_rewind = Some(entry.turn_id);
+                        }
+                    }
+                }
+                return false;
+            }
+            KeyCode::Char(c) if self.pending_rewind_confirm.is_some() && (c == 'n' || c == 'N') => {
+                self.pending_rewind_confirm = None;
+                self.set_status_notice("Rewind cancelled.".to_string());
+                return false;
+            }
+
+            // ---- Double-Esc on an empty composer → rewind selector ----
+            // (plan 05) A second Esc within 500 ms, not streaming, composer
+            // empty: open the fullscreen rewind selector. A single Esc keeps
+            // all of its current meanings.
+            KeyCode::Esc if !self.is_streaming => {
+                let now = std::time::Instant::now();
+                let double = self
+                    .last_esc_at
+                    .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(500));
+                self.last_esc_at = Some(now);
+                if double && self.prompt_input.is_empty() && self.double_escape_action == "rewind" {
+                    self.last_esc_at = None;
+                    self.open_rewind_selector();
+                    return false;
+                }
+                // Fall through to the single-Esc meanings below.
+            }
+
             // ---- Quit / cancel ----------------------------------------
             // Accept both 'c' and 'C' so Shift+Ctrl+C also triggers copy
             // (issue #149 follow-up).
@@ -1345,6 +1392,9 @@ impl App {
             // seeded with the current message count.
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.session_branching.open(vec![], self.messages.len());
+                // (plan 05) populate the browser with the fork tree on the
+                // next agent-touching pass (the DB lives on the agent).
+                self.pending_branch_list = true;
             }
 
             // ---- Scroll bookmark (Ctrl+G) -------------------------------
@@ -2097,42 +2147,82 @@ impl App {
         false
     }
 
-    fn handle_rewind_flow_key(&mut self, key: KeyEvent) -> bool {
-        use crate::tui::overlays::RewindStep;
-        match &self.rewind_flow.step {
-            RewindStep::Selecting => match key.code {
+    /// (plan 05) Keys inside the fullscreen rewind selector.
+    fn handle_rewind_selector_key(&mut self, key: KeyEvent) -> bool {
+        // Filter mode eats printable keys until Enter/Esc.
+        if self.rewind_selector.filter_open {
+            match key.code {
                 KeyCode::Esc => {
-                    self.rewind_flow.close();
+                    self.rewind_selector.filter_open = false;
                 }
                 KeyCode::Enter => {
-                    self.rewind_flow.confirm_selection();
+                    // Enter in the filter jumps to the first match.
+                    let matches = self.rewind_selector.filtered_indices();
+                    if let Some(&first) = matches.first() {
+                        self.rewind_selector.selected = first;
+                    }
+                    self.rewind_selector.filter_open = false;
+                    self.queue_rewind_preview();
                 }
-                KeyCode::Up => {
-                    self.rewind_flow.selector.select_prev();
+                KeyCode::Backspace => {
+                    self.rewind_selector.filter.pop();
                 }
-                KeyCode::Down => {
-                    self.rewind_flow.selector.select_next();
-                }
-                _ => {}
-            },
-            RewindStep::Confirming { .. } => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    if let Some(idx) = self.rewind_flow.accept_confirm() {
-                        // Truncate conversation to the selected message index.
-                        self.messages.truncate(idx);
-                        // Remove system annotations placed after the truncation point.
-                        self.system_annotations.retain(|a| a.after_index <= idx);
-                        self.push_notice(
-                            NotificationKind::Success,
-                            format!("Rewound to message #{}", idx),
-                        );
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.rewind_selector.filter.push(c);
+                    // Live-jump: keep the cursor on the first match.
+                    let matches = self.rewind_selector.filtered_indices();
+                    if let Some(&first) = matches.first() {
+                        self.rewind_selector.selected = first;
                     }
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    self.rewind_flow.reject_confirm();
-                }
                 _ => {}
-            },
+            }
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.rewind_selector.close();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.rewind_selector.select_prev();
+                self.queue_rewind_preview();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.rewind_selector.select_next();
+                self.queue_rewind_preview();
+            }
+            KeyCode::PageUp => {
+                self.rewind_selector.scroll = self.rewind_selector.scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.rewind_selector.scroll += 10;
+            }
+            KeyCode::Char('f') | KeyCode::Char('/') => {
+                self.rewind_selector.filter_open = true;
+            }
+            KeyCode::Enter => {
+                // Refuse while a turn is running (the plan contract): the
+                // fork writes the store and must not race a live turn.
+                if self.is_streaming {
+                    self.rewind_selector.notice =
+                        Some("A turn is still running — wait for it to finish.".to_string());
+                    return false;
+                }
+                if let Some(entry) = self
+                    .rewind_selector
+                    .entries
+                    .get(self.rewind_selector.selected)
+                {
+                    if entry.compacted {
+                        self.rewind_selector.notice = Some(
+                            "That turn was folded by compaction — pick a later one.".to_string(),
+                        );
+                        return false;
+                    }
+                    self.pending_rewind = Some(entry.turn_id);
+                }
+            }
+            _ => {}
         }
         false
     }

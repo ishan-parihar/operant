@@ -43,7 +43,7 @@ impl App {
                 self.history_search_overlay.visible,
             ),
             ("global_search", self.global_search.visible),
-            ("rewind_flow", self.rewind_flow.visible),
+            ("rewind_selector", self.rewind_selector.visible),
             ("settings_screen", self.settings_screen.visible),
             ("theme_screen", self.theme_screen.visible),
             ("stats_dialog", self.stats_dialog.visible),
@@ -993,7 +993,17 @@ impl App {
             }
             "doctor" => false,
             "rewind" => {
-                self.open_rewind_flow();
+                // (plan 05) `/rewind` opens the selector; `/rewind <n>`
+                // targets prompt #n directly — confirm via y/n in the status
+                // line before the fork.
+                if let Ok(n) = args.trim().parse::<usize>()
+                    && n > 0
+                {
+                    self.pending_rewind_confirm = Some(n);
+                    self.set_status_notice(format!("Rewind to before prompt #{n}? (y/n)"));
+                } else {
+                    self.open_rewind_selector();
+                }
                 true
             }
             "export" => {

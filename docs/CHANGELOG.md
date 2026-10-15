@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-838 — rewind selector: fullscreen fork UI (2026-10-14 batch, plan
+  05, TUI steps 3-5).** /rewind is no longer a modal list that truncated
+  the DISPLAY only — it opens a fullscreen selector over the REAL
+  transcript (the body renderer's own lines), outlines the selected user
+  turn, dims everything after it (the preview of what the fork drops), and
+  shows `Keeps N messages · ~T tokens · drops M turns` from the agent's
+  read-only `preview_rewind`. Enter executes the AGENT-side fork
+  (`rewind_to_turn`, iter-829): the display is rebuilt from the agent's
+  forked store, the rewound prompt lands back in the composer, and the
+  notice names the kept parent session. Compacted turns refuse with the
+  inline "folded by compaction" notice; Enter is refused while a turn
+  streams. `f`/`/` opens a case-insensitive filter over prompts with
+  live-jump. The old RewindFlowOverlay + MessageSelectorOverlay are
+  deleted (their display-truncate behavior mutated nothing in the agent —
+  the screen and the context diverged). `/rewind <n>` targets prompt #n
+  directly with a y/n status-line confirm. Double-Esc on an empty composer
+  opens the selector (new `[tui] double_escape_action`, default "rewind",
+  "none" disables; a single Esc keeps every existing meaning). Ctrl+B now
+  populates the branch browser with the session's fork tree (parent +
+  children from the DB `parent_session_id` links the rewind forks write).
+  Corpus: rewind-flow replaced by rewind-selector + rewind-selector-filter.
+
 - **iter-836 — duplicate-tool-rows oracles + verdict (2026-10-14 batch,
   plan 01).** The mid-stream duplicate-row symptom is now measurable. The
   headless sim drains ONE scripted event per loop pass under

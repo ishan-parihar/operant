@@ -107,7 +107,7 @@ impl App {
         if self.theme_screen.visible {
             return Some(DialogPriority::ThemeScreen);
         }
-        if self.rewind_flow.visible {
+        if self.rewind_selector.visible {
             return Some(DialogPriority::RewindFlow);
         }
         if self.memory_file_selector.visible {
@@ -311,12 +311,12 @@ mod tests {
     /// The three surfaces that were gated inline but absent from the chain.
     ///
     /// This is the regression that motivated the guard: theme_screen,
-    /// rewind_flow and memory_file_selector could each be open and the chain
+    /// rewind selector and memory_file_selector could each be open and the chain
     /// would not have known, so the chain did not describe the UI.
     #[test]
     fn the_three_recovered_surfaces_are_gated() {
         let gates = chained_fields();
-        for field in ["theme_screen", "rewind_flow", "memory_file_selector"] {
+        for field in ["theme_screen", "rewind_selector", "memory_file_selector"] {
             assert!(
                 gates.iter().any(|g| g == field),
                 "{field} is gated in key_handling.rs so it must be gated here too"
