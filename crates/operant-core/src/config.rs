@@ -1670,30 +1670,67 @@ pub struct AuxiliaryModels {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebToolSettings {
-    pub search_url: String,
     pub search_timeout_secs: u64,
     pub fetch_timeout_secs: u64,
     pub user_agent: String,
     pub default_results: usize,
     pub max_results: usize,
-    /// Preferred web search provider: sourcehound (default — requires the
-    /// `sourcehound` binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
-    pub preferred_provider: String,
+    // ── (plan 11C1) retired provider keys, kept parsing for migration ──
+    // Web search is sourcehound-only now. These fields exist ONLY so an
+    // existing user config still loads (`deny_unknown_fields` would
+    // otherwise fail on them); they are serialized away, read by no code,
+    // and `warn_legacy_keys` names the replacement once per load.
+    #[serde(skip_serializing)]
+    pub search_url: Option<String>,
+    #[serde(skip_serializing)]
+    pub preferred_provider: Option<String>,
+    #[serde(skip_serializing)]
     pub tavily_api_key: Option<String>,
+    #[serde(skip_serializing)]
     pub exa_api_key: Option<String>,
+    #[serde(skip_serializing)]
     pub searxng_base_url: Option<String>,
+}
+
+impl WebToolSettings {
+    /// One warning per removed key with a value set (plan 11C1 migration).
+    pub fn warn_legacy_keys(&self) {
+        let pairs = [
+            ("search_url", self.search_url.as_deref(), None::<&str>),
+            (
+                "preferred_provider",
+                self.preferred_provider.as_deref(),
+                Some("sourcehound"),
+            ),
+            ("tavily_api_key", self.tavily_api_key.as_deref(), None),
+            ("exa_api_key", self.exa_api_key.as_deref(), None),
+            ("searxng_base_url", self.searxng_base_url.as_deref(), None),
+        ];
+        for (key, value, replacement) in pairs {
+            if value.is_some_and(|v| !v.trim().is_empty()) {
+                let hint = replacement
+                    .map(|r| format!(" — web search is sourcehound-only now"))
+                    .unwrap_or_else(|| {
+                        " — removed; web search is sourcehound-only now".to_string()
+                    });
+                eprintln!(
+                    "warning: [tools.web] {key} is ignored{hint}. Remove it from operant.toml."
+                );
+            }
+        }
+    }
 }
 
 impl Default for WebToolSettings {
     fn default() -> Self {
         Self {
-            search_url: "https://lite.duckduckgo.com/lite/?q={query}".to_string(),
             search_timeout_secs: 15,
             fetch_timeout_secs: 30,
             user_agent: "Mozilla/5.0 (compatible; OperantAgent/0.1)".to_string(),
             default_results: 10,
             max_results: 20,
-            preferred_provider: "sourcehound".to_string(),
+            search_url: None,
+            preferred_provider: None,
             tavily_api_key: None,
             exa_api_key: None,
             searxng_base_url: None,
@@ -1975,6 +2012,10 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
         config.harness.enabled = true;
         config.tools.kernel.enabled = true;
     }
+
+    // (plan 11C1) one-time migration warnings for the retired web-search
+    // provider keys — the config still parses, the user is told once.
+    config.tools.web.warn_legacy_keys();
 
     Ok(LoadedConfig { config, source })
 }

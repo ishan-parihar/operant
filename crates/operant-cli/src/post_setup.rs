@@ -130,12 +130,12 @@ fn print_tool_summary(config: &AppConfig) {
 
     let checks: Vec<(&str, bool, Option<&str>)> = vec![
         ("Vision", config.vision.provider.is_some(), None),
+        // (plan 11C1) web search is sourcehound-only — availability is the
+        // binary, not a provider key.
         (
             "Web Search & Extract",
-            config.tools.web.tavily_api_key.is_some()
-                || config.tools.web.exa_api_key.is_some()
-                || config.tools.web.searxng_base_url.is_some(),
-            None,
+            operant_core::tools::sourcehound::is_available(),
+            Some("run: operant update --integrations"),
         ),
         ("Image Generation", false, Some("FAL_KEY or other API key")),
         ("Text-to-Speech", config.tts.enabled, None),

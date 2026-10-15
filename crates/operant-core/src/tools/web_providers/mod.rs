@@ -1,14 +1,8 @@
-mod ddg;
-mod exa;
-mod searxng;
+// (plan 11C1) sourcehound is the only web-search provider — the ddg/exa/
+// searxng/tavily alternatives are deleted.
 mod sourcehound;
-mod tavily;
 
-pub use ddg::DDGProvider;
-pub use exa::ExaProvider;
-pub use searxng::SearXNGProvider;
 pub use sourcehound::SourcehoundSearchProvider;
-pub use tavily::TavilyProvider;
 
 use crate::error::Result;
 use async_trait::async_trait;

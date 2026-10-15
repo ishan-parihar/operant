@@ -71,9 +71,7 @@ pub mod web_tools;
 pub mod working_diff_tool;
 pub mod xai_http;
 
-pub use web_providers::{
-    DDGProvider, ExaProvider, SearXNGProvider, TavilyProvider, WebSearchProvider, WebSearchResult,
-};
+pub use web_providers::{SourcehoundSearchProvider, WebSearchProvider, WebSearchResult};
 pub mod discord_tool;
 pub mod feishu_tool;
 pub mod home_assistant_tool;

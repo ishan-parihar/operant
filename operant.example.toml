@@ -362,14 +362,16 @@ listing = "auto"
 # listing_max_tokens = 4000
 
 [tools.web]
-search_url = "https://lite.duckduckgo.com/lite/?q={query}"
+# (plan 11C1) web search is sourcehound-only. The old provider keys —
+# search_url, preferred_provider, tavily_api_key, exa_api_key,
+# searxng_base_url — are accepted-with-warning in existing configs and
+# removed here. Install or update the engine with:
+#   operant update --integrations
 search_timeout_secs = 15
 fetch_timeout_secs = 30
 user_agent = "Mozilla/5.0 (compatible; HermesAgent/0.1)"
 default_results = 10
 max_results = 20
-# preferred_provider: sourcehound (default — uses `sourcehound` binary, falls back to duckduckgo) | tavily | exa | searxng | duckduckgo
-preferred_provider = "sourcehound"
 
 [tools.http]
 timeout_secs = 30
