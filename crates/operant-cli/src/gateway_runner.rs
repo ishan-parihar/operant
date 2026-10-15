@@ -1954,13 +1954,24 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // never converged back to the manifest. Fails closed: a topology that
     // does not compute premiere as org-lead aborts the boot rather than
     // mint authority off a broken graph.
-    operant_core::org::cast::seed_cast(
-        &employee_registry,
-        &hierarchy_edges,
-        &grant_ledger,
-        &request_queue,
-        app_config.genome.grant_ttl_days,
-    )?;
+    //
+    // Phase G (docs/agentic-os/): in org mode the organization is Holon's —
+    // no cast seeding, no operant-side org tables. The archived stores stay
+    // read-only (nothing writes them), and the import mapped the seats into
+    // Holon's own registry (adapters/operant/import-cast.py).
+    if app_config.holon.enabled {
+        tracing::info!(
+            "[holon] enabled — cast seeding skipped (the organization is Holon's; phase G)"
+        );
+    } else {
+        operant_core::org::cast::seed_cast(
+            &employee_registry,
+            &hierarchy_edges,
+            &grant_ledger,
+            &request_queue,
+            app_config.genome.grant_ttl_days,
+        )?;
+    }
     // Row 1 (outline v5 §1): bounded delegation resolves the employee row
     // it delegates INTO — without the registry the authority fails closed
     // on the registry-unavailable arm. Latent today (no production row sets
@@ -4017,19 +4028,28 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // opened at boot above — reusing it avoids a second connection.
         // Fail-open: a seed failure warns but does not block the scheduler
         // or the gateway.
-        match cron_db.seed_cast_jobs(
-            operant_core::org::cast::CAST,
-            Some(employee_registry.as_ref()),
-        ) {
-            Ok(report) => {
-                tracing::info!(
-                    "cast cron seed: {} seat(s), {} job(s)",
-                    report.cast_seats,
-                    report.jobs_written
-                );
-            }
-            Err(e) => {
-                tracing::warn!("cast cron seed failed — cast seats will not self-run: {e}");
+        //
+        // Phase G (docs/agentic-os/): in org mode the cast's duties are
+        // Holon routines (the import re-proposed them); no cast crons.
+        if app_config.holon.enabled {
+            tracing::info!(
+                "[holon] enabled — cast cron seed skipped (duties are Holon routines; phase G)"
+            );
+        } else {
+            match cron_db.seed_cast_jobs(
+                operant_core::org::cast::CAST,
+                Some(employee_registry.as_ref()),
+            ) {
+                Ok(report) => {
+                    tracing::info!(
+                        "cast cron seed: {} seat(s), {} job(s)",
+                        report.cast_seats,
+                        report.jobs_written
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("cast cron seed failed — cast seats will not self-run: {e}");
+                }
             }
         }
         let cron_db = Arc::new(cron_db);

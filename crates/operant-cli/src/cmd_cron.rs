@@ -129,6 +129,22 @@ pub async fn handle_cron_command(
             allow,
             deny,
         } => {
+            // Phase G (docs/agentic-os/): in org mode recurring work belongs
+            // to the organization — `operant cron add` proposes a Holon
+            // routine instead of creating a local cron. One command printed,
+            // ready to paste (the kernel's classifier vets the proposal).
+            if config.holon.enabled {
+                let mut proposal = format!(
+                    "holon routine add --name {name:?} --cron {schedule:?} --command {command:?}"
+                );
+                if let Some(n) = repeat {
+                    proposal.push_str(&format!(" --recurring {n}"));
+                }
+                println!("[holon] org mode: recurring work is the organization's.");
+                println!("Propose it as a routine (the Chair approves):",);
+                println!("  {proposal}");
+                return Ok(());
+            }
             cmd_create(
                 config, &name, &schedule, &command, repeat, seat_mode, allow, deny,
             )

@@ -343,7 +343,6 @@ impl OperantTool for Submit {
 /// tool's `is_available` gates on the Holon-run env, so registration when
 /// a non-Holon session shares the process costs only schema lines).
 pub async fn register_all(registry: &operant_core::tools::ToolRegistry) {
-    use operant_core::tools::OperantTool as _;
     for tool in [
         Box::new(Whoami) as Box<dyn OperantTool>,
         Box::new(OrgChart),

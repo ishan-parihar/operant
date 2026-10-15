@@ -78,6 +78,25 @@ impl CronTool {
     }
 
     fn handle_create(&self, args: &CronToolArgs) -> Result<ToolResult> {
+        // Phase G (docs/agentic-os/): inside a Holon run recurring work is
+        // the organization's — the agent proposes a routine (the kernel's
+        // classifier + the Chair approve), never a local cron. The gate is
+        // the run env, not config: a Holon body proposes; a personal session
+        // on the same box keeps its own crons.
+        if std::env::var_os("HOLON_RUN_DIR").is_some() {
+            let name = args.name.clone().unwrap_or_default();
+            let schedule = args.schedule.clone().unwrap_or_default();
+            let prompt = args.prompt.clone().unwrap_or_default();
+            return Ok(ToolResult::success(
+                "cron",
+                format!(
+                    "This is a Holon run: recurring work belongs to the organization. \
+                     Propose it as a routine (the Chair approves) with the \
+                     `holon routine add --name {name:?} --cron {schedule:?} --command {prompt:?}` \
+                     command — the kernel's classifier vets the proposal."
+                ),
+            ));
+        }
         let name = args.name.as_ref().ok_or_else(|| Error::InvalidToolArgs {
             name: "cron".to_string(),
             details: "Missing 'name' for job creation".to_string(),

@@ -18,6 +18,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod api;
+pub mod archive;
 pub mod chair;
 pub mod enforcement;
 pub mod events;
@@ -70,6 +71,8 @@ pub enum Error {
     Enforcement(String),
     #[error("supervisor protocol: {0}")]
     Protocol(String),
+    #[error("org archive: {0}")]
+    Archive(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

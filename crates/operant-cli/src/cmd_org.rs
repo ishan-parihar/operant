@@ -902,6 +902,16 @@ pub enum HolonAction {
     /// notifications, due schedules. Wire to a cron or systemd timer;
     /// every 2 minutes is the packaged cadence.
     Tick,
+
+    /// Phase G (docs/agentic-os/): the one-time archive of the org stores —
+    /// copy, never delete (ORG-LAYER-DISPOSITION.md §4). Writes
+    /// <operant home>/archive/org-<date>/ with a checksum manifest.
+    /// Date defaults to today (UTC). One snapshot per date.
+    Archive {
+        /// The snapshot's date tag (YYYY-MM-DD); defaults to today
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        date: Option<String>,
+    },
 }
 
 /// Open the Holon read API or explain precisely why org mode is off.
@@ -921,6 +931,21 @@ fn holon_api(config: &AppConfig) -> Result<operant_os::api::HolonApi> {
 
 async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
     use operant_os::api::HolonApi;
+
+    // Phase G: the archive touches only the OPERANT home — the read API
+    // (and its live-instance gate) is irrelevant, and a not-yet-imported
+    // box archives before anything else.
+    if let HolonAction::Archive { date } = action {
+        let operant_home = operant_core::platform::operant_home();
+        let date = date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let dest = operant_os::archive::archive_org_stores(&operant_home, &date)?;
+        println!(
+            "org stores archived to {} (MANIFEST.sha256 beside them)",
+            dest.display()
+        );
+        println!("the originals are untouched — their writers go dark in phase G+1");
+        return Ok(());
+    }
 
     let api = holon_api(config)?;
     match action {
@@ -1093,6 +1118,9 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
             operant_os::run::tick(&home, bin.as_deref()).await?;
             println!("tick fired");
         }
+        // (the Archive arm runs BEFORE the read-API gate above — see the
+        // handler head; this match never sees it)
+        HolonAction::Archive { date: _ } => unreachable!("handled before the read-API gate"),
     }
     Ok(())
 }

@@ -8,6 +8,7 @@ description = "Operant as Holon's runtime: read-only org views, policy enforceme
 [dependencies]
 async-trait = { workspace = true }
 operant-core = { path = "../operant-core" }
+sha2 = "0.10"
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }
 serde_json.workspace = true
