@@ -454,6 +454,29 @@ pub enum ToolProgressMode {
 }
 
 /// When the conversation session should be automatically reset.
+/// Serde validator for `BehaviorSettings::reasoning_effort`: empty (don't
+/// send) or one of minimal|low|medium|high|xhigh (plan 03). Same set as
+/// operant-config's `normalize_reasoning_effort`.
+fn deserialize_validated_reasoning_effort<'de, D>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: String = String::deserialize(deserializer)?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    match normalized.as_str() {
+        "minimal" | "low" | "medium" | "high" | "xhigh" => Ok(normalized),
+        _ => Err(serde::de::Error::custom(format!(
+            "reasoning_effort {raw:?} is invalid (expected \"\" or one of: minimal, low, medium, high, xhigh)"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -463,6 +486,28 @@ pub enum SessionResetMode {
     OnSystemPromptChange,
     OnToolChange,
     Always,
+}
+
+/// How `[agent] reasoning_effort` is serialized per endpoint family
+/// (2026-10-14 batch, plan 03).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffortParam {
+    /// Pick the shape from the base_url/model: openrouter/kilo → `reasoning`
+    /// object; api.openai.com or o*/gpt-5*/codex models → `reasoning_effort`;
+    /// native Anthropic → `thinking` budget; everything else (proxies) →
+    /// `reasoning_effort`.
+    #[default]
+    Auto,
+    /// Always send `"reasoning_effort": "<e>"`.
+    ReasoningEffort,
+    /// Always send `"reasoning": {"effort": "<e>"}`.
+    ReasoningObject,
+    /// Always send `"thinking": {"type": "enabled", "budget_tokens": B}`
+    /// (Anthropic-native; drops temperature per their contract).
+    AnthropicThinking,
+    /// Never send an effort field.
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -534,6 +579,14 @@ pub struct BehaviorSettings {
     /// `memory_nudge_interval` (default 10).
     #[serde(default = "default_memory_nudge_interval")]
     pub memory_nudge_interval: usize,
+    /// Reasoning effort sent on every main-turn request (2026-10-14 batch,
+    /// plan 03). Empty = don't send; one of minimal|low|medium|high|xhigh.
+    /// Invalid values fail config load with the allowed set named.
+    #[serde(default, deserialize_with = "deserialize_validated_reasoning_effort")]
+    pub reasoning_effort: String,
+    /// Wire shape for the effort field (plan 03); see ReasoningEffortParam.
+    #[serde(default)]
+    pub reasoning_effort_param: ReasoningEffortParam,
 
     /// Iterations between skill nudges (0 = disabled). Mirrors hermes-agent's
     /// `creation_nudge_interval` (default 10).
@@ -677,6 +730,8 @@ impl Default for BehaviorSettings {
             context_window: 128_000,
             max_healing_attempts: 3,
             show_reasoning: true,
+            reasoning_effort: String::new(),
+            reasoning_effort_param: ReasoningEffortParam::Auto,
             tool_progress: ToolProgressMode::Auto,
             session_reset: SessionResetMode::Never,
             context_compression: false,

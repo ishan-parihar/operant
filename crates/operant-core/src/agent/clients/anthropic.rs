@@ -147,6 +147,26 @@ impl AnthropicModelClient {
         if let Some(temp) = request.temperature {
             body["temperature"] = json!(temp);
         }
+        // (plan 03) Native Anthropic thinking: budget from the effort
+        // level, clamped below max_tokens. Anthropic requires temperature
+        // to be absent while thinking is enabled.
+        if let Some(effort) = &request.reasoning_effort {
+            let max = request.max_tokens.unwrap_or(4096);
+            let mut budget = match effort.as_str() {
+                "minimal" => 1024,
+                "low" => 2048,
+                "medium" => 8192,
+                "xhigh" => 32_000,
+                _ => 16_384, // high
+            };
+            if budget >= max {
+                budget = max.saturating_sub(1024).max(1024);
+            }
+            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("temperature");
+            }
+        }
         if !request.tools.is_empty() {
             body["tools"] = json!(
                 request
@@ -289,6 +309,10 @@ impl ModelClient for AnthropicModelClient {
         }
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = self.convert_request(&request);
         // Clone the key into an owned String FIRST: `RwLockReadGuard` is not

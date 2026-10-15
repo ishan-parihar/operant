@@ -265,6 +265,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     #[cfg(any())]
     // [port-decision] keybind registry not ported (EFFORT_HELP); re-activate at cutover
     RegisteredCommand::public("/effort", crate::tui::operant_app::keybind::EFFORT_HELP),
+    // (plan 03) the real effort row + the internal setter the picker
+    // funnels through.
+    RegisteredCommand::public(
+        "/effort",
+        "Set reasoning effort (off|minimal|low|medium|high|xhigh)",
+    ),
+    RegisteredCommand::hidden("/effort-set", "Internal: set effort on the live agent"),
     RegisteredCommand::public("/fast", "Toggle fast mode"),
     RegisteredCommand::public(
         "/thinking-display",

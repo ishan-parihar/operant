@@ -22,6 +22,19 @@ impl App {
             Some("max") => EffortLevel::Max,
             _ => EffortLevel::Normal,
         };
+        // (plan 03) the TOML value wins over the legacy settings.json shape;
+        // the mapped string also seeds the agent's wire value.
+        let toml_effort = config.agent.reasoning_effort.trim().to_string();
+        let initial_effort = if !toml_effort.is_empty() {
+            match toml_effort.as_str() {
+                "minimal" | "low" => EffortLevel::Low,
+                "medium" => EffortLevel::Normal,
+                "xhigh" | "max" => EffortLevel::Max,
+                _ => EffortLevel::High,
+            }
+        } else {
+            initial_effort
+        };
         let initial_vim = settings.vim_enabled;
 
         // Make the persisted theme the palette every renderer reads, before
@@ -272,6 +285,7 @@ impl App {
             expanded_tool_id: None,
             model_cycle: Vec::new(),
             pending_compact: false,
+            pending_effort: (!toml_effort.is_empty()).then(|| toml_effort.clone()),
             agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,

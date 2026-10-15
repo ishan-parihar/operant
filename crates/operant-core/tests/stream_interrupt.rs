@@ -129,6 +129,8 @@ fn text_chunk(content: &str) -> StreamChunk {
 
 fn test_config() -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo-stream-interrupt".to_string(),
         max_iterations: 3,
         tool_timeout: Duration::from_secs(5),

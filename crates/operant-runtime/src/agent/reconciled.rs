@@ -1491,7 +1491,9 @@ fn translate_event(event: &AgentEvent, sink: &mut TurnSink) -> Option<TurnEvent>
         | AgentEvent::SubagentStarted { .. }
         | AgentEvent::SubagentStopped { .. }
         | AgentEvent::TodoUpdated { .. }
-        | AgentEvent::StreamCorrupted { .. } => None,
+        | AgentEvent::StreamCorrupted { .. }
+        // (plan 05) rewind turn marks: informational for the reconciler.
+        | AgentEvent::TurnStarted { .. } => None,
     }
 }
 
@@ -3079,6 +3081,8 @@ mod facade_tests {
     /// Same defaults as the parity harness's `core_config`.
     fn test_config(max_iterations: usize, stream: bool) -> AgentConfig {
         AgentConfig {
+            reasoning_effort: String::new(),
+            reasoning_effort_param: Default::default(),
             model: "demo".to_string(),
             max_iterations,
             tool_timeout: Duration::from_secs(5),

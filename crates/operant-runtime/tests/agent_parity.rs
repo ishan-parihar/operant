@@ -261,6 +261,8 @@ impl OperantTool for CoreEnvProbe {
 
 fn core_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations,
         tool_timeout: Duration::from_secs(5),

@@ -59,6 +59,10 @@ pub struct TurnRetryState {
     /// Whether credential rotation has been attempted this turn.
     /// Prevents burning through the entire credential pool.
     pub rotate_attempted: bool,
+    /// Whether the reasoning-effort retry-without-field has been attempted
+    /// this turn (plan 03). One-shot like the others: the field is then
+    /// dropped for the whole session via unsupported_effort_models.
+    pub reasoning_param_attempted: bool,
     /// Whether model fallback has been attempted this turn.
     /// Prevents cascading fallback across all models.
     pub fallback_attempted: bool,
@@ -81,6 +85,7 @@ impl TurnRetryState {
             max_retries: max_retries.unwrap_or(DEFAULT_MAX_RETRIES),
             compress_attempted: false,
             rotate_attempted: false,
+            reasoning_param_attempted: false,
             fallback_attempted: false,
             restart_with_compressed: false,
             restart_with_rotated_credential: false,

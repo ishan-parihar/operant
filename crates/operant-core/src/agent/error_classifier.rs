@@ -67,6 +67,11 @@ pub enum FailoverReason {
     // Provider-specific
     /// Anthropic thinking block sig invalid
     ThinkingSignature,
+    /// Provider rejected the reasoning-effort/thinking request field
+    /// (2026-10-14 batch, plan 03): HTTP 400/422 naming reasoning,
+    /// reasoning_effort, thinking, effort, or an unrecognized/unknown
+    /// parameter. Retry once without the field, then stop sending it.
+    ReasoningParamRejected,
     /// Anthropic "extra usage" tier gate
     LongContextTier,
     /// Anthropic OAuth subscription rejects 1M context beta
@@ -108,6 +113,7 @@ impl FailoverReason {
             Self::InvalidEncryptedContent => "invalid_encrypted_content",
             Self::MultimodalToolContentUnsupported => "multimodal_tool_content_unsupported",
             Self::ThinkingSignature => "thinking_signature",
+            Self::ReasoningParamRejected => "reasoning_param_rejected",
             Self::LongContextTier => "long_context_tier",
             Self::OauthLongContextBetaForbidden => "oauth_long_context_beta_forbidden",
             Self::LlamaCppGrammarPattern => "llama_cpp_grammar_pattern",
@@ -385,6 +391,33 @@ pub fn classify_api_error(
     {
         return ClassifiedError {
             reason: FailoverReason::ThinkingSignature,
+            status_code,
+            message: error_body.to_string(),
+            retryable: true,
+            should_fallback: false,
+            should_compress: false,
+            should_rotate_credential: false,
+        };
+    }
+
+    // (plan 03) Reasoning-effort field rejection: the request is fine
+    // except the effort field. Retry once WITHOUT it (the agent loop owns
+    // that retry so it doesn't burn the stream budget) and stop sending
+    // the field for that model.
+    if (status_code == Some(400) || status_code == Some(422))
+        && (body_lower.contains("reasoning")
+            || body_lower.contains("reasoning_effort")
+            || body_lower.contains("effort")
+            || body_lower.contains("thinking"))
+        && (body_lower.contains("unrecognized")
+            || body_lower.contains("unknown")
+            || body_lower.contains("unsupported")
+            || body_lower.contains("invalid parameter")
+            || body_lower.contains("unexpected")
+            || body_lower.contains("not supported"))
+    {
+        return ClassifiedError {
+            reason: FailoverReason::ReasoningParamRejected,
             status_code,
             message: error_body.to_string(),
             retryable: true,
@@ -1296,6 +1329,38 @@ mod tests {
         let c = classify_api_error(Some(400), "thinking block signature is invalid", None);
         assert_eq!(c.reason, FailoverReason::ThinkingSignature);
         assert!(c.retryable);
+    }
+
+    /// (plan 03) OpenAI-style rejection of the reasoning-effort field:
+    /// 400 naming an unrecognized parameter — retryable, no fallback.
+    #[test]
+    fn test_reasoning_param_rejected_400() {
+        let c = classify_api_error(
+            Some(400),
+            r#"{"error":"Unrecognized request argument supplied: reasoning_effort"}"#,
+            None,
+        );
+        assert_eq!(c.reason, FailoverReason::ReasoningParamRejected);
+        assert!(c.retryable);
+        assert!(!c.should_fallback);
+        assert!(!c.should_compress);
+    }
+
+    /// (plan 03) A 400 that mentions reasoning but is a thinking-signature
+    /// problem must NOT classify as a param rejection — the shapes overlap
+    /// on the word "thinking"; the signature arm is checked first.
+    #[test]
+    fn test_thinking_signature_wins_over_param_rejection() {
+        let c = classify_api_error(Some(400), "thinking blocks cannot be modified", None);
+        assert_eq!(c.reason, FailoverReason::ThinkingSignature);
+    }
+
+    /// (plan 03) A generic 400 with no parameter vocabulary is not a
+    /// reasoning rejection — don't fire the retry-without-effort path.
+    #[test]
+    fn test_generic_400_is_not_reasoning_rejection() {
+        let c = classify_api_error(Some(400), "messages: field required", None);
+        assert_ne!(c.reason, FailoverReason::ReasoningParamRejected);
     }
 
     #[test]

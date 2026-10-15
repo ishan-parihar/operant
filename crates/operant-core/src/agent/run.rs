@@ -85,6 +85,10 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "mutex poison recovery — a poisoned masked_tools lock is a programmer error, not a runtime condition"
     )]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     pub(crate) async fn tools_for_turn(
         &self,
         messages: &[Message],
@@ -276,6 +280,10 @@ impl OperantAgent {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -792,7 +800,34 @@ impl OperantAgent {
                         // sessions that exceed the context window.
                         let classified = FallbackModelClient::classify_error(&e);
                         self.emit_rate_limit_notice(&classified, &e).await;
-                        if classified.should_compress && !retry_state.compress_attempted {
+                        // ── Reasoning-effort rejection (plan 03) ──────────────
+                        // The request was fine except the effort field:
+                        // mark the model, tell the user once, and retry the
+                        // SAME request without the field. This retry is
+                        // free — it does not consume the retry budget.
+                        if classified.reason
+                            == crate::agent::error_classifier::FailoverReason::ReasoningParamRejected
+                            && !retry_state.reasoning_param_attempted
+                        {
+                            retry_state.reasoning_param_attempted = true;
+                            let model = self.effective_model();
+                            self.mark_effort_unsupported(&model);
+                            self.emit(AgentEvent::Notice {
+                                text: format!(
+                                    "Reasoning effort isn't supported by {model}; continuing without it"
+                                ),
+                            })
+                            .await;
+                            warn!(
+                                model = %model,
+                                "Reasoning-effort field rejected — retrying without it"
+                            );
+                            let tools = self.tools_for_turn(&messages).await;
+                            let retry_request = self
+                                .fitted_request(&self.effective_model(), &messages, tools)
+                                .with_reasoning_effort(None);
+                            self.client.chat_streaming(retry_request).await?
+                        } else if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
                             // Try LLM summarization first (intelligent compression),
@@ -2397,6 +2432,7 @@ impl OperantAgent {
                 * crate::context_management::MICRO_COMPACTION_THRESHOLD_PERCENT
                 / 100;
             if estimated > soft {
+                self.bump_conv_epoch(); // (plan 05) non-append mutation
                 let mut conv = self.conversation.write().await;
                 if let Some(marker) = crate::context_management::micro_compact(
                     &mut conv,

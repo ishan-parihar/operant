@@ -262,6 +262,8 @@ fn tool_call_response(tool: &str, arguments: &str) -> ChatResponse {
 /// scripted client answers through `chat`.
 fn test_config() -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations: 4,
         tool_timeout: Duration::from_secs(5),

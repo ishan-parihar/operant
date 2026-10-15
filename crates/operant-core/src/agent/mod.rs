@@ -15,6 +15,7 @@ pub mod learning_graph;
 pub mod llm_compressor;
 pub mod message_safety;
 pub mod provider_registry;
+pub mod rewind;
 pub mod runtime_key;
 pub mod skill_bundle;
 pub mod skill_preprocessing;
@@ -139,6 +140,12 @@ pub struct AgentConfig {
     /// `None` disables disk persistence (approvals are session-memory
     /// only, matching hermes' in-memory `_session_approved`).
     pub approval_allowlist_path: Option<std::path::PathBuf>,
+    /// Reasoning effort sent on every main-turn request (2026-10-14 batch,
+    /// plan 03). Empty string = don't send. One of minimal|low|medium|high|
+    /// xhigh.
+    pub reasoning_effort: String,
+    /// Wire shape for the effort field (plan 03).
+    pub reasoning_effort_param: crate::config::ReasoningEffortParam,
     /// Whether to record trajectories (ReAct steps + messages) for each run.
     /// Saved to ~/.operant/trajectories/<session_id>.json.
     pub record_trajectories: bool,
@@ -196,6 +203,9 @@ impl From<&BehaviorSettings> for AgentConfig {
             memory_review_interval: settings.memory_nudge_interval,
             max_retries: 3,
             tool_search: crate::config::ToolSearchSettings::default(),
+            // (plan 03) reasoning effort: value + wire shape.
+            reasoning_effort: settings.reasoning_effort.clone(),
+            reasoning_effort_param: settings.reasoning_effort_param,
             // iter-723: the [agent] config key flows to the guardrail
             // tracker (builders.rs consumes this field). Was hardcoded
             // empty — the runtime exempt path existed but no config-file
@@ -272,6 +282,10 @@ pub enum AgentEvent {
     /// the CLI/TUI can surface "limit reached, retry in Ns" instead of only
     /// seeing the error text (T3 — hermes `_capture_rate_limits` parity).
     RateLimitNotice { retry_after_secs: Option<u64> },
+    /// (plan 05) A real user prompt was recorded into the conversation.
+    /// The TUI attaches the turn id to the display row so the rewind
+    /// selector can offer per-prompt rewind targets.
+    TurnStarted { turn_id: u64 },
     /// The provider's SSE stream contained events that could not be parsed
     /// (corrupted framing — merged data lines, concatenated JSON, mid-stream
     /// replays). Those payloads are dropped by the parser, so the rendered
@@ -382,6 +396,21 @@ pub enum AgentEvent {
 }
 
 /// Operant Agent for tool orchestration
+/// Rewind target recorded for each real user prompt (2026-10-14 batch,
+/// plan 05).
+#[derive(Debug, Clone)]
+pub struct UserTurnMark {
+    /// Stable id, also carried by `AgentEvent::TurnStarted`.
+    pub turn_id: u64,
+    /// Index of the user message in the stored conversation at record time.
+    /// Valid only while `conv_epoch` matches; relocated by text otherwise.
+    pub conv_index: usize,
+    /// The epoch of the conversation at record time.
+    pub conv_epoch: u64,
+    /// The prompt text (relocation key after compaction).
+    pub text: String,
+}
+
 pub struct OperantAgent {
     config: AgentConfig,
     /// Runtime model override (set via set_model() by the gateway).
@@ -408,6 +437,14 @@ pub struct OperantAgent {
     /// rehydrates it from disk on demand) rather than carried into the next
     /// session. See [`crate::session`] for why.
     conversation: Arc<RwLock<Vec<Message>>>,
+    /// Reasoning effort for main turns (2026-10-14 batch, plan 03). Set from
+    /// `[agent] reasoning_effort` at build, flipped live by the TUI
+    /// (/effort picker, model picker, Shift+Tab) and the gateway. `None`
+    /// when the config is empty or the current model rejected the field.
+    reasoning_effort: Arc<std::sync::RwLock<Option<String>>>,
+    /// Models that returned a reasoning-param rejection (plan 03): the
+    /// field is skipped for these for the rest of the session.
+    unsupported_effort_models: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Durable per-session transcripts, load-on-demand with a bounded warm
     /// cache. Owns which transcript a given session id sees; the
     /// [`Database`] owns where it is written.
@@ -492,6 +529,14 @@ pub struct OperantAgent {
     /// and injects them into the conversation so the model sees the
     /// user's real-time guidance without restarting the turn.
     steer_queue: Arc<tokio::sync::Mutex<Vec<String>>>,
+    /// (plan 05) Rewind targets: one mark per REAL user prompt, in order.
+    /// Steer/nudge/continue messages never get marks (they enter via
+    /// drain_steers, not build_turn_context).
+    user_turns: Arc<std::sync::RwLock<Vec<UserTurnMark>>>,
+    /// (plan 05) Bumped on every non-append mutation of the stored
+    /// conversation (compact, clear, micro_compact, ladder rewrites) —
+    /// rewind locates stale marks by text scan when this differs.
+    conv_epoch: Arc<std::sync::atomic::AtomicU64>,
     /// The ONE session id this agent persists into, for every
     /// `run()` and every persistence site (messages, metadata, tool
     /// context, compression state). Two namespaces used to live here —
@@ -2472,6 +2517,8 @@ mod tests {
         let db = Database::init(temp_dir.path().join("drop_test.sqlite")).unwrap();
 
         let config = AgentConfig {
+            reasoning_effort: String::new(),
+            reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             model: "demo".to_string(),
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
@@ -2520,6 +2567,8 @@ mod tests {
         let db = Database::init(temp_dir.path().join("metrics_test.sqlite")).unwrap();
 
         let config = AgentConfig {
+            reasoning_effort: String::new(),
+            reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             model: "demo".to_string(),
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),
@@ -2634,6 +2683,8 @@ mod tests {
         ));
 
         let config = AgentConfig {
+            reasoning_effort: String::new(),
+            reasoning_effort_param: crate::config::ReasoningEffortParam::Auto,
             model: "demo".to_string(),
             max_iterations: 3,
             tool_timeout: Duration::from_secs(5),

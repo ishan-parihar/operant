@@ -369,6 +369,8 @@ async fn world_with(
 /// of the seat consultation exactly as it does live.
 fn test_config() -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations: 4,
         tool_timeout: Duration::from_secs(5),

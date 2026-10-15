@@ -48,12 +48,14 @@ impl ModelClient for OpenAIModelClient {
             Some(request.tools.as_slice())
         };
         self.inner
-            .chat(
+            .chat_with_effort(
                 &request.model,
                 &request.messages,
                 tools,
                 request.max_tokens,
                 request.temperature,
+                request.reasoning_effort.as_deref(),
+                crate::client::ReasoningShape::Auto,
             )
             .await
     }
@@ -70,12 +72,14 @@ impl ModelClient for OpenAIModelClient {
 
         let stream = self
             .inner
-            .chat_streaming(
+            .chat_streaming_with_effort(
                 &request.model,
                 &request.messages,
                 tools,
                 request.max_tokens,
                 request.temperature,
+                request.reasoning_effort.as_deref(),
+                crate::client::ReasoningShape::Auto,
             )
             .await?;
         // Corrupted-SSE accounting: clone the drop counter before the

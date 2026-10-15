@@ -855,6 +855,23 @@ impl TuiApp {
         app: &mut crate::tui::app::App,
         agent: Option<&std::sync::Arc<operant_core::agent::OperantAgent>>,
     ) {
+        // (plan 03) effort change first: the agent applies it to the very
+        // next request.
+        if let Some(effort) = std::mem::take(&mut app.pending_effort) {
+            if let Some(agent) = agent {
+                agent.set_reasoning_effort(if effort.is_empty() {
+                    None
+                } else {
+                    Some(effort.clone())
+                });
+                let shown = if effort.is_empty() {
+                    "off".to_string()
+                } else {
+                    effort
+                };
+                app.set_status_notice(format!("Reasoning effort: {shown}"));
+            }
+        }
         if std::mem::take(&mut app.pending_compact) {
             let Some(agent) = agent else {
                 app.set_status_notice("No agent attached — nothing to compact.".to_string());

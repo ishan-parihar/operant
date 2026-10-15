@@ -338,6 +338,8 @@ impl OperantTool for MemorySearchTool {
 
 fn test_config(max_iterations: usize, skill_nudge_interval: usize) -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations,
         tool_timeout: Duration::from_secs(5),

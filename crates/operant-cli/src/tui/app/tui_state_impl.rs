@@ -728,6 +728,12 @@ impl TuiState for App {
             context_limit: self.context_limit(),
             queue_mode: Some(self.plan_mode),
             model: Some(self.model_name.clone()),
+            // (plan 03) the effort shown next to the model in the status
+            // facts; "n/a" when the agent rejected the field for this model.
+            reasoning_effort: Some(match self.pending_effort.as_deref() {
+                None | Some("") => String::new(),
+                Some(e) => e.to_string(),
+            }),
             provider_name: self.active_provider.clone(),
             working_dir: self.current_dir.clone(),
             tokens_per_second: self.output_tps(),

@@ -959,6 +959,29 @@ impl App {
                 self.effort_picker.open(self.effort_level);
                 true
             }
+            "effort-set" => {
+                // (plan 03) hidden command the picker/model-picker confirm
+                // path funnels through: sets the wire value on the live agent
+                // via the pending-action channel (same seam as /compact).
+                // Args: the effort string ("" = off).
+                let value = args.trim().to_ascii_lowercase();
+                let valid = ["", "minimal", "low", "medium", "high", "xhigh"];
+                if !valid.contains(&value.as_str()) {
+                    self.set_status_notice(format!(
+                        "Unknown effort '{value}' — use off|minimal|low|medium|high|xhigh"
+                    ));
+                    return true;
+                }
+                self.pending_effort = Some(value.clone());
+                self.effort_level = match value.as_str() {
+                    "minimal" | "low" => crate::tui::model_picker::effort::EffortLevel::Low,
+                    "medium" => crate::tui::model_picker::effort::EffortLevel::Normal,
+                    "xhigh" => crate::tui::model_picker::effort::EffortLevel::Max,
+                    "high" => crate::tui::model_picker::effort::EffortLevel::High,
+                    _ => self.effort_level,
+                };
+                true
+            }
             "permissions" => {
                 // 2026-10-14 batch, plan 10: the explicit replacement for
                 // the removed Shift+Tab permission cycle. Bypass still

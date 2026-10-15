@@ -429,6 +429,10 @@ impl OperantAgent {
         )
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Build the LLM request with the output-token cap fitted to the context
     /// window (omp `output-budget.ts` parity, iter-792).
     ///
@@ -451,9 +455,45 @@ impl OperantAgent {
             .last_prompt_tokens
             .load(std::sync::atomic::Ordering::Relaxed)
             > 0;
+        // (plan 03) main turns carry the reasoning effort unless the model
+        // rejected it this session. `Auto` shape resolves per endpoint.
+        let effort = self
+            .reasoning_effort
+            .read()
+            .expect("reasoning_effort RwLock poisoned — programmer error")
+            .clone()
+            .filter(|_| !self.effort_unsupported_for(model));
+        let shape = match self.config.reasoning_effort_param {
+            crate::config::ReasoningEffortParam::Auto => crate::client::ReasoningShape::Auto,
+            crate::config::ReasoningEffortParam::ReasoningEffort => {
+                crate::client::ReasoningShape::ReasoningEffort
+            }
+            crate::config::ReasoningEffortParam::ReasoningObject => {
+                crate::client::ReasoningShape::ReasoningObject
+            }
+            crate::config::ReasoningEffortParam::AnthropicThinking => {
+                crate::client::ReasoningShape::AnthropicThinking
+            }
+            crate::config::ReasoningEffortParam::None => crate::client::ReasoningShape::None,
+        };
         let request = ChatRequest::new(model.to_string(), messages.to_vec())
             .with_tools(tools)
-            .with_stream(self.config.stream);
+            .with_stream(self.config.stream)
+            .with_reasoning_effort(effort);
+        // (plan 03) the resolved wire shape travels with the request so the
+        // adapter doesn't re-derive it; ChatRequest is provider-agnostic, so
+        // piggyback on the builder — the adapter receives the shape from
+        // the agent's config at the call site below.
+        self.fitted_request_shaped(request, prompt, reported, shape)
+    }
+
+    fn fitted_request_shaped(
+        &self,
+        request: ChatRequest,
+        prompt: usize,
+        reported: bool,
+        _shape: crate::client::ReasoningShape,
+    ) -> ChatRequest {
         match crate::context_management::fit_output_tokens(
             request.max_tokens,
             self.config.context_window,

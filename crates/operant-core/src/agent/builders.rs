@@ -102,6 +102,9 @@ impl OperantAgent {
         let guardrail_exempt = config.guardrail_exempt_tools.clone();
         let persistent_allowlist = approval_allowlist_from_config(&config);
         let sessions = Arc::new(crate::session::SessionStore::new(Arc::clone(&database)));
+        // (plan 03) read before `config` moves into Self.
+        let initial_effort =
+            (!config.reasoning_effort.is_empty()).then(|| config.reasoning_effort.clone());
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -109,6 +112,8 @@ impl OperantAgent {
             registry,
             harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
+            reasoning_effort: Arc::new(std::sync::RwLock::new(initial_effort)),
+            unsupported_effort_models: std::sync::Mutex::new(std::collections::HashSet::new()),
             sessions,
             event_tx: None,
             permission_tx: None,
@@ -125,6 +130,8 @@ impl OperantAgent {
             hook_registry: None,
             harness_prompt_slot: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            user_turns: Arc::new(std::sync::RwLock::new(Vec::new())),
+            conv_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             skill_manager: None,
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
@@ -182,6 +189,9 @@ impl OperantAgent {
         let guardrail_exempt = config.guardrail_exempt_tools.clone();
         let persistent_allowlist = approval_allowlist_from_config(&config);
         let sessions = Arc::new(crate::session::SessionStore::new(Arc::clone(&database)));
+        // (plan 03) read before `config` moves into Self.
+        let initial_effort =
+            (!config.reasoning_effort.is_empty()).then(|| config.reasoning_effort.clone());
         Self {
             config,
             model_override: Arc::new(std::sync::RwLock::new(None::<String>)),
@@ -189,6 +199,8 @@ impl OperantAgent {
             registry,
             harness: None,
             conversation: Arc::new(RwLock::new(Vec::new())),
+            reasoning_effort: Arc::new(std::sync::RwLock::new(initial_effort)),
+            unsupported_effort_models: std::sync::Mutex::new(std::collections::HashSet::new()),
             sessions,
             event_tx: Some(event_tx),
             permission_tx: None,
@@ -205,6 +217,8 @@ impl OperantAgent {
             hook_registry: None,
             harness_prompt_slot: None,
             steer_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            user_turns: Arc::new(std::sync::RwLock::new(Vec::new())),
+            conv_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             skill_manager: None,
             database,
             session_id: Arc::new(std::sync::RwLock::new(None)),
@@ -312,6 +326,10 @@ impl OperantAgent {
         self
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"

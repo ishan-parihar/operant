@@ -24,6 +24,11 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     pub tools: Vec<ToolSchema>,
     pub stream: bool,
+    /// Reasoning effort for this turn (2026-10-14 batch, plan 03). `None`
+    /// on every auxiliary request (guardian, compressor, recap, background
+    /// review) — only main turns carry effort, and only when the user set
+    /// one and the model hasn't rejected the field.
+    pub reasoning_effort: Option<String>,
 }
 
 impl ChatRequest {
@@ -36,6 +41,7 @@ impl ChatRequest {
             temperature: None,
             tools: Vec::new(),
             stream: false,
+            reasoning_effort: None,
         }
     }
 
@@ -48,6 +54,12 @@ impl ChatRequest {
     /// Enable or disable streaming.
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
+        self
+    }
+
+    /// Attach the reasoning effort (plan 03). Main turns only.
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
         self
     }
 }

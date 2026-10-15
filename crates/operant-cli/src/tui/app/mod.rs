@@ -173,6 +173,9 @@ pub struct App {
     /// `/compact` asked the agent to fold its stored history; run by
     /// `TuiApp` (which holds the agent) right after the command.
     pub pending_compact: bool,
+    /// (plan 03) Effort change waiting for the next agent-touching tick —
+    /// `run_pending_agent_actions` applies it to the live agent.
+    pub pending_effort: Option<String>,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.

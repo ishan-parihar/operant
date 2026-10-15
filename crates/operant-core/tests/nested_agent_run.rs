@@ -418,6 +418,8 @@ const PARENT_MAX_ITERATIONS: usize = 8;
 
 fn test_config() -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations: PARENT_MAX_ITERATIONS,
         // 5s per tool call: shorter than the child's own 30s deadline, so the

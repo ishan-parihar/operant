@@ -115,14 +115,16 @@ impl KeyBindingRegistry {
                 context: BindingContext::Prompt,
                 description: "Accept completion",
             },
-            // Not a completion action. The dispatcher (app/key_handling.rs:1520)
-            // cycles the permission mode Default -> AcceptEdits ->
-            // 2026-10-14 batch, plan 10: the Shift+Tab entry is GONE. The
-            // permission cycle it described was removed — two silent presses
-            // armed Bypass; /permissions is the explicit path now and Bypass
-            // always defers to the confirmation dialog. The chord is
-            // deliberately uncatalogued until plan 03 rebinds it to the
-            // reasoning-effort cycle.
+            // (plan 03) Shift+Tab is the effort ladder (the permission-mode
+            // cycle plan 10 removed — two silent presses armed Bypass — is
+            // never coming back on this chord).
+            DefaultBinding {
+                key: KeyCode::BackTab,
+                modifiers: KeyModifiers::SHIFT,
+                action: KeyAction::Custom(16),
+                context: BindingContext::Global,
+                description: "Cycle reasoning effort",
+            },
             DefaultBinding {
                 key: KeyCode::Up,
                 modifiers: KeyModifiers::NONE,

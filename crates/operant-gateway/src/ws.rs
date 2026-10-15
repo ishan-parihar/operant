@@ -1470,6 +1470,8 @@ mod tests {
 
     fn ws_facade_config() -> operant_core::agent::AgentConfig {
         operant_core::agent::AgentConfig {
+            reasoning_effort: String::new(),
+            reasoning_effort_param: Default::default(),
             model: "demo".to_string(),
             max_iterations: 5,
             tool_timeout: Duration::from_secs(5),

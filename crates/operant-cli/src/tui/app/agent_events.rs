@@ -632,6 +632,10 @@ impl App {
                     SystemMessageStyle::Info,
                 );
             }
+            // (plan 05) a real user prompt started — nothing to render; the
+            // turn id is for the rewind selector's row attachment, which
+            // reads marks from the agent on open.
+            AgentEvent::TurnStarted { .. } => {}
         }
     }
 }

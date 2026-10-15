@@ -109,6 +109,10 @@ pub struct EmbeddingData {
 }
 
 impl OpenAIClient {
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Create a new OpenAI client
     pub fn new(config: ClientConfig) -> Self {
         // (iter-139 — fixed ponytail-audit bug A23: was .expect() which
@@ -278,8 +282,41 @@ impl OpenAIClient {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<ChatResponse> {
-        let request =
-            self.build_chat_request(model, messages, tools, false, max_tokens, temperature)?;
+        self.chat_with_effort(
+            model,
+            messages,
+            tools,
+            max_tokens,
+            temperature,
+            None,
+            ReasoningShape::Auto,
+        )
+        .await
+    }
+
+    /// Non-streaming request with a reasoning effort attached (plan 03).
+    /// `shape` picks the wire format; see `apply_reasoning_field`.
+    #[allow(clippy::too_many_arguments)] // mirrors the inner request builder's parameterization
+    pub async fn chat_with_effort(
+        &self,
+        model: &str,
+        messages: &[Message],
+        tools: Option<&[ToolSchema]>,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+        reasoning_effort: Option<&str>,
+        shape: ReasoningShape,
+    ) -> Result<ChatResponse> {
+        let request = self.build_chat_request(
+            model,
+            messages,
+            tools,
+            false,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            shape,
+        )?;
 
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
@@ -366,8 +403,40 @@ impl OpenAIClient {
         max_tokens: Option<u32>,
         temperature: Option<f32>,
     ) -> Result<ChatStreamResponse> {
-        let request =
-            self.build_chat_request(model, messages, tools, true, max_tokens, temperature)?;
+        self.chat_streaming_with_effort(
+            model,
+            messages,
+            tools,
+            max_tokens,
+            temperature,
+            None,
+            ReasoningShape::Auto,
+        )
+        .await
+    }
+
+    /// Streaming request with a reasoning effort attached (plan 03).
+    #[allow(clippy::too_many_arguments)] // mirrors the inner request builder's parameterization
+    pub async fn chat_streaming_with_effort(
+        &self,
+        model: &str,
+        messages: &[Message],
+        tools: Option<&[ToolSchema]>,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+        reasoning_effort: Option<&str>,
+        shape: ReasoningShape,
+    ) -> Result<ChatStreamResponse> {
+        let request = self.build_chat_request(
+            model,
+            messages,
+            tools,
+            true,
+            max_tokens,
+            temperature,
+            reasoning_effort,
+            shape,
+        )?;
 
         let url = self.build_url("")?;
         let headers = self.build_headers()?;
@@ -624,6 +693,7 @@ impl OpenAIClient {
     }
 
     ///Build the chat request payload
+    #[allow(clippy::too_many_arguments)] // the request's full parameter surface; a struct here would only relocate it
     fn build_chat_request(
         &self,
         model: &str,
@@ -632,6 +702,8 @@ impl OpenAIClient {
         stream: bool,
         max_tokens: Option<u32>,
         temperature: Option<f32>,
+        reasoning_effort: Option<&str>,
+        shape: ReasoningShape,
     ) -> Result<serde_json::Value> {
         let mut api_messages: Vec<Value> = messages.iter().map(|m| m.to_value()).collect();
 
@@ -704,7 +776,110 @@ impl OpenAIClient {
             request["tools"] = json!(tools_array);
         }
 
+        // (plan 03) Reasoning effort, in the shape the endpoint family
+        // accepts. Attached last: the field is additive, and a provider
+        // that rejects it triggers the agent's retry-without fallback.
+        if let Some(effort) = reasoning_effort {
+            apply_reasoning_field(
+                &mut request,
+                &self.config.base_url,
+                model,
+                effort,
+                shape,
+                max_tokens,
+            );
+        }
+
         Ok(request)
+    }
+}
+
+/// Wire shape for the reasoning-effort field (2026-10-14 batch, plan 03).
+/// `Auto` resolves from base_url/model; the rest force one shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReasoningShape {
+    #[default]
+    Auto,
+    /// `"reasoning_effort": "<e>"`
+    ReasoningEffort,
+    /// `"reasoning": {"effort": "<e>"}`
+    ReasoningObject,
+    /// `"thinking": {"type": "enabled", "budget_tokens": B}`
+    AnthropicThinking,
+    /// Never send the field.
+    None,
+}
+
+/// Map minimal→low and xhigh→high for shapes that only know the OpenAI
+/// five-level ladder (plan 03).
+fn clamp_effort_for_shape(effort: &str) -> String {
+    match effort {
+        "minimal" => "low".to_string(),
+        "xhigh" => "high".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Anthropic thinking budgets per effort level (plan 03 design table).
+fn anthropic_budget_tokens(effort: &str) -> u32 {
+    match effort {
+        "minimal" => 1024,
+        "low" => 2048,
+        "medium" => 8192,
+        "xhigh" => 32_000,
+        _ => 16_384, // high
+    }
+}
+
+/// Attach the reasoning-effort field in the resolved shape. The `Auto`
+/// table: openrouter/kilo → reasoning object; api.openai.com or
+/// o1*/o3*/o4*/gpt-5*/codex models → reasoning_effort; everything else
+/// (LiteLLM-style proxies, OpenAI-compatible gateways) → reasoning_effort.
+fn apply_reasoning_field(
+    request: &mut serde_json::Value,
+    base_url: &str,
+    model: &str,
+    effort: &str,
+    shape: ReasoningShape,
+    max_tokens: Option<u32>,
+) {
+    let resolved = match shape {
+        ReasoningShape::Auto => {
+            let url = base_url.to_ascii_lowercase();
+            if url.contains("openrouter") || url.contains("kilo") {
+                ReasoningShape::ReasoningObject
+            } else {
+                // api.openai.com, o*/gpt-5*/codex models, and every other
+                // OpenAI-compatible gateway (proxies like the user's
+                // localhost:20129) all take plain reasoning_effort — the
+                // rejection fallback covers a gateway that doesn't.
+                ReasoningShape::ReasoningEffort
+            }
+        }
+        forced => forced,
+    };
+    match resolved {
+        ReasoningShape::ReasoningEffort => {
+            request["reasoning_effort"] = json!(clamp_effort_for_shape(effort));
+        }
+        ReasoningShape::ReasoningObject => {
+            request["reasoning"] = json!({"effort": clamp_effort_for_shape(effort)});
+        }
+        ReasoningShape::AnthropicThinking => {
+            // Anthropic requires temperature to be absent when thinking is
+            // on; clamp the budget below max_tokens.
+            let mut budget = anthropic_budget_tokens(effort);
+            if let Some(max) = max_tokens
+                && budget >= max
+            {
+                budget = max.saturating_sub(1024).max(1024);
+            }
+            request["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+            if let Some(obj) = request.as_object_mut() {
+                obj.remove("temperature");
+            }
+        }
+        ReasoningShape::None | ReasoningShape::Auto => {}
     }
 }
 
@@ -2183,6 +2358,10 @@ Connection: close
         assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn chat_streaming_counts_corrupted_sse_payloads_as_dropped() {
         // iter-754: corrupted SSE framing (merged data lines — exactly what a
@@ -2257,6 +2436,11 @@ Connection: close
 
     // --- bounded error-body read tests (R3) ---
 
+    #[expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn bounded_error_body_truncates_oversized_response() {
         // A server streaming a huge error body must NOT balloon memory: the
@@ -2297,6 +2481,11 @@ Connection: close
         server.abort();
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn bounded_error_body_reads_small_response_fully() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2411,6 +2600,10 @@ Connection: close
 
     // --- iter-23: max_tokens / temperature pass-through tests ---
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// `build_chat_request` now threads `max_tokens` and `temperature` into
     /// the JSON body. Previously these fields existed on `ChatRequest` but
     /// were dropped by the OpenAI adapter — config-level values never reached
@@ -2426,6 +2619,8 @@ Connection: close
                 false,
                 Some(8192),
                 Some(0.5),
+                None,
+                ReasoningShape::Auto,
             )
             .expect("request should build");
 
@@ -2433,11 +2628,24 @@ Connection: close
         assert_eq!(request["temperature"], 0.5);
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn build_chat_request_omits_max_tokens_and_temperature_when_none() {
         let client = OpenAIClient::new(ClientConfig::default());
         let request = client
-            .build_chat_request("gpt-4o", &[Message::user("hi")], None, false, None, None)
+            .build_chat_request(
+                "gpt-4o",
+                &[Message::user("hi")],
+                None,
+                false,
+                None,
+                None,
+                None,
+                ReasoningShape::Auto,
+            )
             .expect("request should build");
 
         // Both fields should be absent (not null) so we don't send default
@@ -2446,6 +2654,137 @@ Connection: close
         assert!(request.get("temperature").is_none());
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
+    #[test]
+    fn build_chat_request_includes_reasoning_effort_for_auto_openai_compatible() {
+        // (plan 03) the user's shape: a local OpenAI-compatible proxy gets
+        // plain `reasoning_effort`.
+        let mut config = ClientConfig::default();
+        config.base_url = "http://localhost:20129/v1".to_string();
+        let client = OpenAIClient::new(config);
+        let request = client
+            .build_chat_request(
+                "small-stack",
+                &[Message::user("hi")],
+                None,
+                false,
+                None,
+                None,
+                Some("high"),
+                ReasoningShape::Auto,
+            )
+            .expect("request should build");
+        assert_eq!(request["reasoning_effort"], "high", "proxy shape");
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
+    #[test]
+    fn build_chat_request_openrouter_uses_reasoning_object() {
+        let mut config = ClientConfig::default();
+        config.base_url = "https://openrouter.ai/api/v1".to_string();
+        let client = OpenAIClient::new(config);
+        let request = client
+            .build_chat_request(
+                "some-model",
+                &[Message::user("hi")],
+                None,
+                false,
+                None,
+                None,
+                Some("low"),
+                ReasoningShape::Auto,
+            )
+            .expect("request should build");
+        assert_eq!(request["reasoning"]["effort"], "low", "openrouter shape");
+        assert!(request.get("reasoning_effort").is_none());
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
+    #[test]
+    fn build_chat_request_omits_reasoning_when_none() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let request = client
+            .build_chat_request(
+                "small-stack",
+                &[Message::user("hi")],
+                None,
+                false,
+                None,
+                None,
+                None,
+                ReasoningShape::Auto,
+            )
+            .expect("request should build");
+        assert!(request.get("reasoning_effort").is_none());
+        assert!(request.get("reasoning").is_none());
+        assert!(request.get("thinking").is_none());
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
+    #[test]
+    fn anthropic_thinking_budget_clamps_below_max_tokens_and_drops_temperature() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let request = client
+            .build_chat_request(
+                "claude-3",
+                &[Message::user("hi")],
+                None,
+                false,
+                Some(4096),
+                Some(0.7),
+                Some("xhigh"),
+                ReasoningShape::AnthropicThinking,
+            )
+            .expect("request should build");
+        assert_eq!(
+            request["thinking"]["budget_tokens"], 3072,
+            "xhigh (32000) clamps below max_tokens 4096"
+        );
+        assert_eq!(request["thinking"]["type"], "enabled");
+        assert!(
+            request.get("temperature").is_none(),
+            "Anthropic requires temperature absent while thinking is on"
+        );
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
+    #[test]
+    fn minimal_and_xhigh_clamp_for_plain_effort_shape() {
+        let client = OpenAIClient::new(ClientConfig::default());
+        let request = client
+            .build_chat_request(
+                "m",
+                &[Message::user("hi")],
+                None,
+                false,
+                None,
+                None,
+                Some("minimal"),
+                ReasoningShape::ReasoningEffort,
+            )
+            .expect("request should build");
+        assert_eq!(request["reasoning_effort"], "low", "minimal→low");
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn build_chat_request_includes_only_max_tokens_when_temperature_none() {
         let client = OpenAIClient::new(ClientConfig::default());
@@ -2457,6 +2796,8 @@ Connection: close
                 false,
                 Some(4096),
                 None,
+                None,
+                ReasoningShape::Auto,
             )
             .expect("request should build");
 
@@ -2464,6 +2805,11 @@ Connection: close
         assert!(request.get("temperature").is_none());
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn tool_call_function_tolerates_explicit_null_fields() {
         // Regression: opencode.ai/zen emits continuation deltas with explicit
@@ -2482,6 +2828,11 @@ Connection: close
         );
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn tool_call_function_tolerates_null_arguments_fragment() {
         // Some gateways send `"arguments":null` on deltas that carry no
@@ -2494,6 +2845,11 @@ Connection: close
         assert_eq!(delta.function.as_ref().unwrap().arguments, "");
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn tool_call_function_null_fields_survive_sse_event_parse() {
         // Regression: continuation deltas with explicit `name:null` must not
@@ -2526,6 +2882,10 @@ Connection: close
     // Now they surface as classified errors: rotate on 429, compress on 413,
     // switch provider on auth/billing.
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn sse_error_event_surfaces_as_rate_limited() {
         let mut buffer = String::from(
@@ -2541,6 +2901,10 @@ Connection: close
         assert!(buffer.is_empty());
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn sse_error_event_surfaces_as_authentication() {
         let mut buffer = String::from(
@@ -2555,6 +2919,10 @@ Connection: close
         );
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[test]
     fn sse_error_event_surfaces_as_context_length() {
         let mut buffer = String::from(
@@ -2580,6 +2948,10 @@ Connection: close
         );
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     /// Raw-TCP embeddings server helper: replies to POST /embeddings with
     /// the given JSON body.
     async fn embeddings_server(body: String) -> String {
@@ -2602,6 +2974,10 @@ Connection: close
         format!("http://{addr}")
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn embeddings_returns_vector_per_input_in_order() {
         let body = r#"{"data":[
@@ -2623,6 +2999,10 @@ Connection: close
         assert_eq!(out[1], vec![0.4, 0.5, 0.6]);
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn embeddings_rejects_partial_response() {
         // F3 regression: a provider returning fewer vectors than requested
@@ -2644,6 +3024,10 @@ Connection: close
         );
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn embeddings_rejects_out_of_range_index() {
         let body = r#"{"data":[{"index":7,"embedding":[0.1]}]}"#.to_string();
@@ -2662,6 +3046,10 @@ Connection: close
         );
     }
 
+    #[expect(
+        clippy::unwrap_used,
+        reason = "invariant guaranteed by surrounding validation"
+    )]
     #[tokio::test]
     async fn embeddings_rejects_empty_vector() {
         let body = r#"{"data":[{"index":0,"embedding":[]}]}"#.to_string();

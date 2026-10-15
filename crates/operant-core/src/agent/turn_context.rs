@@ -50,6 +50,10 @@ pub struct TurnContext {
     clippy::expect_used,
     reason = "poisoned lock: panic is the intended recovery"
 )]
+#[expect(
+    clippy::expect_used,
+    reason = "poisoned lock: panic is the intended recovery"
+)]
 /// Run the once-per-turn setup and return the loop's input context.
 ///
 /// Performs:
@@ -156,8 +160,20 @@ pub async fn build_turn_context(agent: &OperantAgent, user_query: &str) -> Resul
     };
 
     if !already_added {
+        let conv_index = {
+            let conv = agent.conversation.read().await;
+            conv.len()
+        };
         agent
             .add_message(Message::user(effective_query.clone()))
+            .await;
+        // (plan 05) Mark the real user prompt for the rewind selector.
+        // Only this path records marks: nudge/steer/continue messages enter
+        // through drain_steers mid-run and never pass build_turn_context,
+        // so they are excluded structurally, not by content checks.
+        let turn_id = agent.record_user_turn(effective_query.clone(), conv_index);
+        agent
+            .emit(crate::agent::AgentEvent::TurnStarted { turn_id })
             .await;
     }
 
@@ -310,6 +326,44 @@ mod tests {
                 ToolRegistry::new(Duration::from_secs(1)),
                 Arc::clone(db),
             )
+        }
+
+        /// (plan 05, step 1) every real user prompt gets exactly one mark,
+        /// with the pre-add conversation index and the current epoch.
+        #[test]
+        fn user_turn_marks_record_one_per_prompt() {
+            let db = crate::database::Database::init(
+                std::env::temp_dir().join(format!("rewind_marks_{}.db", std::process::id())),
+            )
+            .expect("test db");
+            let agent = agent_with_db(&Arc::new(db));
+            assert!(agent.user_turns().is_empty(), "no marks before any turn");
+
+            let id1 = agent.record_user_turn("first prompt".to_string(), 0);
+            let id2 = agent.record_user_turn("second prompt".to_string(), 2);
+            assert_ne!(id1, id2, "turn ids are unique");
+
+            let turns = agent.user_turns();
+            assert_eq!(turns.len(), 2);
+            assert_eq!(turns[0].text, "first prompt");
+            assert_eq!(turns[0].conv_index, 0);
+            assert_eq!(turns[1].text, "second prompt");
+            assert_eq!(turns[1].conv_index, 2);
+            assert_eq!(turns[0].conv_epoch, agent.conv_epoch());
+        }
+
+        /// (plan 05, step 1) non-append mutations bump the epoch so stale
+        /// marks know they need relocation by text.
+        #[test]
+        fn conv_epoch_bumps_on_non_append_mutations() {
+            let db = crate::database::Database::init(
+                std::env::temp_dir().join(format!("rewind_epoch_{}.db", std::process::id())),
+            )
+            .expect("test db");
+            let agent = agent_with_db(&Arc::new(db));
+            let before = agent.conv_epoch();
+            agent.bump_conv_epoch();
+            assert_eq!(agent.conv_epoch(), before + 1);
         }
 
         /// Two turns on one agent must land in ONE session, and that

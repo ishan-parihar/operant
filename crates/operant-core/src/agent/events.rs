@@ -208,6 +208,7 @@ impl OperantAgent {
     /// messages_after)` and emits the usual Compaction events.
     pub async fn compact_history_now(&self) -> (usize, usize) {
         use crate::context_management as cm;
+        self.bump_conv_epoch(); // (plan 05) non-append mutation
         let (before, tokens_before, after, tokens_after) = {
             let mut conv = self.conversation.write().await;
             let before = conv.len();
@@ -258,7 +259,12 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     pub async fn clear_history(&self) {
+        self.bump_conv_epoch(); // (plan 05) non-append mutation
         // Notify memory provider of session end before clearing.
         // This fires at actual session boundaries so the graph captures
         // session-level patterns. Ported from hermes-agent's
@@ -362,6 +368,10 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Gracefully shut down the memory sync executor.
     /// Drains pending jobs (up to 5s) then abandons remaining work.
     /// Call this during agent shutdown to avoid losing in-flight writes.
@@ -382,6 +392,10 @@ impl OperantAgent {
         &self.database
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -407,6 +421,101 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
+    /// (plan 05) Record a rewind mark for a real user prompt, returning the
+    /// turn id (also emitted as `AgentEvent::TurnStarted`). Called only from
+    /// `build_turn_context`, so steer/nudge/continue messages never get one.
+    pub fn record_user_turn(&self, text: String, conv_index: usize) -> u64 {
+        static NEXT_TURN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let turn_id = NEXT_TURN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let epoch = self.conv_epoch.load(std::sync::atomic::Ordering::Relaxed);
+        let mut turns = self
+            .user_turns
+            .write()
+            .expect("user_turns RwLock poisoned — programmer error");
+        turns.push(UserTurnMark {
+            turn_id,
+            conv_index,
+            conv_epoch: epoch,
+            text,
+        });
+        turn_id
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// (plan 05) All recorded user-turn marks, oldest first.
+    pub fn user_turns(&self) -> Vec<UserTurnMark> {
+        self.user_turns
+            .read()
+            .expect("user_turns RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    /// (plan 05) Bump the conversation epoch — call before any non-append
+    /// mutation of the stored conversation (compact, clear, micro_compact,
+    /// ladder rewrite). Marks from earlier epochs relocate by text scan.
+    pub fn bump_conv_epoch(&self) {
+        self.conv_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// (plan 05) Current conversation epoch.
+    pub fn conv_epoch(&self) -> u64 {
+        self.conv_epoch.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// (plan 03) Live-set the reasoning effort. `None` disables sending the
+    /// field. Called by the TUI (/effort picker, model picker, Shift+Tab)
+    /// and by the rejection fallback.
+    pub fn set_reasoning_effort(&self, effort: Option<String>) {
+        tracing::info!(?effort, "Agent reasoning effort set at runtime");
+        *self
+            .reasoning_effort
+            .write()
+            .expect("reasoning_effort RwLock poisoned — programmer error") = effort;
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// (plan 03) The current reasoning effort, if any.
+    pub fn reasoning_effort(&self) -> Option<String> {
+        self.reasoning_effort
+            .read()
+            .expect("reasoning_effort RwLock poisoned — programmer error")
+            .clone()
+    }
+
+    /// (plan 03) Record that `model` rejected the reasoning field; the
+    /// attach path skips it for the rest of the session.
+    pub fn mark_effort_unsupported(&self, model: &str) {
+        if let Ok(mut set) = self.unsupported_effort_models.lock() {
+            set.insert(model.to_string());
+        }
+    }
+
+    /// (plan 03) Whether `model` is known to reject the reasoning field.
+    pub fn effort_unsupported_for(&self, model: &str) -> bool {
+        self.unsupported_effort_models
+            .lock()
+            .is_ok_and(|set| set.contains(model))
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Get the current model name (effective model = override or config).
     pub fn model(&self) -> String {
         self.model_override
@@ -417,6 +526,10 @@ impl OperantAgent {
             .unwrap_or_else(|| self.config.model.clone())
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -445,6 +558,10 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "RwLock poison recovery — a poisoned seat_id lock is a programmer error, not a runtime condition"
     )]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     pub fn seat_id(&self) -> Option<String> {
         self.seat_id
             .read()
@@ -469,6 +586,10 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "RwLock poison recovery — a poisoned charter lock is a programmer error, not a runtime condition"
     )]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     pub fn charter(&self) -> Option<String> {
         self.charter
             .read()
@@ -489,6 +610,10 @@ impl OperantAgent {
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
+    )]
+    #[expect(
+        clippy::expect_used,
+        reason = "invariant guaranteed by surrounding validation"
     )]
     /// Assign the session this agent persists into.
     ///

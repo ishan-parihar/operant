@@ -154,6 +154,8 @@ async fn main() -> Result<()> {
 
     // Build the agent
     let agent_config = AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: std::env::var("MODEL").unwrap_or_else(|_| "gpt-4".to_string()),
         max_iterations: 10,
         tool_timeout: Duration::from_secs(30),

@@ -8,6 +8,44 @@ use super::*;
 /// the loss window for a long session that never runs one.
 const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 
+// ---- 2026-10-14 batch, plan 03: effort wire mapping ----
+
+/// The agent's wire value for a UI effort level. The picker's four levels
+/// map onto the request field's ladder; "" (empty) is only reachable via
+/// `effort-set off` (Shift+Tab's cycle-off position).
+fn effort_wire_value(level: crate::tui::model_picker::effort::EffortLevel) -> String {
+    use crate::tui::model_picker::effort::EffortLevel;
+    match level {
+        EffortLevel::Low => "low".to_string(),
+        EffortLevel::Normal => "medium".to_string(),
+        EffortLevel::High => "high".to_string(),
+        EffortLevel::Max => "xhigh".to_string(),
+    }
+}
+
+impl App {
+    /// Shift+Tab (plan 03 decision 1; plan 10 cleared the permission cycle
+    /// off this key): cycle effort off → low → medium → high → xhigh → off,
+    /// forwarding each step to the agent via the pending-action channel.
+    pub(crate) fn cycle_effort(&mut self) {
+        use crate::tui::model_picker::effort::EffortLevel;
+        let (next_level, wire) = match self.effort_level {
+            EffortLevel::Low => (EffortLevel::Normal, "medium".to_string()),
+            EffortLevel::Normal => (EffortLevel::High, "high".to_string()),
+            EffortLevel::High => (EffortLevel::Max, "xhigh".to_string()),
+            EffortLevel::Max => (EffortLevel::Low, String::new()),
+        };
+        self.effort_level = next_level;
+        self.pending_effort = Some(wire);
+        let label = if self.pending_effort.as_deref().is_some_and(|w| w.is_empty()) {
+            "off".to_string()
+        } else {
+            next_level.label().to_string()
+        };
+        self.set_status_notice(format!("Effort: {label}"));
+    }
+}
+
 impl App {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> bool {
         // ── F12: toggle debug overlay (highest priority, never blocked) ──
@@ -119,6 +157,9 @@ impl App {
                     let chosen = self.effort_picker.current();
                     self.effort_level = chosen;
                     self.effort_picker.close();
+                    // (plan 03) forward the wire value to the agent through
+                    // the pending-action channel.
+                    self.pending_effort = Some(effort_wire_value(chosen));
                     self.set_status_notice(format!(
                         "Effort set to {} {}.",
                         chosen.symbol(),
@@ -645,6 +686,8 @@ impl App {
                         }
                         if let Some(e) = effort {
                             self.effort_level = e;
+                            // (plan 03) forward the wire value to the agent.
+                            self.pending_effort = Some(effort_wire_value(e));
                         }
                         // Store explicit selections in the canonical
                         // "provider/model" form for non-Anthropic providers.
@@ -1593,11 +1636,12 @@ impl App {
             }
 
             // ---- Shift+Tab ----------------------------------------------
-            // 2026-10-14 batch, plan 10: Shift+Tab no longer cycles permission
-            // mode — two silent presses reached Bypass. Permission modes are
-            // chosen explicitly via /permissions, and Bypass always defers
-            // to the confirmation dialog. Shift+Tab stays unbound here until
-            // plan 03 lands the reasoning-effort cycle on it.
+            // 2026-10-14 batch, plan 10 removed the permission-mode cycle
+            // (two silent presses armed Bypass); plan 03 rebinds the key to
+            // the effort cycle — the oh-my-pi "effort ladder" muscle memory.
+            KeyCode::BackTab if !self.is_streaming => {
+                self.cycle_effort();
+            }
 
             // ---- Submit ------------------------------------------------
             // Shift+Enter / Alt+Enter / Ctrl+Enter / Ctrl+J insert a literal

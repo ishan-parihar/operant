@@ -333,6 +333,8 @@ fn varying_calls(tool: &str, n: usize) -> Vec<ChatResponse> {
 
 fn test_config(max_iterations: usize) -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations,
         // Generous stream-level wrapper: the registry's own (short) timeout

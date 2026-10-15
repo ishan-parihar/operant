@@ -210,6 +210,8 @@ fn text_response(content: &str) -> ChatResponse {
 
 fn test_config() -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: "demo".to_string(),
         max_iterations: 6,
         tool_timeout: Duration::from_secs(5),

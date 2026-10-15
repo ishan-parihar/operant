@@ -306,6 +306,8 @@ fn turn_end_log(model: &str) -> String {
 
 fn test_config(model: &str, max_iterations: usize) -> AgentConfig {
     AgentConfig {
+        reasoning_effort: String::new(),
+        reasoning_effort_param: Default::default(),
         model: model.to_string(),
         max_iterations,
         tool_timeout: Duration::from_secs(5),

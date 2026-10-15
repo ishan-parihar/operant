@@ -14,7 +14,9 @@ use crate::tui::theme_colors;
 /// Effort controls the extended-thinking `budget_tokens` parameter sent to the
 /// API. Only models that support extended thinking honour this; for others it
 /// is silently ignored.
-mod effort;
+// (plan 03) pub for the effort ladder wiring in app/commands.rs and
+// app/key_handling.rs.
+pub mod effort;
 mod models;
 mod render;
 mod state;
