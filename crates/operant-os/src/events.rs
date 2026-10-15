@@ -37,11 +37,26 @@ pub async fn match_and_fire(
         {
             continue;
         }
+        // O-09: untrusted channel text never rides argv — Holon's text
+        // arguments read `@path` and `-` as file/stdin as the calling
+        // user, so an argv payload of "@/home/.../model.key" would make
+        // the kernel read that file into the work's message. STDIN with
+        // `-` is the only safe channel for event text.
         let mut cmd = holon_cmd(config_home, bin);
-        cmd.args(["routine", "fire", &t.id, "--payload", event_text]);
-        let out = cmd
-            .stdin(std::process::Stdio::null())
-            .output()
+        cmd.args(["routine", "fire", &t.id, "--payload", "-"]);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        use tokio::io::AsyncWriteExt;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| crate::Error::Protocol(format!("routine fire {}: {e}", t.id)))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(event_text.as_bytes()).await;
+            let _ = stdin.shutdown().await;
+        }
+        let out = child
+            .wait_with_output()
             .await
             .map_err(|e| crate::Error::Protocol(format!("routine fire {}: {e}", t.id)))?;
         if out.status.success() {

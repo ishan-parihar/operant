@@ -15,19 +15,47 @@ use tokio::process::Command;
 
 use crate::run::{Prepared, finish, heartbeat, prepare};
 
+/// The OS baseline a body inherits (O-07): everything else — channel
+/// tokens, provider keys, HOLON_CHAIR_KEY, the supervisor's HERMES_HOME —
+/// stays with the supervisor. The prepared env layers on top of this.
+const ENV_BASELINE: &[&str] = &[
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TMPDIR",
+    "XDG_RUNTIME_DIR",
+];
+
 /// Run ONE prepared body to completion: spawn under the prepared env + the
-/// supervisor's own environment (the driver command is a shell line), renew
+/// OS baseline (the driver command is a shell line), renew
 /// the lease every `lease/3` (min 10s), wait (bounded by the driver's
 /// timeout), then hand in with the body's exit code.
 ///
-/// The body inherits the supervisor's environment plus the prepared run env
-/// — the kernel's run_env already carries HOLON_RUN_TOKEN, HOLON_RUN_DIR
-/// (HOLON_BRIEF_DIR) and HOLON, and the driver's own [env] entries.
+/// The body inherits ONLY the OS baseline (ENV_BASELINE) plus the prepared
+/// run env (O-07) — the kernel's run_env carries HOLON_RUN_TOKEN,
+/// HOLON_RUN_DIR (HOLON_BRIEF_DIR) and HOLON, and the driver's own [env]
+/// entries. The supervisor's secrets never reach it.
 pub async fn run_body(
     config_home: &Path,
     bin: Option<&str>,
     prepared: &Prepared,
 ) -> crate::Result<i32> {
+    // O-11: an isolated instance's prepared env carries HOLON_BROKER —
+    // the body is meant to run as the agent user through the runner
+    // socket. Until the Rust runner exists, supervising such an instance
+    // would run the body as the operator (who can read the Chair key and
+    // work.db): refuse, with the reason named.
+    if prepared.env.contains_key("HOLON_BROKER") {
+        return Err(crate::Error::Protocol(
+            "this instance runs isolated bodies through its runner socket — the operant \
+             supervisor serves it only when the Rust runner lands (audit O-11/O-30)"
+                .into(),
+        ));
+    }
+
     let token = prepared
         .env
         .get("HOLON_RUN_TOKEN")
@@ -38,7 +66,18 @@ pub async fn run_body(
     cmd.arg("-c")
         .arg(&prepared.command)
         .current_dir(&prepared.cwd);
-    // the driver's env (HOLON_*, HERMES_HOME-style entries) — over ours
+    // O-07: a body gets the OS baseline and the kernel's prepared env —
+    // NEVER the supervisor's own environment. The gateway's supervisor
+    // carries channel tokens and provider keys, and an operator's
+    // HOLON_CHAIR_KEY would be a path for the Chair key to reach agents,
+    // which a standing rule forbids. env_clear, then the allowlist, then
+    // the prepared env on top (it wins by construction).
+    cmd.env_clear();
+    for key in ENV_BASELINE {
+        if let Ok(v) = std::env::var(key) {
+            cmd.env(key, v);
+        }
+    }
     for (k, v) in &prepared.env {
         cmd.env(k, v);
     }

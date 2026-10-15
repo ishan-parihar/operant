@@ -1638,10 +1638,32 @@ fn holon_notion_hook(app_config: &AppConfig) -> Option<operant_core::gateway::Ho
             return None;
         }
     };
+    // O-08: the arm mounts at the instance's SECRET path — read once at
+    // gateway start through the adapter itself (`webhook-path` creates
+    // and persists a random route on first call). Unreadable → the arm
+    // stays off entirely: a literal "notion" route is exactly the
+    // guessable path the token-rotation guard exists to prevent.
+    let wp = std::process::Command::new("python3")
+        .arg(&script)
+        .arg("--holon-home")
+        .arg(&home)
+        .arg("webhook-path")
+        .output();
+    let webhook_path = match wp {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            tracing::warn!(
+                home = %home.display(),
+                "notion webhook-path unreadable — the secret-path arm stays off (O-08)"
+            );
+            return None;
+        }
+    };
     Some(operant_core::gateway::HolonHook {
         home,
         script,
         python_path: None,
+        webhook_path,
     })
 }
 

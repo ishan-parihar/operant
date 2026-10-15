@@ -41,7 +41,17 @@ pub struct HolonHook {
     pub script: std::path::PathBuf,
     /// Extra env for the run (the kernel exports its own through --home).
     pub python_path: Option<String>,
+    /// The instance's SECRET webhook path (O-08): `holon_notion.py
+    /// webhook-path` — a random, unguessable route the arm mounts at
+    /// instead of a literal "notion". The adapter's token rotation is
+    /// only valid behind this path (kernel H-05), so the arm also passes
+    /// `--path-verified`.
+    pub webhook_path: String,
 }
+
+/// O-08: at most two notion-adapter processes at a time — every event
+/// otherwise spawns an unbounded `python3`, a cheap denial of service.
+static NOTION_SEMAPHORE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 impl WebhookAdapter {
     pub fn new(enabled: bool) -> Self {
@@ -260,17 +270,28 @@ impl PlatformAdapter for WebhookAdapter {
                         // platform's own handshake) is the adapter's — it
                         // carries the notion secret — so this arm runs BEFORE
                         // our generic HMAC check, like the handshakes above.
-                        if route == "notion"
-                            && let Some(hook) = holon.clone()
+                        if let Some(hook) = holon.clone()
+                            && !hook.webhook_path.is_empty()
+                            && route == hook.webhook_path.trim_start_matches('/')
                         {
                             let sig = headers
                                 .get("x-notion-signature")
                                 .and_then(|v| v.to_str().ok())
                                 .map(str::to_string);
+                            let _permit = NOTION_SEMAPHORE
+                                .acquire()
+                                .await
+                                .expect("semaphore never closes");
                             let mut cmd = tokio::process::Command::new("python3");
                             cmd.arg(&hook.script)
                                 .arg("--holon-home").arg(&hook.home)
                                 .arg("apply")
+                                // H-05: the adapter rotates the verification
+                                // token ONLY behind the secret path this arm
+                                // mounts at — say so, or every apply is
+                                // refused with "token refused: apply is not
+                                // mounted behind the secret path".
+                                .arg("--path-verified")
                                 .arg("--signature").arg(sig.unwrap_or_default())
                                 .stdin(std::process::Stdio::piped())
                                 .stdout(std::process::Stdio::piped())
