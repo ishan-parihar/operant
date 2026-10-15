@@ -150,6 +150,10 @@ impl TerminalBackend for LocalBackend {
 
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
+        // (plan 04) a dropped tool future (cancel mid-run) must kill the
+        // child — without this a cancelled `sleep 20` keeps running and
+        // the user pays for work they stopped.
+        cmd.kill_on_drop(true);
 
         let mut child = cmd
             .spawn()

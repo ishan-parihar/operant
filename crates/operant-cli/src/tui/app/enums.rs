@@ -233,6 +233,10 @@ pub enum ToolStatus {
     Running,
     Done,
     Error,
+    /// (2026-10-14 batch, plan 04) the user cancelled the turn before this
+    /// call finished. Renders `⊘`, dim, preview "cancelled" — the row stays
+    /// (earlier turns' blocks are never cleared), only its status moves.
+    Cancelled,
 }
 
 impl ToolStatus {

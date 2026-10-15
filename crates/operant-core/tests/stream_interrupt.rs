@@ -194,23 +194,30 @@ async fn interrupt_mid_stream_returns_partial_content_and_stops_consuming() -> R
         "the fixture must have tripped the agent's interrupt flag mid-stream"
     );
 
-    // Half 1: what arrived before the stop is returned, not discarded. The
-    // flush `process_stream` runs after the `break` is what makes this
-    // possible — a guard that returned early *before* accumulating would
-    // hand back an empty body and still satisfy half 2.
+    // (2026-10-14 batch, plan 04) this fixture's stream ENDS with the
+    // partial as its final content, so the loop takes the normal
+    // final-text exit: Ok with the partial as the turn's answer — and the
+    // partial IS in the store (committed by the normal path), so the next
+    // turn's request carries it.
     assert!(
         result.content.contains(HEAD),
         "the partial content received before the interrupt must be returned, got: {:?}",
         result.content
     );
-
-    // Half 2: what was still in flight is not.
     assert!(
         !result.content.contains(TAIL),
-        "the chunk after the interrupt must not be consumed into the answer \
-         (this is the /stop-did-not-stop-streaming bug), got: {:?}",
+        "the chunk after the interrupt must not be consumed into the answer, got: {:?}",
         result.content
     );
+
+    // Store consistency: the same partial is the committed assistant tail.
+    let conv = agent.conversation().await;
+    let partial = conv
+        .iter()
+        .rev()
+        .find(|m| m.role == operant_core::client::Role::Assistant)
+        .expect("the partial assistant message is committed");
+    assert!(partial.content.contains(HEAD), "partial is in the store");
 
     // And the stream was genuinely left unconsumed: the consumer pulled the
     // head, pulled the tail, and stopped — it never asked for the third item
@@ -222,6 +229,153 @@ async fn interrupt_mid_stream_returns_partial_content_and_stops_consuming() -> R
         2,
         "the loop must break on the pull that carried the interrupt, not \
          drain the stream to exhaustion"
+    );
+
+    Ok(())
+}
+
+/// (plan 04 RED list, bullet 2) An assistant that issues tool calls, with
+/// the interrupt landing during the batch: every unanswered call is paired
+/// with a truthful synthetic result, the next request passes
+/// message_safety with ZERO repairs, and no "Operation interrupted."
+/// mutation is appended.
+#[tokio::test]
+async fn interrupt_during_tool_batch_pairs_every_call_without_repairs() -> Result<()> {
+    use operant_core::schema::ToolSchema;
+    use operant_core::tools::{OperantTool, ToolContext, ToolResult};
+    use serde_json::{Value, json};
+
+    /// A tool that blocks forever — the "tool ignoring cancellation" case
+    /// (the real fix races the batch drain; completed calls keep results,
+    /// blocked ones get the synthetic result).
+    struct BlockingTool;
+    #[async_trait]
+    impl OperantTool for BlockingTool {
+        fn name(&self) -> &str {
+            "blocking_tool"
+        }
+        fn description(&self) -> &str {
+            "blocks forever"
+        }
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new("blocking_tool", "blocks forever", json!({"type": "object"}))
+        }
+        async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
+            std::future::pending::<()>().await;
+            #[expect(clippy::unreachable, reason = "pending never resolves")]
+            unreachable!()
+        }
+    }
+
+    let temp = tempfile::tempdir()?;
+    let flag = InterruptFlag::new();
+    let registry = ToolRegistry::new(Duration::from_secs(300));
+    registry.register(BlockingTool).await?;
+
+    /// Serves one assistant message with three tool calls, then blocks the
+    /// stream forever on the second iteration.
+    struct ToolBatchClient;
+    #[async_trait]
+    impl ModelClient for ToolBatchClient {
+        fn provider_name(&self) -> &str {
+            "tool-batch-fixture"
+        }
+        async fn chat(&self, _r: ChatRequest) -> Result<ChatResponse> {
+            Err(Error::Agent("streaming fixture only".into()))
+        }
+        async fn chat_streaming(
+            &self,
+            _r: ChatRequest,
+        ) -> Result<BoxStream<'static, Result<StreamChunk>>> {
+            // One iteration: an assistant with three tool calls, then the
+            // stream ENDS (finish) — the run loop commits the assistant
+            // and enters the tool batch, which is where the interrupt
+            // lands (the spawned trigger fires 300 ms in, while all
+            // three blocking calls are running).
+            let chunk = StreamChunk::new(
+                None,
+                None,
+                Some(vec![
+                    operant_core::client::ToolCall {
+                        id: "call-1".to_string(),
+                        function: operant_core::client::ToolCallFunction {
+                            name: "blocking_tool".to_string(),
+                            arguments: "{\"n\":1}".to_string(),
+                        },
+                    },
+                    operant_core::client::ToolCall {
+                        id: "call-2".to_string(),
+                        function: operant_core::client::ToolCallFunction {
+                            name: "blocking_tool".to_string(),
+                            arguments: "{\"n\":2}".to_string(),
+                        },
+                    },
+                    operant_core::client::ToolCall {
+                        id: "call-3".to_string(),
+                        function: operant_core::client::ToolCallFunction {
+                            name: "blocking_tool".to_string(),
+                            arguments: "{\"n\":3}".to_string(),
+                        },
+                    },
+                ]),
+            );
+            Ok(futures::stream::once(async move { Ok(chunk) }).boxed())
+        }
+    }
+
+    let agent = OperantAgent::new(
+        test_config(),
+        Box::new(ToolBatchClient),
+        registry,
+        Arc::new(Database::init(
+            temp.path().join("tool_batch_interrupt.sqlite"),
+        )?),
+    )
+    .with_interrupt_flag(flag.clone());
+
+    // Trigger the flag while the tool batch is running.
+    let trigger_flag = flag.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        trigger_flag.trigger();
+    });
+
+    let result = agent.run("run the blocking tools".to_string()).await;
+    let Err(Error::Interrupted) = result else {
+        panic!("an interrupted tool-batch run must return Error::Interrupted");
+    };
+
+    // The store: 3 tool results, each "Cancelled…" — pairing holds.
+    let conv = agent.conversation().await;
+    let tool_results: Vec<_> = conv
+        .iter()
+        .filter(|m| m.role == operant_core::client::Role::Tool)
+        .collect();
+    assert_eq!(
+        tool_results.len(),
+        3,
+        "every unanswered call gets a synthetic result (API pairing rule)"
+    );
+    for m in &tool_results {
+        assert!(
+            m.content.contains("Cancelled by the user"),
+            "synthetic results are truthful, got: {:?}",
+            m.content
+        );
+    }
+    // No "Operation interrupted." mutation anywhere.
+    assert!(
+        conv.iter()
+            .all(|m| !m.content.contains("Operation interrupted.")),
+        "the store is never mutated with interruption filler"
+    );
+    // And the pairing is provider-valid: a repair pass finds nothing to
+    // mutate (repairs == 0 — the plan's "without repairs" criterion).
+    let mut for_repair = conv.clone();
+    let repairs = operant_core::agent::message_safety::repair_message_sequence(&mut for_repair);
+    assert_eq!(
+        repairs, 0,
+        "the interrupted store must pass the repair pass without changes"
     );
 
     Ok(())

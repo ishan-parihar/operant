@@ -838,7 +838,7 @@ fn anthropic_budget_tokens(effort: &str) -> u32 {
 fn apply_reasoning_field(
     request: &mut serde_json::Value,
     base_url: &str,
-    model: &str,
+    _model: &str,
     effort: &str,
     shape: ReasoningShape,
     max_tokens: Option<u32>,

@@ -1296,15 +1296,11 @@ impl App {
                         outcome.status_message(),
                     );
                 } else if self.is_streaming {
-                    // Cancel streaming.
-                    self.is_streaming = false;
-                    self.spinner_verb = None;
-                    // Flush in-flight streaming text to messages BEFORE snapshot
-                    // so the response is preserved in the transcript.
-                    self.flush_streamed_assistant_message();
-                    self.set_status_notice("Cancelled.".to_string());
-                    self.complete_current_turn_snapshot(true);
-                    self.tool_use_blocks.clear();
+                    // (plan 04) Ctrl+C while streaming is the same cancel as
+                    // Esc — the interrupt flag, not the invisible
+                    // "is_streaming=false" that used to leave the agent
+                    // running and spending.
+                    self.cancel_streaming_turn();
                 } else {
                     // No text selected and not streaming: handle exit confirmation sequence.
                     // Always clear the prompt input on Ctrl+C.

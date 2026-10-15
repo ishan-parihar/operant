@@ -14,22 +14,51 @@ impl App {
         }
     }
 
-    /// Stop the running turn (Esc while streaming, `/cancel`): keep what
-    /// streamed, abort the agent task, close the turn snapshot.
+    /// Stop the running turn (Esc while streaming, `/cancel`, Ctrl+C while
+    /// streaming — 2026-10-14 batch, plan 04 unified all three): keep what
+    /// streamed, TRIGGER THE INTERRUPT FLAG (never abort — the agent
+    /// commits its own tail: partial text + synthetic "Cancelled…" tool
+    /// results), mark pending tool rows Cancelled, and arm the 3 s
+    /// watchdog. Earlier turns' rows are untouched.
     pub(crate) fn cancel_streaming_turn(&mut self) {
         self.is_streaming = false;
         self.spinner_verb = None;
+        // (plan 04) capture the partial BEFORE the flush empties it — the
+        // watchdog repair path may need it if the agent future was dropped
+        // mid-stream (race_interrupt's poll can win over the inner flush).
+        let partial = self.streaming_text.clone();
         // Flush in-flight streaming text to messages BEFORE snapshot
         // so the response is preserved in the transcript.
         self.flush_streamed_assistant_message();
         self.set_status_notice("Cancelled.".to_string());
-        // Abort the background agent task so it actually stops.
-        if let Some(handle) = self.agent_task_handle.take() {
-            handle.abort();
+        // (plan 04) graceful-first: the flag; the agent returns
+        // Error::Interrupted after committing its tail.
+        if let Some(flag) = self.agent_interrupt.as_ref() {
+            flag.trigger();
+        } else {
+            // No flag (no live agent / mock): fall back to the old abort so
+            // the task can never outlive the cancel.
+            if let Some(handle) = self.agent_task_handle.take() {
+                handle.abort();
+            }
+        }
+        // (plan 04) every still-pending block of THIS turn reads cancelled;
+        // blocks of earlier turns are never touched (the old
+        // tool_use_blocks.clear() deleted them — defect 3 of the plan).
+        for block in &mut self.tool_use_blocks {
+            if block.status.is_pending() {
+                block.status = crate::tui::app::ToolStatus::Cancelled;
+            }
         }
         // Snapshot AFTER flushing so tool trail is preserved.
         self.complete_current_turn_snapshot(true);
-        self.tool_use_blocks.clear();
+        // (plan 04) 3 s watchdog: if the agent hasn't returned by then (a
+        // tool ignoring cancellation), the loop aborts and repairs.
+        if self.agent_task_handle.is_some() {
+            self.cancel_deadline =
+                Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+            self.pending_repair_partial = (!partial.is_empty()).then_some(partial);
+        }
     }
 
     /// Keep a finished call's full output for Ctrl+O. Bounded for long

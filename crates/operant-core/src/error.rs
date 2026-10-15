@@ -216,6 +216,15 @@ pub enum Error {
     #[error("Agent error: {0}")]
     Agent(String),
 
+    /// The user interrupted the turn (Esc / /cancel / Ctrl+C). Distinct from
+    /// `Agent("Interrupted by user")` on purpose (2026-10-14 batch, plan 04):
+    /// a typed variant lets the TUI treat it as success-with-no-error-card
+    /// and the gateway route it without string-matching. The conversation
+    /// tail has already been committed (partial text + synthetic tool
+    /// results) by `commit_interrupted_tail` before this is returned.
+    #[error("Interrupted by user")]
+    Interrupted,
+
     #[error("Max iterations exceeded: {max}")]
     MaxIterationsExceeded { max: usize },
 

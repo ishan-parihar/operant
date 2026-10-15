@@ -176,6 +176,22 @@ pub struct App {
     /// (plan 03) Effort change waiting for the next agent-touching tick —
     /// `run_pending_agent_actions` applies it to the live agent.
     pub pending_effort: Option<String>,
+    /// (plan 04) The live agent's interrupt flag, set wherever
+    /// `agent_task_handle` is set. The cancel path triggers it instead of
+    /// aborting the task, so the agent commits its own tail (partial text +
+    /// synthetic tool results) and the store stays consistent.
+    pub agent_interrupt: Option<operant_core::interrupt::InterruptFlag>,
+    /// (plan 04) Watchdog deadline: 3 s grace after a cancel for the agent
+    /// to return gracefully; after that the task is aborted and
+    /// `repair_after_abort` runs. `None` when no cancel is pending.
+    pub cancel_deadline: Option<std::time::Instant>,
+    /// (plan 04) Partial text for the post-abort repair — the TUI still
+    /// holds the streamed buffer the dropped agent future lost.
+    pub pending_repair_partial: Option<String>,
+    /// (plan 04) The watchdog aborted the agent task; the next
+    /// agent-touching tick runs `repair_after_abort` with the captured
+    /// partial.
+    pub pending_repair: bool,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.
@@ -1038,6 +1054,19 @@ impl App {
 
             // Check if background agent.run() completed.
             self.drain_run_complete();
+
+            // (plan 04) cancel watchdog: 3 s grace after the interrupt; if
+            // the agent task is still alive (a tool ignoring cancellation),
+            // abort as the last resort — drain_run_complete's Closed arm
+            // turns the death into a store repair.
+            if let Some(deadline) = self.cancel_deadline
+                && std::time::Instant::now() >= deadline
+            {
+                self.cancel_deadline = None;
+                if let Some(handle) = self.agent_task_handle.take() {
+                    handle.abort();
+                }
+            }
 
             // Draw the frame, and immediately scan the *just-rendered*
             // buffer for URL runs. ratatui swaps its two buffers at the

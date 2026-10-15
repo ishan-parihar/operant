@@ -190,6 +190,86 @@ impl OperantAgent {
         conv.push(message);
     }
 
+    /// (2026-10-14 batch, plan 04) Commit the interrupted tail: the partial
+    /// assistant text plus synthetic "Cancelled…" tool results for calls
+    /// that never finished. Runs under ONE conversation write so the store
+    /// is never observed half-written. Persists each appended message so a
+    /// resume sees the same history.
+    ///
+    /// Deliberately does NOT append "Operation interrupted." — strict
+    /// providers' alternation is handled at request-build time by
+    /// message_safety, not by mutating the store.
+    pub(crate) async fn commit_interrupted_tail(&self, partial: Option<&str>) {
+        let session_id = self.session_id().unwrap_or_default();
+        let timestamp = chrono::Utc::now().to_rfc3339();
+
+        // Phase 1 (under the write lock): decide the appends, apply them.
+        let mut to_persist: Vec<Message> = Vec::new();
+        {
+            let mut conv = self.conversation.write().await;
+
+            // (a) Partial assistant text, verbatim.
+            if let Some(text) = partial.filter(|t| !t.is_empty()) {
+                // If the interrupted stream already committed its assistant
+                // message (the run loop's normal path got there first), skip.
+                let last_was_this_text = conv
+                    .last()
+                    .is_some_and(|m| m.role == crate::client::Role::Assistant && m.content == text);
+                if !last_was_this_text {
+                    let msg = crate::client::Message::assistant(text.to_string());
+                    to_persist.push(msg.clone());
+                    conv.push(msg);
+                }
+            }
+
+            // (b) Pair every unanswered tool call in the last assistant
+            // message with a truthful synthetic result. (API pairing rule —
+            // message_safety would otherwise "repair" by dropping calls,
+            // which is the context mutation the user forbade.)
+            let unanswered: Vec<crate::client::ToolCall> = conv
+                .iter()
+                .rev()
+                .find(|m| m.role == crate::client::Role::Assistant)
+                .and_then(|m| m.tool_calls.clone())
+                .map(|calls| {
+                    let answered: std::collections::HashSet<&str> = conv
+                        .iter()
+                        .filter(|m| m.role == crate::client::Role::Tool)
+                        .filter_map(|m| m.tool_call_id.as_deref())
+                        .collect();
+                    calls
+                        .into_iter()
+                        .filter(|c| !answered.contains(c.id.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for call in unanswered {
+                let msg = crate::client::Message::tool(
+                    call.id.clone(),
+                    "Cancelled by the user before this call finished.",
+                );
+                to_persist.push(msg.clone());
+                conv.push(msg);
+            }
+        }
+        // Phase 2 (lock released): persist what was appended.
+        for msg in to_persist {
+            let _ = self.database.save_message(
+                &session_id,
+                msg.role.as_str(),
+                &msg.content,
+                &timestamp,
+            );
+        }
+    }
+
+    /// (plan 04) Post-abort repair: the watchdog aborted the task after the
+    /// grace window; run the same tail-commit logic on the store. The TUI
+    /// supplies the partial text (it still holds the streamed buffer).
+    pub async fn repair_after_abort(&self, partial: Option<String>) {
+        self.commit_interrupted_tail(partial.as_deref()).await;
+    }
+
     /// Add a user message
     pub async fn user_message(&self, content: impl Into<String>) {
         self.add_message(Message::user(content)).await;

@@ -563,6 +563,138 @@ fn show_tool_calls_false_in_config_starts_hidden() {
 
 /// Alt+O (and Ctrl+Shift+O where the terminal reports it) collapses tool
 /// rows behind one summary row and restores them.
+/// 2026-10-14 batch, plan 04: cancel keeps every row of every turn and
+/// marks only THIS turn's pending blocks Cancelled. The old
+/// tool_use_blocks.clear() deleted earlier turns' rows too.
+#[test]
+fn cancel_keeps_earlier_turn_rows_and_marks_pending_cancelled() {
+    let mut app = make_app();
+    use crate::tui::app::enums::{ToolStatus, ToolUseBlock};
+
+    // Turn 1: a settled tool row.
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "read_file".to_string(),
+        after_index: 0,
+        status: ToolStatus::Done,
+        output_preview: None,
+        input_json: "{}".to_string(),
+    });
+    // Turn 2 (streaming): one done, one running.
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t2a".to_string(),
+        name: "shell".to_string(),
+        after_index: 2,
+        status: ToolStatus::Done,
+        output_preview: None,
+        input_json: "{}".to_string(),
+    });
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t2b".to_string(),
+        name: "shell".to_string(),
+        after_index: 2,
+        status: ToolStatus::Running,
+        output_preview: None,
+        input_json: "{}".to_string(),
+    });
+    app.is_streaming = true;
+
+    app.cancel_streaming_turn();
+
+    assert_eq!(app.tool_use_blocks.len(), 3, "no row was deleted");
+    assert_eq!(app.tool_use_blocks[0].status, ToolStatus::Done);
+    assert_eq!(app.tool_use_blocks[1].status, ToolStatus::Done);
+    assert_eq!(
+        app.tool_use_blocks[2].status,
+        ToolStatus::Cancelled,
+        "the pending block of the cancelled turn reads cancelled"
+    );
+    assert!(!app.is_streaming);
+    // No live agent → no interrupt flag → no watchdog armed.
+    assert!(app.cancel_deadline.is_none());
+}
+
+/// 2026-10-14 batch, plan 04: with a live flag, cancel triggers it instead
+/// of aborting the task, and arms the 3 s watchdog.
+#[tokio::test]
+async fn cancel_triggers_interrupt_flag_and_arms_watchdog() {
+    let mut app = make_app();
+    let flag = operant_core::interrupt::InterruptFlag::new();
+    app.agent_interrupt = Some(flag.clone());
+    // A dummy handle so the watchdog arms (no agent task = nothing to watch).
+    let (_tx, rx) =
+        tokio::sync::oneshot::channel::<std::result::Result<(), operant_core::error::Error>>();
+    let handle = tokio::spawn(async move {
+        let _ = rx.await;
+    });
+    app.agent_task_handle = Some(handle);
+    app.is_streaming = true;
+
+    app.cancel_streaming_turn();
+
+    assert!(flag.is_triggered(), "the interrupt flag fired, not abort");
+    assert!(
+        app.cancel_deadline.is_some(),
+        "the 3 s watchdog deadline is armed while the task lives"
+    );
+    assert!(app.agent_task_handle.is_some(), "task not aborted yet");
+}
+
+/// 2026-10-14 batch, plan 04: Ctrl+C while streaming routes through the
+/// same cancel (flag trigger), not the old invisible is_streaming=false.
+#[test]
+fn ctrl_c_while_streaming_triggers_the_interrupt_flag() {
+    let mut app = make_app();
+    let flag = operant_core::interrupt::InterruptFlag::new();
+    app.agent_interrupt = Some(flag.clone());
+    app.is_streaming = true;
+
+    app.handle_key_event(press_key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    assert!(
+        flag.is_triggered(),
+        "Ctrl+C while streaming triggers the flag"
+    );
+    assert!(!app.is_streaming);
+    assert!(
+        app.tool_use_blocks.is_empty(),
+        "sanity: no blocks seeded; nothing to keep"
+    );
+}
+
+/// 2026-10-14 batch, plan 04: the watchdog. After the deadline passes, the
+/// loop aborts the task as the last resort.
+#[tokio::test]
+async fn watchdog_aborts_after_deadline() {
+    let mut app = make_app();
+    let (_tx, rx) =
+        tokio::sync::oneshot::channel::<std::result::Result<(), operant_core::error::Error>>();
+    // A task that never resolves and never observes the flag — the
+    // "tool ignoring cancellation" case.
+    let handle = tokio::spawn(async move {
+        std::future::pending::<()>().await;
+        let _ = rx;
+    });
+    app.agent_task_handle = Some(handle);
+    app.cancel_deadline = Some(std::time::Instant::now());
+
+    // The watchdog tick (normally inside App::run's loop).
+    if let Some(deadline) = app.cancel_deadline
+        && std::time::Instant::now() >= deadline
+    {
+        app.cancel_deadline = None;
+        if let Some(handle) = app.agent_task_handle.take() {
+            handle.abort();
+        }
+    }
+
+    assert!(app.cancel_deadline.is_none(), "deadline consumed");
+    assert!(
+        app.agent_task_handle.is_none(),
+        "task aborted by the watchdog"
+    );
+}
+
 #[test]
 fn alt_o_and_ctrl_shift_o_toggle_tool_visibility() {
     let mut app = make_app();

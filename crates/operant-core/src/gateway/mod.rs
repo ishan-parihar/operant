@@ -28,7 +28,10 @@ mod slack;
 mod sms;
 mod telegram;
 mod types;
-mod webhook;
+// (in-flight completion by the concurrent agent — the peer's phase-F
+// gateway_runner.rs builds a HolonHook on the CLI side, so the module
+// must be public).
+pub mod webhook;
 mod whatsapp;
 pub use admin::*;
 pub use discord::*;
@@ -1566,6 +1569,7 @@ mod tests {
     #[tokio::test]
     async fn test_gateway_stats() {
         let config = GatewayConfig {
+            holon_notion: None,
             telegram_enabled: false,
             telegram_token: None,
             discord_enabled: false,
@@ -1832,6 +1836,7 @@ mod tests {
     #[test]
     fn test_format_startup_message() {
         let config = GatewayConfig {
+            holon_notion: None,
             telegram_enabled: true,
             telegram_token: Some("tok".to_string()),
             discord_enabled: false,

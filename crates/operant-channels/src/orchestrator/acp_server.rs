@@ -821,7 +821,10 @@ impl AcpServer {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     fn register_cancel_token(
         &self,
         session_id: &str,
@@ -846,7 +849,10 @@ impl AcpServer {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     fn remove_cancel_token(&self, session_id: &str) {
         self.cancel_tokens
             .lock()
@@ -940,7 +946,10 @@ impl AcpServer {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-        #[expect(clippy::expect_used, reason = "poisoned lock: panic is the intended recovery")]
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
     /// Handle `session/cancel` notifications (ACP spec §Cancellation).
     ///
     /// Fires the cancellation token for the named session's active turn, if

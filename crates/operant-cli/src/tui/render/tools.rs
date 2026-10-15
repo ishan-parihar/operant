@@ -527,6 +527,14 @@ pub(crate) fn render_tool_group_lines(
                     Style::default().fg(theme_colors::TOOL_ERROR),
                 ));
             }
+            // (plan 04) cancelled calls stay visible, dim, with the ⊘ marker.
+            ToolStatus::Cancelled => {
+                let style = Style::default()
+                    .fg(theme::dim_color())
+                    .add_modifier(Modifier::DIM);
+                spans.push(Span::styled("\u{2298} ".to_string(), style));
+                spans.push(Span::styled(label, style));
+            }
         }
         lines.push(Line::from(spans));
     }

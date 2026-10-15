@@ -445,6 +445,10 @@ impl TuiApp {
                         });
                         self.app.run_complete_rx = Some(rx);
                         self.app.agent_task_handle = Some(handle);
+                        // (plan 04) the cancel path triggers the flag, never
+                        // aborts — the agent commits its own tail.
+                        self.app.agent_interrupt = Some(agent.interrupt_flag());
+                        self.app.cancel_deadline = None;
                     } else {
                         // No agent — the runtime failed to build, so the
                         // submission is dropped on the floor with nothing
@@ -513,6 +517,9 @@ impl TuiApp {
         });
         self.app.run_complete_rx = Some(rx);
         self.app.agent_task_handle = Some(handle);
+        // (plan 04) see the spawn note above.
+        self.app.agent_interrupt = Some(agent.interrupt_flag());
+        self.app.cancel_deadline = None;
     }
 
     /// Run the real `App::run` loop headlessly against a `TestBackend`,
@@ -710,6 +717,9 @@ impl TuiApp {
             });
             self.app.run_complete_rx = Some(rx);
             self.app.agent_task_handle = Some(handle);
+            // (plan 04) see the spawn note above.
+            self.app.agent_interrupt = Some(agent.interrupt_flag());
+            self.app.cancel_deadline = None;
         }
 
         use ratatui::Terminal;
@@ -801,6 +811,10 @@ impl TuiApp {
                         });
                         self.app.run_complete_rx = Some(rx);
                         self.app.agent_task_handle = Some(handle);
+                        // (plan 04) the cancel path triggers the flag, never
+                        // aborts — the agent commits its own tail.
+                        self.app.agent_interrupt = Some(agent.interrupt_flag());
+                        self.app.cancel_deadline = None;
                     } else if is_mock {
                         // Mock path: the "agent" is the script, not a failed
                         // init - a submitted message must land in the
@@ -855,6 +869,21 @@ impl TuiApp {
         app: &mut crate::tui::app::App,
         agent: Option<&std::sync::Arc<operant_core::agent::OperantAgent>>,
     ) {
+        // (plan 04) watchdog repair: the agent task was aborted after the
+        // grace window; commit the tail (partial text from the TUI buffer +
+        // synthetic tool results) on the stored conversation.
+        if std::mem::take(&mut app.pending_repair) {
+            if let Some(agent) = agent {
+                let partial = app.pending_repair_partial.take();
+                agent.repair_after_abort(partial).await;
+                app.push_system_message(
+                    "Turn stopped; the interrupted step was kept in context.".to_string(),
+                    crate::tui::app::SystemMessageStyle::Info,
+                );
+            } else {
+                app.pending_repair_partial = None;
+            }
+        }
         // (plan 03) effort change first: the agent applies it to the very
         // next request.
         if let Some(effort) = std::mem::take(&mut app.pending_effort) {

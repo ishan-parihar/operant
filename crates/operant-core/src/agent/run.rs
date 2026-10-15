@@ -668,12 +668,18 @@ impl OperantAgent {
                     )
                     .await;
                 }
-                self.emit(AgentEvent::Error {
-                    error: "Interrupted by user".to_string(),
-                })
-                .await;
-                let _ = message_safety::close_interrupted_tool_sequence(&mut messages, None);
-                return Err(Error::Agent("Interrupted by user".to_string()));
+                // (plan 04) graceful exit: commit the interrupted tail (the
+                // partial assistant text landed via the normal commit path
+                // if the stream's inner flag-check flushed it; pair any
+                // unanswered tool calls) and return the TYPED error. No
+                // AgentEvent::Error — the TUI shows its "Turn stopped."
+                // notice, and an error card would read as a failure.
+                // close_interrupted_tool_sequence is gone: it appended
+                // "Operation interrupted.", mutating the store the user
+                // said not to touch; alternation for strict providers is
+                // handled at request-build time by message_safety.
+                self.commit_interrupted_tail(None).await;
+                return Err(crate::error::Error::Interrupted);
             }
 
             if iteration > self.config.max_iterations {
@@ -790,8 +796,12 @@ impl OperantAgent {
                     Ok(s) => s,
                     Err(e) => {
                         // T2: bail out on interrupt instead of classifying.
+                        // (plan 04) the typed error + tail commit keep the
+                        // store consistent instead of surfacing the raw
+                        // transport error from a request the user killed.
                         if self.interrupt_flag.is_triggered() {
-                            return Err(e);
+                            self.commit_interrupted_tail(None).await;
+                            return Err(crate::error::Error::Interrupted);
                         }
                         // ── Context overflow auto-compression (iter-63) ───────
                         // When the provider returns a context_overflow error,
@@ -908,9 +918,14 @@ impl OperantAgent {
                         Ok(processed) => break processed,
                         Err(e) => {
                             // T2: never classify/retry an interrupt-aborted
-                            // request — propagate the interrupted error up.
+                            // request — commit the tail (pairing results for
+                            // any unanswered tool calls; the partial text was
+                            // committed by the normal path when the inner
+                            // flag-check won the race) and surface the typed
+                            // interrupt so no error card renders.
                             if self.interrupt_flag.is_triggered() {
-                                return Err(e);
+                                self.commit_interrupted_tail(None).await;
+                                return Err(crate::error::Error::Interrupted);
                             }
                             let classified = FallbackModelClient::classify_error(&e);
                             let retryable = classified.retryable
@@ -1040,8 +1055,12 @@ impl OperantAgent {
                     Ok(r) => r,
                     Err(e) => {
                         // T2: bail out on interrupt instead of classifying.
+                        // (plan 04) the typed error + tail commit keep the
+                        // store consistent instead of surfacing the raw
+                        // transport error from a request the user killed.
                         if self.interrupt_flag.is_triggered() {
-                            return Err(e);
+                            self.commit_interrupted_tail(None).await;
+                            return Err(crate::error::Error::Interrupted);
                         }
                         let classified = FallbackModelClient::classify_error(&e);
                         self.emit_rate_limit_notice(&classified, &e).await;

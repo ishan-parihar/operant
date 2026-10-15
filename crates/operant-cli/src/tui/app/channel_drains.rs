@@ -301,14 +301,19 @@ impl App {
 
     /// 9. Check if background agent.run() completed.
     pub(super) fn drain_run_complete(&mut self) -> bool {
-        let Some(ref mut rx) = self.run_complete_rx else {
+        let Some(rx) = &mut self.run_complete_rx else {
             return false;
         };
         match rx.try_recv() {
             Ok(result) => {
                 self.is_streaming = false;
+                // (plan 04) a graceful cancel is success-with-no-error-card:
+                // the tail was already committed and "Cancelled." is on
+                // the status line; an error card would read as failure.
+                let interrupted = matches!(result, Err(operant_core::error::Error::Interrupted));
                 if let Err(e) = result
                     && !self.run_error_surfaced
+                    && !interrupted
                 {
                     self.handle_agent_event(AgentEvent::Error {
                         error: e.user_message(),
@@ -317,6 +322,7 @@ impl App {
                 self.run_error_surfaced = false;
                 self.run_complete_rx = None;
                 self.agent_task_handle.take(); // Clear completed handle.
+                self.cancel_deadline = None; // graceful return beat the watchdog
                 true
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
@@ -324,6 +330,14 @@ impl App {
                 self.run_error_surfaced = false;
                 self.run_complete_rx = None;
                 self.agent_task_handle.take(); // Clear completed handle.
+                // (plan 04) the task ended without the oneshot resolving —
+                // the watchdog aborted it (a tool ignored cancellation) or
+                // it panicked. Either way the store needs the same repair;
+                // route it through the pending-action channel so the
+                // agent handle (if any) is in scope.
+                if self.cancel_deadline.take().is_some() {
+                    self.pending_repair = true;
+                }
                 true
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,

@@ -281,6 +281,16 @@ fn display_message_from_tool_block(app: &App, block: &ToolUseBlock) -> DisplayMe
                 format!("✗ {preview}")
             }
         }
+        ToolStatus::Cancelled => {
+            // (plan 04) the row stays, dim, with the honest marker — the
+            // store got a synthetic "Cancelled…" tool result; the screen
+            // must not pretend the call vanished.
+            if preview.trim().is_empty() {
+                "⊘ cancelled".to_string()
+            } else {
+                format!("⊘ cancelled — {preview}")
+            }
+        }
         status if status.is_pending() && preview.trim().is_empty() => {
             TOOL_PENDING_PREVIEW.to_string()
         }

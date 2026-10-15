@@ -107,6 +107,15 @@ impl InterruptFlag {
             sleep(Duration::from_millis(50)).await;
         }
     }
+
+    /// Block the current task until the flag is triggered, with no timeout
+    /// (2026-10-14 batch, plan 04). For racing a tool-batch drain against a
+    /// cancel: the winner of the `select!` is whichever happens first.
+    pub async fn wait_triggered(&self) {
+        while !self.is_triggered() {
+            sleep(Duration::from_millis(50)).await;
+        }
+    }
 }
 
 impl Default for InterruptFlag {

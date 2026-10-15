@@ -1425,7 +1425,20 @@ impl OperantAgent {
             } else {
                 self.config.tool_timeout
             };
-            let result = timeout(limit, tool_future).await;
+            // (plan 04) race the tool against the interrupt flag too: a
+            // blocking tool must die on cancel, not ride its timeout out.
+            // The interrupt arm yields a truthful "Cancelled…" result —
+            // NOT the timeout marker, which would feed the S2 breaker a
+            // cancellation it didn't cause.
+            let interrupt_flag = self.interrupt_flag.clone();
+            let cancelled_msg = "Cancelled by the user before this call finished.";
+            let result = tokio::select! {
+                r = timeout(limit, tool_future) => r,
+                _ = interrupt_flag.wait_triggered() => Ok(Ok(ToolResult::error(
+                    &tool_call.id,
+                    cancelled_msg.to_string(),
+                ))),
+            };
             if let Some(ref bus) = self.turn_end_bus {
                 bus.record_tool_duration(tool_started.elapsed().as_millis() as u64);
             }
@@ -1479,6 +1492,10 @@ impl OperantAgent {
             let semaphore = StdArc::new(Semaphore::new(8));
             let tool_timeout = self.config.tool_timeout;
 
+            // (plan 04) ids captured before `pending` is consumed — the
+            // interrupt path pairs unfinished calls by id.
+            let tool_call_ids: Vec<String> =
+                pending.iter().map(|(_, tc, _)| tc.id.clone()).collect();
             let futures: Vec<_> = pending
                 .into_iter()
                 .map(|(idx, tool_call, args)| {
@@ -1563,15 +1580,45 @@ impl OperantAgent {
                 })
                 .collect();
 
-            // Execute all futures concurrently and collect results
-            let results = stream::iter(futures)
-                .buffer_unordered(8)
-                .collect::<Vec<_>>()
-                .await;
+            // Execute all futures concurrently and collect results.
+            // (plan 04) The drain races the interrupt flag: completed
+            // results are kept; when the flag fires, the pool is dropped
+            // (running tool futures are cancelled — child processes die
+            // with kill_on_drop) and every call that never produced a
+            // result becomes a truthful "Cancelled by the user…" result,
+            // so the API pairing rule holds without message_safety
+            // repairs.
+            let mut got = Vec::new();
+            let mut pool = stream::iter(futures).buffer_unordered(8);
+            let interrupted = loop {
+                tokio::select! {
+                    maybe = pool.next() => {
+                        match maybe {
+                            Some(pair) => got.push(pair),
+                            None => break false,
+                        }
+                    }
+                    _ = self.interrupt_flag.wait_triggered() => {
+                        break true;
+                    }
+                }
+            };
 
             // Place results in the correct position
-            for (idx, result) in results {
+            for (idx, result) in got {
                 early_results[idx] = Some(result);
+            }
+            if interrupted {
+                warn!("Interrupt during tool batch — cancelled unfinished calls");
+                for (idx, call) in call_names.iter().enumerate() {
+                    if early_results[idx].is_none() {
+                        let _ = call; // name only for logging
+                        early_results[idx] = Some(ToolResult::error(
+                            &tool_call_ids[idx],
+                            "Cancelled by the user before this call finished.".to_string(),
+                        ));
+                    }
+                }
             }
         }
 
