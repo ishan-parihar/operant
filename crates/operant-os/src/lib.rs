@@ -22,6 +22,7 @@ pub mod enforcement;
 pub mod policy;
 pub mod run;
 pub mod supervisor;
+pub mod tools;
 
 /// Read-API versions this build understands. v2 (holon 0010_event_triggers)
 /// keeps every view shape of v1 — api_triggers may simply carry event rows now

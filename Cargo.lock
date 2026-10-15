@@ -5088,6 +5088,7 @@ dependencies = [
 name = "operant-os"
 version = "0.2.1"
 dependencies = [
+ "async-trait",
  "operant-core",
  "rusqlite",
  "serde",

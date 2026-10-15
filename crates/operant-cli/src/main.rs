@@ -1021,6 +1021,15 @@ pub(crate) async fn build_registry(
     // (iter-153: EchoTool + CalculatorTool deleted — toy demo tools.
     // operant-core already has a real EchoTool in debug_helpers.rs.)
 
+    // Phase E (docs/agentic-os/): native Holon tools — the agent's read/
+    // submit surface for the organization, replacing the resident `holon mcp`
+    // subprocess per run. Every tool gates itself on the Holon-run env
+    // (HOLON_HOME / HOLON_RUN_TOKEN), so registering when [holon] is on is
+    // inert outside a Holon run.
+    if config.holon.enabled {
+        operant_os::tools::register_all(&registry).await;
+    }
+
     // Memory provider tools (agentmemory_*) are registered via the MCP
     // server path (config.mcp.servers → agentmemory) and/or the agent's
     // MemoryProvider hook — see load_memory_manager / create_runtime_agent.
