@@ -95,6 +95,33 @@ use crate::error::{Error, Result};
 const AFT_REPO: &str = "cortexkit/aft";
 const AFT_STORAGE_DIR: &str = "aft";
 
+/// (plan 11B) The aft integration spec for the shared binary updater:
+/// versioned cache dirs, raw platform binaries, prune to the newest 2.
+pub fn aft_spec() -> crate::binary_updater::IntegrationSpec {
+    crate::binary_updater::IntegrationSpec {
+        name: "aft",
+        repo: AFT_REPO,
+        asset_marker: aft_platform_marker(),
+        install: crate::binary_updater::InstallKind::CacheDir {
+            dir: operant_home().join(AFT_STORAGE_DIR),
+            keep: 2,
+        },
+    }
+}
+
+fn aft_platform_marker() -> &'static str {
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    match (os, arch) {
+        ("linux", "x86_64") => "linux-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("macos", "aarch64") => "darwin-arm64",
+        ("windows", "x86_64") => "win32-x64",
+        ("windows", "aarch64") => "win32-arm64",
+        _ => "linux-x64",
+    }
+}
+
 /// Resolve the aft binary path, downloading it if necessary.
 ///
 /// Resolution order (mirrors the opencode/pi adapter):
@@ -145,12 +172,11 @@ pub async fn resolve_aft_binary() -> Result<PathBuf> {
     // 4. Cached binary
     let cache_dir = operant_home().join(AFT_STORAGE_DIR);
     if let Some(cached) = find_cached_binary(&cache_dir).await {
-        // Kick off a background auto-update check (non-blocking).
-        tokio::spawn(async {
-            if let Err(e) = check_and_download_update().await {
-                tracing::debug!(error = %e, "aft auto-update check failed (non-fatal)");
-            }
-        });
+        // (plan 11B) the shared updater path: once-per-session + 6 h
+        // throttle + prune-to-2 + a user-visible failure notice. The old
+        // per-bridge check re-downloaded per session and never pruned
+        // (14 versions cached).
+        crate::binary_updater::kick_session_update(aft_spec());
         return Ok(cached);
     }
 
@@ -375,23 +401,6 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
 
 /// Check for a newer aft release and download it in the background.
 /// Non-fatal — logs errors but doesn't propagate them.
-async fn check_and_download_update() -> Result<()> {
-    let tag = fetch_latest_release_tag().await?;
-    let cache_dir = operant_home().join(AFT_STORAGE_DIR);
-    let expected_dir = cache_dir.join(format!("aft-{}", tag));
-    let bin_name = if cfg!(windows) { "aft.exe" } else { "aft" };
-    let expected_bin = expected_dir.join(bin_name);
-
-    if expected_bin.exists() {
-        tracing::debug!(tag = %tag, "aft already up-to-date");
-        return Ok(());
-    }
-
-    tracing::info!(tag = %tag, "newer aft version available, downloading");
-    download_aft_release(&tag).await?;
-    tracing::info!(tag = %tag, "aft updated — will be used on next bridge spawn");
-    Ok(())
-}
 
 /// Map the current platform to the aft release asset name (v0.49.x naming:
 /// raw binaries, no target triple, no tarball extension).

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-840 — one binary updater for sourcehound and aft (plan 11B).**
+  The two auto-update paths (single-binary sourcehound, versioned-cache
+  aft) each carried their own download/verify/replace logic, neither
+  pruned, neither throttled, and failures were debug-only. New
+  `operant-core/src/binary_updater.rs` is the one shared implementation:
+  `gh api` release check (API asset URLs — `browser_download_url` 404s on
+  private repos even with the token; the verified combination is the API
+  form + `Accept: application/octet-stream` + the gh token), download,
+  SHA256SUMS verify when present, atomic replace (0755 before the rename
+  — the live sourcehound 1.7.0 install initially landed non-executable
+  and was caught by the version check), cache-dir install with
+  **prune-to-2** (aft carried 14 versions), a per-process once-guard and
+  a 6 h on-disk throttle (`~/.operant/cache/updates.json`), and a
+  once-per-session user-visible notice drained into the TUI status line.
+  Surfaces: `operant doctor` lists installed/latest per integration with
+  an update hint, `operant version --detailed` prints them,
+  `operant update integrations` force-checks now. Live-proven:
+  sourcehound updated 1.6.0 → 1.7.0 through the real path, then reported
+  "up to date" on re-run. Tests: version parse/compare, prune-to-2,
+  checksum-detectability, tar.gz + raw-ELF extraction, and a fake-`gh`
+  check resolving installed/latest without the network.
+
 - **iter-839 — native scrollback: message-final emission (plan 09, step 1;
   fixes K-3).** The scroll emitter's row watermark now clamps to the last
   FINAL display message — `final_display_message_count` walks the display

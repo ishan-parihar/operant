@@ -1065,6 +1065,9 @@ impl App {
             // tick-based status drain.)
             self.drain_mcp_reconnect_status();
 
+            // (plan 11B) integration update notice → status line.
+            self.drain_update_notice();
+
             // Drain query events from the agent bridge task.
             self.drain_agent_events();
 

@@ -65,6 +65,7 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     // Each section runs its checks and returns (issues, manual_issues).
     checks_config::run_config_checks(config, &mut issues, &mut manual_issues);
     checks_tools::run_tool_checks(config, &mut issues, &mut manual_issues);
+    checks_tools::run_integration_checks(&mut issues, &mut manual_issues).await;
     checks_api::run_api_checks(config, &mut issues).await;
     checks_tools::run_platform_checks(config, &mut issues, &mut manual_issues);
 

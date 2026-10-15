@@ -47,6 +47,7 @@ mod advisor;
 pub mod aft_bridge;
 pub mod agent;
 pub mod approval;
+pub mod binary_updater;
 pub mod blast_radius;
 pub mod browser_provider;
 pub mod client;

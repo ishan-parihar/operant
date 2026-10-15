@@ -877,3 +877,70 @@ fn detect_memory_provider(config: &AppConfig) -> Option<String> {
 
     None
 }
+
+/// (plan 11B) Integration versions — installed vs latest through the
+/// shared binary updater's check path. Async because the gh poll awaits.
+pub async fn run_integration_checks(issues: &mut Vec<String>, manual_issues: &mut Vec<String>) {
+    let _ = (&mut *issues, &mut *manual_issues);
+    // -- integrations: installed vs latest (2026-10-14 batch, plan 11B) --
+    // The shared binary updater's check path: no install, no throttle.
+    {
+        match operant_core::tools::sourcehound_update::check().await {
+            Some(v) => match (v.installed, v.latest) {
+                (Some(i), Some(l)) if l > i => check_warn(
+                    "sourcehound",
+                    &format!(
+                        "{} (latest {} — run operant update --integrations)",
+                        operant_core::binary_updater::version_string(i),
+                        operant_core::binary_updater::version_string(l)
+                    ),
+                ),
+                (Some(i), Some(_)) => check_ok(
+                    "sourcehound",
+                    &format!(
+                        "{} (up to date)",
+                        operant_core::binary_updater::version_string(i)
+                    ),
+                ),
+                (Some(i), None) => check_info(&format!(
+                    "sourcehound {} (latest unknown — gh unavailable)",
+                    operant_core::binary_updater::version_string(i)
+                )),
+                (None, _) => check_warn(
+                    "sourcehound",
+                    "(not found — run operant update --integrations)",
+                ),
+            },
+            None => check_info("sourcehound (check skipped: binary not on PATH)"),
+        }
+        let aft = operant_core::aft_bridge::aft_spec();
+        match operant_core::binary_updater::check(&aft).await {
+            Ok(v) => match (v.installed, v.latest) {
+                (Some(i), Some(l)) if l > i => check_warn(
+                    "aft",
+                    &format!(
+                        "{} (latest {} — run operant update --integrations)",
+                        operant_core::binary_updater::version_string(i),
+                        operant_core::binary_updater::version_string(l)
+                    ),
+                ),
+                (Some(i), Some(_)) => check_ok(
+                    "aft",
+                    &format!(
+                        "{} (up to date)",
+                        operant_core::binary_updater::version_string(i)
+                    ),
+                ),
+                (Some(i), None) => check_info(&format!(
+                    "aft {} (latest unknown — gh unavailable)",
+                    operant_core::binary_updater::version_string(i)
+                )),
+                (None, _) => check_warn(
+                    "aft",
+                    "(no versioned cache — run operant update --integrations)",
+                ),
+            },
+            Err(_) => check_info("aft (check skipped)"),
+        }
+    }
+}

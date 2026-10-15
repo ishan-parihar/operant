@@ -51,6 +51,30 @@ impl App {
     /// the moment it is posted — no keystroke required. The last message wins;
     /// the channel is drained to empty so a burst of updates collapses to the
     /// final state. (iter-326 — tick-based status drain.)
+    /// (plan 11B) Drain the shared binary updater's once-per-session notice
+    /// into the status line — "sourcehound updated 1.6.0 → 1.7.0" or the
+    /// failure reason, visible instead of debug-only.
+    pub(super) fn drain_update_notice(&mut self) -> bool {
+        use operant_core::binary_updater::UpdateNotice;
+        let Some(notice) = operant_core::binary_updater::take_pending_notice() else {
+            return false;
+        };
+        match notice {
+            UpdateNotice::Updated { name, from, to } => {
+                self.set_status_notice(format!("{name} updated {from} → {to}"));
+            }
+            UpdateNotice::Available { name, to } => {
+                self.set_status_notice(format!(
+                    "{name} {to} available (no asset for this platform)"
+                ));
+            }
+            UpdateNotice::Failed { name, reason } => {
+                self.set_status_notice(format!("{name} update failed: {reason}"));
+            }
+        }
+        true
+    }
+
     pub(super) fn drain_mcp_reconnect_status(&mut self) -> bool {
         let Some(ref mut rx) = self.mcp_reconnect_rx else {
             return false;
