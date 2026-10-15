@@ -11,8 +11,13 @@ use operant_os::chair::{is_chair, run_as_chair};
 fn launcher_printing(stdout: &str) -> (tempfile::TempDir, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("holon.sh");
-    std::fs::write(&script, format!("#!/bin/sh\nprintf '%s\\n' '{stdout}'\n"))
-        .expect("write script");
+    // write-then-rename: exec'ing a file some thread just wrote races
+    // ETXTBSY on tmpfs under the parallel test harness (observed: two
+    // different tests, "Text file busy" at random). The renamed-in inode
+    // has no writers, ever.
+    let tmp = dir.path().join("holon.sh.tmp");
+    std::fs::write(&tmp, format!("#!/bin/sh\nprintf '%s\\n' '{stdout}'\n")).expect("write script");
+    std::fs::rename(&tmp, &script).expect("rename script");
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     (dir, script.to_string_lossy().into_owned())
@@ -82,7 +87,10 @@ async fn a_refused_chair_command_is_a_named_error() {
     // must surface as an error, not silently succeed.
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("holon.sh");
-    std::fs::write(&script, "#!/bin/sh\nexit 4\n").expect("write");
+    // write-then-rename — same ETXTBSY guard as launcher_printing
+    let tmp = dir.path().join("holon.sh.tmp");
+    std::fs::write(&tmp, "#!/bin/sh\nexit 4\n").expect("write");
+    std::fs::rename(&tmp, &script).expect("rename");
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let bin = script.to_string_lossy().into_owned();

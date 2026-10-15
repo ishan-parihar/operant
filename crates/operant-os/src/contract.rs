@@ -16,8 +16,7 @@ use crate::{Error, Result};
 pub fn validate_result(run_dir: &Path, stage: &str) -> Result<()> {
     let raw = std::fs::read_to_string(run_dir.join("result.json"))
         .map_err(|e| Error::Protocol(format!("result.json unreadable: {e}")))?;
-    let doc: Value = serde_json::from_str(&raw)
-        .map_err(|e| Error::PolicyParse(e))?;
+    let doc: Value = serde_json::from_str(&raw).map_err(|e| Error::PolicyParse(e))?;
     let schema_name = format!("{stage}-result.schema.json");
     // the schemas load from the vendored set at runtime (include_str
     // cannot be dynamic over the stage name)
@@ -42,9 +41,8 @@ pub fn validate_result(run_dir: &Path, stage: &str) -> Result<()> {
             v.get("required")
                 .and_then(Value::as_array)
                 .map(|req| {
-                    req.iter().all(|key| {
-                        key.as_str().is_some_and(|k| doc.get(k).is_some())
-                    })
+                    req.iter()
+                        .all(|key| key.as_str().is_some_and(|k| doc.get(k).is_some()))
                 })
                 .unwrap_or(false)
         });

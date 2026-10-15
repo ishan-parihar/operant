@@ -65,11 +65,20 @@ fn a_real_prepare_env_engages_enforcement_trajectory_and_usage() {
         return;
     };
     // The operant binary under test: env override (a debug build made by
-    // the operator) else the repo's own target (cargo test runs in it).
+    // the operator; an ABSOLUTE path — a relative one breaks when the
+    // test harness's cwd differs from the workspace root, observed live)
+    // else the repo's own target (cargo test runs in it).
     let operant = std::env::var_os("OPERANT_BIN")
         .map(std::path::PathBuf::from)
+        .map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                std::env::current_dir().unwrap_or_default().join(p)
+            }
+        })
         .unwrap_or_else(|| {
-            // find target/debug/operant from the crate root (three up)
+            // find target/debug/operant from the crate root (two up)
             let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             p.pop();
             p.pop();
@@ -77,70 +86,117 @@ fn a_real_prepare_env_engages_enforcement_trajectory_and_usage() {
         });
     assert!(
         operant.exists(),
-        "no operant binary at {} — build it (cargo build -p operant-cli --bin operant) or set OPERANT_BIN",
+        "no operant binary at {} — build it (cargo build -p operant-cli --bin operant) or set OPERANT_BIN (absolute)",
         operant.display()
     );
 
     let (_hits, _server, port) = canned_provider();
 
-    // 1. scratch instance + one plan-stage claim
+    // 1. scratch instance + a REAL prepare: init → hire (the scratch org
+    // has no adapter-installed `operant` driver, so hire the builtin
+    // `generic-shell` one) → task add → dispatch --prepare. This is the
+    // exact env a real body runs under — the kernel exports it (H-01),
+    // operant consumes it (O-01); driving the real thing means a kernel
+    // rename or shape change FAILS here instead of at runtime.
     let dir = tempfile::tempdir().expect("tempdir");
     let home = dir.path().join("home");
-    let out = Command::new("python3")
-        .args(["-m", "holon", "--home"])
-        .arg(&home)
-        .arg("init")
-        .env("PYTHONPATH", &repo)
-        .output()
-        .expect("init");
+    let holon = |args: &[&str]| {
+        let mut c = Command::new("python3");
+        c.arg("-m").arg("holon").arg("--home").arg(&home);
+        for a in args {
+            c.arg(a);
+        }
+        c.env("PYTHONPATH", &repo);
+        c.output().expect("holon cli")
+    };
+    let out = holon(&["init"]);
     assert!(
         out.status.success(),
         "init: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-
-    // claim through the kernel as the chair (a scratch org has an
-    // executive seat only; a claim needs work — add one and prepare)
-    let prep = Command::new("python3")
-        .args(["-m", "holon", "--home"])
-        .arg(&home)
-        .arg("--json")
-        .arg("dispatch")
-        .arg("--as")
-        .arg("executive")
-        .arg("--prepare")
-        .env("PYTHONPATH", &repo)
-        .output()
-        .expect("prepare");
+    // probation→active not required for a claim, but keep it explicit
+    let out = holon(&[
+        "hr",
+        "hire",
+        "--name",
+        "E2E",
+        "--title",
+        "E2E",
+        "--dept",
+        "executive",
+        "--jd",
+        "probe the run-env contract",
+        "--driver",
+        "generic-shell",
+        "--roles",
+        "planner,executor,verifier",
+        "--reason",
+        "e2e",
+    ]);
+    assert!(
+        out.status.success(),
+        "hr hire: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let hire_out = String::from_utf8_lossy(&out.stdout).to_string();
+    let emp = hire_out
+        .lines()
+        .find_map(|l| l.split_whitespace().find(|w| w.starts_with("emp_")))
+        .expect("hired employee id")
+        .to_string();
+    let out = holon(&[
+        "task",
+        "add",
+        "E2E probe",
+        "--intent",
+        "reply ok",
+        "--dept",
+        "executive",
+    ]);
+    assert!(
+        out.status.success(),
+        "task add: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let prep = holon(&["--json", "dispatch", "--as", &emp, "--prepare"]);
     let stdout = String::from_utf8_lossy(&prep.stdout).to_string();
     let shell: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::Value::Null);
     let prepared = shell
         .get("prepared")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let prepared = prepared.as_object().map(|o| o.clone()).unwrap_or_default();
+    let env_map = prepared
+        .get("env")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let get = |k: &str| env_map.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    // The H-01 contract, asserted from the REAL kernel output:
+    let run_dir = get("HOLON_RUN_DIR")
+        .or_else(|| get("HOLON_BRIEF_DIR"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the kernel's prepare env carries no HOLON_RUN_DIR/HOLON_BRIEF_DIR: {}",
+                serde_json::to_string(&env_map).unwrap_or_default()
+            )
+        });
+    let run_dir = std::path::PathBuf::from(&run_dir);
+    let employee = get("HOLON_EMPLOYEE_ID").expect("HOLON_EMPLOYEE_ID in the prepare env");
+    let holon_cmd = get("HOLON").expect("HOLON in the prepare env");
+    // policy.json comes with the claim (the kernel writes it at claim);
+    // if this kernel predates it, the run below degrades to no-authority —
+    // the mount assertion catches that as a failure.
 
-    // A fresh instance has no work: nothing to prepare is a legitimate
-    // null — the run-env semantics are what this test pins, so a null
-    // claim still exercises the env when we set it by hand (below we
-    // synthesize the env from a real policy file instead).
-    let run_dir = dir.path().join("run");
-    std::fs::create_dir_all(&run_dir).expect("run dir");
-    let policy = serde_json::json!({
-        "version": 1, "grade": null, "stage": "plan", "posture": "observe",
-        "roots": [], "writes": [], "commands": [], "deny": [],
-        "budget": {"tokens": null, "cost": null}
-    });
-    std::fs::write(run_dir.join("policy.json"), policy.to_string()).expect("policy");
-    std::fs::write(run_dir.join("BRIEF.md"), "# brief").expect("brief");
-
-    // 2. the run: observe config + the prepared-style env
+    // 2. the run: observe config + the REAL prepared env
     let cfg = dir.path().join("observe.toml");
     std::fs::write(&cfg, format!(
         "[client]\nbase_url = \"http://127.0.0.1:{port}/v1\"\ntimeout_secs = 60\napi_key = \"sk-test\"\n[agent]\nmodel = \"scripted\"\nmax_iterations = 1\nstream = false\nshow_reasoning = false\n[tui]\nrich_output = false\n[tools]\ndisabled_tools = [\"file_write\"]\n"
     )).expect("cfg");
 
-    let out = Command::new(&operant)
-        .arg("run")
+    let mut cmd = Command::new(&operant);
+    cmd.arg("run")
         .arg("-c")
         .arg(&cfg)
         .arg("--max-iterations")
@@ -151,13 +207,18 @@ fn a_real_prepare_env_engages_enforcement_trajectory_and_usage() {
         .env("HERMES_HOME", dir.path().join("ohome"))
         .env("RUST_LOG", "info")
         .env("HOLON_RUN_DIR", &run_dir)
-        .env("HOLON_EMPLOYEE_ID", "emp_scripted")
-        .env(
-            "HOLON",
-            format!("python3 -m holon --home {}", home.display()),
-        )
-        .output()
-        .expect("operant run");
+        .env("HOLON_EMPLOYEE_ID", &employee)
+        .env("HOLON", &holon_cmd);
+    // the rest of the kernel's prepared env rides too (HOLON_HOME,
+    // HOLON_RUN_ID, the run token, stage/posture…) — exactly what a body
+    // sees; layering the whole map is the contract this test exists to pin
+    for (k, v) in &env_map {
+        let Some(v) = v.as_str() else {
+            continue;
+        };
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("operant run");
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();

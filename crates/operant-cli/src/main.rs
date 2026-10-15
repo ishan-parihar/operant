@@ -1023,10 +1023,13 @@ pub(crate) async fn build_registry(
 
     // Phase E (docs/agentic-os/): native Holon tools — the agent's read/
     // submit surface for the organization, replacing the resident `holon mcp`
-    // subprocess per run. Every tool gates itself on the Holon-run env
-    // (HOLON_HOME / HOLON_RUN_TOKEN), so registering when [holon] is on is
-    // inert outside a Holon run.
-    if config.holon.enabled {
+    // subprocess per run. Registration keys on the RUN ENV (audit O-03): a
+    // Holon body runs with the adapter's posture configs, which carry no
+    // [holon] section — a config gate here left every real body without its
+    // native tools. The run env (HOLON_RUN_DIR/HOLON_BRIEF_DIR) is the only
+    // signal the kernel actually controls; every tool's `is_available` gates
+    // on the same env, so registering is inert outside a Holon run.
+    if operant_core::platform::is_holon_run() || config.holon.enabled {
         operant_os::tools::register_all(&registry).await;
     }
 
