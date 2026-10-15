@@ -141,6 +141,24 @@ pub async fn run_body(
         // kernel records the breach the same way a killed dispatcher would
         None => 137,
     };
+    // Invariant 2 (BOUNDARY §5, W8): the finished result validates against
+    // the kernel's published schema before the run hands in — a warning
+    // here is the drift's first signal (the kernel's own submit remains
+    // the authority). The stage comes from the run's policy document.
+    if let Some(run_dir) = prepared.env.get("HOLON_RUN_DIR") {
+        let _ = run_dir; // the brief dir is the same directory (H-01)
+    }
+    if let Some(brief_dir) = prepared.brief_md.parent() {
+        if let Ok(policy_text) = std::fs::read_to_string(brief_dir.join("policy.json"))
+            && let Ok(policy) = serde_json::from_str::<serde_json::Value>(&policy_text)
+            && let Some(stage) = policy.get("stage").and_then(|s| s.as_str())
+        {
+            if let Err(e) = crate::contract::validate_result(brief_dir, stage) {
+                tracing::warn!(stage, error = %e, "result.json failed its schema check (submit will refuse it)");
+            }
+        }
+    }
+
     finish(config_home, bin, &prepared.run, exit).await?;
     Ok(exit)
 }

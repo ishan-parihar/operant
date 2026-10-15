@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "holon:execute-result",
+  "title": "Holon execute result",
+  "type": "object",
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "success",
+        "partial",
+        "failure",
+        "noop"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "documentation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200000
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_intent": {
+      "type": "string"
+    },
+    "writes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "paths you changed (the fast lane is graded again on them)"
+    },
+    "external_effects": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "anything you sent or published outside the organization"
+    },
+    "skill_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "skill": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200000
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "skill",
+          "file",
+          "content",
+          "why"
+        ]
+      },
+      "description": "department skill files to write; the approved plan must list each as `skill:<skill>/<file>`, and the kernel applies them when the work is verified"
+    },
+    "learnings": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "decision",
+                  "constraint",
+                  "preference",
+                  "lesson",
+                  "open_question",
+                  "glossary",
+                  "artifact"
+                ]
+              },
+              "confidence": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ]
+          }
+        ]
+      },
+      "description": "lessons (your memory) and facts (the project's)"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fact",
+                  "decision",
+                  "constraint",
+                  "preference",
+                  "lesson",
+                  "open_question",
+                  "glossary",
+                  "artifact"
+                ]
+              },
+              "confidence": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ]
+          }
+        ]
+      },
+      "description": "decisions future work must respect"
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "intent": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "title",
+              "intent"
+            ]
+          }
+        ]
+      },
+      "description": "improvements, routed to the steward"
+    },
+    "refusals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "policy": {
+            "type": "string",
+            "description": "the policy.json rule that refused it (roots, writes, commands, budget)"
+          }
+        },
+        "required": [
+          "tool",
+          "reason"
+        ]
+      },
+      "description": "calls your harness refused under policy.json (H3): tool + reason + rule. The kernel treats them as blockers (rework or escalation), never breaches"
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "tokens_in": {
+          "type": "object",
+          "properties": {}
+        },
+        "tokens_out": {
+          "type": "object",
+          "properties": {}
+        },
+        "cost": {
+          "type": "object",
+          "properties": {}
+        },
+        "tool_calls": {
+          "type": "object",
+          "properties": {}
+        },
+        "duration_s": {
+          "type": "object",
+          "properties": {}
+        },
+        "build": {
+          "type": "string",
+          "description": "the harness build that ran (its version or revision string); pass rates group by it and a regression opens incident work (H10)"
+        }
+      },
+      "description": "what the run consumed (H4): the kernel records it on the run — budgets and cost per verified result read it; a usage the driver measured wins over the envelope's claim"
+    },
+    "guard": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      "description": "a fix's regression guard (K-2), on an incident fix's execute result: registered when the fix verifies; the heartbeat runs it forever, and a failure reopens the incident"
+    }
+  },
+  "required": [
+    "outcome",
+    "summary",
+    "documentation"
+  ]
+}

@@ -20,6 +20,7 @@
 pub mod api;
 pub mod archive;
 pub mod chair;
+pub mod contract;
 pub mod enforcement;
 pub mod events;
 pub mod organs;

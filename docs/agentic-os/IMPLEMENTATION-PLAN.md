@@ -21,23 +21,43 @@ operant `iter-831` events + chair + Notion webhook arm, smoked live) ·
 phase G (H9 Holon `b07f292`; operant `iter-833` archive + RETIRE gates) ·
 phase H (H10 Holon `adf9d3f`; operant `iter-834` doctor --json smoke-clean).
 
-**Audit 2026-10-15 (`AUDIT-2026-10-15.md`): "landed" above means landed as code, not as a
-working system.** In a real Holon run:
-- policy enforcement, `trajectory.json` and usage never switch on: operant reads `HOLON_RUN_DIR`,
-  and the kernel exports `HOLON_BRIEF_DIR` (O-01);
-- the native tools are not registered for bodies, and two of them always fail (O-03, O-04);
-- the Chair channel and event intake have no caller (O-14, O-15);
-- the supervisor is a CLI loop, and there is no clock (O-12, O-13).
+**Audit 2026-10-15 (`AUDIT-2026-10-15.md`) → closed through W5 by the audit's own plan (2026-10-15, iters 844–852):**
+- **W1 Engage** (iter-844): the run-env contract reads `HOLON_RUN_DIR`→`HOLON_BRIEF_DIR` and
+  `HOLON_EMPLOYEE_ID` through one helper pair; the native tools are generated from the vendored
+  `holon.mcp.tools()` output (correct argv, stdin text, `$HOLON` resolution); registration fires on
+  the run env; the observe allowlist derives from the same table (no phantom names). E2E
+  acceptance: a real prepare env + scripted provider → enforcement mounts, trajectory.json, usage.
+- **W2 Safety** (iter-845): bodies get env_clear + an 8-key baseline (no Chair key, no channel
+  tokens — env-dump-pinned); the notion arm mounts ONLY at the instance's secret webhook path
+  (`--path-verified`, semaphore-bounded); event payloads ride stdin; isolated instances refused.
+- **W3 Enforce** (iter-847): refusals recorded to `refusals.jsonl` and merged into
+  `result.refusals[]`; the policy-roots write fence (file_write/patch, reads unfenced); the token
+  budget enforced on provider-reported usage through the interrupt flag.
+- **W4 Organs** (iter-849): the supervisor and clock are gateway tasks (`[holon] supervise`,
+  `max_concurrent_runs`, `clock`), lease/3 heartbeat cadence, process-group kill, driver.log tee,
+  exponential backoff; org-mode doctor lines; `~` expansion. Org mode's own gate (W1–W4) is met.
+- **W5 Channel** (iter-850): the Chair's channel routes through is_chair → `holon classify`
+  (title argv-bounded, intent stdin) → the kernel's answer in-thread; every inbound message is an
+  event source (cooldown skips uncounted); the notion script derives from the bin checkout.
+- **W6/W7 core** (iter-851): Holon runs annotate learning (`learning.jsonl` → result.learnings)
+  instead of writing the skill/memory stores (personal mode untouched — pinned); the archive is
+  WAL-safe (VACUUM INTO — a committed-to--wal row verified present in the snapshot,
+  integrity_check ok) and covers the org/ tree + per-board kanbans; routine proposals speak the
+  kernel's real argv.
+- **W8** (iter-852+): adapter-test coverage restored, deleted-cast tests removed, the kernel's
+  result schemas vendored with a variant validator wired into the supervisor's finish path
+  (invariant 2's seam).
 
-Four security gaps (O-07 … O-10) block turning org mode on. The next iterations are the audit's
-work packages W1–W8, in its §5 order. Org mode stays off on every box until W1 and W2 land.
+**Feature-gate decision (O-27), recorded:** `operant-os` ships ungated in the workspace — the
+runtime switch `[holon] enabled = false` IS the gate (byte-identical personal mode is
+invariant 5, pinned by test); a cargo feature would double-gate one switch and complicate the
+peer fleet's shared tree. The plan's original feature-gate line is superseded by this decision.
 
-**Pending owner decisions:** G+1's module deletion (one release after G by design —
-the org-mode day must first prove zero new rows in the archived tables) and the
-supersession banners' flip from "proposed" to ratified; H11's Python-organ
-retirement (the VPS still runs ZeroClaw). The runner/broker Rust ports are
-deliberately unported — the Python fallback serves the non-operant deployments
-H11 will eventually retire.
+**Pending owner decisions:** turning org mode ON on the workstation (the audit §5 checklist:
+archive taken ✓, absolute home+bin, one supervised routine under owner control); H11's
+Python-organ retirement (the VPS still runs ZeroClaw). The runner/broker Rust ports remain
+deliberately unported — the Python fallback serves the non-operant deployments H11 will
+eventually retire, and O-11's refusal guard holds until then.
 
 ## Where the code goes
 
