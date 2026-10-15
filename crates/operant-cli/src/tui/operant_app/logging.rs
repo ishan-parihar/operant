@@ -207,6 +207,13 @@ impl Logger {
         Some(Self { file })
     }
 
+    // (plan 01, S1b) the only permitted direct-stderr site: the logger
+    // itself just failed, so tracing is dead here and a mid-frame
+    // corruption is the lesser evil against losing the failure signal.
+    #[allow(
+        clippy::print_stderr,
+        reason = "logger self-failure: tracing is dead here"
+    )]
     fn write(&mut self, level: &str, message: &str) {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let ctx = context_prefix();
@@ -584,6 +591,8 @@ pub fn cleanup_old_logs() {
 
 /// Core of [`cleanup_old_logs`], parameterized on the directory and "now" so it
 /// can be unit-tested without touching the real log directory or process env.
+// (plan 01, S1b) best-effort failure surfacing during log rotation.
+#[allow(clippy::print_stderr, reason = "logger cleanup: best-effort surfacing")]
 fn cleanup_old_logs_in(log_dir: &std::path::Path, now: chrono::DateTime<Local>) {
     let Ok(entries) = fs::read_dir(log_dir) else {
         return;

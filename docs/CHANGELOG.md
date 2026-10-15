@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-836 — duplicate-tool-rows oracles + verdict (2026-10-14 batch,
+  plan 01).** The mid-stream duplicate-row symptom is now measurable. The
+  headless sim drains ONE scripted event per loop pass under
+  --frame-per-event (re-arming the mock completion until the event channel
+  empties), so every inter-event state paints a frame — 14/7/19 frames for
+  the three new agent scripts (parallel out-of-order tools, error-then-
+  success, 8 identical calls as a hash-collision stressor). A cache-
+  coherence oracle (OPERANT_DEBUG_PREP_ORACLE=1) builds every frame twice —
+  once through the caches, once fully uncached — and diffs the wrapped
+  lines; the sim fails on any mismatch. Verdict: 0 mismatches over all 40
+  frames, and per-frame row counts are exact and monotone (1..8 for the
+  8-call script, never exceeding live calls) — the body cache's prefix/
+  suffix reuse and the live-rows model are CLEAR in the simulator; what
+  looked like duplicate rows mid-stream is the spinner detail + status
+  notice carrying the tool NAME beside the rows, not a second row.
+  S1b is fixed regardless: every println/eprintln while the TUI may own
+  the screen routed through tracing (permissions review, storage recovery,
+  session picker, regex-compile duplicate dropped; debug-hub capture
+  errors), and `#![deny(clippy::print_stdout, print_stderr)]` now sits on
+  the tui module — the only exemptions are the logger's own failure path
+  (tracing is dead there) and cfg(test). Remaining suspects S1 (OSC-8/
+  pinned-image residue) and S2 (Ambiguous/Wide glyph widths) are live-
+  terminal-only; the live tmux capture-pane check is the open red-team
+  item. Three corpus scenarios pin the shapes with `count:` asserts
+  (exact per-call counts on the final screen).
+
 - **iter-817 — dead-command removal: 35 unwired slash commands purged
   (2026-10-14 batch, plan 02).** The iter-811 sweep's finding is now
   structurally impossible: 31 planned removals (/commit, /git, /test,

@@ -217,7 +217,9 @@ impl TuiDebugHub {
         let path = capture.dir.join(format!("frame-{index:04}.txt"));
         let rows = buffer_rows(buffer);
         if let Err(e) = std::fs::write(&path, rows.join("\n") + "\n") {
-            eprintln!("[tui-debug] frame capture {index} -> {path:?} failed: {e}");
+            // (plan 01, S1b) tracing: the hub runs under the live TUI too,
+            // where a raw stderr write corrupts the frame.
+            tracing::warn!("[tui-debug] frame capture {index} -> {path:?} failed: {e}");
             return;
         }
         capture.captured.insert(index);
@@ -292,9 +294,9 @@ impl TuiDebugHub {
         let path = self.inner.event_log_path.lock().clone();
         if let Some(path) = path {
             if let Err(e) = self.inner.event_bus.dump_to_file(&path) {
-                eprintln!("[tui-debug] failed to dump event log to {path:?}: {e}");
+                tracing::warn!("[tui-debug] failed to dump event log to {path:?}: {e}");
             } else {
-                eprintln!("[tui-debug] event log dumped to {path:?}");
+                tracing::info!("[tui-debug] event log dumped to {path:?}");
             }
         }
     }

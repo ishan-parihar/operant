@@ -1698,6 +1698,17 @@ async fn debug_simulate(config: &AppConfig, args: SimulateArgs) -> Result<()> {
         check_style_baseline(style_baseline, &style_dump, args.accept_baseline)?;
     }
 
+    // (plan 01) cache-coherence oracle: the run fails on any mismatch.
+    let oracle_mismatches = crate::tui::operant_ui::prepare::prep_oracle_mismatches();
+    if std::env::var("OPERANT_DEBUG_PREP_ORACLE").is_ok_and(|v| v.trim() == "1") {
+        println!("Prep oracle: {oracle_mismatches} mismatch(es).");
+        if oracle_mismatches > 0 {
+            anyhow::bail!(
+                "Simulation failed: prep oracle reported {oracle_mismatches} cache-coherence mismatch(es)."
+            );
+        }
+    }
+
     println!("Simulation succeeded without errors.");
     Ok(())
 }

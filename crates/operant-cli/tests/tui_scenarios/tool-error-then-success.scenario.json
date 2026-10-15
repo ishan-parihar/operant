@@ -1,0 +1,19 @@
+{
+  "name": "tool-error-then-success",
+  "surface": "crates/operant-cli/src/tui/render/tools.rs::ToolStatus render arms",
+  "opens_with": "(/voice to clear the boot notice; rows come from the agent script)",
+  "keys": "/voice<enter>",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == false"
+  ],
+  "assert_screen": [
+    "count:shell==2",
+    "contains:Build failed but cleanup succeeded."
+  ],
+  "notes": "2026-10-14 batch, plan 01: error-then-success shape — the failed row keeps its error glyph while the second row completes; the count is per-call (2 calls, 2 rows), proving the failed row is not duplicated or dropped by the transition. Oracle evidence (2026-10-15): 7 frames, 0 mismatches, 2 rows in every frame after the second start.",
+  "agent_script": "tool-progress-and-error.json",
+  "deterministic": true,
+  "baseline": "tool-error-then-success.txt",
+  "style_baseline": "tool-error-then-success.style.txt"
+}

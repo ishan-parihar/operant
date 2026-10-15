@@ -848,25 +848,27 @@ pub fn run_permissions() -> Result<()> {
 
     if requests.is_empty() {
         if !expired.is_empty() {
-            println!(
+            // (plan 01, S1b) never print while a TUI may own the screen —
+            // route through tracing; the CLI still surfaces it via logs.
+            tracing::info!(
                 "Expired {} stale permission request{} (requester session inactive).",
                 expired.len(),
                 if expired.len() == 1 { "" } else { "s" }
             );
         }
-        println!("No pending permission requests.");
+        tracing::info!("No pending permission requests.");
         return Ok(());
     }
 
     if !expired.is_empty() {
-        println!(
+        tracing::info!(
             "Expired {} stale permission request{} (requester session inactive).",
             expired.len(),
             if expired.len() == 1 { "" } else { "s" }
         );
     }
 
-    println!(
+    tracing::info!(
         "{} pending permission request{}.",
         requests.len(),
         if requests.len() == 1 { "" } else { "s" }

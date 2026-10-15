@@ -85,6 +85,9 @@ pub struct App {
     /// once `frame_count` reaches this, so a scenario that never stops
     /// streaming can't hang the test suite. `None` = no cap (interactive).
     pub simulation_max_frames: Option<u64>,
+    /// (plan 01) `--frame-per-event`: the sim drains ONE scripted event per
+    /// loop pass so every inter-event state paints a frame.
+    pub simulation_one_event_per_frame: bool,
     pub cost_tracker: Arc<CostTracker>,
     /// TUI debugging hub — event bus, frame counter, F12 overlay.
     /// Enabled by OPERANT_TUI_DEBUG=1. Zero overhead when disabled.

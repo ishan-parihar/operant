@@ -1388,7 +1388,8 @@ fn compile_static_regex(pattern: &str) -> Option<Regex> {
             crate::tui::operant_app::logging::error(&format!(
                 "failed to compile static message regex: {err}"
             ));
-            eprintln!("operant: failed to compile static regex: {err}");
+            // (plan 01, S1b) the logging call above is the failure surface —
+            // the eprintln duplicate used to corrupt a live frame.
             None
         }
     }

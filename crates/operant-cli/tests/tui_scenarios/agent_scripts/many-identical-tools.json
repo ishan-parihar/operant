@@ -1,0 +1,21 @@
+[
+  {"type":"content","text":"Verifying the file reads identically eight times."},
+  {"type":"tool_start","id":"m1","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m2","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m3","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m4","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m5","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m6","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m7","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_start","id":"m8","name":"aft_read","arguments":"{\"path\":\"same.txt\"}"},
+  {"type":"tool_complete","id":"m1","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m2","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m3","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m4","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m5","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m6","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m7","name":"aft_read","output":"identical payload"},
+  {"type":"tool_complete","id":"m8","name":"aft_read","output":"identical payload"},
+  {"type":"content","text":"All eight reads returned the same payload."},
+  {"type":"done","text":"Done."}
+]

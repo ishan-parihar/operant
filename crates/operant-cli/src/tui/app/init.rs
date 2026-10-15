@@ -86,6 +86,7 @@ impl App {
             simulated_keys: Vec::new(),
             simulated_mouse: Vec::new(),
             simulation_max_frames: None,
+            simulation_one_event_per_frame: false,
             cost_tracker,
             debug_hub: crate::tui::debug::TuiDebugHub::new_from_env(),
             command_registry,

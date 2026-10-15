@@ -213,9 +213,19 @@ impl App {
     /// 7. Drain query events from the agent bridge task.
     pub(super) fn drain_agent_events(&mut self) -> bool {
         let mut events = Vec::new();
-        if let Some(ref mut rx) = self.agent_event_rx {
-            while let Ok(ev) = rx.try_recv() {
-                events.push(ev);
+        if let Some(rx) = &mut self.agent_event_rx {
+            // (plan 01) one-event-per-frame mode: the scripted events drive
+            // the sim one loop pass at a time so --frame-per-event captures
+            // the true frame BETWEEN every pair of events (the mid-stream
+            // state the duplicate-row oracles need).
+            if self.is_simulating && self.simulation_one_event_per_frame {
+                if let Ok(ev) = rx.try_recv() {
+                    events.push(ev);
+                }
+            } else {
+                while let Ok(ev) = rx.try_recv() {
+                    events.push(ev);
+                }
             }
         }
         let drained = !events.is_empty();
@@ -301,6 +311,23 @@ impl App {
 
     /// 9. Check if background agent.run() completed.
     pub(super) fn drain_run_complete(&mut self) -> bool {
+        // (plan 01) one-event-per-frame mode: the mock's completion is
+        // pre-resolved, but scripted events may still be buffered — re-arm
+        // so the loop paints one frame per remaining event and only lets
+        // is_streaming flip when the channel is empty.
+        if self.is_simulating
+            && self.simulation_one_event_per_frame
+            && self.agent_event_rx.as_ref().is_some_and(|rx| rx.len() > 0)
+        {
+            if let Some(rx) = &mut self.run_complete_rx {
+                if rx.try_recv().is_ok() {
+                    let (tx, fresh) = tokio::sync::oneshot::channel();
+                    let _ = tx.send(Ok(()));
+                    self.run_complete_rx = Some(fresh);
+                }
+            }
+            return true;
+        }
         let Some(rx) = &mut self.run_complete_rx else {
             return false;
         };

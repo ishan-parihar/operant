@@ -48,6 +48,82 @@ fn assistant_aux_cache() -> &'static std::sync::Mutex<AssistantAuxCacheState> {
     CACHE.get_or_init(|| std::sync::Mutex::new(AssistantAuxCacheState::default()))
 }
 
+// ── Cache-coherence oracle (2026-10-14 batch, plan 01) ─────────────────
+// Behind OPERANT_DEBUG_PREP_ORACLE=1: every prepared frame is ALSO built
+// uncached and the wrapped lines compared. A mismatch means a cache path
+// (exact | incremental | prefix_reuse | suffix_reuse) stitched a frame
+// that differs from a full rebuild — the duplicate-tool-rows class. The
+// simulator reads the mismatch counter and fails the run on > 0.
+thread_local! {
+    static LAST_BODY_CACHE_KIND: std::cell::Cell<&'static str> =
+        const { std::cell::Cell::new("full") };
+}
+
+// (plan 01) oracle: set for exactly ONE prepare pass to force the body
+// build off the cache — the uncached reference frame.
+thread_local! {
+    static PREP_ORACLE_BYPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+static PREP_ORACLE_MISMATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn prep_oracle_enabled() -> bool {
+    // (rs-lazylock) initializer known at declaration: env read + test flag.
+    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        std::env::var("OPERANT_DEBUG_PREP_ORACLE").is_ok_and(|v| v.trim() == "1") && !cfg!(test)
+    });
+    *ENABLED
+}
+
+/// Total oracle mismatches since process start (plan 01). The headless
+/// simulator fails the run when this is non-zero with the oracle on.
+pub fn prep_oracle_mismatches() -> u64 {
+    PREP_ORACLE_MISMATCHES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn prep_oracle_compare(
+    cached: &crate::tui::operant_model::PreparedChatFrame,
+    fresh: &crate::tui::operant_model::PreparedChatFrame,
+    frame_kind: &'static str,
+) {
+    let flatten = |f: &crate::tui::operant_model::PreparedChatFrame| {
+        f.sections
+            .iter()
+            .flat_map(|s| s.prepared.wrapped_plain_lines.iter().cloned())
+            .collect::<Vec<_>>()
+    };
+    let (a, b) = (flatten(cached), flatten(fresh));
+    if a == b {
+        return;
+    }
+    PREP_ORACLE_MISMATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let body_kind = LAST_BODY_CACHE_KIND.with(|cell| cell.get());
+    tracing::error!(
+        frame_kind,
+        body_kind,
+        "PREP ORACLE MISMATCH: cached frame differs from uncached rebuild"
+    );
+    // First divergent line — enough to find the row without dumping the
+    // whole transcript into the log.
+    let mut shown = 0;
+    for (i, (ca, cb)) in a.iter().zip(b.iter()).enumerate() {
+        if ca != cb {
+            tracing::error!(line = i, cached = %ca, fresh = %cb, "oracle diff");
+            shown += 1;
+            if shown >= 3 {
+                break;
+            }
+        }
+    }
+    if a.len() != b.len() {
+        tracing::error!(
+            cached_lines = a.len(),
+            fresh_lines = b.len(),
+            "oracle diff: line-count divergence"
+        );
+    }
+}
+
 /// Compute (and cache) the auxiliary raw-line-map data for an assistant message.
 /// `cached` is the already-rendered (and possibly cached) display lines for the
 /// message; `align` and `centered` describe the current display mode.
@@ -740,6 +816,12 @@ pub(crate) fn prepare_messages(
             if !stale {
                 super::note_full_prep_cache_lookup(cache_lookup_start.elapsed());
                 super::note_full_prep_cache_hit(kind, prepared.as_ref());
+                // (plan 01) oracle: a cache hit is the interesting case —
+                // verify the hit equals an uncached rebuild.
+                if prep_oracle_enabled() {
+                    let fresh = prepare_messages_inner(app, width, height);
+                    prep_oracle_compare(prepared.as_ref(), &fresh, "exact");
+                }
                 return prepared;
             }
         }
@@ -751,6 +833,16 @@ pub(crate) fn prepare_messages(
     let build_start = Instant::now();
     let prepared = Arc::new(prepare_messages_inner(app, width, height));
     super::note_full_prep_built(prepared.as_ref(), build_start.elapsed());
+
+    // (plan 01) oracle: fresh builds go through the BODY cache, whose
+    // prefix/suffix reuse is the real suspect — set the one-shot bypass so
+    // the comparison build is a TRUE uncached rebuild, then compare.
+    if prep_oracle_enabled() {
+        let body_kind = LAST_BODY_CACHE_KIND.with(std::cell::Cell::get);
+        PREP_ORACLE_BYPASS.with(|cell| cell.set(true));
+        let fresh = prepare_messages_inner(app, width, height);
+        prep_oracle_compare(prepared.as_ref(), &fresh, body_kind);
+    }
 
     {
         if let Ok(mut cache) = full_prep_cache().lock() {
@@ -1141,6 +1233,15 @@ fn prepare_body_cached(app: &dyn TuiState, width: u16) -> Arc<PreparedMessages> 
         return Arc::new(prepare_body(app, width, false));
     }
 
+    // (plan 01) oracle: the uncached comparison build bypasses this cache
+    // entirely — a stitched frame must be compared against a TRUE rebuild.
+    if prep_oracle_enabled() && PREP_ORACLE_BYPASS.with(std::cell::Cell::get) {
+        PREP_ORACLE_BYPASS.with(|cell| cell.set(false)); // one uncached pass
+        super::note_body_request();
+        LAST_BODY_CACHE_KIND.with(|cell| cell.set("oracle_full"));
+        return Arc::new(prepare_body(app, width, false));
+    }
+
     super::note_body_request();
 
     let key = BodyCacheKey {
@@ -1298,6 +1399,8 @@ pub(super) fn build_body_from_base(
             match prepare_body_prepended(app, width, prev, drop_msgs, head_count) {
                 Ok(stitched) => {
                     super::note_body_incremental_reuse(s);
+                    // (plan 01) oracle: name the path on mismatch.
+                    LAST_BODY_CACHE_KIND.with(|cell| cell.set("suffix_reuse"));
                     return (stitched, "suffix_reuse");
                 }
                 Err(returned) => prev = returned,
@@ -1313,14 +1416,14 @@ pub(super) fn build_body_from_base(
         truncate_prepared_to_boundary(Arc::make_mut(&mut prev), k);
     }
     super::note_body_incremental_reuse(k);
-    (
-        prepare_body_incremental(app, width, prev, k),
-        if k == prev_count {
-            "incremental"
-        } else {
-            "prefix_reuse"
-        },
-    )
+    let kind = if k == prev_count {
+        "incremental"
+    } else {
+        "prefix_reuse"
+    };
+    // (plan 01) the oracle names the reuse path that produced a bad frame.
+    LAST_BODY_CACHE_KIND.with(|cell| cell.set(kind));
+    (prepare_body_incremental(app, width, prev, k), kind)
 }
 
 /// Immutable per-build render context shared by the full and incremental body

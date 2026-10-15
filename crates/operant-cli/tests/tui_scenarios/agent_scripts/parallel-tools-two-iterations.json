@@ -1,0 +1,16 @@
+[
+  {"type":"thinking","content":"Planning: I need to check three files in parallel."},
+  {"type":"content","text":"Reading the three files now."},
+  {"type":"tool_start","id":"p1","name":"aft_read","arguments":"{\"path\":\"a.txt\"}"},
+  {"type":"tool_start","id":"p2","name":"aft_read","arguments":"{\"path\":\"b.txt\"}"},
+  {"type":"tool_start","id":"p3","name":"aft_read","arguments":"{\"path\":\"c.txt\"}"},
+  {"type":"tool_complete","id":"p2","name":"aft_read","output":"B contents line 1"},
+  {"type":"tool_complete","id":"p3","name":"aft_read","output":"C contents line 1"},
+  {"type":"tool_complete","id":"p1","name":"aft_read","output":"A contents line 1"},
+  {"type":"thinking","content":"All three came back; checking one more file."},
+  {"type":"content","text":"One more file to cross-check."},
+  {"type":"tool_start","id":"p4","name":"aft_read","arguments":"{\"path\":\"d.txt\"}"},
+  {"type":"tool_complete","id":"p4","name":"aft_read","output":"D contents line 1"},
+  {"type":"content","text":"All four files are consistent."},
+  {"type":"done","text":"Done."}
+]

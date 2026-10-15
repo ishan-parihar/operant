@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ Verifying the file reads identically eight times.
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+
+ All eight reads returned the same payload.
+
+ 1› /voice                                                                                                             │
+
+2>
+                                                                         ~ 96/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+

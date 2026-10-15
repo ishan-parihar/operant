@@ -204,16 +204,18 @@ pub enum StorageRecoveryEvent<'a> {
 }
 
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    // (plan 01, S1b) recovery notices route through tracing — an eprintln
+    // while the TUI owns the screen lands mid-frame and corrupts the diff.
     read_json_with_recovery_handler(path, |event| match event {
         StorageRecoveryEvent::CorruptPrimary { path, error } => {
-            eprintln!(
+            tracing::warn!(
                 "Corrupt JSON at {}, trying backup: {}",
                 path.display(),
                 error
             );
         }
         StorageRecoveryEvent::RecoveredFromBackup { backup_path } => {
-            eprintln!("Recovered from backup: {}", backup_path.display());
+            tracing::warn!("Recovered from backup: {}", backup_path.display());
         }
     })
 }

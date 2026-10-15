@@ -2453,7 +2453,9 @@ pub fn pick_session() -> Result<Option<PickerResult>> {
         + orphan_sessions.len();
 
     if total_sessions == 0 {
-        eprintln!("No sessions found.");
+        // (plan 01, S1b) tracing, not eprintln — the picker can be opened
+        // while the TUI owns the screen.
+        tracing::warn!("No sessions found.");
         return Ok(None);
     }
 

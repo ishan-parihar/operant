@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ Running the build step by step.
+   ✗ shell · 10 tok [Alt] [⇧] [S]
+   ✓ shell · 5 tok
+
+ Build failed but cleanup succeeded.
+
+ 1› /voice                                                                                                             │
+
+2>
+                                                                         ~ 43/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
+
+
+
+
+

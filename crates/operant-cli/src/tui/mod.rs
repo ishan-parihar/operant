@@ -1,3 +1,10 @@
+// (plan 01, S1b) prints while the TUI owns the screen corrupt the diff —
+// cells written outside ratatui's buffer never repaint until something
+// else touches them (the "heals on scroll" ghost-row shape). Route through
+// tracing or a status notice; the only exemptions are the #[expect] sites
+// with a reason (logger self-failure, where tracing is dead) and cfg(test).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 pub mod adapter_types;
 pub mod provider;
 pub mod vendor;

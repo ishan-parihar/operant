@@ -730,6 +730,10 @@ impl TuiApp {
 
         self.app.is_simulating = true;
         self.app.simulation_max_frames = max_frames;
+        // (plan 01) frame-per-event capture mode doubles as the per-event
+        // drain switch: capture-all implies one event per loop pass.
+        self.app.simulation_one_event_per_frame =
+            frame_capture.as_ref().is_some_and(|plan| plan.all);
         self.app.simulated_keys = keys;
         self.app.debug_hub.event_bus().set_enabled(true);
         if let Some(plan) = frame_capture {

@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1
+ /login to add provider
+ ● anthropic(key)
+ ~
+
+ Reading the three files now.
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+   ✓ aft_read · 4 tok
+
+ One more file to cross-check.
+   ✓ aft_read · 4 tok
+
+ All four files are consistent.
+
+ 1› /voice                                                                                                             │
+
+2>
+                                                                         ~ 56/200k ▱▱▱▱▱▱▱▱▱▱ 0% API key Offline Capture
+
+
+
+
+

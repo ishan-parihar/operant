@@ -1,5 +1,31 @@
 # BUGS.md — Operant Audit Fixes
 
+## OPEN — Duplicate tool rows mid-turn (2026-10-14 batch, plan 01)
+
+- [ ] **S1 (OSC-8 / pinned-image post-draw writes)** — UNRESOLVED, live-only.
+  `osc8::emit_hits` and `pinned_images::emit_strip` run after `terminal.draw`
+  and write cells outside ratatui's diff; a width or position disagreement
+  leaves ghosts until a scroll rewrites them. Cleared by SIMULATOR only —
+  needs the live tmux `capture-pane` check (F12 `d` buffer dump) to convict
+  or clear.
+- [ ] **S2 (Ambiguous/Wide glyph widths)** — UNRESOLVED, live-only. `○ ⛭ ⚡ ⏳
+  🐝 🧠 📣 ⚠(+VS16)` disagree between unicode-width and real terminals;
+  shifted cells leave fragments of the previous frame. Same live check.
+- [x] **S3 (body-cache prefix/suffix reuse)** — CLEARED 2026-10-15. The
+  prep oracle (OPERANT_DEBUG_PREP_ORACLE=1, iter-836) built every frame of
+  the three stressor scripts twice — cached vs uncached — 0 mismatches over
+  40 mid-stream frames. `suffix_reuse` fired without producing divergence.
+- [x] **S4 (live tool rows rendered out of context)** — CLEARED 2026-10-15.
+  Per-frame row counts under --frame-per-event are exact and monotone (8
+  identical calls → rows 1..8, never 9). The apparent "duplicate" is the
+  spinner detail + status notice carrying the tool NAME beside the row —
+  content, not a second row.
+- [x] **S1b (direct prints while the TUI owns the screen)** — FIXED
+  iter-836: all production println/eprintln under tui/ route through
+  tracing (or were dropped where they duplicated a logging call);
+  `#![deny(clippy::print_stdout, print_stderr)]` on the tui module, with
+  `#[allow]` only on the logger's own failure path.
+
 ## OPEN — Live data loss on mainline (2026-10-03)
 
 ### D-1 — A cron agent job destroys a gateway user's live conversation (FIXED iter-570/571 — headers below left as the original audit; see the correction note)

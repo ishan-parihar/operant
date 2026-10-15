@@ -1,0 +1,19 @@
+{
+  "name": "parallel-tool-rows",
+  "surface": "crates/operant-cli/src/tui/operant_model/adapter.rs::live_tool_rows + display_messages",
+  "opens_with": "(/voice to clear the boot notice; rows come from the agent script)",
+  "keys": "/voice<enter>",
+  "size": "120x40",
+  "assert": [
+    "any_modal_open == false"
+  ],
+  "assert_screen": [
+    "count:aft_read==4",
+    "contains:All four files are consistent."
+  ],
+  "notes": "2026-10-14 batch, plan 01: the duplicate-tool-rows oracle scenario. Four aft_read calls across two iterations, completing OUT OF ORDER (p2, p3, p1, then p4). The count assert requires the FINAL screen to carry the tool name exactly 4 times — one row per call, no spinner/notice residue (those die with the turn). Under --frame-per-event the per-frame row counts are additionally monotone: 1,2,3,3...,4 — never exceeding the number of calls that exist. Oracle evidence (2026-10-15): 14 frames, 0 prep-oracle mismatches, rows exact in every frame; the sim side of the duplicate-rows symptom is CLEAR, the residue suspects (OSC 8/pinned images/glyph width) are live-terminal-only.",
+  "agent_script": "parallel-tools-two-iterations.json",
+  "deterministic": true,
+  "baseline": "parallel-tool-rows.txt",
+  "style_baseline": "parallel-tool-rows.style.txt"
+}

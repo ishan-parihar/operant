@@ -1,0 +1,9 @@
+[
+  {"type":"content","text":"Running the build step by step."},
+  {"type":"tool_start","id":"e1","name":"shell","arguments":"{\"cmd\":\"make build\"}"},
+  {"type":"tool_error","id":"e1","name":"shell","error":"make: *** [Makefile:42: build] Error 1"},
+  {"type":"tool_start","id":"e2","name":"shell","arguments":"{\"cmd\":\"make clean\"}"},
+  {"type":"tool_complete","id":"e2","name":"shell","output":"cleaned build artifacts"},
+  {"type":"content","text":"Build failed but cleanup succeeded."},
+  {"type":"done","text":"Done."}
+]
