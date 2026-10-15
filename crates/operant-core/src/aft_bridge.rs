@@ -435,6 +435,9 @@ pub struct AftBridge {
     _child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<serde_json::Value>>>>,
+    /// (plan 07.1) Last ≤64 stderr lines, drained live so the child never
+    /// blocks on a full pipe; surfaced in failure diagnostics.
+    pub stderr_tail: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// Cache of `bash_completed` async frames keyed by `task_id`. The
     /// reader stores every completion frame here so a bash call can find
     /// its result even if it was emitted before the caller registered a
@@ -480,6 +483,28 @@ impl AftBridge {
             .stdout
             .take()
             .ok_or_else(|| Error::Agent("aft: failed to capture stdout".to_string()))?;
+        // (plan 07.1) stderr was piped and NEVER READ — aft's diagnostics
+        // fill the 64KB OS pipe buffer and the child then BLOCKS on its
+        // next stderr write, freezing the bridge mid-request. Drain it
+        // into a small ring (kept for failure diagnostics); a child that
+        // writes megabytes keeps running.
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| Error::Agent("aft: failed to capture stderr".to_string()))?;
+        let stderr_ring = Arc::new(Mutex::new(std::collections::VecDeque::<String>::new()));
+        let stderr_ring_clone = stderr_ring.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let mut ring = stderr_ring_clone.lock().await;
+                if ring.len() >= 64 {
+                    ring.pop_front();
+                }
+                ring.push_back(line);
+            }
+        });
 
         let pending = Arc::new(Mutex::new(HashMap::<
             String,
@@ -545,6 +570,7 @@ impl AftBridge {
             bash_cache,
             bash_waiters,
             project_root: abs_root,
+            stderr_tail: stderr_ring,
             configured: Mutex::new(false),
         })
     }
@@ -902,8 +928,16 @@ impl AftBridgePool {
                 .stderr(std::process::Stdio::null())
                 .spawn();
             match result {
-                Ok(_child) => {
-                    tracing::debug!(root = %root_s, "aft callgraph warmup spawned detached")
+                // (plan 07.1) REAP in this same detached thread: a std
+                // Child dropped without wait() leaves a zombie in
+                // operant's process table once the warmup finishes
+                // (observed: <defunct> aft processes). The wait() parks
+                // this throwaway thread — free — and preserves the
+                // detached intent: operant exiting first never kills the
+                // build (no kill_on_drop; init reaps then).
+                Ok(mut child) => {
+                    tracing::debug!(root = %root_s, "aft callgraph warmup spawned detached");
+                    let _ = child.wait();
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, root = %root_s, "aft callgraph warmup spawn failed")
@@ -920,6 +954,83 @@ impl AftBridgePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// (plan 07.1) The stderr-drain regression: a child that writes 1MB to
+    /// stderr while serving requests must complete them. Before the drain
+    /// task, the 64KB OS pipe buffer filled and the child blocked forever
+    /// on its next stderr write — a bridge freeze no timeout surfaced as
+    /// anything but a hang. The fake aft spews 1MB BEFORE answering, then
+    /// responds to one request.
+    #[tokio::test]
+    async fn megabyte_stderr_child_still_serves_requests() {
+        let dir = std::env::temp_dir().join(format!("operant-aft-stderr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("aft");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\n\
+             # 1MB of newline-terminated diagnostics to stderr BEFORE\n\
+             # serving — more than the 64KB pipe buffer, so an undrained\n\
+             # pipe would block this very loop.\n\
+             yes eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee | head -c 1048576 >&2\n\
+             while IFS= read -r line; do\n\
+               id=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+               printf '{\"id\":\"%s\",\"success\":true,\"result\":{\"ok\":true}}\\n' \"$id\"\n\
+             done\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Scoped AFT_BINARY so resolve_aft_binary finds the fake.
+        // Serialise with any other AFT_BINARY-dependent test via a lock.
+        static BIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = BIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe {
+            std::env::set_var("AFT_BINARY", &fake);
+        }
+
+        let root = dir.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let bridge = AftBridge::spawn(root).await.expect("bridge spawns");
+
+        // The freeze mode is a hang; bound it so the failure mode is a
+        // test error, not a stuck runner.
+        let called = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            bridge
+                .call("outline", serde_json::json!({}))
+                .await
+                .expect("request completes despite the megabyte of stderr")
+        })
+        .await;
+        unsafe {
+            std::env::remove_var("AFT_BINARY");
+        }
+
+        assert!(
+            called.is_ok(),
+            "the 1MB-stderr child never answered — the drain regressed"
+        );
+        // The ring kept the tail for diagnostics. The drain task fills it
+        // concurrently with the request handling — poll briefly instead
+        // of asserting synchronously.
+        let ring_has_tail = {
+            let mut found = false;
+            for _ in 0..50 {
+                let ring = bridge.stderr_tail.lock().await;
+                if ring.iter().any(|l| !l.trim().is_empty()) {
+                    found = true;
+                    break;
+                }
+                drop(ring);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            found
+        };
+        assert!(ring_has_tail, "stderr tail captured the diagnostics");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[tokio::test]
     async fn unavailable_marker_expires_after_ttl() {

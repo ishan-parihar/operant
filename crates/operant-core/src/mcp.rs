@@ -667,6 +667,21 @@ impl McpStdioClient {
         let stdout = child.stdout.take().ok_or_else(|| {
             crate::error::Error::Agent("Failed to capture child stdout".to_string())
         })?;
+        // (plan 07.1) stderr was piped and never read — a chatty MCP
+        // server (sourcehound logs to stderr) fills the 64KB OS buffer
+        // and the child blocks on its next write, freezing the server.
+        // Drain to tracing; the pipe can never fill.
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.trim().is_empty() {
+                        tracing::debug!(target: "mcp_child", line = %line, "mcp child stderr");
+                    }
+                }
+            });
+        }
 
         *self.child.write().await = Some(child);
         *self.io.lock().await = Some(StdioIo {
