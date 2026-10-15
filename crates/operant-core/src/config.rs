@@ -327,6 +327,42 @@ fn default_max_concurrent_runs() -> usize {
     2
 }
 
+/// O-26: expand a leading `~` in a [holon] path. The plan's own example
+/// writes `home = "~/holon"` — without this it reaches the API as a
+/// literal `~` and fails with "work database not found at ~/holon/…".
+fn expand_holon_path(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return std::path::Path::new(&home).join(rest);
+    }
+    if s == "~"
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return std::path::PathBuf::from(home);
+    }
+    p.to_path_buf()
+}
+
+impl HolonSettings {
+    /// O-26: resolve `~` in every [holon] path field, once, at load.
+    pub fn expand_tilde(mut self) -> Self {
+        self.home = expand_holon_path(&self.home);
+        if let Some(b) = self.bin.clone() {
+            self.bin = Some(
+                expand_holon_path(&PathBuf::from(b))
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        if let Some(s) = self.notion_script.clone() {
+            self.notion_script = Some(expand_holon_path(&s));
+        }
+        self
+    }
+}
+
 impl Default for HolonSettings {
     fn default() -> Self {
         Self {
@@ -2055,6 +2091,9 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     config.browser.warn_legacy_keys();
     // (plan 11C3) [memory] provider is accepted-and-ignored now.
     config.memory.warn_legacy_keys();
+
+    // O-26: [holon] paths arrive with `~` expanded exactly once.
+    config.holon = config.holon.expand_tilde();
 
     Ok(LoadedConfig { config, source })
 }

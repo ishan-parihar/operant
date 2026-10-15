@@ -22,6 +22,7 @@ pub mod archive;
 pub mod chair;
 pub mod enforcement;
 pub mod events;
+pub mod organs;
 pub mod policy;
 pub mod run;
 pub mod run_env;

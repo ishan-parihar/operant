@@ -6,10 +6,12 @@ license.workspace = true
 description = "Operant as Holon's runtime: read-only org views, policy enforcement, run supervision, the Chair's channel (docs/agentic-os)"
 
 [dependencies]
+libc = "0.2"
 async-trait = { workspace = true }
 operant-core = { path = "../operant-core" }
 sha2 = "0.10"
 serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
 tokio = { workspace = true }
 serde_json.workspace = true
 thiserror.workspace = true

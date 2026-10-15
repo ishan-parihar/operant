@@ -1787,6 +1787,14 @@ fn build_session_context(
 /// builds the enabled platform adapters, creates the gateway session
 /// handler, and starts polling for incoming messages.
 pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
+    // W4 (audit O-12, O-13): the resident organs. When [holon] supervise
+    // is on, the gateway runs the supervisor loop as a task — one claim
+    // loop over supervise_employees under a max_concurrent_runs
+    // semaphore, with backoff on error. When [holon] clock is on, it
+    // fires `holon tick` every 2 minutes (the kernel's schedules and
+    // lease sweeps — the clock belongs to the resident runtime).
+    operant_os::organs::spawn_if_configured(app_config);
+
     init_pending_permissions();
     let mut guard = runner().lock().await;
 

@@ -14,7 +14,9 @@ use anyhow::Result;
 use operant_core::config::AppConfig;
 use operant_core::doctor::Severity;
 
-use self::check_result::{print_banner, print_summary, section_header};
+use self::check_result::{
+    check_fail, check_info, check_ok, print_banner, print_summary, section_header,
+};
 
 /// The exit code `operant doctor` should return.
 ///
@@ -72,6 +74,13 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     // Unified engine (docs/ORGANISM-ARCHITECTURE.md §6 F2): the SAME check
     // list the gateway serializes at GET /api/doctor. Engine errors are
     // genuine issues (they gate the exit code); warnings are advisories.
+    // W4 (audit O-25): the org-mode section — only when [holon] enabled.
+    // Personal mode keeps its exact output (invariant 5).
+    if config.holon.enabled {
+        section_header("Holon org mode");
+        print_holon_org_checks(config);
+    }
+
     let engine_results = operant_core::doctor::diagnose(config);
     for result in &engine_results {
         match result.severity {
@@ -163,5 +172,61 @@ mod tests {
     #[test]
     fn a_single_issue_is_enough_to_fail() {
         assert_eq!(doctor_exit_code(&["one".to_string()], &[]), 1);
+    }
+}
+
+/// O-25: org-mode lines. The read-API call goes through the same
+/// `operant_os::api` every org view uses (mode=ro, the version gate), so
+/// what doctor says is what `operant org holon` will hit.
+fn print_holon_org_checks(config: &AppConfig) {
+    let home = config.holon.home.clone();
+    if home.as_os_str().is_empty() {
+        check_fail(
+            "[holon]",
+            "enabled but no home is set — org mode cannot reach an instance",
+        );
+        return;
+    }
+    // `HolonApi::open` is itself the gate: it opens mode=ro AND refuses an
+    // api_version this build does not know — a success line means every
+    // org view will work.
+    match operant_os::api::HolonApi::open(&home) {
+        Ok(_) => check_ok(
+            "[holon]",
+            &format!("read API reachable at {}", home.display()),
+        ),
+        Err(e) => check_fail("[holon]", &format!("holon instance: {e}")),
+    }
+    match &config.holon.bin {
+        Some(b) if std::path::Path::new(b).exists() => {
+            check_ok("[holon]", &format!("kernel launcher pinned at {b}"));
+        }
+        Some(b) => {
+            check_fail(
+                "[holon]",
+                &format!("kernel launcher [holon] bin={b} does not exist"),
+            );
+        }
+        None => {
+            let line = "[holon] bin unset — the PATH `holon` (or $HOLON_BIN) is used".to_string();
+            check_info(&line);
+        }
+    }
+    if config.holon.supervise {
+        if config.holon.supervise_employees.is_empty() {
+            check_fail("[holon]", "supervise is on with no supervise_employees");
+        } else {
+            check_ok(
+                "[holon]",
+                &format!(
+                    "supervise organ: {} employee(s), max {} concurrent run(s)",
+                    config.holon.supervise_employees.len(),
+                    config.holon.max_concurrent_runs
+                ),
+            );
+        }
+    }
+    if config.holon.clock {
+        check_ok("[holon]", "clock organ: `holon tick` every 2 minutes");
     }
 }
