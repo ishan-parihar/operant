@@ -26,3 +26,63 @@ pub mod seat_budgets;
 pub mod seat_policy;
 pub mod seat_policy_db;
 pub mod worklog;
+
+// ── Refusal recorder (audit O-17, W3) ─────────────────────────────────
+//
+// In a Holon run, a policy refusal is not an interactive ask: the
+// disposition says it becomes `result.refusals[]`. The agent appends one
+// JSON line per refused call into <run dir>/refusals.jsonl; the driver's
+// end-of-run writer merges the lines into result.json (like usage). The
+// log is a plain append — a crash loses at most the refusal in flight,
+// never the run.
+
+/// Appends one refusal record to `<run_dir>/refusals.jsonl`.
+pub fn record_refusal(run_dir: &std::path::Path, tool: &str, reason: &str, rule: &str) {
+    use std::io::Write;
+    let line = serde_json::json!({
+        "tool": tool, "reason": reason, "policy_rule": rule,
+    });
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(run_dir.join("refusals.jsonl"))
+    else {
+        return; // a refusal record never kills the turn
+    };
+    let _ = writeln!(f, "{line}");
+}
+
+/// Reads a run's recorded refusals (empty when none).
+pub fn read_refusals(run_dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let Ok(text) = std::fs::read_to_string(run_dir.join("refusals.jsonl")) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// O-18: the policy's `roots` for this run — None when the run carries no
+/// policy.json or the policy lists no roots (an empty root list means
+/// "the workdir only" upstream, but here None = ungoverned, Some = fenced).
+pub fn holon_policy_roots(run_dir: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
+    let policy = std::fs::read_to_string(run_dir.join("policy.json")).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&policy).ok()?;
+    let roots = doc.get("roots")?.as_array()?;
+    let mut fenced: Vec<std::path::PathBuf> = roots
+        .iter()
+        .filter_map(|r| r.as_str())
+        .map(std::path::PathBuf::from)
+        .collect();
+    // the run directory itself is always workable (the brief, the result)
+    fenced.push(run_dir.to_path_buf());
+    Some(fenced)
+}
+
+/// O-19: this run's token budget cap (policy.json `budget.tokens`), when
+/// the policy sets one. None = ungoverned (no policy or no cap).
+pub fn holon_budget_cap(run_dir: &std::path::Path) -> Option<u64> {
+    let policy = std::fs::read_to_string(run_dir.join("policy.json")).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&policy).ok()?;
+    doc.pointer("/budget/tokens")?.as_u64()
+}

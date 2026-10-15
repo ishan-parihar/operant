@@ -576,6 +576,29 @@ impl OperantAgent {
             usage.prompt_tokens.try_into().unwrap_or(0),
             std::sync::atomic::Ordering::Relaxed,
         );
+
+        // O-19 (W3): a Holon run's token budget is enforced here — the
+        // provider reports what each call actually spent (input tokens
+        // resend the context every turn, so the estimate-based meter
+        // undercounted by ~turns). Over the cap: record the refusal (the
+        // stage sees a budget blocker, not a silent death) and trigger the
+        // interrupt — the loop's existing machinery ends the turn cleanly.
+        if let Some(run_dir) = crate::platform::holon_run_dir()
+            && let Some(cap) = crate::org::holon_budget_cap(&run_dir)
+        {
+            let spent = self.holon_tokens_spent.fetch_add(
+                u64::from(usage.total_tokens),
+                std::sync::atomic::Ordering::Relaxed,
+            ) + u64::from(usage.total_tokens);
+            if spent > cap && !self.interrupt_flag.is_triggered() {
+                let why = format!(
+                    "token budget exhausted: {spent} spent, cap {cap} (policy.json budget)"
+                );
+                crate::org::record_refusal(&run_dir, "budget", &why, "policy.json:budget.tokens");
+                self.interrupt_flag.trigger();
+                self.emit(AgentEvent::Error { error: why }).await;
+            }
+        }
         self.emit(AgentEvent::Usage {
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,

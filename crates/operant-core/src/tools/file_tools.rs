@@ -125,11 +125,51 @@ fn current_umask() -> u32 {
     0o022
 }
 
+/// O-18 (W3): the policy-roots fence for WRITE tools — a Holon run's
+/// `roots` (plus its own run dir) are the only writable places; anything
+/// else is refused and recorded before the write happens. Reads are not
+/// fenced (an observer may read the system). The kernel's workdir
+/// fingerprint stays the after-the-fact check; this is the up-front fence
+/// the plan's phase C acceptance names.
+/// Test/boundary seam: the policy-roots write fence, public so the W3
+/// acceptance tests (and any embedder) can drive it directly.
+pub fn holon_write_fence(raw_path: &str) -> Result<(), String> {
+    let Some(run_dir) = crate::platform::holon_run_dir() else {
+        return Ok(()); // a personal run is not fenced
+    };
+    let path = PathBuf::from(raw_path);
+    let Some(canon) = early_canonical(&path) else {
+        return Ok(()); // unresolvable: the strict checks below handle it
+    };
+    let Some(roots) = crate::org::holon_policy_roots(&run_dir) else {
+        return Ok(()); // no policy roots: ungoverned fence (observe has none anyway)
+    };
+    if roots.iter().any(|root| canon.starts_with(root)) {
+        return Ok(());
+    }
+    let why = format!("path {} is outside the run's policy roots", canon.display());
+    crate::org::record_refusal(&run_dir, "file_write", &why, "policy.json:roots");
+    Err(why)
+}
+
 /// Validate that a path is safe for the agent to read or write. Returns
 /// the canonicalized path on success, or an error message on rejection.
 ///
 /// `pub(crate)` so the patch tool shares the same gate (it previously
 /// bypassed it entirely).
+/// O-18: best-effort canonical resolution for the policy fence — the
+/// same parent-canonicalize trick `validate_path` uses, but an Option so
+/// the fence can skip (fail-open for the path GUARD only; the write
+/// itself still goes through validate_path's strict checks below).
+fn early_canonical(path: &std::path::Path) -> Option<PathBuf> {
+    if let Ok(p) = path.canonicalize() {
+        return Some(p);
+    }
+    let parent = path.parent()?;
+    let canon_parent = parent.canonicalize().ok()?;
+    Some(canon_parent.join(path.file_name()?))
+}
+
 pub(crate) fn validate_path(raw_path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path);
 
@@ -299,6 +339,11 @@ impl OperantTool for FileWriteTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("file_write", format!("Invalid arguments: {}", e)),
         };
+
+        // O-18: the Holon policy-roots fence (writes only)
+        if let Err(e) = holon_write_fence(&args.path) {
+            return ToolResult::error("file_write", e);
+        }
 
         // Path safety check (iter-125 — closes the ponytail-audit security
         // gap "file_tools no path-traversal validation").

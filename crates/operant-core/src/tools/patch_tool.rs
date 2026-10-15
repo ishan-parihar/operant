@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::schema::ToolSchema;
-use crate::tools::file_tools::{atomic_write, validate_path};
+use crate::tools::file_tools::{atomic_write, holon_write_fence, validate_path};
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
 /// Arguments for the patch tool
@@ -146,6 +146,10 @@ impl OperantTool for PatchTool {
         // file tool that could write through `..` traversal or into
         // sensitive files (SSH keys, .aws/credentials, /etc/shadow) that
         // file_write rejects.
+        // O-18: the Holon policy-roots fence (writes only)
+        if let Err(e) = holon_write_fence(&args.path) {
+            return ToolResult::error("patch", e);
+        }
         let path = match validate_path(&args.path) {
             Ok(p) => p,
             Err(e) => return ToolResult::error("patch", e),

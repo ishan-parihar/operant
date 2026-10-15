@@ -1141,7 +1141,25 @@ impl OperantAgent {
             if let Some(SeatDecision::Escalate(why)) = &seat
                 && self.unattended
             {
-                warn!(tool = %name, "Tool call escalated by seat policy — unattended run: queue + deny");
+                warn!(tool = %name, "Tool call escalated by seat policy — unattended run: denied");
+                // O-17 (W3): in a Holon run the refusal is recorded for the
+                // result — `result.refusals[]` is the blocker the kernel and
+                // the Chair read; there is no grant to consult (an approved
+                // plan IS the grant, phase C). A personal unattended run
+                // keeps today's behaviour: queue + deny (if an authority is
+                // attached at all).
+                if let Some(run_dir) = crate::platform::holon_run_dir() {
+                    crate::org::record_refusal(&run_dir, &name, why, "policy.json:escalate");
+                    early_results[idx] = Some(ToolResult::error(
+                        &tool_call.id,
+                        format!(
+                            "Refused under policy.json: {why}. Report this refusal \
+                             in your result's `refusals` so the stage records the \
+                             blocker"
+                        ),
+                    ));
+                    continue;
+                }
                 let session_id = self.session_id().unwrap_or_default();
                 let queued = self
                     .seat_authority
@@ -1250,6 +1268,25 @@ impl OperantAgent {
                         }
                         SeatDecision::Deny(why) => {
                             warn!(tool = %name, "Tool call denied by seat policy");
+                            // O-17: a Holon run's denial is a recorded
+                            // refusal, for the result's `refusals[]`.
+                            if let Some(run_dir) = crate::platform::holon_run_dir() {
+                                crate::org::record_refusal(
+                                    &run_dir,
+                                    &name,
+                                    &why,
+                                    "policy.json:deny",
+                                );
+                                early_results[idx] = Some(ToolResult::error(
+                                    &tool_call.id,
+                                    format!(
+                                        "Refused under policy.json: {why}. Report this \
+                                         refusal in your result's `refusals` so the stage \
+                                         records the blocker"
+                                    ),
+                                ));
+                                continue;
+                            }
                             early_results[idx] = Some(ToolResult::error(
                                 &tool_call.id,
                                 format!("Permission denied by seat policy: {why}"),
