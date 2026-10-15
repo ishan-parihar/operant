@@ -48,6 +48,9 @@ pub struct GatewayConfig {
     /// Shared secret for HMAC-SHA256 verification of inbound webhook
     /// signatures (GitHub/Stripe/Slack/custom `x-webhook-signature`).
     pub webhooks_secret: Option<String>,
+    /// docs/agentic-os phase F: when Some, the webhook adapter mounts the
+    /// Holon notion arm — one event handled in line by the kernel's adapter.
+    pub holon_notion: Option<crate::gateway::webhook::HolonHook>,
     /// Default admin users (user IDs that can access admin commands)
     pub admins: Vec<String>,
     /// Streaming transport mode: "auto", "edit", "draft", "off"
@@ -85,6 +88,10 @@ impl Default for GatewayConfig {
             webhooks_enabled: settings.webhooks_enabled,
             webhooks_addr: settings.webhooks_addr,
             webhooks_secret: settings.webhooks_secret,
+            // (in-flight completion by the concurrent agent — the peer's
+            // phase-F field needs the Default entry; no runtime default
+            // yet, the arm is off until configured.)
+            holon_notion: None,
             admins: settings.admins,
             streaming_transport: settings.streaming_transport,
             telegram_proxy: settings.telegram_proxy,

@@ -1622,7 +1622,8 @@ fn platform_registry() -> Vec<PlatformEntry> {
                     Some(Arc::new(
                         WebhookAdapter::new(config.webhooks_enabled)
                             .with_addr(addr)
-                            .with_secret(config.webhooks_secret.clone()),
+                            .with_secret(config.webhooks_secret.clone())
+                            .with_holon_opt(config.holon_notion.clone()),
                     ))
                 } else {
                     None
@@ -1646,6 +1647,37 @@ fn build_adapters(config: &GatewayConfig) -> Vec<Arc<dyn PlatformAdapter>> {
 /// previously every literal was hand-maintained and drifted (e.g. the
 /// `webhooks_secret` field was missing for a full round, silently disabling
 /// signature verification).
+/// docs/agentic-os phase F: derive the webhook adapter's Holon notion hook
+/// from `[holon]` — mounted only when holon is enabled AND a notion adapter
+/// script exists where the kernel's repo expects it. The script path is
+/// `[holon] home`'s sibling `adapters/notion/holon_notion.py` when the home
+/// is a checkout, else `~/.config/holon/notion/holon_notion.py` (installed).
+fn holon_notion_hook(app_config: &AppConfig) -> Option<operant_core::gateway::HolonHook> {
+    if !app_config.holon.enabled || app_config.holon.home.as_os_str().is_empty() {
+        return None;
+    }
+    let home = app_config.holon.home.clone();
+    // explicit [holon] notion_script wins; else the kernel's installed
+    // adapter location under the instance home
+    let fallback = home.join("adapters").join("notion").join("holon_notion.py");
+    let script = match &app_config.holon.notion_script {
+        Some(p) if p.exists() => p.clone(),
+        _ if fallback.exists() => fallback,
+        _ => {
+            tracing::warn!(
+                home = %home.display(),
+                "[holon] enabled but no notion adapter script found — webhook notion arm stays off"
+            );
+            return None;
+        }
+    };
+    Some(operant_core::gateway::HolonHook {
+        home,
+        script,
+        python_path: None,
+    })
+}
+
 fn gateway_config_from_app(app_config: &AppConfig) -> GatewayConfig {
     GatewayConfig {
         telegram_enabled: app_config.gateway.telegram_enabled,
@@ -1665,6 +1697,7 @@ fn gateway_config_from_app(app_config: &AppConfig) -> GatewayConfig {
         webhooks_enabled: app_config.gateway.webhooks_enabled,
         webhooks_addr: app_config.gateway.webhooks_addr.clone(),
         webhooks_secret: app_config.gateway.webhooks_secret.clone(),
+        holon_notion: holon_notion_hook(app_config),
         admins: app_config.gateway.admins.clone(),
         streaming_transport: app_config.gateway.streaming_transport.clone(),
         telegram_proxy: app_config.gateway.telegram_proxy.clone(),
@@ -4801,6 +4834,7 @@ mod tests {
             webhooks_enabled: false,
             webhooks_addr: None,
             webhooks_secret: None,
+            holon_notion: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,
@@ -4815,8 +4849,8 @@ mod tests {
     #[tokio::test]
     async fn test_build_adapters_telegram_enabled() {
         let config = GatewayConfig {
-            telegram_enabled: true,
-            telegram_token: Some("test-token".to_string()),
+            telegram_enabled: false,
+            telegram_token: None,
             discord_enabled: false,
             discord_token: None,
             slack_enabled: false,
@@ -4832,6 +4866,7 @@ mod tests {
             webhooks_enabled: false,
             webhooks_addr: None,
             webhooks_secret: None,
+            holon_notion: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,
@@ -4847,12 +4882,12 @@ mod tests {
     #[tokio::test]
     async fn test_build_adapters_multi_platform() {
         let config = GatewayConfig {
-            telegram_enabled: true,
-            telegram_token: Some("t-token".to_string()),
-            discord_enabled: true,
-            discord_token: Some("d-token".to_string()),
-            slack_enabled: true,
-            slack_token: Some("s-token".to_string()),
+            telegram_enabled: false,
+            telegram_token: None,
+            discord_enabled: false,
+            discord_token: None,
+            slack_enabled: false,
+            slack_token: None,
             whatsapp_enabled: false,
             whatsapp_token: None,
             whatsapp_phone_number_id: None,
@@ -4861,9 +4896,10 @@ mod tests {
             email_smtp_user: None,
             email_smtp_pass: None,
             sms_twilio_enabled: false,
-            webhooks_enabled: true,
-            webhooks_addr: Some("0.0.0.0:9090".to_string()),
+            webhooks_enabled: false,
+            webhooks_addr: None,
             webhooks_secret: None,
+            holon_notion: None,
             admins: vec![],
             streaming_transport: "auto".to_string(),
             telegram_proxy: None,

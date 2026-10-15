@@ -14,11 +14,33 @@ use super::*;
 /// Routes:
 ///   POST /webhook/{route}  — receives a JSON payload, validates HMAC
 ///   signature (if configured), and forwards as an IncomingMessage.
+///   POST /webhook/notion   — with [holon] enabled: hands the event to the
+///   kernel's notion adapter in line (`apply`), so nothing resident stays
+///   between Notion and the organization (boundary doc R4; the poll remains
+///   the fallback).
 ///   GET  /health           — health check endpoint.
 pub struct WebhookAdapter {
     enabled: bool,
     listen_addr: String,
     secret: Option<String>,
+    /// The Holon hook: where the instance lives, how to reach its notion
+    /// adapter script. None = the notion route is an ordinary webhook.
+    holon: Option<HolonHook>,
+}
+
+/// What the notion arm needs to hand one event to the kernel's adapter.
+// (plan-04 note) Debug completed in-flight by the concurrent agent: the
+// peer's gateway/types.rs derive(Debug) on GatewayConfig requires it.
+// Field values are paths + a string — no secrets, safe to derive.
+#[derive(Clone, Debug)]
+pub struct HolonHook {
+    /// $HOLON_HOME of the instance the event belongs to.
+    pub home: std::path::PathBuf,
+    /// The adapter script (`adapters/notion/holon_notion.py`), run with the
+    /// interpreter on PATH.
+    pub script: std::path::PathBuf,
+    /// Extra env for the run (the kernel exports its own through --home).
+    pub python_path: Option<String>,
 }
 
 impl WebhookAdapter {
@@ -27,6 +49,7 @@ impl WebhookAdapter {
             enabled,
             listen_addr: "0.0.0.0:8080".to_string(),
             secret: None,
+            holon: None,
         }
     }
 
@@ -37,6 +60,19 @@ impl WebhookAdapter {
 
     pub fn with_secret(mut self, secret: Option<String>) -> Self {
         self.secret = secret;
+        self
+    }
+
+    /// Mount the Holon notion arm (docs/agentic-os phase F / H8).
+    pub fn with_holon(mut self, hook: HolonHook) -> Self {
+        self.holon = Some(hook);
+        self
+    }
+
+    /// The gateway factory passes the hook through the shared GatewayConfig;
+    /// naming it for that call site reads better than `map` at a distance.
+    pub fn with_holon_opt(mut self, hook: Option<HolonHook>) -> Self {
+        self.holon = hook;
         self
     }
 }
@@ -100,6 +136,7 @@ impl PlatformAdapter for WebhookAdapter {
             .map_err(|e| Error::Config(format!("Invalid webhook listen addr: {e}")))?;
 
         let secret = self.secret.clone();
+        let holon = self.holon.clone();
         let tx = message_tx.clone();
 
         // Build the axum router
@@ -116,9 +153,10 @@ impl PlatformAdapter for WebhookAdapter {
                 // inbound from Meta".)
                 get(
                     move |Path(_route): Path<String>,
-                          State((_, secret)): State<(
+                          State((_, secret, _)): State<(
                         mpsc::UnboundedSender<IncomingMessage>,
                         Option<String>,
+                        Option<HolonHook>,
                     )>,
                           axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
                         let mode = params.get("hub.mode").map(|s| s.as_str()).unwrap_or("");
@@ -145,9 +183,10 @@ impl PlatformAdapter for WebhookAdapter {
                 .post(
                     move |Path(route): Path<String>,
                           headers: HeaderMap,
-                          State((tx, secret)): State<(
+                          State((tx, secret, holon)): State<(
                         mpsc::UnboundedSender<IncomingMessage>,
                         Option<String>,
+                        Option<HolonHook>,
                     )>,
                           body: axum::body::Bytes| async move {
                         // ────────────────────────────────────────────────────────
@@ -186,6 +225,76 @@ impl PlatformAdapter for WebhookAdapter {
                                         challenge.to_string(),
                                     ).into_response();
                                 }
+                        }
+
+                        // ── Holon notion arm (docs/agentic-os phase F / H8) ──
+                        // One event handed to the kernel's adapter in line;
+                        // nothing resident stays between Notion and the
+                        // organization. Verification (signature + the
+                        // platform's own handshake) is the adapter's — it
+                        // carries the notion secret — so this arm runs BEFORE
+                        // our generic HMAC check, like the handshakes above.
+                        if route == "notion"
+                            && let Some(hook) = holon.clone()
+                        {
+                            let sig = headers
+                                .get("x-notion-signature")
+                                .and_then(|v| v.to_str().ok())
+                                .map(str::to_string);
+                            let mut cmd = tokio::process::Command::new("python3");
+                            cmd.arg(&hook.script)
+                                .arg("--holon-home").arg(&hook.home)
+                                .arg("apply")
+                                .arg("--signature").arg(sig.unwrap_or_default())
+                                .stdin(std::process::Stdio::piped())
+                                .stdout(std::process::Stdio::piped())
+                                .stderr(std::process::Stdio::piped());
+                            if let Some(pp) = hook.python_path {
+                                cmd.env("PYTHONPATH", pp);
+                            }
+                            match cmd.spawn() {
+                                Ok(mut child) => {
+                                    use tokio::io::AsyncWriteExt;
+                                    if let Some(mut stdin) = child.stdin.take()
+                                        && let Err(e) = stdin.write_all(&body).await
+                                    {
+                                        warn!(error = %e, "notion apply: writing body failed");
+                                    }
+                                    drop(child.stdin.take());
+                                    match child.wait_with_output().await {
+                                        Ok(out) => {
+                                            // the adapter prints "<http status> <message>"
+                                            // and exits 1 for any >= 400 — the status is
+                                            // the stdout's leading integer, not the exit code
+                                            let text =
+                                                String::from_utf8_lossy(&out.stdout).to_string();
+                                            let code = text
+                                                .split_whitespace()
+                                                .next()
+                                                .and_then(|s| s.parse::<u16>().ok())
+                                                .filter(|c| (200..600).contains(c))
+                                                .unwrap_or(500);
+                                            return (
+                                                axum::http::StatusCode::from_u16(code)
+                                                    .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                                                text,
+                                            ).into_response();
+                                        }
+                                        Err(e) => {
+                                            warn!(error = %e, "notion apply: adapter run failed");
+                                            return (axum::http::StatusCode::BAD_GATEWAY,
+                                                    format!("notion apply failed: {e}"))
+                                                .into_response();
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "notion apply: spawn failed");
+                                    return (axum::http::StatusCode::BAD_GATEWAY,
+                                            format!("notion apply spawn failed: {e}"))
+                                        .into_response();
+                                }
+                            }
                         }
 
                         // Validate HMAC signature if secret is configured.
@@ -427,7 +536,7 @@ impl PlatformAdapter for WebhookAdapter {
                     },
                 ),
             )
-            .with_state((tx, secret));
+            .with_state((tx, secret, holon));
 
         // Spawn the HTTP server
         tokio::spawn(async move {

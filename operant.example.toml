@@ -454,6 +454,9 @@ enabled = false
 home = ""
 # pin the kernel launcher; empty = the PATH `holon` (or $HOLON_BIN)
 #bin = "~/holon/bin/holon"
+# phase F: the kernel's notion adapter script the gateway's webhook route
+# invokes per event; empty = $HOLON_HOME/adapters/notion/holon_notion.py
+#notion_script = "~/holon-repo/adapters/notion/holon_notion.py"
 # phase E: the run supervisor (CONTRACT §11) — claims, spawns, heartbeats,
 # hands in for these employees. supervise_employees is required when on.
 supervise = false

@@ -18,7 +18,9 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod api;
+pub mod chair;
 pub mod enforcement;
+pub mod events;
 pub mod policy;
 pub mod run;
 pub mod supervisor;

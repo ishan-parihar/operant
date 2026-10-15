@@ -299,6 +299,11 @@ pub struct HolonSettings {
     /// `holon` (or `$HOLON_BIN`).
     #[serde(default)]
     pub bin: Option<String>,
+    /// Phase F: the kernel's notion adapter script the gateway's webhook
+    /// route invokes per event (`adapters/notion/holon_notion.py` in the
+    /// kernel's repo). Empty = `$HOLON_HOME/adapters/notion/holon_notion.py`.
+    #[serde(default)]
+    pub notion_script: Option<PathBuf>,
     /// Phase E: the run supervisor claims, spawns, heartbeats and hands in
     /// (CONTRACT §11) for the employees `supervise_employees` names.
     #[serde(default)]
@@ -328,6 +333,7 @@ impl Default for HolonSettings {
             enabled: false,
             home: PathBuf::new(),
             bin: None,
+            notion_script: None,
             supervise: false,
             supervise_employees: Vec::new(),
             max_concurrent_runs: default_max_concurrent_runs(),
