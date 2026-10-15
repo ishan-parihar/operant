@@ -147,13 +147,11 @@ impl PolicyDoc {
                 mode: SeatMode::Yolo,
                 allow: Vec::new(),
                 deny: self.deny.clone(),
-                delegation: None,
             },
             _ => SeatPolicy {
                 mode: SeatMode::Lockdown,
                 allow: OBSERVE_ALLOW.iter().map(|s| s.to_string()).collect(),
                 deny: self.deny.clone(),
-                delegation: None,
             },
         }
     }

@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use operant_core::org::authority::GrantDb;
-use operant_core::org::pending_requests::PendingRequestDb;
 use operant_core::org::seat_authority::SeatAuthority;
 use operant_core::org::seat_policy::{SeatDecision, SeatPolicySource};
 
@@ -25,13 +23,7 @@ fn observe_authority(home: &std::path::Path) -> Arc<SeatAuthority> {
     )
     .unwrap();
     let policy = PolicyDoc::load(&dir).unwrap();
-    let grants = GrantDb::init(home.join("grants.db")).unwrap();
-    let requests = PendingRequestDb::init(home.join("requests.db")).unwrap();
-    Arc::new(SeatAuthority::new(
-        Arc::new(TestSource { policy }),
-        Arc::new(grants),
-        Arc::new(requests),
-    ))
+    Arc::new(SeatAuthority::new(Arc::new(TestSource { policy })))
 }
 
 struct TestSource {

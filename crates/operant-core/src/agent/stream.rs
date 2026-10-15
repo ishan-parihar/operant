@@ -1129,27 +1129,6 @@ impl OperantAgent {
             // never re-implements. `None` = ungoverned for delegation (no
             // authority, no seat identity, or no posture on the policy row):
             // today's tool-config gates own the verdict, byte-for-byte.
-            if name == "delegate"
-                && let Some(target) = args.get("agent").and_then(|v| v.as_str())
-                && let (Some(authority), Some(seat)) = (
-                    self.seat_authority.as_ref(),
-                    self.seat_id().or_else(|| self.session_id()),
-                )
-                && let Some(check) = authority.consult_delegation(&seat, target)
-                && !check.is_allowed()
-            {
-                warn!(
-                    tool = %name,
-                    target = %target,
-                    seat = %seat,
-                    "Delegation denied by seat policy"
-                );
-                early_results[idx] = Some(ToolResult::error(
-                    &tool_call.id,
-                    format!("Permission denied by seat policy: {}", check.reason),
-                ));
-                continue;
-            }
 
             // ── F2 unattended semantics ─────────────────────────────────
             // An unattended run (cron) never waits on an interactive

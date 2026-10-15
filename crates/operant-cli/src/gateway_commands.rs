@@ -831,34 +831,19 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                             );
                         }
                         (requested, Some(entry)) => {
-                            let known = crate::gateway_runner::employee_registry()
-                                .and_then(|r| r.get_employee(requested).ok().flatten());
-                            if known.is_some() {
-                                match store.bind_employee(&entry.session_key, requested) {
-                                    Ok(Some(_)) => msg.push_str(&format!(
-                                        "Bound this session to `{requested}` — the next turn runs as that employee."
-                                    )),
-                                    Ok(None) => msg.push_str(
-                                        "Session entry vanished before binding — retry.",
-                                    ),
-                                    Err(e) => msg.push_str(&format!("Could not bind: {e}")),
-                                }
-                            } else {
-                                let cast = crate::gateway_runner::employee_registry()
-                                    .map(|r| {
-                                        r.list_employees()
-                                            .map(|emps| {
-                                                emps.iter()
-                                                    .map(|e| e.employee_id.clone())
-                                                    .collect::<Vec<_>>()
-                                                    .join(", ")
-                                            })
-                                            .unwrap_or_default()
-                                    })
-                                    .unwrap_or_else(|| "registry unavailable".to_string());
-                                msg.push_str(&format!(
-                                    "Unknown employee `{requested}`. Known employees: {cast}"
-                                ));
+                            // G+1: no local registry to validate against —
+                            // the id is a name the seat policy (personal
+                            // seats) or Holon (org mode) resolves. Bind it.
+                            // G+1: no local registry — the id resolves at
+                            // the policy (personal) or Holon (org) seam.
+                            match store.bind_employee(&entry.session_key, requested) {
+                                Ok(Some(_)) => msg.push_str(&format!(
+                                    "Bound this session to `{requested}` — the next turn runs as that employee."
+                                )),
+                                Ok(None) => msg.push_str(
+                                    "Session entry vanished before binding — retry.",
+                                ),
+                                Err(e) => msg.push_str(&format!("Could not bind: {e}")),
                             }
                         }
                         (requested, None) => {
@@ -2259,164 +2244,16 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 }
                 None => msg.push_str("Policy: none — ungoverned (today's behaviour)\n"),
             }
-            match approver.grants_for(&target) {
-                Ok(grants) if grants.is_empty() => msg.push_str("Grants: none\n"),
-                Ok(grants) => {
-                    msg.push_str(&format!("Grants ({} live):\n", grants.len()));
-                    for g in grants {
-                        let expiry = match g.expires_at.as_deref() {
-                            None => "standing".to_string(),
-                            Some(at) => format!("expires {at}"),
-                        };
-                        msg.push_str(&format!(
-                            "  `{}` · {} · {} · {} · by {}\n",
-                            g.grant_id,
-                            g.capability,
-                            g.scope.as_str(),
-                            expiry,
-                            g.grantor
-                        ));
-                    }
-                }
-                Err(e) => msg.push_str(&format!("Grants: unreadable — {e}\n")),
-            }
-            match approver.pending_for(&target) {
-                Ok(pending) if pending.is_empty() => {
-                    msg.push_str("Pending escalations: none\n");
-                }
-                Ok(pending) => {
-                    msg.push_str(&format!("Pending escalations ({}):\n", pending.len()));
-                    for r in pending {
-                        msg.push_str(&format!(
-                            "  `{}` · {} — {}\n",
-                            r.request_id, r.tool, r.requester_note
-                        ));
-                    }
-                }
-                Err(e) => msg.push_str(&format!("Pending: unreadable — {e}\n")),
-            }
+            // G+1: the grant ledger retired to Holon (an approved plan is
+            // the grant); there is nothing to list.
+            msg.push_str("Grants: none (an approved plan is the grant now)\n");
+            msg.push_str("Pending escalations: the durable queue is Holon's board now; in-flight asks resolve interactively here.\n");
             msg
         }
 
-        "grant" => {
-            // `/grant <seat> <tool> [--days N]` (operator-only, §6 Q5). The
-            // mint speaks with the authority of the seat's approver-of-record
-            // — the same seat `/approve` names — so `/grant` confers nothing
-            // `/approve` could not, through the same `issue_grant` checks:
-            // an unmanaged seat fails closed here too. When the seat has no
-            // policy row, one is seated at `[genome].unrestricted_default`
-            // (the knob's designed P3 consumer) so the mint actually takes
-            // effect on the next consult.
-        // Gated by the CommandDef (`admin_only: true`, enforced in
-        // `handle_command` before any arm runs — same as /approve /deny).
-        let tokens: Vec<&str> = args.split_whitespace().collect();
-            let (Some(seat), Some(tool)) = (tokens.first().copied(), tokens.get(1).copied()) else {
-                return Some("Usage: `/grant <seat> <tool> [--days N]`.".into());
-            };
-            let mut days: Option<i64> = None;
-            let mut i = 2;
-            while i < tokens.len() {
-                if tokens[i] == "--days" {
-                    let Some(n) = tokens.get(i + 1) else {
-                        return Some("`--days` needs a number: `--days 3` or `--days=3`.".into());
-                    };
-                    match n.parse::<i64>() {
-                        Ok(v) => days = Some(v),
-                        Err(_) => {
-                            return Some(format!("`--days` takes a number, not `{n}`."));
-                        }
-                    }
-                    i += 2;
-                } else if let Some(n) = tokens[i].strip_prefix("--days=") {
-                    match n.parse::<i64>() {
-                        Ok(v) => days = Some(v),
-                        Err(_) => {
-                            return Some(format!("`--days` takes a number, not `{n}`."));
-                        }
-                    }
-                    i += 1;
-                } else {
-                    return Some(format!(
-                        "Unexpected argument `{}` — Usage: `/grant <seat> <tool> [--days N]`.",
-                        tokens[i]
-                    ));
-                }
-            }
-            let (Some(approver), Some(policy_db)) = (
-                crate::gateway_runner::seat_approver(),
-                crate::gateway_runner::seat_policy_db(),
-            ) else {
-                return Some(
-                    "The genome is not wired in this process — start the gateway first.".into(),
-                );
-            };
-            // Seat an ungoverned seat at the configured creation default.
-            let mut seated_note = String::new();
-            let has_row = policy_db.get(seat).ok().flatten().is_some();
-            if !has_row {
-                let mode =
-                    match operant_core::org::seat_policy::SeatMode::from_str(
-                        &ctx.config.genome.unrestricted_default,
-                    ) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            return Some(format!(
-                                "`[genome].unrestricted_default` is invalid ({e}) — fix the config before seating rows."
-                            ));
-                        }
-                    };
-                if let Err(e) = policy_db.upsert(
-                    seat,
-                    &operant_core::org::seat_policy::SeatPolicy {
-                        mode,
-                        allow: Vec::new(),
-                        deny: Vec::new(),
-                    delegation: None,
-                    },
-                ) {
-                    return Some(format!("seating the policy row failed: {e}"));
-                }
-                seated_note = format!(
-                    "\nSeated `{seat}` at mode `{}` (`[genome].unrestricted_default`).",
-                    mode.as_str()
-                );
-            }
-            let why = format!("operator /grant by {}", ctx.user_id);
-            match approver.grant_direct(seat, tool, days, &why) {
-                Ok(grant_id) => format!(
-                    "✅ Grant `{grant_id}` minted for `{seat}` → `{tool}`.{seated_note}\nA revoked or lapsed grant escalates again on the next consult."
-                ),
-                Err(e) => format!("❌ Grant refused: {e}.{seated_note}"),
-            }
-        }
+        "grant" => "Grants are Holon's now: an approved plan is the grant (compiled to policy.json). `holon plan approve` governs.".into(),
 
-        "revoke" => {
-            // `/revoke <grant_id>` (operator-only). A revoked grant stops
-            // consulting immediately (the live filter excludes it), so the
-            // next run that relied on it escalates again — the P3
-            // acceptance.
-        // Gated by the CommandDef (`admin_only: true`), like /grant.
-        let Some(grant_id) = args.split_whitespace().next() else {
-                return Some(
-                    "Usage: `/revoke <grant_id>` — ids are listed by `/permissions <seat>`.".into(),
-                );
-            };
-            let Some(approver) = crate::gateway_runner::seat_approver() else {
-                return Some(
-                    "The genome is not wired in this process — start the gateway first.".into(),
-                );
-            };
-            let reason = format!("operator /revoke by {}", ctx.user_id);
-            match approver.revoke_grant(grant_id, &reason) {
-                Ok(true) => {
-                    format!("✅ Grant `{grant_id}` revoked — the next run escalates again.")
-                }
-                Ok(false) => format!(
-                    "No such grant `{grant_id}`. Live ids are listed by `/permissions <seat>`."
-                ),
-                Err(e) => format!("❌ Revoke failed: {e}"),
-            }
-        }
+        "revoke" => "Grants are Holon's now — nothing to revoke here. `holon plan approve` governs.".into(),
 
         _ => format!(
             "Unknown command: `{}`. Use /help to see available commands.",

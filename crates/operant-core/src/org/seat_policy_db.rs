@@ -19,7 +19,6 @@
 //! make impossible.
 
 use crate::error::Error;
-use crate::org::notice::rfc3339;
 use crate::org::seat_policy::{SeatMode, SeatPolicy, SeatPolicySource};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::path::PathBuf;
@@ -108,14 +107,18 @@ impl SeatPolicyDb {
             .map_err(|e| Error::Agent(format!("seat policies: schema: {e}")))?;
         // Pre-697 files: add `delegation` idempotently (additive-safe probe —
         // the org layer's own rule, see the schema note in authority.rs).
-        crate::org::schema::ensure_column(
-            &conn,
-            "seat_policies",
-            "delegation",
-            Self::DELEGATION_COLUMN_DEF,
-        )
-        .map_err(|e| Error::Agent(format!("seat policies: delegation column: {e}")))
-        .map(|_| ())
+        // G+1: `org::schema` retired; the additive-safe probe inlined.
+        match conn.execute("ALTER TABLE seat_policies ADD COLUMN delegation TEXT", []) {
+            Ok(_) => {}
+            // "duplicate column name" is the idempotent success
+            Err(e) if e.to_string().contains("duplicate column") => {}
+            Err(e) => {
+                return Err(Error::Agent(format!(
+                    "seat policies: delegation column: {e}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Write one seat's policy, replacing any previous row for that seat
@@ -128,20 +131,18 @@ impl SeatPolicyDb {
         let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO seat_policies (employee_id, mode, allow, deny, delegation, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5)
              ON CONFLICT(employee_id) DO UPDATE SET
                  mode = excluded.mode,
                  allow = excluded.allow,
                  deny  = excluded.deny,
-                 delegation = excluded.delegation,
                  updated_at = excluded.updated_at",
             params![
                 employee_id,
                 policy.mode.as_str(),
                 allow,
                 deny,
-                policy.delegation.map(|p| p.as_str()),
-                rfc3339(chrono::Utc::now()),
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             ],
         )
         .map_err(|e| Error::Agent(format!("seat policies: upsert {employee_id}: {e}")))?;
@@ -228,7 +229,7 @@ fn columns_to_policy(
     mode: String,
     allow: String,
     deny: String,
-    delegation: Option<String>,
+    _delegation: Option<String>,
 ) -> Result<SeatPolicy, Error> {
     let mode = SeatMode::from_str(&mode).map_err(|e| {
         Error::Agent(format!(
@@ -239,21 +240,7 @@ fn columns_to_policy(
         .map_err(|e| Error::Agent(format!("seat policies: {employee_id}: allow column: {e}")))?;
     let deny: Vec<String> = serde_json::from_str(&deny)
         .map_err(|e| Error::Agent(format!("seat policies: {employee_id}: deny column: {e}")))?;
-    let delegation = delegation
-        .map(|raw| {
-            crate::org::authority::DelegationPosture::from_str(&raw).map_err(|e| {
-                Error::Agent(format!(
-                    "seat policies: {employee_id}: stored policy is unreadable: {e}"
-                ))
-            })
-        })
-        .transpose()?;
-    Ok(SeatPolicy {
-        mode,
-        allow,
-        deny,
-        delegation,
-    })
+    Ok(SeatPolicy { mode, allow, deny })
 }
 
 impl SeatPolicySource for SeatPolicyDb {
@@ -266,24 +253,6 @@ impl SeatPolicySource for SeatPolicyDb {
             Err(e) => {
                 tracing::error!(
                     "seat policy read failed for {employee_id}; treating as ungoverned: {e}"
-                );
-                None
-            }
-        }
-    }
-
-    fn delegation_posture_for(
-        &self,
-        employee_id: &str,
-    ) -> Option<crate::org::authority::DelegationPosture> {
-        // Same loud-on-corrupt contract as `policy_for`: an unreadable row
-        // is treated as ungoverned HERE (never a widening — `None` is
-        // Independent, today's behaviour) with `get` as the loud path.
-        match self.get(employee_id) {
-            Ok(policy) => policy.and_then(|p| p.delegation),
-            Err(e) => {
-                tracing::error!(
-                    "seat policy read failed for {employee_id}; delegation treated as ungoverned: {e}"
                 );
                 None
             }
@@ -306,7 +275,6 @@ mod tests {
             mode,
             allow: allow.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
-            delegation: None,
         }
     }
 
@@ -421,85 +389,5 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS must not disturb existing rows"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    // ── delegation posture column (P0 delegation governance) ──────────
-
-    #[test]
-    fn delegation_posture_round_trips_and_defaults_to_none() {
-        let db = mem_db();
-        let mut with_posture = policy(SeatMode::Standard, &[], &[]);
-        with_posture.delegation = Some(crate::org::authority::DelegationPosture::Bounded);
-        db.upsert("emp-1", &with_posture).expect("upsert");
-        assert_eq!(
-            db.get("emp-1").expect("get").and_then(|p| p.delegation),
-            Some(crate::org::authority::DelegationPosture::Bounded)
-        );
-        // A row without a posture (the pre-697 shape) reads as ungoverned.
-        db.upsert("emp-2", &policy(SeatMode::Standard, &[], &[]))
-            .expect("upsert");
-        assert_eq!(
-            db.get("emp-2").expect("get").and_then(|p| p.delegation),
-            None
-        );
-        // The trait override reads the same surface.
-        assert_eq!(
-            db.delegation_posture_for("emp-1"),
-            Some(crate::org::authority::DelegationPosture::Bounded)
-        );
-        assert_eq!(db.delegation_posture_for("emp-2"), None);
-    }
-
-    #[test]
-    fn a_bad_delegation_spelling_errors_on_read_not_defaults() {
-        let db = mem_db();
-        db.upsert("emp-1", &policy(SeatMode::Standard, &[], &[]))
-            .expect("upsert");
-        db.lock_conn()
-            .expect("conn")
-            .execute(
-                "UPDATE seat_policies SET delegation = 'sometimes' WHERE employee_id = 'emp-1'",
-                [],
-            )
-            .expect("seed bad spelling");
-        let err = db.get("emp-1").expect_err("bad spelling must error");
-        assert!(err.to_string().contains("unknown delegation posture"));
-        // And the trait surface degrades loudly to ungoverned, never widens.
-        assert_eq!(db.delegation_posture_for("emp-1"), None);
-    }
-
-    #[test]
-    fn pre_697_file_gains_the_delegation_column_idempotently() {
-        // The old five-column shape, hand-built: opening through the store
-        // must ALTER it in place without disturbing the row.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("old-seat-policies.sqlite");
-        {
-            let conn = Connection::open(&path).expect("open");
-            conn.execute_batch(
-                "CREATE TABLE seat_policies (
-                    employee_id TEXT PRIMARY KEY,
-                    mode TEXT NOT NULL, allow TEXT NOT NULL,
-                    deny TEXT NOT NULL, updated_at TEXT NOT NULL);
-                INSERT INTO seat_policies VALUES ('emp-1', 'standard', '[]', '[]', '2020-01-01');",
-            )
-            .expect("old schema");
-        }
-        let db = SeatPolicyDb::init(path).expect("migrated open");
-        assert_eq!(
-            db.get("emp-1").expect("get"),
-            Some(policy(SeatMode::Standard, &[], &[])),
-            "the migration must preserve the pre-697 row"
-        );
-        // Idempotent: a second open must not re-ALTER (ensure_column no-ops).
-        // A write through the migrated surface proves the column is live.
-        let mut with_posture = policy(SeatMode::Standard, &[], &[]);
-        with_posture.delegation = Some(crate::org::authority::DelegationPosture::Forbidden);
-        db.upsert("emp-1", &with_posture)
-            .expect("upsert post-migration");
-        assert_eq!(
-            db.get("emp-1").expect("get").and_then(|p| p.delegation),
-            Some(crate::org::authority::DelegationPosture::Forbidden)
-        );
     }
 }

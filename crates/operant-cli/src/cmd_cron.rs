@@ -313,10 +313,10 @@ async fn cmd_create(
     Ok(())
 }
 
-/// Wave 5: provision employee + policy row for a freshly created cron job.
-/// Employee shape comes from the registry's own backfill (single source of
-/// truth); the policy row defaults to `[genome].unrestricted_default` —
-/// the documented posture — unless `--seat-mode` names one.
+/// G+1 (docs/agentic-os/): the employee registry retired to Holon — a
+/// personal cron seat now provisions only its policy row (the enforcement
+/// surface that stays). The derived seat id is unchanged, so an existing
+/// operator's rows keep applying.
 #[allow(clippy::too_many_arguments)]
 fn provision_cron_seat(
     config: &AppConfig,
@@ -325,7 +325,6 @@ fn provision_cron_seat(
     allow: &[String],
     deny: &[String],
 ) -> Result<String> {
-    use operant_core::org::employee_db::EmployeeDb;
     use operant_core::org::seat_policy::SeatPolicy;
     use operant_core::org::seat_policy_db::SeatPolicyDb;
 
@@ -335,24 +334,19 @@ fn provision_cron_seat(
         .context("Failed to read the new cron job")?
         .with_context(|| format!("cron job {job_id} vanished before seat provisioning"))?;
 
-    let org_db = operant_core::org::employee_db::org_db_path(&config.database_path);
-    let registry =
-        EmployeeDb::open_at(org_db.clone()).context("Failed to open the employee registry")?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let report = registry
-        .backfill_from_cron_jobs(
-            std::slice::from_ref(&job),
-            &now,
-            "wave5: onboarded at cron register",
-        )
-        .context("Failed to provision the automaton's employee row")?;
-
-    let employee_id = operant_core::org::employee::derive_employee_id(&job.id);
+    let employee_id = operant_core::org::worklog::derive_employee_id(&job.id);
     let mode_raw = seat_mode
         .map(|m| m.to_string())
         .unwrap_or_else(|| config.genome.unrestricted_default.clone());
     let mode = std::str::FromStr::from_str(&mode_raw)
         .map_err(|e| anyhow::anyhow!("invalid --seat-mode '{mode_raw}': {e}"))?;
+    // the org-sibling rule: the policy store lives in operant_kanban.db
+    // beside the app db (the pre-G+1 convention, kept for personal seats)
+    let org_db = config
+        .database_path
+        .parent()
+        .map(|p| p.join("operant_kanban.db"))
+        .unwrap_or_else(|| std::path::PathBuf::from("operant_kanban.db"));
     let policies = SeatPolicyDb::init(org_db).context("Failed to open the seat policy store")?;
     policies
         .upsert(
@@ -361,20 +355,17 @@ fn provision_cron_seat(
                 mode,
                 allow: allow.to_vec(),
                 deny: deny.to_vec(),
-                delegation: None,
             },
         )
         .context("Failed to seat the automaton's policy row")?;
 
     Ok(format!(
-        "Seat provisioned: employee `{employee_id}` (registry backfill wrote {} row(s)), policy mode `{}` (allow {}, deny {})",
-        report.employees_written,
+        "Seat provisioned: employee `{employee_id}`, policy mode `{}` (allow {}, deny {})",
         mode.as_str(),
         allow.len(),
         deny.len(),
     ))
 }
-
 async fn cmd_get(config: &AppConfig, id: &str) -> Result<()> {
     let db = CronDb::init(cron_db_path(config)).context("Failed to open cron database")?;
     let job = db

@@ -425,20 +425,32 @@ fn default_cost_status() -> String {
 /// Idempotent: `ensure_column` no-ops when the column is present, and the
 /// backfill update touches only NULL rows.
 fn ensure_employee_binding(conn: &Connection) -> Result<(), Error> {
-    crate::org::schema::ensure_column(conn, "gateway_sessions", "employee_id", "TEXT")
-        .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {e}")))?;
-    conn.execute(
-        "UPDATE gateway_sessions SET employee_id = ?1 WHERE employee_id IS NULL",
-        params![crate::org::cast::PREMIERE_SEAT],
-    )
-    .map_err(|e| Error::Agent(format!("Gateway session employee backfill failed: {e}")))?;
+    // G+1: the column stays (a session may bind a Holon employee id), but
+    // the org backfill is gone with the cast. NULL = ungoverned — the
+    // pre-organism behaviour, byte-identical.
+    let res = conn.execute(
+        "ALTER TABLE gateway_sessions ADD COLUMN employee_id TEXT",
+        [],
+    );
+    match res {
+        Ok(_) => {}
+        // "duplicate column name" is the idempotent success
+        Err(e) if e.to_string().contains("duplicate column") => {}
+        Err(e) => {
+            return Err(Error::Agent(format!(
+                "Failed to init gateway session DB: {e}"
+            )));
+        }
+    }
     Ok(())
 }
 
 /// The binding a NEW session gets when none was chosen explicitly: the
 /// premiere (ORGANISM-ARCHITECTURE §2, owner ruling).
 fn default_employee_binding() -> Option<String> {
-    Some(crate::org::cast::PREMIERE_SEAT.to_string())
+    // G+1: no cast, no premiere — an unbound session is ungoverned. A
+    // Holon-bound session sets its employee id at the binding surface.
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -773,10 +785,7 @@ impl PersistentSessionStore {
                     // reads NULL here only if the migration's UPDATE somehow
                     // did not run — treat that as premiere too, never None,
                     // so a turn never runs seatless.
-                    employee_id: Some(
-                        row.get::<_, Option<String>>(25)?
-                            .unwrap_or_else(|| crate::org::cast::PREMIERE_SEAT.to_string()),
-                    ),
+                    employee_id: row.get::<_, Option<String>>(25)?,
                 })
             })
             .map_err(|e| Error::Agent(format!("Failed to query sessions: {}", e)))?;
@@ -1914,13 +1923,14 @@ mod tests {
     // ── Wave 2 (ORGANISM-ARCHITECTURE §2): employee binding ────────────
 
     #[test]
-    fn wave2_new_session_binds_premiere_by_default() {
-        // Owner ruling: a conversation without an explicit employee runs
-        // as the premiere, not a separate assistant role.
+    fn a_new_session_is_ungoverned_until_bound() {
+        // G+1: no cast, no premiere default — an unbound session runs
+        // ungoverned (the pre-organism behaviour); /session binds a seat
+        // (a personal policy row or a Holon employee id).
         let store = test_store();
         let source = test_source("telegram", "u1", "c1", "dm");
         let entry = store.get_or_create_session(&source, false).unwrap();
-        assert_eq!(entry.employee_id.as_deref(), Some("premiere"));
+        assert_eq!(entry.employee_id.as_deref(), None);
     }
 
     #[test]

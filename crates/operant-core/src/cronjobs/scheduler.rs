@@ -16,11 +16,8 @@ const MAX_TRANSIENT_RETRIES: u8 = 2;
 /// the effective latency — a 30s re-arm lands within the next tick.
 const TRANSIENT_RETRY_BACKOFFS_SECS: [u64; 2] = [30, 120];
 use crate::error::Error;
-use crate::org::decisions_db::RunKind;
-use crate::org::identity_gate::{GateBlock, GateDecision, IdentityGate};
 use crate::org::worklog::OutcomeSignals;
 use crate::org::worklog::UsageAccumulator;
-use crate::org::write_barrier::{WriteBarrier, WriteBarrierRequest};
 use crate::turn_end::{RESULT_SUMMARY_LIMIT, TurnEnd};
 
 /// Message sent from the cron scheduler to the gateway for delivery.
@@ -65,7 +62,6 @@ pub struct CronScheduler {
     /// (`docs/harness-kernel.md:7`): upgrading operant cannot block a job
     /// until an operator installs the gate. See
     /// `docs/WAVE1-DECISIONS.md` §3.2.
-    org_gate: Option<Arc<IdentityGate>>,
     /// The §7.1 write barrier, mounted as the postcondition of every
     /// scheduled agent run (wave-1 slice D, outline §3 "B′").
     ///
@@ -74,12 +70,10 @@ pub struct CronScheduler {
     /// operant cannot fail a job until a [`WriteBarrier`] is constructed and
     /// installed via [`CronScheduler::with_write_barrier`] — the same merge
     /// discipline as [`Self::org_gate`] above.
-    write_barrier: Option<WriteBarrier>,
     /// The org employee registry, mounted so a scheduled run can resolve
     /// its REAL seat (§3.1.1's `employee_cron_jobs` join, reversed) before
     /// the write barrier attributes the row. `None` keeps the pre-661
     /// claim: the §3.1.1 derived session id.
-    employee_db: Option<Arc<crate::org::employee_db::EmployeeDb>>,
     /// The operant root (the directory holding the org dbs), for the
     /// seat's MEMORY.md (`<root>/org/employees/<seat>/MEMORY.md`,
     /// iter-666). `None` disables injection — prompt byte-identical.
@@ -110,7 +104,6 @@ pub struct CronScheduler {
     context_injection: Option<Arc<crate::org::context_injection::ContextInjector>>,
     /// iter-684 (gap 6): the daily seat-pairing sessions' settings.
     /// `None` = never mounted, the tick never checks (dark-mergeable).
-    socialization: Option<crate::config::SocializationSettings>,
     /// iter-720 (trinity P2-A): the observer told about delivery-ledger
     /// lifecycle points (queued / reclaimed / parked). `None` = the
     /// default no-op, tick byte-identical (dark-mergeable — same
@@ -124,9 +117,6 @@ impl CronScheduler {
             db,
             agent,
             delivery_tx: None,
-            org_gate: None,
-            write_barrier: None,
-            employee_db: None,
             seat_memory_root: None,
             transient_retries: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             usage_meter: None,
@@ -134,7 +124,6 @@ impl CronScheduler {
             seat_budgets: None,
             default_budget: crate::config::BudgetSettings::default(),
             context_injection: None,
-            socialization: None,
             observer: None,
         }
     }
@@ -149,38 +138,6 @@ impl CronScheduler {
 
     pub fn with_delivery(mut self, tx: mpsc::UnboundedSender<CronDelivery>) -> Self {
         self.delivery_tx = Some(tx);
-        self
-    }
-
-    /// Install the fail-closed org identity gate (WAVE1-DECISIONS §3.2).
-    ///
-    /// Not called by any default boot path — this is the opt-in that keeps the
-    /// gate dark-mergeable. Once installed, a job whose employee record is
-    /// missing or incomplete is **blocked before dispatch** (never warned
-    /// about), and the block is not retried until the job's next scheduled
-    /// tick.
-    pub fn with_org_gate(mut self, gate: Arc<IdentityGate>) -> Self {
-        self.org_gate = Some(gate);
-        self
-    }
-
-    /// Install the §7.1 write barrier as the scheduled-run postcondition
-    /// (outline §3, B′). Once installed, a completed run must land its three
-    /// artifact rows, and a **barrier write failure fails the run** —
-    /// `last_status = "error"` — even though the agent itself answered.
-    /// §10's B′ acceptance. No default boot path installs it, which keeps
-    /// the mount dark-mergeable exactly like [`Self::with_org_gate`].
-    pub fn with_write_barrier(mut self, barrier: WriteBarrier) -> Self {
-        self.write_barrier = Some(barrier);
-        self
-    }
-
-    /// Mount the employee registry for worklog attribution. Fail-open by
-    /// design: without it (or when the lookup errors) the barrier falls back
-    /// to the §3.1.1 derived id — the pre-661 claim — so an org-store fault
-    /// degrades attribution, never the scheduled run itself.
-    pub fn with_employee_db(mut self, db: Arc<crate::org::employee_db::EmployeeDb>) -> Self {
-        self.employee_db = Some(db);
         self
     }
 
@@ -233,24 +190,14 @@ impl CronScheduler {
         self
     }
 
-    /// iter-684 (gap 6): mount the socialization settings — the tick then
-    /// checks the schedule every pass and runs the configured pairs when
-    /// due. Settings carry their own `enabled` flag; mounting is the
-    /// gateway's decision that the feature is wired at all.
-    pub fn with_socialization(mut self, settings: crate::config::SocializationSettings) -> Self {
-        self.socialization = Some(settings);
-        self
-    }
-
     /// The seat a job belongs to: the §3.1.1 `employee_cron_jobs` join when
     /// the job is linked, else the derived id — the pre-661 claim. Shared
     /// by worklog attribution and seat-memory injection so the two always
     /// agree on which seat a run is.
-    fn resolve_seat_id(&self, job: &CronJob, derived_session_id: &str) -> String {
-        self.employee_db
-            .as_ref()
-            .and_then(|db| db.employee_for_job(&job.id).ok().flatten())
-            .unwrap_or_else(|| derived_session_id.to_string())
+    fn resolve_seat_id(&self, _job: &CronJob, derived_session_id: &str) -> String {
+        // G+1: the employee registry retired to Holon (`api_employees`);
+        // the derived session id is the whole claim again.
+        derived_session_id.to_string()
     }
 
     /// iter-669: the bounded transient-retry budget. A transient provider
@@ -327,7 +274,6 @@ impl CronScheduler {
             // waited for the 10:00 hourly jobs; an armed-with-no-stamp box
             // waits even longer). The unit tests call the coordinator
             // directly, so the tick-level gate was never pinned.
-            self.maybe_run_socialization().await;
             return Ok(());
         }
 
@@ -342,92 +288,13 @@ impl CronScheduler {
         // iter-684 (gap 6): the daily seat-pairing sessions — a schedule
         // check, not a job row (infra-owned, outside the cast registry).
         // After the due jobs so a busy tick never delays a live dispatch.
-        self.maybe_run_socialization().await;
 
-        Ok(())
-    }
-
-    /// The Wave 1 org-identity gate decision for `job`, as a block reason.
-    ///
-    /// Returns `None` when the job may run — either because the org layer is
-    /// off (the default, dark-mergeable state) or because the job's employee
-    /// record is complete. Returns `Some(GateBlock)` when the job's identity
-    /// is incomplete and must not dispatch.
-    ///
-    /// The expected `employee_id` is derived here via §3.1.1's rule
-    /// (`derive_employee_id`, packet A) so the gate checks the *join*, not
-    /// just the field's presence: a row belonging to a different job is not
-    /// this job's identity and must block.
-    fn org_gate_block(&self, job: &CronJob) -> Option<GateBlock> {
-        let gate = self.org_gate.as_ref()?;
-        let expected_employee_id = crate::org::employee::derive_employee_id(&job.id);
-        match gate.check(&job.id, &expected_employee_id) {
-            GateDecision::Allow { .. } => None,
-            GateDecision::Block(block) => Some(block),
-        }
-    }
-
-    /// Fail-closed side effect for a gate block: log at `error!`, persist the
-    /// block on the job row, and advance `next_run_at` — then return without
-    /// executing.
-    ///
-    /// **Why `mark_job_run` still runs on a block.** §3.2 says a block must not
-    /// be *retried* — the job's next attempt is its next scheduled tick. In
-    /// the live scheduler, skipping `mark_job_run` would leave `next_run_at`
-    /// in the past, so `get_due_jobs` would re-select the same job every 60s
-    /// and the "no retry" rule would turn into a busy-spin that never runs the
-    /// job but hammers the DB forever. Persisting the run with the block
-    /// message both honours the no-retry rule and makes the block *visible*:
-    /// `last_status`/`last_error` carry the actionable message, so the job's
-    /// own `operant cron list` output names the job and the missing fields
-    /// without the operator reading logs.
-    fn record_gate_block(&self, job: &CronJob, block: GateBlock) -> Result<(), Error> {
-        let started_at = chrono::Utc::now().to_rfc3339();
-        let message = block.message();
-        // error!, not warn! — §3.2 rule 1. A blocked job is a fault, not a
-        // notice, and warn! is what a "not a warning" acceptance means.
-        error!("{message}");
-        // The employee id the gate resolved (or could not), for the log line's
-        // operator context. Kept in the message already; this is the structured
-        // companion.
-        tracing::error!(
-            job_id = %job.id,
-            job_name = %job.name,
-            missing = ?block.missing_fields(),
-            "org identity gate blocked the tick; not dispatching"
-        );
-        self.db.mark_job_run(
-            &job.id,
-            false,
-            Some(message.clone()),
-            None,
-            self.compute_next_run(job),
-        )?;
-
-        // iter-668: a blocked run is a run attempt — history records it
-        // with its own origin so gate blocks are forensically distinct
-        // from dispatch failures. Audit layer: warn on write failure.
-        if let Err(e) =
-            self.db
-                .record_cron_run(&job.id, &started_at, false, Some(message), "gate_block")
-        {
-            warn!("cron run history write failed for {}: {e}", job.id);
-        }
         Ok(())
     }
 
     async fn run_job(&self, job: &CronJob) -> Result<(), Error> {
         info!("Executing cron job {}: {}", job.id, job.name);
         let run_started_at = chrono::Utc::now().to_rfc3339();
-
-        // ── Wave 1 fail-closed org identity gate (WAVE1-DECISIONS §3.2) ──
-        // Runs immediately before dispatch, not at schedule time, so the check
-        // sees the job exactly as it is about to run. No-op when the org layer
-        // is off (`org_gate == None`), which keeps the pre-gate path
-        // byte-identical on upgrade.
-        if let Some(block) = self.org_gate_block(job) {
-            return self.record_gate_block(job, block);
-        }
 
         // ── iter-678: cron-path budget gate (gap 1) ────────────────────
         // Mirrors the gateway's turn-start gate: a run that would START
@@ -598,7 +465,7 @@ impl CronScheduler {
     /// `None` = the run may proceed. A hard cap already blown at run start
     /// refuses — the run was never going to fit the window.
     fn budget_gate_block(&self, job: &CronJob) -> Option<String> {
-        let derived = crate::org::employee::derive_employee_id(&job.id);
+        let derived = crate::org::worklog::derive_employee_id(&job.id);
         let seat_id = self.resolve_seat_id(job, &derived);
         self.budget_refusal_for_seat(&seat_id)
     }
@@ -628,169 +495,6 @@ impl CronScheduler {
         ))
     }
 
-    /// iter-684 (gap 6): the socialization coordinator — checked every
-    /// tick, runs at most once per schedule fire. Infra-owned per the
-    /// owner's 9-cast-seats ruling (the design doc's `cron_cast_socializer`
-    /// is realized HERE, outside the registry, like dispatcher-retry).
-    async fn maybe_run_socialization(&self) {
-        let Some(settings) = self.socialization.as_ref() else {
-            return;
-        };
-        if !settings.enabled {
-            return;
-        }
-        let Some(root) = self.seat_memory_root.clone() else {
-            warn!("socialization: no seat-memory root mounted — sessions cannot run; skipping");
-            return;
-        };
-        let org_db = root.join("operant_kanban.db");
-        let now = chrono::Utc::now();
-        let last = crate::org::socialization::last_socialization_run(&org_db)
-            .ok()
-            .flatten();
-        if !crate::org::socialization::socialization_due(&settings.schedule, last.as_deref(), now) {
-            return;
-        }
-        info!(
-            pairs = settings.pairs.len(),
-            "socialization: due — running the daily sessions"
-        );
-        // At-most-once: stamp first; a crashed pair is a missed pair, not a
-        // doubled one (spend discipline over completeness).
-        if let Err(e) =
-            crate::org::socialization::record_socialization_run(&org_db, &now.to_rfc3339())
-        {
-            warn!(
-                "socialization: state write failed — sessions skipped to avoid a double run: {e}"
-            );
-            return;
-        }
-        for pair in &settings.pairs {
-            if let Err(e) = self
-                .run_socialization_pair(&root, settings.turn_budget, pair)
-                .await
-            {
-                warn!("socialization: pair {pair:?} failed: {e} (fail-open)");
-            }
-        }
-    }
-
-    /// iter-684 (gap 6): drive ONE pair's session — senior opens, junior
-    /// answers, the alternation closes; the shared turn budget is the
-    /// dm_threads envelope; every turn is a full seat-shaped run (binding +
-    /// memory + injected feeds + metering). On close, the close-out lands in
-    /// BOTH seats' MEMORY.md — the densification ledger.
-    async fn run_socialization_pair(
-        &self,
-        root: &std::path::Path,
-        turn_budget: u32,
-        pair: &[String],
-    ) -> Result<(), Error> {
-        if pair.len() != 2 || pair[0].is_empty() || pair[1].is_empty() || pair[0] == pair[1] {
-            return Err(Error::Agent(format!(
-                "socialization: invalid pair {pair:?} — expected [senior, junior]"
-            )));
-        }
-        let (senior, junior) = (&pair[0], &pair[1]);
-        let threads = crate::org::dm_thread::DmThreadDb::init(root.join("operant_kanban.db"))?;
-        let thread = threads.open(senior, junior, turn_budget)?;
-        let thread_id = thread.thread_id.clone();
-        let session_key = format!("socialization:{thread_id}");
-        let n = turn_budget.max(1);
-
-        let mut transcript_tail = String::new();
-        for i in 0..n {
-            let speaker = if i % 2 == 0 { senior } else { junior };
-            let other = if i % 2 == 0 { junior } else { senior };
-            if threads.remaining(&thread_id)? == 0 {
-                break;
-            }
-            // The seat's budget posture gates a session turn exactly like a
-            // cron run — sessions never spend past a hard cap.
-            if let Some(reason) = self.budget_refusal_for_seat(speaker) {
-                warn!("socialization: turn refused for `{speaker}`: {reason}");
-                break;
-            }
-            let budget = threads.spend_turn(&thread_id)?;
-            let awareness = crate::org::dm_thread::awareness_line(budget.remaining(), n);
-            let base_prompt = if i == 0 {
-                format!(
-                    "Daily socialization session with `{other}`. {awareness}. Open the \
-                     session: greet {other}, share what is most relevant from your \
-                     latest work and the org feeds, name one decision you need from \
-                     {other} or their chain, and ask one question. Be concise."
-                )
-            } else if i + 1 >= n {
-                format!(
-                    "{other} said:\n{transcript_tail}\n{awareness}. Close the session: \
-                     state the outcomes of this exchange and your next intents in \
-                     two to four lines — they will be appended to both seats' \
-                     MEMORY.md files."
-                )
-            } else {
-                format!(
-                    "{other} said:\n{transcript_tail}\n{awareness}. Respond: answer the \
-                     question, share your latest, and surface what you need."
-                )
-            };
-            let prompt = self.bind_seat_run(speaker, &session_key, &base_prompt);
-            let meter_before = self.usage_meter.as_ref().and_then(|m| {
-                m.lock()
-                    .ok()
-                    .map(|acc| (acc.input_tokens(), acc.output_tokens(), acc.cost_usd()))
-            });
-            match self.agent.run(prompt).await {
-                Ok(message) => {
-                    self.drain_run_usage(
-                        &format!("socialization:{thread_id}"),
-                        &format!("socialization {senior}-{junior}"),
-                        speaker,
-                        meter_before,
-                    );
-                    transcript_tail =
-                        crate::agent::safe_truncate_str(message.content.trim(), 800).to_string();
-                }
-                Err(e) => {
-                    warn!("socialization: turn {i} for `{speaker}` failed: {e}");
-                    break;
-                }
-            }
-        }
-        let _ = threads
-            .close(&thread_id, "socialization session complete")
-            .inspect_err(|e| warn!("socialization: close failed for {thread_id}: {e}"));
-
-        // Densification: the close-out (the last spoken content) lands in
-        // BOTH seats' MEMORY.md under a dated heading.
-        let outcome = transcript_tail.trim();
-        if !outcome.is_empty() {
-            let heading = format!("## Socialization {}", chrono::Utc::now().format("%Y-%m-%d"));
-            seat_memory_append(
-                Some(root),
-                senior,
-                &heading,
-                &format!("Session with {junior}: {outcome}"),
-            );
-            seat_memory_append(
-                Some(root),
-                junior,
-                &heading,
-                &format!("Session with {senior}: {outcome}"),
-            );
-            // Phase 2 (socialization design §8): the senior's decision-of-record
-            // posts to the board through the same §2.3.1 consult the CLI seam
-            // runs — fail-open here: the session already succeeded and both
-            // MEMORY.md files carry the outcome, so a refusal or a failed consult
-            // skips the post, never the tick.
-            if let Err(e) =
-                crate::org::socialization::post_session_outcome(root, senior, junior, outcome)
-            {
-                warn!("socialization: outcome notice {senior}->{junior} skipped: {e} (fail-open)");
-            }
-        }
-        Ok(())
-    }
-
     /// iter-684: bind the shared agent to a seat and compose its full prompt
     /// — session key, seat + charter, seat memory, injected feeds. The
     /// shared preamble of every seat-shaped run (cron jobs and socialization
@@ -798,12 +502,9 @@ impl CronScheduler {
     fn bind_seat_run(&self, seat_id: &str, session_key: &str, base_prompt: &str) -> String {
         self.agent.set_session_id(session_key.to_string());
         self.agent.set_seat_id(seat_id.to_string());
-        let charter = self.employee_db.as_ref().and_then(|db| {
-            db.get_employee(seat_id)
-                .ok()
-                .flatten()
-                .and_then(|emp| emp.system_prompt.clone())
-        });
+        // G+1: seat charters live in Holon job descriptions now; the
+        // personal scheduler injects no charter.
+        let charter: Option<String> = None;
         self.agent.set_charter(charter.clone());
         let prompt = match self.seat_memory_root.as_deref() {
             Some(root) => seat_memory_prompt(root, seat_id, base_prompt),
@@ -936,7 +637,7 @@ impl CronScheduler {
         // disagree about what a seat sees. Its history: iter-672 bound the
         // seat (the guard at stream.rs:811 keys on it); iter-666 injected
         // MEMORY.md; iter-679 injected the bounded feed section.
-        let session_id = crate::org::employee::derive_employee_id(&job.id);
+        let session_id = crate::org::worklog::derive_employee_id(&job.id);
         let seat_id = self.resolve_seat_id(job, &session_id);
         let prompt = self.bind_seat_run(&seat_id, &session_id, &job.prompt);
 
@@ -1017,28 +718,13 @@ impl CronScheduler {
         self.drain_run_usage(&job.id, &job.name, &seat_id, meter_before);
 
         match run_result {
-            Ok(message) => {
-                // ── Wave 1 write barrier, outline §3 step B′ ─────────────────
-                // The §7.1 postcondition: a completed scheduled run must
-                // leave its three artifact rows, and a barrier write failure
-                // fails the run regardless of the agent's answer. Only a
-                // completed run reaches the barrier — the `Err` arm below
-                // never completed a turn, so there is nothing to record
-                // there and the run is already a failure.
-                if let Err(e) = self.apply_write_barrier(job, &session_id, &message.content) {
-                    let err_msg = e.to_string();
-                    error!("Write barrier failed for job {}: {}", job.id, err_msg);
-                    (false, String::new(), err_msg.clone(), Some(err_msg), false)
-                } else {
-                    (
-                        true,
-                        "Agent run completed".into(),
-                        message.content,
-                        None,
-                        false,
-                    )
-                }
-            }
+            Ok(message) => (
+                true,
+                "Agent run completed".into(),
+                message.content,
+                None,
+                false,
+            ),
             Err(e) => {
                 let transient = should_arm_transient_retry(&e);
                 let err_msg = format!("Agent run failed: {}", e);
@@ -1051,81 +737,6 @@ impl CronScheduler {
                 )
             }
         }
-    }
-
-    /// Build and run the §7.1 barrier request for one completed scheduled
-    /// run (outline §3, B′). No-op when no barrier is installed.
-    ///
-    /// The request is shaped from what the run actually produced: the
-    /// per-job session id A′ derives (`derive_employee_id` — session and
-    /// employee are one identity, §3.1.1), the job's own id, and the
-    /// assistant's final reply. The `TurnEnd` is built here the same honest
-    /// way `cmd_org.rs`'s `operator_entry` established for framework-level
-    /// runs: construct the event the seam would have emitted and let the
-    /// sealed constructor run, so no second mint point for a worklog row
-    /// is created.
-    ///
-    /// The counters are this seam's honest observation, not the model
-    /// loop's: `run_agent_job` does not see per-tool durations or model
-    /// round-trips (that is the `TurnEndBus`'s job, §3.4), so the row
-    /// records one completed turn with no tools — the same shape
-    /// `operator_entry` records for a CLI run.
-    ///
-    /// `apply` is synchronous (§3): every store it writes through is
-    /// blocking `rusqlite`, so there is nothing to await.
-    fn apply_write_barrier(
-        &self,
-        job: &CronJob,
-        session_id: &str,
-        result: &str,
-    ) -> Result<(), Error> {
-        let Some(barrier) = self.write_barrier.as_ref() else {
-            return Ok(());
-        };
-
-        // `turn_end.rs::summarize` is private, so its cap is inlined here —
-        // `safe_truncate_str` cuts on a UTF-8 char boundary exactly like the
-        // bus path does.
-        let result_truncated = result.len() > RESULT_SUMMARY_LIMIT;
-        let result_summary =
-            crate::agent::safe_truncate_str(result, RESULT_SUMMARY_LIMIT).to_string();
-        // §3.1.1 attribution, fixed in iter-661: the session id is the
-        // DERIVED employee id (`emp-<job prefix>`), which matches the
-        // registry only for legacy cron-derived employees. Seeded cast jobs
-        // carry the REAL seat on `employee_cron_jobs`; resolve that join so
-        // the worklog row names the seat. Unlinked jobs and lookup failures
-        // fall back to the derived id — the pre-fix claim, never a blocked
-        // run: attribution is the audit layer.
-        let employee_claim = self.resolve_seat_id(job, session_id);
-
-        let request = WriteBarrierRequest::from_turn_end(TurnEnd {
-            // No bus minted this event; a per-bus monotonic id is meaningless
-            // at this seam, and `0` matches the `operator_entry` precedent.
-            turn_id: 0,
-            session_id: session_id.to_string(),
-            iterations: 1,
-            tool_calls: 0,
-            tool_durations_ms: Vec::new(),
-            result_summary,
-            result_truncated,
-        })
-        // §3.4 outcome signals, as observed at this seam: the run returned
-        // `Ok`, which the loop reaches only after emitting `AgentEvent::Done`
-        // (`agent/run.rs:1210`), so `done_emitted` is fact; `turn_errored`
-        // is fact; and `last_status_clean` is `true` because operant has no
-        // `last_status` signal at all — the documented honest default
-        // (`OutcomeSignals::last_status_clean`). Without these the row
-        // would derive `partial` for a cleanly completed run.
-        .with_signals(OutcomeSignals {
-            done_emitted: true,
-            turn_errored: false,
-            last_status_clean: true,
-        })
-        .with_employee(employee_claim)
-        .with_run_kind(RunKind::Cron)
-        .with_job_id(Some(job.id.clone()));
-
-        barrier.apply(&request).map(|_| ())
     }
 
     async fn deliver_result(&self, job: &CronJob, content: &str) -> Result<(), Error> {
@@ -1504,52 +1115,6 @@ mod tests {
             .with_usage_store(store)
     }
 
-    /// iter-684 gap 6 defect pin (found live 2026-10-09, arming the
-    /// sessions): the socialization coordinator must be checked on an
-    /// EMPTY-due tick — the early return used to skip it, delaying a
-    /// schedule fire to the next busy tick. Pairs are empty here on
-    /// purpose: the at-most-once STAMP is the observable, no agent turn
-    /// runs, and a real 09:30 fire on a jobless tick is never missed.
-    #[tokio::test]
-    async fn socialization_coordinator_runs_on_an_empty_due_tick() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db =
-            Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
-        let agent = Arc::new(crate::agent::OperantAgent::new(
-            crate::agent::AgentConfig::default(),
-            Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
-                crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
-            )),
-            crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
-            db,
-        ));
-        let cron_db =
-            Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
-        let seats_root = dir.path().join("seats");
-        std::fs::create_dir_all(&seats_root).expect("seats root");
-        let scheduler = super::CronScheduler::new(cron_db, agent)
-            .with_seat_memory_root(seats_root.clone())
-            .with_socialization(crate::config::SocializationSettings {
-                enabled: true,
-                // Every-minute schedule: due with last=None by construction,
-                // so the tick's reach — not the schedule — is under test.
-                schedule: "0 * * * * *".to_string(),
-                turn_budget: 0,
-                pairs: Vec::new(),
-            });
-        // No cron job exists → due_jobs is empty → the old code returned
-        // before ever reaching the coordinator.
-        scheduler.tick().await.expect("tick");
-        let org_db = seats_root.join("operant_kanban.db");
-        let stamp = crate::org::socialization::last_socialization_run(&org_db)
-            .expect("socialization state read");
-        assert!(
-            stamp.is_some(),
-            "the coordinator must stamp on an empty-due tick — otherwise a \
-             09:30 fire waits for the next busy tick"
-        );
-    }
-
     fn test_job() -> crate::cronjobs::db::CronJob {
         crate::cronjobs::db::CronJob {
             id: "job_budget_probe".to_string(),
@@ -1620,7 +1185,7 @@ mod tests {
     #[test]
     fn budget_gate_refuses_a_hard_cap_already_blown() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let seat_id = crate::org::employee::derive_employee_id("job_budget_probe");
+        let seat_id = crate::org::worklog::derive_employee_id("job_budget_probe");
         let scheduler = scheduler_with_budgets(
             dir.path(),
             crate::config::BudgetSettings::default(),
@@ -1645,7 +1210,7 @@ mod tests {
     #[test]
     fn budget_gate_soft_mode_never_refuses() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let seat_id = crate::org::employee::derive_employee_id("job_budget_probe");
+        let seat_id = crate::org::worklog::derive_employee_id("job_budget_probe");
         let scheduler = scheduler_with_budgets(
             dir.path(),
             crate::config::BudgetSettings::default(),
@@ -1667,7 +1232,7 @@ mod tests {
     #[test]
     fn drain_run_usage_writes_the_seat_rollup() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let seat_id = crate::org::employee::derive_employee_id("job_budget_probe");
+        let seat_id = crate::org::worklog::derive_employee_id("job_budget_probe");
         let scheduler =
             scheduler_with_budgets(dir.path(), crate::config::BudgetSettings::default(), None);
         // The meter saw a run's usage after the snapshot: 120 in / 45 out

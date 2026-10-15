@@ -16,8 +16,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use operant_core::org::authority::GrantDb;
-use operant_core::org::pending_requests::PendingRequestDb;
 use operant_core::org::seat_authority::SeatAuthority;
 use operant_core::org::seat_policy::{SeatPolicy, SeatPolicySource};
 
@@ -59,22 +57,17 @@ impl SeatPolicySource for RunPolicySource {
 /// one. Databases live under the isolated operant home (`HERMES_HOME`) — the
 /// same home the adapter installer prepared — so escalations from Holon runs
 /// never touch the operator's own org stores.
-pub fn holon_authority(home: &std::path::Path) -> crate::Result<Option<Arc<SeatAuthority>>> {
+pub fn holon_authority(_home: &std::path::Path) -> crate::Result<Option<Arc<SeatAuthority>>> {
     let Some(loaded) = run_policy() else {
         return Ok(None);
     };
     let policy = loaded?;
-    let org = home.join("org");
-    let grants = GrantDb::init(org.join("grants.db"))
-        .map_err(|e| crate::Error::Enforcement(format!("grants store: {e}")))?;
-    let requests = PendingRequestDb::init(org.join("requests.db"))
-        .map_err(|e| crate::Error::Enforcement(format!("pending requests store: {e}")))?;
-    Ok(Some(Arc::new(SeatAuthority::new(
-        Arc::new(RunPolicySource {
+    // G+1: the authority is policy-only now — the grant ledger and the
+    // durable ask queue retired to Holon (an approved plan IS the grant).
+    Ok(Some(Arc::new(SeatAuthority::new(Arc::new(
+        RunPolicySource {
             seat: holon_seat(),
             policy,
-        }),
-        Arc::new(grants),
-        Arc::new(requests),
-    ))))
+        },
+    )))))
 }

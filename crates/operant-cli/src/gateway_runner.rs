@@ -398,32 +398,6 @@ pub static SEAT_POLICY_DBS: OnceLock<
     std::sync::Mutex<Option<Arc<operant_core::org::seat_policy_db::SeatPolicyDb>>>,
 > = OnceLock::new();
 
-/// Wave 2: the employee registry the gateway turn reads charters from and
-/// the `/session new` command validates employee ids against. Same
-/// OnceLock-over-Mutex shape as [`SEAT_APPROVERS`] for the same reason —
-/// sync surfaces (commands, the turn prologue) have no handle back into
-/// `start_gateway`'s locals. `None` until the gateway starts; consumers
-/// degrade to "no charter, binding refused" rather than guessing.
-pub static EMPLOYEE_REGISTRIES: OnceLock<
-    std::sync::Mutex<Option<Arc<operant_core::org::employee_db::EmployeeDb>>>,
-> = OnceLock::new();
-
-/// Install the gateway's employee registry (Wave 2). Mirrors
-/// [`store_seat_approver`]: overwrite-once at gateway start.
-pub fn store_employee_registry(db: Arc<operant_core::org::employee_db::EmployeeDb>) {
-    let cell = EMPLOYEE_REGISTRIES.get_or_init(|| std::sync::Mutex::new(None));
-    if let Ok(mut guard) = cell.lock() {
-        *guard = Some(db);
-    }
-}
-
-/// The installed employee registry, if the gateway started one.
-pub(crate) fn employee_registry() -> Option<Arc<operant_core::org::employee_db::EmployeeDb>> {
-    let cell = EMPLOYEE_REGISTRIES.get_or_init(|| std::sync::Mutex::new(None));
-    let guard = cell.lock().ok()?;
-    guard.clone()
-}
-
 /// Wave 4 (ORGANISM-ARCHITECTURE §5): the per-seat budget override store.
 /// Same shape as the other org-store globals — the turn prologue resolves
 /// a seat's effective budget through it (per-field precedence over
@@ -1089,25 +1063,18 @@ impl MessageHandler for GatewayMessageHandler {
                     store.entry_for_source(&message.platform, &message.user_id, &message.channel_id)
                 {
                     store_session_key = Some(entry.session_key.clone());
-                    let employee_id = entry
-                        .employee_id
-                        .clone()
-                        .unwrap_or_else(|| "premiere".to_string());
-                    self.agent.set_seat_id(employee_id.clone());
-                    let charter = employee_registry().and_then(|registry| {
-                        registry
-                            .get_employee(&employee_id)
-                            .ok()
-                            .flatten()
-                            .and_then(|emp| emp.system_prompt.clone())
-                    });
-                    self.agent.set_charter(charter);
+                    // G+1: seat binding names a Holon employee id in org
+                    // mode; ungoverned (None) in personal mode. No charter
+                    // injection — job descriptions are Holon's now.
+                    if let Some(emp) = entry.employee_id.clone() {
+                        self.agent.set_seat_id(emp);
+                    }
+                    self.agent.set_charter(None);
                     tracing::debug!(
                         session_key = %session_key,
-                        seat = %employee_id,
-                        "Wave 2: session runs as its bound employee"
+                        "session runs as its bound employee"
                     );
-                    bound_employee = Some(employee_id);
+                    bound_employee = entry.employee_id.clone();
                 }
             }
         }
@@ -1920,7 +1887,20 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // durably queued the moment it happens. The employee registry and the
     // hierarchy edges feed the SeatApprover the dispatcher resolves
     // approvals through.
-    let org_db = operant_core::org::employee_db::org_db_path(&app_config.database_path);
+    // G+1 (docs/agentic-os/, owner order 2026-10-15): the org layer's
+    // retired stores are gone — the grant ledger, the escalation queue,
+    // the employee registry, the hierarchy edges, the cast. What the
+    // gateway keeps is the enforcement machinery the boundary assigns
+    // operant: the personal-mode seat policies (the enforcement surface)
+    // and the seat budgets (window math; caps from policy.json.budget in
+    // org mode). The approver is resolution-only now — an interactive
+    // approval or denial resolves the in-flight ask; there is no grant
+    // to mint and no durable row to record.
+    let org_db = app_config
+        .database_path
+        .parent()
+        .map(|p| p.join("operant_kanban.db"))
+        .unwrap_or_else(|| std::path::PathBuf::from("operant_kanban.db"));
     let seat_policy_store = Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
         org_db.clone(),
     )?);
@@ -1929,70 +1909,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     store_seat_policy_db(Arc::clone(&seat_policy_store));
     let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> =
         seat_policy_store;
-    let grant_ledger = Arc::new(operant_core::org::authority::GrantDb::init(org_db.clone())?);
-    let request_queue = Arc::new(operant_core::org::pending_requests::PendingRequestDb::init(
-        org_db.clone(),
-    )?);
-    let employee_registry = Arc::new(operant_core::org::employee_db::EmployeeDb::open_at(
-        org_db.clone(),
-    )?);
-    // Wave 2: commands and the turn prologue read charters and validate
-    // employee ids through the global seam; the Arc is cloned BEFORE any
-    // dyn coercion below keeps the concrete type reachable.
-    store_employee_registry(Arc::clone(&employee_registry));
     let seat_budget_store = Arc::new(operant_core::org::seat_budgets::SeatBudgetDb::init(
         &org_db,
     )?);
     store_seat_budget_db(Arc::clone(&seat_budget_store));
-    let hierarchy_edges = Arc::new(operant_core::org::hierarchy_edges::HierarchyEdgesDb::init(
-        &org_db,
-    )?);
-    // Wave 1 (ORGANISM-ARCHITECTURE §1): provision the cold-start cast on
-    // first run — the nine manifest seats, their charters, the reporting
-    // edges, and premiere's standing Org-scope grant. Idempotent: an
-    // already-seeded org is left byte-identical, and operator edits are
-    // never converged back to the manifest. Fails closed: a topology that
-    // does not compute premiere as org-lead aborts the boot rather than
-    // mint authority off a broken graph.
-    //
-    // Phase G (docs/agentic-os/): in org mode the organization is Holon's —
-    // no cast seeding, no operant-side org tables. The archived stores stay
-    // read-only (nothing writes them), and the import mapped the seats into
-    // Holon's own registry (adapters/operant/import-cast.py).
-    if app_config.holon.enabled {
-        tracing::info!(
-            "[holon] enabled — cast seeding skipped (the organization is Holon's; phase G)"
-        );
-    } else {
-        operant_core::org::cast::seed_cast(
-            &employee_registry,
-            &hierarchy_edges,
-            &grant_ledger,
-            &request_queue,
-            app_config.genome.grant_ttl_days,
-        )?;
-    }
-    // Row 1 (outline v5 §1): bounded delegation resolves the employee row
-    // it delegates INTO — without the registry the authority fails closed
-    // on the registry-unavailable arm. Latent today (no production row sets
-    // Bounded yet); attaching it here closes the hole before one does.
-    let seat_authority = Arc::new(
-        operant_core::org::seat_authority::SeatAuthority::new(
-            Arc::clone(&seat_policies),
-            Arc::clone(&grant_ledger),
-            Arc::clone(&request_queue),
-        )
-        .with_employee_registry(Arc::clone(&employee_registry)),
-    );
-    // The approver the dispatcher's `/approve` / `/deny` and the 60s timeout
-    // resolve queued asks through. TTL comes from `[genome] grant_ttl_days`
-    // (7-day HoD default; standing grants are CEO+ only).
+    let seat_authority = Arc::new(operant_core::org::seat_authority::SeatAuthority::new(
+        Arc::clone(&seat_policies),
+    ));
+    // The approver the dispatcher's `/approve` / `/deny` and the 60s
+    // timeout resolve queued asks through. Resolution-only (G+1).
     let seat_approver = Arc::new(operant_core::org::seat_authority::SeatApprover::new(
-        Arc::clone(&grant_ledger),
-        Arc::clone(&request_queue),
-        Arc::clone(&employee_registry),
-        Arc::clone(&hierarchy_edges),
-        app_config.genome.grant_ttl_days,
+        "gateway",
     ));
     store_seat_approver(seat_approver);
     let agent = crate::create_runtime_agent_with(
@@ -4022,36 +3949,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // ── Spawn Cron Scheduler ─────────────────────────────────────────────
     let cron_db_path = operant_core::platform::operant_home().join("operant_cron.db");
     if let Ok(cron_db) = operant_core::cronjobs::CronDb::init(cron_db_path) {
-        // Seed the cold-start cast's default cron jobs. Each cast seat gets
-        // a deterministic `cron_cast_<seat>` job; dp-the-program is skipped
-        // (continuous engine, not a scheduled job). The registry is the one
-        // opened at boot above — reusing it avoids a second connection.
-        // Fail-open: a seed failure warns but does not block the scheduler
-        // or the gateway.
-        //
-        // Phase G (docs/agentic-os/): in org mode the cast's duties are
-        // Holon routines (the import re-proposed them); no cast crons.
-        if app_config.holon.enabled {
-            tracing::info!(
-                "[holon] enabled — cast cron seed skipped (duties are Holon routines; phase G)"
-            );
-        } else {
-            match cron_db.seed_cast_jobs(
-                operant_core::org::cast::CAST,
-                Some(employee_registry.as_ref()),
-            ) {
-                Ok(report) => {
-                    tracing::info!(
-                        "cast cron seed: {} seat(s), {} job(s)",
-                        report.cast_seats,
-                        report.jobs_written
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("cast cron seed failed — cast seats will not self-run: {e}");
-                }
-            }
-        }
         let cron_db = Arc::new(cron_db);
         // Row 1 (outline v5 §1): the delivery consumer settles the ledger
         // row the scheduler handed off. `cron_db` is MOVED into the
@@ -4084,38 +3981,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // heartbeat keeps running — attribution is the audit layer, and
         // killing scheduled work because the worklog is unavailable is the
         // worse failure.
-        let scheduler = match operant_core::org::write_barrier::WriteBarrier::for_app(
-            &app_config.database_path,
-        ) {
-            Ok(barrier) => operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
-                .with_write_barrier(barrier)
-                .with_observer(Arc::clone(&cron_observer))
-                .with_employee_db(employee_registry.clone())
-                .with_seat_memory_root(
-                    app_config
-                        .database_path
-                        .parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| app_config.database_path.clone()),
-                )
-                .with_delivery(cron_tx),
-            Err(e) => {
-                tracing::warn!(
-                    "org write barrier unavailable — cron runs will not write worklog rows: {e}"
-                );
-                operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
-                    .with_observer(Arc::clone(&cron_observer))
-                    .with_employee_db(employee_registry.clone())
-                    .with_seat_memory_root(
-                        app_config
-                            .database_path
-                            .parent()
-                            .map(std::path::Path::to_path_buf)
-                            .unwrap_or_else(|| app_config.database_path.clone()),
-                    )
-                    .with_delivery(cron_tx)
-            }
-        };
+        let scheduler = operant_core::cronjobs::CronScheduler::new(cron_db, cron_agent.clone())
+            .with_observer(Arc::clone(&cron_observer))
+            .with_seat_memory_root(
+                app_config
+                    .database_path
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| app_config.database_path.clone()),
+            )
+            .with_delivery(cron_tx);
         // iter-678 (gap 1): mount the cron budget envelope — the usage meter
         // (fed by the cron agent's own event channel), the session store the
         // rollup reads, and the seat-budget resolution (overrides +
@@ -4148,10 +4023,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         if let Some(injector) = context_injector {
             scheduler = scheduler.with_context_injection(injector);
         }
-        // iter-684 (gap 6): mount the socialization settings — the tick
-        // then checks the schedule every pass. Settings carry their own
-        // `enabled` flag (default false, dark-mergeable).
-        let scheduler = scheduler.with_socialization(app_config.socialization.clone());
         tokio::spawn(async move { scheduler.start().await });
 
         // Delivery receiver — sends cron results to platforms

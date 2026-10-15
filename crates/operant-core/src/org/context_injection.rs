@@ -256,7 +256,12 @@ impl ContextInjector {
         database_path: &Path,
         settings: crate::config::ContextInjectionSettings,
     ) -> Result<Self> {
-        let org_sibling = crate::org::worklog_db::worklog_db_path(database_path);
+        // G+1: the org-sibling rule inlined (worklog_db retired): the
+        // context tables live in operant_kanban.db beside the app db.
+        let org_sibling = database_path
+            .parent()
+            .map(|p| p.join("operant_kanban.db"))
+            .unwrap_or_else(|| std::path::PathBuf::from("operant_kanban.db"));
         let conn = Connection::open(&org_sibling)
             .map_err(|e| Error::Agent(format!("context injection: open: {e}")))?;
         conn.execute_batch(CONTEXT_WATERMARKS_SCHEMA)
@@ -312,61 +317,12 @@ impl ContextInjector {
         format!("{rendered}\n\n{prompt}")
     }
 
-    /// The seat's unacknowledged inbox notices, rendered as a prompt block
-    /// (iter-688 — the notice-board READ side). The ack IS the watermark: a
-    /// pending notice re-renders on every seat prompt until the seat acks
-    /// it, then never again — no injector watermark table involved.
-    ///
-    /// Fail-open like every rung: disabled, a missing employee row (the
-    /// org layer off, or the session is not an employee), or any store
-    /// error → `String::new()` and the prompt stays byte-identical.
-    pub fn pending_notices_block(&self, employee_id: &str) -> String {
-        if !self.settings.enabled || employee_id.is_empty() {
-            return String::new();
-        }
-        let Ok(employee_db) = crate::org::employee_db::EmployeeDb::for_app(&self.app_db) else {
-            return String::new();
-        };
-        let Ok(Some(employee)) = employee_db.get_employee(employee_id) else {
-            return String::new(); // not a registered employee — no inbox
-        };
-        let Ok(board) = crate::org::notice_db::NoticeBoard::for_app(&self.app_db) else {
-            return String::new();
-        };
-        let identity = crate::org::resolver::identity_for(&employee, &[], &[]);
-        let mut query = crate::org::resolver::inbox_query_for(&identity, None, Some(20));
-        query.pending_only = true;
-        query.reader_id = Some(employee.employee_id.clone());
-        let Ok(notices) = board.query_inbox(&query) else {
-            return String::new();
-        };
-        if notices.is_empty() {
-            return String::new();
-        }
-        let mut block = String::from(
-            "## Notices addressed to you — each needs an acknowledgment before it clears\n",
-        );
-        for n in &notices {
-            let subject = n
-                .subject
-                .clone()
-                .unwrap_or_else(|| "(no subject)".to_string());
-            let body = if n.body.chars().count() > 160 {
-                let cut: String = n.body.chars().take(160).collect();
-                format!("{cut}…")
-            } else {
-                n.body.clone()
-            };
-            block.push_str(&format!(
-                "- [{}] From {}: {} — {}\n",
-                n.id,
-                n.sender,
-                subject,
-                body.trim()
-            ));
-        }
-        // Trim the trailing newline — the caller composes block separators.
-        block.trim_end().to_string()
+    /// G+1: the notice board retired to Holon (`api_messages`). The
+    /// block is gone; callers of the old surface get an empty string —
+    /// prompt byte-identical.
+    #[expect(dead_code)]
+    pub fn pending_notices_block(&self, _employee_id: &str) -> String {
+        String::new()
     }
 
     /// Collect unseen items for the seat, one class at a time, drop the
@@ -530,83 +486,12 @@ impl ContextInjector {
                     .map_err(|e| Error::Agent(format!("context injection: query: {e}")))?;
                 Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
             }
-            ContextClass::Global => {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT employee, ts, what_done FROM worklog \
-                         WHERE ts > ?1 AND employee IN (?2, ?3) AND employee != ?4 \
-                         ORDER BY ts DESC LIMIT 20",
-                    )
-                    .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
-                let rows = stmt
-                    .query_map(
-                        params![watermark, GLOBAL_AUTHORS[0], GLOBAL_AUTHORS[1], seat_id],
-                        |row| {
-                            Ok(ContextItem {
-                                class,
-                                author: row.get(0)?,
-                                ts: row.get(1)?,
-                                text: row.get(2)?,
-                                hash: 0,
-                            })
-                        },
-                    )
-                    .map_err(|e| Error::Agent(format!("context injection: query: {e}")))?;
-                Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-            }
-            ContextClass::Dept => {
-                // Wave 3 has not landed departments; a seat with no
-                // department has no peers to read. The honest empty set.
-                let dept: Option<String> = conn
-                    .query_row(
-                        "SELECT department FROM employees WHERE employee_id = ?1",
-                        params![seat_id],
-                        |row| row.get(0),
-                    )
-                    .ok();
-                let Some(dept) = dept else {
-                    return Ok(Vec::new());
-                };
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT employee, ts, what_done FROM worklog \
-                         WHERE ts > ?1 AND department = ?2 AND employee != ?3 \
-                         ORDER BY ts DESC LIMIT 20",
-                    )
-                    .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
-                let rows = stmt
-                    .query_map(params![watermark, dept, seat_id], |row| {
-                        Ok(ContextItem {
-                            class,
-                            author: row.get(0)?,
-                            ts: row.get(1)?,
-                            text: row.get(2)?,
-                            hash: 0,
-                        })
-                    })
-                    .map_err(|e| Error::Agent(format!("context injection: query: {e}")))?;
-                Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
-            }
-            ContextClass::Self_ => {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT employee, ts, what_done FROM worklog \
-                         WHERE ts > ?1 AND employee = ?2 \
-                         ORDER BY ts DESC LIMIT 20",
-                    )
-                    .map_err(|e| Error::Agent(format!("context injection: stmt: {e}")))?;
-                let rows = stmt
-                    .query_map(params![watermark, seat_id], |row| {
-                        Ok(ContextItem {
-                            class,
-                            author: row.get(0)?,
-                            ts: row.get(1)?,
-                            text: row.get(2)?,
-                            hash: 0,
-                        })
-                    })
-                    .map_err(|e| Error::Agent(format!("context injection: query: {e}")))?;
-                Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            ContextClass::Global | ContextClass::Dept | ContextClass::Self_ => {
+                // G+1 (docs/agentic-os/): the worklog/employee/notice sources
+                // retired to Holon — the brief and Holon memory carry org
+                // context in a Holon run. Channel-sourced aspects (dm, feed)
+                // are the whole pipeline in personal mode too.
+                Ok(Vec::new())
             }
         }
         .map(|items: Vec<ContextItem>| {
@@ -800,230 +685,6 @@ mod tests {
         crate::config::ContextInjectionSettings::default()
     }
 
-    fn db_with_worklog() -> (tempfile::TempDir, ContextInjector) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // The injector derives the org sibling (operant_kanban.db) from
-        // the app path — build the worklog fixture THERE.
-        let app_db = dir.path().join("app.sqlite");
-        let kanban = crate::org::worklog_db::worklog_db_path(&app_db);
-        let conn = Connection::open(&kanban).expect("open");
-        conn.execute_batch(
-            "CREATE TABLE worklog (
-                id TEXT PRIMARY KEY, ts INTEGER NOT NULL, ts_iso TEXT NOT NULL,
-                employee TEXT NOT NULL, department TEXT, job_id TEXT,
-                what_done TEXT NOT NULL, outcome TEXT NOT NULL
-            );
-            CREATE TABLE employees (employee_id TEXT PRIMARY KEY, department TEXT);",
-        )
-        .expect("schema");
-        drop(conn);
-        let injector = ContextInjector::open(
-            &app_db,
-            crate::config::ContextInjectionSettings {
-                self_quota: 300,
-                ..settings()
-            },
-        )
-        .expect("injector");
-        (dir, injector)
-    }
-
-    fn log(conn: &Connection, employee: &str, ts: i64, text: &str) {
-        conn.execute(
-            "INSERT INTO worklog (id, ts, ts_iso, employee, what_done, outcome)
-             VALUES (?1, ?2, 'x', ?3, ?4, 'success')",
-            params![format!("id-{employee}-{ts}"), ts, employee, text],
-        )
-        .expect("insert worklog");
-    }
-
-    #[test]
-    fn pending_notices_block_renders_until_acked() {
-        // Bare injector — this test needs no worklog fixture (and the
-        // db_with_worklog fixture's hand-made `employees` table would
-        // collide with EmployeeDb's real schema).
-        let dir = tempfile::tempdir().expect("tempdir");
-        let app_db = dir.path().join("app.sqlite");
-        let injector = ContextInjector::open(&app_db, settings()).expect("injector");
-
-        // A real employee row + board on the shared org sibling — the
-        // same file `EmployeeDb::for_app` / `NoticeBoard::for_app`
-        // derive from the app path the injector holds.
-        let employees = crate::org::employee_db::EmployeeDb::for_app(&app_db).expect("employee db");
-        employees
-            .insert_ignore(&crate::org::employee::Employee {
-                employee_id: "emp-warden-1".to_string(),
-                name: "Identity Warden".to_string(),
-                role: "automator".to_string(),
-                department: Some("identity".to_string()),
-                skills: vec![],
-                agent_type: None,
-                persona: None,
-                system_prompt: None,
-                status: "active".to_string(),
-                reason: "test fixture".to_string(),
-                created_at: "2026-10-08T00:00:00Z".to_string(),
-                updated_at: "2026-10-08T00:00:00Z".to_string(),
-            })
-            .expect("insert employee");
-
-        let board = crate::org::notice_db::NoticeBoard::for_app(&app_db).expect("board");
-        let notice = board
-            .post(&crate::org::notice::PostNotice {
-                sender: "user".to_string(),
-                from_dept: None,
-                recipients: vec![
-                    crate::org::notice::Recipient::parse("agent:emp-warden-1").expect("recipient"),
-                ],
-                subject: Some("Registry binding audit".to_string()),
-                body: "Please check the session bindings tonight.".to_string(),
-                correlation_id: None,
-                ack_required: true,
-                tags: vec![],
-                thread_id: None,
-                pinned: false,
-                ttl: None,
-                ttl_expires_at: None,
-                reason: "test".to_string(),
-                metadata: None,
-            })
-            .expect("post notice");
-
-        // The block renders the pending notice — the board's read side.
-        let block = injector.pending_notices_block("emp-warden-1");
-        assert!(
-            block.contains("Notices addressed to you"),
-            "the block must carry its heading: {block}"
-        );
-        assert!(
-            block.contains("Registry binding audit"),
-            "the pending notice must reach its addressee: {block}"
-        );
-
-        // The ack IS the watermark: once acked the block is empty again.
-        board.ack(&notice.id, "emp-warden-1").expect("ack");
-        assert_eq!(
-            injector.pending_notices_block("emp-warden-1"),
-            "",
-            "an acked notice must never re-render"
-        );
-
-        // Fail-open: a session that is not a registered employee has no
-        // inbox — empty block, never an error.
-        assert_eq!(injector.pending_notices_block("emp-nobody"), "");
-    }
-
-    #[test]
-    fn watermark_never_reinjects_a_consumed_row() {
-        let (_dir, injector) = db_with_worklog();
-        let conn = Connection::open(&injector.app_db).expect("conn");
-        log(&conn, "dispatcher", 100, "audited the queue");
-        drop(conn);
-
-        let first = injector.render_section("dispatcher", None, "PROMPT", &[]);
-        assert!(
-            first.contains("audited the queue"),
-            "first render must include it"
-        );
-        assert!(
-            first.ends_with("PROMPT"),
-            "prompt must ride under the section"
-        );
-
-        let second = injector.render_section("dispatcher", None, "PROMPT", &[]);
-        assert_eq!(
-            second, "PROMPT",
-            "a consumed row must never re-inject — byte-identical"
-        );
-    }
-
-    #[test]
-    fn global_feed_reaches_other_seats_but_not_the_author() {
-        let (_dir, injector) = db_with_worklog();
-        let conn = Connection::open(&injector.app_db).expect("conn");
-        log(&conn, "premiere", 100, "org directive: ship the wave");
-        drop(conn);
-
-        let warden = injector.render_section("identity-warden", None, "PROMPT", &[]);
-        assert!(
-            warden.contains("org directive"),
-            "the global feed must reach other seats: {warden}"
-        );
-        let premiere_self = injector.render_section("premiere", None, "PROMPT", &[]);
-        assert!(
-            premiere_self.contains("org directive"),
-            "for the author the same row is Self-class continuity (never a broadcast to itself), and it still renders: {premiere_self}"
-        );
-        // And the author's own render must label it under "Your previous
-        // cycles", not the global feed — the class is a property of the
-        // (reader, row) pair.
-        assert!(
-            premiere_self.contains("Your previous cycles"),
-            "the author sees its own row as Self, not Global: {premiere_self}"
-        );
-    }
-
-    #[test]
-    fn premiere_directives_are_quota_exempt_subject_to_the_total() {
-        let (_dir, injector) = db_with_worklog();
-        let conn = Connection::open(&injector.app_db).expect("conn");
-        // A directive longer than the whole global class quota (500).
-        let long = "directive: ".to_string() + &"prioritise the rollout ".repeat(40);
-        log(&conn, "premiere", 100, &long);
-        drop(conn);
-
-        let rendered = injector.render_section("identity-warden", None, "PROMPT", &[]);
-        assert!(
-            rendered.contains("prioritise the rollout"),
-            "a premiere directive must not be dropped by the class quota"
-        );
-    }
-
-    #[test]
-    fn quota_fills_by_rank_and_rolls_leftovers_into_the_pool() {
-        let (_dir, injector) = db_with_worklog();
-        let conn = Connection::open(&injector.app_db).expect("conn");
-        // Self quota is 300: three 400-char rows cannot all fit the class,
-        // but the pool may take what the total cap (2000) still allows.
-        let filler = "row ".to_string() + &"x".repeat(390);
-        log(&conn, "dispatcher", 100, &filler);
-        log(&conn, "dispatcher", 200, &filler);
-        log(&conn, "dispatcher", 300, &filler);
-        drop(conn);
-
-        let rendered = injector.render_section("dispatcher", None, "PROMPT", &[]);
-        let count = rendered.matches("row xxx").count();
-        assert!(
-            (2..=5).contains(&count),
-            "class quota holds ~1, the pool takes the rest under the total: got {count}"
-        );
-    }
-
-    #[test]
-    fn disabled_or_empty_is_byte_identical() {
-        let (dir, _injector) = db_with_worklog();
-        let injector = ContextInjector::open(
-            &dir.path().join("app.sqlite"),
-            crate::config::ContextInjectionSettings {
-                enabled: false,
-                ..settings()
-            },
-        )
-        .expect("injector");
-        assert_eq!(
-            injector.render_section("dispatcher", None, "PROMPT", &[]),
-            "PROMPT",
-            "disabled must be byte-identical"
-        );
-
-        let (_d2, injector2) = db_with_worklog(); // empty worklog
-        assert_eq!(
-            injector2.render_section("dispatcher", None, "PROMPT", &[]),
-            "PROMPT",
-            "empty pipeline must be byte-identical"
-        );
-    }
-
     #[test]
     fn lexical_affinity_prefers_relevant_items_under_tie() {
         let now = chrono::Utc::now().timestamp();
@@ -1051,8 +712,68 @@ mod tests {
     }
 
     #[test]
+    fn content_hash_matches_whitespace_and_case_variants_only() {
+        assert_eq!(
+            content_hash("Ship the  Wave"),
+            content_hash("ship the wave"),
+            "case and whitespace are normalized"
+        );
+        assert_ne!(
+            content_hash("ship the wave"),
+            content_hash("ship different orders"),
+            "different content hashes differently"
+        );
+    }
+
+    #[test]
+    fn truncate_cuts_on_a_char_boundary() {
+        let cut = truncate_chars("héllo wörld", 5);
+        assert_eq!(cut, "héllo…");
+        assert_eq!(truncate_chars("short", 10), "short");
+    }
+    fn injector_db() -> (tempfile::TempDir, ContextInjector) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // G+1: the injector opens (and creates) its own context tables in
+        // the org-sibling file; the fixture only supplies the paths.
+        let injector = ContextInjector::open(
+            &dir.path().join("app.sqlite"),
+            crate::config::ContextInjectionSettings {
+                self_quota: 300,
+                ..settings()
+            },
+        )
+        .expect("injector");
+        (dir, injector)
+    }
+
+    #[test]
+    fn disabled_or_empty_is_byte_identical() {
+        let (dir, _injector) = injector_db();
+        let injector = ContextInjector::open(
+            &dir.path().join("app.sqlite"),
+            crate::config::ContextInjectionSettings {
+                enabled: false,
+                ..settings()
+            },
+        )
+        .expect("injector");
+        assert_eq!(
+            injector.render_section("dispatcher", None, "PROMPT", &[]),
+            "PROMPT",
+            "disabled must be byte-identical"
+        );
+
+        let (_d2, injector2) = injector_db(); // empty worklog
+        assert_eq!(
+            injector2.render_section("dispatcher", None, "PROMPT", &[]),
+            "PROMPT",
+            "empty pipeline must be byte-identical"
+        );
+    }
+
+    #[test]
     fn captured_inbound_dm_reaches_the_seat_and_not_others() {
-        let (_dir, injector) = db_with_worklog();
+        let (_dir, injector) = injector_db();
         injector.record_inbound_dm(
             "identity-warden",
             "ishan",
@@ -1086,7 +807,7 @@ mod tests {
         // group writes a row per member message — the write-through prune
         // in record_item is the only bound. A row older than the retention
         // window must disappear on the NEXT capture; a fresh row survives.
-        let (_dir, injector) = db_with_worklog();
+        let (_dir, injector) = injector_db();
         let conn = Connection::open(&injector.app_db).expect("conn");
         let ancient = chrono::Utc::now().timestamp() - 30 * 86_400;
         conn.execute(
@@ -1116,7 +837,7 @@ mod tests {
 
     #[test]
     fn captured_feed_post_reaches_its_seat_and_not_others() {
-        let (_dir, injector) = db_with_worklog();
+        let (_dir, injector) = injector_db();
         injector.record_feed_item(
             "premiere",
             "Engineering Notes",
@@ -1142,43 +863,5 @@ mod tests {
             injector.render_section("premiere", None, "PROMPT", &[]),
             "PROMPT"
         );
-    }
-
-    #[test]
-    fn transcript_check_never_echoes_the_inbound_message() {
-        let (_dir, injector) = db_with_worklog();
-        let conn = Connection::open(&injector.app_db).expect("conn");
-        log(&conn, "premiere", 100, "urgent directive follow up now");
-        drop(conn);
-        // The live conversation already carries this content (its inbound
-        // form, differently cased/spaced) — the hash normalizes, so the
-        // exclusion drops the item instead of echoing it back.
-        let exclude = [content_hash("Urgent  directive   follow up now")];
-        assert_eq!(
-            injector.render_section("identity-warden", None, "PROMPT", &exclude),
-            "PROMPT",
-            "the inbound message must never echo back as injected context"
-        );
-    }
-
-    #[test]
-    fn content_hash_matches_whitespace_and_case_variants_only() {
-        assert_eq!(
-            content_hash("Ship the  Wave"),
-            content_hash("ship the wave"),
-            "case and whitespace are normalized"
-        );
-        assert_ne!(
-            content_hash("ship the wave"),
-            content_hash("ship different orders"),
-            "different content hashes differently"
-        );
-    }
-
-    #[test]
-    fn truncate_cuts_on_a_char_boundary() {
-        let cut = truncate_chars("héllo wörld", 5);
-        assert_eq!(cut, "héllo…");
-        assert_eq!(truncate_chars("short", 10), "short");
     }
 }

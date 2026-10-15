@@ -33,15 +33,6 @@ pub struct CronRewriteDrop {
     pub dropped_skill: String,
 }
 
-/// Report from seeding the cold-start cast into the cron store.
-#[derive(Debug, Clone, Default)]
-pub struct CastCronSeedReport {
-    /// Number of cast seats inspected (all of them, including skips).
-    pub cast_seats: usize,
-    /// Number of cron_jobs rows written (inserted or already present).
-    pub jobs_written: usize,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
     pub id: String,
@@ -367,99 +358,6 @@ impl CronDb {
             healed += 1;
         }
         Ok(healed)
-    }
-
-    /// Seed the cold-start cast's default cron jobs (ORGANISM-ARCHITECTURE
-    /// §1 self-operationalization). Idempotent: each job uses a deterministic
-    /// `cron_cast_<seat_id>` id, and `cron_cast_*` is a seed-owned namespace —
-    /// the manifest is the one authority for its schedule. An existing row
-    /// is healed in place: `schedule`/`schedule_display` take the manifest
-    /// value, and `next_run_at` is re-armed only when the schedule actually
-    /// changed. `enabled`/paused state, `name`, and `prompt` are never
-    /// touched — those are operator acts, and a paused job must not be
-    /// resurrected by a reboot.
-    ///
-    /// `dp-the-program` is skipped — its "continuous (existing)"
-    /// cadence is a long-running execution engine, not a scheduled job.
-    ///
-    /// If `employee_db` is provided, each seeded job also writes an
-    /// `employee_cron_jobs` link row so `EmployeeDb::list_employee_cron_jobs`
-    /// and the backfill path see it. The link write is fail-open: a missing
-    /// kanban db does not block cron seeding.
-    pub fn seed_cast_jobs(
-        &self,
-        cast: &[crate::org::cast::CastSeat],
-        employee_db: Option<&crate::org::employee_db::EmployeeDb>,
-    ) -> Result<CastCronSeedReport, Error> {
-        let conn = self.lock_conn()?;
-        let created_at = chrono::Utc::now().to_rfc3339();
-        let mut report = CastCronSeedReport {
-            cast_seats: cast.len(),
-            jobs_written: 0,
-        };
-
-        for seat in cast {
-            // cast_cron_job_for returns None for continuous-cadence seats
-            // (only dp-the-program).
-            let Some((job_id, schedule)) = crate::org::cast::cast_cron_job_for(seat) else {
-                continue;
-            };
-
-            let next_run_at = crate::cronjobs::schedule::next_run_from_schedule(&schedule);
-            let schedule_display = seat.cron.cadence.to_string();
-
-            // iter-666: the seeded prompt is the charter plus the seat-memory
-            // postscript (docs/plan-2026-10-07-two-tier-memory-hybrid §wiring
-            // 2). The ON CONFLICT arm never touches `prompt` — it stays
-            // operator-owned, so this composition applies to cold starts
-            // only; live seats are bootstrapped through their MEMORY.md
-            // (the file carries its own maintenance instruction).
-            let prompt = format!(
-                "{}{}",
-                seat.charter,
-                crate::org::cast::SEAT_MEMORY_POSTSCRIPT
-            );
-
-            conn.execute(
-                "INSERT INTO cron_jobs (
-                    id, name, prompt, schedule, schedule_display, repeat_times, repeat_completed,
-                    deliver, origin_platform, origin_chat_id, origin_thread_id, skill, skills,
-                    model, provider, base_url, script, context_from, enabled_toolsets, workdir,
-                    no_agent, enabled, state, created_at, next_run_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, NULL, NULL, NULL, NULL, NULL,
-                          NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?8, 1, 'scheduled', ?9, ?10)
-                ON CONFLICT(id) DO UPDATE SET
-                    schedule         = excluded.schedule,
-                    schedule_display = excluded.schedule_display,
-                    next_run_at = CASE WHEN cron_jobs.schedule != excluded.schedule
-                                       THEN excluded.next_run_at
-                                       ELSE cron_jobs.next_run_at END",
-                params![
-                    job_id,
-                    seat.cron.role,
-                    prompt,
-                    schedule,
-                    schedule_display,
-                    None::<i32>,
-                    "local",
-                    false,
-                    created_at,
-                    next_run_at
-                ],
-            )
-            .map_err(|e| {
-                Error::Agent(format!(
-                    "Failed to seed cast cron job for {}: {}",
-                    seat.id, e
-                ))
-            })?;
-
-            if let Some(emp) = employee_db {
-                emp.upsert_link(seat.id, &job_id, &schedule_display, true)?;
-            }
-            report.jobs_written += 1;
-        }
-        Ok(report)
     }
 
     pub fn list_jobs(&self, include_disabled: bool) -> Result<Vec<CronJob>, Error> {

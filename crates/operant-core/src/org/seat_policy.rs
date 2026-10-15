@@ -100,10 +100,6 @@ pub struct SeatPolicy {
     pub mode: SeatMode,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
-    /// §2.3-analog: how much of its work this seat may hand off
-    /// (`org/authority.rs::DelegationPosture`). `None` = no posture on
-    /// the row = today's ungoverned delegation — the opt-in rule.
-    pub delegation: Option<crate::org::authority::DelegationPosture>,
 }
 
 /// The verdict for one tool call, with the sentence that explains it —
@@ -223,21 +219,55 @@ pub fn decide(
     }
 }
 
+/// §2.3-analog — delegation posture, moved here from the retired
+/// `authority` module (G+1): the per-seat policy row names HOW much of
+/// its work a seat may hand to another agent. `Independent` is the
+/// default absence — today's behaviour — so wiring a posture is always
+/// the opt-in. The consult path that consumed it retired with the
+/// organism; the personal-mode policy rows keep storing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelegationPosture {
+    /// The seat may never hand work off. Every `delegate` call is denied.
+    Forbidden,
+    /// The seat may delegate within its department, or cross-department on
+    /// a live grant covering the target.
+    Bounded,
+    /// Today's behaviour: the tool-config gates (depth, allowlists,
+    /// readonly) own the verdict; governance is not consulted further.
+    Independent,
+}
+
+impl DelegationPosture {
+    /// Stored/parsed spelling on the policy row.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Forbidden => "forbidden",
+            Self::Bounded => "bounded",
+            Self::Independent => "independent",
+        }
+    }
+}
+
+impl std::str::FromStr for DelegationPosture {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "forbidden" => Ok(Self::Forbidden),
+            "bounded" => Ok(Self::Bounded),
+            "independent" => Ok(Self::Independent),
+            other => Err(format!(
+                "unknown delegation posture '{other}' (expected forbidden/bounded/independent)"
+            )),
+        }
+    }
+}
+
 /// Storage seam for the run path (wave-2 slice E consults this).
 /// Sync because the stores are `Arc<Mutex<Connection>>` like `GrantDb`,
 /// and the decision point must not await.
 pub trait SeatPolicySource: Send + Sync {
     fn policy_for(&self, employee_id: &str) -> Option<SeatPolicy>;
-
-    /// The seat's delegation posture, if the policy row sets one.
-    /// Default `None` = ungoverned — sources that do not model delegation
-    /// stay implementors without touching their bodies.
-    fn delegation_posture_for(
-        &self,
-        _employee_id: &str,
-    ) -> Option<crate::org::authority::DelegationPosture> {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -249,7 +279,6 @@ mod tests {
             mode,
             allow: allow.iter().map(|s| s.to_string()).collect(),
             deny: deny.iter().map(|s| s.to_string()).collect(),
-            delegation: None,
         }
     }
 
