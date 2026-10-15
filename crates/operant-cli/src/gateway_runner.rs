@@ -4846,9 +4846,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_adapters_telegram_enabled() {
+        // O-28 (audit): the coverage iter-831 neutered — an ENABLED
+        // telegram (token injected, no network touched at build time)
+        // constructs its adapter. The old version flipped every platform
+        // off and still asserted a telegram adapter.
         let config = GatewayConfig {
-            telegram_enabled: false,
-            telegram_token: None,
+            telegram_enabled: true,
+            telegram_token: Some("test-token".to_string()),
             discord_enabled: false,
             discord_token: None,
             slack_enabled: false,
@@ -4879,13 +4883,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_adapters_multi_platform() {
+        // O-28 (audit): restore the intent — two enabled platforms build
+        // two adapters (tokens injected; the constructors do not dial).
         let config = GatewayConfig {
-            telegram_enabled: false,
-            telegram_token: None,
+            telegram_enabled: true,
+            telegram_token: Some("test-token".to_string()),
             discord_enabled: false,
             discord_token: None,
-            slack_enabled: false,
-            slack_token: None,
+            slack_enabled: true,
+            slack_token: Some("slack-token".to_string()),
             whatsapp_enabled: false,
             whatsapp_token: None,
             whatsapp_phone_number_id: None,
@@ -4894,7 +4900,7 @@ mod tests {
             email_smtp_user: None,
             email_smtp_pass: None,
             sms_twilio_enabled: false,
-            webhooks_enabled: false,
+            webhooks_enabled: true,
             webhooks_addr: None,
             webhooks_secret: None,
             holon_notion: None,
@@ -4906,7 +4912,10 @@ mod tests {
             max_concurrent_sessions: None,
         };
         let adapters = build_adapters(&config);
-        assert_eq!(adapters.len(), 4);
+        assert_eq!(adapters.len(), 3, "telegram + slack + webhook");
+        let names: Vec<&str> = adapters.iter().map(|a| a.name()).collect();
+        assert!(names.contains(&"telegram"), "{names:?}");
+        assert!(names.contains(&"slack"), "{names:?}");
     }
 
     #[test]
