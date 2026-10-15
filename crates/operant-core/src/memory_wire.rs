@@ -65,6 +65,45 @@ use crate::error::{Error, Result};
 /// memory in one recallable namespace.
 pub const DEFAULT_BANK: &str = "operant";
 
+/// (plan 11E) The memory scope a provider instance serves. Type, not string:
+/// a call site cannot accidentally pass a seat identity where a personal
+/// bank belongs — the wrong shape does not compile.
+///
+/// - `Personal` — the user's own memory (`operant` bank): what solo
+///   sessions see.
+/// - `Seat` — an organization seat's memory (`emp:<identity>` bank): a
+///   seat's writes and recalls never cross into the personal bank, and a
+///   solo session that never opens a Seat scope can never read `emp:*`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryScope {
+    Personal,
+    Seat { identity: String },
+}
+
+/// (plan 11E) Derive the bank id for a scope. The seat identity is
+/// sanitized ([a-z0-9_-], ≤32 chars) so a hostile seat id cannot forge
+/// bank names — `Bank { identity: "operant/x" }` cannot reach the
+/// personal bank or fabricate paths.
+pub fn bank_for(scope: &MemoryScope) -> String {
+    match scope {
+        MemoryScope::Personal => DEFAULT_BANK.to_string(),
+        MemoryScope::Seat { identity } => {
+            let cleaned: String = identity
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .take(32)
+                .collect();
+            format!("emp:{cleaned}")
+        }
+    }
+}
+
 /// Characters retained from the user turn in `sync_turn`. Mirrors the previous
 /// agentmemory integration's truncation, kept on our side so the stored memory
 /// is bounded regardless of what memory-wire does internally.
@@ -230,6 +269,23 @@ impl MemoryWireProvider<SqliteStore> {
             bank: DEFAULT_BANK.to_string(),
             persistent,
         })
+    }
+
+    /// (plan 11E) Open a provider scoped to one memory namespace — the
+    /// seam the seat wiring consumes. Personal is the default bank; a Seat
+    /// scope isolates that seat's memories behind `emp:<identity>`, so
+    /// seat writes never land in the personal bank and a personal
+    /// provider's recall never sees them.
+    pub fn scoped(storage_dir: PathBuf, scope: &MemoryScope) -> Result<Self> {
+        let mut provider = Self::new(storage_dir)?;
+        provider.bank = bank_for(scope);
+        Ok(provider)
+    }
+
+    /// (plan 11E) The bank this provider instance serves (diagnostics and
+    /// the seat-side wiring).
+    pub fn bank(&self) -> &str {
+        &self.bank
     }
 
     /// (plan 11C3) The one-time MEMORY.md/USER.md import. The storage dir
@@ -646,5 +702,93 @@ mod tests {
     async fn initialize_is_a_noop_and_succeeds() {
         let p = in_memory_provider();
         p.initialize("session-1").await.expect("initialize");
+    }
+
+    // -- (plan 11E) bank_for + scope isolation -------------------------------
+
+    #[test]
+    fn bank_for_derives_sanitized_bank_ids() {
+        use super::MemoryScope;
+        assert_eq!(
+            bank_for(&MemoryScope::Personal),
+            "operant",
+            "personal scope keeps the default bank"
+        );
+        assert_eq!(
+            bank_for(&MemoryScope::Seat {
+                identity: "alice".to_string()
+            }),
+            "emp:alice"
+        );
+        // Hostile identity: path separators and mixed case cannot forge a
+        // bank name that reaches the personal bank or fabricates paths.
+        // (`.` and `/` each collapse to `-`: the leading ".." becomes "--".)
+        assert_eq!(
+            bank_for(&MemoryScope::Seat {
+                identity: "../OPERANT/x!".to_string()
+            }),
+            "emp:---operant-x-"
+        );
+        // Overlong identity truncates.
+        let long = "a".repeat(64);
+        assert_eq!(
+            bank_for(&MemoryScope::Seat { identity: long }).len(),
+            "emp:".len() + 32
+        );
+    }
+
+    /// (plan 11E red-team) Seat isolation, end to end over a REAL sqlite
+    /// store: a fact retained through a Seat-scoped provider is recallable
+    /// from that seat and INVISIBLE to a Personal-scoped provider over the
+    /// same database file — and vice versa. A solo session (Personal
+    /// only) can never see `emp:*`.
+    #[test]
+    fn seat_bank_is_isolated_from_personal_bank() {
+        use super::MemoryScope;
+        let dir = std::env::temp_dir().join(format!("operant-banks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let seat = MemoryWireProvider::scoped(
+            dir.clone(),
+            &MemoryScope::Seat {
+                identity: "alice".to_string(),
+            },
+        )
+        .expect("seat provider");
+        assert_eq!(seat.bank(), "emp:alice");
+        seat.retain_turn(
+            "alice's private standup note",
+            "contains seat-only knowledge",
+        );
+        let seat_recall = seat.recall_text("standup note", 5);
+        assert!(
+            !seat_recall.trim().is_empty(),
+            "the seat sees its own memory"
+        );
+
+        let solo = MemoryWireProvider::scoped(dir.clone(), &MemoryScope::Personal)
+            .expect("personal provider");
+        assert_eq!(solo.bank(), "operant");
+        let solo_recall = solo.recall_text("standup note", 5);
+        assert!(
+            solo_recall.trim().is_empty(),
+            "a personal-scope recall must NEVER see emp:* — got: {solo_recall:?}"
+        );
+
+        // And the reverse: personal memory is invisible to the seat. The
+        // probe ("preference") is lexically disjoint from the seat's own
+        // memory ("standup note", "seat-only knowledge") so a hit can only
+        // be a cross-bank leak.
+        solo.retain_turn(
+            "my durable preference",
+            "personal-only fact about formatting",
+        );
+        let seat_view = seat.recall_text("preference", 5);
+        assert!(
+            seat_view.trim().is_empty(),
+            "the seat must not see the personal bank — got: {seat_view:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
