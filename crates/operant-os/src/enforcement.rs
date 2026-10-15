@@ -21,12 +21,13 @@ use operant_core::org::seat_policy::{SeatPolicy, SeatPolicySource};
 
 use crate::policy::PolicyDoc;
 
-/// The seat id a Holon run runs as: the kernel exports `HOLON_EMPLOYEE`.
-/// Falls back to the run id so the consult always names *something*.
+/// The seat id a Holon run runs as: the kernel exports `HOLON_EMPLOYEE_ID`
+/// (O-02); the legacy `HOLON_EMPLOYEE` and the run id keep the consult
+/// self-consistent on older kernels.
 pub fn holon_seat() -> String {
-    std::env::var("HOLON_EMPLOYEE")
-        .or_else(|_| std::env::var("HOLON_RUN_ID"))
-        .unwrap_or_else(|_| "holon-run".to_string())
+    crate::run_env::holon_employee()
+        .or_else(|| std::env::var("HOLON_RUN_ID").ok())
+        .unwrap_or_else(|| "holon-run".to_string())
 }
 
 /// The policy document for THIS run, when this is a Holon run at all.
@@ -34,7 +35,7 @@ pub fn holon_seat() -> String {
 /// `None` = not a Holon run (personal mode, byte-identical) or a run the
 /// kernel launched before phase C (no policy.json yet) — same no-op.
 pub fn run_policy() -> Option<crate::Result<PolicyDoc>> {
-    let dir: PathBuf = std::env::var_os("HOLON_RUN_DIR")?.into();
+    let dir = crate::run_env::holon_run_dir()?;
     if !dir.join("policy.json").exists() {
         return None;
     }

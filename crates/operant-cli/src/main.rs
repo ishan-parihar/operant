@@ -2408,7 +2408,7 @@ async fn run_non_tui(
     let mcp_manager = McpManager::new();
     // Phase D (docs/agentic-os/, H4): a Holon run always records — the
     // trajectory IS the gold standard input, not an optional extra.
-    let record_trajectory = record_trajectory || std::env::var_os("HOLON_RUN_DIR").is_some();
+    let record_trajectory = record_trajectory || operant_core::platform::is_holon_run();
     let agent =
         create_agent_without_events(config, system_prompt, &mcp_manager, &config.skills.root_dir)
             .await?

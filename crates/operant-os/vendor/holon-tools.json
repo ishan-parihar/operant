@@ -1,0 +1,455 @@
+[
+ {
+  "name": "holon_whoami",
+  "description": "Who you are in the organization and what you are working on now.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "holon_submit",
+  "description": "Hand in this run's result: the JSON envelope the stage brief describes, as an object. Use this instead of writing result.json when you have no file-write tool.",
+  "inputSchema": {
+   "type": "object",
+   "required": [
+    "result"
+   ],
+   "properties": {
+    "result": {
+     "type": "object",
+     "description": "the result envelope (see the brief's Output section)"
+    },
+    "run_id": {
+     "type": "string",
+     "description": "default: the run your token belongs to"
+    }
+   }
+  }
+ },
+ {
+  "name": "holon_emp_card",
+  "description": "the identity card a harness injects into an employee's system prompt",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "employee": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "employee"
+   ]
+  }
+ },
+ {
+  "name": "holon_org",
+  "description": "the org chart",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "holon_dept_roles",
+  "description": "the department's role slots and who fills them",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "slug": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "slug"
+   ]
+  }
+ },
+ {
+  "name": "holon_task_show",
+  "description": "one work node: its pipeline, outputs, children and conversation",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "task_id": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "task_id"
+   ]
+  }
+ },
+ {
+  "name": "holon_task_tree",
+  "description": "the holarchy under a work node",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "task_id": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "task_id"
+   ]
+  }
+ },
+ {
+  "name": "holon_plan_show",
+  "description": "a plan awaiting (or past) approval: by approval, plan or work id",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "ref": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "ref"
+   ]
+  }
+ },
+ {
+  "name": "holon_memory_search",
+  "description": "search institutional memory",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string",
+     "positional": true
+    },
+    "scope": {
+     "type": "string"
+    },
+    "limit": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "query"
+   ]
+  }
+ },
+ {
+  "name": "holon_memory_add",
+  "description": "add to institutional memory",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "scope": {
+     "type": "string",
+     "description": "emp:<id> | dept:<slug> | org | <project ref> | class:<name>"
+    },
+    "kind": {
+     "type": "string",
+     "enum": [
+      "fact",
+      "decision",
+      "constraint",
+      "preference",
+      "lesson",
+      "open_question",
+      "glossary",
+      "artifact"
+     ]
+    },
+    "content": {
+     "type": "string"
+    },
+    "provenance": {
+     "type": "string"
+    },
+    "confidence": {
+     "type": "string",
+     "enum": [
+      "low",
+      "medium",
+      "high"
+     ]
+    },
+    "pin": {
+     "type": "boolean"
+    },
+    "literal": {
+     "type": "boolean",
+     "description": "the content is literal text: a runtime relaying it must not let '@path' or '-' choose a file"
+    }
+   },
+   "required": [
+    "scope",
+    "kind",
+    "content"
+   ]
+  }
+ },
+ {
+  "name": "holon_memory_context",
+  "description": "preview the context bundle a stage would receive",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "task_id": {
+     "type": "string",
+     "positional": true
+    },
+    "budget": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "task_id"
+   ]
+  }
+ },
+ {
+  "name": "holon_msg_send",
+  "description": "message a colleague, a department, the organization or the Chair",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "to": {
+     "type": "string",
+     "description": "emp:<id> | dept:<slug> | org | chair",
+     "positional": true
+    },
+    "body": {
+     "type": "string",
+     "positional": true
+    },
+    "task": {
+     "type": "string"
+    },
+    "literal": {
+     "type": "boolean",
+     "description": "the body is literal text: a runtime relaying it must not let '@path' or '-' choose a file"
+    }
+   },
+   "required": [
+    "to",
+    "body"
+   ]
+  }
+ },
+ {
+  "name": "holon_msg_inbox",
+  "description": "your messages (and your department's)",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ },
+ {
+  "name": "holon_msg_request",
+  "description": "ask another department for work (it becomes work there)",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "dept": {
+     "type": "string",
+     "positional": true
+    },
+    "title": {
+     "type": "string",
+     "positional": true
+    },
+    "intent": {
+     "type": "string"
+    },
+    "acceptance": {
+     "type": "string"
+    },
+    "priority": {
+     "type": "integer",
+     "enum": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ]
+    }
+   },
+   "required": [
+    "dept",
+    "title",
+    "intent"
+   ]
+  }
+ },
+ {
+  "name": "holon_skill_list",
+  "description": "skills available (an employee's own with --as)",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "dept": {
+     "type": "string"
+    },
+    "role": {
+     "type": "string"
+    }
+   }
+  }
+ },
+ {
+  "name": "holon_skill_show",
+  "description": "print a skill file",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "positional": true
+    },
+    "file": {
+     "type": "string",
+     "positional": true
+    },
+    "dept": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ]
+  }
+ },
+ {
+  "name": "holon_skill_invoke",
+  "description": "render a skill for an employee and record the use",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "positional": true
+    },
+    "file": {
+     "type": "string",
+     "positional": true
+    },
+    "dept": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ]
+  }
+ },
+ {
+  "name": "holon_run_show",
+  "description": "a run and its stage",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "run_id"
+   ]
+  }
+ },
+ {
+  "name": "holon_run_heartbeat",
+  "description": "extend a run's lease on long work",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "run_id": {
+     "type": "string",
+     "positional": true
+    }
+   },
+   "required": [
+    "run_id"
+   ]
+  }
+ },
+ {
+  "name": "holon_metrics",
+  "description": "the feedback loops' sensors, each with its counter-metric",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "dept": {
+     "type": "string"
+    },
+    "days": {
+     "type": "integer"
+    }
+   }
+  }
+ },
+ {
+  "name": "holon_claim",
+  "description": "claim the next ready stage you may do (exit 3 if none)",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "stage": {
+     "type": "string",
+     "enum": [
+      "research",
+      "shape",
+      "plan",
+      "approve",
+      "execute",
+      "verify",
+      "retro"
+     ],
+     "description": "only this stage (default: any of your roles' stages)"
+    },
+    "driver": {
+     "type": "string"
+    },
+    "task": {
+     "type": "string",
+     "description": "only this work or stage"
+    }
+   }
+  }
+ },
+ {
+  "name": "holon_classify",
+  "description": "ask the decision model which lane a job needs (script, fast, full)",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "title": {
+     "type": "string",
+     "positional": true
+    },
+    "intent": {
+     "type": "string",
+     "description": "text, '-' for stdin, or @file"
+    },
+    "command": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "intent"
+   ]
+  }
+ },
+ {
+  "name": "holon_routine_list",
+  "description": "routines: lane, schedule, firings and outcomes",
+  "inputSchema": {
+   "type": "object",
+   "properties": {}
+  }
+ }
+]

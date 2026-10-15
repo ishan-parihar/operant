@@ -110,8 +110,8 @@ impl OperantAgent {
         // truthfully knows (tokens estimate, tool_calls, duration). The kernel's
         // set_run_usage coalesces: this measurement wins over the envelope's
         // claim. A personal run (no HOLON_RUN_DIR) keeps today's file untouched.
-        if let Some(run_dir) = std::env::var_os("HOLON_RUN_DIR") {
-            self.write_holon_run_files(run_dir.into(), &trajectory, messages);
+        if let Some(run_dir) = crate::platform::holon_run_dir() {
+            self.write_holon_run_files(run_dir, &trajectory, messages);
         }
 
         // Write to ~/.operant/trajectories/
@@ -154,12 +154,33 @@ impl OperantAgent {
             warn!(error = %e, "failed to write trajectory.json");
         }
 
-        // usage: only the driver knows the true spend. Merge into the agent's
-        // result.json when it wrote one (the kernel's set_run_usage prefers
-        // this over the envelope's self-report); when it submitted through
-        // the kernel's MCP there is nothing to patch and the kernel measures
-        // its own. duration_s is the kernel's own run-row measurement —
-        // the trajectory carries no start mark, so the driver leaves it null.
+        // usage (O-21): the driver's measurement always lands in the run
+        // dir FIRST — the kernel reads usage.json on every stage (H-04),
+        // including a body that submitted through the kernel and never
+        // wrote result.json. duration_s stays the kernel's own run-row
+        // measurement; the driver leaves it null.
+        let (tokens_in, tokens_out) = messages.iter().fold((0usize, 0usize), |(i, o), m| {
+            let est = m.content.len() / 4;
+            if m.role == crate::client::Role::Assistant {
+                (i, o + est)
+            } else {
+                (i + est, o)
+            }
+        });
+        let usage = serde_json::json!({
+            "tokens_in": tokens_in, "tokens_out": tokens_out,
+            "tool_calls": trajectory.tool_calls,
+            "build": crate::BUILD_STAMP,
+        });
+        if let Err(e) = std::fs::write(
+            run_dir.join("usage.json"),
+            serde_json::to_string(&usage).unwrap_or_default(),
+        ) {
+            warn!(error = %e, "failed to write usage.json");
+        }
+
+        // then merge usage into the agent's result.json when it wrote one
+        // (set_run_usage prefers the driver either way)
         let result_path = run_dir.join("result.json");
         let Ok(existing) = std::fs::read_to_string(&result_path) else {
             return;
@@ -171,14 +192,7 @@ impl OperantAgent {
         let Some(obj) = env.as_object_mut() else {
             return;
         };
-        let (tokens_in, tokens_out) = messages.iter().fold((0usize, 0usize), |(i, o), m| {
-            let est = m.content.len() / 4;
-            if m.role == crate::client::Role::Assistant {
-                (i, o + est)
-            } else {
-                (i + est, o)
-            }
-        });
+
         obj.insert(
             "usage".to_string(),
             serde_json::json!({

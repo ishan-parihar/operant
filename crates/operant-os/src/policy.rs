@@ -46,7 +46,9 @@ const OBSERVE_ALLOW: &[&str] = &[
     "todo",
     "clarify",
     "env_probe",
-    "http_request",
+    // O-10: no mutating HTTP for observers — http_request supports POST/
+    // PUT/DELETE/PATCH, and xai/openrouter are paid/mutating calls. An
+    // observer keeps the read-only fetch tools only.
     "web_search",
     "web_fetch",
     "web_scrape",
@@ -64,21 +66,27 @@ const OBSERVE_ALLOW: &[&str] = &[
     "video_analyze",
     "transcribe_audio",
     "osv_check",
-    "openrouter_query",
     "browser_camofox_state",
     "debug_env",
     "debug_system",
-    "xai_http_request",
     // Holon's read API is read-only by construction (operant_os::api)
-    "holon_whoami",
-    "holon_org",
-    "holon_board",
-    "holon_work",
-    "holon_memory_search",
-    "holon_task_show",
-    "holon_memory_store",
-    "holon_submit",
-    "holon_msg",
+    // The native Holon tools derive from the vendored list (O-05): every
+    // read/submit tool is allowed; the mutating ones (memory_add,
+    // msg_send/msg_request, claim, classify) are not — an observer reads
+    // the organization and hands in a result, it does not act on it.
+    // OBSERVE_HOLON_DENY is the exception list, so the table stays the
+    // single source: a new read tool is allowed by default.
+];
+
+/// Native Holon tools an observer is DENIED (mutating; the complement of
+/// the allow list above, which `observe_policy()` builds at runtime).
+pub const OBSERVE_HOLON_DENY: &[&str] = &[
+    "holon_memory_add",
+    "holon_msg_send",
+    "holon_msg_request",
+    "holon_claim",
+    "holon_classify",
+    "holon_run_heartbeat",
 ];
 
 /// `policy.json` as Holon compiles it (its execution/policy.py, version 1).
@@ -150,7 +158,13 @@ impl PolicyDoc {
             },
             _ => SeatPolicy {
                 mode: SeatMode::Lockdown,
-                allow: OBSERVE_ALLOW.iter().map(|s| s.to_string()).collect(),
+                allow: OBSERVE_ALLOW
+                    .iter()
+                    .copied()
+                    .chain(crate::tools::native_tool_names().into_iter())
+                    .filter(|n| !OBSERVE_HOLON_DENY.contains(n))
+                    .map(|s| s.to_string())
+                    .collect(),
                 deny: self.deny.clone(),
             },
         }

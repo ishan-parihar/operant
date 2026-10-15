@@ -1,359 +1,323 @@
-//! Native Holon tools (boundary doc §2: replaces one resident Python MCP
-//! server per run).
+//! The native Holon tools, generated from ONE definition (audit O-04/O-05):
+//! `vendor/holon-tools.json` — the exact output of Holon's own
+//! `holon.mcp.tools()` registry walk. The vendor file is the contract;
+//! `native_tool_table()` parses it, `register_all` registers every entry,
+//! and `NATIVE_TOOL_NAMES` is the single list the observe posture and the
+//! availability gates read. The two sides cannot drift because the table
+//! IS the list.
 //!
-//! In a Holon run the agent gets these instead of a spawned `holon mcp`:
-//! reads go through the read-only API client (invariant 1 — no writable
-//! handle exists), and the organization-facing writes a body legitimately
-//! makes (memory, messages, its own run's heartbeat/claim, submit) go
-//! through the kernel CLI with the run token the kernel exported. The
-//! token authorizes exactly the agent-command set (`AGENT_COMMANDS` in
-//! holon/mcp.py); the kernel enforces the rest.
-//!
-//! Every tool is inert outside a Holon run (`is_available` requires
-//! HOLON_HOME) — invariant 5.
+//! Argv rules (checked against Holon's argparse):
+//! - every property becomes `--<name> <value>`, booleans become flags;
+//! - free text (content, body, result, intent, title, message…) goes on
+//!   STDIN with `-` as the argument (O-09: untrusted text never in argv,
+//!   and it can never name a file the kernel reads);
+//! - the kernel is resolved through `$HOLON` (a shell command string,
+//!   split with shlex rules), else `[holon] bin`, else `holon` on PATH.
 
-use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolResult};
 
-use crate::api::HolonApi;
-
-/// Shared plumbing: where the instance is, and how to call its CLI.
-struct HolonEnv {
-    home: PathBuf,
-    bin: String,
+/// One entry of the vendored tool list.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: String,
+    /// the kernel's generator writes camelCase
+    #[serde(default, rename = "inputSchema")]
+    pub input_schema: Value,
 }
 
-fn holon_env() -> Option<HolonEnv> {
-    let home = std::env::var_os("HOLON_HOME")?;
-    let bin = std::env::var("HOLON_BIN").unwrap_or_else(|_| "holon".to_string());
-    Some(HolonEnv {
-        home: home.into(),
-        bin,
-    })
+/// The vendored kernel tool list — the output of `holon.mcp.tools()`.
+pub static NATIVE_TOOLS: LazyLock<Vec<ToolDef>> = LazyLock::new(|| {
+    static VENDOR: &str = include_str!("../vendor/holon-tools.json");
+    serde_json::from_str(VENDOR)
+        .expect("vendor/holon-tools.json must be the exact holon.mcp.tools() output")
+});
+
+/// The single list of native tool names (O-05): the observe allowlist and
+/// the availability gates read this, so a name that is not registered
+/// cannot appear anywhere.
+pub fn native_tool_names() -> Vec<&'static str> {
+    // SAFETY-free: names are static strings in the vendor; leak the
+    // allocation once — the process lives as long as the registry.
+    NATIVE_TOOLS.iter().map(|t| t.name.as_str()).collect()
 }
 
-fn run_cli(env: &HolonEnv, args: &[&str]) -> ToolResult {
-    let out = std::process::Command::new(&env.bin)
-        .args(["--home", &env.home.to_string_lossy()])
-        .args(args)
-        .output();
-    let out = match out {
-        Ok(o) => o,
-        Err(e) => {
-            return ToolResult::error("holon-cli", format!("holon cli: {e}"));
-        }
-    };
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return ToolResult::error(
-            "holon-cli",
-            format!(
-                "holon: {}",
-                stderr
-                    .is_empty()
-                    .then(|| stdout.clone())
-                    .unwrap_or_else(|| stderr.clone())
-            ),
-        );
-    }
-    ToolResult::success("holon-cli", stdout)
+/// Arguments whose values are free (possibly untrusted) text: they ride
+/// STDIN with `-`, never argv (O-09).
+fn is_stdin_arg(name: &str) -> bool {
+    matches!(
+        name,
+        "content"
+            | "body"
+            | "result"
+            | "intent"
+            | "title"
+            | "message"
+            | "text"
+            | "findings"
+            | "notes"
+    )
 }
 
-// ── read tools (read-only API) ─────────────────────────────────────────────
-
-/// `holon_whoami`: the acting employee's identity card (who they are, their
-/// department, their roles — the kernel's `emp card` shape).
-pub struct Whoami;
-
-#[async_trait]
-impl OperantTool for Whoami {
-    fn name(&self) -> &str {
-        "holon_whoami"
+/// How operant reaches the kernel for a body's tools: the contract exports
+/// `$HOLON` as a shell command string (e.g. `/usr/bin/python3 -m holon
+/// --home …`); `[holon] bin` or the PATH `holon` is the fallback.
+fn kernel_command(bin: Option<&str>) -> Vec<String> {
+    if let Ok(holon) = std::env::var("HOLON")
+        && !holon.is_empty()
+    {
+        // shlex-style split: quotes group; no escapes beyond that (the
+        // contract's shape is `program args…` with no shell metacharacters
+        // of its own — we do not spawn a shell).
+        return split_word_list(&holon);
     }
-    fn description(&self) -> &str {
-        "Your identity card in the organization: employee id, title, department, roles. You are this employee for the whole run."
-    }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name(),
-            self.description(),
-            json!({"type": "object", "properties": {}}),
-        )
-    }
-    fn is_available(&self) -> bool {
-        std::env::var_os("HOLON_EMPLOYEE_ID").is_some()
-    }
-    async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
-        };
-        let emp = std::env::var("HOLON_EMPLOYEE_ID").unwrap_or_default();
-        run_cli(&env, &["emp", "card", &emp])
-    }
+    let bin = bin
+        .map(str::to_string)
+        .or_else(|| std::env::var("HOLON_BIN").ok())
+        .unwrap_or_else(|| "holon".to_string());
+    vec![bin]
 }
 
-/// `holon_org`: departments, heads, and the org chart (read API).
-pub struct OrgChart;
-
-#[async_trait]
-impl OperantTool for OrgChart {
-    fn name(&self) -> &str {
-        "holon_org"
-    }
-    fn description(&self) -> &str {
-        "The organization's structure: departments with their missions and heads, and the employee roster with roles."
-    }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name(),
-            self.description(),
-            json!({"type": "object", "properties": {}}),
-        )
-    }
-    fn is_available(&self) -> bool {
-        holon_env().is_some()
-    }
-    async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
-        };
-        let api = match HolonApi::open(&env.home) {
-            Ok(api) => api,
-            Err(e) => return ToolResult::error(self.name(), format!("read API: {e}")),
-        };
-        match (api.departments(), api.employees()) {
-            (Ok(depts), Ok(emps)) => {
-                let mut out = String::from("Departments:\n");
-                for d in &depts {
-                    let head = d.head.as_deref().unwrap_or("-");
-                    out.push_str(&format!("  {} — {} (head {})\n", d.slug, d.name, head));
+/// Minimal shell-word split (POSIX single/double quotes, no escapes).
+fn split_word_list(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    for ch in s.chars() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
                 }
-                out.push_str("Employees:\n");
-                for e in &emps {
-                    out.push_str(&format!(
-                        "  {} — {} · {} · {}\n",
-                        e.id, e.name, e.title, e.department
-                    ));
-                }
-                ToolResult::success(self.name(), out)
             }
-            (Err(e), _) | (_, Err(e)) => ToolResult::error(self.name(), format!("read API: {e}")),
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+/// One generic tool, driven by its vendored definition.
+pub struct NativeCliTool {
+    def: ToolDef,
+    /// The subcommand path: `holon_org` -> ["org"], `holon_task_show` ->
+    /// ["task", "show"]; whoami/submit are special-cased.
+    argv_path: Vec<String>,
+}
+
+impl NativeCliTool {
+    pub fn from_def(def: &ToolDef) -> Self {
+        let argv_path = def
+            .name
+            .strip_prefix("holon_")
+            .unwrap_or(def.name.as_str())
+            .split('_')
+            .map(str::to_string)
+            .collect();
+        Self {
+            def: def.clone(),
+            argv_path,
         }
     }
 }
 
-/// `holon_board`: the board — ready and running stages (read API).
-pub struct Board;
-
 #[async_trait]
-impl OperantTool for Board {
+impl OperantTool for NativeCliTool {
     fn name(&self) -> &str {
-        "holon_board"
+        &self.def.name
     }
+
     fn description(&self) -> &str {
-        "The work board: stages ready to claim and stages running now, with their titles and departments."
+        &self.def.description
     }
+
     fn schema(&self) -> ToolSchema {
         ToolSchema::new(
             self.name(),
             self.description(),
-            json!({"type": "object", "properties": {}}),
+            self.def.input_schema.clone(),
         )
     }
+
+    /// A tool is available exactly when this process is a Holon body: the
+    /// run env (the kernel's prepared variables) decides, not config.
     fn is_available(&self) -> bool {
-        holon_env().is_some()
+        operant_core::platform::is_holon_run()
     }
-    async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
-        };
-        let api = match HolonApi::open(&env.home) {
-            Ok(api) => api,
-            Err(e) => return ToolResult::error(self.name(), format!("read API: {e}")),
-        };
-        match api.board() {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    return ToolResult::success(self.name(), "The board is empty.");
-                }
-                let mut out = String::new();
-                for b in &rows {
-                    out.push_str(&format!(
-                        "  {} — {} · {} · {}\n",
-                        b.stage,
-                        b.title,
-                        b.department.as_deref().unwrap_or("-"),
-                        b.status
-                    ));
-                }
-                ToolResult::success(self.name(), out)
+
+    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+        if !self.is_available() {
+            return ToolResult::error(self.name(), "only available inside a Holon run".to_string());
+        }
+        if self.def.name == "holon_whoami" {
+            return self.run_kernel(&[], None).await;
+        }
+        if self.def.name == "holon_submit" {
+            return self.submit(args).await;
+        }
+        self.cli_call(args).await
+    }
+}
+
+impl NativeCliTool {
+    /// Build argv from the tool's properties: `--name value`, booleans as
+    /// flags, stdin-text properties as `--name -` with the value piped.
+    async fn cli_call(&self, args: Value) -> ToolResult {
+        let obj = match args {
+            Value::Object(m) => m,
+            _ => {
+                return ToolResult::error(
+                    self.def.name.clone(),
+                    "arguments must be an object".to_string(),
+                );
             }
-            Err(e) => ToolResult::error(self.name(), format!("read API: {e}")),
+        };
+        let mut argv: Vec<String> = Vec::new();
+        let mut stdin_text: Option<String> = None;
+        for (key, val) in &obj {
+            if val.is_null() {
+                continue;
+            }
+            let flag = format!("--{key}");
+            if val.as_bool() == Some(true) {
+                argv.push(flag);
+                continue;
+            }
+            if val.as_bool() == Some(false) {
+                continue; // a false flag is the default; never pass it
+            }
+            let text = match val {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            if is_stdin_arg(key) {
+                if stdin_text.is_some() {
+                    return ToolResult::error(
+                        self.def.name.clone(),
+                        "one stdin-text argument per call".to_string(),
+                    );
+                }
+                stdin_text = Some(text);
+                argv.push(flag);
+                argv.push("-".to_string());
+            } else {
+                argv.push(flag);
+                argv.push(text);
+            }
         }
+        self.run_kernel(&argv, stdin_text).await
     }
-}
 
-// ── organization-facing writes (kernel CLI, run token) ─────────────────────
-
-/// `holon_memory_add`: store a memory the organization keeps about its work.
-pub struct MemoryAdd;
-
-#[async_trait]
-impl OperantTool for MemoryAdd {
-    fn name(&self) -> &str {
-        "holon_memory_add"
-    }
-    fn description(&self) -> &str {
-        "Store a memory in the organization's memory: lessons, terrain notes, decisions worth keeping. Use for what the org should remember beyond this run."
-    }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name(),
-            self.description(),
-            json!({"type": "object", "properties": {"text": {"type": "string", "description": "the memory to store"}}, "required": ["text"]}),
-        )
-    }
-    fn is_available(&self) -> bool {
-        std::env::var_os("HOLON_RUN_TOKEN").is_some()
-    }
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
+    /// `holon_submit`: the envelope is a JSON object — the kernel's
+    /// `submit <run_id> --file -` reads it from stdin.
+    async fn submit(&self, args: Value) -> ToolResult {
+        let Some(run_id) = std::env::var("HOLON_RUN_ID").ok() else {
+            return ToolResult::error(
+                self.def.name.clone(),
+                "no HOLON_RUN_ID — this body has nothing to submit".to_string(),
+            );
         };
-        let Some(text) = args.get("text").and_then(Value::as_str) else {
-            return ToolResult::error(self.name(), "text is required");
-        };
-        run_cli(&env, &["memory", "add", text])
-    }
-}
-
-/// `holon_memory_search`: recall the organization's memories.
-pub struct MemorySearch;
-
-#[async_trait]
-impl OperantTool for MemorySearch {
-    fn name(&self) -> &str {
-        "holon_memory_search"
-    }
-    fn description(&self) -> &str {
-        "Search the organization's memory: lessons and terrain notes from past work."
-    }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name(),
-            self.description(),
-            json!({"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]}),
-        )
-    }
-    fn is_available(&self) -> bool {
-        holon_env().is_some()
-    }
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
-        };
-        let Some(query) = args.get("query").and_then(Value::as_str) else {
-            return ToolResult::error(self.name(), "query is required");
-        };
-        run_cli(&env, &["memory", "search", query])
-    }
-}
-
-/// `holon_msg_send`: message another employee (through the org's channels).
-pub struct MsgSend;
-
-#[async_trait]
-impl OperantTool for MsgSend {
-    fn name(&self) -> &str {
-        "holon_msg_send"
-    }
-    fn description(&self) -> &str {
-        "Send a message to another employee in the organization."
-    }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name(),
-            self.description(),
-            json!({"type": "object", "properties": {"to": {"type": "string", "description": "employee id"}, "body": {"type": "string"}}, "required": ["to", "body"]}),
-        )
-    }
-    fn is_available(&self) -> bool {
-        std::env::var_os("HOLON_RUN_TOKEN").is_some()
-    }
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
-        };
-        let (Some(to), Some(body)) = (
-            args.get("to").and_then(Value::as_str),
-            args.get("body").and_then(Value::as_str),
-        ) else {
-            return ToolResult::error(self.name(), "to and body are required");
-        };
-        run_cli(&env, &["msg", "send", to, body])
-    }
-}
-
-/// `holon_submit`: hand this run's result envelope to the kernel (the
-/// observe-stage path — an observer cannot write result.json but can
-/// always submit).
-pub struct Submit;
-
-#[async_trait]
-impl OperantTool for Submit {
-    fn name(&self) -> &str {
-        "holon_submit"
-    }
-    fn description(&self) -> &str {
-        "Hand this run's result envelope to the organization. The envelope must match your stage's contract (the brief lists its fields)."
-    }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name(),
-            self.description(),
-            json!({"type": "object", "properties": {"result": {"type": "object", "description": "the stage's result envelope as JSON"}}, "required": ["result"]}),
-        )
-    }
-    fn is_available(&self) -> bool {
-        std::env::var_os("HOLON_RUN_TOKEN").is_some()
-    }
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> ToolResult {
-        let Some(env) = holon_env() else {
-            return ToolResult::error(self.name(), "not a Holon run (HOLON_HOME unset)");
-        };
-        let run = std::env::var("HOLON_RUN_ID").unwrap_or_default();
         let Some(result) = args.get("result") else {
-            return ToolResult::error(self.name(), "result is required");
+            return ToolResult::error(
+                self.def.name.clone(),
+                "the `result` envelope is required".to_string(),
+            );
         };
-        let Ok(text) = serde_json::to_string(result) else {
-            return ToolResult::error(self.name(), "result is not serializable");
+        let body = serde_json::to_string(result).unwrap_or_default();
+        self.run_kernel(
+            &["submit".into(), run_id, "--file".into(), "-".into()],
+            Some(body),
+        )
+        .await
+    }
+
+    /// One kernel invocation: `sh`-free, env passed explicitly (the body's
+    /// own env — the token is the body's), stdout/stderr captured.
+    async fn run_kernel(&self, extra: &[String], stdin_text: Option<String>) -> ToolResult {
+        use tokio::io::AsyncWriteExt;
+        let mut argv = kernel_command(None);
+        argv.extend(self.argv_path.iter().cloned());
+        argv.extend(extra.iter().cloned());
+        let mut cmd = tokio::process::Command::new(&argv[0]);
+        cmd.args(&argv[1..])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return ToolResult::error(
+                    self.def.name.clone(),
+                    format!(
+                        "kernel not reachable ({e}): $HOLON or [holon] bin must name the launcher"
+                    ),
+                );
+            }
         };
-        run_cli(&env, &["--json", "submit", &run, &text])
+        if let Some(text) = stdin_text {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes()).await;
+                let _ = stdin.shutdown().await;
+            }
+        } else if let Some(stdin) = child.stdin.take() {
+            drop(stdin); // no stdin: close it so the kernel does not wait
+        }
+        // wait_with_output consumes the child: kill-on-timeout needs a
+        // handle kept out of the move. Take the pid's kill right first.
+        let mut child = child;
+        let wait = child.wait_with_output();
+        match tokio::time::timeout(std::time::Duration::from_secs(120), wait).await {
+            Ok(Ok(out)) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                if out.status.success() {
+                    ToolResult::success(self.def.name.clone(), stdout.trim().to_string())
+                } else {
+                    ToolResult::error(
+                        self.def.name.clone(),
+                        if stderr.trim().is_empty() {
+                            format!(
+                                "kernel exit {}: {}",
+                                out.status.code().unwrap_or(-1),
+                                stdout.trim()
+                            )
+                        } else {
+                            stderr.trim().to_string()
+                        },
+                    )
+                }
+            }
+            Ok(Err(e)) => ToolResult::error(self.def.name.clone(), format!("kernel wait: {e}")),
+            Err(_) => ToolResult::error(
+                self.def.name.clone(),
+                "kernel call timed out (120s)".to_string(),
+            ),
+        }
     }
 }
 
-/// Register every native Holon tool on the registry. Called by the CLI's
-/// tool build when `[holon] enabled` (and inert outside a Holon run — each
-/// tool's `is_available` gates on the Holon-run env, so registration when
-/// a non-Holon session shares the process costs only schema lines).
+/// Register every tool the vendored kernel list names. The registry stays
+/// in lockstep with `vendor/holon-tools.json` — the vendor-is-stale test
+/// (tests/native_tools.rs) regenerates and compares when HOLON_REPO is set.
 pub async fn register_all(registry: &operant_core::tools::ToolRegistry) {
-    for tool in [
-        Box::new(Whoami) as Box<dyn OperantTool>,
-        Box::new(OrgChart),
-        Box::new(Board),
-        Box::new(MemoryAdd),
-        Box::new(MemorySearch),
-        Box::new(MsgSend),
-        Box::new(Submit),
-    ] {
-        let name = tool.name().to_string();
-        if let Err(e) = registry.register_dyn(std::sync::Arc::from(tool)).await {
+    for def in NATIVE_TOOLS.iter() {
+        let name = def.name.clone();
+        if let Err(e) = registry
+            .register_dyn(std::sync::Arc::new(NativeCliTool::from_def(def)))
+            .await
+        {
             tracing::warn!(tool = %name, error = %e, "holon tool registration failed");
         }
     }

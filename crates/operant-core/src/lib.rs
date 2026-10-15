@@ -136,6 +136,17 @@ pub mod write_origin;
 /// — doctor's helper does that for you.
 pub const MEMORY_WIRE_REV: &str = env!("OPERANT_MEMORY_WIRE_REV");
 
+/// The build identity a Holon run reports (audit O-20): the exact string
+/// `operant --version` prints. The kernel's H10 groups judgments by this
+/// build stamp; a regression opens incident work against it.
+pub const BUILD_STAMP: &str = concat!(
+    "operant ",
+    env!("CARGO_PKG_VERSION"),
+    " (memory-wire ",
+    env!("OPERANT_MEMORY_WIRE_REV"),
+    ")"
+);
+
 pub use observer::{ConsoleObserver, Observer, ObserverEvent, ObserverMetric};
 pub use runtime_adapter::{NativeRuntime, RuntimeAdapter};
 

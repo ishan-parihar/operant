@@ -83,7 +83,7 @@ impl CronTool {
         // classifier + the Chair approve), never a local cron. The gate is
         // the run env, not config: a Holon body proposes; a personal session
         // on the same box keeps its own crons.
-        if std::env::var_os("HOLON_RUN_DIR").is_some() {
+        if crate::platform::is_holon_run() {
             let name = args.name.clone().unwrap_or_default();
             let schedule = args.schedule.clone().unwrap_or_default();
             let prompt = args.prompt.clone().unwrap_or_default();

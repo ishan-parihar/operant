@@ -118,6 +118,48 @@ pub fn operant_home() -> PathBuf {
     }
 }
 
+/// The Holon run-environment contract, read once (audit O-01/O-02).
+///
+/// Holon exports the run's directory as `HOLON_RUN_DIR` (CONTRACT §1, wave-1
+/// H-01) with `HOLON_BRIEF_DIR` as its documented alias — both name the run
+/// directory holding `BRIEF.md`, `policy.json` and `result.json`. Older
+/// kernels export only the alias; operant accepts either, preferring the
+/// canonical name. The employee arrives as `HOLON_EMPLOYEE_ID`, with
+/// `HOLON_EMPLOYEE` as a legacy alias.
+///
+/// These live here (not in operant-os) because the agent loop and the cron
+/// tool — core code — read them; operant-os re-exports for its own call sites.
+
+/// The run directory for THIS process if it is a Holon body: the dir the
+/// kernel prepared, carrying the brief, the policy and the result path.
+pub fn holon_run_dir() -> Option<PathBuf> {
+    for key in ["HOLON_RUN_DIR", "HOLON_BRIEF_DIR"] {
+        if let Some(v) = env::var_os(key)
+            && !v.is_empty()
+        {
+            return Some(PathBuf::from(v));
+        }
+    }
+    None
+}
+
+/// Whether THIS process is a Holon body at all (run dir present).
+pub fn is_holon_run() -> bool {
+    holon_run_dir().is_some()
+}
+
+/// The employee id this body runs as, if the kernel named one.
+pub fn holon_employee() -> Option<String> {
+    for key in ["HOLON_EMPLOYEE_ID", "HOLON_EMPLOYEE"] {
+        if let Ok(v) = env::var(key)
+            && !v.is_empty()
+        {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// `<operant_home>/config`
 pub fn operant_config_dir() -> PathBuf {
     operant_home().join("config")
