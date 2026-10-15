@@ -511,7 +511,7 @@ or parallelism.
   Untraced — no sibling identified.
 - **Unowned**: same posture as K-1 — own iteration, do not fold into org work.
 
-### K-3 — Terminal-scroll mode's row-count watermark assumes an append-only Body (OPEN, P3, scroll mode only)
+### K-3 — Terminal-scroll mode's row-count watermark assumes an append-only Body (FIXED 2026-10-15, iter-839 — plan 09 step 1)
 
 `emit_settled_transcript_rows` (`tui/app/scroll_emit.rs`) emits
 `[watermark, committed_prefix)` by **row count**. That is only correct while
@@ -525,9 +525,12 @@ native scrollback).
   alt-screen TUI never calls `insert_before`.
 - **Found**: 2026-10-13 visual-layer audit (by reading the code, not a live
   repro); not the 2026-10-13 duplication complaint, which was alt-screen.
-- **Next step**: key the watermark on settled *message* boundaries
-  (`PreparedMessages.message_boundaries`) instead of rows, or freeze emitted
-  rows' heights. Live-verify only — `insert_before` is inert on TestBackend.
+- **Fix (iter-839)**: the watermark now clamps to the last FINAL display
+  message (`final_display_message_count` stops at any still-pending tool
+  row) and is BODY-relative — the old boundary also wrongly counted header
+  chrome rows, desyncing the live-region floor (terminal-scroll-mode golden
+  re-proven). Rows that can still change shape are never emitted. Live
+  `insert_before` verification remains part of plan 09's final gate.
 
 ### K-4 — `cargo test -p operant-cli --no-default-features` does not compile (OPEN, unowned)
 

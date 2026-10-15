@@ -39,13 +39,21 @@ impl App {
             return;
         };
         let committed = committed_prefix_rows(&frame);
+        // (plan 09, K-3 fix) clamp to the MESSAGE-finality boundary: the
+        // first-mutable-section row boundary still counts tool rows that
+        // re-render on status flips (Queued → Running → Done), so a row
+        // watermark emits them early and the flip duplicates or shifts
+        // history. Emitting only through the last FINAL display message
+        // means nothing emitted can ever change shape.
+        let final_count = crate::tui::operant_model::adapter::final_display_message_count(self);
+        let emittable = message_final_rows(&frame, final_count).min(committed);
         let width = terminal.size().map(|s| s.width).unwrap_or(0);
         let recorded_width = self.scroll_emitted_width.get();
         if recorded_width == 0 || recorded_width != width {
             // First frame or resize: sync the watermark to the current
-            // prefix. Never re-emit rows already in history.
+            // emittable prefix. Never re-emit rows already in history.
             self.scroll_emitted_width.set(width);
-            self.scroll_emitted_rows.set(committed);
+            self.scroll_emitted_rows.set(emittable);
             return;
         }
         let watermark = self.scroll_emitted_rows.get();
@@ -74,15 +82,15 @@ impl App {
                 );
             });
         }
-        if committed <= watermark {
+        if emittable <= watermark {
             return;
         }
-        let lines = settled_lines(&frame, watermark, committed);
+        let lines = settled_lines(&frame, watermark, emittable);
         if lines.is_empty() {
             // Rows existed but none were renderable (e.g. image-region
             // placeholders). Advance the watermark anyway — those rows are
             // settled; the native history just doesn't carry them.
-            self.scroll_emitted_rows.set(committed);
+            self.scroll_emitted_rows.set(emittable);
             return;
         }
         let height = lines.len() as u16;
@@ -100,9 +108,33 @@ impl App {
             }
         });
         if result.is_ok() {
-            self.scroll_emitted_rows.set(committed);
+            self.scroll_emitted_rows.set(emittable);
         }
     }
+}
+
+/// (plan 09, K-3) Wrapped-row count through the last FINAL display
+/// message: `message_boundaries[final_count - 1].wrapped_len`. The
+/// boundaries are cumulative across the BODY section, so this is the
+/// message-true emit target the row watermark is clamped against.
+fn message_final_rows(frame: &PreparedChatFrame, final_count: usize) -> usize {
+    let body = frame
+        .sections
+        .iter()
+        .find(|s| matches!(s.kind, PreparedSectionKind::Body))
+        .or_else(|| frame.sections.first());
+    let Some(body) = body else {
+        return 0;
+    };
+    let boundaries = &body.prepared.message_boundaries;
+    if final_count == 0 {
+        return 0;
+    }
+    boundaries
+        .get(final_count - 1)
+        .map(|b| b.wrapped_len)
+        .unwrap_or(0)
+        .min(body.prepared.wrapped_lines.len())
 }
 
 /// Row index one past the last settled (emittable) row: the `line_start` of
@@ -237,4 +269,89 @@ mod tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0].to_string(), "r0");
     }
+}
+
+// ── (plan 09, K-3) message-finality clamp ─────────────────────────
+
+fn body_with_boundaries(boundaries: Vec<usize>) -> crate::tui::operant_model::PreparedMessages {
+    let rows = boundaries.last().copied().unwrap_or(0);
+    let mut prepared = crate::tui::operant_model::PreparedMessages {
+        wrapped_lines: (0..rows)
+            .map(|i| ratatui::text::Line::from(format!("r{i}")))
+            .collect(),
+        wrapped_plain_lines: std::sync::Arc::new(Vec::new()),
+        wrapped_copy_offsets: std::sync::Arc::new(Vec::new()),
+        raw_plain_lines: std::sync::Arc::new(Vec::new()),
+        wrapped_line_map: std::sync::Arc::new(Vec::new()),
+        wrapped_user_indices: Vec::new(),
+        wrapped_user_prompt_starts: Vec::new(),
+        wrapped_user_prompt_ends: Vec::new(),
+        user_prompt_texts: Vec::new(),
+        image_regions: Vec::new(),
+        edit_tool_ranges: Vec::new(),
+        copy_targets: Vec::new(),
+        message_boundaries: Vec::new(),
+        mermaid_pending_epoch: None,
+    };
+    prepared.message_boundaries = boundaries
+        .into_iter()
+        .map(|wrapped_len| crate::tui::operant_model::MessageBoundary {
+            msg_hash: 0,
+            wrapped_len,
+            raw_len: wrapped_len,
+            user_prompt_len: 0,
+        })
+        .collect();
+    prepared
+}
+
+#[test]
+fn message_final_rows_tracks_the_last_final_message() {
+    let body = body_with_boundaries(vec![2, 5, 9]);
+    let f = PreparedChatFrame::from_sections(vec![(
+        PreparedSectionKind::Body,
+        std::sync::Arc::new(body),
+    )]);
+    // All three messages final → whole body emittable.
+    assert_eq!(message_final_rows(&f, 3), 9);
+    // First two final → 5 rows.
+    assert_eq!(message_final_rows(&f, 2), 5);
+    // None final → nothing emittable.
+    assert_eq!(message_final_rows(&f, 0), 0);
+    // Over-count (shouldn't happen) clamps to the body height.
+    assert_eq!(message_final_rows(&f, 99), 9);
+}
+
+#[test]
+fn final_display_message_count_stops_at_pending_tool_row() {
+    use crate::tui::app::enums::{ToolStatus, ToolUseBlock};
+    let mut app = crate::tui::app::tests::make_app();
+    // A committed user message is final.
+    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+    app.messages.push(Message {
+        role: Role::User,
+        content: MessageContent::Text("hello".to_string()),
+    });
+    assert_eq!(
+        crate::tui::operant_model::adapter::final_display_message_count(&app),
+        1
+    );
+    // A PENDING tool row stops the count — nothing after it may emit.
+    app.tool_use_blocks.push(ToolUseBlock {
+        id: "t1".to_string(),
+        name: "shell".to_string(),
+        after_index: 1,
+        status: ToolStatus::Running,
+        output_preview: None,
+        input_json: "{}".to_string(),
+    });
+    let upto = crate::tui::operant_model::adapter::final_display_message_count(&app);
+    assert!(
+        upto < app.tool_use_blocks.len() + app.messages.len(),
+        "a pending tool row must not count as final (got {upto})"
+    );
+    // Once the row settles, the count covers it.
+    app.tool_use_blocks[0].status = ToolStatus::Done;
+    let settled = crate::tui::operant_model::adapter::final_display_message_count(&app);
+    assert!(settled >= upto + 1, "a settled row lifts the boundary");
 }

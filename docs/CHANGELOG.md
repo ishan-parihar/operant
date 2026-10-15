@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-839 — native scrollback: message-final emission (plan 09, step 1;
+  fixes K-3).** The scroll emitter's row watermark now clamps to the last
+  FINAL display message — `final_display_message_count` walks the display
+  list and stops at the first still-pending tool row (Queued/Running rows
+  re-render on every status flip; emitting them early froze a partial into
+  scrollback, then the flip duplicated or shifted history — BUGS.md K-3).
+  The boundary is also body-relative now: the old committed-prefix
+  measurement wrongly counted HEADER chrome rows as emittable transcript,
+  which desynced the live-region floor (the terminal-scroll-mode golden
+  re-proven; its pinned ↑22 was the defect). Corpus
+  terminal-scroll-mode + terminal-scroll-cls re-proven deterministic,
+  verify 0 drift. This is step 1 of the native-scroll plan; the dynamic
+  live region, replay-on-reset, and the default flip remain gated on the
+  live terminal verification.
+
 - **iter-838 — rewind selector: fullscreen fork UI (2026-10-14 batch, plan
   05, TUI steps 3-5).** /rewind is no longer a modal list that truncated
   the DISPLAY only — it opens a fullscreen selector over the REAL

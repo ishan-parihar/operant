@@ -26,7 +26,7 @@
 // `tui/mod.rs`, which must keep firing loudly until W3 wires the renderers in.
 #![cfg_attr(test, allow(dead_code))]
 
-mod adapter;
+pub mod adapter;
 mod anchor;
 mod cache;
 mod message;

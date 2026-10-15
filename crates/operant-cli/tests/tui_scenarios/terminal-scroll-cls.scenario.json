@@ -14,5 +14,5 @@
   ],
   "baseline": "terminal-scroll-cls.txt",
   "style_baseline": "terminal-scroll-cls.style.txt",
-  "notes": "P5-4 scroll-mode golden (second of two). /cls in scroll mode arms the one-shot native-scrollback divider (iter-762) AND collapses the live window (iter-761 capture). The divider flag stays armed until the NEXT settled content arrives — with no post-/cls emission in this scenario it must read exactly true. The state assertions pin both the collapse and the armed divider; the text golden pins the collapsed frame (no transcript rows)."
+  "notes": "P5-4 scroll-mode golden (second of two). /cls in scroll mode arms the one-shot native-scrollback divider (iter-762) AND collapses the live window (iter-761 capture). The divider flag stays armed until the NEXT settled content arrives — with no post-/cls emission in this scenario it must read exactly true. The state assertions pin both the collapse and the armed divider; the text golden pins the collapsed frame (no transcript rows). K-3 re-prove (iter-839): the emitted watermark is now clamped to the MESSAGE-final boundary and is body-relative — the old committed boundary wrongly counted header chrome rows, so the live-region floor shifted and this golden was re-proven (the pinned ↑22 encoded the defect)."
 }

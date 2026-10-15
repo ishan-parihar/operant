@@ -165,6 +165,31 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
 /// thinking that preceded a call still renders above the call (iter-785).
 /// Once the boundary flush commits the tails, `after_index <=
 /// messages.len()` and the rows return to the Body at their anchor.
+/// (plan 09, K-3) How many leading display messages are FINAL — nothing
+/// after them can change shape. Tool rows are final only once their block
+/// settles (Done/Error/Cancelled); a Queued/Running row still re-renders on
+/// every status flip, so emitting it early would freeze a partial into
+/// scrollback. Everything else (user prompts, committed assistant text,
+/// annotations) is final the moment it appears in the Body. The jcode
+/// DisplayMessage carries no status, so tool rows are resolved by id
+/// against the App's own `tool_use_blocks`.
+pub fn final_display_message_count(app: &App) -> usize {
+    let display = display_messages(app);
+    display
+        .iter()
+        .take_while(|m| {
+            m.tool_data
+                .as_ref()
+                .map(|tc| {
+                    !app.tool_use_blocks
+                        .iter()
+                        .any(|b| b.id == tc.id && b.status.is_pending())
+                })
+                .unwrap_or(true)
+        })
+        .count()
+}
+
 pub fn live_tool_rows(app: &App) -> Vec<DisplayMessage> {
     if !tails_live(app) {
         return Vec::new();
