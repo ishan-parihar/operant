@@ -124,6 +124,21 @@ fn guard_aft_path(tool_name: &str, raw_path: &str) -> std::result::Result<(), To
     }
 }
 
+/// O-18: the WRITE variants of the AFT tools share one fence — the same
+/// policy-roots write fence the basic file tools carry (audit O-18: "a
+/// path guard for the file tools AND the AFT writers"). Reads keep the
+/// plain `guard_aft_path`; every AFT writer goes through here first, so
+/// a Holon run's roots cannot be bypassed by switching tool families.
+/// `aft_ast_replace` names no path (AFT resolves its pattern internally)
+/// and stays behind the adapter's disabled_tools lists plus the kernel's
+/// workdir fingerprint.
+fn guard_aft_write(tool_name: &str, raw_path: &str) -> std::result::Result<(), ToolResult> {
+    if let Err(why) = crate::tools::file_tools::holon_write_fence(raw_path) {
+        return Err(ToolResult::error(tool_name, why));
+    }
+    guard_aft_path(tool_name, raw_path)
+}
+
 /// Strip protocol noise (id/success/code) from an aft response so the
 /// model sees only meaningful payload (content/output/text/message/…).
 fn response_payload(response: &Value) -> Value {
@@ -534,7 +549,7 @@ impl OperantTool for AftWriteTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_write", format!("Invalid arguments: {}", e)),
         };
-        if let Err(err) = guard_aft_path("aft_write", &args.file_path) {
+        if let Err(err) = guard_aft_write("aft_write", &args.file_path) {
             return err;
         }
         execute_aft_command(
@@ -575,7 +590,7 @@ impl OperantTool for AftEditTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_edit", format!("Invalid arguments: {}", e)),
         };
-        if let Err(err) = guard_aft_path("aft_edit", &args.file_path) {
+        if let Err(err) = guard_aft_write("aft_edit", &args.file_path) {
             return err;
         }
         execute_aft_command(
@@ -630,7 +645,7 @@ impl OperantTool for AftApplyPatchTool {
                 .or_else(|| trimmed.strip_prefix("*** Add File: "))
                 .or_else(|| trimmed.strip_prefix("*** Delete File: "));
             if let Some(path) = path
-                && let Err(err) = guard_aft_path("aft_apply_patch", path.trim())
+                && let Err(err) = guard_aft_write("aft_apply_patch", path.trim())
             {
                 return err;
             }
@@ -722,6 +737,12 @@ impl OperantTool for AftBashTool {
             Ok(a) => a,
             Err(e) => return ToolResult::error("aft_bash", format!("Invalid arguments: {}", e)),
         };
+        // O-18: the policy-commands fence — same allowlist the basic
+        // terminal tool carries; a Holon run cannot bypass it by switching
+        // tool families.
+        if let Err(why) = crate::tools::file_tools::holon_command_fence(&args.command) {
+            return ToolResult::error("aft_bash", why);
+        }
         let project_root = project_root_from_context(&context);
         let bridge = match self.pool.get(&project_root).await {
             Ok(b) => b,

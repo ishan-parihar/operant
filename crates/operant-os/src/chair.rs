@@ -15,19 +15,40 @@ use std::path::Path;
 
 use crate::run::holon_cmd;
 
+/// Run one `holon` CLI probe and collect its output. ETXTBSY retry: a
+/// launcher script just installed (or a bin the operator is redeploying)
+/// can be exec'd while the file's write is still settling — a transient
+/// tmpfs condition, observed under the parallel test harness. A 100ms
+/// pause and one retry is correct for an idempotent read; a second
+/// failure is a real failure.
+async fn run_holon(
+    config_home: &Path,
+    bin: Option<&str>,
+    args: &[&str],
+) -> crate::Result<std::process::Output> {
+    let run_once = || async {
+        let mut cmd = holon_cmd(config_home, bin);
+        cmd.args(args);
+        cmd.stdin(std::process::Stdio::null()).output().await
+    };
+    let mut attempt = run_once().await;
+    if let Err(e) = &attempt
+        && e.to_string().contains("os error 26")
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        attempt = run_once().await;
+    }
+    attempt
+        .map_err(|e| crate::Error::Protocol(format!("holon {}: {e}", args.first().unwrap_or(&""))))
+}
+
 /// The Chair's channel refs, as the organization configured them.
 /// Degradation, not death: an unreadable config or CLI failure is an empty
 /// set — an unverifiable sender is chat, never Chair.
 pub async fn chair_channels(config_home: &Path, bin: Option<&str>) -> crate::Result<Vec<String>> {
     // `holon org` is a chair/any-actor read; asking through the CLI keeps
     // one source of truth for the config (no second [chair] parser here)
-    let mut cmd = holon_cmd(config_home, bin);
-    cmd.args(["--json", "chair-channels"]);
-    let out = cmd
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await
-        .map_err(|e| crate::Error::Protocol(format!("chair-channels: {e}")))?;
+    let out = run_holon(config_home, bin, &["--json", "chair-channels"]).await?;
     if !out.status.success() {
         tracing::warn!("chair-channels unavailable — treating sender as chat");
         return Ok(Vec::new());
@@ -68,12 +89,9 @@ pub async fn run_as_chair(
     bin: Option<&str>,
     command: &[&str],
 ) -> crate::Result<String> {
-    let mut cmd = holon_cmd(config_home, bin);
-    cmd.arg("--json");
-    cmd.args(command);
-    let out = cmd
-        .stdin(std::process::Stdio::null())
-        .output()
+    let mut all = vec!["--json"];
+    all.extend_from_slice(command);
+    let out = run_holon(config_home, bin, &all)
         .await
         .map_err(|e| crate::Error::Protocol(format!("chair command: {e}")))?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -104,15 +122,25 @@ pub async fn dispatch_message(
     // apply; argv length still bounds it) and `--intent` rides stdin.
     // The Chair's message is both: what it announces and what it wants.
     let title: String = text.chars().take(200).collect();
-    let mut cmd = holon_cmd(config_home, bin);
-    cmd.args(["--json", "classify", &title, "--intent", "-"]);
-    cmd.stdin(std::process::Stdio::piped());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
+    // ETXTBSY retry — same transient as run_holon; classify needs stdin
+    // piped so it gets its own spawn-with-retry shape.
+    let spawn_once = || {
+        let mut cmd = holon_cmd(config_home, bin);
+        cmd.args(["--json", "classify", &title, "--intent", "-"]);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        cmd.spawn()
+    };
+    let mut spawned = spawn_once();
+    if let Err(e) = &spawned
+        && e.to_string().contains("os error 26")
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        spawned = spawn_once();
+    }
     use tokio::io::AsyncWriteExt;
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| crate::Error::Protocol(format!("classify spawn: {e}")))?;
+    let mut child = spawned.map_err(|e| crate::Error::Protocol(format!("classify spawn: {e}")))?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes()).await;
         let _ = stdin.shutdown().await;

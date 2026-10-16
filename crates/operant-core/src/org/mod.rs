@@ -87,6 +87,27 @@ pub fn holon_budget_cap(run_dir: &std::path::Path) -> Option<u64> {
     doc.pointer("/budget/tokens")?.as_u64()
 }
 
+/// O-18: the policy's terminal allowlist for this run — the kernel merges
+/// the grade's `commands` and `act_commands` (act postures only) into one
+/// sorted `commands` list at policy generation (holon execution/policy.py).
+/// None = ungoverned (no policy or the policy lists nothing — the fence
+/// stays inert, matching the roots fence's convention); Some(names) = only
+/// these command names may run.
+pub fn holon_policy_commands(run_dir: &std::path::Path) -> Option<Vec<String>> {
+    let policy = std::fs::read_to_string(run_dir.join("policy.json")).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&policy).ok()?;
+    let commands = doc.get("commands")?.as_array()?;
+    let names: Vec<String> = commands
+        .iter()
+        .filter_map(|c| c.as_str())
+        .map(str::to_string)
+        .collect();
+    if names.is_empty() {
+        return None; // an empty allowlist upstream means ungoverned, not deny-all
+    }
+    Some(names)
+}
+
 /// W6 (audit O-22, invariant 4): in a Holon run, learning writes become
 /// annotations in the run directory — never files in the operant home.
 /// One JSON line per annotation, keyed by kind: `skill_changes`,

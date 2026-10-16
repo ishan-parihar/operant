@@ -240,11 +240,28 @@ fn a_real_prepare_env_engages_enforcement_trajectory_and_usage() {
             .expect("trajectory parses");
     assert!(traj.get("steps").is_some(), "trajectory shape: {traj}");
 
-    // 4. usage.json written always (O-21)
+    // 4. usage.json written always (O-21) — with the PROVIDER's numbers
+    // (O-19: metered per call, never the chars/4 estimate — the scripted
+    // provider reports prompt_tokens=111/completion_tokens=22, which an
+    // estimate cannot reproduce) and the build stamp (O-20).
     let usage_path = run_dir.join("usage.json");
+    let usage: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&usage_path)
+            .unwrap_or_else(|_| panic!("no usage.json in {}", run_dir.display())),
+    )
+    .expect("usage.json parses");
+    assert_eq!(
+        usage["tokens_in"].as_u64(),
+        Some(111),
+        "usage.json carries the provider-metered input, not an estimate: {usage}"
+    );
+    assert_eq!(
+        usage["tokens_out"].as_u64(),
+        Some(22),
+        "usage.json carries the provider-metered output: {usage}"
+    );
     assert!(
-        usage_path.exists(),
-        "no usage.json in {}",
-        run_dir.display()
+        usage["build"].as_str().is_some_and(|b| !b.is_empty()),
+        "the build stamp rides usage.json (O-20): {usage}"
     );
 }

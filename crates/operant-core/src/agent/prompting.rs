@@ -143,7 +143,7 @@ impl OperantAgent {
         &self,
         run_dir: std::path::PathBuf,
         trajectory: &crate::trajectory::Trajectory,
-        messages: &[Message],
+        _messages: &[Message],
     ) {
         // trajectory.json in the kernel's shape (one definition:
         // crate::trajectory::holon_trajectory_json — also unit-tested there)
@@ -159,16 +159,25 @@ impl OperantAgent {
         // including a body that submitted through the kernel and never
         // wrote result.json. duration_s stays the kernel's own run-row
         // measurement; the driver leaves it null.
-        let (tokens_in, tokens_out) = messages.iter().fold((0usize, 0usize), |(i, o), m| {
-            let est = m.content.len() / 4;
-            if m.role == crate::client::Role::Assistant {
-                (i, o + est)
-            } else {
-                (i + est, o)
-            }
-        });
+        // O-19: the numbers are the PROVIDER's, metered per call in
+        // emit_usage_and_cost (prompt/completion reported by the API),
+        // with cost from the session accumulator (models_dev pricing when
+        // the catalog has the model, else null) — never the chars/4
+        // estimate the audit flagged (input undercounted by ~turns).
+        let tokens_in = self
+            .holon_tokens_in
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let tokens_out = self
+            .holon_tokens_out
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let cost = self
+            .session_cost_usd
+            .read()
+            .map(|c| if *c > 0.0 { Some(*c) } else { None })
+            .unwrap_or(None);
         let usage = serde_json::json!({
             "tokens_in": tokens_in, "tokens_out": tokens_out,
+            "cost": cost,
             "tool_calls": trajectory.tool_calls,
             "build": crate::BUILD_STAMP,
         });
@@ -211,7 +220,7 @@ impl OperantAgent {
             serde_json::json!({
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
-                "cost": null,
+                "cost": cost,
                 "tool_calls": trajectory.tool_calls,
                 "duration_s": null,
             }),

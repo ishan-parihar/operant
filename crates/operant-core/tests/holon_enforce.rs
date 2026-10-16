@@ -107,3 +107,90 @@ fn the_budget_cap_reads_the_policy_pointer() {
         "no cap = ungoverned"
     );
 }
+
+/// O-18: the terminal command fence — the policy's `commands` list is the
+/// allowlist; a command outside it is refused AND recorded; a personal run
+/// and an ungoverned policy pass; a leading path is judged by its binary
+/// name; a quoted command name unwraps.
+#[test]
+fn the_command_fence_refuses_and_records_off_the_allowlist() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_dir, run) = holon_run_dir_with(
+        r#"{"version":1,"stage":"execute","posture":"act","roots":[],"writes":[],"commands":["git","rg"],"deny":[],"budget":{"tokens":null,"cost":null}}"#,
+    );
+    // SAFETY: serialized test; the run env is the only variable.
+    unsafe { std::env::set_var("HOLON_RUN_DIR", &run) };
+
+    assert!(operant_core::tools::file_tools::holon_command_fence("git status").is_ok());
+    // a leading path names the same binary
+    assert!(operant_core::tools::file_tools::holon_command_fence("/usr/bin/git status").is_ok());
+    // a quoted binary name unwraps
+    assert!(operant_core::tools::file_tools::holon_command_fence("'git' status").is_ok());
+
+    let err =
+        operant_core::tools::file_tools::holon_command_fence("rm -rf /").expect_err("must refuse");
+    assert!(
+        err.contains("'rm' is not in the run's policy commands"),
+        "{err}"
+    );
+    // a shell wrap cannot smuggle a refused binary: the line names `sh`
+    let err2 = operant_core::tools::file_tools::holon_command_fence("sh -c 'rm -rf /'")
+        .expect_err("the wrap must be judged on its own first token");
+    assert!(err2.contains("'sh' is not in"), "{err2}");
+    let refusals = operant_core::org::read_refusals(&run);
+    assert!(
+        refusals
+            .iter()
+            .any(|r| r["tool"] == "terminal" && r["policy_rule"] == "policy.json:commands"),
+        "the command fence recorded its refusals: {refusals:?}"
+    );
+
+    unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+
+    // personal run: never fenced
+    assert!(operant_core::tools::file_tools::holon_command_fence("rm -rf /").is_ok());
+}
+
+/// O-18: an empty `commands` list is ungoverned (None), not deny-all —
+/// the same convention the roots fence uses.
+#[test]
+fn an_empty_commands_list_is_ungoverned() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_dir, run) = holon_run_dir_with(
+        r#"{"version":1,"stage":"execute","posture":"act","roots":[],"writes":[],"commands":[],"deny":[],"budget":{"tokens":null,"cost":null}}"#,
+    );
+    // SAFETY: serialized test.
+    unsafe { std::env::set_var("HOLON_RUN_DIR", &run) };
+    assert!(
+        operant_core::tools::file_tools::holon_command_fence("anything at all").is_ok(),
+        "an empty allowlist means ungoverned, matching the roots fence"
+    );
+    unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+}
+
+/// O-18: the AFT writers share the same roots fence as the basic file
+/// tools — the call cannot bypass policy roots by switching families.
+/// (Driven through the real guard: `guard_aft_write` is crate-private, so
+/// this pins the fence seam through its public half + the AftWriteTool's
+/// execute path would need a live bridge — the fence itself is the seam
+/// under test, exercised via holon_write_fence which guard_aft_write
+/// forwards to.)
+#[test]
+fn the_aft_writer_route_shares_the_roots_fence() {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (_dir, run) = holon_run_dir_with(
+        r#"{"version":1,"stage":"execute","posture":"act","roots":["/tmp"],"writes":[],"commands":[],"deny":[],"budget":{"tokens":null,"cost":null}}"#,
+    );
+    // SAFETY: serialized test.
+    unsafe { std::env::set_var("HOLON_RUN_DIR", &run) };
+    // the exact call guard_aft_write("aft_write", path) makes first:
+    assert!(
+        operant_core::tools::file_tools::holon_write_fence("/tmp/aft-probe.txt").is_ok(),
+        "an AFT write inside the roots passes the shared fence"
+    );
+    assert!(
+        operant_core::tools::file_tools::holon_write_fence("/etc/aft-probe.txt").is_err(),
+        "an AFT write outside the roots is refused by the shared fence"
+    );
+    unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+}

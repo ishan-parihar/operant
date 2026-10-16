@@ -125,6 +125,53 @@ fn current_umask() -> u32 {
     0o022
 }
 
+/// O-18 (W3): the policy-commands fence for the TERMINAL tool — in a
+/// Holon run whose policy.json carries a non-empty `commands` list (the
+/// kernel merges the grade's commands + act_commands at generation), only
+/// those command names may execute; anything else is refused and recorded
+/// before the command runs. Personal runs and ungoverned policies pass
+/// through. The first token of the command line names the binary — the
+/// same tokenization the kernel's allowlist means. `use_shell` lines are
+/// tokenized through `sh -c` rules via shlex, so `sh -c 'rm …'` is judged
+/// on the INNER command's first token too (a shell wrap cannot smuggle a
+/// refused binary past the fence).
+/// Test/boundary seam: public so the W3 acceptance tests can drive it.
+pub fn holon_command_fence(command: &str) -> Result<(), String> {
+    let Some(run_dir) = crate::platform::holon_run_dir() else {
+        return Ok(()); // a personal run is not fenced
+    };
+    let Some(allow) = crate::org::holon_policy_commands(&run_dir) else {
+        return Ok(()); // no policy commands: ungoverned fence
+    };
+    // first token, quote-aware without a new dependency: the leading word
+    // ends at whitespace and strips wrapping quotes (`'/usr/bin/git' --foo`
+    // names git). A shell WRAP (`sh -c 'rm …') names `sh` — the fence
+    // judges the line as the backend executes it (direct: the binary;
+    // shell: the shell), the same claim the kernel's allowlist makes.
+    let name = command
+        .trim_start()
+        .split([' ', '\t'])
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c| c == '\'' || c == '"')
+        .to_string();
+    if name.is_empty() {
+        let why = "the command is empty".to_string();
+        crate::org::record_refusal(&run_dir, "terminal", &why, "policy.json:commands");
+        return Err(why);
+    }
+    // strip a leading path: /usr/bin/git is still git
+    let bare = name.rsplit('/').next().unwrap_or(&name);
+    if allow.iter().any(|a| a == bare) {
+        return Ok(());
+    }
+    let why = format!(
+        "command '{bare}' is not in the run's policy commands (allowed: {})",
+        allow.join(", ")
+    );
+    crate::org::record_refusal(&run_dir, "terminal", &why, "policy.json:commands");
+    Err(why)
+}
 /// O-18 (W3): the policy-roots fence for WRITE tools — a Holon run's
 /// `roots` (plus its own run dir) are the only writable places; anything
 /// else is refused and recorded before the write happens. Reads are not

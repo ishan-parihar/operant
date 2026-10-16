@@ -583,6 +583,20 @@ impl OperantAgent {
         // undercounted by ~turns). Over the cap: record the refusal (the
         // stage sees a budget blocker, not a silent death) and trigger the
         // interrupt — the loop's existing machinery ends the turn cleanly.
+        // O-19: the in/out split feeds usage.json — provider-metered,
+        // not estimated (input tokens resend the context every turn;
+        // the chars/4 estimate undercounted by ~turns). Metered on every
+        // Holon run; the cap comparison below is the only conditional.
+        if crate::platform::holon_run_dir().is_some() {
+            self.holon_tokens_in.fetch_add(
+                u64::from(usage.prompt_tokens),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            self.holon_tokens_out.fetch_add(
+                u64::from(usage.completion_tokens),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         if let Some(run_dir) = crate::platform::holon_run_dir()
             && let Some(cap) = crate::org::holon_budget_cap(&run_dir)
         {

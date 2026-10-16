@@ -568,6 +568,12 @@ pub struct OperantAgent {
     /// O-19: provider-reported tokens this Holon run has spent — enforced
     /// against the policy's budget cap in `emit_usage_and_cost`.
     pub(crate) holon_tokens_spent: std::sync::atomic::AtomicU64,
+    /// O-19: provider-reported input/output tokens for THIS run, fed in
+    /// `emit_usage_and_cost` and read by `write_holon_run_files` — the
+    /// usage.json numbers are the meter, not the chars/4 estimate (which
+    /// undercounted input by ~turns, the audit's O-19).
+    pub(crate) holon_tokens_in: std::sync::atomic::AtomicU64,
+    pub(crate) holon_tokens_out: std::sync::atomic::AtomicU64,
     /// R2: set when a stream error on a known reasoning model fired with no
     /// content arrived yet (upstream idle-killed the thinking phase). The run
     /// loop appends thinking-timeout guidance to the final error message once

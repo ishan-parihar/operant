@@ -49,6 +49,14 @@ impl OperantTool for TerminalTool {
         };
         let settings = runtime_config().tools.terminal;
 
+        // O-18: the policy-commands fence — a Holon run whose policy.json
+        // lists allowed commands refuses everything else up front, with
+        // the refusal recorded for the result envelope. Personal runs and
+        // ungoverned policies pass straight through.
+        if let Err(why) = crate::tools::file_tools::holon_command_fence(&args.command) {
+            return ToolResult::error("terminal", why);
+        }
+
         let timeout = std::time::Duration::from_secs(
             args.timeout
                 .unwrap_or(settings.max_timeout_secs)
