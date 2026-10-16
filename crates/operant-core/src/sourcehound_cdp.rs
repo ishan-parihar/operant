@@ -407,12 +407,36 @@ pub async fn get_or_start_shared_session() -> Result<Arc<CdpBrowserSession>> {
         .cloned()
 }
 
-/// Resolve a CDP WebSocket URL for tools that speak raw CDP:
-/// `BROWSER_CDP_URL` env override first, else the managed shared session.
-pub async fn resolve_cdp_ws_url() -> Result<String> {
+/// R-02 (AUDIT-2026-10-16-capability-layer): the CDP endpoint's ONE env
+/// seam. `BROWSER_CDP_URL` is canonical; `OBS_CDP_URL` — the legacy
+/// apply-engine name — is accepted as a deprecated fallback, so a
+/// department migrating its browser surface cannot end up with two names
+/// for one endpoint and no tool reading the one its config sets.
+/// Holon's browser surface manifest names `BROWSER_CDP_URL` (the winner).
+pub fn browser_cdp_url_from_env() -> Option<String> {
     if let Ok(url) = std::env::var("BROWSER_CDP_URL")
         && !url.trim().is_empty()
     {
+        return Some(url);
+    }
+    if let Ok(url) = std::env::var("OBS_CDP_URL")
+        && !url.trim().is_empty()
+    {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            tracing::warn!(
+                "OBS_CDP_URL is the legacy name — set BROWSER_CDP_URL instead; the old name may be removed"
+            );
+        });
+        return Some(url);
+    }
+    None
+}
+
+/// Resolve a CDP WebSocket URL for tools that speak raw CDP:
+/// `BROWSER_CDP_URL` env override first, else the managed shared session.
+pub async fn resolve_cdp_ws_url() -> Result<String> {
+    if let Some(url) = browser_cdp_url_from_env() {
         return Ok(url);
     }
     let session = get_or_start_shared_session().await?;
@@ -573,6 +597,40 @@ pub fn js_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // env-mutating tests share one lock (the process env is global)
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// R-02: one CDP endpoint, two historical names. The canonical
+    /// `BROWSER_CDP_URL` wins; the legacy `OBS_CDP_URL` still routes so a
+    /// migrating department's config keeps working; neither set → None.
+    #[serial_test::serial]
+    #[test]
+    fn cdp_env_name_r02_canonical_wins_legacy_falls_back() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // SAFETY: serialized by ENV_LOCK; restored below.
+        unsafe {
+            std::env::remove_var("BROWSER_CDP_URL");
+            std::env::remove_var("OBS_CDP_URL");
+        }
+        assert_eq!(browser_cdp_url_from_env(), None);
+        unsafe { std::env::set_var("OBS_CDP_URL", "ws://legacy:1") };
+        assert_eq!(
+            browser_cdp_url_from_env(),
+            Some("ws://legacy:1".to_string()),
+            "the legacy apply-engine name still routes (deprecated)"
+        );
+        unsafe { std::env::set_var("BROWSER_CDP_URL", "ws://canonical:2") };
+        assert_eq!(
+            browser_cdp_url_from_env(),
+            Some("ws://canonical:2".to_string()),
+            "the canonical name wins when both are set"
+        );
+        unsafe {
+            std::env::remove_var("BROWSER_CDP_URL");
+            std::env::remove_var("OBS_CDP_URL");
+        }
+    }
 
     #[test]
     fn js_escape_prevents_injection() {

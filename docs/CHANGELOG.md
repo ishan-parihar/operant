@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-883 — R-02: one CDP endpoint, two names — the legacy one
+  still routes** (capability-layer audit 2026-10-16). The browser tools
+  read `BROWSER_CDP_URL`; the legacy apply engines read `OBS_CDP_URL` —
+  a department migrating its browser surface could end up with two names
+  for one endpoint and no tool reading the one its config sets. One env
+  seam now: `sourcehound_cdp::browser_cdp_url_from_env()` — the canonical
+  `BROWSER_CDP_URL` wins, the legacy `OBS_CDP_URL` routes as a
+  deprecated fallback (one-time warn), and all four readers go through it
+  (browser_cdp_tool, browser_dialog_tool, browser_tool's accessibility
+  tree, resolve_cdp_ws_url). Holon's browser surface manifest names
+  `BROWSER_CDP_URL`. Guard:
+  `cdp_env_name_r02_canonical_wins_legacy_falls_back`; the three
+  env-mutating browser tests now carry `#[serial]` (they never did — the
+  env is process-global and they raced anything that reads it).
+
 - **iter-882 — R-09: a Holon body's skill list is the run's department-
   resolved library** (capability-layer audit 2026-10-16). The frozen
   prefix's `<available_skills>` block listed the org-wide standard export

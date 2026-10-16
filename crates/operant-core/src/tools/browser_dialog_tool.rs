@@ -38,12 +38,12 @@ impl OperantTool for BrowserDialogTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
-        let cdp_url = match std::env::var("BROWSER_CDP_URL") {
-            Ok(url) => url,
-            Err(_) => {
+        let cdp_url = match crate::sourcehound_cdp::browser_cdp_url_from_env() {
+            Some(url) => url,
+            None => {
                 return ToolResult::error(
                     self.name(),
-                    "BROWSER_CDP_URL environment variable not set.",
+                    "BROWSER_CDP_URL environment variable not set (the legacy OBS_CDP_URL is also accepted).",
                 );
             }
         };
@@ -93,6 +93,7 @@ mod tests {
         assert!(serde_json::to_string(&schema.parameters).is_ok());
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_browser_dialog_missing_env() {
         let saved = std::env::var("BROWSER_CDP_URL").ok();

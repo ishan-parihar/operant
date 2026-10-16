@@ -167,14 +167,14 @@ impl BrowserTool {
         let cdp_url = args
             .cdp_url
             .clone()
-            .or_else(|| std::env::var("BROWSER_CDP_URL").ok());
+            .or_else(crate::sourcehound_cdp::browser_cdp_url_from_env);
 
         let cdp_url = match cdp_url {
             Some(url) => url,
             None => {
                 return ToolResult::error(
                     self.name(),
-                    "No CDP URL available. Set BROWSER_CDP_URL or pass cdp_url parameter.",
+                    "No CDP URL available. Set BROWSER_CDP_URL (the legacy OBS_CDP_URL is also accepted) or pass cdp_url parameter.",
                 );
             }
         };

@@ -56,8 +56,8 @@ impl OperantTool for BrowserCdpTool {
 
         let params = normalize_params(parsed.params.clone());
 
-        match std::env::var("BROWSER_CDP_URL") {
-            Ok(url) if !url.trim().is_empty() => {
+        match crate::sourcehound_cdp::browser_cdp_url_from_env() {
+            Some(url) => {
                 // Explicit external endpoint (real Chrome / DevTools): targets
                 // live process-wide there, so a fresh connection per command
                 // is fine.
@@ -177,6 +177,7 @@ mod tests {
         assert!(serde_json::to_string(&schema.parameters).is_ok());
     }
 
+    #[serial_test::serial]
     #[tokio::test]
     async fn test_browser_cdp_unreachable_endpoint_errors() {
         // An explicit but unreachable BROWSER_CDP_URL must surface a CDP error
