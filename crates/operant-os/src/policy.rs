@@ -54,6 +54,23 @@ const OBSERVE_ALLOW: &[&str] = &[
     "web_scrape",
     "web_extract",
     "web_crawl",
+    // G1 live day (the first research body was denied aft_read): the AFT
+    // READ suite is exactly what an observer mapping terrain wants —
+    // IDE-grade navigation over a codebase, zero mutation. The AFT writers
+    // (edit/apply_patch/ast_replace/undo/restore_checkpoint/checkpoint)
+    // and aft_bash stay denied; the adapters' disabled_tools already
+    // carried the writers, this adds the readers.
+    "aft_read",
+    "aft_outline",
+    "aft_zoom",
+    "aft_grep",
+    "aft_glob",
+    "aft_callers",
+    "aft_inspect",
+    "aft_ast_search",
+    "aft_list_checkpoints",
+    "aft_checkpoint_paths",
+    "aft_status",
     "memory_search",
     "memory_recall",
     "skills_list",
