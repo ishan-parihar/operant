@@ -53,8 +53,11 @@ runtime switch `[holon] enabled = false` IS the gate (byte-identical personal mo
 invariant 5, pinned by test); a cargo feature would double-gate one switch and complicate the
 peer fleet's shared tree. The plan's original feature-gate line is superseded by this decision.
 
-**Pending owner decisions:** turning org mode ON on the workstation (the audit §5 checklist:
-archive taken ✓, absolute home+bin, one supervised routine under owner control); H11's
+**Pending owner decisions:** the audit §5 checklist's LAST step — one supervised routine's
+plan→execute→verify under owner control, on a healthy route (org mode itself has been ON since
+2026-10-16: archive taken twice — `org-2026-10-16` carries the `org/` tree — absolute home+bin,
+the adapter installed with the Python MCP mount dropped, a pilot employee, eight supervised
+bodies; see REMAINING-GAPS' G1 record); H11's
 Python-organ retirement (the VPS still runs ZeroClaw). The runner/broker Rust ports remain
 deliberately unported — the Python fallback serves the non-operant deployments H11 will
 eventually retire, and O-11's refusal guard holds until then.

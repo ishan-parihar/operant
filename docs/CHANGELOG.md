@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-888 — red-team pass 2 (audit §9): org-mode event intake
+  spoke a dead kernel contract and could never fire.** The 2026-10-17
+  adversarial pass over AUDIT-2026-10-15.md found W5's "O-15 closed"
+  false in effect twice over: `events::match_and_fire` matched the RAW
+  `api_triggers` pattern — which carries the `event:` kind marker
+  (migration 0010: `pattern = coalesce(s.event, s.cron)`) — so no real
+  channel text could ever contain it and intake never fired; and the
+  payload went as `--payload -` + stdin, the pre-H-06 contract, which
+  the literal-`--payload` kernel (8eff8b7) takes as the string "-" —
+  every firing lost the event text. Now CONTRACT §13's semantics: the
+  marker is stripped (fail-closed on rows that do not speak the
+  documented syntax) and the text rides as ONE literal argv token
+  (exec-style, no shell; the kernel never reads it as a file
+  reference). O-15's acceptance test never existed (the O-24
+  phantom-coverage class); `tests/events.rs` now pins all of it
+  against a real kernel — fire once, the cooldown skip NOT counted
+  (H-13 rc 3), a non-match fires nothing, and the event text reaches
+  the fired work's message VERBATIM. Mutation-proven: 0/1 against the
+  pre-fix code, 1/1 with it; operant-os battery 37 green with
+  `HOLON_REPO` set.
+
 - **iter-887 — plan 07 §1′+§2: native scrollback gets a message
   watermark and a replay** (audit plan 07, bugs 1-2 + the H-1
   regression). The row watermark drifted whenever a tool row
