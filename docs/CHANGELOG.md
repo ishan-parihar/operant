@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-882 — R-09: a Holon body's skill list is the run's department-
+  resolved library** (capability-layer audit 2026-10-16). The frozen
+  prefix's `<available_skills>` block listed the org-wide standard export
+  the adapter installs once into the shared `HERMES_HOME`, so a
+  department's tailored skill reached the body twice — the standard copy
+  in the list, the fork in the brief. `build_agent_core_with_memory` now
+  roots the run's SkillManager at the directory the kernel names in
+  brief.json (`skills` — `runs/<id>/skills`, department-resolved, written
+  at claim; kernel half landed in Holon a5fda76): one copy of every
+  skill, the fork included. A Holon brief that names none (an older
+  kernel) lists no skills at all — the brief is the render, never the
+  standard export. Personal mode keeps `config.skills.root_dir`
+  byte-identical. Guards:
+  `run_env::tests::skills_dir_follows_the_brief_and_absent_means_none_r09`
+  (the brief.json seam: named → Some, absent/empty → None) and the R-07
+  e2e extended — the captured provider request's `<available_skills>`
+  names skills, and every listed name exists in the run's export (the
+  e2e's isolated home holds no export, so the list can only come from
+  the run's library).
+
 - **iter-881 — R-08: a Holon run opens no memory provider**
   (capability-layer audit 2026-10-16). The trace resolved the audit's open
   question: the six live Holon runs left no bank anywhere because the

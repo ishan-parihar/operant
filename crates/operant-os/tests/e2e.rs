@@ -644,6 +644,55 @@ fn a_holon_body_gets_only_the_kernels_guidance_r07() {
         "R-08: a Holon run must not even create the memory bank in the isolated home"
     );
 
+    // R-09: the body's skill list is the run's department-resolved export
+    // (runs/<id>/skills, named in brief.json) — every listed skill exists
+    // there, and nothing else is listed. The adapter home holds NO export in
+    // this e2e (ohome/skills is absent), so any listed skill can only have
+    // come from the run's library.
+    let run_dir = prep.run_dir.clone();
+    let run_skills = run_dir.join("skills");
+    let exported: Vec<String> = std::fs::read_dir(&run_skills)
+        .unwrap_or_else(|_| panic!("no skills export in {}", run_skills.display()))
+        .filter_map(|e| e.ok().and_then(|e| e.file_name().into_string().ok()))
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    assert!(
+        !exported.is_empty(),
+        "the kernel exported the run's resolved library: {run_skills:?}"
+    );
+    // the wire is JSON — quotes inside the system-prompt string ride as
+    // \" — normalize before picking skill names out of the block
+    let mut listed: Vec<String> = Vec::new();
+    for b in &wire {
+        let norm = b.replace("\\\"", "\"").replace("\\n", "\n");
+        let Some(block) = norm
+            .split("<available_skills>")
+            .nth(1)
+            .and_then(|rest| rest.split("</available_skills>").next())
+        else {
+            continue;
+        };
+        for line in block.lines() {
+            if let Some(name) = line
+                .trim()
+                .strip_prefix("<skill name=\"")
+                .and_then(|rest| rest.split('"').next())
+            {
+                listed.push(name.to_string());
+            }
+        }
+    }
+    assert!(
+        !listed.is_empty(),
+        "the Holon body lists the run's exported skills: {wire:?}"
+    );
+    for name in &listed {
+        assert!(
+            exported.contains(name),
+            "R-09: skill {name} is listed but is not in the run's export — a twin from another library"
+        );
+    }
+
     // 2. personal mode, same planted files: both sources must still ride
     bodies.lock().expect("bodies").clear();
     let mut cmd = Command::new(&operant);

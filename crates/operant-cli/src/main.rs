@@ -1437,6 +1437,25 @@ async fn build_agent_core_with_memory(
         memory_provider_tools::register_provider_tools(&registry, provider.clone()).await;
     }
 
+    // R-09 (AUDIT-2026-10-16-capability-layer): a Holon run's skill root is
+    // the run-local, department-resolved library the kernel exported into
+    // runs/<id>/skills and named in brief.json — one copy of every skill,
+    // the department's fork included. A Holon brief that names none (a
+    // kernel older than the field) lists no skills at all: the brief is
+    // the render, never the org-wide standard export with a stale twin
+    // beside every fork. Personal mode keeps config.skills.root_dir
+    // byte-identical.
+    let holon_skills = if operant_core::platform::is_holon_run() {
+        Some(operant_os::run_env::holon_skills_dir().unwrap_or_else(|| {
+            operant_core::platform::holon_run_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from(""))
+                .join("skills")
+        }))
+    } else {
+        None
+    };
+    let skills_dir: &Path = holon_skills.as_deref().unwrap_or(skills_dir);
+
     let mut skill_manager = SkillManager::new(skills_dir.to_path_buf());
     if let Err(e) = skill_manager.load_all() {
         warn!(
