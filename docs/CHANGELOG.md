@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-879 — R-07: a Holon body gets no workspace or global context**
+  (capability-layer audit 2026-10-16). `load_context_file_prompt` appended a
+  `<workspace_context>` block to every turn from two sources nobody gated on
+  `is_holon_run()`: the owner's global context dir (`~/.config/operant/context`
+  — outside the run's `HERMES_HOME`, so the owner's personal context) and the
+  first workspace file (AGENTS.md, CLAUDE.md, …) found walking up from the
+  cwd — so a body whose workdir sits in a legacy tree got that tree's stale
+  protocol beside the kernel's brief: two instruction sets, one ungoverned.
+  Now a Holon run loads neither (the kernel's brief is the only org guidance
+  — the single-injector law); the kernel names no workspace file in
+  brief.json today, so none load. Personal mode is unchanged. Guards:
+  `a_holon_run_gets_no_workspace_or_global_context_r07` (unit, `#[serial]`:
+  planted AGENTS.md + planted XDG global context — empty in a Holon run,
+  both loaded in personal mode) and
+  `a_holon_body_gets_only_the_kernels_guidance_r07` (e2e: a REAL kernel
+  prepare env drives the built binary; the captured provider requests carry
+  neither marker in a Holon run and both in the personal one).
+
 - **iter-875 — plan 05A: `/model` switches the agent and lists the
   configured endpoint's models** (audit plan 05 Part A). The picker's
   rows came from a models.dev snapshot for a provider GUESSED from the

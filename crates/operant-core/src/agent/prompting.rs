@@ -11,6 +11,18 @@ use super::*;
 
 impl OperantAgent {
     pub(crate) fn load_context_file_prompt(&self) -> String {
+        // R-07 (AUDIT-2026-10-16-capability-layer): in a Holon run the kernel's
+        // brief is the only org guidance this body gets. Both sources below
+        // are the owner's, not the organization's — `dirs::config_dir()` is
+        // outside the run's HERMES_HOME (the owner's personal context), and
+        // the workspace walk picks up whatever AGENTS.md sits in the legacy
+        // tree the workdir lives in, a second stale instruction set beside
+        // the brief. The kernel names no workspace context file in brief.json
+        // today, so a Holon run gets none.
+        if crate::platform::is_holon_run() {
+            return String::new();
+        }
+
         let mut blocks = Vec::new();
 
         let global_context = load_default_context_files();

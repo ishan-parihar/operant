@@ -1355,6 +1355,71 @@ mod tests {
         assert_eq!(agent.build_frozen_prefix(), plain);
     }
 
+    #[serial]
+    #[test]
+    fn a_holon_run_gets_no_workspace_or_global_context_r07() {
+        // R-07 (AUDIT-2026-10-16-capability-layer): a Holon body's only org
+        // guidance is the kernel's brief. Neither the owner's global context
+        // dir (outside the run's HERMES_HOME) nor the workspace walk (a
+        // legacy tree's AGENTS.md sitting in the workdir) may inject; a
+        // personal run keeps loading both. #[serial]: this test moves the
+        // process cwd and sets env vars, and shares the global serial lock
+        // with every other cwd/env-reading serial test.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let work = dir.path().join("work");
+        let xdg = dir.path().join("xdg");
+        let ctx = xdg.join("operant").join("context");
+        std::fs::create_dir_all(&work).expect("work dir");
+        std::fs::create_dir_all(&ctx).expect("xdg context dir");
+        std::fs::write(
+            work.join("AGENTS.md"),
+            "R07 LEGACY WORKSPACE MARKER — stale protocol",
+        )
+        .expect("planted workspace file");
+        std::fs::write(ctx.join("global.md"), "R07 OWNER GLOBAL MARKER")
+            .expect("planted global file");
+
+        let home = std::env::current_dir().expect("cwd");
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_current_dir(&work).expect("chdir");
+        // SAFETY: #[serial] — no other test runs while these are set.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &xdg) };
+        unsafe { std::env::set_var("HOLON_RUN_DIR", dir.path().join("run")) };
+
+        let db = Database::init(std::env::temp_dir().join("test_r07_context_gate.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        assert_eq!(
+            agent.load_context_file_prompt(),
+            "",
+            "a Holon run must inject neither the owner's global context nor the workspace walk"
+        );
+
+        unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+        let personal = agent.load_context_file_prompt();
+        assert!(
+            personal.contains("R07 LEGACY WORKSPACE MARKER")
+                && personal.contains("R07 OWNER GLOBAL MARKER"),
+            "personal mode keeps both sources: {personal}"
+        );
+
+        // restore the shared process state for the tests that follow
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+        std::env::set_current_dir(home).expect("restore cwd");
+        let _ = std::fs::remove_file(std::env::temp_dir().join("test_r07_context_gate.sqlite"));
+    }
+
     #[test]
     fn truncate_tool_result_preserves_skill_view_metadata() {
         // skill_view returns {name, description, content, tags,
