@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-871 — plan 03 §3/§4: the permission decision path** (audit
+  plan 03, findings 5+6). `settings.permission_mode` had zero readers on
+  the permission DECISION path — BypassPermissions still prompted every
+  request and Plan mode still let gated tools run. Now the drain consults
+  the mode FIRST, for every request: `BypassPermissions` →
+  `AllowSession` (the core's hardline/blocked checks run before the
+  channel, so bypass can never widen a hardline block), `Plan` → `Deny`
+  with a visible "read-only" notice. `/yolo` no longer writes the
+  bypass mode to settings.json with no confirmation — arming goes through
+  the same confirmation dialog `/permissions` uses; disarming stays
+  direct. A second request arriving while a dialog is open is now QUEUED
+  (`pending_permission_queue`) and opens in order as dialogs close —
+  the old drain silently denied it, and tools run up to 8 in parallel
+  (the parallel tool pool iter-56) so one batch could carry two gated
+  tools. The bash "always allow" prefix now stores the first TWO tokens
+  ("git status", not "git" — a one-token entry auto-approved
+  `git push --force`) and the read side refuses any command carrying
+  shell metacharacters (`; && || | \ $ ( ) > < \n`) or flagged by the
+  core's `ApprovalGuard::check_dangerous` — a stored prefix can never
+  approve an injected tail or a dangerous shape. The dead
+  `bash_command_allowed_by_prefix` test twin is deleted; the four
+  store-side tests assert the real allowlist. Tests:
+  `bypass_mode_auto_allows_without_a_dialog`,
+  `plan_mode_denies_without_a_dialog`,
+  `a_second_request_while_a_dialog_is_open_queues_instead_of_denying`,
+  `bash_prefix_allows_plain_continuations_only`.
+
 - **iter-867 — the TUI drives the agent, not a copy of it (audit plan 03
   §1/§2/§5)**. The TUI kept a parallel copy of the conversation, and
   `/clear`, `/new`, `/undo`, `/retry`, `/stop` edited only that copy:

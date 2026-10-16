@@ -1522,14 +1522,16 @@ fn test_ctrl_n_navigates_history_down() {
     assert_eq!(app.prompt_input.text, "second");
 }
 
-// ---- Bash prefix allowlist ----------------------------------------------
+// ---- Bash prefix allowlist --------------------------------------------
+// (plan 03 §4) The twin helper `bash_command_allowed_by_prefix` is gone —
+// these assert the REAL store; the auto-approve BEHAVIOR (two-token
+// matching, metachar/danger guards) is pinned by
+// `bash_prefix_allows_plain_continuations_only` in app/commands.rs tests.
 
 #[test]
 fn test_bash_command_not_allowed_by_default() {
     let app = make_app();
-    assert!(!app.bash_command_allowed_by_prefix("git status"));
-    assert!(!app.bash_command_allowed_by_prefix("ls -la"));
-    assert!(!app.bash_command_allowed_by_prefix(""));
+    assert!(app.bash_prefix_allowlist.is_empty());
 }
 
 #[test]
@@ -1556,12 +1558,18 @@ fn test_bash_prefix_allowlist_after_p_key() {
     };
     app.handle_permission_key(key);
 
-    // Dialog should be dismissed and "git" added to the allowlist.
+    // Dialog dismissed; the TWO-TOKEN prefix of the command recorded
+    // ("git status", not "git" — a one-token "git" would cover
+    // "git push --force", which §4 exists to stop).
     assert!(app.permission_request.is_none());
-    assert!(app.bash_command_allowed_by_prefix("git status"));
-    assert!(app.bash_command_allowed_by_prefix("git push origin main"));
-    // Other commands should NOT be allowed.
-    assert!(!app.bash_command_allowed_by_prefix("rm -rf /tmp"));
+    assert!(
+        app.bash_prefix_allowlist.contains("git status"),
+        "the command's two-token prefix must be recorded"
+    );
+    assert!(
+        !app.bash_prefix_allowlist.contains("git"),
+        "the bare one-token form must NOT be recorded"
+    );
 }
 
 #[test]
@@ -1590,8 +1598,8 @@ fn test_bash_prefix_allowlist_via_enter_on_p_option() {
     app.handle_permission_key(key);
 
     assert!(app.permission_request.is_none());
-    assert!(app.bash_command_allowed_by_prefix("cargo test"));
-    assert!(!app.bash_command_allowed_by_prefix("make build"));
+    assert!(app.bash_prefix_allowlist.contains("cargo build"));
+    assert!(!app.bash_prefix_allowlist.contains("make build"));
 }
 
 #[test]
@@ -1618,7 +1626,7 @@ fn test_bash_prefix_allowlist_non_prefix_option_does_not_add() {
     app.handle_permission_key(key);
 
     assert!(app.permission_request.is_none());
-    assert!(!app.bash_command_allowed_by_prefix("npm test"));
+    assert!(app.bash_prefix_allowlist.is_empty());
 }
 
 // ---- iter-20: permission dialog response routing ----------------------

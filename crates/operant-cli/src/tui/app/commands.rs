@@ -601,7 +601,8 @@ impl App {
                     PermissionMode::Default
                 };
                 self.set_status_notice(if self.plan_mode {
-                    "Plan mode ON — Operant will plan before acting.".to_string()
+                    "Plan mode ON — read-only: gated tools will be denied. /permissions to change."
+                        .to_string()
                 } else {
                     "Plan mode OFF.".to_string()
                 });
@@ -1050,30 +1051,30 @@ impl App {
             // /yolo — toggle bypass-permissions mode by flipping the
             // permission_mode setting between 'Default' and 'BypassPermissions'.
             "yolo" => {
-                let mut settings =
-                    crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
-                let new_mode = if matches!(
-                    settings.permission_mode,
+                // (plan 03 §3) Arming bypass goes through the confirmation
+                // dialog — the same one /permissions uses — and persists
+                // only on "Yes, I accept" (arm_bypass_permissions). The old
+                // arm wrote settings.json directly with no confirmation.
+                // Disarming stays direct: removing a permission needs no
+                // confirm.
+                if matches!(
+                    self.settings.permission_mode,
                     crate::tui::adapter_types::config::PermissionMode::BypassPermissions
                 ) {
-                    crate::tui::adapter_types::config::PermissionMode::default()
+                    let mut settings =
+                        crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
+                    settings.permission_mode =
+                        crate::tui::adapter_types::config::PermissionMode::default();
+                    let _ = settings.save_sync();
+                    self.settings.permission_mode =
+                        crate::tui::adapter_types::config::PermissionMode::default();
+                    self.set_status_notice(
+                        "YOLO mode disarmed — permissions will prompt.".to_string(),
+                    );
                 } else {
-                    crate::tui::adapter_types::config::PermissionMode::BypassPermissions
-                };
-                settings.permission_mode = new_mode.clone();
-                let _ = settings.save_sync();
-                self.settings.permission_mode = new_mode.clone();
-                self.set_status_notice(
-                    if matches!(
-                        new_mode,
-                        crate::tui::adapter_types::config::PermissionMode::BypassPermissions
-                    ) {
-                        "YOLO mode armed — permissions will be auto-approved. Use with care."
-                            .to_string()
-                    } else {
-                        "YOLO mode disarmed — permissions will prompt.".to_string()
-                    },
-                );
+                    self.bypass_permissions_dialog.show();
+                    self.set_status_notice("Confirm bypass permissions in the dialog.".to_string());
+                }
                 true
             }
 
@@ -2542,5 +2543,201 @@ mod tests {
             "still streaming — the clear must stay deferred"
         );
         assert!(!agent.conversation().await.is_empty());
+    }
+
+    // ── plan 03 §3/§4: the permission decision path ────────────────────
+
+    use crate::tui::adapter_types::config::PermissionMode;
+    use operant_core::agent::{ToolPermissionRequest, ToolPermissionResponse};
+
+    fn permission_req(
+        tool: &str,
+        preview: Option<&str>,
+    ) -> (
+        ToolPermissionRequest,
+        tokio::sync::oneshot::Receiver<ToolPermissionResponse>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            ToolPermissionRequest {
+                tool_name: tool.to_string(),
+                tool_id: format!("tool-{tool}"),
+                description: "test request".to_string(),
+                danger_explanation: String::new(),
+                input_preview: preview.map(str::to_string),
+                seat_escalation: None,
+                unattended: false,
+                response_tx: tx,
+            },
+            rx,
+        )
+    }
+
+    /// Bypass mode IS the decision: AllowSession, no dialog. Pre-§3 the
+    /// mode had zero readers on the decision path — it still prompted.
+    #[tokio::test]
+    async fn bypass_mode_auto_allows_without_a_dialog() {
+        let mut app = make_app();
+        app.settings.permission_mode = PermissionMode::BypassPermissions;
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("rm -rf /tmp/thing"));
+        tx.send(req).await.expect("send");
+        app.permission_rx = Some(rx);
+
+        app.drain_permission_requests();
+        assert_eq!(
+            resp_rx.try_recv(),
+            Ok(ToolPermissionResponse::AllowSession),
+            "bypass must answer AllowSession itself"
+        );
+        assert!(
+            app.permission_request.is_none(),
+            "bypass must not open a dialog"
+        );
+    }
+
+    /// Plan mode is read-only: Deny, no dialog, a visible notice.
+    #[tokio::test]
+    async fn plan_mode_denies_without_a_dialog() {
+        let mut app = make_app();
+        app.settings.permission_mode = PermissionMode::Plan;
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("cargo build"));
+        tx.send(req).await.expect("send");
+        app.permission_rx = Some(rx);
+
+        app.drain_permission_requests();
+        assert_eq!(
+            resp_rx.try_recv(),
+            Ok(ToolPermissionResponse::Deny),
+            "plan mode must deny gated tools itself"
+        );
+        assert!(
+            app.permission_request.is_none(),
+            "plan mode must not open a dialog"
+        );
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|m| m.contains("read-only")),
+            "the denial must be visible"
+        );
+    }
+
+    /// Two requests in one batch: the second QUEUES, it is not silently
+    /// denied. The dialog-pop order follows.
+    #[tokio::test]
+    async fn a_second_request_while_a_dialog_is_open_queues_instead_of_denying() {
+        let mut app = make_app();
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req1, mut resp1) = permission_req("bash", Some("cargo test --release"));
+        let (req2, mut resp2) = permission_req("file_write", None);
+        tx.send(req1).await.expect("send 1");
+        tx.send(req2).await.expect("send 2");
+        app.permission_rx = Some(rx);
+
+        app.drain_permission_requests();
+        assert!(
+            app.permission_request.is_some(),
+            "the first request opens the dialog"
+        );
+        assert_eq!(
+            app.pending_permission_queue.len(),
+            1,
+            "the second request queues, never denies"
+        );
+        assert!(
+            resp2.try_recv().is_err(),
+            "no answer may be sent for the queued request yet"
+        );
+        assert!(resp1.try_recv().is_err(), "first request still unanswered");
+
+        // Dialog closes (its own path sends the answer) — the queued one
+        // opens next.
+        app.permission_request = None;
+        assert!(app.open_next_permission_request());
+        assert!(
+            app.permission_request.is_some(),
+            "the queued request opens after the dialog closes"
+        );
+        assert!(app.pending_permission_queue.is_empty());
+    }
+
+    /// (plan 03 §4) the two-token prefix allowlist: plain continuations
+    /// auto-approve; a different command, an injected tail, or a dangerous
+    /// shape always reaches the dialog.
+    #[tokio::test]
+    async fn bash_prefix_allows_plain_continuations_only() {
+        let mut app = make_app();
+        app.bash_prefix_allowlist.insert("git status".to_string());
+        app.bash_prefix_allowlist.insert("ls".to_string());
+
+        // Plain continuation of a two-token entry → auto.
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("git status --short"));
+        tx.send(req).await.expect("send");
+        app.permission_rx = Some(rx);
+        app.drain_permission_requests();
+        assert_eq!(
+            resp_rx.try_recv(),
+            Ok(ToolPermissionResponse::AllowSession),
+            "a stored two-token prefix covers its plain continuations"
+        );
+        assert!(app.permission_request.is_none());
+
+        // Single-token legacy entry → plain continuation auto.
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("ls -la /tmp"));
+        tx.send(req).await.expect("send");
+        app.permission_rx = Some(rx);
+        app.drain_permission_requests();
+        assert_eq!(
+            resp_rx.try_recv(),
+            Ok(ToolPermissionResponse::AllowSession),
+            "a single-token entry covers its first token"
+        );
+
+        // Different command under the same first token → dialog, never auto.
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("git push --force"));
+        tx.send(req).await.expect("send");
+        app.permission_rx = Some(rx);
+        app.drain_permission_requests();
+        assert!(
+            resp_rx.try_recv().is_err(),
+            "git push --force must never auto-approve on a git-status entry"
+        );
+        assert!(
+            app.permission_request.is_some(),
+            "it opens the dialog instead"
+        );
+        app.permission_request = None;
+
+        // Injection tail on a matching entry → dialog.
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("git status; rm -rf /"));
+        tx.send(req).await.expect("send");
+        app.permission_rx = Some(rx);
+        app.drain_permission_requests();
+        assert!(
+            resp_rx.try_recv().is_err(),
+            "a metacharacter tail must never auto-approve"
+        );
+        assert!(app.permission_request.is_some(), "it opens the dialog");
+        app.permission_request = None;
+
+        // Dangerous shape even with a matching single-token entry → dialog.
+        let mut app2 = make_app();
+        app2.bash_prefix_allowlist.insert("rm".to_string());
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let (req, mut resp_rx) = permission_req("bash", Some("rm -rf /"));
+        tx.send(req).await.expect("send");
+        app2.permission_rx = Some(rx);
+        app2.drain_permission_requests();
+        assert!(
+            resp_rx.try_recv().is_err(),
+            "a dangerous shape must never auto-approve, even on a matching entry"
+        );
+        assert!(app2.permission_request.is_some(), "it opens the dialog");
     }
 }

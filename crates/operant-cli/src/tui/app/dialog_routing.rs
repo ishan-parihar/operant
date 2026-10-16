@@ -160,6 +160,11 @@ impl App {
         } else {
             TurnState::Idle
         };
+        // (plan 03 §3) LAST: the next queued request, if one arrived while
+        // this dialog was open, opens now — a parallel batch's second gated
+        // tool used to be silently denied here. Opening sets the turn back
+        // to WaitingForApproval, so it must run after the state reset above.
+        self.open_next_permission_request();
     }
 
     /// Handle a key event while a permission dialog is active.
@@ -235,20 +240,17 @@ impl App {
             return;
         }
         if let PermissionDialogKind::Bash { command, .. } = &pr.kind {
-            let first_word = command.split_whitespace().next().unwrap_or("").to_string();
-            if !first_word.is_empty() {
-                self.bash_prefix_allowlist.insert(first_word);
+            // (plan 03 §4) store the first TWO tokens ("git status", not
+            // "git") — a one-token "git" would auto-approve "git push
+            // --force". One token only for single-token commands. The read
+            // side (channel_drains) additionally refuses any command with
+            // shell metacharacters or a dangerous shape, so a stored
+            // prefix can never approve an injected tail.
+            let tokens: Vec<&str> = command.split_whitespace().take(2).collect();
+            if !tokens.is_empty() {
+                self.bash_prefix_allowlist.insert(tokens.join(" "));
             }
         }
-    }
-
-    /// Returns `true` if the given bash `command` is covered by the session-local
-    /// prefix allowlist (i.e. its first word matches an entry in
-    /// `bash_prefix_allowlist`).  Used by callers to skip the permission dialog.
-    #[cfg(test)]
-    pub fn bash_command_allowed_by_prefix(&self, command: &str) -> bool {
-        let first_word = command.split_whitespace().next().unwrap_or("");
-        !first_word.is_empty() && self.bash_prefix_allowlist.contains(first_word)
     }
 }
 

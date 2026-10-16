@@ -270,8 +270,14 @@ impl App {
     /// Returns `true` only when a dialog was actually opened: a request
     /// auto-approved or auto-denied above paints nothing.
     pub(super) fn drain_permission_requests(&mut self) -> bool {
-        let Some(ref mut rx) = self.permission_rx else {
-            return false;
+        // Take the receiver out for the loop (plan 03 §3): the loop body
+        // calls methods on `self` (set_status_notice, open_permission_dialog),
+        // which a live `ref mut` borrow of the permission_rx FIELD would
+        // conflict with (E0499). No early return inside the loop, so the
+        // receiver is always restored below.
+        let mut rx = match self.permission_rx.take() {
+            Some(rx) => rx,
+            None => return false,
         };
         let mut opened = false;
         while let Ok(req) = rx.try_recv() {
@@ -280,12 +286,38 @@ impl App {
                     tool_name: req.tool_name.clone(),
                     at: crate::tui::debug::event_bus::now_secs(),
                 });
+            // (plan 03 §3) The mode the user picked IS the permission
+            // decision — the drain consults it for every request. Before
+            // this, `settings.permission_mode` had zero readers on the
+            // decision path: BypassPermissions still prompted and Plan
+            // still let gated tools run. The core's hardline/blocked checks
+            // run BEFORE the channel (agent/stream.rs), so bypass can never
+            // widen a hardline block — it only skips the prompt.
+            use crate::tui::adapter_types::config::PermissionMode;
+            match self.settings.permission_mode {
+                PermissionMode::BypassPermissions => {
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::AllowSession);
+                    continue;
+                }
+                PermissionMode::Plan => {
+                    let _ = req
+                        .response_tx
+                        .send(operant_core::agent::ToolPermissionResponse::Deny);
+                    self.set_status_notice(
+                        "Plan mode is read-only — tool denied. /permissions to change.".to_string(),
+                    );
+                    continue;
+                }
+                _ => {}
+            }
             if self.permission_request.is_some() {
-                // A dialog is already shown — deny the new request
-                // so the agent doesn't block forever.
-                let _ = req
-                    .response_tx
-                    .send(operant_core::agent::ToolPermissionResponse::Deny);
+                // A dialog is already shown — QUEUE the request (plan 03
+                // §3). Tools run up to 8 in parallel (stream.rs), so one
+                // batch can carry two gated tools; the old auto-deny
+                // silently killed every request but the first.
+                self.pending_permission_queue.push_back(req);
                 continue;
             }
 
@@ -299,38 +331,84 @@ impl App {
             if (req.tool_name == "bash" || req.tool_name == "shell" || req.tool_name == "terminal")
                 && let Some(ref preview) = req.input_preview
             {
-                let first_word = preview
-                    .split_whitespace()
-                    .next()
-                    .map(|w| w.trim_start_matches("./").to_string())
-                    .unwrap_or_default();
-                if !first_word.is_empty() && self.bash_prefix_allowlist.contains(&first_word) {
-                    let _ = req
-                        .response_tx
-                        .send(operant_core::agent::ToolPermissionResponse::AllowSession);
-                    continue;
+                // (plan 03 §4) A stored prefix may only auto-approve a PLAIN
+                // continuation of itself: any shell metacharacter (injection
+                // tail) or a shape the core's danger classifier flags kills
+                // the auto-approve and falls through to the dialog. The
+                // classifier is the core's — never a second one here.
+                let has_meta = [";", "&&", "||", "|", "\\", "$(", ">", "<", "\n"]
+                    .iter()
+                    .any(|m| preview.contains(m));
+                let dangerous = operant_core::approval::ApprovalGuard::new(
+                    operant_core::approval::ApprovalMode::Smart,
+                )
+                .check_dangerous(preview)
+                .is_some();
+                if !has_meta && !dangerous {
+                    let tokens: Vec<&str> = preview.split_whitespace().take(2).collect();
+                    let two_token = tokens.join(" ");
+                    let first_token = tokens.first().copied().unwrap_or("");
+                    // Two-token entries match the command's two-token
+                    // prefix ("git status" covers "git status --short");
+                    // legacy one-token entries match the first token (the
+                    // metachar/danger guards above already police that arm).
+                    let prefix_ok = self.bash_prefix_allowlist.contains(&two_token)
+                        || (!first_token.is_empty()
+                            && self.bash_prefix_allowlist.contains(first_token));
+                    if prefix_ok {
+                        let _ = req
+                            .response_tx
+                            .send(operant_core::agent::ToolPermissionResponse::AllowSession);
+                        continue;
+                    }
                 }
             }
 
-            let reason = if req.danger_explanation.is_empty() {
-                req.description.clone()
-            } else {
-                format!("{}\n{}", req.description, req.danger_explanation)
-            };
-            let dialog = crate::tui::dialogs::PermissionRequest::from_reason(
-                req.tool_id,
-                req.tool_name,
-                reason,
-                req.input_preview,
-            );
-            self.permission_request = Some(dialog);
-            self.pending_permission_response_tx = Some(req.response_tx);
-            // The turn is blocked on the user's answer, not on the
-            // model — the status line says so.
-            self.turn_state = TurnState::WaitingForApproval;
+            self.open_permission_dialog(req);
             opened = true;
         }
+        self.permission_rx = Some(rx);
         opened
+    }
+
+    /// Open the permission dialog for `req` (plan 03 §3 extracted — the
+    /// drain and the queue-pop share one path). Caller guarantees no
+    /// dialog is currently open.
+    pub(super) fn open_permission_dialog(
+        &mut self,
+        req: operant_core::agent::ToolPermissionRequest,
+    ) {
+        let reason = if req.danger_explanation.is_empty() {
+            req.description.clone()
+        } else {
+            format!("{}\n{}", req.description, req.danger_explanation)
+        };
+        let dialog = crate::tui::dialogs::PermissionRequest::from_reason(
+            req.tool_id,
+            req.tool_name,
+            reason,
+            req.input_preview,
+        );
+        self.permission_request = Some(dialog);
+        self.pending_permission_response_tx = Some(req.response_tx);
+        // The turn is blocked on the user's answer, not on the
+        // model — the status line says so.
+        self.turn_state = TurnState::WaitingForApproval;
+    }
+
+    /// (plan 03 §3) Called when a permission dialog closes: open the next
+    /// queued request, if any. Returns true if a new dialog opened.
+    pub(super) fn open_next_permission_request(&mut self) -> bool {
+        if self.permission_request.is_some() {
+            return false;
+        }
+        match self.pending_permission_queue.pop_front() {
+            Some(req) => {
+                self.open_permission_dialog(req);
+                true
+            }
+            None => false,
+        }
     }
 
     /// 9. Check if background agent.run() completed.

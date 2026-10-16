@@ -195,6 +195,7 @@ impl App {
             pending_new: false,
             pending_undo: None,
             pending_retry_after_undo: false,
+            pending_permission_queue: std::collections::VecDeque::new(),
             plan_mode: false,
             stall_start: None,
             settings_screen: SettingsScreen::new(),

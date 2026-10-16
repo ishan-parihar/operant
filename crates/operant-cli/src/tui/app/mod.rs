@@ -451,6 +451,12 @@ pub struct App {
     /// the drained prompt goes to `pending_retry_query` (auto-resubmit)
     /// instead of back to the composer.
     pub pending_retry_after_undo: bool,
+    /// (plan 03 §3) Permission requests that arrived while a dialog was
+    /// already open. Tools run up to 8 in parallel, so a batch can carry two
+    /// gated tools — the old drain auto-DENIED the second one; these queue
+    /// and open in order as dialogs close.
+    pub pending_permission_queue:
+        std::collections::VecDeque<operant_core::agent::ToolPermissionRequest>,
 
     // ---- Visual mode indicators -------------------------------------------
     /// Plan mode — input border turns blue, `PLAN` shown in status bar.
