@@ -128,6 +128,71 @@ fn multiturn_provider() -> (
     (hits, handle, port)
 }
 
+/// R-07 (AUDIT-2026-10-16-capability-layer): a canned provider that
+/// RECORDS every request body, so a test asserts on the built messages —
+/// the actual wire — instead of the builder's internals.
+fn capturing_provider() -> (
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    std::thread::JoinHandle<()>,
+    u16,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bodies2 = std::sync::Arc::clone(&bodies);
+    let handle = std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            let Ok(mut stream) = conn else { break };
+            let bodies = std::sync::Arc::clone(&bodies2);
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 16384];
+                // read headers, then Content-Length bytes of body — the
+                // message array of a Holon run exceeds one chunk
+                let header_end = loop {
+                    if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break p + 4;
+                    }
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                };
+                let headers = String::from_utf8_lossy(&buf[..header_end]).to_lowercase();
+                let want = headers
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < header_end + want {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let body_end = (header_end + want).min(buf.len());
+                let body = String::from_utf8_lossy(&buf[header_end..body_end]).to_string();
+                bodies.lock().expect("bodies lock").push(body);
+                let payload = serde_json::json!({
+                    "id": "chatcmpl-r07", "object": "chat.completion",
+                    "created": 0, "model": "scripted",
+                    "choices": [{"index": 0, "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "{\"summary\":\"ok\",\"outcome\":\"noop\"}"}}],
+                    "usage": {"prompt_tokens": 111, "completion_tokens": 22, "total_tokens": 133}
+                });
+                let out = payload.to_string();
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    out.len(),
+                    out
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            });
+        }
+    });
+    (bodies, handle, port)
+}
+
 /// The real-kernel half both e2e tests share: init → hire (the scratch org
 /// has no adapter-installed `operant` driver, so hire the builtin
 /// `generic-shell` one) → task add → dispatch --prepare. Returns the
@@ -377,7 +442,7 @@ fn a_multiturn_body_meters_every_call_and_the_live_fence_refuses() {
     std::fs::write(
         &cfg,
         format!(
-            "[client]\nbase_url = \"http://127.0.0.1:{port}/v1\"\ntimeout_secs = 60\napi_key = \"sk-test\"\n[agent]\nmodel = \"scripted\"\nmax_iterations = 2\nstream = false\nshow_reasoning = false\n[tui]\nrich_output = false\n"
+            "[client]\nbase_url = \"http://127.0.0.1:{port}/v1\"\ntimeout_secs = 60\napi_key = \"sk-test\"\n[agent]\nmodel = \"scripted\"\nmax_iterations = 2\nstream = false\nshow_reasoning = false\ncreation_nudge_interval = 1\n[tui]\nrich_output = false\n"
         ),
     )
     .expect("cfg");
@@ -406,6 +471,22 @@ fn a_multiturn_body_meters_every_call_and_the_live_fence_refuses() {
         stdout.contains("policy.json enforcement mounted")
             || stderr.contains("policy.json enforcement mounted"),
         "enforcement never mounted.\nstderr: {stderr}\nstdout: {stdout}"
+    );
+
+    // iter-878's gate: the nudge interval is 1, so the trigger fires on
+    // this body's very turn — and a Holon body must SKIP the review
+    // spawn (W6's seventh learner). The skip line proves the gate branch;
+    // no "Spawning background skill review" line proves the exit-path
+    // spawns stayed dormant (they fire on review_fired, which the Holon
+    // branch must not latch).
+    assert!(
+        stdout.contains("skill review skipped") || stderr.contains("skill review skipped"),
+        "the Holon-run gate must fire with creation_nudge_interval = 1.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Spawning background skill review")
+            && !stderr.contains("Spawning background skill review"),
+        "the skill review must never spawn inside a Holon body\nstdout: {stdout}"
     );
 
     // multi-turn verified: the tool-call frame plus the loop's response
@@ -458,5 +539,130 @@ fn a_multiturn_body_meters_every_call_and_the_live_fence_refuses() {
         usage["tokens_out"].as_u64(),
         Some(want_out),
         "every call metered ({calls} calls): {usage}"
+    );
+}
+
+/// R-07 (AUDIT-2026-10-16-capability-layer): a Holon body's only org
+/// guidance is the kernel's brief — the single-injector law. The e2e
+/// plants what the ungated code injects today: a legacy `AGENTS.md` in
+/// the workdir the body runs from, and the owner's global context file
+/// under a scratch XDG_CONFIG_HOME (never the operator's real one).
+/// The Holon run's built messages must contain neither; the personal
+/// run, same planted files, must still contain both — the gate must not
+/// leak outside Holon runs.
+#[test]
+fn a_holon_body_gets_only_the_kernels_guidance_r07() {
+    let Some(repo) = holon_repo() else {
+        eprintln!("SKIPPED (HOLON_REPO unset): the R-07 E2E did not run");
+        return;
+    };
+    let operant = operant_under_test();
+    let (bodies, _server, port) = capturing_provider();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let prep = real_prepare(&repo, &dir.path().join("home"), "");
+
+    // the planted legacy tree (the workdir) and the planted owner context
+    let work = dir.path().join("work");
+    let xdg = dir.path().join("xdg");
+    let ctx = xdg.join("operant").join("context");
+    std::fs::create_dir_all(&work).expect("work dir");
+    std::fs::create_dir_all(&ctx).expect("xdg context dir");
+    std::fs::write(
+        work.join("AGENTS.md"),
+        "R07E2E LEGACY WORKSPACE MARKER - a stale venture protocol",
+    )
+    .expect("planted workspace file");
+    std::fs::write(ctx.join("global.md"), "R07E2E OWNER GLOBAL MARKER")
+        .expect("planted global file");
+
+    let cfg = dir.path().join("observe.toml");
+    std::fs::write(
+               &cfg,
+        format!(
+            "[client]\nbase_url = \"http://127.0.0.1:{port}/v1\"\ntimeout_secs = 60\napi_key = \"sk-test\"\n[agent]\nmodel = \"scripted\"\nmax_iterations = 1\nstream = false\nshow_reasoning = false\n[tui]\nrich_output = false\n[tools]\ndisabled_tools = [\"file_write\"]\n"
+        ),
+    )
+    .expect("cfg");
+
+    // 1. the Holon run: the full prepare env, cwd = the planted workdir,
+    // the owner's context dir redirected to the scratch XDG home
+    let mut cmd = Command::new(&operant);
+    cmd.arg("run")
+        .arg("-c")
+        .arg(&cfg)
+        .arg("--max-iterations")
+        .arg("1")
+        .arg("--no-stream")
+        .arg("-q")
+        .arg("Reply with a JSON object.")
+        .env("HERMES_HOME", dir.path().join("ohome"))
+        .env("RUST_LOG", "info")
+        .env("XDG_CONFIG_HOME", &xdg)
+        .current_dir(&work);
+    for (k, v) in &prep.env_map {
+        let Some(v) = v.as_str() else {
+            continue;
+        };
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("operant run");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        stdout.contains("policy.json enforcement mounted")
+            || stderr.contains("policy.json enforcement mounted"),
+        "the run must be a Holon body. stderr: {stderr}"
+    );
+    let wire = bodies.lock().expect("bodies").clone();
+    assert!(
+        !wire.is_empty(),
+        "the run must reach the provider: {stdout}"
+    );
+    for body in &wire {
+        assert!(
+            !body.contains("R07E2E LEGACY WORKSPACE MARKER"),
+            "a Holon body must not carry the legacy tree's AGENTS.md: {body}"
+        );
+        assert!(
+            !body.contains("R07E2E OWNER GLOBAL MARKER"),
+            "a Holon body must not carry the owner's global context: {body}"
+        );
+        assert!(
+            !body.contains("<workspace_context>"),
+            "a Holon body gets no workspace context block: {body}"
+        );
+    }
+
+    // 2. personal mode, same planted files: both sources must still ride
+    bodies.lock().expect("bodies").clear();
+    let mut cmd = Command::new(&operant);
+    cmd.arg("run")
+        .arg("-c")
+        .arg(&cfg)
+        .arg("--max-iterations")
+        .arg("1")
+        .arg("--no-stream")
+        .arg("-q")
+        .arg("Reply with a JSON object.")
+        .env("HERMES_HOME", dir.path().join("ohome"))
+        .env("XDG_CONFIG_HOME", &xdg)
+        .current_dir(&work);
+    let out = cmd.output().expect("operant run (personal)");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let wire = bodies.lock().expect("bodies").clone();
+    assert!(
+        !wire.is_empty(),
+        "the personal run must reach the provider: {stderr}"
+    );
+    assert!(
+        wire.iter()
+            .any(|b| b.contains("R07E2E LEGACY WORKSPACE MARKER")),
+        "personal mode keeps the workspace walk: {wire:?}"
+    );
+    assert!(
+        wire.iter()
+            .any(|b| b.contains("R07E2E OWNER GLOBAL MARKER")),
+        "personal mode keeps the owner's global context: {wire:?}"
     );
 }

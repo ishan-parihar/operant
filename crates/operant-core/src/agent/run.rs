@@ -2240,7 +2240,7 @@ impl OperantAgent {
             // Scope the MutexGuard so it's dropped before the .await below.
             // A std::sync::MutexGuard held across an await point makes the
             // future !Send, which breaks tokio::spawn.
-            let mut should_review_skills = {
+            let should_review_skills = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self
                     .evolution_state
@@ -2277,17 +2277,20 @@ impl OperantAgent {
                 // last line before a silent body death was this spawn). A
                 // Holon body never spawns the skill review: its LLM traffic
                 // is unmetered run spend (neither usage.json nor the budget
-                // cap sees it — same class as the distillation catch,
-                // iter-869), and the org's learning rides the result
-                // envelope (learnings/proposals), not a personal skill
-                // store. review_fired still latches so the exit path's
-                // spawn guard sees a settled decision either way.
-                review_fired = true;
+                // cap sees it — the same class as iter-869's distillation
+                // catch), and the org's learning rides the result envelope
+                // (learnings/proposals), not a personal skill store.
+                //
+                // The gate must keep review_fired UNLATCHED: the exit-path
+                // spawns (run.rs :245/:1504/:1891/:1962) fire on
+                // `if review_fired` — latching then flipping a local flag
+                // (iter-877's first cut) gated nothing.
                 if crate::platform::holon_run_dir().is_some() {
                     info!(
                         "skill review skipped — a Holon body's learning rides the result envelope"
                     );
-                    should_review_skills = false;
+                } else {
+                    review_fired = true;
                 }
             }
 
