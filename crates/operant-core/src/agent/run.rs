@@ -2240,7 +2240,7 @@ impl OperantAgent {
             // Scope the MutexGuard so it's dropped before the .await below.
             // A std::sync::MutexGuard held across an await point makes the
             // future !Send, which breaks tokio::spawn.
-            let should_review_skills = {
+            let mut should_review_skills = {
                 let skill_manage_called = tool_names.iter().any(|n| n == "skill_manage");
                 let mut evo = self
                     .evolution_state
@@ -2273,7 +2273,22 @@ impl OperantAgent {
             // repetition is capped. The actual `spawn_background_review` is
             // invoked by the TextResponse / GraceCall / CircuitBreaker exits.
             if should_review_skills && !review_fired {
+                // W6/O-22's SEVENTH learner (the live day caught it: the log's
+                // last line before a silent body death was this spawn). A
+                // Holon body never spawns the skill review: its LLM traffic
+                // is unmetered run spend (neither usage.json nor the budget
+                // cap sees it — same class as the distillation catch,
+                // iter-869), and the org's learning rides the result
+                // envelope (learnings/proposals), not a personal skill
+                // store. review_fired still latches so the exit path's
+                // spawn guard sees a settled decision either way.
                 review_fired = true;
+                if crate::platform::holon_run_dir().is_some() {
+                    info!(
+                        "skill review skipped — a Holon body's learning rides the result envelope"
+                    );
+                    should_review_skills = false;
+                }
             }
 
             // ── /steer directive drain (iter-65) ──────────────────────────
