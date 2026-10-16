@@ -172,7 +172,10 @@ async fn a_decision_verb_routes_to_the_kernel_plan_command() {
             .expect("dispatch");
     let argv = std::fs::read_to_string(&argv_path).expect("argv recorded");
     let argv_line = argv.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(argv_line.contains("plan approve pln_9"), "addressed: {argv}");
+    assert!(
+        argv_line.contains("plan approve pln_9"),
+        "addressed: {argv}"
+    );
 }
 
 /// O-14: non-verbs stay classifier traffic — the router must not eat
