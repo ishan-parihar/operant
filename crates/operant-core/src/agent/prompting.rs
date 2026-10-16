@@ -237,6 +237,18 @@ impl OperantAgent {
     pub(crate) fn spawn_session_distillation(&self, history: Vec<Message>) {
         // (plan 11C3) no memory_manager gate anymore — distillation writes
         // through the process's memory-wire provider (checked inside).
+        //
+        // A Holon body does not distill (W6/O-22's sixth learner — caught
+        // by the multi-turn e2e, which saw 3 provider calls and 2 metered):
+        // the organization's memory is Holon's (boundary S1/S3 — the same
+        // rule that gates skill_manage, the curator, memory_store and the
+        // review nudges), and the post-turn distillation LLM call would be
+        // run spend that neither usage.json nor the budget cap ever sees.
+        // The run's learnings ride the result envelope (W6's capture), not
+        // the personal memory store.
+        if crate::platform::holon_run_dir().is_some() {
+            return;
+        }
         let client = self.client.clone();
         let model = self.config.model.clone();
         tokio::spawn(async move {

@@ -1193,6 +1193,25 @@ impl OperantAgent {
                 && self.permission_tx.is_none()
             {
                 warn!(tool = %name, "Tool call escalated by seat policy — no interactive approver attached: deny");
+                // O-17 (W3, the multi-turn e2e's catch): in a Holon run the
+                // refusal is RECORDED for the result — the same org-mode
+                // semantics the unattended path carries. The queue-then-wait
+                // behavior ("the next run consults the grant the approver
+                // mints") is the PERSONAL-run path; in org mode there is no
+                // approver and no grant — an approved plan IS the grant, and
+                // result.refusals[] is the blocker the kernel and the Chair
+                // read.
+                if let Some(run_dir) = crate::platform::holon_run_dir() {
+                    crate::org::record_refusal(&run_dir, &name, &why, "policy.json:escalate");
+                    early_results[idx] = Some(ToolResult::error(
+                        &tool_call.id,
+                        format!(
+                            "Refused under policy.json (escalated): {why}. Report this \
+                             refusal in your result's `refusals` so the stage records the blocker"
+                        ),
+                    ));
+                    continue;
+                }
                 let session_id = self.session_id().unwrap_or_default();
                 let queued = self
                     .seat_authority
