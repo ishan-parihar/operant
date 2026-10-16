@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **iters 854–858 — the agentic-OS red-team close-out** (audit
+  `docs/agentic-os/AUDIT-2026-10-15.md` §8). A red-team of the W-wave
+  closure record found four claims that did not survive adversarial
+  reading; all closed with regression evidence:
+  - **iter-854 — O-03 for real**: the `holon_*` native tools now register
+    on the RUN ENV (`HOLON_RUN_DIR`), not on `[holon] enabled` — iter-844's
+    commit message had claimed this but the gate was unchanged, so real
+    bodies (whose posture configs carry no `[holon]`) never saw the tools.
+    The e2e now drives the kernel's ACTUAL `dispatch --prepare` env
+    (init → hire → task → prepare) instead of a hand-synthesized map.
+  - **iter-855 — O-12 residuals**: the organs semaphore was decorative
+    (bodies awaited inline; concurrency was always 1) — bodies now run as
+    spawned tasks holding permits; the CLI supervise `--loop` no longer
+    hot-loops on error; stop-after-submit (CONTRACT §4): `run_body` polls
+    `run show` on its own 15s cadence, kills the process group when the
+    run leaves `running`, and skips the driver-path finish (the kernel's
+    own submit already recorded the result).
+  - **iter-856 — O-19 reporting + O-18 remainder**: usage.json carries the
+    PROVIDER's prompt/completion tokens (metered per call, no longer
+    conditional on a budget cap) plus the session's models_dev cost and
+    the build stamp — never the chars/4 estimate; the e2e asserts the
+    scripted provider's exact numbers. The policy `commands` allowlist is
+    now enforced at both terminal seams (`terminal` + `aft_bash`), and
+    the AFT writers share the roots fence (`guard_aft_write`). The
+    chair-test ETXTBSY flake (tmpfs exec-vs-write settling, ~1-in-3
+    batteries) is root-fixed with a single-retry `run_holon` helper.
+  - **iter-857 — O-14 acceptance**: "approve <id>" from the Chair now
+    routes to the kernel's `plan approve/reject` decision commands through
+    `run_as_chair` (reject's because-clause rides `--note`); ordinary chat
+    still classifies.
+  - **iter-858 — verification debts**: the WAL-safe archive regression
+    test iter-851's commit body described but never shipped now exists
+    (`tests/archive_wal.rs`: a committed-but-uncheckpointed row IS in the
+    snapshot, integrity_check ok, org/ tree + side-board db ride);
+    doctor reports the Notion arm's script and the newest org archive with
+    its age; `supervise --help` and operant-os's boundary citation now
+    tell the truth (O-29).
+  - **Holon adapter (kernel 38ae9e9)**: install.py probes the pinned
+    operant for native tools at install time and drops the resident
+    Python `holon mcp` mount for builds that carry them — completing W1's
+    phase E acceptance (no Python alive during the body).
+
 ### Added
 
 - **iter-846 — memory is memory-wire only (plan 11C3).** Six parallel
