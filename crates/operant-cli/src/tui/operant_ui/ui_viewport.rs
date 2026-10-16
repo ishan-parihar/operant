@@ -414,13 +414,16 @@ pub(super) fn draw_messages(
     } else {
         resolve_tail_follow_scroll(max_scroll, viewport_height)
     };
-    // P5-2 watermark floor: rows below the watermark are already emitted
-    // into native scrollback (terminal-scroll mode) — the live viewport
-    // never shows them; the reader scrolls them in the terminal's own
-    // scrollback instead. No-op in the default alt-screen mode (watermark
-    // stays 0).
+    // P5-2 / plan 07 §1′ watermark floor: rows of the messages already
+    // emitted into native scrollback (terminal-scroll mode) — the live
+    // viewport never shows them; the reader scrolls them in the terminal's
+    // own scrollback instead. No-op in the default alt-screen mode (the
+    // watermark stays 0).
     let scroll = if app.terminal_scroll_mode() {
-        scroll.max(app.scroll_emitted_rows())
+        scroll.max(crate::tui::app::scroll_emit::message_count_rows(
+            &prepared,
+            app.scroll_emitted_through(),
+        ))
     } else {
         scroll
     };

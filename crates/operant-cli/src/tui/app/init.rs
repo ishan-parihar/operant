@@ -160,8 +160,10 @@ impl App {
             transcript_version: Cell::new(0),
             terminal_clear_version: Cell::new(None),
             terminal_scroll_mode,
-            scroll_emitted_rows: Cell::new(0),
-            scroll_emitted_width: Cell::new(0),
+            scroll_emitted_through: Cell::new(0),
+            pending_native_replay: Cell::new(false),
+            scroll_last_width: Cell::new(0),
+            scroll_resize_replay_at_ms: Cell::new(0),
             scroll_cls_divider: Cell::new(false),
             help_overlay: {
                 let mut overlay = HelpOverlay::new();

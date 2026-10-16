@@ -1028,8 +1028,7 @@ impl TuiApp {
                 // Native-scroll reset (07 §2 lands the full replay; until
                 // then a cleared conversation must not re-emit the old
                 // rows).
-                app.scroll_emitted_rows.set(0);
-                app.scroll_emitted_width.set(0);
+                app.request_native_replay();
                 app.invalidate_transcript();
                 app.set_status_notice("Conversation cleared.".to_string());
             }
@@ -1050,8 +1049,7 @@ impl TuiApp {
                     app.auto_scroll = true;
                     app.new_messages_while_scrolled = 0;
                     app.token_count = 0;
-                    app.scroll_emitted_rows.set(0);
-                    app.scroll_emitted_width.set(0);
+                    app.request_native_replay();
                     app.invalidate_transcript();
                     app.set_status_notice("New session started.".to_string());
                     return;
@@ -1072,8 +1070,7 @@ impl TuiApp {
                 app.auto_scroll = true;
                 app.new_messages_while_scrolled = 0;
                 app.token_count = 0;
-                app.scroll_emitted_rows.set(0);
-                app.scroll_emitted_width.set(0);
+                app.request_native_replay();
                 app.invalidate_transcript();
                 let short: String = fresh.chars().take(8).collect();
                 app.set_status_notice(format!(
@@ -1096,8 +1093,7 @@ impl TuiApp {
                 Self::rebuild_display_from_agent(app, conv);
                 app.tool_use_blocks.clear();
                 app.system_annotations.clear();
-                app.scroll_emitted_rows.set(0);
-                app.scroll_emitted_width.set(0);
+                app.request_native_replay();
                 app.invalidate_transcript();
                 let short: String = session_id.chars().take(8).collect();
                 app.set_status_notice(format!("Switched to session {short}"));
@@ -1123,8 +1119,7 @@ impl TuiApp {
                             Self::rebuild_display_from_agent(app, conv);
                             app.tool_use_blocks.clear();
                             app.system_annotations.clear();
-                            app.scroll_emitted_rows.set(0);
-                            app.scroll_emitted_width.set(0);
+                            app.request_native_replay();
                             app.invalidate_transcript();
                             if retry_after_undo {
                                 app.pending_retry_query = Some(outcome.prompt_text.clone());
@@ -1202,6 +1197,9 @@ impl TuiApp {
                 "Nothing to compact yet — the history is all recent turns.".to_string()
             };
             app.push_system_message(text, crate::tui::app::SystemMessageStyle::Info);
+            // (plan 07 §2) compaction rewrites what history shows — replay
+            // re-emits it under the compacted view.
+            app.request_native_replay();
         }
     }
 }

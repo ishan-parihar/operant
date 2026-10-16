@@ -48,7 +48,7 @@ These four failures were invisible since iter-838: the test targets they live
 in did not compile, so no gate could run them. They exist on `origin/main`
 today, independent of the gate repair.
 
-- [ ] **H-1 — `tui::app::scroll_emit::message_final_rows_tracks_the_last_final_message`**
+- [x] **H-1 — CLOSED iter-887** (plan 07 §1′): `tui::app::scroll_emit::message_final_rows_tracks_the_last_final_message`
   (crates/operant-cli/src/tui/app/scroll_emit.rs:322): `assertion left == right
   failed — left: 0, right: 9`. The landed native-scroll step-1 emits no rows
   for a multi-message transcript. This is exactly the row-vs-message

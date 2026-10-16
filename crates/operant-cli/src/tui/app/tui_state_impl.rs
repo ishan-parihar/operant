@@ -579,8 +579,8 @@ impl TuiState for App {
         self.terminal_scroll_mode
     }
 
-    fn scroll_emitted_rows(&self) -> usize {
-        self.scroll_emitted_rows.get()
+    fn scroll_emitted_through(&self) -> usize {
+        self.scroll_emitted_through.get()
     }
 
     fn time_since_user_interaction(&self) -> Option<Duration> {

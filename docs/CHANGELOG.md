@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-887 — plan 07 §1′+§2: native scrollback gets a message
+  watermark and a replay** (audit plan 07, bugs 1-2 + the H-1
+  regression). The row watermark drifted whenever a tool row
+  re-rendered (Queued→Running→Done) between flushes — the flushed rows
+  duplicated or shifted in the terminal's own scrollback, and H-1
+  (`message_final_rows_tracks_the_last_final_message`, RED since the
+  test gate repair) pinned exactly that defect. The watermark is now a
+  MESSAGE index (`scroll_emitted_through`): whole final display
+  messages are emitted, and a final message's rows are immutable, so
+  the index cannot drift. And because native scrollback cannot reflow,
+  the operations that make emitted history wrong now REPLAY: the new
+  `SynchronizedUpdate::replay_clear` (cursor home + clear screen +
+  purge scrollback, inside the DEC 2026 bracket) resets the watermark
+  and the next pass re-emits the whole transcript at the CURRENT
+  width. Replay is requested by /clear, /new, /cls (which keeps its
+  divider), rewind, session switch, /compact, theme change, the
+  Ctrl+T and Alt+O display toggles (toggles are now retroactive —
+  the old notice said "applies to new output" and the user wanted
+  them functional), resize (debounced 150 ms), and Alt+L (manual).
+  The viewport floor (`ui_viewport`) now computes from the message
+  watermark (`message_count_rows`). Tests:
+  `message_count_rows_tracks_message_boundaries` (the H-1
+  replacement: cumulative boundary rows through N messages) and
+  `replay_resets_the_watermark_and_reemits_at_the_current_width`.
+  Gates: gate 2 = 1761 passed, 2 pre-existing H-failures only (H-1
+  is closed by this change); corpus 61/62 (rewind-flow pre-existing
+  at tip, BUGS.md H-3); clippy seen=39 new=38, baseline parity.
+
 - **iter-886 — plan 04: ONE command table; no dead or lying
   commands** (audit plan 04, findings 11+12+19). Three tables fed the
   TUI: typeahead/palette/help read the GATEWAY's `COMMAND_REGISTRY` —

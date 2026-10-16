@@ -385,6 +385,9 @@ impl App {
         settings.theme = theme;
         let _ = settings.save_sync();
         crate::tui::theme_colors::set_active_theme(theme_name);
+        // (plan 07 §2) a theme change recolors every settled row — replay
+        // re-emits history under the new palette.
+        self.request_native_replay();
         self.status_message = Some(format!("Theme set to: {}", theme_name));
     }
 }

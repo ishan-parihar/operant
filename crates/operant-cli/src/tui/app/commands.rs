@@ -132,7 +132,7 @@ impl App {
             // headless fullscreen TestBackend, so scrollback history
             // itself is live-verified territory, not corpus territory.
             "terminal_scroll_mode": self.terminal_scroll_mode,
-            "scroll_emitted_rows": self.scroll_emitted_rows.get(),
+            "scroll_emitted_through": self.scroll_emitted_through.get(),
             "scroll_cls_divider": self.scroll_cls_divider.get()
         })
     }
@@ -1406,6 +1406,11 @@ impl App {
                 // an invalidate after the capture bumps the version and the
                 // collapsed state reads as dead.
                 self.clear_view_terminal_style();
+                // (plan 07 §2) native-scroll mode: the view reset also
+                // replays — the divider below marks the boundary in the
+                // re-emitted history.
+                self.request_native_replay();
+                self.scroll_cls_divider.set(true);
                 self.status_message =
                     Some("View cleared — context kept (/clear drops context)".to_string());
                 true

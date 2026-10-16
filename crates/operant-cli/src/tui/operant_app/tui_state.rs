@@ -320,9 +320,10 @@ pub trait TuiState {
     fn terminal_scroll_mode(&self) -> bool {
         false
     }
-    /// Last-emitted-row watermark (P5-2): rows below this live in native
-    /// scrollback already; the live viewport floors its window here.
-    fn scroll_emitted_rows(&self) -> usize {
+    /// (plan 07 §1′) MESSAGE watermark: final display messages below this
+    /// index live in native scrollback already; the live viewport floors
+    /// its window at their wrapped rows.
+    fn scroll_emitted_through(&self) -> usize {
         0
     }
     /// How long since the user last pressed a key, scrolled, or pasted, or

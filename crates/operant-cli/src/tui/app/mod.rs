@@ -16,7 +16,7 @@ mod prompt;
 mod providers;
 mod redraw_reason;
 mod scroll_anchor;
-mod scroll_emit;
+pub(crate) mod scroll_emit;
 mod tui_state_impl;
 mod turn_state;
 
@@ -337,19 +337,25 @@ pub struct App {
     /// alt-screen) is active — settled transcript rows emit into the native
     /// buffer above the inline viewport.
     pub terminal_scroll_mode: bool,
-    /// Last-emitted-row watermark (P5-2): absolute row index, in the
-    /// prepared frame's wrapped-line space, up to which settled rows have
-    /// been emitted into native history via `insert_before`. Only rows
-    /// before the first mutable section (Streaming/Reasoning/BatchProgress)
-    /// are emittable — those rows can still change. Deliberately NOT reset
-    /// by Ctrl+L / /cls: emitted history is append-only; a reset would
-    /// re-emit (duplicate) the whole transcript into native scrollback.
-    pub scroll_emitted_rows: Cell<usize>,
-    /// Terminal width the watermark was recorded at. A resize rewraps the
-    /// transcript; already-emitted history keeps its old wrap (native
-    /// scrollback cannot reflow), so the watermark re-syncs to the new
-    /// committed prefix instead of re-emitting rows at the new width.
-    pub scroll_emitted_width: Cell<u16>,
+    /// (plan 07 §1′) MESSAGE watermark: one past the last FINAL display
+    /// message emitted into native history. The row watermark it replaces
+    /// drifted whenever a tool row re-rendered (Queued→Running→Done)
+    /// between flushes — a message index cannot drift: a final message's
+    /// rows are immutable.
+    pub scroll_emitted_through: Cell<usize>,
+    /// (plan 07 §2) One-shot replay request: the run loop (which owns the
+    /// terminal) clears the screen inside the synchronized-update bracket
+    /// and resets the watermark to 0 so the next emit pass re-emits the
+    /// whole transcript at the CURRENT width. Set by /clear /new /cls,
+    /// rewind, session switch, /compact, theme change, the Ctrl+T and
+    /// Alt+O toggles, resize (debounced) and Alt+L (manual).
+    pub pending_native_replay: Cell<bool>,
+    /// Terminal width the last resize was seen at — the debounce source
+    /// for the replay-on-resize (150 ms after the last change).
+    pub scroll_last_width: Cell<u16>,
+    /// (plan 07 §2) deadline (millis) after which a resize-triggered
+    /// replay fires; 0 = none pending.
+    pub scroll_resize_replay_at_ms: Cell<u128>,
     /// Pending `/cls` divider (P5: terminal-scroll mode): when set, the
     /// scroll emitter prints one dim rule row into native history before
     /// the next emitted content, so cleared-view boundaries are visible
@@ -770,6 +776,12 @@ pub(crate) trait SynchronizedUpdate {
     /// the bracketed region, a failed draw included, or the terminal keeps
     /// withholding output waiting for an end sequence that never arrives.
     fn end_synchronized_update(&mut self) -> std::io::Result<()>;
+
+    /// (plan 07 §2) the native-scroll replay clear: cursor home, clear
+    /// screen, clear scrollback — the whole history is about to be
+    /// re-emitted at the current width, so the old-width history is purged,
+    /// not kept.
+    fn replay_clear(&mut self) -> std::io::Result<()>;
 }
 
 impl<W: std::io::Write> SynchronizedUpdate for ratatui::backend::CrosstermBackend<W> {
@@ -780,6 +792,17 @@ impl<W: std::io::Write> SynchronizedUpdate for ratatui::backend::CrosstermBacken
     fn end_synchronized_update(&mut self) -> std::io::Result<()> {
         crossterm::execute!(self, crossterm::terminal::EndSynchronizedUpdate)
     }
+
+    fn replay_clear(&mut self) -> std::io::Result<()> {
+        // \x1b[H (home) + \x1b[2J (clear screen) + \x1b[3J (purge
+        // scrollback): the plan-07 §2 replay sequence.
+        crossterm::execute!(
+            self,
+            crossterm::cursor::MoveTo(0, 0),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
+        )
+    }
 }
 
 impl SynchronizedUpdate for ratatui::backend::TestBackend {
@@ -788,6 +811,13 @@ impl SynchronizedUpdate for ratatui::backend::TestBackend {
     }
 
     fn end_synchronized_update(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn replay_clear(&mut self) -> std::io::Result<()> {
+        // Headless: the recording wrapper asserts on the emit payloads, not
+        // the clear; the screen state after a replay is driven by the next
+        // draw + emit pass.
         Ok(())
     }
 }

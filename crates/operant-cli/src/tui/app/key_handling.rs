@@ -1577,9 +1577,21 @@ impl App {
             // Alt+O is the everywhere fallback — same action either way.
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_thinking();
+                // (plan 07 §2) a display toggle changes what settled rows
+                // SHOULD look like — replay re-emits history under the new
+                // mode instead of "applying to new output".
+                self.request_native_replay();
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.toggle_tool_visibility();
+                self.request_native_replay();
+            }
+            // (plan 07 §2) Alt+L: manual native replay — re-emit the whole
+            // transcript at the current width (native scrollback cannot
+            // reflow, so this is the honest "redraw my history" key).
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.request_native_replay();
+                self.set_status_notice("Replaying transcript at current width…".to_string());
             }
 
             // ---- Alt/Meta key text editing operations -------------------
