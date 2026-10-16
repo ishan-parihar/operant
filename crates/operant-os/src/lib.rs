@@ -41,7 +41,13 @@ pub mod tools;
 /// org mode stays off — a newer Holon must not be read through stale view shapes).
 /// v3 (the hardening wave) adds the guards/genome-era views without
 /// changing any v1/v2 shape — the client reads all three identically.
-pub const KNOWN_API_VERSIONS: &[&str] = &["1", "2", "3"];
+/// v4 (the capability-layer audit §2, iter-885) is accepted BEFORE the kernel
+/// publishes it: the C1/R-04 migration (surface units, `api_pool`, the
+/// service columns) adds views without changing any v1–v3 shape, and the
+/// cross-repo order is operant-knows-4 FIRST, kernel-migrates SECOND — a
+/// kernel that bumps to v4 against a runtime that does not know it turns
+/// org mode off on the live box.
+pub const KNOWN_API_VERSIONS: &[&str] = &["1", "2", "3", "4"];
 
 /// Errors surfaced by the org-runtime seam. Degrade, don't die: every consumer
 /// turns these into a doctor line or a helpful error, never a dead turn.

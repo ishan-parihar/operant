@@ -295,6 +295,7 @@ impl HolonApi {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// Invariant 1 (scoped to the read API): a connection built the way `open`
     /// builds it (URI + mode=ro + SQLITE_OPEN_URI) rejects writes at the SQLite
@@ -318,6 +319,46 @@ mod tests {
         assert!(
             err.to_string().to_lowercase().contains("readonly"),
             "unexpected error shape: {err}"
+        );
+    }
+
+    /// iter-885 (capability-layer audit §2): a kernel that publishes
+    /// api_version = 4 must not turn org mode off — v4 is accepted BEFORE it
+    /// exists (the cross-repo order: operant knows 4 first, the kernel
+    /// migrates second; a v4 kernel against a v3-only runtime would have
+    /// gone dark on the live box). A version beyond the known set still
+    /// refuses: stale view shapes must never be read through.
+    #[test]
+    fn a_v4_kernel_is_read_and_an_unknown_still_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let db_dir = home.join("execution").join("runtime");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let seed = |version: &str| {
+            let db = db_dir.join("work.db");
+            let _ = std::fs::remove_file(&db);
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            conn.execute(
+                "CREATE TABLE api_meta (key TEXT PRIMARY KEY, value TEXT)",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO api_meta VALUES ('api_version', ?)", [version])
+                .unwrap();
+        };
+
+        seed("4");
+        let opened = HolonApi::open(&home);
+        assert!(
+            opened.is_ok(),
+            "a v4 kernel must keep org mode on: {opened:?}"
+        );
+
+        seed("5");
+        let refused = HolonApi::open(&home);
+        assert!(
+            refused.is_err(),
+            "an api_version this build does not know still refuses: {refused:?}"
         );
     }
 }

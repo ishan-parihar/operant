@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-885 — read API v4 accepted BEFORE the kernel publishes it**
+  (capability-layer audit §2, the sequencing gate). A kernel at v4 against a
+  runtime that knows only v1–v3 would turn org mode OFF on the live box —
+  the refusal is the runtime's protection against reading stale view shapes.
+  The cross-repo order is therefore operant-first: `KNOWN_API_VERSIONS` gains
+  `"4"` now, reading v1–v3 shapes unchanged; the kernel's C1/R-04 migration
+  (surface units, `api_pool`, the service columns) lands AFTER this, and its
+  `pack_api` lint is taught v4's columns in the same migration. Guard:
+  `api::tests::a_v4_kernel_is_read_and_an_unknown_still_refuses` — a scratch
+  instance publishing `4` opens; one publishing `5` still refuses.
+
+  Label note (protocol): iters 879–884 carried two label collisions with a
+  concurrent session (the peer's skill-review iters 877/878 took 877/878
+  while this work was built as 877; the peer's G1 live-day docs took 884 the
+  same hour). Both commits sharing a label are left on origin/main per the
+  protocol; this commit notes it.
+
 - **iter-883 — R-02: one CDP endpoint, two names — the legacy one
   still routes** (capability-layer audit 2026-10-16). The browser tools
   read `BROWSER_CDP_URL`; the legacy apply engines read `OBS_CDP_URL` —
