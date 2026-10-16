@@ -3,20 +3,20 @@
 
 
 
- operan┌───────────────────────────────────────────────────────────────┐
- operan│ Select model                                                  │
- /model│ Search                                                        │
- v0.2.1│                                                               │
- /login│   claude-haiku-4-5-20251001  Anthropic                        │
- ● anth│   claude-opus-4-20250514  Anthropic                           │
- ~     │   claude-opus-4-5-20251101  Anthropic                         │
-       │   claude-opus-4-6  Anthropic                                  │
-       │ ● claude-sonnet-4-20250514  ◐ normal  Anthropic               │
-1>     │ ● claude-sonnet-4-20250514  Anthropic                         │
-       │   claude-sonnet-4-5-20250929  Anthropic                       │ Capture
-       │   claude-sonnet-4-6  Anthropic                                │
-       │ enter select  ←/→ effort                                      │
-       └───────────────────────────────────────────────────Esc to close┘
+ operant · replay
+ operant
+ /model to switch · Offline Capture
+ v0.2.1┌───────────────────────────────────────────────────────────────┐
+ /login│ Select model                                                  │
+ ● anth│ Search                                                        │
+ ~     │                                                               │
+       │ ● offline-capture  configured  [agent] model / fallback_models│
+       │                                                               │
+1>     │ enter select                                                  │
+       └───────────────────────────────────────────────────Esc to close┘ Capture
+
+
+
 
 
 

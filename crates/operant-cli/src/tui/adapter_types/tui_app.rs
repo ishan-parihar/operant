@@ -1139,6 +1139,33 @@ impl TuiApp {
                 app.set_status_notice(format!("Reasoning effort: {shown}"));
             }
         }
+        // (plan 05A) model switch: ONE source of truth — the agent applies
+        // it, and the display (model_name, config, context window, cost
+        // tracker) refreshes FROM the agent, never from a parallel copy.
+        // Persist through the surgical writer (plan 09): agent.model only.
+        if let Some(model) = std::mem::take(&mut app.pending_model) {
+            if let Some(agent) = agent {
+                agent.set_model(model.clone());
+                let applied = agent.model().to_string();
+                app.model_name = applied.clone();
+                app.config.agent.model = applied.clone();
+                if let Some(tracker) = std::sync::Arc::get_mut(&mut app.cost_tracker) {
+                    tracker.set_model(&applied);
+                }
+                app.refresh_context_window_size();
+                // Context is fresh on a new model.
+                app.context_used_tokens = 0;
+                match operant_core::config::persist_config_key("agent.model", &applied) {
+                    Ok(path) => app.set_status_notice(format!(
+                        "Model: {applied} (persisted to {})",
+                        path.display()
+                    )),
+                    Err(e) => {
+                        app.set_status_notice(format!("Model: {applied} (persist failed: {e})"))
+                    }
+                }
+            }
+        }
         if std::mem::take(&mut app.pending_compact) {
             let Some(agent) = agent else {
                 app.set_status_notice("No agent attached — nothing to compact.".to_string());

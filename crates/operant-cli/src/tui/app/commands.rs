@@ -465,11 +465,10 @@ impl App {
                     self.set_status_notice("Connect a provider to choose a model.".to_string());
                     return true;
                 }
-                let provider = self
-                    .active_provider
-                    .clone()
-                    .unwrap_or_else(|| "anthropic".to_string());
-                self.open_model_picker_for_provider(&provider, None);
+                // (plan 05A) the picker lists the AGENT'S ENDPOINT's models
+                // (config.client.base_url /models) plus the configured
+                // [agent] models — not a provider-guessed catalogue.
+                self.open_model_picker_for_endpoint(None);
                 true
             }
             // /model-status — status-tier (command backlog tier 1):
@@ -2649,6 +2648,60 @@ mod tests {
                 .as_deref()
                 .is_some_and(|m| m.contains("read-only")),
             "the denial must be visible"
+        );
+    }
+
+    /// (plan 05A) a model pick must reach the AGENT and persist — the old
+    /// confirm path updated only the display copy, so requests kept using
+    /// the old model forever.
+    #[tokio::test]
+    async fn model_pick_drain_switches_the_agent_and_persists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A real config file so persist_config_key has a target.
+        let cfg_path = dir.path().join("operant.toml");
+        std::fs::write(
+            &cfg_path,
+            "[agent]\nmodel = \"old-model\"\n\n[client]\nbase_url = \"http://localhost:9/v1\"\n",
+        )
+        .expect("write config");
+        let loaded = operant_core::config::load_app_config(Some(&cfg_path)).expect("load");
+        operant_core::config::install_runtime_config(loaded.config.clone());
+
+        let agent = scripted_agent(&dir);
+        assert_eq!(
+            agent.model(),
+            "old-model",
+            "the scripted agent starts on the configured model"
+        );
+
+        let mut app = make_app();
+        app.config = loaded.config;
+        app.pending_model = Some("small-stack".to_string());
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        assert_eq!(
+            agent.model(),
+            "small-stack",
+            "the AGENT must switch — requests read agent.model()"
+        );
+        assert_eq!(
+            app.model_name, "small-stack",
+            "display refreshed from the agent"
+        );
+        assert_eq!(app.config.agent.model, "small-stack");
+        assert!(app.pending_model.is_none(), "consumed");
+        let persisted = std::fs::read_to_string(&cfg_path).expect("re-read");
+        assert!(
+            persisted.contains("small-stack"),
+            "the pick persists through the surgical writer: {persisted}"
+        );
+        assert!(
+            !persisted.contains("[pk]"),
+            "the whole-file rewrite must be gone"
         );
     }
 

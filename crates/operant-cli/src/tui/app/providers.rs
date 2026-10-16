@@ -2,6 +2,49 @@
 
 use super::*;
 
+// (plan 05A) Fetch the endpoint's own model list: OpenAI-style
+// `GET {base_url}/models` with the client's key — the same endpoint the
+// agent's requests hit. Never a row source on its own: the configured
+// `[agent]` models are always merged in by the caller.
+async fn fetch_endpoint_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Vec<crate::tui::model_picker::ModelEntry> {
+    let url = format!("{base_url}/models");
+    let mut req = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key);
+    }
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    if !resp.status().is_success() {
+        return Vec::new();
+    }
+    let parsed: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    parsed
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
+                .map(|id| crate::tui::model_picker::ModelEntry {
+                    id: id.to_string(),
+                    display_name: id.to_string(),
+                    description: format!("from {}", base_url),
+                    is_current: false,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl App {
     fn display_default_model_for_provider(&self, provider_id: &str) -> String {
         crate::tui::model_picker::default_model_for_provider(provider_id, &self.model_registry)
@@ -94,6 +137,79 @@ impl App {
         self.model_picker.open_with_title(
             title.unwrap_or_else(|| "Select model".to_string()),
             &current_model,
+            self.effort_level,
+            self.fast_mode,
+        );
+    }
+
+    /// (plan 05A) The /model picker for the AGENT'S OWN ENDPOINT: rows come
+    /// from `GET {config.client.base_url}/models` with the client's own key
+    /// — the endpoint the requests actually hit — plus the configured
+    /// `[agent] model` and `fallback_models` (always shown, marked
+    /// "configured", even when the endpoint is unreachable). The old
+    /// provider-guessed catalogue listed models.dev rows for a provider
+    /// inferred from the MODEL NAME, which ignored the endpoint entirely
+    /// (an omp-gateway endpoint showed OpenAI's catalogue) and confirmed
+    /// to a "{provider}/{id}" the endpoint does not know.
+    pub(super) fn open_model_picker_for_endpoint(&mut self, title: Option<String>) {
+        let base_url = self
+            .config
+            .client
+            .base_url
+            .trim_end_matches('/')
+            .to_string();
+        let api_key = self.config.client.api_key.clone();
+
+        // The configured rows are available NOW; the endpoint rows land
+        // through the same model_fetch_rx → drain_model_fetch path the old
+        // picker used, so the picker opens instantly and refreshes in
+        // place when the fetch answers.
+        let mut configured: Vec<String> = std::iter::once(self.config.agent.model.clone())
+            .chain(self.config.agent.fallback_models.iter().cloned())
+            .filter(|m| !m.trim().is_empty())
+            .collect();
+        configured.dedup();
+        let configured_rows: Vec<crate::tui::model_picker::ModelEntry> = configured
+            .iter()
+            .map(|id| crate::tui::model_picker::ModelEntry {
+                id: id.clone(),
+                display_name: "configured".to_string(),
+                description: "[agent] model / fallback_models".to_string(),
+                is_current: *id == self.config.agent.model,
+            })
+            .collect();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        self.model_fetch_rx = Some(rx);
+        self.model_picker_fetch_pending = true;
+        self.model_picker.set_models(configured_rows.clone());
+        self.model_picker_provider_id = None;
+
+        let rows_for_spawn = configured_rows;
+        // Headless callers (tests, and any non-runtime context) have no
+        // reactor — the configured rows are already in place, so skip the
+        // fetch instead of panicking. Inside the TUI there is always a
+        // runtime.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                let fetched = fetch_endpoint_models(&base_url, api_key.as_deref()).await;
+                // Endpoint rows first-class, configured kept, dedup by id.
+                let mut rows = fetched;
+                for c in rows_for_spawn {
+                    if !rows.iter().any(|r| r.id == c.id) {
+                        rows.push(c);
+                    }
+                }
+                let _ = tx.send(Ok(rows)).await;
+            });
+        } else {
+            self.model_fetch_rx = None;
+            self.model_picker_fetch_pending = false;
+        }
+
+        self.model_picker.open_with_title(
+            title.unwrap_or_else(|| "Select model".to_string()),
+            &self.config.agent.model,
             self.effort_level,
             self.fast_mode,
         );
@@ -224,6 +340,9 @@ impl App {
             .map_or(0, |i| (i + 1) % self.model_cycle.len());
         let model = self.model_cycle[next].clone();
         self.set_model(model.clone());
+        // (plan 05A) the cycle reaches the agent through the same drain as
+        // the picker confirm — the old path only updated the display copy.
+        self.pending_model = Some(model.clone());
         self.set_status_notice(format!(
             "Model: {model} ({}/{})",
             next + 1,

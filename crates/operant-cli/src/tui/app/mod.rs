@@ -177,6 +177,12 @@ pub struct App {
     /// (plan 03) Effort change waiting for the next agent-touching tick —
     /// `run_pending_agent_actions` applies it to the live agent.
     pub pending_effort: Option<String>,
+    /// (plan 05A) The model the user picked — applied to the AGENT (and
+    /// persisted) by the run loop's pending-action drain, one source of
+    /// truth: agent.set_model → app.model_name = agent.model(). The old
+    /// confirm path only updated the display copy, so requests kept
+    /// using the old model forever.
+    pub pending_model: Option<String>,
     /// (plan 04) The live agent's interrupt flag, set wherever
     /// `agent_task_handle` is set. The cancel path triggers it instead of
     /// aborting the task, so the agent commits its own tail (partial text +

@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-875 — plan 05A: `/model` switches the agent and lists the
+  configured endpoint's models** (audit plan 05 Part A). The picker's
+  rows came from a models.dev snapshot for a provider GUESSED from the
+  model name — the agent's real endpoint (`client.base_url`) was never
+  queried, so an omp-gateway endpoint showed OpenAI's catalogue — and
+  the confirm path never reached `agent.set_model`: the display copy
+  changed, requests kept using the old model forever, and the picked id
+  was re-mangled into `{provider}/{id}` from the guessed provider. Now:
+  - the catalogue is the endpoint's own (`GET {base_url}/models` with
+    the client's key, OpenAI-style `data[].id`), merged with the
+    configured `[agent] model` + `fallback_models` (always shown,
+    marked "configured", so an unreachable endpoint is never a dead
+    end); rows show the real id; the fetch rides the existing
+    `model_fetch_rx` → drain path so the picker opens instantly and
+    refreshes in place;
+  - the confirm path and Alt+P model cycling set `pending_model`, and
+    the run loop's drain applies it: `agent.set_model(id)` → the
+    display refreshes FROM `agent.model()` (one source of truth) →
+    context-window refresh → persist via plan 09's surgical writer
+    (`agent.model` only — `client.*` never touched);
+  - the `{provider}/{id}` munging is gone — the picked id is the model
+    id the endpoint knows.
+  Regression test: `model_pick_drain_switches_the_agent_and_persists`
+  (agent switches, display refreshes from the agent, config file gains
+  exactly the one key, no whole-file rewrite).
+
 - **iter-874 — plan 09: surgical config writes — one key, in the file
   that was loaded** (audit plan 09, findings 7+18). The TUI's model pick
   re-serialized the WHOLE runtime config to a hardcoded

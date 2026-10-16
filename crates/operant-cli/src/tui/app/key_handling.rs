@@ -689,31 +689,21 @@ impl App {
                             // (plan 03) forward the wire value to the agent.
                             self.pending_effort = Some(effort_wire_value(e));
                         }
-                        // Store explicit selections in the canonical
-                        // "provider/model" form for non-Anthropic providers.
-                        // The "free" composite's picker entries already carry
-                        // a routing prefix (`free/…`, `zen/…`, `openrouter/…`)
-                        // so re-prefixing would produce nonsense like
-                        // `free/free/auto`. Also, OpenRouter catalog entries
-                        // are already prefixed with `openrouter/…` — check
-                        // for that to avoid `openrouter/openrouter/anthropic/…`.
-                        // (Bug #14 from iter-82 audit.)
-                        let provider = self.active_provider.as_deref().unwrap_or("anthropic");
-                        let prefix = format!("{}/", provider);
-                        let full_model = if provider == "anthropic" || provider == "free" {
-                            model_id.clone()
-                        } else if model_id.starts_with(&prefix) {
-                            // Already prefixed (e.g. openrouter/anthropic/claude-…).
-                            model_id.clone()
-                        } else {
-                            format!("{}/{}", provider, model_id)
-                        };
-                        self.set_model(full_model.clone());
-                        self.persist_provider_and_model();
+                        // (plan 05A) The picked id IS the model id — the
+                        // catalogue rows come from the agent's own
+                        // endpoint, so the old "{provider}/{id}" munging
+                        // (built from a GUESSED provider) produced ids the
+                        // endpoint does not know. The apply goes through
+                        // pending_model: the drain calls agent.set_model,
+                        // refreshes the display from agent.model() (one
+                        // source of truth), and persists via the surgical
+                        // writer.
+                        self.set_model(model_id.clone());
+                        self.pending_model = Some(model_id.clone());
                         let effort_hint = effort
                             .map(|e| format!(" [{}]", e.label()))
                             .unwrap_or_default();
-                        self.set_status_notice(format!("Model: {}{}", full_model, effort_hint));
+                        self.set_status_notice(format!("Model: {model_id}{}", effort_hint));
                     }
                 }
                 KeyCode::Backspace => self.model_picker.pop_filter_char(),

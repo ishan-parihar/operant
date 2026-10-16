@@ -132,10 +132,21 @@ pub fn render_model_picker(state: &ModelPickerState, area: Rect, buf: &mut Buffe
                 spans.push(Span::styled("   ", Style::default().bg(bg)));
             }
 
+            // (plan 05A) the ID is the row's primary text — it is what the
+            // endpoint knows and what the confirm sends; display_name is
+            // secondary decoration ("configured", or the endpoint's own
+            // label). The old render led with display_name, so dated
+            // snapshot ids collapsed to visually identical rows.
             spans.push(Span::styled(
-                model.display_name.clone(),
+                model.id.clone(),
                 Style::default().fg(fg).bg(bg),
             ));
+            if model.display_name != model.id {
+                spans.push(Span::styled(
+                    format!("  {}", model.display_name),
+                    Style::default().fg(theme_colors::muted()).bg(bg),
+                ));
+            }
 
             // Effort indicator
             if supports_effort && is_selected {
