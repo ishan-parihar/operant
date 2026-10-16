@@ -73,8 +73,20 @@ pub fn spawn_if_configured(config: &AppConfig) {
                 tracing::info!(home = %home.display(), "holon clock organ: tick every 2 minutes");
                 loop {
                     tokio::time::sleep(Duration::from_secs(120)).await;
-                    if let Err(e) = tick_once(&home, bin.as_deref()).await {
-                        tracing::warn!(error = %e, "holon tick failed (retrying next cadence)");
+                    match tick_once(&home, bin.as_deref()).await {
+                        Ok(()) => {
+                            // Liveness evidence (G3, REMAINING-GAPS): the
+                            // doctor reads this stamp to tell a clock organ
+                            // that ticks from one that died silently.
+                            // Best-effort — a stamp failure must never kill
+                            // the cadence.
+                            if let Err(e) = stamp_last_tick(&home) {
+                                tracing::warn!(error = %e, "holon tick: could not stamp liveness");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "holon tick failed (retrying next cadence)");
+                        }
                     }
                 }
             });
@@ -99,6 +111,23 @@ async fn tick_once(home: &Path, bin: Option<&str>) -> crate::Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Write the clock organ's liveness stamp: the unix seconds of the last
+/// successful `holon tick`, at `<home>/.clock/last_tick`. The doctor's
+/// liveness check reads it (G3). Best-effort by contract — the caller
+/// logs a failure and keeps the cadence.
+fn stamp_last_tick(home: &Path) -> std::io::Result<()> {
+    let dir = home.join(".clock");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(
+        dir.join("last_tick"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            .to_string(),
+    )
 }
 
 /// The resident supervisor loop: claim what is ready, run it under the

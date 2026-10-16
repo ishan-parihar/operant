@@ -44,8 +44,12 @@ today, independent of the gate repair.
   (crates/operant-cli/src/tui/render/operant_overlays.rs:747): `row 2 is
   `settings_screen`, expected `rewind_flow``. The overlay dispatch table and
   the test's expected paint order disagree — one of the two is stale from a
-  recent overlay insertion. Fix in its own iteration: decide the true paint
-  order, then align table and test.
+  recent overlay insertion. **The corpus scenario `rewind-flow` fails the
+  same way** (`Unknown assertion path: 'overlays.rewind_flow'` — proven
+  identical at pristine origin/main tip with a stash-built binary,
+  2026-10-16): the scenario file itself still references the renamed
+  overlay path. Fix in its own iteration: decide the true paint order, align
+  table + test + scenario.
 - [x] **H-4 — `tools::sub_agent_tool::tests::compute_child_toolsets_supplied_list_fully_stripped_yields_empty`**
   (crates/operant-core/src/tools/sub_agent_tool.rs:1603):
   `sessions migration failed: failed to read user_version: disk I/O error`.

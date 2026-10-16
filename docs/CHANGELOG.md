@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-865 — G3: clock-organ liveness is now evidenced, and doctor
+  reads it** (`REMAINING-GAPS.md` G3). The clock organ fires `holon tick`
+  every 2 minutes but wrote no liveness evidence, and `operant doctor`
+  unconditionally printed OK for it — a clock that died at boot read as
+  healthy forever. The organ now stamps the unix seconds of every
+  successful tick to `<holon home>/.clock/last_tick` (best-effort; a stamp
+  failure logs and keeps the cadence), and doctor classifies the stamp:
+  missing/unreadable → `check_fail` "never ticked" (a daemon younger
+  than 2 minutes legitimately has no stamp yet), older than 300s
+  (generous vs the 120s cadence) → `check_fail` "stale", recent →
+  `check_ok` with the age. Regression test:
+  `cmd_doctor::tests::clock_verdict_reads_the_liveness_stamp`
+  (fresh/stale/never/garbage). BUGS.md H-3 strengthened: the corpus
+  scenario `rewind-flow` fails the same rename
+  (`Unknown assertion path 'overlays.rewind_flow'`, proven identical at
+  pristine tip).
+
 - **iter-864 — gateway: one turn at a time on the shared agent** (audit
   plan 06A:
   `docs/audit/2026-10-16-operant-audit/06-gateway-concurrency-and-seat-memory.md`).

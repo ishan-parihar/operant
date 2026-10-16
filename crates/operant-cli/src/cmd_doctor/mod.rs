@@ -130,9 +130,87 @@ pub async fn handle_doctor_command(config: &AppConfig, fix: bool, json: bool) ->
     Ok(())
 }
 
+/// G3 (REMAINING-GAPS): the clock organ's liveness verdict, read from the
+/// stamp `organs.rs::stamp_last_tick` writes after every successful
+/// `holon tick`. Before this, doctor unconditionally printed OK for the
+/// clock organ — a clock that died at boot read as healthy forever.
+#[derive(Debug, PartialEq, Eq)]
+enum ClockVerdict {
+    /// No stamp (or an unreadable one): no tick ever completed.
+    NeverTicked,
+    /// Last tick's age in seconds — beyond the staleness bound.
+    Stale(u64),
+    /// Last tick's age in seconds — within the staleness bound.
+    Fresh(u64),
+}
+
+/// Generous vs the 120s cadence: one missed tick on a loaded box must not
+/// flunk the doctor. Two-and-a-half cadences without a stamp is dead or
+/// wedged.
+const CLOCK_STALE_AFTER_SECS: u64 = 300;
+
+fn clock_organ_verdict(home: &std::path::Path) -> ClockVerdict {
+    let stamp = home.join(".clock").join("last_tick");
+    let text = match std::fs::read_to_string(&stamp) {
+        Ok(t) => t,
+        Err(_) => return ClockVerdict::NeverTicked,
+    };
+    let ticked_at = match text.trim().parse::<u64>() {
+        Ok(s) => s,
+        Err(_) => return ClockVerdict::NeverTicked,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let age = now.saturating_sub(ticked_at);
+    if age > CLOCK_STALE_AFTER_SECS {
+        ClockVerdict::Stale(age)
+    } else {
+        ClockVerdict::Fresh(age)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::doctor_exit_code;
+    use super::{ClockVerdict, clock_organ_verdict, doctor_exit_code};
+
+    /// G3 regression: doctor must distinguish a ticking clock organ from
+    /// a dead one. Before the liveness stamp it printed OK unconditionally.
+    #[test]
+    fn clock_verdict_reads_the_liveness_stamp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        let stamp_dir = home.join(".clock");
+        std::fs::create_dir_all(&stamp_dir).expect("stamp dir");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // No stamp yet — the organ never completed a tick.
+        assert_eq!(clock_organ_verdict(home), ClockVerdict::NeverTicked);
+
+        // Fresh stamp (the organs.rs writer's exact format: unix seconds).
+        std::fs::write(stamp_dir.join("last_tick"), now.to_string()).expect("stamp");
+        match clock_organ_verdict(home) {
+            ClockVerdict::Fresh(age) => assert!(age <= 2, "fresh stamp read as {age}s old"),
+            other => panic!("a fresh stamp must be Fresh, got {other:?}"),
+        }
+
+        // Stale stamp — one past the 300s bound.
+        std::fs::write(stamp_dir.join("last_tick"), (now - 301).to_string()).expect("stale");
+        match clock_organ_verdict(home) {
+            ClockVerdict::Stale(age) => {
+                assert!(age >= 301, "stale stamp read as {age}s old")
+            }
+            other => panic!("a stale stamp must be Stale, got {other:?}"),
+        }
+
+        // Garbage stamp — treated as never ticked, never a panic.
+        std::fs::write(stamp_dir.join("last_tick"), "not-a-number").expect("garbage");
+        assert_eq!(clock_organ_verdict(home), ClockVerdict::NeverTicked);
+    }
 
     fn issues(n: usize) -> Vec<String> {
         (0..n).map(|i| format!("issue {i}")).collect()
@@ -227,7 +305,23 @@ fn print_holon_org_checks(config: &AppConfig) {
         }
     }
     if config.holon.clock {
-        check_ok("[holon]", "clock organ: `holon tick` every 2 minutes");
+        match clock_organ_verdict(&home) {
+            ClockVerdict::NeverTicked => check_fail(
+                "[holon]",
+                "clock organ: no liveness stamp — `holon tick` has never completed (a daemon younger than 2 minutes has not ticked yet)",
+            ),
+            ClockVerdict::Stale(age_secs) => check_fail(
+                "[holon]",
+                &format!(
+                    "clock organ stale: last tick {} minute(s) ago (cadence is 2 minutes)",
+                    age_secs / 60
+                ),
+            ),
+            ClockVerdict::Fresh(age_secs) => check_ok(
+                "[holon]",
+                &format!("clock organ: last tick {age_secs}s ago (cadence 2 minutes)"),
+            ),
+        }
     }
     // O-25: the Notion arm's script — the same three-way resolution the
     // gateway arm uses ([holon] notion_script, else <bin>/../adapters/notion,
