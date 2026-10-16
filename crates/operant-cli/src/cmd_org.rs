@@ -534,6 +534,17 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
                     }
                 }
                 if !r#loop {
+                    // G1 live-day note: rc=0 with no output was opaque on the
+                    // workstation — "nothing to claim" is a real, common
+                    // answer (all held stages leased, none ready) and the
+                    // operator should see it said
+                    if !ran {
+                        println!(
+                            "nothing to claim{} — every ready stage for these \
+                             employees is held or none is ready",
+                            stage.map(|s| format!(" at stage {s}")).unwrap_or_default()
+                        );
+                    }
                     break;
                 }
                 if errored {
