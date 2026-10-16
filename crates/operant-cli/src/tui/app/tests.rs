@@ -209,10 +209,35 @@ fn test_normalize_char_shift_with_other_modifiers() {
 }
 
 #[test]
-fn test_mcp_subcommand_is_not_intercepted() {
+// (plan 04) rewritten: /mcp with args now runs the REAL subcommand through
+// the shell-out pattern (the old body returned false so `operant mcp auth`
+// typed as /mcp auth went to the MODEL). The panel opens only for bare /mcp.
+#[test]
+fn test_mcp_with_args_runs_the_subcommand_and_bare_opens_the_panel() {
     let mut app = make_app();
-    assert!(!app.intercept_slash_command_with_args("mcp", "auth mcphub"));
-    assert!(!app.mcp_view.visible);
+    assert!(app.intercept_slash_command_with_args("mcp", "auth mcphub"));
+    assert!(
+        !app.mcp_view.visible,
+        "with args the panel must not open — the subcommand runs"
+    );
+    assert_eq!(
+        app.pending_shell_command,
+        Some(vec![
+            std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "operant".to_string()),
+            "mcp".to_string(),
+            "auth".to_string(),
+            "mcphub".to_string(),
+        ]),
+        "the real subcommand must be queued"
+    );
+
+    app.pending_shell_command = None;
+    assert!(app.intercept_slash_command_with_args("mcp", ""));
+    assert!(app.mcp_view.visible, "bare /mcp opens the panel");
+    assert!(app.pending_shell_command.is_none());
 }
 
 // (plan 03) test_clear_slash_command_clears_messages deleted: it pinned
@@ -5024,6 +5049,27 @@ async fn no_registered_tui_command_is_unwired() {
             assert!(
                 !note.text.contains("not yet wired to a handler"),
                 "/{bare} landed the not-yet-wired fallback: {} (plan 02)",
+                note.text
+            );
+        }
+    }
+
+    // (plan 04) The TYPEAHEAD table is part of the contract now: anything
+    // autocomplete suggests must dispatch. A row the typeahead offers that
+    // falls through to the model (or prints not-wired) is a lying command.
+    for (name, _desc) in crate::tui::app::helpers::tui_slash_command_data() {
+        let bare = name.trim_start_matches('/');
+        let before = app.system_annotations.len();
+        let handled = app.handle_tui_command(bare, "");
+        assert!(
+            handled,
+            "/{bare} is offered by typeahead but not intercepted (plan 04 — lying suggestion)"
+        );
+        let start = before.min(app.system_annotations.len());
+        for note in &app.system_annotations[start..] {
+            assert!(
+                !note.text.contains("not yet wired to a handler"),
+                "/{bare} landed the not-yet-wired fallback: {} (plan 04)",
                 note.text
             );
         }

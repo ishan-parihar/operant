@@ -8,31 +8,32 @@ use crate::tui::dialog_select::SelectItem;
 use crate::tui::overlays::HelpEntry;
 
 // ---------------------------------------------------------------------------
-// Unified command data (single source of truth from COMMAND_REGISTRY)
+// Unified command data (single source of truth: REGISTERED_COMMANDS)
 // ---------------------------------------------------------------------------
 
 /// All TUI-available slash commands as `(name, description)` pairs.
-/// Derived from the canonical `COMMAND_REGISTRY` — replaces the old hardcoded
-/// `PROMPT_SLASH_COMMANDS` constant. Used by typeahead and command palette.
-pub(super) fn tui_slash_command_data() -> Vec<(&'static str, &'static str)> {
-    crate::commands::COMMAND_REGISTRY
-        .iter()
-        .filter(|cmd| !cmd.gateway_only)
-        .map(|cmd| (cmd.name, cmd.description))
+/// (plan 04) THE ONE TABLE is the TUI registry — `REGISTERED_COMMANDS` in
+/// `tui/operant_app/app.rs`. The old source, `COMMAND_REGISTRY`, is the
+/// GATEWAY's table; feeding the TUI's typeahead from it meant suggestions
+/// for commands that were never wired (the 18-command "not yet wired" list)
+/// and no suggestions for commands that were.
+pub fn tui_slash_command_data() -> Vec<(&'static str, &'static str)> {
+    // The typeahead matcher prefixes the slash itself — the rows carry
+    // bare names (the same convention COMMAND_REGISTRY used).
+    crate::tui::operant_app::app::locally_suggested_command_rows()
+        .map(|(name, help)| (name.trim_start_matches('/'), help))
         .collect()
 }
 
 /// Generate help overlay entries from the unified command registry.
-/// Each entry includes aliases (e.g. "n, clear" for /new) and the
-/// TUI category for grouped display.
+/// (plan 04) same source as typeahead: the TUI registry, one table.
 pub(super) fn help_overlay_entries() -> Vec<HelpEntry> {
-    crate::commands::tui_slash_commands()
-        .iter()
-        .map(|cmd| HelpEntry {
-            name: cmd.name.to_string(),
-            aliases: cmd.aliases.join(", "),
-            description: cmd.description.to_string(),
-            category: cmd.category.to_string(),
+    crate::tui::operant_app::app::registered_command_rows()
+        .map(|(name, help)| HelpEntry {
+            name: name.to_string(),
+            aliases: String::new(),
+            description: help.to_string(),
+            category: "Commands".to_string(),
         })
         .collect()
 }

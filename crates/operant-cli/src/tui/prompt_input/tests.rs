@@ -267,6 +267,49 @@ fn paste_counter_increments() {
 const TEST_FILE_AUTOCOMPLETE_LIMIT: usize = 15;
 const TEST_FILE_AUTOCOMPLETE_SHOW_HIDDEN: bool = false;
 
+/// (plan 04) The TUI's real command list comes from the ONE table —
+/// REGISTERED_COMMANDS via tui_slash_command_data. Typing a TUI-only
+/// command's prefix must suggest it: pre-plan-04 the typeahead read the
+/// GATEWAY's COMMAND_REGISTRY, so /rewind, /permissions and friends never
+/// appeared.
+#[test]
+fn typeahead_suggests_the_registered_tui_commands() {
+    let cmds = crate::tui::app::helpers::tui_slash_command_data();
+    for needle in ["/rew", "/perm", "/goal", "/undo"] {
+        let suggestions = compute_slash_suggestions(needle, &cmds);
+        assert!(
+            suggestions.iter().any(|s| s.text.starts_with(needle)),
+            "typeahead must suggest a registered command for {needle}"
+        );
+    }
+    // The lying suggestions are gone: nothing suggests the deleted
+    // commands. Every suggestion's dispatch is pinned by the sweep; this
+    // pins that the SUGGESTIONS come from the one table.
+    for (name, _) in &cmds {
+        assert!(
+            !matches!(
+                *name,
+                "history"
+                    | "handoff"
+                    | "snapshot"
+                    | "env"
+                    | "toolsets"
+                    | "blueprint"
+                    | "gquota"
+                    | "billing"
+                    | "credits"
+                    | "pet"
+                    | "heapdump"
+                    | "replay"
+                    | "busy"
+                    | "browser"
+                    | "indicator"
+            ),
+            "{name} must not be suggested — it was deleted or made honest (plan 04)"
+        );
+    }
+}
+
 #[test]
 fn typeahead_slash_prefix_matches() {
     let cmds = [

@@ -1,13 +1,13 @@
 {
   "name": "memory-file-selector",
   "surface": "crates/operant-cli/src/tui/memory_file_selector.rs::render_memory_file_selector",
-  "opens_with": "/memory",
-  "keys": "/memory<enter>",
+  "opens_with": "/context-files",
+  "keys": "/context-files<enter>",
   "size": "120x40",
   "variants": [
     {
       "size": "80x24",
-      "keys": "/memory<enter>"
+      "keys": "/context-files<enter>"
     }
   ],
   "assert": [

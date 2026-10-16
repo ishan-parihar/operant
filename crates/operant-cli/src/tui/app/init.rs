@@ -303,6 +303,7 @@ impl App {
             pending_rewind_confirm: None,
             double_escape_action: "rewind".to_string(),
             pending_branch_list: false,
+            pending_switch_session: None,
             agent_task_handle: None,
             pending_key: None,
             model_fetch_rx: None,

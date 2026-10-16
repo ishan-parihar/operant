@@ -14,7 +14,7 @@
     "focus == Input"
   ],
   "assert_screen": [
-    "contains:Start a new session"
+    "contains:Show help and keyboard shortcuts"
   ],
   "baseline": "typeahead-suggestions.txt",
   "style_baseline": "typeahead-suggestions.style.txt",

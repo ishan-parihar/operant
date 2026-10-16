@@ -34,6 +34,14 @@ D-3, kept).
   the gateway twin belongs to the gateway line (peer surface — do not
   grab from the TUI slice). Owner: the plan-03 close-out.
 
+- [ ] **H-9 — connect-dialog dead-end stubs** (plan 04 leftover). The
+  run loop's MCP-panel auth and device-auth flows print "not yet wired —
+  restart operant" (`tui_app.rs` stub arms). Plan 04's default is to remove
+  the unreachable providers from the connect dialog so the dead end can't
+  be reached; finishing device-flow polling for `github-copilot` /
+  `openai-codex` is the alternative (owner call — only worth it if the
+  owner uses them).
+
 ## OPEN — Hidden regressions surfaced by the test-gate repair (2026-10-16, audit plan 02)
 
 These four failures were invisible since iter-838: the test targets they live

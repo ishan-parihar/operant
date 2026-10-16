@@ -9,29 +9,29 @@
                            │                                                               │
                            │                                                               │
                            │ Other                                                         │
-                           │ /new Start a new session (fresh session ID + history)         │
-                           │ /redraw Force a full UI repaint (recovers from terminal drift)│
- operant · replay          │                                                               │
- operant                   │ Review & History                                              │
- /model to switch · Offline│ /history Show conversation history                            │
- v0.2.1                    │                                                               │
- /login to add provider    │ Other                                                         │
- ● anthropic(key)          │ /save Save the current conversation                           │
- ~                         │                                                               │
-                           │ Review & History                                              │
-                           │ /retry Retry the last message (resend to agent)               │
-1>                         │ /undo Back up N user turns and re-prompt (default 1)          │
-                           │                                                               │   ~ API key Offline Capture
-                           │ Session                                                       │
-                           │ /title Set a title for the current session                    │
+                           │ /help Show help and keyboard shortcuts                        │
+                           │ /? Show help and keyboard shortcuts                           │
+ operant · replay          │ /commands Alias for /help                                     │
+ operant                   │                                                               │
+ /model to switch · Offline│ Model & Provider                                              │
+ v0.2.1                    │ /model List or switch models                                  │
+ /login to add provider    │                                                               │
+ ● anthropic(key)          │ Other                                                         │
+ ~                         │ /models Alias for /model                                      │
+                           │ /refresh-model-list Refresh provider model catalogs           │
+                           │                                                               │
+1>                         │ Tools                                                         │
+                           │ /agents Configure models for agent roles                      │   ~ API key Offline Capture
                            │                                                               │
                            │ Other                                                         │
-                           │ /handoff Hand off this session to a messaging platform (Telegr│
+                           │ /todos Show the session todo list as a card in the chat       │
+                           │ /todo Alias for /todos                                        │
+                           │ /hotkeys List hotkeys with your personal usage                │
                            │                                                               │
-                           │ Session                                                       │
-                           │ /branch Branch the current session (explore a different path) │
+                           │ Diagnostics                                                   │
+                           │ /terminal-setup Fix Shift+Enter newlines                      │
                            │                                                               │
-                           │ Context                                                       │
+                           │ Other                                                         │
                            └───────────────────────────────────────────────────Esc to close┘
 
 

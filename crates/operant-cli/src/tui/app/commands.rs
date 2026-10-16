@@ -5,16 +5,10 @@ use super::*;
 impl App {
     #[allow(dead_code)] // Used in tests
     pub fn intercept_slash_command_with_args(&mut self, cmd: &str, args: &str) -> bool {
-        if cmd == "mcp" && !args.trim().is_empty() {
-            return false;
-        }
         self.intercept_slash_command_with_args_impl(cmd, args)
     }
 
     pub fn handle_tui_command(&mut self, cmd: &str, args: &str) -> bool {
-        if cmd == "mcp" && !args.trim().is_empty() {
-            return false;
-        }
         self.intercept_slash_command_with_args_impl(cmd, args)
     }
 
@@ -271,11 +265,29 @@ impl App {
         out
     }
 
+    /// (plan 04) Run a REAL CLI subcommand from the TUI: same binary
+    /// (version matches), `pending_shell_command` suspends the alt screen and
+    /// inherits stdio, so interactive wizards work and plain output lands in
+    /// the terminal the TUI returns to. The subcommand-parity arms
+    /// (/cron, /kanban, /curator, /suggestions, /profile, /logs, /pause,
+    /// /unpause, /org, /platforms, /mcp <args>, /setup) all funnel here —
+    /// one pattern, the actual subcommand, zero re-implementation.
+    fn shell_out_to_subcommand(&mut self, subcommand: &str, args: &str) {
+        self.close_secondary_views();
+        self.dismiss_error_notifications();
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "operant".to_string());
+        let mut argv = vec![exe, subcommand.to_string()];
+        argv.extend(args.split_whitespace().map(str::to_string));
+        self.pending_shell_command = Some(argv);
+        self.set_status_notice(format!("Running operant {subcommand}…"));
+    }
+
     /// Implementation that receives both cmd and args. Most slash commands
     /// ignore args; a few (like /personality `<name>`) consume them.
     fn intercept_slash_command_with_args_impl(&mut self, cmd: &str, args: &str) -> bool {
-        self.close_secondary_views();
-        self.dismiss_error_notifications();
         // Record slash-command usage for smart ordering of `/` suggestions.
         // (iter-125 — recency + frequency ranking.)
         self.slash_usage.record(cmd);
@@ -317,8 +329,15 @@ impl App {
                 true
             }
             "mcp" => {
-                let servers = self.load_mcp_servers();
-                self.mcp_view.open(servers);
+                // (plan 04) bare /mcp keeps the panel; with args it runs the
+                // real subcommand (the old arm returned false for any args,
+                // so `operant mcp list` typed as /mcp list went to the model).
+                if args.trim().is_empty() {
+                    let servers = self.load_mcp_servers();
+                    self.mcp_view.open(servers);
+                } else {
+                    self.shell_out_to_subcommand("mcp", args);
+                }
                 true
             }
             "agents" | "tasks" => {
@@ -341,9 +360,16 @@ impl App {
                 true
             }
             // (iter-211: survey/feedback slash command deleted — no telemetry backend)
-            "memory" => {
+            "context-files" => {
+                // (plan 04) the AGENTS.md/CLAUDE.md selector — renamed from
+                // /memory, whose old help ("Toggle memory feature") lied:
+                // it selects context files, it does not touch memory.
                 let root = self.project_root();
                 self.memory_file_selector.open(&root);
+                true
+            }
+            "memory" => {
+                self.shell_out_to_subcommand("memory", args);
                 true
             }
             // /skill <name> — expand a skill into the turn (hermes
@@ -486,7 +512,11 @@ impl App {
             // parity). The overlay was previously only reachable via a
             // keybinding; the slash arm makes it discoverable.
             "branch" => {
-                self.session_branching.open(vec![], self.messages.len());
+                // (plan 04) the arm opened the overlay with an EMPTY list
+                // (it never set pending_branch_list, so the fork-tree backfill
+                // in tui_app.rs never ran). One flag: the real feeder builds
+                // parent + child forks from the agent's DB.
+                self.pending_branch_list = true;
                 true
             }
             // /status — session/model/token summary (hermes /status parity).
@@ -952,7 +982,13 @@ impl App {
                     .open(self.settings.permission_mode.clone());
                 true
             }
-            "doctor" => false,
+            "doctor" => {
+                // (plan 04) the REAL health checks, not the registry's
+                // display-only handler — and it must intercept: the sweep
+                // treats a fall-through as a lie.
+                self.shell_out_to_subcommand("doctor", args);
+                true
+            }
             "rewind" => {
                 // (plan 05) `/rewind` opens the selector; `/rewind <n>`
                 // targets prompt #n directly — confirm via y/n in the status
@@ -1085,19 +1121,6 @@ impl App {
 
             // /busy — toggle "busy" indicator (we map to auto_compact to avoid
             // adding a new state field; busy = compact aggressively).
-            "busy" => {
-                self.auto_compact_enabled = !self.auto_compact_enabled;
-                self.set_status_notice(format!(
-                    "Auto-compact {}.",
-                    if self.auto_compact_enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                ));
-                true
-            }
-
             // /verbose — cycle output-style between auto/stream/verbose.
 
             // /reasoning — toggle whether thinking/reasoning blocks are
@@ -1189,20 +1212,6 @@ impl App {
             // agent via create_runtime_agent with its own session id + event
             // channel, threaded through the run loop — invasive and not
             // headless-testable, so we point at `operant run --query ... &`.)
-            "background" => {
-                let trimmed = args.trim();
-                self.set_status_notice(if trimmed.is_empty() {
-                    "Usage: /background <prompt> — operant runs one agent synchronously; this prints the command to run it detached.".to_string()
-                } else {
-                    let escaped = trimmed.replace('"', "\\\"");
-                    format!(
-                        "Operant runs synchronously in-session. Background it with: operant run --query \"{}\" &",
-                        escaped
-                    )
-                });
-                true
-            }
-
             // /rollback — surface the existing /rewind flow (which IS
             // implemented) instead of silently dropping /rollback.
             "rollback" => {
@@ -1317,16 +1326,11 @@ impl App {
 
             // /browser — surface that operant has a Camofox browser backend
             // but no in-TUI browser launcher (it's a tool the agent calls).
-            "browser" => {
-                self.set_status_notice(
-                    "Browser: operant uses Camofox as the default. The agent invokes it via the browser tool — no in-TUI browser panel.".to_string()
-                );
-                true
-            }
-
-            // /indicator, /statusbar — toggle Settings.terminal_progress_bar
-            // (operant has one status-bar toggle, not the two hermes has).
-            "indicator" | "statusbar" => {
+            // /statusbar — toggle Settings.terminal_progress_bar. The
+            // /indicator twin is deleted: two names, one toggle, one row
+            // (plan 04 — operant has one status-bar toggle, not the two
+            // hermes has).
+            "statusbar" => {
                 let mut settings =
                     crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
                 settings.terminal_progress_bar = !settings.terminal_progress_bar;
@@ -1379,14 +1383,6 @@ impl App {
             // /billing, /credits — surface that operant doesn't track
             // provider billing/credits (it's BYOK); point users at /stats
             // for local token usage tracking.
-            "billing" | "credits" => {
-                self.set_status_notice(format!(
-                    "{}: operant is BYOK and doesn't track provider billing. Use /stats for local token usage.",
-                    cmd
-                ));
-                true
-            }
-
             // /update — point at `operant update` (the TUI can't self-update
             // without restarting).
             "update" => {
@@ -1399,24 +1395,8 @@ impl App {
 
             // /heapdump, /mem — debug diagnostics; surface a snapshot of
             // turn count + token count + cost as a memory/heap summary.
-            "heapdump" | "mem" => {
-                self.set_status_notice(format!(
-                    "Turns: {} | Tokens: {} | Cost: ${:.4} | Agent status entries: {}",
-                    self.turn_metadata.len(),
-                    self.token_count,
-                    self.cost_usd,
-                    self.agent_status.len()
-                ));
-                true
-            }
-
             // /pet — Easter-egg. (iter-144: rustle pose trigger deleted
             // since the pose system was dead code. Still shows the message.)
-            "pet" => {
-                self.set_status_notice("Rustle wags its tail. 🐕".to_string());
-                true
-            }
-
             // jcode /cls parity (2026-10-10 command sweep): clear the rendered
             // VIEW only — the model keeps its full context. Distinct from
             // /clear, which drops the conversation. Same machinery as Ctrl+L.
@@ -1510,14 +1490,6 @@ impl App {
                 self.journey_view.open(skills_dir, memory_dir);
                 true
             }
-            "replay" | "replay-diff" => {
-                self.set_status_notice(format!(
-                    "/{} overlay is planned. For now, use /agents to view the spawn tree.",
-                    cmd
-                ));
-                true
-            }
-
             // /setup — suspend the TUI and shell out to `operant setup` so the
             // user gets the full interactive wizard. The run loop in
             // TuiApp::run polls pending_shell_command after each frame and,
@@ -1525,16 +1497,26 @@ impl App {
             // inherited stdio, waits for it, then re-enters alt screen + raw
             // mode and clears the field.
             "setup" => {
-                // Use the current binary (so the version matches) with the
-                // `setup` subcommand. If operant was launched via a wrapper,
-                // fall back to the literal "operant" name on PATH.
-                let exe = std::env::current_exe()
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "operant".to_string());
-                self.pending_shell_command = Some(vec![exe, "setup".to_string()]);
-                self.set_status_notice("Launching setup wizard…".to_string());
+                self.shell_out_to_subcommand("setup", args);
                 true
+            }
+
+            // (plan 04) Subcommand parity: these arms shell out to the REAL
+            // CLI subcommand (same binary, same version) via the /setup
+            // suspend-and-run pattern — the output lands in the terminal the
+            // TUI returns to. The old typeahead suggested them but every one
+            // printed "not yet wired to a handler".
+            "cron" | "kanban" | "curator" | "suggestions" | "profile" | "logs" | "pause"
+            | "unpause" | "org" => {
+                self.shell_out_to_subcommand(cmd, args);
+                true
+            }
+            "platforms" => {
+                self.shell_out_to_subcommand("gateway", "status");
+                true
+            }
+            "title" => {
+                return self.intercept_slash_command_with_args_impl("rename", args);
             }
             // /whoami — show what the agent knows about the user.
             // (P1-9 from UX audit — transparency + trust.)

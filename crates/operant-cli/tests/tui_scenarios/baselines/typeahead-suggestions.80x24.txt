@@ -13,12 +13,12 @@
 
 
 1> /
-/new  Start a new session (fresh session ID + history)
-/redraw  Force a full UI repaint (recovers from terminal drift)
-/history  Show conversation history
-/save  Save the current conversation
-/retry  Retry the last message (resend to agent)
-/undo  Back up N user turns and re-prompt (default 1)
-/title  Set a title for the current session
-/handoff  Hand off this session to a messaging platform (Telegram, Discord, etc.
+/help  Show help and keyboard shortcuts
+/?  Show help and keyboard shortcuts
+/commands  Alias for /help
+/model  List or switch models
+/models  Alias for /model
+/refresh-model-list  Refresh provider model catalogs
+/agents  Configure models for agent roles
+/todos  Show the session todo list as a card in the chat  +103 more
 

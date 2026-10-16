@@ -725,8 +725,10 @@ impl App {
                     KeyCode::Char('d') => self.session_branching.start_delete_confirm(),
                     KeyCode::Enter => {
                         if let Some(branch) = self.session_branching.selected_branch() {
-                            self.status_message =
-                                Some(format!("Switched to branch: {}", branch.name));
+                            // (plan 04) real switch: the drain retargets the
+                            // agent and rebuilds the display (the old body
+                            // printed "Switched to branch" and did nothing).
+                            self.pending_switch_session = Some(branch.id.clone());
                             self.session_branching.close();
                         }
                     }
@@ -735,11 +737,16 @@ impl App {
                 BranchBrowserMode::CreateNew => match key.code {
                     KeyCode::Esc => self.session_branching.cancel(),
                     KeyCode::Enter => {
-                        if let Some((name, at_msg)) = self.session_branching.confirm_create_new() {
-                            self.status_message =
-                                Some(format!("Created branch: {} at message {}", name, at_msg));
-                            self.session_branching.close();
-                        }
+                        // (plan 04) a named fork at the current point IS
+                        // /rewind's documented behavior ("forks the session,
+                        // old path kept") — the old body printed "Created
+                        // branch" and did nothing. Close; the fork happens
+                        // through /rewind.
+                        self.session_branching.cancel();
+                        self.set_status_notice(
+                            "Fork at a point: use /rewind (forks the session, old path kept)."
+                                .to_string(),
+                        );
                     }
                     KeyCode::Backspace => self.session_branching.pop_create_char(),
                     KeyCode::Char(c) => self.session_branching.push_create_char(c),
@@ -748,9 +755,14 @@ impl App {
                 BranchBrowserMode::ConfirmDelete => match key.code {
                     KeyCode::Esc | KeyCode::Char('n') => self.session_branching.cancel(),
                     KeyCode::Enter | KeyCode::Char('y') => {
-                        if let Some(branch_id) = self.session_branching.confirm_delete() {
-                            self.set_status_notice(format!("Deleted branch: {}", branch_id));
-                        }
+                        // (plan 04) the old body printed "Deleted branch" and
+                        // never touched the store — sessions are the durable
+                        // record (\resume), deletion belongs to the CLI where
+                        // it can be deliberate: `operant sessions delete`.
+                        self.session_branching.cancel();
+                        self.set_status_notice(
+                            "Deleting sessions: `operant sessions delete <id>` (they are kept for /resume by design).".to_string(),
+                        );
                     }
                     _ => {}
                 },
@@ -1707,19 +1719,40 @@ impl App {
                         && is_steer_command_input(&self.prompt_input.text)) =>
             {
                 use crate::tui::prompt_input::AcceptForSubmitOutcome;
-                // Phase 1.3: Auto-select first suggestion when visible but none selected.
-                if !self.prompt_input.suggestions.is_empty()
-                    && self.prompt_input.suggestion_index.is_none()
-                {
-                    self.prompt_input.suggestion_index = Some(0);
-                }
-                match self.prompt_input.accept_suggestion_for_submit() {
-                    AcceptForSubmitOutcome::ExtendInput => {
-                        self.refresh_prompt_input();
-                        return false;
+                // (plan 04) An EXACT command submits as typed — Enter must
+                // never replace the user's typed command with a different
+                // one that merely shares the prefix (usage-recency can rank
+                // /effort-set above a typed /effort, or /context-files above
+                // /context; completion is for PARTIAL input only). Exact is
+                // judged on the first word, so "/goal ship it" still counts
+                // as an exact /goal with args.
+                let typed_first_word = self
+                    .prompt_input
+                    .text
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let exact_command = !typed_first_word.is_empty()
+                    && crate::tui::app::helpers::tui_slash_command_data()
+                        .iter()
+                        .any(|(name, _)| *name == typed_first_word);
+                if !exact_command {
+                    // Phase 1.3: Auto-select first suggestion when visible but none selected.
+                    if !self.prompt_input.suggestions.is_empty()
+                        && self.prompt_input.suggestion_index.is_none()
+                    {
+                        self.prompt_input.suggestion_index = Some(0);
                     }
-                    AcceptForSubmitOutcome::Submit => return true,
-                    AcceptForSubmitOutcome::NoSuggestion => {}
+                    match self.prompt_input.accept_suggestion_for_submit() {
+                        AcceptForSubmitOutcome::ExtendInput => {
+                            self.refresh_prompt_input();
+                            return false;
+                        }
+                        AcceptForSubmitOutcome::Submit => return true,
+                        AcceptForSubmitOutcome::NoSuggestion => {}
+                    }
                 }
                 // Auto-dismiss all error notifications when user sends a message
                 self.dismiss_error_notifications();

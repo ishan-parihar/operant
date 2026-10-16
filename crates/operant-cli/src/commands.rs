@@ -499,9 +499,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Session",
     )
     .cli_only(),
-    CommandDef::new("history", "Show conversation history", "Session")
-        .cli_only()
-        .with_aliases(&["h"]),
     CommandDef::new("save", "Save the current conversation", "Session")
         .cli_only()
         .with_aliases(&["export"]),
@@ -517,13 +514,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .with_args("[N]"),
     CommandDef::new("title", "Set a title for the current session", "Session").with_args("[name]"),
-    CommandDef::new(
-        "handoff",
-        "Hand off this session to a messaging platform (Telegram, Discord, etc.)",
-        "Session",
-    )
-    .with_args("<platform>")
-    .cli_only(),
     CommandDef::new(
         "branch",
         "Branch the current session (explore a different path)",
@@ -542,14 +532,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Session",
     )
     .with_args("[number]"),
-    CommandDef::new(
-        "snapshot",
-        "Create or restore state snapshots of Operant config/state",
-        "Session",
-    )
-    .cli_only()
-    .with_aliases(&["snap"])
-    .with_args("[create|restore <id>|prune]"),
     CommandDef::new("stop", "Kill all running background processes", "Session"),
     CommandDef::new("approve", "Approve a pending dangerous command", "Session")
         .gateway_only()
@@ -599,9 +581,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         .with_args("[model] [--provider name] [--global] [--refresh]"),
     CommandDef::new("provider", "Switch LLM provider", "Configuration").with_args("<name>"),
     CommandDef::new("config", "Show current configuration", "Configuration")
-        .cli_only()
-        .with_args("[key] [value]"),
-    CommandDef::new("env", "View or set environment variables", "Configuration")
         .cli_only()
         .with_args("[key] [value]"),
     CommandDef::new(
@@ -688,7 +667,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .cli_only()
     .with_args("[list|disable|enable] [name...]"),
-    CommandDef::new("toolsets", "List available toolsets", "Tools & Skills").cli_only(),
     CommandDef::new(
         "skills",
         "Search, install, inspect, or manage skills",
@@ -719,13 +697,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .with_aliases(&["suggest"])
     .with_args("[accept|dismiss N | catalog]"),
-    CommandDef::new(
-        "blueprint",
-        "Set up an automation from a blueprint template",
-        "Tools & Skills",
-    )
-    .with_aliases(&["bp"])
-    .with_args("[name] [slot=value ...]"),
     CommandDef::new(
         "curator",
         "Background skill maintenance (status, run, pin, archive, list-archived)",
@@ -790,12 +761,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Show token usage and rate limits for the current session",
         "Info",
     ),
-    CommandDef::new("credits", "Show Nous credit balance and top up", "Info"),
-    CommandDef::new(
-        "billing",
-        "Manage Nous terminal billing — buy credits, auto-reload, limits",
-        "Info",
-    ),
     CommandDef::new("insights", "Show usage insights and analytics", "Info").with_args("[days]"),
     CommandDef::new(
         "platforms",
@@ -847,12 +812,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         "Show your slash command access (admin / user)",
         "Info",
     ),
-    CommandDef::new(
-        "gquota",
-        "Show Google Gemini Code Assist quota usage",
-        "Info",
-    )
-    .cli_only(),
     CommandDef::new("time", "Show the current time", "Info"),
     CommandDef::new("session", "Show current session info", "Info").with_aliases(&["s"]),
     CommandDef::new("doctor", "Run diagnostics", "Info"),
@@ -886,10 +845,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     CommandDef::new("setup", "Re-run the setup wizard", "Configuration").cli_only(),
     CommandDef::new("mouse", "Show mouse capture info", "Info").cli_only(),
     CommandDef::new("terminal-setup", "Show terminal capability info", "Info").cli_only(),
-    CommandDef::new("heapdump", "Show debug snapshot", "Info").cli_only(),
-    CommandDef::new("pet", "Pet the mascot", "Info").cli_only(),
-    CommandDef::new("replay", "Replay spawn tree (planned)", "Session").cli_only(),
-    CommandDef::new("replay-diff", "Diff replay (planned)", "Session").cli_only(),
     // ── Agent flows (tier 3) ─────────────────────────────────────────────
     // One-shot agent sessions launched via the /setup suspend-and-run escape
     // hatch; handlers registered in register_agent_flow_handlers (tui_app.rs).
@@ -1948,15 +1903,10 @@ mod tests {
         assert!(deny.gateway_only, "/deny must be gateway_only");
     }
 
-    #[test]
-    fn test_snapshot_alias_snap() {
-        let map = build_command_map();
-        assert!(
-            map.contains_key("snap"),
-            "Alias 'snap' must resolve to 'snapshot'"
-        );
-        assert_eq!(map.get("snap").unwrap().name, "snapshot");
-    }
+    // (plan 04) test_snapshot_alias_bp and test_blueprint_alias_bp deleted:
+    // the snapshot and blueprint commands were dead (never wired in the TUI,
+    // never handled by the gateway) and were removed from COMMAND_REGISTRY —
+    // alias pins for deleted rows pin the lie.
 
     #[test]
     fn test_branch_has_no_dead_alias() {
@@ -2012,15 +1962,8 @@ mod tests {
         assert_eq!(map.get("suggest").unwrap().name, "suggestions");
     }
 
-    #[test]
-    fn test_blueprint_alias_bp() {
-        let map = build_command_map();
-        assert!(
-            map.contains_key("bp"),
-            "Alias 'bp' must resolve to 'blueprint'"
-        );
-        assert_eq!(map.get("bp").unwrap().name, "blueprint");
-    }
+    // (plan 04) test_blueprint_alias_bp deleted with the blueprint row:
+    // dead command, dead alias pin.
 
     #[test]
     fn test_config_gate_on_verbose() {

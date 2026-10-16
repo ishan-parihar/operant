@@ -9,109 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **iter-885 — read API v4 accepted BEFORE the kernel publishes it**
-  (capability-layer audit §2, the sequencing gate). A kernel at v4 against a
-  runtime that knows only v1–v3 would turn org mode OFF on the live box —
-  the refusal is the runtime's protection against reading stale view shapes.
-  The cross-repo order is therefore operant-first: `KNOWN_API_VERSIONS` gains
-  `"4"` now, reading v1–v3 shapes unchanged; the kernel's C1/R-04 migration
-  (surface units, `api_pool`, the service columns) lands AFTER this, and its
-  `pack_api` lint is taught v4's columns in the same migration. Guard:
-  `api::tests::a_v4_kernel_is_read_and_an_unknown_still_refuses` — a scratch
-  instance publishing `4` opens; one publishing `5` still refuses.
-
-  Label note (protocol): iters 879–884 carried two label collisions with a
-  concurrent session (the peer's skill-review iters 877/878 took 877/878
-  while this work was built as 877; the peer's G1 live-day docs took 884 the
-  same hour). Both commits sharing a label are left on origin/main per the
-  protocol; this commit notes it.
-
-- **iter-883 — R-02: one CDP endpoint, two names — the legacy one
-  still routes** (capability-layer audit 2026-10-16). The browser tools
-  read `BROWSER_CDP_URL`; the legacy apply engines read `OBS_CDP_URL` —
-  a department migrating its browser surface could end up with two names
-  for one endpoint and no tool reading the one its config sets. One env
-  seam now: `sourcehound_cdp::browser_cdp_url_from_env()` — the canonical
-  `BROWSER_CDP_URL` wins, the legacy `OBS_CDP_URL` routes as a
-  deprecated fallback (one-time warn), and all four readers go through it
-  (browser_cdp_tool, browser_dialog_tool, browser_tool's accessibility
-  tree, resolve_cdp_ws_url). Holon's browser surface manifest names
-  `BROWSER_CDP_URL`. Guard:
-  `cdp_env_name_r02_canonical_wins_legacy_falls_back`; the three
-  env-mutating browser tests now carry `#[serial]` (they never did — the
-  env is process-global and they raced anything that reads it).
-
-- **iter-882 — R-09: a Holon body's skill list is the run's department-
-  resolved library** (capability-layer audit 2026-10-16). The frozen
-  prefix's `<available_skills>` block listed the org-wide standard export
-  the adapter installs once into the shared `HERMES_HOME`, so a
-  department's tailored skill reached the body twice — the standard copy
-  in the list, the fork in the brief. `build_agent_core_with_memory` now
-  roots the run's SkillManager at the directory the kernel names in
-  brief.json (`skills` — `runs/<id>/skills`, department-resolved, written
-  at claim; kernel half landed in Holon a5fda76): one copy of every
-  skill, the fork included. A Holon brief that names none (an older
-  kernel) lists no skills at all — the brief is the render, never the
-  standard export. Personal mode keeps `config.skills.root_dir`
-  byte-identical. Guards:
-  `run_env::tests::skills_dir_follows_the_brief_and_absent_means_none_r09`
-  (the brief.json seam: named → Some, absent/empty → None) and the R-07
-  e2e extended — the captured provider request's `<available_skills>`
-  names skills, and every listed name exists in the run's export (the
-  e2e's isolated home holds no export, so the list can only come from
-  the run's library).
-
-- **iter-881 — R-08: a Holon run opens no memory provider**
-  (capability-layer audit 2026-10-16). The trace resolved the audit's open
-  question: the six live Holon runs left no bank anywhere because the
-  adapter pinned `[memory] provider = "builtin"`, which `load_memory_manager`
-  treats as legacy no-op → no provider ever existed. That pin's removal
-  (kernel 293a13b) left `enabled = true` + the `agentmemory` default — which
-  WOULD have opened one memory-wire bank inside the shared adapter
-  `HERMES_HOME`, every employee sharing it. The gate now lives where the
-  decision is made — `load_memory_manager` (main.rs) returns before the
-  factory under `HOLON_RUN_DIR`, so not even the sqlite appears; the
-  kernel's context bundle is the run's memory, and learnings leave through
-  result.json (W6). Personal mode is unchanged (a design preference).
-  Guards: `a_holon_run_opens_no_memory_provider_r08` (unit, `#[serial]`:
-  no provider, no bank file under the run env; provider built in personal
-  mode under the same default config) and the R-07 e2e extended — a Holon
-  body's captured requests carry no `<memory_context>` and the isolated
-  home holds no `memory_wire.sqlite`, while the personal run builds its
-  bank under the same config.
-
-- **iter-880 — R-10: a Holon body gets no `[continual harness]` lessons**
-  (capability-layer audit 2026-10-16). `injection_block` read only the
-  `[kernel] enabled` flag: nothing asked `is_holon_run()`, and the store's
-  `state_dir` defaults to `~/.local/share/operant/kernel/harness` — outside
-  the run's `HERMES_HOME` — against BOUNDARY.md §4 (operant keeps no
-  continual-harness lesson store for org work). The Holon adapter pins
-  `[kernel] enabled = false` now, but the gate lives in the runtime too:
-  `injection_from` (the shared body behind `injection_block`) returns before
-  the enabled flag and the per-turn cache, so a posture config that re-enables
-  the kernel cannot put the body's own lessons beside the kernel's brief.
-  Personal mode is unchanged. Guard:
-  `a_holon_run_gates_the_continual_harness_before_its_lessons_r10` — a real
-  sidecar store seeded via `refine_apply` (personal mode injects the lesson),
-  then the same runtime under `HOLON_RUN_DIR` injects nothing.
-
-- **iter-879 — R-07: a Holon body gets no workspace or global context**
-  (capability-layer audit 2026-10-16). `load_context_file_prompt` appended a
-  `<workspace_context>` block to every turn from two sources nobody gated on
-  `is_holon_run()`: the owner's global context dir (`~/.config/operant/context`
-  — outside the run's `HERMES_HOME`, so the owner's personal context) and the
-  first workspace file (AGENTS.md, CLAUDE.md, …) found walking up from the
-  cwd — so a body whose workdir sits in a legacy tree got that tree's stale
-  protocol beside the kernel's brief: two instruction sets, one ungoverned.
-  Now a Holon run loads neither (the kernel's brief is the only org guidance
-  — the single-injector law); the kernel names no workspace file in
-  brief.json today, so none load. Personal mode is unchanged. Guards:
-  `a_holon_run_gets_no_workspace_or_global_context_r07` (unit, `#[serial]`:
-  planted AGENTS.md + planted XDG global context — empty in a Holon run,
-  both loaded in personal mode) and
-  `a_holon_body_gets_only_the_kernels_guidance_r07` (e2e: a REAL kernel
-  prepare env drives the built binary; the captured provider requests carry
-  neither marker in a Holon run and both in the personal one).
+- **iter-886 — plan 04: ONE command table; no dead or lying
+  commands** (audit plan 04, findings 11+12+19). Three tables fed the
+  TUI: typeahead/palette/help read the GATEWAY's `COMMAND_REGISTRY` —
+  so autocomplete suggested 18 commands that only printed "not yet
+  wired", never suggested ~45 commands that actually worked (typing
+  `/rew` or `/perm` showed nothing), and `/split` and `/mcp <args>` fell
+  through to the MODEL as prompts. Now `REGISTERED_COMMANDS` is the one
+  table for typeahead, palette and `/help` (`COMMAND_REGISTRY` remains
+  the gateway's), and the sweep test enforces BOTH halves: every
+  registered row dispatches, and every typeahead suggestion dispatches
+  — a lying suggestion is now a build failure, not a runtime notice.
+  - **Wired to the real CLI subcommands** (the /setup suspend-and-run
+    pattern, one `shell_out_to_subcommand` helper, zero re-implementation):
+    `/cron`, `/kanban`, `/curator`, `/suggestions`, `/profile`, `/logs`,
+    `/pause`, `/unpause`, `/org`, `/platforms` (→ `operant gateway status`),
+    `/title` (→ `/rename`), `/doctor` (the real health checks, not the
+    display-only registry handler), `/memory` (→ `operant memory`); the
+    AGENTS.md selector moved to `/context-files`. Bare `/mcp` keeps the
+    panel; `/mcp <args>` runs the subcommand.
+  - **Branching made honest**: `/branch` sets the feeder flag (the arm
+    opened an EMPTY list — the fork-tree backfill never ran), and Enter
+    switches for real (the drain retargets the agent and rebuilds the
+    display — the old body printed "Switched to branch" and did
+    nothing); create/delete modes point at the real flows (`/rewind`
+    forks; sessions are kept for /resume by design).
+  - **Deleted** (lying or dead): `/split` `/split-view` (sent to the
+    model), `/busy`, `/browser` (Camofox is purged), `/indicator` (kept
+    `/statusbar`), `/billing` `/credits`, `/pet` `/heapdump` `/mem`,
+    `/replay` `/replay-diff`, `/background` (TUI arm; the gateway keeps
+    its row), and the `COMMAND_REGISTRY` rows nothing serves
+    (`history`, `handoff`, `snapshot`, `env`, `toolsets`, `blueprint`,
+    `gquota`). `/update`'s help no longer claims "Background update and
+    auto reload".
+  Tests: the extended `no_registered_tui_command_is_unwired` (RED first:
+  /history landed the not-wired fallback), the new
+  `typeahead_suggests_the_registered_tui_commands` (RED first: /rew
+  suggested nothing), and the rewritten mcp contract test; the stale
+  snapshot/blueprint alias pins went with their commands.
 
 - **iter-875 — plan 05A: `/model` switches the agent and lists the
   configured endpoint's models** (audit plan 05 Part A). The picker's
@@ -3235,3 +3170,108 @@ Full Changelog: [v0.1.1...v0.1.2](https://github.com/eikarna/operant-rs/compare/
 [0.1.1]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.1
 [0.1.2]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.2
 [0.1.3]: https://github.com/eikarna/operant-rs/releases/tag/v0.1.3
+
+- **iter-885 — read API v4 accepted BEFORE the kernel publishes it**
+  (capability-layer audit §2, the sequencing gate). A kernel at v4 against a
+  runtime that knows only v1–v3 would turn org mode OFF on the live box —
+  the refusal is the runtime's protection against reading stale view shapes.
+  The cross-repo order is therefore operant-first: `KNOWN_API_VERSIONS` gains
+  `"4"` now, reading v1–v3 shapes unchanged; the kernel's C1/R-04 migration
+  (surface units, `api_pool`, the service columns) lands AFTER this, and its
+  `pack_api` lint is taught v4's columns in the same migration. Guard:
+  `api::tests::a_v4_kernel_is_read_and_an_unknown_still_refuses` — a scratch
+  instance publishing `4` opens; one publishing `5` still refuses.
+
+  Label note (protocol): iters 879–884 carried two label collisions with a
+  concurrent session (the peer's skill-review iters 877/878 took 877/878
+  while this work was built as 877; the peer's G1 live-day docs took 884 the
+  same hour). Both commits sharing a label are left on origin/main per the
+  protocol; this commit notes it.
+
+- **iter-883 — R-02: one CDP endpoint, two names — the legacy one
+  still routes** (capability-layer audit 2026-10-16). The browser tools
+  read `BROWSER_CDP_URL`; the legacy apply engines read `OBS_CDP_URL` —
+  a department migrating its browser surface could end up with two names
+  for one endpoint and no tool reading the one its config sets. One env
+  seam now: `sourcehound_cdp::browser_cdp_url_from_env()` — the canonical
+  `BROWSER_CDP_URL` wins, the legacy `OBS_CDP_URL` routes as a
+  deprecated fallback (one-time warn), and all four readers go through it
+  (browser_cdp_tool, browser_dialog_tool, browser_tool's accessibility
+  tree, resolve_cdp_ws_url). Holon's browser surface manifest names
+  `BROWSER_CDP_URL`. Guard:
+  `cdp_env_name_r02_canonical_wins_legacy_falls_back`; the three
+  env-mutating browser tests now carry `#[serial]` (they never did — the
+  env is process-global and they raced anything that reads it).
+
+- **iter-882 — R-09: a Holon body's skill list is the run's department-
+  resolved library** (capability-layer audit 2026-10-16). The frozen
+  prefix's `<available_skills>` block listed the org-wide standard export
+  the adapter installs once into the shared `HERMES_HOME`, so a
+  department's tailored skill reached the body twice — the standard copy
+  in the list, the fork in the brief. `build_agent_core_with_memory` now
+  roots the run's SkillManager at the directory the kernel names in
+  brief.json (`skills` — `runs/<id>/skills`, department-resolved, written
+  at claim; kernel half landed in Holon a5fda76): one copy of every
+  skill, the fork included. A Holon brief that names none (an older
+  kernel) lists no skills at all — the brief is the render, never the
+  standard export. Personal mode keeps `config.skills.root_dir`
+  byte-identical. Guards:
+  `run_env::tests::skills_dir_follows_the_brief_and_absent_means_none_r09`
+  (the brief.json seam: named → Some, absent/empty → None) and the R-07
+  e2e extended — the captured provider request's `<available_skills>`
+  names skills, and every listed name exists in the run's export (the
+  e2e's isolated home holds no export, so the list can only come from
+  the run's library).
+
+- **iter-881 — R-08: a Holon run opens no memory provider**
+  (capability-layer audit 2026-10-16). The trace resolved the audit's open
+  question: the six live Holon runs left no bank anywhere because the
+  adapter pinned `[memory] provider = "builtin"`, which `load_memory_manager`
+  treats as legacy no-op → no provider ever existed. That pin's removal
+  (kernel 293a13b) left `enabled = true` + the `agentmemory` default — which
+  WOULD have opened one memory-wire bank inside the shared adapter
+  `HERMES_HOME`, every employee sharing it. The gate now lives where the
+  decision is made — `load_memory_manager` (main.rs) returns before the
+  factory under `HOLON_RUN_DIR`, so not even the sqlite appears; the
+  kernel's context bundle is the run's memory, and learnings leave through
+  result.json (W6). Personal mode is unchanged (a design preference).
+  Guards: `a_holon_run_opens_no_memory_provider_r08` (unit, `#[serial]`:
+  no provider, no bank file under the run env; provider built in personal
+  mode under the same default config) and the R-07 e2e extended — a Holon
+  body's captured requests carry no `<memory_context>` and the isolated
+  home holds no `memory_wire.sqlite`, while the personal run builds its
+  bank under the same config.
+
+- **iter-880 — R-10: a Holon body gets no `[continual harness]` lessons**
+  (capability-layer audit 2026-10-16). `injection_block` read only the
+  `[kernel] enabled` flag: nothing asked `is_holon_run()`, and the store's
+  `state_dir` defaults to `~/.local/share/operant/kernel/harness` — outside
+  the run's `HERMES_HOME` — against BOUNDARY.md §4 (operant keeps no
+  continual-harness lesson store for org work). The Holon adapter pins
+  `[kernel] enabled = false` now, but the gate lives in the runtime too:
+  `injection_from` (the shared body behind `injection_block`) returns before
+  the enabled flag and the per-turn cache, so a posture config that re-enables
+  the kernel cannot put the body's own lessons beside the kernel's brief.
+  Personal mode is unchanged. Guard:
+  `a_holon_run_gates_the_continual_harness_before_its_lessons_r10` — a real
+  sidecar store seeded via `refine_apply` (personal mode injects the lesson),
+  then the same runtime under `HOLON_RUN_DIR` injects nothing.
+
+- **iter-879 — R-07: a Holon body gets no workspace or global context**
+  (capability-layer audit 2026-10-16). `load_context_file_prompt` appended a
+  `<workspace_context>` block to every turn from two sources nobody gated on
+  `is_holon_run()`: the owner's global context dir (`~/.config/operant/context`
+  — outside the run's `HERMES_HOME`, so the owner's personal context) and the
+  first workspace file (AGENTS.md, CLAUDE.md, …) found walking up from the
+  cwd — so a body whose workdir sits in a legacy tree got that tree's stale
+  protocol beside the kernel's brief: two instruction sets, one ungoverned.
+  Now a Holon run loads neither (the kernel's brief is the only org guidance
+  — the single-injector law); the kernel names no workspace file in
+  brief.json today, so none load. Personal mode is unchanged. Guards:
+  `a_holon_run_gets_no_workspace_or_global_context_r07` (unit, `#[serial]`:
+  planted AGENTS.md + planted XDG global context — empty in a Holon run,
+  both loaded in personal mode) and
+  `a_holon_body_gets_only_the_kernels_guidance_r07` (e2e: a REAL kernel
+  prepare env drives the built binary; the captured provider requests carry
+  neither marker in a Holon run and both in the personal one).
+

@@ -6,7 +6,7 @@ mod commands;
 mod dialog_routing;
 mod enums;
 mod event_coalesce;
-mod helpers;
+pub(crate) mod helpers;
 mod import_config;
 mod init;
 mod key_handling;
@@ -217,6 +217,11 @@ pub struct App {
     /// (plan 05) Ctrl+B opened the branch browser — populate the fork tree
     /// from the agent's DB on the next pending-actions pass.
     pub pending_branch_list: bool,
+    /// (plan 04) Enter in the branch browser: switch the agent to that
+    /// session (a branch IS a session — the rewind fork makes one). Applied
+    /// by the run loop's drain (`set_session_id` + display rebuild), the
+    /// plan-03 pattern.
+    pub pending_switch_session: Option<String>,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
     /// strip.

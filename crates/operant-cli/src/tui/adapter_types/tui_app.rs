@@ -1080,6 +1080,28 @@ impl TuiApp {
                     "New session started ({short}) — previous session kept for /resume."
                 ));
             }
+            if let Some(session_id) = std::mem::take(&mut app.pending_switch_session) {
+                let Some(agent) = agent else {
+                    app.set_status_notice("No agent attached — cannot switch session.".to_string());
+                    return;
+                };
+                // (plan 04) a branch IS a session (the rewind fork makes
+                // one), so switching = the /new shape: retarget, keep the
+                // old session in the store, rebuild the display from the
+                // agent's conversation.
+                let old = agent.session_id().unwrap_or_default();
+                agent.set_session_id(session_id.clone());
+                agent.notify_session_switch(&session_id, &old, false);
+                let conv = agent.conversation().await;
+                Self::rebuild_display_from_agent(app, conv);
+                app.tool_use_blocks.clear();
+                app.system_annotations.clear();
+                app.scroll_emitted_rows.set(0);
+                app.scroll_emitted_width.set(0);
+                app.invalidate_transcript();
+                let short: String = session_id.chars().take(8).collect();
+                app.set_status_notice(format!("Switched to session {short}"));
+            }
             if let Some(n) = app.pending_undo.take() {
                 let retry_after_undo = std::mem::take(&mut app.pending_retry_after_undo);
                 let Some(agent) = agent else {

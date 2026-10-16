@@ -292,12 +292,13 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/refactor", "Run a safe refactor loop"),
     RegisteredCommand::public("/compact", "Compact context"),
     RegisteredCommand::public("/fix", "Recover when the model cannot continue"),
-    RegisteredCommand::public("/memory", "Toggle memory feature"),
+    RegisteredCommand::public("/context", "Show the full session context snapshot"),
+    RegisteredCommand::public("/context-files", "Select AGENTS.md / context files"),
+    RegisteredCommand::public("/memory", "Memory-wire status (operant memory)"),
     RegisteredCommand::public(
         "/goals",
         "Show goals and pending initiatives from the autonomous ledger",
     ),
-    RegisteredCommand::public("/context", "Show the full session context snapshot"),
     RegisteredCommand::public(
         "/skills",
         "Show loaded skills and operant-endorsed recommendations",
@@ -320,7 +321,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Cycle or set diff display mode (off/inline/full/file)",
     ),
     RegisteredCommand::public("/reload", "Reload into newest available binary"),
-    RegisteredCommand::public("/update", "Background update and auto reload"),
+    RegisteredCommand::public("/update", "How to update (runs operant update)"),
     RegisteredCommand::public("/resume", "Open session picker"),
     RegisteredCommand::public("/sessions", "Alias for /resume"),
     RegisteredCommand::public("/session", "Alias for /resume"),
@@ -335,6 +336,68 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Continue every interrupted live session that would auto-resume",
     ),
     RegisteredCommand::remote("/resumeall", "Alias for /continue"),
+    // (plan 04) The arms below have been dispatchable since the Hermes port
+    // but never appeared in typeahead or /help, because those read the
+    // GATEWAY's COMMAND_REGISTRY instead of this table. One table now: every
+    // working arm is a row here. (Rows that already exist above are not
+    // repeated — agents, auth, changelog, context, diff, info, save,
+    // session, sessions, skills, stats, update.)
+    RegisteredCommand::public("/branch", "Switch to a previous session (alias of /resume)"),
+    RegisteredCommand::public("/bundle", "Run a saved command bundle"),
+    RegisteredCommand::public("/changes", "Show working-tree changes"),
+    RegisteredCommand::public("/connect", "Open the provider connect dialog"),
+    RegisteredCommand::public("/copy", "Copy the last response to the clipboard"),
+    RegisteredCommand::public("/cost", "Show cost and token usage for the session"),
+    RegisteredCommand::public("/doctor", "Run the health checks"),
+    RegisteredCommand::public("/exit", "Quit (alias of /quit)"),
+    RegisteredCommand::public("/export", "Export the conversation"),
+    RegisteredCommand::public("/find", "Search the conversation (alias of /search)"),
+    RegisteredCommand::public("/fresh", "Start a fresh session (alias of /new)"),
+    RegisteredCommand::public("/goal", "Set the session goal"),
+    RegisteredCommand::public("/hooks", "Show configured hooks"),
+    RegisteredCommand::public("/import-config", "Import a provider config"),
+    RegisteredCommand::public("/init", "Write an AGENTS.md for this project"),
+    RegisteredCommand::public("/journey", "Show the journey view"),
+    RegisteredCommand::public("/mcp", "Open the MCP servers panel"),
+    RegisteredCommand::public("/mouse", "Show or toggle mouse capture"),
+    RegisteredCommand::public("/new", "Start a new session (old one kept for /resume)"),
+    RegisteredCommand::public("/output-style", "Cycle output style (auto|stream|verbose)"),
+    RegisteredCommand::public("/personality", "Show or set the assistant personality"),
+    RegisteredCommand::public("/plugins", "Open the plugins panel"),
+    RegisteredCommand::public("/queue", "Show the session task queue"),
+    RegisteredCommand::public("/redraw", "Force a full redraw"),
+    RegisteredCommand::public("/reload-mcp", "Reconnect MCP servers"),
+    RegisteredCommand::public("/reload-skills", "Reload skills from disk"),
+    RegisteredCommand::public("/retry", "Rewind the last turn and resubmit it"),
+    RegisteredCommand::public("/rollback", "Alias of /rewind"),
+    RegisteredCommand::public("/search", "Search the conversation"),
+    RegisteredCommand::public("/setup", "Run the interactive setup wizard"),
+    RegisteredCommand::public("/skill", "Run a saved skill"),
+    RegisteredCommand::public("/skin", "Show or switch the terminal skin"),
+    RegisteredCommand::public("/status", "Show gateway and runtime status"),
+    RegisteredCommand::public("/statusbar", "Toggle the terminal status bar"),
+    RegisteredCommand::public("/steer", "Queue a steering message mid-run"),
+    RegisteredCommand::public("/stop", "Stop the running turn"),
+    RegisteredCommand::public("/subgoal", "Show the current subgoal"),
+    RegisteredCommand::public("/tasks", "Show the autonomous task ledger"),
+    RegisteredCommand::public("/theme", "Show or switch the theme"),
+    RegisteredCommand::public("/undo", "Rewind the last N turns"),
+    RegisteredCommand::public("/verbose", "Toggle verbose reasoning display"),
+    RegisteredCommand::public("/vim", "Toggle vim keybindings"),
+    RegisteredCommand::public("/whoami", "Show the saved user profile"),
+    RegisteredCommand::public("/yolo", "Arm bypass permissions (needs confirm)"),
+    // (plan 04) subcommand parity arms — wired via shell_out_to_subcommand.
+    RegisteredCommand::public("/cron", "Operant cron: list, add, remove jobs"),
+    RegisteredCommand::public("/kanban", "Operant kanban: view and move cards"),
+    RegisteredCommand::public("/curator", "Operant curator controls"),
+    RegisteredCommand::public("/suggestions", "Operant suggestions board"),
+    RegisteredCommand::public("/profile", "Show the operator profile"),
+    RegisteredCommand::public("/logs", "Tail the operant log"),
+    RegisteredCommand::public("/pause", "Pause the e-stop (operant pause)"),
+    RegisteredCommand::public("/unpause", "Resume after a pause (operant resume)"),
+    RegisteredCommand::public("/org", "Operant org views (budget, holon)"),
+    RegisteredCommand::public("/platforms", "Gateway status (operant gateway status)"),
+    RegisteredCommand::public("/title", "Rename the session (alias of /rename)"),
 ];
 
 /// Every non-hidden slash command with its one-line description, in
@@ -354,6 +417,26 @@ pub(crate) fn registered_command_entries() -> impl Iterator<Item = (&'static str
 /// the model as prompt text either).
 pub(crate) fn registered_command_names_including_hidden() -> impl Iterator<Item = &'static str> {
     REGISTERED_COMMANDS.iter().map(|command| command.name)
+}
+
+/// (plan 04) The ONE table's full rows — `(name, help)` for every registered
+/// command. The single source for /help's list.
+pub(crate) fn registered_command_rows() -> impl Iterator<Item = (&'static str, &'static str)> {
+    REGISTERED_COMMANDS
+        .iter()
+        .map(|command| (command.name, command.help))
+}
+
+/// (plan 04) The typeahead/palette view: same rows minus the remote-only
+/// commands — those dispatch on the remote side of a bridge session, so
+/// suggesting them locally would be a lying suggestion (the invariant:
+/// everything typeahead offers must dispatch here).
+pub(crate) fn locally_suggested_command_rows() -> impl Iterator<Item = (&'static str, &'static str)>
+{
+    REGISTERED_COMMANDS
+        .iter()
+        .filter(|command| !command.remote_only)
+        .map(|command| (command.name, command.help))
 }
 
 /// Registered names that must dispatch LOCALLY: everything except the
