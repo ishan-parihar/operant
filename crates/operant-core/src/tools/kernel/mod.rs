@@ -36,7 +36,27 @@ pub fn global_runtime() -> Option<&'static Arc<KernelRuntime>> {
 /// first, then global lessons; empty state renders NOTHING so prompts stay
 /// byte-stable when the kernel is off or the store is empty.
 pub async fn injection_block(session_id: Option<&str>, max_chars: usize) -> Option<String> {
-    let rt = global_runtime()?;
+    injection_from(global_runtime(), session_id, max_chars).await
+}
+
+async fn injection_from(
+    rt: Option<&Arc<KernelRuntime>>,
+    session_id: Option<&str>,
+    max_chars: usize,
+) -> Option<String> {
+    // R-10 (AUDIT-2026-10-16-capability-layer): a Holon body gets no
+    // continual-harness lessons — the kernel's brief is the run's only org
+    // guidance, and this store's state_dir defaults to
+    // ~/.local/share/operant/kernel/harness, outside the run's HERMES_HOME
+    // (BOUNDARY.md §4 keeps no lesson store for org work). The Holon
+    // adapter pins [kernel] enabled = false; the gate lives in the runtime
+    // too, so a posture config that re-enables the kernel cannot put the
+    // body's own lessons beside the kernel's brief. Checked before the
+    // enabled flag and before the cache, so nothing side-effecting runs.
+    if crate::platform::is_holon_run() {
+        return None;
+    }
+    let rt = rt?;
     if !rt.settings().enabled {
         return None;
     }
@@ -416,5 +436,43 @@ mod tests {
             .await
             .unwrap();
         assert!(!ov["overview"].as_str().unwrap().contains("Terse"));
+    }
+
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn a_holon_run_gates_the_continual_harness_before_its_lessons_r10() {
+        // R-10 (AUDIT-2026-10-16-capability-layer): a Holon body gets no
+        // [continual harness] block even with the kernel ENABLED and a
+        // non-empty lesson store; personal mode keeps injecting. Seeded
+        // through the real sidecar protocol (main tree: kernel-sidecar/.venv),
+        // so the gated None below is the gate, not an empty store — the
+        // personal half first proves the lesson would inject. #[serial]:
+        // HOLON_RUN_DIR is process-global.
+        let dir = tempfile::tempdir().unwrap();
+        let rt = KernelRuntime::new(test_settings(dir.path()));
+        rt.request(
+            "refine_apply",
+            json!({
+                "scope": "local",
+                "session_key": "r10",
+                "trigger": "r10",
+                "evidence": "integration",
+                "edits": [{"action": "create", "kind": "prompt",
+                           "title": "Terse", "content": "Be terse."}],
+            }),
+        )
+        .await
+        .expect("apply");
+        let personal = injection_from(Some(&rt), Some("r10"), 1200).await;
+        assert!(
+            personal.as_deref().is_some_and(|b| b.contains("Terse")),
+            "personal mode injects the lesson: {personal:?}"
+        );
+
+        // SAFETY: #[serial] — the only test running while this is set.
+        unsafe { std::env::set_var("HOLON_RUN_DIR", dir.path().join("run")) };
+        let gated = injection_from(Some(&rt), Some("r10"), 1200).await;
+        assert!(gated.is_none(), "a Holon run injects nothing: {gated:?}");
+        unsafe { std::env::remove_var("HOLON_RUN_DIR") };
     }
 }

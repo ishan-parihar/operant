@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-880 — R-10: a Holon body gets no `[continual harness]` lessons**
+  (capability-layer audit 2026-10-16). `injection_block` read only the
+  `[kernel] enabled` flag: nothing asked `is_holon_run()`, and the store's
+  `state_dir` defaults to `~/.local/share/operant/kernel/harness` — outside
+  the run's `HERMES_HOME` — against BOUNDARY.md §4 (operant keeps no
+  continual-harness lesson store for org work). The Holon adapter pins
+  `[kernel] enabled = false` now, but the gate lives in the runtime too:
+  `injection_from` (the shared body behind `injection_block`) returns before
+  the enabled flag and the per-turn cache, so a posture config that re-enables
+  the kernel cannot put the body's own lessons beside the kernel's brief.
+  Personal mode is unchanged. Guard:
+  `a_holon_run_gates_the_continual_harness_before_its_lessons_r10` — a real
+  sidecar store seeded via `refine_apply` (personal mode injects the lesson),
+  then the same runtime under `HOLON_RUN_DIR` injects nothing.
+
 - **iter-879 — R-07: a Holon body gets no workspace or global context**
   (capability-layer audit 2026-10-16). `load_context_file_prompt` appended a
   `<workspace_context>` block to every turn from two sources nobody gated on
