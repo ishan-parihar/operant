@@ -101,6 +101,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `a_second_request_while_a_dialog_is_open_queues_instead_of_denying`,
   `bash_prefix_allows_plain_continuations_only`.
 
+- **iters 868–869 — the remaining-gaps close-out, agentic-OS** (G3
+  closed by a peer in iter-865; see `docs/agentic-os/REMAINING-GAPS.md`'s
+  closure log):
+  - **iter-868 — G2, Chair notify, kernel-aligned**: `operant org holon
+    notify --reason R --text T` is the `[notify].command` delivery seam —
+    the kernel computes what is new for the Chair (`pending_for_chair`,
+    `notify_seq` dedup, `_deliver` for routine results) and shells this
+    CLI; operant resolves the Chair's channels (the same `chair_channels`
+    source `is_chair` uses) and posts through the gateway's one-shot
+    send. A first-draft polling organ was found wrong-direction against
+    the kernel source and reverted before landing — the kernel owns the
+    cadence and the sequencing. Owner wires the instance:
+    `[notify].command = "operant org holon notify --reason heartbeat
+    --text {message}"`.
+  - **iter-869 — G10, the multi-turn e2e + two real bugs it caught**: the
+    new e2e drives the real prepare env with a tool-call frame outside
+    the org's `[scope]` roots and proves the live policy denies + records
+    + the file never appears, with per-call metering derived from the
+    verified call count. Building it caught: (1) stream.rs's headless
+    Escalate-deny path never recorded the refusal — O-17's missed
+    sibling; now records `policy.json:escalate` with the org-mode
+    message; (2) session distillation fired at every Holon turn end —
+    W6/O-22's sixth learner — unmetered post-turn LLM spend and a
+    personal-memory retain in a Holon run; now gated on the run env like
+    the other five learners.
+
 - **iter-867 — the TUI drives the agent, not a copy of it (audit plan 03
   §1/§2/§5)**. The TUI kept a parallel copy of the conversation, and
   `/clear`, `/new`, `/undo`, `/retry`, `/stop` edited only that copy:

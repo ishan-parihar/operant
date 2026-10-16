@@ -161,6 +161,38 @@ pay down deliberate deferrals.
 - **Accept (when pulled)**: each named test exists and runs in the default battery with
   `HOLON_REPO` set.
 
+## Closure log
+
+- **G3 — closed, iter-865 (peer)**: `stamp_last_tick` in organs.rs + `clock_organ_verdict` in
+  doctor (NeverTicked / Stale > 300s / Fresh), with a four-case regression test. Better than
+  the sketch here: the daemon-age nuance (a gateway younger than the 120s cadence legitimately
+  has no stamp).
+- **G2 — closed, iter-868**: the kernel-aligned design, not a polling organ. Ground truth
+  verified in the kernel (`service.py`): `notify()` shells `[notify].command` with `{message}`
+  and owns the dedup (`notify_seq`, same-txn); `_deliver()` reuses the seam for finished
+  routine results; the heartbeat drives it. Operant's shipped half is the thin delivery CLI
+  `operant org holon notify --reason R --text T` — resolved Chair channels (the same
+  `chair_channels` accessor `is_chair` uses), posted through `send_channel_message`. A draft
+  polling organ (reading `api_approvals`/`api_messages` on a timer) was built first, found
+  wrong-direction against the kernel source (double-notify, misses `_deliver`), and reverted
+  before it ever landed. Owner wires the instance:
+  `[notify].command = "operant org holon notify --reason heartbeat --text {message}"`.
+- **G10 — closed, iter-869**: the multi-turn e2e (`a_multiturn_body_meters_every_call_and_the_live_fence_refuses`)
+  drives the real prepare env with a two-response canned provider (tool-call frame outside the
+  org's `[scope]` roots, then the completion); the metering arithmetic derives from the verified
+  call count so the loop's retry machinery cannot break the pin. **Building it caught two real
+  product bugs, fixed in the same iteration:**
+  1. stream.rs's headless Escalate-deny path did not record the refusal (O-17's sibling case —
+     the unattended path had the fix, this one was missed); now records
+     `policy.json:escalate` in a Holon run and gives the org-mode message.
+  2. session distillation fired at every Holon turn end — W6/O-22's SIXTH learner (its list
+     named five): unmetered post-turn LLM spend (3 provider hits, 2 metered — the e2e measured
+     it) and a personal-memory retain in a run whose learnings belong in the result envelope.
+     Gated on `holon_run_dir`, same rule as the other five.
+- **G1 — this session**: the live day (adapter install into `~/holon`, `[holon]` + `[notify]`
+  wiring, one supervised routine, doctor) — executed after the iters-868/869 deploy; see the
+  closure note below.
+
 ## Order of attack
 
 1. **G1** (owner) — the checklist's last steps, including installing the adapter into `~/holon`

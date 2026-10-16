@@ -25,7 +25,13 @@ There is one organization, one owner per capability and one writer per database.
    Holon's matching Python packages, config, acceptance tests, and the order.
 4. **`AUDIT-2026-10-15.md`**: the phases as built against this plan. It has findings O-01 …
    O-32, the invariants' real state, and work packages W1–W8: the next iterations.
-5. In Holon's repository:
+5. **`AUDIT-2026-10-16-capability-layer.md`**: the open work list for how the organization's
+   declared capabilities reach a body, and what operant injects into a Holon run on its own
+   (R-02 … R-20). It gives each item's acceptance, its order relative to the kernel (the
+   read-API v4 trap), and the verification method. It extends `REMAINING-GAPS.md`'s G-list.
+6. In Holon's repository:
+   - `docs/design/2026-10-16-capability-layer-audit.md` (public) is the kernel's half of that
+     work list, with the same R-numbers;
    - `docs/design/2026-10-14-holon-operant-boundary.md` is the canonical rule, the ownership
      table, the measurements and the interfaces: the read API, the run protocol, the contract
      additions;
