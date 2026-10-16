@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-881 — R-08: a Holon run opens no memory provider**
+  (capability-layer audit 2026-10-16). The trace resolved the audit's open
+  question: the six live Holon runs left no bank anywhere because the
+  adapter pinned `[memory] provider = "builtin"`, which `load_memory_manager`
+  treats as legacy no-op → no provider ever existed. That pin's removal
+  (kernel 293a13b) left `enabled = true` + the `agentmemory` default — which
+  WOULD have opened one memory-wire bank inside the shared adapter
+  `HERMES_HOME`, every employee sharing it. The gate now lives where the
+  decision is made — `load_memory_manager` (main.rs) returns before the
+  factory under `HOLON_RUN_DIR`, so not even the sqlite appears; the
+  kernel's context bundle is the run's memory, and learnings leave through
+  result.json (W6). Personal mode is unchanged (a design preference).
+  Guards: `a_holon_run_opens_no_memory_provider_r08` (unit, `#[serial]`:
+  no provider, no bank file under the run env; provider built in personal
+  mode under the same default config) and the R-07 e2e extended — a Holon
+  body's captured requests carry no `<memory_context>` and the isolated
+  home holds no `memory_wire.sqlite`, while the personal run builds its
+  bank under the same config.
+
 - **iter-880 — R-10: a Holon body gets no `[continual harness]` lessons**
   (capability-layer audit 2026-10-16). `injection_block` read only the
   `[kernel] enabled` flag: nothing asked `is_holon_run()`, and the store's

@@ -2299,6 +2299,20 @@ async fn load_repo_memory_manager() -> Result<(MemoryManager, Option<Arc<dyn Mem
 pub(crate) async fn load_memory_manager(
     storage_dir: PathBuf,
 ) -> Result<(MemoryManager, Option<Arc<dyn MemoryProvider>>)> {
+    // R-08 (AUDIT-2026-10-16-capability-layer): a Holon run opens NO memory
+    // provider — the kernel's context bundle is the run's memory, and
+    // learnings leave through result.json (W6). The trace that forced this:
+    // the adapter used to pin `[memory] provider = "builtin"`, which this
+    // loader treats as legacy no-op → no provider ever existed (that is why
+    // six live Holon runs left no bank anywhere); the pin's removal left
+    // `enabled = true` + the `agentmemory` default, which WOULD open one
+    // memory-wire bank in the shared adapter HERMES_HOME — every employee
+    // sharing it, and the gateway's cron agent's lessons beside org work.
+    // Gated before construction so not even the sqlite file appears.
+    // Personal mode keeps its provider (a design preference — unchanged).
+    if operant_core::platform::is_holon_run() {
+        return Ok((MemoryManager::with_storage_dir(storage_dir), None));
+    }
     // (plan 11C3) memory-wire is the ONLY engine. The MemoryManager half of
     // this pair is now inert plumbing the agent still accepts (kept so the
     // D-5 threading compiles; nothing reads it into prompts anymore), and
@@ -3362,6 +3376,41 @@ mod tests {
             "D-5: the two cores must share ONE MemoryManager state; a fresh manager would see nothing"
         );
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // R-08 (AUDIT-2026-10-16-capability-layer): the loader is the one place
+    // a process decides to OPEN a memory provider, so the Holon gate lives
+    // here and nowhere else: under HOLON_RUN_DIR no provider is built and
+    // not even the sqlite appears; personal mode (same default config,
+    // memory.enabled = true) builds one. #[serial]: HOLON_RUN_DIR is
+    // process-global and runtime_config() is read inside.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn a_holon_run_opens_no_memory_provider_r08() {
+        let dir = std::env::temp_dir().join(format!("operant_cli_r08_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("holon")).unwrap();
+        std::fs::create_dir_all(dir.join("personal")).unwrap();
+
+        // SAFETY: #[serial] — the only test running while this is set.
+        unsafe { std::env::set_var("HOLON_RUN_DIR", dir.join("holon")) };
+        let (_m, provider) = load_memory_manager(dir.join("holon")).await.unwrap();
+        assert!(
+            provider.is_none(),
+            "a Holon run opens no memory provider — the kernel's bundle is the run's memory (W6)"
+        );
+        assert!(
+            !dir.join("holon").join("memory_wire.sqlite").exists(),
+            "gated before construction: not even the bank file appears in the run's home"
+        );
+        unsafe { std::env::remove_var("HOLON_RUN_DIR") };
+
+        let (_m, provider) = load_memory_manager(dir.join("personal")).await.unwrap();
+        assert!(
+            provider.is_some(),
+            "personal mode keeps its memory provider under the same default config"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

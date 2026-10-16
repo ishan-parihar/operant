@@ -190,6 +190,7 @@ ci-all = [
 ]
 
 [dev-dependencies]
+serial_test = "3.2"
 
 [lints]
 workspace = true

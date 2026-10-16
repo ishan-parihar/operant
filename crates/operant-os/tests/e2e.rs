@@ -580,7 +580,7 @@ fn a_holon_body_gets_only_the_kernels_guidance_r07() {
     std::fs::write(
                &cfg,
         format!(
-            "[client]\nbase_url = \"http://127.0.0.1:{port}/v1\"\ntimeout_secs = 60\napi_key = \"sk-test\"\n[agent]\nmodel = \"scripted\"\nmax_iterations = 1\nstream = false\nshow_reasoning = false\n[tui]\nrich_output = false\n[tools]\ndisabled_tools = [\"file_write\"]\n"
+                        "[client]\nbase_url = \"http://127.0.0.1:{port}/v1\"\ntimeout_secs = 60\napi_key = \"sk-test\"\n[agent]\nmodel = \"scripted\"\nmax_iterations = 1\nstream = false\nshow_reasoning = false\n[tui]\nrich_output = false\n[tools]\ndisabled_tools = [\"file_write\"]\n[memory]\nenabled = true\n"
         ),
     )
     .expect("cfg");
@@ -632,7 +632,17 @@ fn a_holon_body_gets_only_the_kernels_guidance_r07() {
             !body.contains("<workspace_context>"),
             "a Holon body gets no workspace context block: {body}"
         );
+        // R-08: memory is enabled in this config, but a Holon body opens no
+        // memory provider — nothing to prefetch, so no <memory_context>
+        assert!(
+            !body.contains("<memory_context>"),
+            "a Holon body gets no memory prefetch — the kernel's bundle is the run's memory: {body}"
+        );
     }
+    assert!(
+        !dir.path().join("ohome").join("memory_wire.sqlite").exists(),
+        "R-08: a Holon run must not even create the memory bank in the isolated home"
+    );
 
     // 2. personal mode, same planted files: both sources must still ride
     bodies.lock().expect("bodies").clear();
@@ -664,5 +674,12 @@ fn a_holon_body_gets_only_the_kernels_guidance_r07() {
         wire.iter()
             .any(|b| b.contains("R07E2E OWNER GLOBAL MARKER")),
         "personal mode keeps the owner's global context: {wire:?}"
+    );
+    // R-08: the personal run, same config, DOES open the memory bank in the
+    // isolated home — proving the Holon-mode absence above is the gate, not
+    // a config accident
+    assert!(
+        dir.path().join("ohome").join("memory_wire.sqlite").exists(),
+        "R-08: personal mode builds its memory bank under the same config"
     );
 }
