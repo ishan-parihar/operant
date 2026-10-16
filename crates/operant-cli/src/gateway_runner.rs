@@ -824,6 +824,52 @@ struct GatewayMessageHandler {
     /// gateway turn's mirror of the scheduler's cron seam. `None` = no
     /// injection, turns byte-identical (dark-mergeable).
     context_injection: Option<Arc<operant_core::org::context_injection::ContextInjector>>,
+    /// One gateway turn at a time on the shared agent (2026-10-16 audit,
+    /// plan 06A). Every chat shares ONE `Arc<OperantAgent>` whose hot
+    /// conversation slot is swapped by `set_session_id`; two concurrent
+    /// turns retarget each other mid-run and one chat's tool results land
+    /// in the other's persisted transcript. Held from the retarget to the
+    /// end of `handle`.
+    // ponytail: one turn at a time. Upgrade path: an agent per seat (the
+    // create_runtime_agent seam) if a busy chat starves others — measure
+    // queue wait first.
+    turn_lock: tokio::sync::Mutex<()>,
+    /// The session whose turn currently holds `turn_lock` — the `/stop`
+    /// attach gate. The interrupt flag is ONE object shared by every
+    /// chat, so handing it to a non-running session's command context
+    /// would let that session stop someone else's turn.
+    running_session: std::sync::Mutex<Option<String>>,
+}
+
+impl GatewayMessageHandler {
+    /// Plan 06A: `/stop` may only stop the turn that currently holds
+    /// `turn_lock`. The interrupt flag is one object shared by every
+    /// chat, so attaching it for any other session would let that
+    /// session's `/stop` kill someone else's running turn.
+    fn stop_flag_if_running(
+        &self,
+        turn_inflight: &HashMap<String, InterruptFlag>,
+        session_key: &str,
+    ) -> Option<InterruptFlag> {
+        let running = self
+            .running_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if running.as_deref() == Some(session_key) {
+            turn_inflight.get(session_key).cloned()
+        } else {
+            None
+        }
+    }
+}
+
+/// Clears `running_session` when the turn ends, on every return path — a
+/// stale "running" marker would send every later `/stop` into the void.
+struct RunningSessionGuard<'a>(&'a std::sync::Mutex<Option<String>>);
+impl Drop for RunningSessionGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 #[async_trait::async_trait]
@@ -928,6 +974,52 @@ impl MessageHandler for GatewayMessageHandler {
                 "Gateway turn is continuing a /resume-pinned session"
             );
         }
+
+        // ── One turn at a time on the shared agent (2026-10-16 audit,
+        // plan 06A) ────────────────────────────────────────────────
+        // `set_session_id` below swaps the agent's single hot conversation:
+        // the outgoing session's turns go back to the store and the
+        // incoming session's transcript is rehydrated in their place. Two
+        // concurrent turns on this one agent therefore retarget each other
+        // mid-run — one chat's tool results and answer persist under the
+        // OTHER chat's session id. The lock is held until `handle`
+        // returns; other chats queue here instead of corrupting the
+        // running turn.
+        // ponytail: one turn at a time. Upgrade path: an agent per seat
+        // (the create_runtime_agent seam) if a busy chat starves others —
+        // measure queue wait first.
+        // Queue visibility (plan 06A): if another chat's turn holds the
+        // lock, show the platform typing indicator while this one waits.
+        if self.turn_lock.try_lock().is_err() {
+            let gw = self.gateway.lock().await;
+            if let Some(ref g) = *gw {
+                let _ = g.send_typing(&message.platform, &message.channel_id, message.thread_id);
+            }
+        }
+        let _turn = self.turn_lock.lock().await;
+        let _running_marker = RunningSessionGuard(&self.running_session);
+        {
+            let mut running = self
+                .running_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *running = Some(session_key.clone());
+        }
+        // Arm a clean interrupt latch at TURN START. This used to run in
+        // the dispatch loop, where a second chat's dispatch could wipe a
+        // `/stop` aimed at the RUNNING chat (plan 06A failure case 4).
+        // Inside the lock the reset can only ever affect this turn.
+        self.agent.interrupt_flag().reset();
+        // Process-global per-turn state moves inside the lock for the same
+        // reason (it used to be set in the dispatch closure, where two
+        // overlapping chats could interleave their origins).
+        operant_core::tools::cron_tool::set_cron_origin(Some(
+            operant_core::tools::cron_tool::CronOrigin {
+                platform: message.platform.clone(),
+                chat_id: message.channel_id.clone(),
+                thread_id: message.thread_id.map(|t| t.to_string()),
+            },
+        ));
 
         // Point the agent at THIS session before it runs. Without it the agent
         // minted a fresh `sess_<uuid>` per turn, so the tool trajectory was
@@ -2141,6 +2233,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         )
         .ok()
         .map(Arc::new),
+        turn_lock: tokio::sync::Mutex::new(()),
+        running_session: std::sync::Mutex::new(None),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -3393,7 +3487,10 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                         &platform,
                                         &msg.channel_id,
                                     )
-                                    .with_stop_flag(turn_inflight.get(&session_key).cloned())
+                                    .with_stop_flag(
+                                        handler_for_stop
+                                            .stop_flag_if_running(&turn_inflight, &session_key),
+                                    )
                                     .with_session_pins(Some(session_pins.clone()))
                                     .with_session_key(&session_key);
                                     if let Some(response_text) =
@@ -3684,12 +3781,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                             turn_queue.push_back((session_key, msg));
                             continue;
                         }
-                        // Reset BEFORE inserting. `InterruptFlag` is a latch, and
-                        // a triggered flag that is never cleared makes every later
-                        // turn exit immediately — so a `/stop` that fixed one turn
-                        // would brick the agent for the rest of the session.
+                        // Insert the shared interrupt latch for this turn
+                        // BEFORE spawning, so `/stop` can find the flag while
+                        // the turn waits for or holds the turn lock. The
+                        // RESET moved into `handle` (plan 06A): resetting
+                        // here let one chat's dispatch wipe a `/stop` aimed
+                        // at the RUNNING chat, and a triggered flag that is
+                        // never cleared would brick the agent for the rest
+                        // of the session — the reset inside the lock keeps
+                        // both invariants.
                         let stop_flag = handler_for_stop.agent.interrupt_flag();
-                        stop_flag.reset();
                         turn_inflight.insert(session_key.clone(), stop_flag);
                         let gw = gw_for_turns.clone();
                         let app_config_clone = app_config_for_turns.clone();
@@ -3902,17 +4003,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         build_session_context(&platform, &channel_id, msg_thread, &app_config_clone);
                     msg.content = format!("[context: {}]\n{}", ctx.trim(), msg.content);
 
-                    // Expose the REAL delivery target to tools that need it
-                    // (cron job origin — R39). Prompts only carry redacted ids.
-                    operant_core::tools::cron_tool::set_cron_origin(Some(
-                        operant_core::tools::cron_tool::CronOrigin {
-                            platform: platform.clone(),
-                            chat_id: channel_id.clone(),
-                            thread_id: msg.thread_id.map(|t| t.to_string()),
-                        },
-                    ));
-
-                    // ── 6. Route message ──────────────────────────────────────────
+                    // ── 6. Route message ──────────────────────────────────────
                     match gw.route_message(msg).await {
                         Ok(Some(response)) => {
                             tracing::info!(
@@ -4526,6 +4617,8 @@ mod tests {
             summary_ttl_minutes: 30,
             default_budget: operant_core::config::BudgetSettings::default(),
             context_injection: Some(injector),
+            turn_lock: tokio::sync::Mutex::new(()),
+            running_session: std::sync::Mutex::new(None),
         };
 
         // Unmapped channel → the `premiere` default (same default as the
@@ -4585,6 +4678,220 @@ mod tests {
             ],
             "unmapped channel defaults to premiere; mapped channel lands on its seat"
         );
+    }
+
+    // ── Plan 06A: one turn at a time on the shared agent ──────────────
+
+    /// A scripted model client whose every turn SLEEPS before answering
+    /// — the window in which a second chat's turn used to retarget the
+    /// shared agent mid-run. The answer echoes the last user message so
+    /// each session's stored transcript is self-describing.
+    struct SlowEchoClient {
+        delay_ms: u64,
+    }
+
+    fn echo_chat_response(content: &str) -> operant_core::client::ChatResponse {
+        use operant_core::client::{Choice, MessageDelta, Role, Usage};
+        operant_core::client::ChatResponse {
+            id: "resp_echo".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            model: "slow-echo".into(),
+            choices: vec![Choice {
+                index: 0,
+                message: MessageDelta {
+                    role: Some(Role::Assistant),
+                    content: Some(content.to_string()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
+            },
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl operant_core::agent::ModelClient for SlowEchoClient {
+        fn provider_name(&self) -> &str {
+            "slow-echo"
+        }
+
+        async fn chat(
+            &self,
+            request: operant_core::agent::ChatRequest,
+        ) -> operant_core::error::Result<operant_core::client::ChatResponse> {
+            tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+            let echo = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == operant_core::client::Role::User)
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
+            Ok(echo_chat_response(&format!("answer-{echo}")))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: operant_core::agent::ChatRequest,
+        ) -> operant_core::error::Result<
+            futures::stream::BoxStream<
+                'static,
+                operant_core::error::Result<operant_core::agent::StreamChunk>,
+            >,
+        > {
+            Err(operant_core::error::Error::Agent(
+                "streaming not used in this test".into(),
+            ))
+        }
+    }
+
+    /// A handler over ONE shared agent with the scripted client — the
+    /// production shape: every chat talks to the same `Arc<OperantAgent>`.
+    fn slow_echo_handler(dir: &tempfile::TempDir, delay_ms: u64) -> Arc<GatewayMessageHandler> {
+        let db = Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        );
+        let mut cfg = operant_core::agent::AgentConfig::default();
+        cfg.stream = false; // the scripted client answers through `chat`
+        let agent = Arc::new(operant_core::agent::OperantAgent::new(
+            cfg,
+            Box::new(SlowEchoClient { delay_ms }),
+            operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
+            db,
+        ));
+        let (bridge_state_tx, _bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::tui::bridge_state::BridgeConnectionState,
+        >();
+        Arc::new(GatewayMessageHandler {
+            agent,
+            current_session_id: tokio::sync::Mutex::new(None),
+            gateway: tokio::sync::Mutex::new(None),
+            bridge_state_tx,
+            session_pins: Arc::new(SessionPins::default()),
+            exit_reasons: ExitReasonMap::default(),
+            turn_usage: TurnUsageMap::default(),
+            summary_ttl_minutes: 30,
+            default_budget: operant_core::config::BudgetSettings::default(),
+            context_injection: None,
+            turn_lock: tokio::sync::Mutex::new(()),
+            running_session: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Two chats, one shared agent, both turns in flight at once. The
+    /// model sleeps inside each turn, so pre-06A chat B's `set_session_id`
+    /// landed mid-A: A's answer persisted under B's session id and A's
+    /// stored transcript never saw its own answer. With the turn lock the
+    /// turns serialize and each session's store holds exactly its own
+    /// user message and answer.
+    #[tokio::test]
+    async fn concurrent_chats_keep_disjoint_transcripts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handler = slow_echo_handler(&dir, 200);
+        let msg_a = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
+        let msg_b = IncomingMessage::new("discord", "u-b", "B", "c-b", "from-B");
+
+        let h = Arc::clone(&handler);
+        let turn_a = tokio::spawn(async move { h.handle(msg_a).await });
+        let h = Arc::clone(&handler);
+        let turn_b = tokio::spawn(async move { h.handle(msg_b).await });
+
+        let out_a = turn_a.await.expect("join A").expect("A turn completes");
+        let out_b = turn_b.await.expect("join B").expect("B turn completes");
+        assert!(
+            out_a.content.contains("answer-from-A"),
+            "{:?}",
+            out_a.content
+        );
+        assert!(
+            out_b.content.contains("answer-from-B"),
+            "{:?}",
+            out_b.content
+        );
+
+        // Each stored conversation holds ONLY its own user message and
+        // answer — the corruption pre-06A put A's answer in B's rows.
+        for (platform, channel, user, tag) in [
+            ("telegram", "c-a", "u-a", "A"),
+            ("discord", "c-b", "u-b", "B"),
+        ] {
+            let key = format!("{platform}:{channel}:{user}");
+            let sid = derived_gateway_session_id(&key);
+            handler.agent.set_session_id(sid);
+            let contents: Vec<String> = handler
+                .agent
+                .conversation()
+                .await
+                .iter()
+                .map(|m| m.content.clone())
+                .collect();
+            assert_eq!(
+                contents,
+                vec![format!("from-{tag}"), format!("answer-from-{tag}")],
+                "session {key} must hold only its own turn"
+            );
+        }
+    }
+
+    /// `/stop` may only attach the shared interrupt flag for the session
+    /// whose turn actually holds the lock. Pre-06A every entry in
+    /// `turn_inflight` got the flag, so a `/stop` naming a queued chat
+    /// killed the RUNNING chat's turn.
+    #[tokio::test]
+    async fn stop_attaches_only_to_the_running_turns_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handler = slow_echo_handler(&dir, 300);
+        let key_a = "telegram:c-a:u-a".to_string();
+        let key_b = "discord:c-b:u-b".to_string();
+        // Both turns registered the way the dispatch loop registers them.
+        let mut turn_inflight: HashMap<String, InterruptFlag> = HashMap::new();
+        turn_inflight.insert(key_a.clone(), handler.agent.interrupt_flag());
+        turn_inflight.insert(key_b.clone(), handler.agent.interrupt_flag());
+
+        let h = Arc::clone(&handler);
+        let msg_a = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
+        let turn = tokio::spawn(async move { h.handle(msg_a).await });
+
+        // Wait until A holds the lock (running_session names A).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let running = handler
+                .running_session
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if running.as_deref() == Some(key_a.as_str()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "A never started — running_session never named A"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // B is registered but NOT running: its /stop must carry no flag —
+        // the shared flag here would let /stop in B kill A's live turn.
+        assert!(
+            handler
+                .stop_flag_if_running(&turn_inflight, &key_b)
+                .is_none(),
+            "a non-running session must not receive the shared interrupt flag"
+        );
+        assert!(
+            handler
+                .stop_flag_if_running(&turn_inflight, &key_a)
+                .is_some(),
+            "the running session's /stop must find its flag"
+        );
+
+        turn.await.expect("join A").expect("A completes normally");
     }
 
     /// iter-632 regression (Wave-4 metering wire): a turn's accumulated

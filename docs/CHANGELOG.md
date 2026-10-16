@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-864 — gateway: one turn at a time on the shared agent** (audit
+  plan 06A:
+  `docs/audit/2026-10-16-operant-audit/06-gateway-concurrency-and-seat-memory.md`).
+  Every gateway chat shares one `Arc<OperantAgent>` whose hot conversation
+  is swapped by `set_session_id`; with every message on its own tokio task,
+  two concurrent chats retargeted each other mid-run — one chat's tool
+  results and answer persisted under the OTHER chat's session id, a second
+  chat's dispatch wiped a `/stop` aimed at the running chat, and `/stop` in
+  one chat killed another's live turn. Fixed with one `turn_lock`
+  (`tokio::sync::Mutex<()>`) on `GatewayMessageHandler`, held from the
+  session retarget to the end of `handle`: concurrent chats now queue
+  (with the platform typing indicator shown while they wait) instead of
+  corrupting each other. The interrupt-latch reset moved from the dispatch
+  loop into the lock (a second chat's dispatch can no longer un-stop the
+  running chat), the per-turn `cron_origin` moved inside the lock with it,
+  and `/stop` only attaches the shared interrupt flag for the session
+  whose turn holds the lock (`stop_flag_if_running`). Regression tests:
+  `concurrent_chats_keep_disjoint_transcripts` (mutation-proven: disabling
+  the lock fails it on the exact cross-session corruption) and
+  `stop_attaches_only_to_the_running_turns_session`. Residual: `/stop` for
+  a queued (not yet started) session is a no-op — BUGS.md W3-2. Verified
+  en passant: the cron scheduler runs due jobs sequentially, so the
+  cron agent has no analogous race (D-6).
+
 - **iter-863 — the test gate is real again** (2026-10-16 audit, plan 02:
   `docs/audit/2026-10-16-operant-audit/02-test-gate-repair.md`). Ten test
   targets had been dead since the org layer retired (iter-838) — they

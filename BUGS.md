@@ -1,5 +1,28 @@
 # BUGS.md — Operant Audit Fixes
 
+## OPEN — Gateway turn concurrency (audit plan 06A — LOCKED iter-864, residual below)
+
+The shared-agent race is fixed (one `turn_lock` per handler, held from the
+retarget to the end of `handle`; interrupt reset and cron-origin moved
+inside the lock; `/stop` only attaches to the session that holds the lock).
+Residual, accepted for now:
+
+- [ ] **W3-2 — `/stop` for a QUEUED session is a no-op.** With the turn
+  lock, a session whose turn is waiting for the lock has an entry in
+  `turn_inflight` but is not running, so its `/stop` gets no flag and
+  reports "nothing to stop"; the turn runs when its turn comes. Cancelling
+  a queued turn needs queue-entry removal in the dispatch loop — small,
+  but a separate UX decision (a queued turn starts within seconds on a
+  one-owner box). The pre-06A behavior was strictly worse: `/stop` for a
+  queued chat killed the RUNNING chat's turn.
+
+Also verified while implementing (plan 06A's D-6 check): the cron
+scheduler runs due jobs SEQUENTIALLY (`for job in due_jobs {
+run_job(&job).await }`, `scheduler.rs:260`), so the cron agent cannot run
+two jobs at once — no lock needed there. D-6's remaining half (can a cron
+run overlap a GATEWAY turn?) is moot: cron runs on its own agent (BUGS
+D-3, kept).
+
 ## OPEN — Hidden regressions surfaced by the test-gate repair (2026-10-16, audit plan 02)
 
 These four failures were invisible since iter-838: the test targets they live
