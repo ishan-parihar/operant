@@ -1,6 +1,6 @@
 # Audit: the capability layer across the Holon seam (2026-10-16)
 
-Status: **open work list.** A red-team audit of how the capabilities the organization declares
+Status: **executing.** A red-team audit of how the capabilities the organization declares
 (Holon's units, pooling, `policy.json`, the brief) reach a body running in operant, and of
 everything operant adds to a Holon run's prompt on its own. Item ids (R-nn) match Holon's
 `docs/design/2026-10-16-capability-layer-audit.md` (the kernel's half) and the owner's overlay
@@ -8,9 +8,11 @@ record `2026-10-16-agentic-os-red-team-audit.md` (the full evidence). Measured a
 source at iter-873 and the deployed gateway (built 2026-10-16 17:09; `operant doctor` green).
 
 **How to use it.** §1 items are operant defects or gaps: each is one iteration under
-`AGENTS.md`'s protocol, with the acceptance written here. §2 is the order relative to the
-kernel; respect it, or org mode turns itself off (the read-API version trap). §3 is the method:
-read it before you claim an item closed.
+`AGENTS.md`'s protocol, with the acceptance written here — items carrying a **Closed**
+line are done and guarded (iters 879–884); R-04/R-03 and R-20 remain open on their own
+gates (kernel read API v4; the owner's push/receiver choice). §2 is the order relative to
+the kernel; respect it, or org mode turns itself off (the read-API version trap). §3 is the
+method: read it before you claim an item closed.
 
 ## 1. Operant-side items
 
@@ -31,6 +33,10 @@ read it before you claim an item closed.
 - **Accept:** a test with `HOLON_RUN_DIR` set, a planted `AGENTS.md` in the cwd and a planted
   global context file: the built messages contain neither. Personal mode stays byte-identical
   (invariant 5).
+- **Closed (iter-879):** the gate lives in `load_context_file_prompt` (before either source
+  loads). Guards: `a_holon_run_gets_no_workspace_or_global_context_r07` (unit) and
+  `a_holon_body_gets_only_the_kernels_guidance_r07` (e2e over the real prepare env — the
+  captured provider requests carry neither marker).
 
 ### R-08 — memory in a Holon run is not isolated · CONFIRMED (gate missing) / PLAUSIBLE (leak)
 
@@ -49,6 +55,14 @@ read it before you claim an item closed.
 - **Accept:** extend `crates/operant-core/tests/holon_capture.rs` (today it covers tool writes,
   not this path): a Holon-run turn with a provider configured leaves no retained memory and
   injects no `<memory_context>`.
+- **Closed (iter-881):** the trace resolved the "not observed" question — the six live runs
+  left no bank anywhere because the adapter's `[memory] provider = "builtin"` pin made
+  `load_memory_manager` return None (no provider ever existed); removing the pin would have
+  opened one shared bank in the adapter `HERMES_HOME`. The gate lives in
+  `load_memory_manager` (cli), before construction. Guards:
+  `a_holon_run_opens_no_memory_provider_r08` (unit) and the R-07 e2e's memory assertions
+  (no `<memory_context>` on the wire, no bank file; the personal run builds one under the
+  same config).
 
 ### R-09 — the skill list shows the standard skill while the brief shows the department's fork · CONFIRMED
 
@@ -59,6 +73,11 @@ read it before you claim an item closed.
   as the skill root for this run. Until it does, list no skills in a Holon run (the brief is the
   render).
 - **Accept:** a Holon run whose brief names a skills dir lists only those skills.
+- **Closed (iter-882):** the kernel half landed first (Holon a5fda76 — every prepared run
+  exports its department-resolved library to `runs/<id>/skills`, named `skills` in
+  brief.json), so the interim "list no skills" fallback only covers kernels older than the
+  field. Guards: `run_env::tests::skills_dir_follows_the_brief_and_absent_means_none_r09`
+  and the R-07 e2e's skill assertions (every listed skill exists in the run's export).
 
 ### R-10 — the continual-harness lane reads a store outside the run's home · PLAUSIBLE (default off)
 
@@ -70,6 +89,11 @@ read it before you claim an item closed.
   `[kernel] enabled = false`).
 - **Accept:** with the kernel enabled and `HOLON_RUN_DIR` set, the volatile suffix carries no
   `[continual harness]` block.
+- **Closed (iter-880):** the gate lives in `injection_from` (the shared body behind
+  `injection_block`), checked before the enabled flag and the per-turn cache. Guard:
+  `a_holon_run_gates_the_continual_harness_before_its_lessons_r10` — a real sidecar store
+  seeded via `refine_apply` (personal mode injects), the same runtime under `HOLON_RUN_DIR`
+  injects nothing.
 
 ### R-04 — the runtime never reads the registry the organization declares · CONFIRMED
 
@@ -114,6 +138,11 @@ read it before you claim an item closed.
   `OBS_CDP_URL`. When their departments migrate, one variable must win. Either the browser tool
   also accepts `OBS_CDP_URL` (with a deprecation line), or the migration renames it in the
   department's `[secrets.dept]` / env. Holon's browser surface manifest names whichever wins.
+- **Closed (iter-883):** the browser tool also accepts the legacy name — one env seam,
+  `sourcehound_cdp::browser_cdp_url_from_env()`: `BROWSER_CDP_URL` canonical, `OBS_CDP_URL`
+  a deprecated fallback (one-time warn); all four readers go through it. Holon's browser
+  surface manifest names `BROWSER_CDP_URL`. Guard:
+  `cdp_env_name_r02_canonical_wins_legacy_falls_back`.
 
 ### R-11 — doc truth · CONFIRMED
 
@@ -125,6 +154,10 @@ read it before you claim an item closed.
   backends. The code deleted them (`memory_provider.rs`: "BuiltinProvider is deleted";
   `browser_provider.rs:1-6`). The **preferences** stand; the descriptive lines are stale. That
   section is marked DO NOT CHANGE, so raise it with the owner instead of editing it.
+- **Closed (iter-884, docs):** `REMAINING-GAPS.md`'s closure log now names the owner's overlay
+  register as the one tracker and forbids parallel logs; the stale `AGENTS.md` descriptors
+  are recorded as owner-action items there (raised, not edited — the section is DO NOT
+  CHANGE). R-04/R-03 and R-20 stay open on their own gates (kernel v4; owner's choice).
 
 ## 2. Order relative to the kernel
 

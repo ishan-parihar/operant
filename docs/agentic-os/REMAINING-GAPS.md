@@ -163,6 +163,13 @@ pay down deliberate deferrals.
 
 ## Closure log
 
+> **One register (R-11):** the owner's overlay register
+> (`docs/design/2026-10-16-remaining-implementation-gaps.md` in the private
+> overlay) is the authoritative tracker for open work across this seam; the
+> entries below are history — what closed, where, and with what guard — kept
+> here only because this repository cannot see the overlay. Do not open a
+> parallel closure log elsewhere.
+
 - **G3 — closed, iter-865 (peer)**: `stamp_last_tick` in organs.rs + `clock_organ_verdict` in
   doctor (NeverTicked / Stale > 300s / Fresh), with a four-case regression test. Better than
   the sketch here: the daemon-age nuance (a gateway younger than the 120s cadence legitimately
@@ -253,3 +260,17 @@ pay down deliberate deferrals.
 
 Each G-item that closes gets a line in `AUDIT-2026-10-15.md` §8's sibling pattern (or this file
 grows a closure column) in the same iteration that closes it, per the audit's §6 discipline.
+
+**Owner-action items surfaced by the capability-layer audit (R-11, iter-884):**
+
+- `AGENTS.md` → "Design Preferences" still DESCRIBES code that no longer exists:
+  `BuiltinProvider` as the zero-dependency memory fallback (deleted — plan 11C3:
+  memory-wire is the only engine) and lightpanda/camofox/browserbase/browser-use/firecrawl
+  as available browser backends (deleted — sourcehound is the only engine). The section is
+  marked DO NOT CHANGE, so the descriptive lines are raised here instead of edited: the
+  PREFERENCES stand; the stale descriptors should be reworded by the owner.
+- The audit's own work list (`AUDIT-2026-10-16-capability-layer.md`) is current as of
+  iter-884: §1 items R-07, R-08, R-09, R-10 and R-02 are closed with guards; R-11's doc
+  half is this change. Still open: R-04/R-03 (wait on the kernel publishing read API v4),
+  R-20 (the owner picks gateway-clock vs service), and the kernel-side §2 design changes
+  (C1/C2/C6/R-13/R-14/R-16/N-1 — the Chair's).
