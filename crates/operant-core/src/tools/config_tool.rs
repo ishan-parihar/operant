@@ -175,6 +175,9 @@ fn get_config_value(key: &str) -> Result<Value> {
 }
 
 /// Set a dotted config key on the runtime config (mirrors `operant config set`).
+/// (plan 09) the walk is the ONE copy in core — `config::set_nested_json`.
+/// This tool's contract is unchanged: in-memory only, never persisted
+/// (see the module docs — persistence is the user's explicit action).
 fn set_config_value(key: &str, value: &str) -> Result<()> {
     let current = runtime_config();
     let mut root = serde_json::to_value(&current)
@@ -187,7 +190,7 @@ fn set_config_value(key: &str, value: &str) -> Result<()> {
         ));
     }
 
-    set_nested(&mut root, &segments, value)?;
+    crate::config::set_nested_json(&mut root, &segments, value)?;
 
     let updated = serde_json::from_value(root).map_err(|e| {
         crate::error::Error::Agent(format!("invalid config value for '{key}': {e}"))
@@ -195,62 +198,6 @@ fn set_config_value(key: &str, value: &str) -> Result<()> {
 
     install_runtime_config(updated);
     Ok(())
-}
-
-/// Recursively navigate into a nested `serde_json::Value` object and set the
-/// leaf value identified by the remaining path segments.
-fn set_nested(target: &mut Value, segments: &[&str], raw: &str) -> Result<()> {
-    if segments.is_empty() {
-        return Err(crate::error::Error::Agent(
-            "config key must not be empty".into(),
-        ));
-    }
-    let head = segments[0];
-
-    if segments.len() == 1 {
-        let parsed = coerce_json_value(raw);
-        let obj = target.as_object_mut().ok_or_else(|| {
-            crate::error::Error::Agent(format!("cannot index into non-object with '{head}'"))
-        })?;
-        obj.insert(head.to_string(), parsed);
-        return Ok(());
-    }
-
-    let tail = &segments[1..];
-    let obj = target.as_object_mut().ok_or_else(|| {
-        crate::error::Error::Agent(format!("cannot index into non-object with '{head}'"))
-    })?;
-
-    if !obj.contains_key(head) {
-        obj.insert(head.to_string(), Value::Object(Map::new()));
-    }
-    let child = obj
-        .get_mut(head)
-        .ok_or_else(|| crate::error::Error::Agent(format!("could not access key '{head}'")))?;
-
-    set_nested(child, tail, raw)
-}
-
-/// Best-effort coercion of a string argument into a typed JSON value.
-/// Precedence: boolean → integer → float → string (mirrors the CLI).
-fn coerce_json_value(raw: &str) -> Value {
-    match raw.to_ascii_lowercase().as_str() {
-        "true" => return Value::Bool(true),
-        "false" => return Value::Bool(false),
-        _ => {}
-    }
-
-    if let Ok(n) = raw.parse::<i64>() {
-        return Value::Number(n.into());
-    }
-
-    if let Ok(f) = raw.parse::<f64>()
-        && let Some(n) = serde_json::Number::from_f64(f)
-    {
-        return Value::Number(n);
-    }
-
-    Value::String(raw.to_string())
 }
 
 /// Mask secret-looking values (api_key / token / secret / password / auth)
@@ -298,28 +245,40 @@ mod tests {
 
     #[test]
     fn coerce_boolean_and_number() {
-        assert_eq!(coerce_json_value("true"), Value::Bool(true));
-        assert_eq!(coerce_json_value("false"), Value::Bool(false));
-        assert_eq!(coerce_json_value("42"), Value::Number(42.into()));
-        assert_eq!(coerce_json_value("-5"), Value::Number((-5).into()));
+        assert_eq!(crate::config::coerce_json_value("true"), Value::Bool(true));
         assert_eq!(
-            coerce_json_value("2.71"),
+            crate::config::coerce_json_value("false"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            crate::config::coerce_json_value("42"),
+            Value::Number(42.into())
+        );
+        assert_eq!(
+            crate::config::coerce_json_value("-5"),
+            Value::Number((-5).into())
+        );
+        assert_eq!(
+            crate::config::coerce_json_value("2.71"),
             Value::Number(serde_json::Number::from_f64(2.71).unwrap())
         );
-        assert_eq!(coerce_json_value("gpt-4o"), Value::String("gpt-4o".into()));
+        assert_eq!(
+            crate::config::coerce_json_value("gpt-4o"),
+            Value::String("gpt-4o".into())
+        );
     }
 
     #[test]
     fn set_nested_creates_intermediates() {
         let mut obj = serde_json::json!({});
-        set_nested(&mut obj, &["a", "b", "c"], "42").unwrap();
+        crate::config::set_nested_json(&mut obj, &["a", "b", "c"], "42").unwrap();
         assert_eq!(obj["a"]["b"]["c"], 42);
     }
 
     #[test]
     fn set_nested_rejects_empty_key() {
         let mut obj = serde_json::json!({});
-        assert!(set_nested(&mut obj, &[], "v").is_err());
+        assert!(crate::config::set_nested_json(&mut obj, &[], "v").is_err());
     }
 
     #[test]

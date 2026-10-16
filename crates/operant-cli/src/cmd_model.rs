@@ -143,6 +143,14 @@ async fn set_model(name: &str) -> Result<()> {
     let updated: AppConfig = serde_json::from_value(value)?;
     install_runtime_config(updated);
 
-    println!("Model set to: {}", name);
+    // (plan 09) persist through the ONE surgical writer — the old body
+    // changed the in-memory config and printed success, then the process
+    // exited and the setting was gone.
+    match operant_core::config::persist_config_key("agent.model", name) {
+        Ok(path) => println!("Model set to: {name} (persisted to {})", path.display()),
+        Err(e) => {
+            eprintln!("Model set to: {name} (in-memory only; persist failed: {e})")
+        }
+    }
     Ok(())
 }

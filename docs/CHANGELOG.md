@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-874 — plan 09: surgical config writes — one key, in the file
+  that was loaded** (audit plan 09, findings 7+18). The TUI's model pick
+  re-serialized the WHOLE runtime config to a hardcoded
+  `~/.operant/operant.toml`: comments and layout were destroyed, retired
+  default sections (`[pk]`, `[genome.budget]`, …) were resurrected on every
+  write, `operant -c <path>` runs wrote the WRONG file, the provider-guessed
+  `client.base_url` clobbered the user's endpoint (e.g. the omp gateway
+  replaced by api.anthropic.com), and env-sourced secrets landed in the
+  TOML in plain text. `operant model set` and `operant config set`
+  changed the in-memory config, printed success, and vanished with the
+  process. Now one writer — `operant_core::config::persist_config_key` —
+  edits exactly one dotted key via `toml_edit` (comments and every other
+  key byte-for-byte), in the file the process actually loaded
+  (`loaded_config_path()`, recorded at load), through a temp-file +
+  validate-before-rename cycle that keeps the 0600 mode and can never leave
+  an unloadable config behind. Callers: the TUI persist (`agent.model`
+  only — client.* is never written from the TUI), `operant model set`,
+  `operant config set` (both print the path they wrote; in-memory update
+  kept). The serde_json walk/set (`set_nested_json` +
+  `coerce_json_value`) moved to core as the one copy — the agent's config
+  tool's in-memory-only contract is unchanged. Tests:
+  `persist_config_key_keeps_comments_and_other_keys_byte_for_byte`,
+  `persist_config_key_never_writes_secrets_that_were_never_in_the_file`,
+  `persist_config_key_creates_intermediate_tables_and_coerces_scalars`,
+  `persist_config_key_rejects_a_broken_leaf_and_leaves_the_file_unchanged`.
+
 - **iter-872 — plan 03 §6: `/goal` actually reaches the agent**.
   The arm claimed the goal was "injected so the agent sees it", but the
   injection was a display-only system annotation — the agent's context

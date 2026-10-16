@@ -2095,7 +2095,180 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // O-26: [holon] paths arrive with `~` expanded exactly once.
     config.holon = config.holon.expand_tilde();
 
+    // (plan 09) Record the file this process actually loaded — the one
+    // `persist_config_key` writes into. Without it, every writer guessed
+    // `~/.operant/operant.toml` and `operant -c <path>` runs wrote the
+    // wrong file.
+    if let Ok(mut slot) = LOADED_CONFIG_PATH.write() {
+        *slot = source.clone();
+    }
+
     Ok(LoadedConfig { config, source })
+}
+/// The config file this process actually loaded (`-c <path>`, the config-dir
+/// override, or the discovered default). `None` until `load_app_config` runs,
+/// or when no file exists at all — persistence then has no target, which
+/// callers must surface instead of guessing a path.
+static LOADED_CONFIG_PATH: std::sync::LazyLock<RwLock<Option<PathBuf>>> =
+    std::sync::LazyLock::new(|| RwLock::new(None));
+
+/// The config file the current process loaded — the one (and only one)
+/// `persist_config_key` writes into.
+pub fn loaded_config_path() -> Option<PathBuf> {
+    LOADED_CONFIG_PATH
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+// ── (plan 09) Surgical config writes ────────────────────────────────────────────
+
+/// Coerce a CLI-style raw string into the TOML scalar it means — `true`,
+/// `42`, `3.5`, else a (quoted) string. Same coercion every setter used
+/// ad hoc; now one copy, used by the leaf parser and the tests.
+fn coerce_scalar(raw: &str) -> toml_edit::Item {
+    let raw = raw.trim();
+    if raw == "true" || raw == "false" {
+        return toml_edit::value(raw == "true");
+    }
+    if let Ok(int) = raw.parse::<i64>() {
+        return toml_edit::value(int);
+    }
+    if let Ok(float) = raw.parse::<f64>() {
+        return toml_edit::value(float);
+    }
+    toml_edit::value(raw)
+}
+
+/// Set one dotted key (`agent.model`) in the config file the process
+/// actually loaded, keeping every comment, every layout choice, and every
+/// OTHER key byte-for-byte (2026-10-16 audit plan 09: the old writers
+/// re-serialized the whole `AppConfig`, which stripped comments, resurrected
+/// retired keys from the defaults, clobbered `client.base_url` with a
+/// provider-guessed URL, and wrote env-sourced secrets to disk).
+///
+/// Validation: after writing, the file re-parses through the normal
+/// loader; on failure the previous bytes are restored and the error is
+/// returned (a typo from `operant config set` can never leave an
+/// unloadable config behind). Returns the path written.
+pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
+    let path = loaded_config_path().ok_or_else(|| {
+        crate::error::Error::Config(
+            "no config file is loaded in this process; nothing to persist into".to_string(),
+        )
+    })?;
+    let original = std::fs::read(&path)
+        .map_err(|e| crate::error::Error::Config(format!("read {}: {e}", path.display())))?;
+
+    let mut doc: toml_edit::DocumentMut = std::str::from_utf8(&original)
+        .map_err(|e| crate::error::Error::Config(format!("{}: not UTF-8: {e}", path.display())))?
+        .parse()
+        .map_err(|e| {
+            crate::error::Error::Config(format!("{}: not valid TOML: {e}", path.display()))
+        })?;
+
+    let segments: Vec<&str> = dotted.split('.').collect();
+    if segments.is_empty() || segments.iter().any(|s| s.is_empty()) {
+        return Err(crate::error::Error::Config(format!(
+            "config key '{dotted}' must be a non-empty dotted path"
+        )));
+    }
+    let (tables, leaf) = segments.split_at(segments.len() - 1);
+    let mut table = doc.as_table_mut();
+    for segment in tables {
+        let entry = table
+            .entry(segment)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+        table = entry.as_table_mut().ok_or_else(|| {
+            crate::error::Error::Config(format!(
+                "config key '{dotted}': '{segment}' is not a table in {}",
+                path.display()
+            ))
+        })?;
+    }
+    table.insert(leaf[0], coerce_scalar(raw_value));
+
+    // Write to a sibling temp file with the original's mode, validate it
+    // through the REAL loader, and only then rename over — the user's
+    // config is never left broken by a typo from `operant config set`, and
+    // a reader never sees a half-written file. The mode (0600 where
+    // secrets live by design) must survive the round-trip.
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, doc.to_string())
+        .map_err(|e| crate::error::Error::Config(format!("write {}: {e}", tmp.display())))?;
+    if let Ok(mode) = std::fs::metadata(&path).map(|m| m.permissions()) {
+        let _ = std::fs::set_permissions(&tmp, mode);
+    }
+    if let Err(e) = parse_config_file(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(crate::error::Error::Config(format!(
+            "config key '{dotted}' was rejected by the config loader ({e}); \
+             {} left unchanged",
+            path.display()
+        )));
+    }
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| crate::error::Error::Config(format!("rename {}: {e}", path.display())))?;
+    Ok(path)
+}
+
+/// Best-effort coercion of a CLI string argument into a typed JSON value.
+/// Precedence: boolean → integer → float → string. The one copy (plan 09):
+/// `operant config set` and the agent's config tool both walk through it.
+pub fn coerce_json_value(raw: &str) -> serde_json::Value {
+    match raw.to_ascii_lowercase().as_str() {
+        "true" => return serde_json::Value::Bool(true),
+        "false" => return serde_json::Value::Bool(false),
+        _ => {}
+    }
+    if let Ok(n) = raw.parse::<i64>() {
+        return serde_json::Value::Number(n.into());
+    }
+    if let Ok(f) = raw.parse::<f64>()
+        && let Some(n) = serde_json::Number::from_f64(f)
+    {
+        return serde_json::Value::Number(n);
+    }
+    serde_json::Value::String(raw.to_string())
+}
+
+/// Recursively navigate into a nested `serde_json::Value` object and set
+/// the leaf value — the in-memory twin of `persist_config_key`, used by
+/// `operant config set` and the agent's config tool (the config tool's
+/// documented contract stays: in-memory only, never persisted).
+pub fn set_nested_json(target: &mut serde_json::Value, segments: &[&str], raw: &str) -> Result<()> {
+    if segments.is_empty() {
+        return Err(crate::error::Error::Agent(
+            "config key must not be empty".into(),
+        ));
+    }
+    let head = segments[0];
+
+    if segments.len() == 1 {
+        let parsed = coerce_json_value(raw);
+        let obj = target.as_object_mut().ok_or_else(|| {
+            crate::error::Error::Agent(format!("cannot index into non-object with '{head}'"))
+        })?;
+        obj.insert(head.to_string(), parsed);
+        return Ok(());
+    }
+
+    let tail = &segments[1..];
+    let obj = target.as_object_mut().ok_or_else(|| {
+        crate::error::Error::Agent(format!("cannot index into non-object with '{head}'"))
+    })?;
+
+    if !obj.contains_key(head) {
+        obj.insert(
+            head.to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        );
+    }
+    let child = obj
+        .get_mut(head)
+        .ok_or_else(|| crate::error::Error::Agent(format!("could not access key '{head}'")))?;
+
+    set_nested_json(child, tail, raw)
 }
 
 /// Inject the agentmemory MCP server into `config.mcp.servers` when the
@@ -2370,6 +2543,133 @@ mod tests {
 
     fn env_lock() -> &'static Mutex<()> {
         ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    // ── (plan 09) surgical config writes ────────────────────────────────
+
+    /// A minimal but complete-enough config the loader accepts. The
+    /// loader requires nothing mandatory, so a couple of comments and two
+    /// keys is a valid file.
+    fn write_plan09_fixture(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("operant.toml");
+        std::fs::write(
+            &path,
+            "# my header comment — must survive every persist\n\n[client]\nbase_url = \"http://localhost:20129/v1\"\n\n[agent]\nmodel = \"big-stack\"\n",
+        )
+        .expect("write fixture");
+        path
+    }
+
+    #[test]
+    #[serial]
+    fn persist_config_key_keeps_comments_and_other_keys_byte_for_byte() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_plan09_fixture(dir.path());
+        let loaded = load_app_config(Some(&path)).expect("load fixture");
+        install_runtime_config(loaded.config);
+
+        let written = persist_config_key("agent.model", "small-stack").expect("persist");
+        assert_eq!(written, path, "the LOADED file is the one written");
+
+        let text = std::fs::read_to_string(&path).expect("re-read");
+        assert!(
+            text.contains("# my header comment — must survive every persist"),
+            "comments must survive: {text}"
+        );
+        assert!(
+            text.contains("http://localhost:20129/v1"),
+            "client.base_url must be untouched: {text}"
+        );
+        assert!(
+            text.contains("model = \"small-stack\""),
+            "the leaf must be set: {text}"
+        );
+        assert!(!text.contains("big-stack"), "the old value is replaced");
+        // No defaults resurrected: the file holds ONLY what it held plus the
+        // leaf (the old whole-file writer emitted [pk], [genome.budget], …).
+        assert!(
+            !text.contains("[pk]"),
+            "retired default sections must not appear"
+        );
+        assert!(
+            !text.contains("[genome"),
+            "retired default sections must not appear"
+        );
+        // And it re-loads.
+        let reloaded = parse_config_file(&path).expect("reload");
+        assert_eq!(reloaded.agent.model, "small-stack");
+        assert_eq!(
+            reloaded.client.base_url, "http://localhost:20129/v1",
+            "base_url must survive the persist unchanged"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn persist_config_key_never_writes_secrets_that_were_never_in_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_plan09_fixture(dir.path());
+        let loaded = load_app_config(Some(&path)).expect("load fixture");
+        // Simulate an env-sourced secret in the RUNTIME config (the old
+        // writer serialized the whole runtime config, dragging it to disk).
+        let mut cfg = loaded.config;
+        cfg.client.api_key = Some("sk-NEVER-DISK".to_string());
+        install_runtime_config(cfg);
+
+        persist_config_key("agent.model", "small-stack").expect("persist");
+
+        let text = std::fs::read_to_string(&path).expect("re-read");
+        assert!(
+            !text.contains("sk-NEVER-DISK"),
+            "a secret that lives in env/runtime must never land in the file: {text}"
+        );
+        assert!(
+            !text.contains("api_key"),
+            "the api_key key must not appear either: {text}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn persist_config_key_creates_intermediate_tables_and_coerces_scalars() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_plan09_fixture(dir.path());
+        let loaded = load_app_config(Some(&path)).expect("load fixture");
+        install_runtime_config(loaded.config);
+
+        // New nested leaf (a valid schema path): genome.budget.cap is a
+        // real f64 field, and the [genome.budget] table is absent from the
+        // fixture — the walk must CREATE it.
+        persist_config_key("genome.budget.cap", "2.5").expect("persist float");
+        let reloaded = parse_config_file(&path).expect("reload");
+        assert_eq!(reloaded.genome.budget.cap, 2.5);
+
+        // Boolean coercion on a real key.
+        persist_config_key("tui.terminal_scroll_mode", "true").expect("persist bool");
+        let reloaded = parse_config_file(&path).expect("reload");
+        assert!(reloaded.tui.terminal_scroll_mode);
+    }
+
+    #[test]
+    #[serial]
+    fn persist_config_key_rejects_a_broken_leaf_and_leaves_the_file_unchanged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_plan09_fixture(dir.path());
+        let before = std::fs::read_to_string(&path).expect("read before");
+        let loaded = load_app_config(Some(&path)).expect("load fixture");
+        install_runtime_config(loaded.config);
+
+        // `agent.model` is a STRING — walking INTO it as a table must fail
+        // before any write happens.
+        let err = persist_config_key("agent.model.leaf", "x").expect_err("collision");
+        assert!(err.to_string().contains("not a table"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read after"),
+            before,
+            "the file must be byte-identical after a rejected write"
+        );
+        // No temp litter.
+        assert!(!path.with_extension("toml.tmp").exists());
     }
 
     #[test]

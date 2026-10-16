@@ -128,40 +128,20 @@ impl App {
         let _ = settings.save_sync();
     }
 
-    pub(super) fn persist_provider_and_model(&self) {
-        // Provider+model live exclusively in operant.toml — written via
-        // sync_model_to_toml below. settings.json is NOT written here; it only
-        // stores visual prefs (theme, vim_enabled, reduce_motion, etc.) which are
-        // persisted separately. (iter-221: removed dead settings.json round-trip
-        // that was a no-op after iter-220 removed provider/model from Settings.)
-        self.sync_model_to_toml(&self.config.agent.model);
-    }
-
-    // Write the current model + provider to ~/.operant/operant.toml so that
-    /// `operant setup` reads the actual current values instead of defaults.
-    /// (iter-117 — fixes the config-source proliferation bug.)
-    fn sync_model_to_toml(&self, model: &str) {
-        // Load the existing TOML config, update the model field, and write back.
-        // We use the runtime config (already loaded by main.rs) rather than
-        // re-parsing the TOML file, to avoid format issues.
-        let mut config = operant_core::config::runtime_config();
-        config.agent.model = model.to_string();
-        if let Some(ref provider) = self.active_provider {
-            // Update base_url based on provider.
-            if let Some(p) = crate::provider::PROVIDERS
-                .iter()
-                .find(|p| p.name == *provider)
-                && !p.default_base_url.is_empty()
-            {
-                config.client.base_url = p.default_base_url.to_string();
-            }
-        }
-        // Write to ~/.operant/operant.toml.
-        let config_path = dirs::home_dir()
-            .map(|h| h.join(".operant").join("operant.toml"))
-            .unwrap_or_else(|| std::path::PathBuf::from("operant.toml"));
-        if let Ok(toml_str) = toml::to_string_pretty(&config) {
-            let _ = std::fs::write(&config_path, &toml_str);
+    pub(super) fn persist_provider_and_model(&mut self) {
+        // Provider+model live exclusively in operant.toml — persisted via
+        // the ONE surgical writer (plan 09): agent.model only, in the file
+        // the process actually loaded, comments and every other key kept
+        // byte-for-byte. client.* is NEVER written from here: the old
+        // sync_model_to_toml re-serialized the whole runtime config, which
+        // stripped comments, resurrected retired default keys, clobbered
+        // client.base_url with a provider-guessed URL, and wrote
+        // env-sourced secrets to disk. settings.json is NOT written here;
+        // it only stores visual prefs (iter-221).
+        if let Err(e) =
+            operant_core::config::persist_config_key("agent.model", &self.config.agent.model)
+        {
+            self.set_status_notice(format!("Could not persist model: {e}"));
         }
     }
 

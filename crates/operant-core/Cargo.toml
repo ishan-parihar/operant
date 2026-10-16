@@ -19,6 +19,9 @@ futures-util = { workspace = true }
 axum = { workspace = true }
 # Unpoisoned locks where call sites would otherwise unwrap (house rule)
 parking_lot = { workspace = true }
+# Surgical config writes (2026-10-16 audit plan 09): persist one key in
+# the loaded TOML, keeping comments and every other key byte-for-byte.
+toml_edit = "0.22"
 
 # Networking
 reqwest = { workspace = true }
