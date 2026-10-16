@@ -102,3 +102,102 @@ async fn a_refused_chair_command_is_a_named_error() {
         "named refusal expected, got {err}"
     );
 }
+
+/// O-14: the decision router. "approve <ref>" dispatches the kernel's
+/// `plan approve` through run_as_chair (the argv the launcher receives is
+/// the proof); "reject <ref> because …" carries the note; a non-verb
+/// message falls to the classifier; a too-long ref falls through (not a
+/// command, someone pasting text).
+#[tokio::test]
+async fn a_decision_verb_routes_to_the_kernel_plan_command() {
+    // the launcher records the argv it received, then answers like the
+    // kernel's approve output
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("holon.sh");
+    let argv_path = dir.path().join("argv");
+    let tmp = dir.path().join("holon.sh.tmp");
+    std::fs::write(
+        &tmp,
+        format!(
+            "#!/bin/sh\nprintf '%s\n' \"$@\" > '{}'\nprintf '%s\n' '{{\"approved\": true}}'\n",
+            argv_path.display()
+        ),
+    )
+    .expect("write");
+    std::fs::rename(&tmp, &script).expect("rename");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let bin = script.to_string_lossy().into_owned();
+
+    // approve: exactly the kernel's argv
+    let out = operant_os::chair::dispatch_message(Path::new("/tmp"), Some(&bin), "approve pln_123")
+        .await
+        .expect("dispatch");
+    assert!(
+        out.contains("approved"),
+        "the kernel's answer rides back: {out}"
+    );
+    let argv = std::fs::read_to_string(&argv_path).expect("argv recorded");
+    let argv_line = argv.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        argv_line.contains("--json plan approve pln_123"),
+        "approve routes to the kernel's plan command: {argv}"
+    );
+
+    // reject with a because-clause: the note rides --note
+    std::fs::write(&argv_path, "").expect("clear");
+    let _ = operant_os::chair::dispatch_message(
+        Path::new("/tmp"),
+        Some(&bin),
+        "reject pln_123 because the acceptance is unmeasurable",
+    )
+    .await
+    .expect("dispatch");
+    let argv = std::fs::read_to_string(&argv_path).expect("argv recorded");
+    let argv_line = argv.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        argv_line.contains("plan reject pln_123 --note"),
+        "reject carries its note: {argv}"
+    );
+    assert!(
+        argv_line.contains("the acceptance is unmeasurable"),
+        "the note text is the kernel's, verbatim: {argv}"
+    );
+
+    // a chaired address still works
+    std::fs::write(&argv_path, "").expect("clear");
+    let _ =
+        operant_os::chair::dispatch_message(Path::new("/tmp"), Some(&bin), "chair, approve pln_9")
+            .await
+            .expect("dispatch");
+    let argv = std::fs::read_to_string(&argv_path).expect("argv recorded");
+    let argv_line = argv.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(argv_line.contains("plan approve pln_9"), "addressed: {argv}");
+}
+
+/// O-14: non-verbs stay classifier traffic — the router must not eat
+/// ordinary chat, and a runaway "approve" with no ref is not a command.
+#[tokio::test]
+async fn a_non_decision_message_falls_to_the_classifier() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let script = dir.path().join("holon.sh");
+    // the launcher answers the CLASSIFY shape (the router only calls it
+    // after the decision check missed)
+    let tmp = dir.path().join("holon.sh.tmp");
+    std::fs::write(&tmp, "#!/bin/sh\nprintf '%s\n' '{\"lane\": \"full\"}'\n").expect("write");
+    std::fs::rename(&tmp, &script).expect("rename");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let bin = script.to_string_lossy().into_owned();
+
+    // ordinary chat and a verb with no ref: both classify
+    for text in ["how is the refactor going?", "approve"] {
+        let out = operant_os::chair::dispatch_message(Path::new("/tmp"), Some(&bin), text)
+            .await
+            .expect("classify falls through");
+        assert!(
+            out.contains("lane"),
+            "'{text}' classified, not routed: {out}"
+        );
+    }
+}
