@@ -360,13 +360,15 @@ type PendingUserQuestions =
 pub static PENDING_PERMISSIONS: OnceLock<PendingPermissions> = OnceLock::new();
 
 /// F2: the seat approver the gateway's `/approve` / `/deny` commands and the
-/// permission receiver's arms resolve queued seat escalations through
-/// (mint via `issue_grant`, resolve the `pending_requests` row). Same
+/// permission receiver's arms resolve queued seat escalations through.
+/// Resolution-only (G+1): an approval or denial unblocks the in-flight
+/// ask — there is no grant to mint and no durable row to record; Holon's
+/// board owns the durable approvals. Same
 /// OnceLock-over-Mutex<Option<..>> shape as [`PENDING_PERMISSIONS`]
 /// because it solves the same problem: gateway_commands is sync and has no
 /// handle back into `start_gateway`'s locals. `None` until the gateway
-/// starts — commands then skip minting, the same graceful degradation the
-/// pending-permissions store has.
+/// starts — commands then degrade the same way the pending-permissions
+/// store does.
 pub static SEAT_APPROVERS: OnceLock<
     std::sync::Mutex<Option<Arc<operant_core::org::seat_authority::SeatApprover>>>,
 > = OnceLock::new();
@@ -1920,12 +1922,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // fails to open must fail loudly — silently running ungoverned is the
     // widening the genome exists to make impossible.
     //
-    // F2 widens E's seam: the authority carries the grant ledger and the
-    // escalation queue alongside the policy source, so the run-path consult
-    // reads real grants (`has_grant`, plan §4 rule 6) and an escalation is
-    // durably queued the moment it happens. The employee registry and the
-    // hierarchy edges feed the SeatApprover the dispatcher resolves
-    // approvals through.
     // G+1 (docs/agentic-os/, owner order 2026-10-15): the org layer's
     // retired stores are gone — the grant ledger, the escalation queue,
     // the employee registry, the hierarchy edges, the cast. What the
@@ -1943,8 +1939,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let seat_policy_store = Arc::new(operant_core::org::seat_policy_db::SeatPolicyDb::init(
         org_db.clone(),
     )?);
-    // P3: the concrete store is what `/grant` seats policy rows through;
-    // the agents carry the `Arc<dyn SeatPolicySource>` view below.
+    // The concrete store `/permissions` reads posture rows through; the
+    // agents carry the `Arc<dyn SeatPolicySource>` view below.
     store_seat_policy_db(Arc::clone(&seat_policy_store));
     let seat_policies: Arc<dyn operant_core::org::seat_policy::SeatPolicySource> =
         seat_policy_store;
@@ -4554,8 +4550,7 @@ mod tests {
         .with_channel_post(true);
         handler.record_feed(&mapped);
 
-        let org_db =
-            operant_core::org::worklog_db::worklog_db_path(&dir.path().join("agent.sqlite"));
+        let org_db = dir.path().join("operant_kanban.db");
         let conn = rusqlite::Connection::open(&org_db).expect("org db");
         let mut stmt = conn
             .prepare("SELECT class, seat_hint, author, text FROM context_items ORDER BY id")

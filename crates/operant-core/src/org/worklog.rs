@@ -2,7 +2,7 @@
 //! (`docs/WAVE1-DECISIONS.md` §3.4).
 //!
 //! Pure types and the sealed entry constructor. No I/O; the sqlite store
-//! lives in [`super::worklog_db`].
+//! retired with the org layer — the accumulator is what remains.
 //!
 //! Spec: `docs/WAVE1-DECISIONS.md` §3.4. Organism corroboration:
 //! `docs/ORGANISM-ARTIFACT-REFERENCE.md` §4.4(a) (19 keys measured over
@@ -61,8 +61,8 @@
 //!
 //! ## Append-only
 //!
-//! There is no update and no delete in this module, in
-//! [`super::worklog_db`], or in the DDL — and the table additionally carries
+//! There is no update and no delete in this module, in the retired sqlite
+//! store, or in the DDL — and the table additionally carries
 //! `BEFORE UPDATE` / `BEFORE DELETE` triggers that `RAISE(ABORT)`, so
 //! append-only is a *storage* invariant, not merely an API-shape one. A
 //! caller holding a raw `Connection` still cannot rewrite history. The
@@ -257,7 +257,8 @@ pub fn derive_outcome(signals: &OutcomeSignals, result_summary_empty: bool) -> O
 ///
 /// **This is a design decision beyond §3.4**, which specifies the column but
 /// no length. The reasoning: the log is append-only *at the storage layer*
-/// (see [`super::worklog_db`]), so an unbounded text column cannot be
+/// (append-only is a storage invariant, not merely an API-shape one), so an
+/// unbounded text column cannot be
 /// trimmed later — a rambling row is permanent. The seam already caps
 /// `what_done` at [`crate::turn_end::RESULT_SUMMARY_LIMIT`] for exactly this
 /// reason; the kaizen field gets the same budget so one turn's row has a

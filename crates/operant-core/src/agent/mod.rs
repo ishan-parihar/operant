@@ -456,20 +456,20 @@ pub struct OperantAgent {
     /// tool-execution guard in `agent/stream.rs` consults
     /// [`crate::org::seat_authority::SeatAuthority::consult`] before the
     /// permission channel: the seat's verdict can run a tool with no prompt
-    /// (allow entry, yolo mode, or a STANDING GRANT — the ledger is real
-    /// since F2), escalate with the policy's own explanation (persisted to
-    /// the `pending_requests` queue, deduplicated), or deny outright.
+    /// (an allow entry or a yolo mode), escalate with the policy's own
+    /// explanation (the in-flight ask resolves interactively; the durable
+    /// approvals queue retired to Holon's board), or deny outright.
     /// `None` (the default) keeps the run path byte-identical — no decide()
     /// call at all.
     seat_authority: Option<Arc<crate::org::seat_authority::SeatAuthority>>,
     /// F2 unattended semantics: this agent runs without an interactive user
     /// (cron). A governed `Escalate` verdict is clamped to a same-run Deny
-    /// after the ask is queued — an unattended run never waits on a prompt
-    /// channel nobody drains, and the next run consults the grant the
-    /// approver minted between ticks. The UNGOVERNED path (no policy row)
-    /// ignores this flag entirely: it keeps today's channel behaviour
-    /// byte-for-byte, including the dispatcher's no-active-channel
-    /// auto-AllowSession arm.
+    /// once the ask is recorded — an unattended run never waits on a
+    /// prompt channel nobody drains, and there is no grant a later run
+    /// could consult (Holon's board owns durable approvals). The
+    /// UNGOVERNED path (no policy row) ignores this flag entirely: it keeps
+    /// today's channel behaviour byte-for-byte, including the
+    /// dispatcher's no-active-channel auto-AllowSession arm.
     unattended: bool,
     /// Guardian-LLM arm (hermes `approval_smart.py` parity): armed when
     /// `OPERANT_GUARDIAN_LLM` is truthy at CONSTRUCTION (one read, not a

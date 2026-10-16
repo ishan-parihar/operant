@@ -1283,6 +1283,9 @@ done
 ```bash
 cargo fmt --all
 ./scripts/check.sh check -p <crate>
+bash scripts/test-compile-gate.sh   # every kept crate's TEST targets compile
+                                     # (2026-10-16 audit plan 02: 10 dead test
+                                     #  targets hid behind a red gate for weeks)
 cargo test -p <crate> --lib
 cargo clippy -p <crate> --all-targets -- -D warnings
 ```

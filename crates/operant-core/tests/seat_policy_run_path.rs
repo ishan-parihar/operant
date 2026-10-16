@@ -36,8 +36,6 @@ use operant_core::client::{
 };
 use operant_core::database::Database;
 use operant_core::error::{Error, Result};
-use operant_core::org::authority::GrantDb;
-use operant_core::org::pending_requests::PendingRequestDb;
 use operant_core::org::seat_authority::SeatAuthority;
 use operant_core::org::seat_policy::{SeatMode, SeatPolicy, SeatPolicySource};
 use operant_core::org::seat_policy_db::SeatPolicyDb;
@@ -117,9 +115,8 @@ impl OperantTool for BashStubTool {
 /// Marker the `delegate` stub returns when it actually executes.
 const DELEGATE_MARKER: &str = "DELEGATE_STUB_RAN";
 
-/// Delegate-named stub: the P0 delegation gate in `stream.rs` classifies by
-/// NAME and reads the `agent` arg — this stub exercises that consult
-/// without spawning a real sub-agent.
+/// Delegate-named stub: exercises the `delegate` tool name on the real
+/// run path without spawning a real sub-agent.
 struct DelegateStubTool;
 
 #[derive(JsonSchema, Deserialize)]
@@ -334,17 +331,7 @@ async fn world_with(
             .upsert(session_id, &policy)
             .expect("upsert seat policy");
         let source: Arc<dyn SeatPolicySource> = Arc::new(store);
-        // F2 widened the seam: the policy source rides inside a
-        // SeatAuthority with the grant ledger and the escalation queue
-        // (over the same tempdir, the way the gateway shares one db file).
-        let authority = Arc::new(SeatAuthority::new(
-            source,
-            Arc::new(GrantDb::init(dir.path().join("org.sqlite")).expect("GrantDb::init")),
-            Arc::new(
-                PendingRequestDb::init(dir.path().join("org.sqlite"))
-                    .expect("PendingRequestDb::init"),
-            ),
-        ));
+        let authority = Arc::new(SeatAuthority::new(source));
         agent = agent.with_seat_authority(Some(authority));
         let agent = Arc::new(agent);
         agent.set_session_id(session_id);
@@ -419,7 +406,6 @@ async fn lockdown_seat_escalates_a_tool_call_through_the_real_guard() {
                 mode: SeatMode::Lockdown,
                 allow: vec![],
                 deny: vec![],
-                delegation: None,
             },
         )),
     )
@@ -470,7 +456,6 @@ async fn yolo_seat_runs_the_tool_with_no_permission_prompt() {
                 mode: SeatMode::Yolo,
                 allow: vec![],
                 deny: vec![],
-                delegation: None,
             },
         )),
     )
@@ -569,7 +554,6 @@ async fn seat_deny_row_denies_without_prompting() {
                 mode: SeatMode::Yolo,
                 allow: vec![],
                 deny: vec!["seat_probe".to_string()],
-                delegation: None,
             },
         )),
     )
@@ -595,58 +579,11 @@ async fn seat_deny_row_denies_without_prompting() {
     );
 }
 
-// ── P0 delegation governance (run path) ─────────────────────────────────
+// ── Delegate tool on the run path ─────────────────────────────────────
 
-/// The real guard consults the seat's delegation posture: a `forbidden` row
-/// denies the delegate call BEFORE the tool executes, shaped like a seat
-/// policy denial, and the turn still completes.
-#[tokio::test]
-async fn forbidden_seat_cannot_delegate_through_the_real_guard() {
-    let mut w = world(
-        vec![
-            tool_call_response(
-                "delegate",
-                r#"{"agent":"researcher","prompt":"do the thing"}"#,
-            ),
-            text_response("done"),
-        ],
-        Some((
-            "seat-nodelegate",
-            SeatPolicy {
-                mode: SeatMode::Standard,
-                allow: vec![],
-                deny: vec![],
-                delegation: Some(operant_core::org::authority::DelegationPosture::Forbidden),
-            },
-        )),
-    )
-    .await;
-
-    w.agent
-        .run("go".to_string())
-        .await
-        .expect("run completes despite the denial");
-
-    assert!(
-        !w.client.saw(DELEGATE_MARKER),
-        "a forbidden seat must never reach the delegate tool body"
-    );
-    assert!(
-        w.client.saw("Permission denied by seat policy"),
-        "the denial must be shaped like a seat policy denial"
-    );
-    assert!(
-        w.client.saw("forbids delegation"),
-        "the posture's why-sentence must travel with the denial"
-    );
-    assert!(
-        w.permission_rx.try_recv().is_err(),
-        "a delegation denial is not an escalation — the channel never sees it"
-    );
-}
-
-/// The ungoverned twin: no posture on the row = today's behaviour — the
-/// delegate tool runs. The opt-in rule, on the real path.
+/// The ungoverned twin: no delegation gate exists (it retired with the
+/// org layer — an approved Holon plan is the governance now), so the
+/// `delegate` tool simply runs.
 #[tokio::test]
 async fn ungoverned_seat_delegates_as_today() {
     let mut w = world(
@@ -663,7 +600,6 @@ async fn ungoverned_seat_delegates_as_today() {
                 mode: SeatMode::Standard,
                 allow: vec![],
                 deny: vec![],
-                delegation: None,
             },
         )),
     )

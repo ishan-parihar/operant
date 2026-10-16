@@ -1083,12 +1083,10 @@ impl OperantAgent {
             // ── P1/P2 seat policy (permission-genome slices E + F2) ──────
             // With a seat authority attached AND a session id (the employee
             // id), `decide()` owns the verdict for this seat: `Run` skips the
-            // prompt outright (a yolo mode, a seat allow entry, or — since
-            // F2 — a standing grant in the ledger), `Escalate` persists the
-            // ask to the `pending_requests` queue (deduplicated: a second
-            // ask for the same (seat, tool) references the first row, never
-            // duplicates it) and then enters the channel below with the
-            // policy's `why` as the danger explanation, and `Deny` is
+            // prompt outright (a yolo mode or a seat allow entry), `Escalate`
+            // enters the channel below with the policy's `why` as the danger
+            // explanation (in-flight asks resolve interactively; the durable
+            // approvals queue retired to Holon's board), and `Deny` is
             // returned shaped like a declined permission. Everything sits
             // behind the Option: no authority, no session id, or no policy
             // row for this seat → `None` → the branches below are today's
@@ -1104,9 +1102,6 @@ impl OperantAgent {
             // `dangerous` reuses `is_permission_gated_tool`, the same list
             // the prompt below has always keyed on (one list so the gate and
             // the predicate cannot drift apart).
-            //
-            // `has_grant` is REAL since F2 (plan §4 rule 6 completed): the
-            // ledger's unexpired, unrevoked grant naming THIS tool exactly.
             let seat: Option<SeatDecision> = match (
                 self.seat_authority.as_ref(),
                 // Wave 2: the seat is the bound EMPLOYEE when the gateway set
@@ -1119,16 +1114,6 @@ impl OperantAgent {
                 }
                 _ => None,
             };
-
-            // ── P0 delegation governance (§2.3-analog) ───────────────────
-            // The delegate tool hands work to another configured agent.
-            // When the acting seat is governed, its delegation posture owns
-            // that verdict — the PURE rule lives in `org/authority.rs`
-            // (`can_delegate`), the resolution in `SeatAuthority::
-            // consult_delegation`; this run-path site only consults, it
-            // never re-implements. `None` = ungoverned for delegation (no
-            // authority, no seat identity, or no posture on the policy row):
-            // today's tool-config gates own the verdict, byte-for-byte.
 
             // ── F2 unattended semantics ─────────────────────────────────
             // An unattended run (cron) never waits on an interactive

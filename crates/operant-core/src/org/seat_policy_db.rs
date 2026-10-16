@@ -2,12 +2,12 @@
 //! `docs/NEXT-IMPLEMENTATION-OUTLINE.md` §11, answering alignment Q1 with the
 //! recommended default (a sqlite table).
 //!
-//! Mirrors [`crate::org::authority::GrantDb`]: DDL as a `pub const` schema
-//! string, idempotent [`SeatPolicyDb::init`], `Arc<Mutex<Connection>>` with
-//! poisoning treated as a recoverable error, and the same table-not-a-file
-//! choice (`seat_policies` is a table inside a database the kanban family
-//! owns — see the authority module docs for why a second file would repeat
-//! `BUGS.md` R5-1's split-brain).
+//! Mirrors the retired authority store's discipline: DDL as a `pub const`
+//! schema string, idempotent [`SeatPolicyDb::init`],
+//! `Arc<Mutex<Connection>>` with poisoning treated as a recoverable
+//! error, and the same table-not-a-file choice (`seat_policies` is a
+//! table inside a database the kanban family owns — a second file would
+//! repeat `BUGS.md` R5-1's split-brain).
 //!
 //! ## Mode parsing is loud, never defaulting
 //!
@@ -37,8 +37,8 @@ impl SeatPolicyDb {
     /// DDL, applied declaratively and idempotently.
     ///
     /// Same "never `crate::migrations::migrate`, never `PRAGMA user_version`"
-    /// discipline as [`crate::org::authority::GrantDb::GRANTS_SCHEMA`] — the
-    /// counter belongs to the kanban family that owns the file.
+    /// discipline the org stores shared — the counter belongs to the
+    /// kanban family that owns the file.
     pub const SEAT_POLICIES_SCHEMA: &str = r#"
         CREATE TABLE IF NOT EXISTS seat_policies (
             employee_id TEXT PRIMARY KEY,

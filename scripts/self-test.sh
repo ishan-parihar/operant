@@ -64,6 +64,7 @@ run_clippy() {
 run_test "Build release binary" "./scripts/check.sh build --release 2>&1"
 
 # 2. Tests
+run_test "Test targets compile (scripts/test-compile-gate.sh — the 2026-10-16 plan-02 guard)" "bash scripts/test-compile-gate.sh 2>&1"
 run_test "Run workspace tests" "./scripts/check.sh test --workspace 2>&1"
 
 # 3. Clippy

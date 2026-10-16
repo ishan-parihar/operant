@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-863 — the test gate is real again** (2026-10-16 audit, plan 02:
+  `docs/audit/2026-10-16-operant-audit/02-test-gate-repair.md`). Ten test
+  targets had been dead since the org layer retired (iter-838) — they
+  still imported `authority`, `employee_db`, `notice`, `worklog_db`,
+  `write_barrier`, `CamofoxStateTool` — so `cargo test -p operant-cli
+  --bin operant` could not compile and every later "gates green" claim
+  was unverifiable. Disposition per
+  `docs/agentic-os/ORG-LAYER-DISPOSITION.md`:
+  - **Deleted** (subjects retired to Holon):
+    `org_wave2_shared_file`, `governance_escalation`, `org_notice_board`,
+    `org_employee_registry`, `org_identity_gate`,
+    `org_worklog_framework_only`, the orphaned
+    `tools/authority_tools_tests.rs`, the `gateway_commands` grant/revoke
+    battery (`grant_is_operator_only`,
+    `grant_seats_ungoverned_seat_and_mints_ttl_grant`,
+    `grant_days_override_beats_the_config_ttl`,
+    `grant_to_unmanaged_seat_fails_closed`,
+    `grant_standing_only_when_approver_is_org_lead`,
+    `grant_days_override_cannot_defeat_the_standing_rule`,
+    `revoke_stops_the_grant_and_a_second_revoke_is_not_found`,
+    `P3Stores`/`seed_p3`/`p3_seed_employee`), and the write-barrier pair in
+    `cron_session_isolation`
+    (`a_completed_scheduled_run_leaves_exactly_one_worklog_row`,
+    `a_barrier_write_failure_makes_the_run_report_failure`) plus
+    `forbidden_seat_cannot_delegate_through_the_real_guard` and the
+    `browser_camofox_state` row in `integration_test`, and — found by the
+    first green run — `org_cli_contract.rs` in full (all seven tests drive
+    retired `operant org` subcommands: `department`, `dm`, `decision`;
+    the live surface is `org budget` + `org holon`).
+  - **Rewired to the kept modules**: `seat_policy_run_path` (SeatAuthority
+    now wraps only the policy source; `delegation` field gone),
+    `cron_session_isolation` (`derive_employee_id` moved to
+    `org::worklog`), `permissions_shows_posture_and_gates_other_seats`
+    (seeds a `SeatPolicyDb` row; asserts the Holon grant redirect), and
+    the `record_feed` channel-map test (`operant_kanban.db` sibling path).
+  - Stale comments naming retired modules as live were deleted from
+    `agent/stream.rs`, `agent/mod.rs`, `cronjobs/scheduler.rs`,
+    `gateway_runner.rs`, `org/seat_policy_db.rs`, `org/worklog.rs` — the
+    last two also fix broken intra-doc links that failed the rustdoc
+    gate.
+  - New `scripts/test-compile-gate.sh` runs `cargo check --tests` over
+    every kept crate so a module deletion cannot leave dead tests again;
+    wired into `self-test.sh` and the AGENTS.md per-push gate list.
+  - **The gates now run.** Gate 2 (`cargo test -p operant-cli --bin
+    operant`): 1742 passed, 3 failed. Gate 3 core lib: 2271 passed
+    (the one `sub_agent_tool` failure is the known parallel-DB flake —
+    solo rerun green). The 2026-10-15 brief's deferred tests ran for the
+    first time and PASSED: `tool_output_budget_evicts_oldest_first` and
+    the five rewind-selector tests. Six real hidden regressions the red
+    gate had been swallowing are now in `BUGS.md` (H-1..H-3, H-5..H-7);
+    the one `sub_agent_tool` failure is the known parallel-DB flake
+    (solo rerun green).
+
 - **iters 854–858 — the agentic-OS red-team close-out** (audit
   `docs/agentic-os/AUDIT-2026-10-15.md` §8). A red-team of the W-wave
   closure record found four claims that did not survive adversarial

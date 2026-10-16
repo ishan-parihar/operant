@@ -17,15 +17,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use operant_core::tools::builtin::{
-    ApprovalTool, CamofoxStateTool, CheckpointTool, ClarifyTool, CodeExecutionTool, DateTimeTool,
-    DiscordAdminTool, DiscordTool, EnvVarTool, FileListTool, FileReadTool, FileSearchTool,
-    FileStateTool, FileWriteTool, HomeAssistantTool, HttpRequestTool, ImageGenerationTool,
-    MemoryRecallTool, MemorySearchTool, MemoryStoreTool, NeuttsSynthTool, NotificationTool,
-    OpenRouterTool, OsvCheckTool, PatchTool, SendMessageTool, SkillViewTool, SkillsTool,
-    SpotifyAlbumsTool, SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool,
-    SpotifyPlaylistsTool, SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool,
-    TimestampTool, TodoTool, ToolBackendTool, TranscriptionTool, TtsTool, VideoAnalysisTool,
-    VisionTool, WebFetchTool, WebSearchTool, XaiHttpTool,
+    ApprovalTool, CheckpointTool, ClarifyTool, CodeExecutionTool, DateTimeTool, DiscordAdminTool,
+    DiscordTool, EnvVarTool, FileListTool, FileReadTool, FileSearchTool, FileStateTool,
+    FileWriteTool, HomeAssistantTool, HttpRequestTool, ImageGenerationTool, MemoryRecallTool,
+    MemorySearchTool, MemoryStoreTool, NeuttsSynthTool, NotificationTool, OpenRouterTool,
+    OsvCheckTool, PatchTool, SendMessageTool, SkillViewTool, SkillsTool, SpotifyAlbumsTool,
+    SpotifyDevicesTool, SpotifyLibraryTool, SpotifyPlaybackTool, SpotifyPlaylistsTool,
+    SpotifyQueueTool, SpotifySearchTool, SystemInfoTool, TerminalTool, TimestampTool, TodoTool,
+    ToolBackendTool, TranscriptionTool, TtsTool, VideoAnalysisTool, VisionTool, WebFetchTool,
+    WebSearchTool, XaiHttpTool,
 };
 use operant_core::tools::{OperantTool, ToolContext, ToolRegistry};
 
@@ -422,7 +422,6 @@ fn zero_dep_tools() -> Vec<(&'static str, Box<dyn OperantTool>)> {
         ("memory_search", Box::new(MemorySearchTool)),
         ("memory_recall", Box::new(MemoryRecallTool)),
         ("tool_backend", Box::new(ToolBackendTool)),
-        ("browser_camofox_state", Box::new(CamofoxStateTool)),
         ("openrouter_query", Box::new(OpenRouterTool)),
         ("xai_http_request", Box::new(XaiHttpTool)),
         ("osv_check", Box::new(OsvCheckTool)),

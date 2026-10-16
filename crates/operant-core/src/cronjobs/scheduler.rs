@@ -53,27 +53,6 @@ pub struct CronScheduler {
     db: Arc<CronDb>,
     agent: Arc<OperantAgent>,
     delivery_tx: Option<mpsc::UnboundedSender<CronDelivery>>,
-    /// The Wave 1 fail-closed identity gate (packet B).
-    ///
-    /// `None` — the default — is the **org layer off** state: no registry is
-    /// consulted and the tick path is byte-identical to the pre-gate code.
-    /// A gate is only reachable by explicitly calling
-    /// [`CronScheduler::with_org_gate`], so the gate is dark-mergeable
-    /// (`docs/harness-kernel.md:7`): upgrading operant cannot block a job
-    /// until an operator installs the gate. See
-    /// `docs/WAVE1-DECISIONS.md` §3.2.
-    /// The §7.1 write barrier, mounted as the postcondition of every
-    /// scheduled agent run (wave-1 slice D, outline §3 "B′").
-    ///
-    /// `None` — the default — is the **barrier-off**, dark-mergeable state:
-    /// the tick path is byte-identical to the pre-B′ code, so upgrading
-    /// operant cannot fail a job until a [`WriteBarrier`] is constructed and
-    /// installed via [`CronScheduler::with_write_barrier`] — the same merge
-    /// discipline as [`Self::org_gate`] above.
-    /// The org employee registry, mounted so a scheduled run can resolve
-    /// its REAL seat (§3.1.1's `employee_cron_jobs` join, reversed) before
-    /// the write barrier attributes the row. `None` keeps the pre-661
-    /// claim: the §3.1.1 derived session id.
     /// The operant root (the directory holding the org dbs), for the
     /// seat's MEMORY.md (`<root>/org/employees/<seat>/MEMORY.md`,
     /// iter-666). `None` disables injection — prompt byte-identical.
@@ -106,8 +85,7 @@ pub struct CronScheduler {
     /// `None` = never mounted, the tick never checks (dark-mergeable).
     /// iter-720 (trinity P2-A): the observer told about delivery-ledger
     /// lifecycle points (queued / reclaimed / parked). `None` = the
-    /// default no-op, tick byte-identical (dark-mergeable — same
-    /// discipline as `org_gate`).
+    /// default no-op, tick byte-identical (dark-mergeable).
     observer: Option<Arc<dyn crate::observer::Observer>>,
 }
 

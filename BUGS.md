@@ -1,5 +1,57 @@
 # BUGS.md — Operant Audit Fixes
 
+## OPEN — Hidden regressions surfaced by the test-gate repair (2026-10-16, audit plan 02)
+
+These four failures were invisible since iter-838: the test targets they live
+in did not compile, so no gate could run them. They exist on `origin/main`
+today, independent of the gate repair.
+
+- [ ] **H-1 — `tui::app::scroll_emit::message_final_rows_tracks_the_last_final_message`**
+  (crates/operant-cli/src/tui/app/scroll_emit.rs:322): `assertion left == right
+  failed — left: 0, right: 9`. The landed native-scroll step-1 emits no rows
+  for a multi-message transcript. This is exactly the row-vs-message
+  watermark defect audit plan 07 step 1′ describes; owner: the plan-07
+  execution.
+- [ ] **H-2 — `tests::load_memory_manager_reads_existing_memory_file`**
+  (crates/operant-cli/src/main.rs:3282): `assertion left == right failed —
+  left: 0, right: 1`. The legacy MEMORY.md `load_repo_memory_manager` loads
+  0 of 1 entries. Plan 08 deletes this surface (memory-wire everywhere);
+  fix or remove with it.
+- [ ] **H-3 — `tui::render::operant_overlays::tests::dispatch_rows_are_the_registered_surfaces_in_paint_order`**
+  (crates/operant-cli/src/tui/render/operant_overlays.rs:747): `row 2 is
+  `settings_screen`, expected `rewind_flow``. The overlay dispatch table and
+  the test's expected paint order disagree — one of the two is stale from a
+  recent overlay insertion. Fix in its own iteration: decide the true paint
+  order, then align table and test.
+- [x] **H-4 — `tools::sub_agent_tool::tests::compute_child_toolsets_supplied_list_fully_stripped_yields_empty`**
+  (crates/operant-core/src/tools/sub_agent_tool.rs:1603):
+  `sessions migration failed: failed to read user_version: disk I/O error`.
+  **CLOSED 2026-10-16: parallel-DB flake** — solo rerun green (1 passed,
+  0 failed, 0.01s), and the full lib re-ran green under `--no-fail-fast`
+  (2271 passed, 0 failed). The known K-class; no code change.
+- [ ] **H-5 — `memory_is_a_multi_turn_feedback_channel`**
+  (crates/operant-core/tests/memory_feedback.rs:289): `assertion left ==
+  right failed — left: "default", right: "TURN-2-ANSWER"`. Turn 2's recall
+  returns the default prompt instead of the remembered answer — the
+  multi-turn memory feedback channel is broken at the seam. Owner: plan 08
+  (memory unification) or its own iteration if 08's rewire doesn't
+  incidentally fix it.
+- [ ] **H-6 — `pause_gate_holds_then_releases`**
+  (crates/operant-core/tests/pause_gate.rs:115): `the model must not be
+  reached while the estop is engaged`. The e-stop hold failed in the
+  integration harness — the pause gate let a model call through while
+  paused. Owner: its own iteration; this is a safety gate.
+- [ ] **H-7 — review_discipline noop-round accounting is off by one**
+  (crates/operant-core/tests/review_discipline.rs:571 and 4 siblings —
+  `noop_rounds_exit_the_daemon_before_the_iteration_cap`,
+  `thirty_iteration_turn_fires_one_review_after_the_turn_not_mid_loop`,
+  `a_write_round_resets_the_noop_streak`,
+  `write_every_round_still_runs_to_the_iteration_cap`,
+  `below_interval_no_review_spawns`): `left: [12, 13], right: [11, 12]`
+  — the daemon stops after rounds 12/13 instead of 11/12. One shared
+  off-by-one root in the autonomous loop's round accounting is likely;
+  diagnose once, fix once. Owner: its own iteration.
+
 ## OPEN — Duplicate tool rows mid-turn (2026-10-14 batch, plan 01)
 
 - [ ] **S1 (OSC-8 / pinned-image post-draw writes)** — UNRESOLVED, live-only.
