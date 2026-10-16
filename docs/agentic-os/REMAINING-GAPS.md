@@ -1,10 +1,10 @@
 # Remaining implementation gaps (2026-10-16)
 
-Status: **outline.** The audit's W-packages are closed (`AUDIT-2026-10-15.md` §7, plus §8's
-red-team close-out, iters 854–861). This file is the map of everything still open after that
-close-out: what each gap is, where it lives, who owns the prerequisite, and the acceptance that
-would close it. It is the working list for the next batch of iterations; each G-item is one or
-more iterations under `AGENTS.md`.
+Status: **largely closed** — see the closure log at the bottom. The audit's W-packages are
+closed (`AUDIT-2026-10-15.md` §7, plus §8's red-team close-out, iters 854–861). This file's
+G-items were then executed: G3 (peer iter-865), G2 (iter-868), G10 (iter-869, which caught two
+more product bugs), and G1's live day ran 2026-10-16 night — every mechanism exercised live,
+with the findings below.
 
 Nothing here blocks the owner's **turn org mode on** checklist (§7): archive taken ✓ (twice now,
 the second under the WAL-safe code with the `org/` charter tree in it), configure absolute
@@ -189,9 +189,51 @@ pay down deliberate deferrals.
      named five): unmetered post-turn LLM spend (3 provider hits, 2 metered — the e2e measured
      it) and a personal-memory retain in a run whose learnings belong in the result envelope.
      Gated on `holon_run_dir`, same rule as the other five.
-- **G1 — this session**: the live day (adapter install into `~/holon`, `[holon]` + `[notify]`
-  wiring, one supervised routine, doctor) — executed after the iters-868/869 deploy; see the
-  closure note below.
+- **G1 — executed on the live night of 2026-10-16 (steps 2–4 done; step 5 run as far as the
+  route allowed; the residue is owner-side)**. What the live day proved, on the live instance
+  with the deployed iter-878 binary:
+  - **Config on**: `~/.operant/operant.toml` carries `[holon]` (absolute `home`, `bin`,
+    `clock = true`, `notion_script` pinned — the instance's `adapters/notion` holds data, not
+    the script), and `~/holon/holon.toml` carries the `[notify]` seam. `operant doctor`'s
+    Holon section: 5/5 green (read API, launcher, clock liveness, notion script, archive).
+  - **Adapter installed into `~/holon`**: the native-tools probe dropped the Python
+    `holon mcp` mount (no Python process alive during any body run — phase E's acceptance,
+    observed across eight bodies). A pilot employee (`Oto`, driver `operant`, roles
+    executor/planner/researcher/verifier) was hired into tools.
+  - **Eight supervised bodies ran live.** Every mechanism engaged, end to end, on real org
+    work: policy mounted on the employee seat per body; the live fences denied and RECORDED
+    (`aft_bash`, `file_write` refusals in `refusals.jsonl`); the AFT read suite worked after
+    iter-873; per-call metering held to the end (the last body: 1,634,727 tokens in,
+    31,882 out, 63 tool calls, `usage.json` populated); lease/3 heartbeats renewed; the
+    kernel's lease sweep reclaimed orphaned runs; iter-878's gate fired live
+    ("skill review skipped", twice, at the nudge cadence).
+  - **What the live day caught and fixed (six iterations across two repos):**
+    - iter-870 (operant): a silent `nothing to claim` exit.
+    - iter-873 (operant): observers were denied the AFT read suite.
+    - Holon adapter: 120s→300s→600s request ceilings (three bodies died on the ceiling);
+      `HERMES_TURN_TIMEOUT=3600` (a 23-tool-call research body died on the 20-min per-TURN
+      default); `[tools] registry_timeout_secs` 120 (30s killed AFT cold-starts — and the
+      first fix set the wrong key, the live log caught it); `[tools.kernel]`, not
+      `[kernel]` (the sixth body died at startup on an unknown field).
+    - iter-877/878 (operant): the skill-review nudge spawned inside a Holon body — W6's
+      SEVENTH learner; the first gate was dead code (the latch fired before the flag flip;
+      caught in review before the stale release activated), the functional gate is pinned by
+      the e2e and fired live.
+    - The live smoke check was pointing at `hermes --version` for a department that now runs
+      operant bodies — every claim on the org was silently gated for hours before this was
+      found; now probes `operant --version`.
+  - **Where the end-to-end hand-in stands**: the last body ran the FULL 40-iteration budget
+    (63 tool calls over ~27 minutes of genuine work on a hard legacy task) and the grace
+    call returned empty on the free route under tonight's pressure — no `result.json`, so
+    the kernel correctly marks it failed. The hand-in remains blocked by two things neither
+    repo controls: the free route's health under load (the omniroute gateway was also down
+    outright for a stretch — the smoke check correctly blocked all agents until it was
+    restored, then stopped again to leave the box as the owner left it), and the kernel's
+    oldest-first claim feeding bodies the two hardest legacy tasks. **The acceptance that
+    remains for the owner**: one routine's plan→execute→verify on a healthy route — the
+    seeded `tsk_01M523A8M8H64N97PQ78S4SCXX` (run-env report, tools dept) is small and
+    claimable when the route is healthy; `operant org holon supervise --employee
+    emp_01M52391VBR6Q29GXMMQACQWZ4` is the command.
 
 ## Order of attack
 
