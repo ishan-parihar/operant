@@ -269,6 +269,23 @@ pub enum HolonAction {
         #[arg(long, value_name = "YYYY-MM-DD")]
         date: Option<String>,
     },
+
+    /// G2 (REMAINING-GAPS): the kernel's `[notify]` delivery seam. The
+    /// kernel computes what is new for the Chair (its event seq, deduped
+    /// by notify_seq) and shells `[notify].command` with `{message}`
+    /// substituted; operant's half is to post that message to each Chair
+    /// channel. No polling, no local state — the kernel owns both. The
+    /// owner wires `[notify].command = "operant org holon notify --reason
+    /// heartbeat --text {message}"` in the instance's holon.toml.
+    Notify {
+        /// Audit reason (the org mandate: every action names its why)
+        #[arg(long)]
+        reason: String,
+        /// The kernel-composed message (arrives argv-safe: the kernel
+        /// shlex-quotes `{message}` into the command line)
+        #[arg(long, value_name = "TEXT")]
+        text: String,
+    },
 }
 
 /// Open the Holon read API or explain precisely why org mode is off.
@@ -301,6 +318,56 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
             dest.display()
         );
         println!("the originals are untouched — their writers go dark in phase G+1");
+        return Ok(());
+    }
+
+    // G2 (REMAINING-GAPS): the kernel's [notify] delivery seam — like the
+    // archive, it needs the [holon] config but NOT the read API (it shells
+    // the kernel CLI through chair_channels, the same single source the
+    // inbound is_chair check uses). The kernel computed and deduped what
+    // is new before shelling us; this arm only delivers.
+    if let HolonAction::Notify { reason, text } = action {
+        if !config.holon.enabled {
+            anyhow::bail!(
+                "org mode is off: set [holon] enabled = true in operant.toml \
+                 (docs/agentic-os/README.md — invariant 5: off is byte-identical personal mode)"
+            );
+        }
+        if config.holon.home.as_os_str().is_empty() {
+            anyhow::bail!("org mode needs [holon] home set to the Holon instance ($HOLON_HOME)");
+        }
+        validated_reason("org holon notify", &reason)?;
+        let channels = operant_os::chair::chair_channels(
+            std::path::Path::new(&config.holon.home),
+            config.holon.bin.as_deref(),
+        )
+        .await?;
+        if channels.is_empty() {
+            // not an error: an org with nobody configured to hear is the
+            // owner's setup state; the kernel's own notify event still
+            // records the attempt
+            println!("no [chair] channels configured — the message has nobody to reach");
+            return Ok(());
+        }
+        let mut sent = 0usize;
+        let mut failed = 0usize;
+        for r#ref in &channels {
+            // a ref is `<platform>:<user id>` — the same shape is_chair
+            // compares against
+            let Some((platform, user_id)) = r#ref.split_once(':') else {
+                continue;
+            };
+            match crate::gateway_runner::send_channel_message(config, platform, user_id, &text)
+                .await
+            {
+                Ok(_) => sent += 1,
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("send to {platform}:{user_id} failed: {e}");
+                }
+            }
+        }
+        println!("chair notify: {sent} sent, {failed} failed (reason: {reason})");
         return Ok(());
     }
 
@@ -484,9 +551,10 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
             operant_os::run::tick(&home, bin.as_deref()).await?;
             println!("tick fired");
         }
-        // (the Archive arm runs BEFORE the read-API gate above — see the
-        // handler head; this match never sees it)
+        // (the Archive and Notify arms run BEFORE the read-API gate above —
+        // see the handler head; this match never sees them)
         HolonAction::Archive { date: _ } => unreachable!("handled before the read-API gate"),
+        HolonAction::Notify { .. } => unreachable!("handled before the read-API gate"),
     }
     Ok(())
 }
