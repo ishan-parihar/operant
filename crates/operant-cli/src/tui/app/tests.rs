@@ -215,15 +215,12 @@ fn test_mcp_subcommand_is_not_intercepted() {
     assert!(!app.mcp_view.visible);
 }
 
-#[test]
-fn test_clear_slash_command_clears_messages() {
-    let mut app = make_app();
-    app.add_message(Role::User, "hello".to_string());
-    app.add_message(Role::Assistant, "world".to_string());
-    assert_eq!(app.messages.len(), 2);
-    assert!(app.intercept_slash_command("clear"));
-    assert_eq!(app.messages.len(), 0);
-}
+// (plan 03) test_clear_slash_command_clears_messages deleted: it pinned
+// the OLD arm behavior — /clear clearing the display directly from the arm,
+// which is exactly the display-only lie plan 03 §2 removes. The arm now
+// defers to the drain: see clear_when_idle_defers_to_the_drain and
+// clear_drain_empties_agent_context_and_display in app/commands.rs tests,
+// which pin the new semantics end to end (agent context AND display).
 
 #[test]
 fn test_exit_slash_command_sets_quit_flag() {

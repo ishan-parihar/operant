@@ -36,6 +36,13 @@ pub struct RewindOutcome {
     pub removed_turns: usize,
 }
 
+/// A fresh session id — one shape everywhere a session is minted
+/// (rewind forks, the TUI's /new). (plan 03 §2 extracted this so /new
+/// cannot drift from the fork shape.)
+pub fn new_session_id() -> String {
+    format!("sess_{}", uuid::Uuid::new_v4())
+}
+
 impl OperantAgent {
     /// (plan 05) Read-only preview: the conversation prefix a rewind to
     /// `turn_id` would keep, and its estimated tokens. No state changes —
@@ -115,7 +122,7 @@ impl OperantAgent {
             .count();
 
         // 2. New session id (same shape as /new), parent = old.
-        let new_session = format!("sess_{}", uuid::Uuid::new_v4());
+        let new_session = new_session_id();
         let now = chrono::Utc::now().to_rfc3339();
         let session_data = crate::database::SessionData {
             id: new_session.clone(),

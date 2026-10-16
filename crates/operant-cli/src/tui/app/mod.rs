@@ -436,6 +436,21 @@ pub struct App {
     /// hermes-parity skill-invocation expansion into the turn.
     /// (iter-320 — wires skill/bundle slash expansion to real state.)
     pub pending_user_message: Option<String>,
+    /// (plan 03 §2) `/clear` while a turn is still stopping: the agent's
+    /// `clear_history` runs when the turn has fully finished (the loop-top
+    /// drain), so the stopping turn's tail write can't re-populate the
+    /// conversation after the clear.
+    pub pending_clear: bool,
+    /// (plan 03 §2) `/new` while a turn is still stopping: same deferral as
+    /// `pending_clear`, then a fresh session id.
+    pub pending_new: bool,
+    /// (plan 03 §2) `/undo [N]`: rewind N turns from the last mark when the
+    /// turn has finished. `None` = nothing pending.
+    pub pending_undo: Option<usize>,
+    /// (plan 03 §2) set with `pending_undo` by `/retry`: after the rewind,
+    /// the drained prompt goes to `pending_retry_query` (auto-resubmit)
+    /// instead of back to the composer.
+    pub pending_retry_after_undo: bool,
 
     // ---- Visual mode indicators -------------------------------------------
     /// Plan mode — input border turns blue, `PLAN` shown in status bar.

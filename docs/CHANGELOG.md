@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-867 — the TUI drives the agent, not a copy of it (audit plan 03
+  §1/§2/§5)**. The TUI kept a parallel copy of the conversation, and
+  `/clear`, `/new`, `/undo`, `/retry`, `/stop` edited only that copy:
+  the slash command printed success, the screen changed, and the
+  agent's real context never moved. Worse, `/stop` and mid-stream
+  `/clear`/`/new` only flipped the display's `is_streaming`, so the
+  agent kept running while the TUI showed idle — and a prompt typed
+  right after spawned a SECOND concurrent run on the one shared agent
+  (the same corruption the gateway's turn lock fixed in iter-864).
+  Now:
+  - `/stop` triggers the real interrupt flag (the exact `/cancel`/Esc
+    path) instead of a display flip.
+  - `/clear` and `/new` mid-stream cancel the turn and DEFER — the
+    drain runs `agent.clear_history()` / mints a fresh session id
+    (the rewind fork's `sess_` shape, via `notify_session_switch`)
+    only after the run has fully finished, so a stopping turn's tail
+    write can no longer repopulate the conversation after the clear.
+    The display rebuilds from the agent's conversation (one extracted
+    `rebuild_display_from_agent`, shared with the rewind handler).
+  - `/undo [N]` and `/retry` go through the agent's REAL rewind
+    machinery (`rewind_marks` → `rewind_to_turn`, which forks and
+    keeps the undone path for `/resume`) instead of a display-only
+    `messages.truncate`; the undone prompt returns to the composer,
+    and `/retry` re-queues it for resubmission.
+  - One submit path: the interactive and simulator composer blocks
+    collapsed into `submit_user_message`, which now carries the
+    steering queue AND the new stopping-turn guard (an unfinished
+    agent task future refuses a second run: "A turn is still
+    stopping").
+  - The drain runs at the loop top of BOTH run loops once the turn
+    finishes; with no agent attached (headless mock scenarios) the
+    display-only fallback preserves the old semantics.
+  Regression tests: `stop_mid_stream_triggers_the_real_interrupt`,
+  `clear_mid_stream_cancels_and_defers_to_the_drain`,
+  `clear_when_idle_defers_to_the_drain`, `undo_parses_n_and_defers`,
+  `undo_while_streaming_is_refused`,
+  `retry_defers_into_the_rewind_machinery`, and the drain battery
+  (`clear_drain_empties_agent_context_and_display`,
+  `new_drain_mints_a_fresh_session_and_empties_the_context`,
+  `undo_drain_forks_through_the_rewind_machinery`,
+  `retry_drain_queues_the_resubmission`,
+  `drain_leaves_pendings_alone_while_a_turn_is_still_stopping`).
+
 - **iter-865 — G3: clock-organ liveness is now evidenced, and doctor
   reads it** (`REMAINING-GAPS.md` G3). The clock organ fires `holon tick`
   every 2 minutes but wrote no liveness evidence, and `operant doctor`

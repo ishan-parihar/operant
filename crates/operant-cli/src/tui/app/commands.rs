@@ -552,25 +552,19 @@ impl App {
                 self.push_system_message(summary, crate::tui::app::enums::SystemMessageStyle::Info);
                 true
             }
+            // /clear — drop the conversation. The agent-side clear is DEFERRED
+            // (plan 03 §2): if a turn is streaming, cancel it first and let
+            // the loop-top drain run agent.clear_history() once the run has
+            // fully finished — otherwise the stopping turn's tail write
+            // re-populates the conversation after the clear.
             "clear" => {
-                self.messages.clear();
-                self.system_annotations.clear();
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
-                self.tool_use_blocks.clear();
-                self.turn_metadata.clear();
-                self.cost_usd = 0.0;
-                // Reset streaming + scroll + token state so new input isn't
-                // silently dropped. Without this, /clear mid-stream leaves
-                // is_streaming=true, so the prompt input handler rejects
-                // new queries.
-                self.is_streaming = false;
-                self.scroll_offset = 0;
-                self.auto_scroll = true;
-                self.new_messages_while_scrolled = 0;
-                self.token_count = 0;
-                self.invalidate_transcript();
-                self.set_status_notice("Conversation cleared.".to_string());
+                if self.is_streaming {
+                    self.cancel_streaming_turn();
+                    self.pending_clear = true;
+                    self.set_status_notice("Stopping turn, will clear…".to_string());
+                } else {
+                    self.pending_clear = true;
+                }
                 true
             }
             "exit" | "quit" => {
@@ -613,107 +607,68 @@ impl App {
                 });
                 true
             }
-            // /stop — cancel the live streaming turn, exactly as Esc does.
-            // (iter-270: wired to real streaming cancel path.)
+            // /stop — cancel the live streaming turn, exactly as Esc and
+            // /cancel do: trigger the interrupt flag (the agent commits its
+            // tail and returns Error::Interrupted) instead of only flipping
+            // the display's is_streaming (plan 03 §1 — the old body lied:
+            // the agent kept running while the TUI showed idle, and a prompt
+            // typed right after raced two concurrent runs on one agent).
             "stop" => {
                 if self.is_streaming {
-                    self.is_streaming = false;
-                    self.spinner_verb = None;
-                    // Flush in-flight streaming text to messages BEFORE snapshot
-                    // so the response is preserved in the transcript.
-                    self.flush_streamed_assistant_message();
-                    self.set_status_notice("Stopped.".to_string());
-                    self.complete_current_turn_snapshot(true);
-                    self.tool_use_blocks.clear();
+                    self.cancel_streaming_turn();
                 } else {
                     self.set_status_notice("Nothing to stop — no turn is running.".to_string());
                 }
                 true
             }
 
-            // /new — start a completely fresh session (same as /clear but
-            // also resets cost and turn counter).
-            // (iter-270: wired to real state clear.)
+            // /new — a fresh session: new session id + empty conversation.
+            // Same deferral as /clear (plan 03 §1/§2): the agent-side work
+            // (new session id + swap) runs in the loop-top drain once any
+            // in-flight turn has fully finished. The old session stays in
+            // the store and in /resume.
             "new" | "fresh" => {
-                self.messages.clear();
-                self.system_annotations.clear();
-                self.streaming_text.clear();
-                self.streaming_thinking.clear();
-                self.tool_use_blocks.clear();
-                self.turn_metadata.clear();
-                self.session_goal = None;
-                self.cost_usd = 0.0;
-                self.is_streaming = false;
-                self.scroll_offset = 0;
-                self.auto_scroll = true;
-                self.new_messages_while_scrolled = 0;
-                self.token_count = 0;
-                self.session_title = None;
-                self.invalidate_transcript();
-                self.set_status_notice("New session started.".to_string());
-                true
-            }
-
-            // /undo — remove the last user + assistant exchange from the
-            // transcript. Safe no-op if fewer than 2 messages.
-            // (iter-270: wired to real message state.)
-            "undo" => {
-                // Find last user message index from the end.
-                let last_user = self
-                    .messages
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, m)| m.role == Role::User)
-                    .map(|(i, _)| i);
-                if let Some(idx) = last_user {
-                    // Remove all messages from that user message to end.
-                    self.messages.truncate(idx);
-                    // Also discard the trailing assistant turn metadata entry.
-                    self.turn_metadata.pop();
-                    self.invalidate_transcript();
-                    self.set_status_notice("Last turn undone.".to_string());
+                if self.is_streaming {
+                    self.cancel_streaming_turn();
+                    self.pending_new = true;
+                    self.set_status_notice("Stopping turn, starting new session…".to_string());
                 } else {
-                    self.set_status_notice("Nothing to undo.".to_string());
+                    self.pending_new = true;
                 }
                 true
             }
 
-            // /retry — resubmit the last user message. Queues it via
-            // pending_retry_query so the adapter_types run loop can spawn
-            // the agent call (App::run is sync, agent.run is async).
-            // (iter-270: wired to real state.)
+            // /undo [N] — rewind the last N turns through the agent's real
+            // rewind machinery (which forks and keeps the old path), when
+            // the turn has finished (plan 03 §2 — the old hand-rolled
+            // messages.truncate edited only the display, so the agent kept
+            // the full context and every later turn "remembered" the
+            // undone exchange).
+            "undo" => {
+                let n: usize = args.trim().parse().unwrap_or(1);
+                let n = n.max(1);
+                if self.is_streaming {
+                    self.status_message =
+                        Some("Cannot undo while a turn is running. Stop first.".to_string());
+                    return true;
+                }
+                self.pending_undo = Some(n);
+                true
+            }
+
+            // /retry — undo the last turn (real rewind) and resubmit its
+            // prompt. The undo runs in the drain (plan 03 §2); the resubmit
+            // rides the existing pending_retry_query loop-top drain, so the
+            // resubmitted turn starts only after the rewind has rebuilt the
+            // display.
             "retry" => {
                 if self.is_streaming {
                     self.status_message =
                         Some("Cannot retry while a turn is running. Stop first.".to_string());
                     return true;
                 }
-                let last_user_text = self
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == Role::User)
-                    .map(|m| m.get_all_text());
-                if let Some(text) = last_user_text {
-                    // Remove all messages from the last user message onward
-                    // so the turn is truly retried (not duplicated).
-                    let last_user_idx = self
-                        .messages
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(_, m)| m.role == Role::User)
-                        .map(|(i, _)| i);
-                    if let Some(idx) = last_user_idx {
-                        self.messages.truncate(idx);
-                    }
-                    self.pending_retry_query = Some(text);
-                    self.invalidate_transcript();
-                    self.set_status_notice("Retrying last message…".to_string());
-                } else {
-                    self.set_status_notice("No previous message to retry.".to_string());
-                }
+                self.pending_undo = Some(1);
+                self.pending_retry_after_undo = true;
                 true
             }
 
@@ -2279,5 +2234,313 @@ mod tests {
         // Opening the gate for /steer must not let ordinary prompts start a
         // second turn while one is already streaming.
         assert!(!app.handle_key_event(press_key(KeyCode::Enter, KeyModifiers::NONE)));
+    }
+
+    // ── plan 03 §1/§2: the context commands drive the agent ────────────
+
+    /// /stop must trigger the REAL interrupt — the old arm only flipped
+    /// is_streaming, so the agent kept running while the TUI showed idle
+    /// and a prompt typed right after raced a second run on one agent.
+    #[test]
+    fn stop_mid_stream_triggers_the_real_interrupt() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        let flag = operant_core::interrupt::InterruptFlag::new();
+        app.agent_interrupt = Some(flag.clone());
+
+        assert!(app.handle_tui_command("stop", ""));
+        assert!(flag.is_triggered(), "/stop must trigger the interrupt flag");
+        assert!(!app.is_streaming);
+    }
+
+    /// /clear mid-stream cancels the turn and DEFERS the clear: the
+    /// display stays until the drain runs `agent.clear_history()` on a
+    /// fully-finished turn, so the stopping turn's tail write cannot
+    /// repopulate the conversation after the clear.
+    #[test]
+    fn clear_mid_stream_cancels_and_defers_to_the_drain() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        app.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text("hello".into()),
+        });
+        let flag = operant_core::interrupt::InterruptFlag::new();
+        app.agent_interrupt = Some(flag.clone());
+
+        assert!(app.handle_tui_command("clear", ""));
+        assert!(
+            flag.is_triggered(),
+            "the running turn must be cancelled first"
+        );
+        assert!(app.pending_clear, "the clear must be deferred to the drain");
+        assert!(
+            !app.messages.is_empty(),
+            "the display must not lie — it stays until the agent is really cleared"
+        );
+    }
+
+    /// /clear when idle also defers (same drain, one code path).
+    #[test]
+    fn clear_when_idle_defers_to_the_drain() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("clear", ""));
+        assert!(app.pending_clear);
+    }
+
+    /// /undo [N] parses N and defers; while streaming it is refused.
+    #[test]
+    fn undo_parses_n_and_defers() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("undo", "2"));
+        assert_eq!(app.pending_undo, Some(2));
+        assert!(app.handle_tui_command("undo", ""));
+        assert_eq!(app.pending_undo, Some(1), "no argument means 1");
+    }
+
+    #[test]
+    fn undo_while_streaming_is_refused() {
+        let mut app = make_app();
+        app.is_streaming = true;
+        assert!(app.handle_tui_command("undo", ""));
+        assert!(app.pending_undo.is_none(), "nothing may be undone mid-turn");
+    }
+
+    /// /retry is undo-1 + resubmit, through the same rewind machinery.
+    #[test]
+    fn retry_defers_into_the_rewind_machinery() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("retry", ""));
+        assert_eq!(app.pending_undo, Some(1));
+        assert!(app.pending_retry_after_undo);
+    }
+
+    // ── plan 03 §2: the drain reaches the agent ─────────────────────────
+
+    /// The scripted client the drain tests run against — same shape as the
+    /// gateway_runner tests'.
+    struct EchoClient;
+
+    fn echo_chat_response(content: &str) -> operant_core::client::ChatResponse {
+        use operant_core::client::{Choice, MessageDelta, Role, Usage};
+        operant_core::client::ChatResponse {
+            id: "resp_echo".into(),
+            object: "chat.completion".into(),
+            created: 0,
+            model: "echo".into(),
+            choices: vec![Choice {
+                index: 0,
+                message: MessageDelta {
+                    role: Some(Role::Assistant),
+                    content: Some(content.to_string()),
+                    reasoning_content: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
+            },
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl operant_core::agent::ModelClient for EchoClient {
+        fn provider_name(&self) -> &str {
+            "echo"
+        }
+
+        async fn chat(
+            &self,
+            request: operant_core::agent::ChatRequest,
+        ) -> operant_core::error::Result<operant_core::client::ChatResponse> {
+            let echo = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == operant_core::client::Role::User)
+                .map(|m| m.content.clone())
+                .unwrap_or_default();
+            Ok(echo_chat_response(&format!("answer-{echo}")))
+        }
+
+        async fn chat_streaming(
+            &self,
+            _request: operant_core::agent::ChatRequest,
+        ) -> operant_core::error::Result<
+            futures::stream::BoxStream<
+                'static,
+                operant_core::error::Result<operant_core::agent::StreamChunk>,
+            >,
+        > {
+            Err(operant_core::error::Error::Agent(
+                "streaming not used in this test".into(),
+            ))
+        }
+    }
+
+    fn scripted_agent(
+        dir: &tempfile::TempDir,
+    ) -> std::sync::Arc<operant_core::agent::OperantAgent> {
+        let db = std::sync::Arc::new(
+            operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
+        );
+        let mut cfg = operant_core::agent::AgentConfig::default();
+        cfg.stream = false;
+        std::sync::Arc::new(operant_core::agent::OperantAgent::new(
+            cfg,
+            Box::new(EchoClient),
+            operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(5)),
+            db,
+        ))
+    }
+
+    #[tokio::test]
+    async fn clear_drain_empties_agent_context_and_display() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = scripted_agent(&dir);
+        agent.run("q1".into()).await.expect("turn 1");
+        agent.run("q2".into()).await.expect("turn 2");
+        assert_eq!(
+            agent.conversation().await.len(),
+            4,
+            "two turns = four messages before the clear"
+        );
+
+        let mut app = make_app();
+        app.pending_clear = true;
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        assert!(
+            agent.conversation().await.is_empty(),
+            "the AGENT context is cleared"
+        );
+        assert!(
+            app.messages.is_empty(),
+            "the display is rebuilt from the agent"
+        );
+        assert!(!app.pending_clear);
+    }
+
+    #[tokio::test]
+    async fn new_drain_mints_a_fresh_session_and_empties_the_context() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = scripted_agent(&dir);
+        agent.run("q1".into()).await.expect("turn 1");
+        let old_session = agent.session_id().unwrap_or_default();
+
+        let mut app = make_app();
+        app.pending_new = true;
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        let new_session = agent.session_id().unwrap_or_default();
+        assert_ne!(
+            old_session, new_session,
+            "/new must mint a fresh session id"
+        );
+        assert!(
+            new_session.starts_with("sess_"),
+            "the fork shape, not an ad-hoc id"
+        );
+        assert!(agent.conversation().await.is_empty());
+        assert!(app.messages.is_empty());
+        assert!(!app.pending_new);
+    }
+
+    #[tokio::test]
+    async fn undo_drain_forks_through_the_rewind_machinery() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = scripted_agent(&dir);
+        agent.run("first-question".into()).await.expect("turn 1");
+        agent.run("second-question".into()).await.expect("turn 2");
+        let before = agent.session_id().unwrap_or_default();
+
+        let mut app = make_app();
+        app.pending_undo = Some(1);
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        let conv = agent.conversation().await;
+        assert_eq!(
+            conv.len(),
+            2,
+            "one turn left after undoing the second — the AGENT context is rewound"
+        );
+        assert!(conv.iter().any(|m| m.content.contains("first-question")));
+        assert!(!conv.iter().any(|m| m.content.contains("second-question")));
+        assert_ne!(
+            agent.session_id().unwrap_or_default(),
+            before,
+            "rewind forks — the undone path is kept, not overwritten"
+        );
+        assert_eq!(
+            app.prompt_input.text, "second-question",
+            "the undone prompt comes back to the composer"
+        );
+        assert!(app.pending_undo.is_none());
+    }
+
+    #[tokio::test]
+    async fn retry_drain_queues_the_resubmission() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = scripted_agent(&dir);
+        agent.run("the-question".into()).await.expect("turn 1");
+
+        let mut app = make_app();
+        app.pending_undo = Some(1);
+        app.pending_retry_after_undo = true;
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        assert_eq!(
+            app.pending_retry_query.as_deref(),
+            Some("the-question"),
+            "the rewound prompt is queued for resubmission, not the composer"
+        );
+        assert_eq!(
+            app.prompt_input.text, "",
+            "retry never touches the composer"
+        );
+    }
+
+    /// The drain must NOT consume the pendings while a turn is still
+    /// finishing — the loop-top call retries after the run completes.
+    #[tokio::test]
+    async fn drain_leaves_pendings_alone_while_a_turn_is_still_stopping() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = scripted_agent(&dir);
+        agent.run("q1".into()).await.expect("turn 1");
+
+        let mut app = make_app();
+        app.is_streaming = true;
+        app.pending_clear = true;
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        assert!(
+            app.pending_clear,
+            "still streaming — the clear must stay deferred"
+        );
+        assert!(!agent.conversation().await.is_empty());
     }
 }

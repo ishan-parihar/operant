@@ -256,7 +256,11 @@ impl TuiApp {
         if let Some(query) = self.initial_query.take()
             && let Some(ref agent) = agent
         {
-            self.submit_user_message(agent, query);
+            // Initial query: never came from the composer — disarm the
+            // restore slot so a failure here can't resurrect the
+            // composer's last sent text (the pre-merge behavior).
+            self.app.clear_failed_input_recovery();
+            self.submit_user_message(agent, query).await;
         }
 
         let result = loop {
@@ -271,7 +275,9 @@ impl TuiApp {
                 && let Some(agent) = agent.as_ref()
                 && let Some(inject_text) = self.app.pending_user_message.take()
             {
-                self.submit_user_message(agent, inject_text);
+                // /skill + /bundle expansion: never came from the composer.
+                self.app.clear_failed_input_recovery();
+                self.submit_user_message(agent, inject_text).await;
                 continue;
             }
             // /retry: drain pending_retry_query set by the intercept arm at
@@ -281,8 +287,22 @@ impl TuiApp {
                 && let Some(agent) = agent.as_ref()
                 && let Some(retry_text) = self.app.pending_retry_query.take()
             {
-                self.submit_user_message(agent, retry_text);
+                // /retry resubmission: never came from the composer.
+                self.app.clear_failed_input_recovery();
+                self.submit_user_message(agent, retry_text).await;
                 continue;
+            }
+            // (plan 03 §2) /clear, /new, /undo deferred from a mid-stream
+            // invocation: the agent-side work runs once the turn has fully
+            // finished (is_streaming false), so the stopping turn's tail
+            // write can't repopulate the conversation after a clear.
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && (self.app.pending_clear
+                    || self.app.pending_new
+                    || self.app.pending_undo.is_some())
+            {
+                Self::run_pending_agent_actions(&mut self.app, Some(agent)).await;
             }
 
             match self.app.run(&mut terminal) {
@@ -409,49 +429,12 @@ impl TuiApp {
                         }
                     }
 
-                    if let Some(ref agent) = agent {
-                        // If a turn is currently streaming, push the input as
-                        // a steer directive instead of starting a new turn.
-                        // The agent drains steers at the next iteration boundary
-                        // and injects them as user-role messages. (iter-93 —
-                        // closes the /steer parity gap.)
-                        if self.app.is_streaming
-                            && let Some(ref handle) = self.app.steer_queue_handle
-                        {
-                            let mut q = handle.lock().await;
-                            q.push(input.clone());
-                            self.app.status_message = Some(format!(
-                                "Steer queued: {}",
-                                input.chars().take(60).collect::<String>()
-                            ));
-                            continue;
-                        }
-                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                        self.app.messages.push(Message {
-                            role: Role::User,
-                            content: MessageContent::Text(input.clone()),
-                        });
-                        // The display cache is keyed on transcript_version;
-                        // without this bump the user message is invisible
-                        // until the first agent event arrives (N-2).
-                        self.app.invalidate_transcript();
-                        self.app.is_streaming = true;
-                        self.app.begin_turn();
-                        self.app.streaming_text.clear();
-                        self.app.streaming_thinking.clear();
-
-                        let agent_clone = std::sync::Arc::clone(agent);
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        let handle = tokio::spawn(async move {
-                            let result = agent_clone.run(input).await.map(|_| ());
-                            let _ = tx.send(result);
-                        });
-                        self.app.run_complete_rx = Some(rx);
-                        self.app.agent_task_handle = Some(handle);
-                        // (plan 04) the cancel path triggers the flag, never
-                        // aborts — the agent commits its own tail.
-                        self.app.agent_interrupt = Some(agent.interrupt_flag());
-                        self.app.cancel_deadline = None;
+                    if let Some(agent) = &agent {
+                        // (plan 03 §5) the ONE submit path: steer-if-streaming
+                        // and the stopping-turn guard both live inside
+                        // submit_user_message now — the composer block that
+                        // used to live here was a third copy of them.
+                        self.submit_user_message(agent, input).await;
                     } else {
                         // No agent — the runtime failed to build, so the
                         // submission is dropped on the floor with nothing
@@ -483,7 +466,7 @@ impl TuiApp {
     /// Shared by the initial-query path, /retry, and the /skill + /bundle
     /// expansion so the submission wiring lives in exactly one place.
     /// (iter-320 — dedupe three near-identical submission blocks.)
-    fn submit_user_message(
+    async fn submit_user_message(
         &mut self,
         agent: &std::sync::Arc<operant_core::agent::OperantAgent>,
         text: String,
@@ -494,11 +477,47 @@ impl TuiApp {
         if let Some(activity) = &self.app.recap_activity {
             activity.notify();
         }
-        // The initial query, the `/skill` + `/bundle` expansion and `/retry`
-        // all submit text that never came from the composer, so nothing is
-        // owed back if the turn dies. Disarm: a failure here must not resurrect
-        // whatever the composer last sent.
-        self.app.clear_failed_input_recovery();
+        // (plan 03 §1) THE spawn guard, in the one submit path: a turn whose
+        // task future has not finished is still running on the agent even
+        // if the display already flipped to idle (a /stop'd turn committing
+        // its tail, or a /clear-ed turn's stop). Starting a second run on
+        // the shared agent corrupts both turns' transcripts (the gateway
+        // got the same fix in iter-864; this is the TUI twin).
+        if self
+            .app
+            .agent_task_handle
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
+        {
+            self.app
+                .set_status_notice("A turn is still stopping — try again in a moment.".to_string());
+            return;
+        }
+        // If a turn is currently streaming, push the input as a steer
+        // directive instead of starting a new turn (iter-93). Checked AFTER
+        // the spawn guard: an unfinished handle with is_streaming true is a
+        // live turn to steer; the guard above only catches the stopping
+        // window where steering is pointless (the interrupt is already
+        // fired).
+        if self.app.is_streaming
+            && let Some(handle) = &self.app.steer_queue_handle
+        {
+            let mut q = handle.lock().await;
+            q.push(text.clone());
+            self.app.status_message = Some(format!(
+                "Steer queued: {}",
+                text.chars().take(60).collect::<String>()
+            ));
+            return;
+        }
+        // (plan 03 §5) The failed-input restore slot is the COMPOSER's
+        // debt: `take_input` armed it when Enter consumed the composer,
+        // and the merged composer path routes through here — clearing it
+        // here would strand a failed composer submission with no restore
+        // (the context-menu drift). The NON-composer callers (initial
+        // query, /skill + /bundle expansion, /retry) disarm the slot at
+        // their own call sites instead: their text never came from the
+        // composer, so nothing is owed back.
         self.app.messages.push(Message {
             role: Role::User,
             content: MessageContent::Text(text.clone()),
@@ -748,6 +767,17 @@ impl TuiApp {
         }
 
         loop {
+            // (plan 03 §2) the sim mirrors the interactive loop's deferred
+            // drain (see the retry/skill drains there) so a mid-stream
+            // /clear in a scenario behaves exactly like production.
+            if !self.app.is_streaming
+                && let Some(agent) = agent.as_ref()
+                && (self.app.pending_clear
+                    || self.app.pending_new
+                    || self.app.pending_undo.is_some())
+            {
+                Self::run_pending_agent_actions(&mut self.app, Some(agent)).await;
+            }
             match self.app.run(&mut terminal) {
                 Ok(Some(input)) => {
                     // Intercept slash commands exactly like the interactive
@@ -788,40 +818,10 @@ impl TuiApp {
                             continue;
                         }
                     }
-                    if let Some(ref agent) = agent {
-                        if self.app.is_streaming
-                            && let Some(ref handle) = self.app.steer_queue_handle
-                        {
-                            let mut q = handle.lock().await;
-                            q.push(input.clone());
-                            continue;
-                        }
-                        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                        self.app.messages.push(Message {
-                            role: Role::User,
-                            content: MessageContent::Text(input.clone()),
-                        });
-                        // The display cache is keyed on transcript_version;
-                        // without this bump the user message is invisible
-                        // until the first agent event arrives (N-2).
-                        self.app.invalidate_transcript();
-                        self.app.is_streaming = true;
-                        self.app.begin_turn();
-                        self.app.streaming_text.clear();
-                        self.app.streaming_thinking.clear();
-
-                        let agent_clone = std::sync::Arc::clone(agent);
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        let handle = tokio::spawn(async move {
-                            let result = agent_clone.run(input).await.map(|_| ());
-                            let _ = tx.send(result);
-                        });
-                        self.app.run_complete_rx = Some(rx);
-                        self.app.agent_task_handle = Some(handle);
-                        // (plan 04) the cancel path triggers the flag, never
-                        // aborts — the agent commits its own tail.
-                        self.app.agent_interrupt = Some(agent.interrupt_flag());
-                        self.app.cancel_deadline = None;
+                    if let Some(agent) = &agent {
+                        // (plan 03 §5) the one submit path, shared with the
+                        // interactive loop's composer.
+                        self.submit_user_message(agent, input).await;
                     } else if is_mock {
                         // Mock path: the "agent" is the script, not a failed
                         // init - a submitted message must land in the
@@ -872,7 +872,33 @@ impl TuiApp {
 impl TuiApp {
     /// Agent-side work a slash command asked for (it needs the agent, which
     /// the app does not hold): `/compact` folds the stored conversation.
-    async fn run_pending_agent_actions(
+    /// (plan 03 §2) The ONE display rebuild: `App.messages` from the
+    /// agent's conversation, so display and context come from a single
+    /// source. Extracted from the rewind handler; /clear, /new and /undo
+    /// rebuild through it too — a slash command must never leave the
+    /// display diverged from the agent's real context.
+    fn rebuild_display_from_agent(
+        app: &mut crate::tui::app::App,
+        conv: Vec<operant_core::client::Message>,
+    ) {
+        app.messages.clear();
+        use crate::tui::adapter_types::types::{Message, MessageContent, Role};
+        for m in conv {
+            let role = match m.role {
+                operant_core::client::Role::User => Role::User,
+                operant_core::client::Role::Assistant => Role::Assistant,
+                operant_core::client::Role::System => Role::System,
+                operant_core::client::Role::Tool => Role::System,
+            };
+            app.messages.push(Message {
+                role,
+                content: MessageContent::Text(m.content),
+            });
+        }
+        app.invalidate_transcript();
+    }
+
+    pub(crate) async fn run_pending_agent_actions(
         app: &mut crate::tui::app::App,
         agent: Option<&std::sync::Arc<operant_core::agent::OperantAgent>>,
     ) {
@@ -963,26 +989,8 @@ impl TuiApp {
                     // Rebuild the display from the agent's forked store —
                     // display and context from one source.
                     let conv = agent.conversation().await;
-                    app.messages.clear();
-                    use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                    for m in conv {
-                        let role = match m.role {
-                            operant_core::client::Role::User => Role::User,
-                            operant_core::client::Role::Assistant => Role::Assistant,
-                            operant_core::client::Role::System => Role::System,
-                            operant_core::client::Role::Tool => Role::System,
-                        };
-                        app.messages.push(Message {
-                            role,
-                            content: MessageContent::Text(m.content),
-                        });
-                    }
-                    // Tool rows and annotations of the removed turns are gone
-                    // with the display they belonged to.
-                    app.tool_use_blocks.clear();
-                    app.system_annotations.clear();
+                    Self::rebuild_display_from_agent(app, conv);
                     app.rewind_selector.close();
-                    app.invalidate_transcript();
                     // oh-my-pi behaviour: the rewound prompt comes back to
                     // the composer, ready to edit and resend.
                     app.set_prompt_text(outcome.prompt_text.clone());
@@ -994,6 +1002,123 @@ impl TuiApp {
                 }
                 Err(e) => {
                     app.rewind_selector.notice = Some(e.to_string());
+                }
+            }
+        }
+        // ── (plan 03 §2) the deferred context commands ────────────────────
+        // Consumed only when the turn has fully finished (`!app.is_streaming`);
+        // while a stopping turn is still committing its tail they stay set
+        // and the loop-top drain calls here again.
+        if !app.is_streaming {
+            if std::mem::take(&mut app.pending_clear) {
+                let Some(agent) = agent else {
+                    app.set_status_notice("No agent attached — cannot clear.".to_string());
+                    return;
+                };
+                agent.clear_history().await;
+                let conv = agent.conversation().await;
+                Self::rebuild_display_from_agent(app, conv);
+                app.tool_use_blocks.clear();
+                app.system_annotations.clear();
+                app.turn_metadata.clear();
+                app.cost_usd = 0.0;
+                app.scroll_offset = 0;
+                app.auto_scroll = true;
+                app.new_messages_while_scrolled = 0;
+                // Native-scroll reset (07 §2 lands the full replay; until
+                // then a cleared conversation must not re-emit the old
+                // rows).
+                app.scroll_emitted_rows.set(0);
+                app.scroll_emitted_width.set(0);
+                app.invalidate_transcript();
+                app.set_status_notice("Conversation cleared.".to_string());
+            }
+            if std::mem::take(&mut app.pending_new) {
+                let Some(agent) = agent else {
+                    // Headless/mock: display-only fresh session, same as the
+                    // pre-plan-03 arm.
+                    app.messages.clear();
+                    app.system_annotations.clear();
+                    app.streaming_text.clear();
+                    app.streaming_thinking.clear();
+                    app.tool_use_blocks.clear();
+                    app.turn_metadata.clear();
+                    app.session_goal = None;
+                    app.cost_usd = 0.0;
+                    app.session_title = None;
+                    app.scroll_offset = 0;
+                    app.auto_scroll = true;
+                    app.new_messages_while_scrolled = 0;
+                    app.token_count = 0;
+                    app.scroll_emitted_rows.set(0);
+                    app.scroll_emitted_width.set(0);
+                    app.invalidate_transcript();
+                    app.set_status_notice("New session started.".to_string());
+                    return;
+                };
+                let old = agent.session_id().unwrap_or_default();
+                let fresh = operant_core::agent::rewind::new_session_id();
+                agent.set_session_id(fresh.clone());
+                agent.notify_session_switch(&fresh, &old, false);
+                let conv = agent.conversation().await;
+                Self::rebuild_display_from_agent(app, conv);
+                app.tool_use_blocks.clear();
+                app.system_annotations.clear();
+                app.turn_metadata.clear();
+                app.session_goal = None;
+                app.cost_usd = 0.0;
+                app.session_title = None;
+                app.scroll_offset = 0;
+                app.auto_scroll = true;
+                app.new_messages_while_scrolled = 0;
+                app.token_count = 0;
+                app.scroll_emitted_rows.set(0);
+                app.scroll_emitted_width.set(0);
+                app.invalidate_transcript();
+                let short: String = fresh.chars().take(8).collect();
+                app.set_status_notice(format!(
+                    "New session started ({short}) — previous session kept for /resume."
+                ));
+            }
+            if let Some(n) = app.pending_undo.take() {
+                let retry_after_undo = std::mem::take(&mut app.pending_retry_after_undo);
+                let Some(agent) = agent else {
+                    app.set_status_notice("No agent attached — cannot undo.".to_string());
+                    return;
+                };
+                let marks = agent.rewind_marks();
+                if marks.len() < n {
+                    app.pending_undo = None;
+                    app.pending_retry_after_undo = false;
+                    app.set_status_notice(format!(
+                        "Nothing to undo — only {} completed turn(s).",
+                        marks.len()
+                    ));
+                } else if let Some(turn_id) = marks.iter().rev().nth(n - 1).map(|m| m.turn_id) {
+                    match agent.rewind_to_turn(turn_id).await {
+                        Ok(outcome) => {
+                            let conv = agent.conversation().await;
+                            Self::rebuild_display_from_agent(app, conv);
+                            app.tool_use_blocks.clear();
+                            app.system_annotations.clear();
+                            app.scroll_emitted_rows.set(0);
+                            app.scroll_emitted_width.set(0);
+                            app.invalidate_transcript();
+                            if retry_after_undo {
+                                app.pending_retry_query = Some(outcome.prompt_text.clone());
+                                app.set_status_notice("Retrying last message…".to_string());
+                            } else {
+                                app.set_prompt_text(outcome.prompt_text.clone());
+                                app.set_status_notice(format!(
+                                    "Undid {} turn(s) — prompt restored to the composer.",
+                                    outcome.removed_turns
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            app.set_status_notice(format!("Undo failed: {e}"));
+                        }
+                    }
                 }
             }
         }
