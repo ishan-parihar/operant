@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-872 — plan 03 §6: `/goal` actually reaches the agent**.
+  The arm claimed the goal was "injected so the agent sees it", but the
+  injection was a display-only system annotation — the agent's context
+  never changed. `/goal <text>` now queues `[session goal] <text>` through
+  `pending_user_message` (the same one-keystroke drain `/skill` uses),
+  so the agent receives the goal as a real message on the next turn; the
+  status-bar display and transcript annotation stay. Regression test:
+  `goal_submission_reaches_the_agent_context`. `/fast` — the other §6
+  item — is scheduled for deletion in its own iteration (picker
+  machinery + golden regeneration via `prove`); the TUI knob reaches
+  nothing in the agent, and the gateway's `fast_mode` session-metadata
+  twin has no reader either (recorded in BUGS.md).
+
 - **iter-871 — plan 03 §3/§4: the permission decision path** (audit
   plan 03, findings 5+6). `settings.permission_mode` had zero readers on
   the permission DECISION path — BypassPermissions still prompted every

@@ -698,12 +698,18 @@ impl App {
                     ));
                 } else {
                     self.session_goal = Some(trimmed.to_string());
+                    // (plan 03 §6) The annotation below is DISPLAY-only —
+                    // the agent sees the goal because it is SUBMITTED as a
+                    // real message on the next turn, through the same
+                    // one-keystroke drain /skill uses. The old comment
+                    // claimed injection that never reached the agent.
+                    self.pending_user_message = Some(format!("[session goal] {}", trimmed));
                     // Inject as a system annotation so it appears in transcript.
                     self.push_system_message(
                         format!("🎯 Goal set: {}", trimmed),
                         crate::tui::app::SystemMessageStyle::Info,
                     );
-                    self.set_status_notice(format!("Goal set: {}", trimmed));
+                    self.set_status_notice(format!("Goal set and sent to the agent: {trimmed}"));
                 }
                 true
             }
@@ -2543,6 +2549,28 @@ mod tests {
             "still streaming — the clear must stay deferred"
         );
         assert!(!agent.conversation().await.is_empty());
+    }
+
+    /// (plan 03 §6) /goal's claim "so the agent sees it" was display-only;
+    /// the goal now rides pending_user_message — the same drain /skill
+    /// uses — so the agent receives it as a real message next turn.
+    #[test]
+    fn goal_submission_reaches_the_agent_context() {
+        let mut app = make_app();
+        assert!(app.handle_tui_command("goal", "ship the release"));
+        assert_eq!(
+            app.pending_user_message.as_deref(),
+            Some("[session goal] ship the release"),
+            "the goal must be queued for the agent, not just the status bar"
+        );
+        assert_eq!(app.session_goal.as_deref(), Some("ship the release"));
+        // No-args shows the goal; the queued message stays queued.
+        assert!(app.handle_tui_command("goal", ""));
+        assert_eq!(
+            app.pending_user_message.as_deref(),
+            Some("[session goal] ship the release"),
+            "showing the goal must not consume the queued submission"
+        );
     }
 
     // ── plan 03 §3/§4: the permission decision path ────────────────────

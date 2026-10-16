@@ -23,6 +23,17 @@ two jobs at once — no lock needed there. D-6's remaining half (can a cron
 run overlap a GATEWAY turn?) is moot: cron runs on its own agent (BUGS
 D-3, kept).
 
+- [ ] **H-8 — `/fast` lies in two places** (2026-10-16, audit plan 03 §6
+  remainder). The TUI's `/fast` flips `App.fast_mode`, which nothing in
+  the agent reads (the model picker's fast column and Shift+Tab toggle
+  are coherent UI, but the knob reaches no agent behavior); the
+  GATEWAY's `/fast` writes `fast_mode` into session metadata that no
+  handler reads (gateway_commands.rs:1571-1595 — writes only).
+  Disposition per the plan: delete the TUI arm + the picker's fast
+  column (an iteration with `prove` regeneration of the picker goldens);
+  the gateway twin belongs to the gateway line (peer surface — do not
+  grab from the TUI slice). Owner: the plan-03 close-out.
+
 ## OPEN — Hidden regressions surfaced by the test-gate repair (2026-10-16, audit plan 02)
 
 These four failures were invisible since iter-838: the test targets they live
