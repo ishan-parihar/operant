@@ -229,4 +229,79 @@ fn print_holon_org_checks(config: &AppConfig) {
     if config.holon.clock {
         check_ok("[holon]", "clock organ: `holon tick` every 2 minutes");
     }
+    // O-25: the Notion arm's script — the same three-way resolution the
+    // gateway arm uses ([holon] notion_script, else <bin>/../adapters/notion,
+    // else the instance home). A missing script means the arm stays off
+    // silently; doctor says so.
+    let notion_bin_fallback = config
+        .holon
+        .bin
+        .as_deref()
+        .and_then(|b| std::path::Path::new(b).parent())
+        .map(|p| p.join("adapters").join("notion").join("holon_notion.py"));
+    let notion_home_fallback = home.join("adapters").join("notion").join("holon_notion.py");
+    let notion = match &config.holon.notion_script {
+        Some(p) => Some(p.clone()),
+        None => notion_bin_fallback.filter(|p| p.exists()).or_else(|| {
+            notion_home_fallback
+                .exists()
+                .then_some(notion_home_fallback.clone())
+        }),
+    };
+    match notion {
+        Some(p) if p.exists() => check_ok(
+            "[holon]",
+            &format!("notion adapter script at {}", p.display()),
+        ),
+        _ => check_fail(
+            "[holon]",
+            "no notion adapter script (set [holon] notion_script, or install the adapter) — the notion webhook arm stays off",
+        ),
+    }
+    // O-25: the archive's evidence — the last snapshot directory under
+    // the operant home. Doctor names it and its age; an org-mode operator
+    // wants to know the archived state is recent before retiring readers.
+    let archive_root = operant_core::platform::operant_home().join("archive");
+    let latest = std::fs::read_dir(&archive_root)
+        .ok()
+        .and_then(|rd| {
+            let mut entries: Vec<std::path::PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("org-"))
+                })
+                .collect();
+            entries.sort();
+            entries.pop()
+        })
+        .filter(|p| p.is_dir());
+    match latest {
+        Some(p) => {
+            let age = std::fs::metadata(&p)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(|t| {
+                    let secs = std::time::SystemTime::now()
+                        .duration_since(t)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if secs < 86400 {
+                        format!("{}h ago", secs / 3600)
+                    } else {
+                        format!("{}d ago", secs / 86400)
+                    }
+                })
+                .unwrap_or_else(|| "unknown age".to_string());
+            check_ok(
+                "[holon]",
+                &format!("org archive: {} ({})", p.display(), age),
+            );
+        }
+        None => check_info(
+            "[holon] no org archive taken yet — run `operant org holon archive` before retiring live readers",
+        ),
+    }
 }

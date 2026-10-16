@@ -238,7 +238,10 @@ pub enum HolonAction {
 
     /// Phase E (CONTRACT §11): one supervision pass — claim the next ready
     /// stage for the employee, run the body, hand it in. `--loop` keeps
-    /// supervising until interrupted. Requires [holon] supervise = true.
+    /// supervising until interrupted. Runs regardless of [holon] supervise
+    /// (that flag gates the gateway's resident organ; the CLI loop is a
+    /// manual foreground tool) — it needs supervise_employees in the
+    /// config, or the employee ids as arguments.
     Supervise {
         /// The employee to serve (defaults to [holon] supervise_employees,
         /// served in order)

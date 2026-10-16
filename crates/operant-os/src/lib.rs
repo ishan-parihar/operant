@@ -1,5 +1,8 @@
-//! Operant as Holon's runtime — the org side of `docs/agentic-os/` (boundary doc
-//! `holon/docs/design/2026-10-14-holon-operant-boundary.md`).
+//! Operant as Holon's runtime — the org side of `docs/agentic-os/`. The
+//! interface contract is Holon's public `docs/CONTRACT.md` (§§1, 8–12);
+//! the boundary record itself lives in the private `holon-personal`
+//! overlay (docs/design/2026-10-14-holon-operant-boundary.md) — cite the
+//! CONTRACT for interfaces and the overlay for the record (audit O-29).
 //!
 //! Phase B (work package H2's consumer): the read API. Holon publishes SQL views
 //! (`api_*`, `api_version`) over its `work.db`; this crate is the ONLY sanctioned
