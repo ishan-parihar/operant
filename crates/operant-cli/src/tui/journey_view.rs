@@ -14,11 +14,10 @@
 //
 // Data sources:
 //   - Skills:  operant_core::skills::SkillManager::load_all()
-//   - Memories: operant_core::memory::MemoryStore::read_memories() (sync read
-//                of ~/.operant/memory/MEMORY.md)
+//   - Memories: memory-wire list_memories (plan 08 — one engine)
 
 use operant_core::agent::learning_graph::{self, LearningGraph};
-use operant_core::memory::{MemoryBlock, MemoryStore};
+use operant_core::memory::MemoryBlock;
 use operant_core::skills::Skill;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -91,17 +90,33 @@ impl JourneyViewState {
             }
         }
 
-        // Load memories (sync read of MEMORY.md).
-        let store = MemoryStore::new(memory_dir);
-        match store.read_memories() {
-            Ok(map) => {
-                let mut blocks: Vec<MemoryBlock> = map.into_values().collect();
-                // Newest first by created_at, fall back to importance.
-                blocks.sort_by(|a, b| {
-                    b.created_at
-                        .cmp(&a.created_at)
-                        .then(b.importance.cmp(&a.importance))
-                });
+        // (plan 08) ONE engine: the memory half reads memory-wire (the
+        // same store the agent recalls from), adapted into the view's row
+        // type. The old loader read a phantom MEMORY.md under `memory_dir`.
+        let _ = memory_dir;
+        match operant_core::memory_wire::MemoryWireProvider::new(
+            operant_core::platform::operant_home(),
+        ) {
+            Ok(provider) => {
+                // Newest first: the store's page order is newest-first.
+                let rows = provider.list_page(200, 0);
+                let mut blocks: Vec<MemoryBlock> = rows
+                    .iter()
+                    .map(|m| {
+                        let mut b = MemoryBlock::new(m.id.clone(), "memory", m.content.clone());
+                        b.created_at = m
+                            .created_at
+                            .as_deref()
+                            .and_then(|c| {
+                                chrono::DateTime::parse_from_rfc3339(c)
+                                    .ok()
+                                    .map(|t| t.timestamp())
+                            })
+                            .unwrap_or(0);
+                        b
+                    })
+                    .collect();
+                blocks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 self.memories = blocks;
             }
             Err(e) => {

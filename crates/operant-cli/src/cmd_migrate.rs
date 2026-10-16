@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -78,23 +78,39 @@ pub async fn handle_migrate_command(
                     }
                 }
             } else {
+                // (plan 08) migrate IMPORTS into memory-wire — the one
+                // engine — instead of copying MEMORY.md/USER.md into
+                // ~/.operant where nothing would ever read them again.
                 let mut migrated = 0u32;
-                let operant_dir = dirs::home_dir().unwrap_or_default().join(".operant");
+                let provider = operant_core::memory_wire::MemoryWireProvider::new(
+                    operant_core::platform::operant_home(),
+                )?;
 
-                if has_memory {
-                    let dest = operant_dir.join("MEMORY.md");
-                    std::fs::copy(&memory_file, &dest)?;
-                    migrated += 1;
-                    if !json {
-                        println!("✅ Migrated MEMORY.md → {}", dest.display());
+                for (found, path, label) in [
+                    (has_memory, &memory_file, "MEMORY.md"),
+                    (has_user, &user_file, "USER.md"),
+                ] {
+                    if !found {
+                        continue;
                     }
-                }
-                if has_user {
-                    let dest = operant_dir.join("USER.md");
-                    std::fs::copy(&user_file, &dest)?;
+                    let text = std::fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    let mut count = 0u32;
+                    for line in text.lines() {
+                        let body = line.trim().trim_start_matches('-').trim();
+                        if body.is_empty() {
+                            continue;
+                        }
+                        if provider
+                            .retain_fact(body, &["migrated".to_string()])
+                            .is_some()
+                        {
+                            count += 1;
+                        }
+                    }
                     migrated += 1;
                     if !json {
-                        println!("✅ Migrated USER.md → {}", dest.display());
+                        println!("✅ Imported {label}: {count} memories → memory-wire");
                     }
                 }
 

@@ -353,32 +353,45 @@ pub fn run_config_checks(
         );
     }
 
-    // Built-in memory lives at the operant home ROOT (MEMORY.md / USER.md),
-    // matching the agent's `load_repo_memory_manager` storage dir. The doctor
-    // previously probed a phantom `memories/` subdir, so it always warned even
-    // when the agent's real memory store was healthy (audit R5-2).
-    let memory_file = hh.join("MEMORY.md");
-    if memory_file.exists() {
-        let size = std::fs::read_to_string(&memory_file)
-            .map(|s| s.trim().len())
-            .unwrap_or(0);
-        check_ok(&format!("MEMORY.md exists ({} chars)", size), "");
-    } else {
-        check_info(
-            "MEMORY.md not created yet (will be created when the agent first writes a memory)",
+    // (plan 08) ONE memory engine: memory-wire at
+    // ~/.operant/memory_wire.sqlite, personal bank — the same store the
+    // agent recalls from. The old MEMORY.md/USER.md file probes are gone:
+    // they reported the legacy files' health while the agent had already
+    // moved to memory-wire (audit finding 10).
+    let db = hh.join("memory_wire.sqlite");
+    if db.exists() {
+        let size = std::fs::metadata(&db).map(|m| m.len()).unwrap_or(0);
+        check_ok(
+            &format!("memory-wire: {} ({} KB)", db.display(), size / 1024),
+            "",
         );
-    }
-
-    let user_file = hh.join("USER.md");
-    if user_file.exists() {
-        let size = std::fs::read_to_string(&user_file)
-            .map(|s| s.trim().len())
-            .unwrap_or(0);
-        check_ok(&format!("USER.md exists ({} chars)", size), "");
+        if let Ok(provider) = operant_core::memory_wire::MemoryWireProvider::new(
+            operant_core::platform::operant_home(),
+        ) {
+            if let Some(stats) = provider.memory_bank_stats() {
+                check_ok(
+                    &format!(
+                        "bank {:?}: {} memories, {} tags",
+                        provider.bank_id(),
+                        stats.memories,
+                        stats.tags
+                    ),
+                    "",
+                );
+            } else {
+                check_warn(
+                    "memory-wire store opened but stats read failed",
+                    "(run operant memory stats)",
+                );
+            }
+        } else {
+            check_warn(
+                "memory-wire store failed to open",
+                "(memories degrade to misses this session)",
+            );
+        }
     } else {
-        check_info(
-            "USER.md not created yet (will be created when the agent first writes a memory)",
-        );
+        check_info("memory-wire store not created yet (created on the first retained memory)");
     }
 
     let state_db = hh.join("state.db");

@@ -1138,11 +1138,6 @@ pub(crate) async fn build_registry(
         }
     }
 
-    // The agentmemory MCP server is injected natively at config load
-    // (config::ensure_default_mcp_servers) whenever the agentmemory memory
-    // provider is active, so it flows through the generic config-driven
-    // connect loop below like any other server. No CLI special case needed.
-
     // LCM context-engine tools: when agent.context_engine = "lcm" the
     // lossless DAG is active, so expose lcm_recall / lcm_stats to the model.
     // This engine instance is a read-only peer of the one attached to the
@@ -3289,33 +3284,12 @@ mod tests {
         assert_eq!(select_log_target(&logging, true), LogTarget::File);
     }
 
-    #[tokio::test]
-    async fn load_memory_manager_reads_existing_memory_file() {
-        let dir =
-            std::env::temp_dir().join(format!("operant_cli_memory_load_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let seed = MemoryManager::with_storage_dir(dir.clone());
-        seed.store(
-            operant_core::memory::MemoryBlock::new("cli_fact", "fact", "Loaded memory fact")
-                .importance(90),
-        )
-        .await;
-        // iter-24: store() marks dirty instead of writing immediately.
-        // flush_if_dirty() persists to disk so load_memory_manager can
-        // read the file.
-        seed.flush_if_dirty().await.unwrap();
-
-        let (loaded, provider) = load_memory_manager(dir.clone()).await.unwrap();
-        // With the default config, provider may be Some(memory_wire) or None
-        // (builtin/disabled) — both are valid; the manager must still load.
-        assert!(provider.is_none() || provider.unwrap().name() == "memory_wire");
-
-        assert_eq!(loaded.search("Loaded memory").await.len(), 1);
-
-        let _ = std::fs::remove_dir_all(dir);
-    }
+    // (plan 08) load_memory_manager_reads_existing_memory_file deleted:
+    // it pinned the LEGACY MemoryManager file round-trip (MEMORY.md seed →
+    // read back), exactly the split-surface path plan 08 retires. The
+    // engine the agent actually recalls from is memory-wire, covered by
+    // memory_wire.rs's own wiring tests; the manager's remaining role
+    // (turn sequencing) carries no file contract to pin here.
 
     /// BUGS.md D-5 — the hoisted memory pair must be the pair the agent
     /// core is built with. Two `build_agent_core_with_memory` calls given

@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-890 — plan 08: ONE memory engine everywhere** (audit plan 08,
+  finding 10). The agent moved to memory-wire in 11C3, but every surface
+  around it still read the legacy files: `operant memory list/store/
+  search/...` wrote MEMORY.md (invisible to the agent's recall),
+  `operant doctor` probed MEMORY.md/USER.md health, `/whoami` read a
+  phantom third store and said "I don't know much about you yet" while
+  memory-wire held hundreds of rows, `/journey` listed the phantom
+  store, `operant migrate` copied MEMORY.md to a directory nothing
+  reads, and every single start printed the agentmemory warning — from
+  the DEFAULTS. Now:
+  - `MemoryWireProvider` gained thin CLI pass-throughs
+    (`list_page`, `memory_by_id`, `delete_memory_by_id`,
+    `memory_bank_stats`, `bank_id`) — same panic-guarded
+    degrade-don't-die contract as the turn hooks.
+  - `operant memory` runs on them: list/get/search(recall)/store/
+    delete/stats/import/export/clear (import accepts JSONL or a legacy
+    MEMORY.md/USER.md; profile and prune are deleted — they read
+    USER.md and had no engine filter).
+  - doctor prints one memory-wire line (store path + bank stats); the
+    MEMORY.md/USER.md probes are gone.
+  - `/whoami` and `/journey` read memory-wire (the journey keeps its
+    row type via a small adapter); `operant migrate` imports into
+    memory-wire instead of file-copying.
+  - Config: default provider is `memory-wire`; the retired agentmemory
+    keys still parse (accepted + ignored) but DEFAULTS ARE SILENT —
+    `legacy_warnings()` returns data and the new test pins that a clean
+    start warns nothing (the audit's every-start warning is gone);
+    `agentmemory_package_spec`/`agentmemory_mcp_spec` and the
+    agentmemory MCP seeding (`ensure_default_mcp_servers` on the core
+    side) are deleted with their tests — the schema twin in
+    operant-config stays until plan 10 takes that crate.
+  - mcp-view corpus golden re-proved: the seeded agentmemory MCP row
+    is gone from the default panel.
+  Tests: `memory_defaults_are_silent` (RED before: defaults warned),
+  `cli_store_is_agent_visible` (the plan's acceptance: a CLI-stored
+  fact is found by the agent-shaped recall — RED before: two engines).
+  Gates: gate 2 = 1761 passed / 1 pre-existing (H-3; H-2's test deleted
+  with the legacy path it pinned); core lib 2276 green solo (the 3
+  battery failures are the known parallel-DB disk-I/O flake class,
+  solo-green); corpus 61/62 (rewind-flow pre-existing, BUGS.md H-3);
+  clippy seen=39 new=38 baseline parity.
+
 - **iter-888 — red-team pass 2 (audit §9): org-mode event intake
   spoke a dead kernel contract and could never fire.** The 2026-10-17
   adversarial pass over AUDIT-2026-10-15.md found W5's "O-15 closed"

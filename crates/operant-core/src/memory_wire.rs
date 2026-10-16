@@ -234,6 +234,46 @@ impl<S: Store> MemoryWireProvider<S> {
             svc.retain_tagged(bank, content, None, tags)
         })
     }
+
+    // ── (plan 08) CLI pass-throughs ────────────────────────────────
+    // The `operant memory` subcommands read and write the SAME engine the
+    // agent recalls from — thin, panic-guarded, same degradation contract
+    // as the turn hooks (a miss, never a dead command).
+
+    /// One page of the provider's bank, newest first (the memory-wire
+    /// store's page order).
+    pub fn list_page(&self, limit: usize, offset: usize) -> Vec<memory_wire::memory::Memory> {
+        let bank = &self.bank;
+        let svc = &self.service;
+        guard("list_memories", || svc.list_memories(bank, limit, offset)).unwrap_or_default()
+    }
+
+    /// One memory by id, or `None` (absent in this bank reads as absent).
+    pub fn memory_by_id(&self, id: &str) -> Option<memory_wire::memory::Memory> {
+        let bank = &self.bank;
+        let svc = &self.service;
+        guard("get_memory", || svc.get_memory(bank, id)).flatten()
+    }
+
+    /// Delete one memory; `false` when it was not in the bank.
+    pub fn delete_memory_by_id(&self, id: &str) -> bool {
+        let bank = &self.bank;
+        let svc = &self.service;
+        guard("delete_memory", || svc.delete_memory(bank, id)).unwrap_or(false)
+    }
+
+    /// Row count + age bounds for the provider's bank (zeroes when the
+    /// service is degraded — the doctor and `stats` print what they get).
+    pub fn memory_bank_stats(&self) -> Option<memory_wire::store::BankStats> {
+        let bank = &self.bank;
+        let svc = &self.service;
+        guard("bank_stats", || svc.bank_stats(bank))
+    }
+
+    /// The provider's bank id (the `--bank` default the CLI prints).
+    pub fn bank_id(&self) -> &str {
+        &self.bank
+    }
 }
 
 impl MemoryWireProvider<SqliteStore> {
@@ -453,6 +493,33 @@ mod tests {
     fn in_memory_provider() -> MemoryWireProvider<SqliteStore> {
         let store = SqliteStore::open_in_memory().expect("open in-memory store");
         MemoryWireProvider::from_service(MemoryService::new(store), "test")
+    }
+
+    /// (plan 08) the CLI/agent unification acceptance: a fact stored
+    /// through the CLI-shaped pass-through is found by the agent-shaped
+    /// recall on the SAME provider. Pre-plan-08 the CLI wrote MEMORY.md
+    /// and the agent recalled memory-wire — the fact never met the recall.
+    #[test]
+    fn cli_store_is_agent_visible() {
+        let provider = in_memory_provider();
+        let id = provider
+            .retain_fact("prefers tabs over spaces for Rust", &[])
+            .expect("retain accepted");
+        assert!(
+            provider.memory_by_id(&id).is_some(),
+            "the stored fact must be readable back by id"
+        );
+        let recalled = provider.recall_text("tabs spaces preference", 5);
+        assert!(
+            recalled.contains("tabs over spaces"),
+            "the agent-shaped recall must find the CLI-stored fact, got: {recalled}"
+        );
+        let stats = provider.memory_bank_stats().expect("stats readable");
+        assert_eq!(stats.memories, 1);
+        let listed = provider.list_page(10, 0);
+        assert_eq!(listed.len(), 1);
+        assert!(provider.delete_memory_by_id(&id));
+        assert!(provider.list_page(10, 0).is_empty());
     }
 
     /// A `Store` whose every mutating/reading operation panics, standing in for

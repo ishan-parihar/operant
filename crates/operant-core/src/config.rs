@@ -1504,89 +1504,77 @@ impl Default for TtsSettings {
 
 /// Memory provider configuration.
 ///
-/// `provider` selects the long-term memory backend:
-/// - `"agentmemory"` (default) — hybrid semantic memory via the agentmemory
-///   server (BM25 + vector + graph). Operant auto-spawns
-///   `npx @agentmemory/agentmemory` on :3111 when needed and registers its
-///   MCP tools (memory_smart_search, memory_save, ...).
-/// - `"builtin"` — file-backed MEMORY.md/USER.md in the operant home directory
-/// - Any other string falls back to `"builtin"`.
+/// (plan 08) memory-wire is the one engine (in-process, ~/.operant/
+/// memory_wire.sqlite). The `provider` key is accepted so existing files
+/// keep loading; anything but the memory-wire family is ignored with a
+/// one-line warning. The retired agentmemory keys stay accepted the same
+/// way — `deny_unknown_fields` is on, and a config that parsed yesterday
+/// must parse today.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemorySettings {
-    /// Memory provider: agentmemory|builtin
+    /// Memory provider: memory-wire (the only engine; other names warn)
     pub provider: String,
     /// Whether long-term memory is enabled at all
     pub enabled: bool,
-    /// agentmemory server base URL (default: http://localhost:3111)
+    /// (retired, plan 08) agentmemory server base URL — accepted, ignored.
     pub agentmemory_url: Option<String>,
-    /// Optional shared secret for the agentmemory REST API
+    /// (retired, plan 08) agentmemory REST secret — accepted, ignored.
     pub agentmemory_secret: Option<String>,
-    /// Auto-spawn `npx @agentmemory/agentmemory` when the server is unreachable
+    /// (retired, plan 08) agentmemory auto-spawn — accepted, ignored.
     pub agentmemory_auto_spawn: Option<bool>,
-    /// Pinned npm package version for `@agentmemory/*` spawns (auto-spawn
-    /// and the MCP entries). `None` →
-    /// `operant_config::DEFAULT_AGENTMEMORY_VERSION` (supply-chain: never
-    /// resolve `@latest` at runtime).
+    /// (retired, plan 08) npm version pin — accepted, ignored.
     pub agentmemory_version: Option<String>,
 }
 
 impl MemorySettings {
-    /// (plan 11C3 migration) memory-wire is the only engine — warn once
-    /// when a non-default provider name (or the removed agentmemory
-    /// spawn keys) is configured.
+    /// (plan 08) the retired-key warning contract: DEFAULTS ARE SILENT.
+    /// A warning fires only for a value the file actually carries (the
+    /// deserialized struct cannot tell "present" from "defaulted", so the
+    /// retired keys default to `None`/`Some(false)` — the loud legacy
+    /// default `Some(true)` is gone and every clean start is quiet).
     pub fn warn_legacy_keys(&self) {
+        for line in self.legacy_warnings() {
+            eprintln!("{line}");
+        }
+    }
+
+    /// (plan 08) the warning contract as data — defaults ARE SILENT. A
+    /// warning fires only for a value the file actually carries; the
+    /// deserialized struct cannot tell "present" from "defaulted", so
+    /// the retired agentmemory keys default to `None` — the loud legacy
+    /// default `Some(true)` is gone and every clean start is quiet. The
+    /// test pins this: `MemorySettings::default().legacy_warnings()` is
+    /// empty.
+    pub fn legacy_warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
         if !matches!(
             self.provider.as_str(),
             "memory-wire" | "memory_wire" | "memory" | ""
         ) {
-            eprintln!(
+            out.push(format!(
                 "warning: [memory] provider = {:?} is ignored — memory-wire is the only memory engine now. Remove the key from operant.toml.",
                 self.provider
-            );
+            ));
         }
         if self.agentmemory_auto_spawn.unwrap_or(false) {
-            eprintln!(
+            out.push(
                 "warning: [memory] agentmemory_auto_spawn is removed — the agentmemory server era is over. Remove the key from operant.toml."
+                    .to_string(),
             );
         }
-    }
-
-    /// The resolved `@agentmemory/agentmemory@<version>` package spec used
-    /// by the auto-spawner — configured pin or the pinned default, never
-    /// `@latest`.
-    pub fn agentmemory_package_spec(&self) -> String {
-        format!(
-            "@agentmemory/agentmemory@{}",
-            self.agentmemory_version
-                .as_deref()
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .unwrap_or(operant_config::DEFAULT_AGENTMEMORY_VERSION)
-        )
-    }
-
-    /// The resolved `@agentmemory/mcp@<version>` package spec for MCP entries.
-    pub fn agentmemory_mcp_spec(&self) -> String {
-        format!(
-            "@agentmemory/mcp@{}",
-            self.agentmemory_version
-                .as_deref()
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .unwrap_or(operant_config::DEFAULT_AGENTMEMORY_VERSION)
-        )
+        out
     }
 }
 
 impl Default for MemorySettings {
     fn default() -> Self {
         Self {
-            provider: "agentmemory".to_string(),
+            provider: "memory-wire".to_string(),
             enabled: true,
             agentmemory_url: None,
             agentmemory_secret: None,
-            agentmemory_auto_spawn: Some(true),
+            agentmemory_auto_spawn: None,
             agentmemory_version: None,
         }
     }
@@ -2073,7 +2061,6 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     // connect_all, gateway orchestrator) exposes the full 53-tool memory
     // surface. Users who configured their own server (or deliberately
     // disabled it) keep their entry untouched.
-    ensure_default_mcp_servers(&mut config);
 
     // 018-U3: single harness — [harness].enabled and [tools.kernel].enabled
     // are now aliases for the same master switch. OR so either being true
@@ -2269,53 +2256,6 @@ pub fn set_nested_json(target: &mut serde_json::Value, segments: &[&str], raw: &
         .ok_or_else(|| crate::error::Error::Agent(format!("could not access key '{head}'")))?;
 
     set_nested_json(child, tail, raw)
-}
-
-/// Inject the agentmemory MCP server into `config.mcp.servers` when the
-/// agentmemory memory provider is active and no `agentmemory` server is
-/// already configured. This makes the memory tools a native, config-driven
-/// MCP server instead of a CLI-only special case (hermes-agent plugin
-/// parity: agentmemory registers itself as an MCP server the same way the
-/// hermes plugin's docs configure `@agentmemory/mcp`).
-pub fn ensure_default_mcp_servers(config: &mut AppConfig) {
-    if !(config.memory.enabled && config.memory.provider == "agentmemory") {
-        return;
-    }
-    if config.mcp.servers.iter().any(|s| s.name == "agentmemory") {
-        return;
-    }
-    let server_url = config
-        .memory
-        .agentmemory_url
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "http://localhost:3111".to_string());
-    let mut env = HashMap::new();
-    env.insert("AGENTMEMORY_URL".to_string(), server_url);
-    // Propagate the optional shared secret so the MCP tools authenticate
-    // exactly like the REST hooks (parity: the plugin's MCP server reads
-    // AGENTMEMORY_SECRET from its environment).
-    if let Some(secret) = config
-        .memory
-        .agentmemory_secret
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-    {
-        env.insert("AGENTMEMORY_SECRET".to_string(), secret);
-    }
-    config.mcp.servers.push(McpServerConfig {
-        name: "agentmemory".to_string(),
-        transport: McpTransportKind::Stdio,
-        url: None,
-        auth_token: None,
-        command: Some("npx".to_string()),
-        args: vec!["-y".to_string(), config.memory.agentmemory_mcp_spec()],
-        env,
-        enabled: true,
-        // Deferred (lazy): the provider's own memory tools are registered
-        // directly, so we never want to spawn npx on every agent startup.
-        deferred: true,
-    });
 }
 
 /// The `OPERANT_CONFIG_DIR` override (if set and non-empty), tilde-expanded.
@@ -3136,134 +3076,38 @@ wonderful_unknown_key = 42
         assert!(text.contains("expected"));
     }
 
+    // (plan 08) agentmemory_version_pins_package_specs deleted with the
+    // spec fns and the seeding — the agentmemory era is over.
+
+    // (plan 08) deleted with the agentmemory seeding: ensure_default_mcp_servers_injects_agentmemory_when_provider_active
+
+    // (plan 08) deleted with the agentmemory seeding: ensure_default_mcp_servers_respects_custom_url_and_existing_server
+
+    // (plan 08) deleted with the agentmemory seeding: ensure_default_mcp_servers_noop_for_builtin_provider
+
+    /// (plan 08) DEFAULTS ARE SILENT: a clean start must not print the
+    /// legacy-key warnings. Pre-plan-08 the DEFAULT provider was
+    /// "agentmemory" (not in the allowed list) and auto_spawn defaulted
+    /// to Some(true), so every single start warned — the audit's
+    /// "seen on every start" finding.
     #[test]
-    fn agentmemory_version_pins_package_specs() {
-        // Default: pinned constant, never @latest.
-        let mem = MemorySettings::default();
-        assert!(mem.agentmemory_version.is_none());
-        assert_eq!(
-            mem.agentmemory_package_spec(),
-            format!(
-                "@agentmemory/agentmemory@{}",
-                operant_config::DEFAULT_AGENTMEMORY_VERSION
-            )
-        );
-        assert_eq!(
-            mem.agentmemory_mcp_spec(),
-            format!(
-                "@agentmemory/mcp@{}",
-                operant_config::DEFAULT_AGENTMEMORY_VERSION
-            )
-        );
-
-        // Configured pin wins; whitespace-only falls back to the default.
-        let mem: MemorySettings = toml::from_str("agentmemory_version = \"1.2.3\"").expect("parse");
-        assert_eq!(
-            mem.agentmemory_package_spec(),
-            "@agentmemory/agentmemory@1.2.3"
-        );
-        let mem: MemorySettings = toml::from_str("agentmemory_version = \"  \"").expect("parse");
-        assert_eq!(
-            mem.agentmemory_mcp_spec(),
-            format!(
-                "@agentmemory/mcp@{}",
-                operant_config::DEFAULT_AGENTMEMORY_VERSION
-            )
-        );
-    }
-
-    #[test]
-    fn ensure_default_mcp_servers_injects_agentmemory_when_provider_active() {
-        // Default config has provider=agentmemory → the agentmemory stdio
-        // MCP server is injected natively so all agent paths expose the
-        // 53-tool memory surface.
-        let mut config = AppConfig::default();
-        assert!(config.memory.enabled);
-        assert_eq!(config.memory.provider, "agentmemory");
-        ensure_default_mcp_servers(&mut config);
-
-        let server = config
-            .mcp
-            .servers
-            .iter()
-            .find(|s| s.name == "agentmemory")
-            .expect("agentmemory server should be injected");
-        assert!(server.enabled);
-        assert_eq!(server.transport, McpTransportKind::Stdio);
-        assert_eq!(server.command.as_deref(), Some("npx"));
+    fn memory_defaults_are_silent() {
+        let warnings = MemorySettings::default().legacy_warnings();
         assert!(
-            server
-                .args
-                .iter()
-                .any(|a| a == &config.memory.agentmemory_mcp_spec())
+            warnings.is_empty(),
+            "clean defaults must not warn, got: {warnings:?}"
         );
-        // Supply-chain: the spec is pinned — never `@latest` or bare.
-        let spec = server
-            .args
-            .iter()
-            .find(|a| a.starts_with("@agentmemory/mcp"))
-            .expect("pinned mcp spec");
-        assert!(spec.ends_with(operant_config::DEFAULT_AGENTMEMORY_VERSION));
-        assert!(!spec.ends_with("latest"));
-        // Deferred (lazy): never spawn npx on agent startup — the provider's
-        // own memory tools are registered directly instead.
-        assert!(server.deferred);
-        assert_eq!(
-            server.env.get("AGENTMEMORY_URL").map(String::as_str),
-            Some("http://localhost:3111")
-        );
-    }
-
-    #[test]
-    fn ensure_default_mcp_servers_respects_custom_url_and_existing_server() {
-        // Custom agentmemory_url + secret flow into the injected server env.
-        let mut config = AppConfig::default();
-        config.memory.agentmemory_url = Some("http://127.0.0.1:9999".to_string());
-        config.memory.agentmemory_secret = Some("s3cret".to_string());
-        ensure_default_mcp_servers(&mut config);
-        let server = config
-            .mcp
-            .servers
-            .iter()
-            .find(|s| s.name == "agentmemory")
-            .expect("agentmemory server should be injected");
-        assert_eq!(
-            server.env.get("AGENTMEMORY_URL").map(String::as_str),
-            Some("http://127.0.0.1:9999")
-        );
-        assert_eq!(
-            server.env.get("AGENTMEMORY_SECRET").map(String::as_str),
-            Some("s3cret"),
-            "configured secret must reach the injected MCP server env"
-        );
-
-        // A user-configured agentmemory server is never duplicated, even if
-        // they deliberately disabled it.
-        let mut config = AppConfig::default();
-        config.mcp.servers.push(McpServerConfig {
-            name: "agentmemory".to_string(),
-            enabled: false,
-            ..Default::default()
-        });
-        ensure_default_mcp_servers(&mut config);
-        assert_eq!(
-            config
-                .mcp
-                .servers
-                .iter()
-                .filter(|s| s.name == "agentmemory")
-                .count(),
-            1,
-            "existing agentmemory server must not be duplicated"
-        );
-    }
-
-    #[test]
-    fn ensure_default_mcp_servers_noop_for_builtin_provider() {
-        let mut config = AppConfig::default();
-        config.memory.provider = "builtin".to_string();
-        ensure_default_mcp_servers(&mut config);
-        assert!(config.mcp.servers.is_empty());
+        assert_eq!(MemorySettings::default().provider, "memory-wire");
+        // A file that actually carries a retired key still warns once.
+        let loud = MemorySettings {
+            provider: "agentmemory".to_string(),
+            enabled: true,
+            agentmemory_url: None,
+            agentmemory_secret: None,
+            agentmemory_auto_spawn: Some(true),
+            agentmemory_version: None,
+        };
+        assert_eq!(loud.legacy_warnings().len(), 2);
     }
 
     #[test]

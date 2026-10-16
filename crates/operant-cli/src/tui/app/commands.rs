@@ -1526,47 +1526,65 @@ impl App {
             // /whoami — show what the agent knows about the user.
             // (P1-9 from UX audit — transparency + trust.)
             "whoami" => {
-                let mem_dir = operant_core::platform::operant_home().join("memory");
-                let store = operant_core::memory::MemoryStore::new(mem_dir);
-                match store.read_memories() {
-                    Ok(map) if map.is_empty() => {
-                        self.set_status_notice(
-                            "I don't know much about you yet. Chat with me and I'll start remembering.".to_string()
-                        );
-                    }
-                    Ok(map) => {
-                        let blocks: Vec<_> = map.into_values().collect();
-                        let mut summary = format!(
-                            "Here's what I know about you ({} memories):\n\n",
-                            blocks.len()
-                        );
-                        for block in blocks.iter().take(10) {
-                            let preview: String = block
-                                .content
-                                .lines()
-                                .next()
-                                .unwrap_or("")
-                                .chars()
-                                .take(80)
-                                .collect();
-                            summary.push_str(&format!(
-                                "  [{:>3}] {:<10} {}\n",
-                                block.importance, block.block_type, preview,
-                            ));
-                        }
-                        if blocks.len() > 10 {
-                            summary.push_str(&format!("\n  ...and {} more\n", blocks.len() - 10));
-                        }
-                        self.push_system_message(
-                            summary,
-                            crate::tui::app::SystemMessageStyle::Info,
-                        );
-                    }
+                // (plan 08) ONE engine: memory-wire, the same store the agent
+                // recalls from. The old arm read `~/.operant/memory/` via
+                // MemoryStore — a third, phantom path: it said "I don't know
+                // much about you yet" while memory-wire held hundreds of rows.
+                let opened = operant_core::memory_wire::MemoryWireProvider::new(
+                    operant_core::platform::operant_home(),
+                );
+                match opened {
                     Err(_) => {
                         self.set_status_notice(
-                            "No memory store found. Use /memory to manage memory files."
+                            "Memory store unavailable — run operant doctor for the memory-wire line."
                                 .to_string(),
                         );
+                    }
+                    Ok(provider) => {
+                        let hits = provider.list_page(10, 0);
+                        if hits.is_empty() {
+                            self.set_status_notice(
+                                "I don't have any memories yet. Chat with me and I'll start remembering."
+                                    .to_string(),
+                            );
+                        } else {
+                            let total = provider
+                                .memory_bank_stats()
+                                .map(|s| s.memories)
+                                .unwrap_or(hits.len());
+                            let mut summary = format!(
+                                "Here's what I remember (showing 10 of {total} memories):
+
+"
+                            );
+                            for m in &hits {
+                                let preview: String = m
+                                    .content
+                                    .lines()
+                                    .next()
+                                    .unwrap_or("")
+                                    .chars()
+                                    .take(80)
+                                    .collect();
+                                summary.push_str(&format!(
+                                    "  {} {preview}
+",
+                                    m.id
+                                ));
+                            }
+                            if total > hits.len() {
+                                summary.push_str(&format!(
+                                    "
+  ...and {} more
+",
+                                    total - hits.len()
+                                ));
+                            }
+                            self.push_system_message(
+                                summary,
+                                crate::tui::app::SystemMessageStyle::Info,
+                            );
+                        }
                     }
                 }
                 true

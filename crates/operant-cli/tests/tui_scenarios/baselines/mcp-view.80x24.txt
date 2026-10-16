@@ -1,10 +1,10 @@
 
 
 
-      MCP — 1 servers · 0 tools                              Esc to close
+      MCP — 0 servers · 0 tools                              Esc to close
      ┌ Servers ──────────────┐┌ Tools ────────────────────────────────────┐
- ope │stdio                  ││/ filter tools                             │
- ope │› ○ agentmemory  0 tool││                                           │
+ ope │                       ││/ filter tools                             │
+ ope │                       ││                                           │
  /mo │                       ││                                           │
  v0. │                       ││                                           │
  /lo │                       ││                                           │
