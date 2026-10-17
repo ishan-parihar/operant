@@ -49,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BUGS.md hygiene: H-5/H-6/H-7/H-8 and K-1 closed with root causes; TODO.md
   K-3 row moved to Implemented (done in iter-887).
 
+- **iter-905 — connect-dialog dead ends and MCP panel auth (H-9), native
+  scroll docs (plan 07 step 6).** The `openai-codex` connect row no longer
+  opens a device-auth dialog that could never complete (it takes an API key
+  like its peers); the unreachable `github-copilot` arm and the
+  `device_auth_pending` stub are removed. The MCP panel's `a` key runs the
+  real OAuth 2.1 + PKCE login in the background (same flow as `operant mcp
+  login`) instead of printing "not yet wired". README gains a "Terminal
+  scrollback mode" section and `operant.example.toml` documents the
+  mouse-capture contract (never enabled in native-scroll mode; verified at
+  the only `EnableMouseCapture` call site, the alt-screen branch). K-4
+  (`--no-default-features`) re-verified closed by the iter-892 crate purge.
+
 ### Docs
 
 - **iter-903 — the 2026-10-16 raw audit is integrated into the kb**

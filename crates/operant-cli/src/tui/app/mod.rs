@@ -559,8 +559,6 @@ pub struct App {
     pub free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState,
     /// Device code / browser auth dialog (GitHub Copilot device flow, Anthropic OAuth).
     pub device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState,
-    /// When set, the main loop should spawn the async auth task for this provider.
-    pub device_auth_pending: Option<String>,
     /// Shared provider registry for dynamic model fetching.
     /// Model registry populated from models.dev — single source of truth for
     /// all provider models shown in the `/model` picker.
@@ -1027,6 +1025,49 @@ impl App {
             Some("MCP reconnect initiated — servers will reconnect in the background.".to_string());
     }
 
+    /// Background OAuth login for one MCP server, reported through the same
+    /// status channel the reconnect task uses (drained every frame). The
+    /// tokens persist under `~/.operant/mcp-tokens/`; a reconnect (`r`)
+    /// picks them up.
+    fn start_mcp_panel_auth(&mut self, server_name: String) {
+        let Some(url) = self
+            .config
+            .mcp
+            .servers
+            .iter()
+            .find(|s| s.name == server_name)
+            .and_then(|s| s.url.clone())
+        else {
+            self.set_status_notice(format!(
+                "MCP auth: '{server_name}' has no URL (stdio servers don't use OAuth)."
+            ));
+            return;
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        self.mcp_reconnect_rx = Some(rx);
+        self.set_status_notice(format!(
+            "MCP auth for '{server_name}': complete the login in your browser…"
+        ));
+        tokio::spawn(async move {
+            let config = operant_core::mcp_oauth::McpOAuthConfig {
+                client_id: None,
+                client_secret: None,
+                scope: None,
+                redirect_port: None,
+                client_name: Some(format!("operant-{server_name}")),
+                timeout: None,
+            };
+            let provider = operant_core::mcp_oauth::get_manager().get_provider(&url, Some(config));
+            let msg = match provider.authenticate().await {
+                Ok(_) => format!(
+                    "MCP auth for '{server_name}' succeeded — press r in the MCP panel to reconnect."
+                ),
+                Err(e) => format!("MCP auth for '{server_name}' failed: {e}"),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
     /// Teardown shared by every exit path: dump debug state, then release any
     /// live background-delegation rows so none outlives the process that owns
     /// the child it was tracking.
@@ -1151,6 +1192,11 @@ impl App {
             // of waiting for the next Enter. (iter-326 — 'r' acts now.)
             if self.take_pending_mcp_reconnect() {
                 self.start_mcp_reconnect();
+            }
+            // MCP panel 'a': run the real OAuth 2.1 + PKCE login (the same
+            // flow as `operant mcp login`) in the background.
+            if let Some(server_name) = self.take_pending_mcp_panel_auth() {
+                self.start_mcp_panel_auth(server_name);
             }
 
             // Ctrl+G: edit the prompt in the external editor. Runs here, not

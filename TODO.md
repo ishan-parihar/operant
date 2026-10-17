@@ -38,7 +38,6 @@ in `## Review`, which autonomous mode never touches.
 - `[keybindings]` user overrides in `operant.toml` (`/keys` now shows the effective registry bindings + conflicts — iter-820; overrides remain)
 - `▸ thought for Xs` collapsed row when a Current-mode reasoning trace hides
 - Unify the gateway's `agent.show_reasoning` with the TUI reasoning display mode
-- BUGS.md K-4: gate the `operant_runtime` observer call so `--no-default-features` builds
 
 ## Review
 

@@ -207,6 +207,7 @@ pub fn render_help_overlay(frame: &mut Frame, overlay: &HelpOverlay, area: Rect)
         ("PageUp / PgDn", "Scroll messages"),
         ("j / k", "Scroll one line"),
         ("Home / End", "Top / bottom"),
+        ("wheel / select", "Terminal scrollback (native mode)"),
     ] {
         left_lines.push(kb_line(key, desc));
     }

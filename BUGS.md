@@ -32,13 +32,17 @@ D-3, kept).
   handler. `test_fast_is_not_a_command` pins it. If provider priority
   tiers are wanted later, wire them to a real request field first.
 
-- [ ] **H-9 — connect-dialog dead-end stubs** (plan 04 leftover). The
-  run loop's MCP-panel auth and device-auth flows print "not yet wired —
-  restart operant" (`tui_app.rs` stub arms). Plan 04's default is to remove
-  the unreachable providers from the connect dialog so the dead end can't
-  be reached; finishing device-flow polling for `github-copilot` /
-  `openai-codex` is the alternative (owner call — only worth it if the
-  owner uses them).
+- [x] **H-9 — CLOSED 2026-10-18 (iter-905): dead ends removed, MCP auth wired.**
+  The connect dialog's `openai-codex` row opened a device-auth dialog whose
+  polling task never existed ("not yet wired — restart operant"); the
+  `github-copilot` arm was unreachable (the provider id is `copilot`, which
+  already falls through to a working token dialog). Both arms and the
+  `device_auth_pending` plumbing are gone — `openai-codex` now takes an API
+  key like the other providers. The MCP panel's `a` key now runs the real
+  OAuth 2.1 + PKCE login (`start_mcp_panel_auth`, same flow as
+  `operant mcp login`) in the background and reports through the status
+  line. Residual: the `device_auth_dialog` scaffold is retained but has no
+  opener — delete it when a real device flow lands or in a dead-code sweep.
 
 ## OPEN — Hidden regressions surfaced by the test-gate repair (2026-10-16, audit plan 02)
 
@@ -628,7 +632,7 @@ native scrollback).
   re-proven). Rows that can still change shape are never emitted. Live
   `insert_before` verification remains part of plan 09's final gate.
 
-### K-4 — `cargo test -p operant-cli --no-default-features` does not compile (OPEN, unowned)
+### K-4 — `cargo test -p operant-cli --no-default-features` does not compile (CLOSED 2026-10-18 — `operant-runtime` was purged in iter-892; `--no-default-features --no-run` builds all test targets)
 
 `gateway_runner.rs:3888` calls `operant_runtime::agent::reconciled::core_observer_from_config`
 unconditionally (iter-772, `38443eab`), but `operant-runtime` is only a

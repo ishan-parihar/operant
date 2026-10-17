@@ -196,7 +196,6 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.device_auth_dialog.close();
-                    self.device_auth_pending = None;
                 }
                 _ if matches!(
                     self.device_auth_dialog.status,
@@ -220,7 +219,6 @@ impl App {
                             crate::tui::adapter_types::StoredCredential::ApiKey { key: token }
                         };
                         self.auth_store.set(&provider_id, credential);
-                        self.device_auth_pending = None;
                         self.device_auth_dialog.close();
                         self.activate_provider(provider_id, provider_name, "Connected to");
                         return false;
@@ -233,7 +231,6 @@ impl App {
                 {
                     // Any key after error -> close
                     self.device_auth_dialog.close();
-                    self.device_auth_pending = None;
                 }
                 _ => {} // Ignore other keys while waiting
             }
@@ -498,18 +495,6 @@ impl App {
                                     selected.title.clone(),
                                     current_url,
                                 );
-                            }
-                            "github-copilot" => {
-                                // GitHub Copilot: device code flow
-                                self.device_auth_dialog
-                                    .open(selected.id.clone(), selected.title.clone());
-                                self.device_auth_pending = Some("github-copilot".to_string());
-                            }
-                            "codex" | "openai-codex" => {
-                                // OpenAI Codex: browser OAuth flow (spawned by main loop)
-                                self.device_auth_dialog
-                                    .open("openai-codex".into(), "OpenAI Codex".into());
-                                self.device_auth_pending = Some("openai-codex".to_string());
                             }
                             // AWS Bedrock — accept a bearer token via key input dialog
                             "amazon-bedrock" => {

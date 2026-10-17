@@ -231,7 +231,6 @@ impl App {
                 crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
             free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
             device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState::new(),
-            device_auth_pending: None,
             model_registry: {
                 let mut reg = crate::tui::adapter_types::ModelRegistry::new();
                 // Try to load cached models.dev data from disk.

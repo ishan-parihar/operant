@@ -389,9 +389,7 @@ fn expand_message_with_mode(
                             // trace line, not the whole block. This arm MUST
                             // precede `!show_thinking` — otherwise a past
                             // turn hits the empty arm and vanishes.
-                            ContentBlock::Thinking { thinking, .. }
-                                if collapse_past_thinking =>
-                            {
+                            ContentBlock::Thinking { thinking, .. } if collapse_past_thinking => {
                                 rows.push(DisplayMessage::reasoning(
                                     crate::tui::operant_render_core::reasoning_summary_line_markup(
                                         thinking.lines().count(),

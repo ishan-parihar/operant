@@ -135,7 +135,7 @@ pub(super) fn provider_picker_items() -> Vec<SelectItem> {
                 "Popular",
                 None,
                 match name {
-                    "openai-codex" => "(ChatGPT Plus/Pro — browser login)",
+                    "openai-codex" => "(API key)",
                     "copilot" => "(GitHub subscription or token)",
                     "copilot-acp" => "(GitHub Copilot ACP)",
                     "google-gemini-cli" => "(Google Cloud OAuth)",

@@ -214,7 +214,10 @@ external_editor = ""
 # P5-1 terminal-scrollback mode (2026-10-10 design doc): render in the main
 # buffer with an inline bottom viewport instead of the alternate screen — the
 # terminal's native scrollback owns the history (tmux copy-mode and native
-# selection reach everything). Default off until live-verified.
+# selection reach everything). Mouse capture is never enabled in this mode:
+# scroll with the wheel / Shift+PgUp / tmux copy-mode, select with the
+# terminal's own selection. Full-screen views (/rewind, settings, pickers)
+# use the alternate screen while open. Default off until live-verified.
 # terminal_scroll_mode = false
 
 # What a DOUBLE Esc on an empty composer does when no turn is streaming:

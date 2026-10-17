@@ -219,6 +219,20 @@ grant_ttl_days = 7    # HoD-approved escalation grants expire after a week
 
 See [`operant.example.toml`](operant.example.toml) for the full reference — every section is annotated.
 
+### Terminal scrollback mode (opt-in)
+
+```toml
+[tui]
+terminal_scroll_mode = true
+```
+
+Renders in your terminal's main buffer with a small live region at the bottom instead of the alternate screen, so the **terminal owns the history**:
+
+- **Scroll** with the wheel, `Shift+PgUp` / `Shift+PgDn`, or tmux copy-mode (`prefix` + `[`).
+- **Select and copy** with the terminal's own selection — Operant never captures the mouse in this mode, so drag-select, double-click and your terminal's copy shortcut work across the whole session.
+- Full-screen views (`/rewind`, settings, pickers) still take the alternate screen while open and hand the scrollback back when closed.
+- Default is off (alt-screen app mode, with in-app mouse scroll/selection) until the live terminal sweep (tmux, kitty, ghostty, alacritty) is signed off.
+
 ---
 
 ## CLI reference
