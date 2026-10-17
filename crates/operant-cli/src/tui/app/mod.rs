@@ -217,6 +217,13 @@ pub struct App {
     /// (plan 05) Ctrl+B opened the branch browser — populate the fork tree
     /// from the agent's DB on the next pending-actions pass.
     pub pending_branch_list: bool,
+    /// (plan 07 step 5) true while a full-screen overlay has taken the
+    /// alternate screen in native-scroll mode. Full-screen overlays
+    /// painting INTO the native scroll region would duplicate rows that
+    /// are already in scrollback, so they swap to the alternate screen
+    /// for their lifetime; closing leaves it and requests a native
+    /// replay so the transcript re-emits at the current width.
+    pub overlay_alt_active: bool,
     /// (plan 05B) The ported jcode unified inline picker (model, effort),
     /// when open. `Some` while the picker owns the keyboard; the renderer
     /// draws it through `inline_interactive_state()`, and the key
@@ -787,6 +794,17 @@ pub(crate) trait SynchronizedUpdate {
     /// re-emitted at the current width, so the old-width history is purged,
     /// not kept.
     fn replay_clear(&mut self) -> std::io::Result<()>;
+
+    /// (plan 07 step 5) swap to the alternate screen for a full-screen
+    /// overlay. In native-scroll mode an overlay that painted into the
+    /// scroll region would duplicate rows already in scrollback, so the
+    /// overlay draws on the alternate screen instead. `TestBackend` has no
+    /// alternate screen — its impl is a no-op and the headless corpus keeps
+    /// drawing into the same buffer.
+    fn enter_alt_screen(&mut self) -> std::io::Result<()>;
+
+    /// Leave the alternate screen when the last full-screen overlay closes.
+    fn leave_alt_screen(&mut self) -> std::io::Result<()>;
 }
 
 impl<W: std::io::Write> SynchronizedUpdate for ratatui::backend::CrosstermBackend<W> {
@@ -808,6 +826,14 @@ impl<W: std::io::Write> SynchronizedUpdate for ratatui::backend::CrosstermBacken
             crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
         )
     }
+
+    fn enter_alt_screen(&mut self) -> std::io::Result<()> {
+        crossterm::execute!(self, crossterm::terminal::EnterAlternateScreen)
+    }
+
+    fn leave_alt_screen(&mut self) -> std::io::Result<()> {
+        crossterm::execute!(self, crossterm::terminal::LeaveAlternateScreen)
+    }
 }
 
 impl SynchronizedUpdate for ratatui::backend::TestBackend {
@@ -823,6 +849,16 @@ impl SynchronizedUpdate for ratatui::backend::TestBackend {
         // Headless: the recording wrapper asserts on the emit payloads, not
         // the clear; the screen state after a replay is driven by the next
         // draw + emit pass.
+        Ok(())
+    }
+
+    fn enter_alt_screen(&mut self) -> std::io::Result<()> {
+        // Headless: no alternate screen. The overlay draws into the same
+        // buffer — the corpus goldens are the headless proof.
+        Ok(())
+    }
+
+    fn leave_alt_screen(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
@@ -1044,6 +1080,7 @@ impl App {
                 // frame — sim runs only; the live TUI exits via the same path
                 // and is untouched.
                 if self.is_simulating {
+                    self.sync_overlay_alt_screen(terminal);
                     let _ = terminal.draw(|f| render::render_app(f, self));
                 }
                 self.run_exit_teardown();
@@ -1182,6 +1219,10 @@ impl App {
                 // answer for a redundant frame, and the F12 overlay prints it
                 // as `idle`; the loop still draws unconditionally, so this is
                 // diagnostic, not a gate.
+                // (plan 07 step 5) the full-screen overlays take the
+                // alternate screen under native scroll, so they never
+                // duplicate history that is already in scrollback.
+                self.sync_overlay_alt_screen(terminal);
                 let redraw_reason = self.redraw_reason();
                 let draw_start = std::time::Instant::now();
                 let drawn = terminal.draw(|f| render::render_app(f, self));

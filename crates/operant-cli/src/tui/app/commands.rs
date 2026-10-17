@@ -1,6 +1,7 @@
 //! Command handling methods.
 
 use super::*;
+use crossterm::execute;
 
 impl App {
     #[allow(dead_code)] // Used in tests
@@ -2830,5 +2831,59 @@ mod tests {
             "a dangerous shape must never auto-approve, even on a matching entry"
         );
         assert!(app2.permission_request.is_some(), "it opens the dialog");
+    }
+}
+
+// ── (plan 07 step 5) the alternate-screen guard for full-screen overlays ──
+impl App {
+    /// Which overlays are "full-screen" in jcode chrome terms: they cover
+    /// the whole frame, so in native-scroll mode they must NOT paint into
+    /// the scroll region (their rows would duplicate history that is
+    /// already in scrollback). The unified inline picker is deliberately
+    /// NOT here — it renders inline inside the live region by design
+    /// (plan 05B).
+    fn full_screen_overlay_open(&self) -> bool {
+        self.terminal_scroll_mode
+            && self.overlay_flags().iter().any(|(name, visible)| {
+                *visible
+                    && !matches!(
+                        *name,
+                        "inline_interactive"
+                            | "voice_mode_notice"
+                            | "selection_highlight"
+                            | "selection_row_cache"
+                            | "context_menu"
+                            | "command_palette"
+                            | "permission_request"
+                            | "mcp_approval"
+                            | "ask_user_dialog"
+                    )
+            })
+    }
+
+    /// Called once per frame before the draw. Takes the alternate screen
+    /// when a full-screen overlay opens under it and leaves it when the
+    /// last one closes (requesting a native replay — the transcript
+    /// re-emits at the current width, so nothing stale survives the
+    /// overlay's cover).
+    pub(super) fn sync_overlay_alt_screen<
+        B: ratatui::backend::Backend + super::SynchronizedUpdate,
+    >(
+        &mut self,
+        terminal: &mut ratatui::Terminal<B>,
+    ) {
+        let want = self.full_screen_overlay_open();
+        if want && !self.overlay_alt_active {
+            let _ = terminal.backend_mut().enter_alt_screen();
+            let _ = terminal.backend_mut().clear();
+            self.overlay_alt_active = true;
+        } else if !want && self.overlay_alt_active {
+            let _ = terminal.backend_mut().leave_alt_screen();
+            self.overlay_alt_active = false;
+            // (plan 07 §2) the overlay covered native history rows — the
+            // watermark still counts them, but they are stale on screen;
+            // replay re-emits the whole transcript at the current width.
+            self.request_native_replay();
+        }
     }
 }

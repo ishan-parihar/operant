@@ -304,6 +304,7 @@ impl App {
             pending_rewind_confirm: None,
             double_escape_action: "rewind".to_string(),
             pending_branch_list: false,
+            overlay_alt_active: false,
             inline_interactive: None,
             pending_switch_session: None,
             agent_task_handle: None,

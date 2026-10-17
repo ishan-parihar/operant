@@ -31,3 +31,5 @@
 | 2026-10-17 | docs/plans/plan-2026-10-11-tui-remaining-gaps-outline.md | self-declared supersession: the file's own header names its successor (superseded version of the remaining-gaps chain); owner kept live |
 | 2026-10-17 | docs/plans/plan-2026-10-09-remaining-gaps-outline-v6.md | declared closed by plan-2026-10-12-tui-remaining-gaps-outline.md: 'the v6 outline is CLOSED (iter-775) — its rows all landed; do not re-derive work from it' |
 | 2026-10-17 | docs/plans/plan-2026-10-12-tui-remaining-gaps-outline.md | its own header: 'the four live complaints — ALL CLOSED'; superseded by the 2026-10-13 TUI outline (ground truth iter-792) |
+| 2026-10-17 | docs/plans/plan-2026-10-09-remaining-gaps.md | Superseded by plan-2026-10-17-remaining-implementation-gaps.md (the post-audit-execution ground state: iters 862-901 landed) |
+| 2026-10-17 | docs/plans/plan-2026-10-13-tui-remaining-gaps-outline.md | Superseded by plan-2026-10-17-remaining-implementation-gaps.md (post-audit-execution ground state, iters 862-901) |
