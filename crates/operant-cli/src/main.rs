@@ -325,10 +325,7 @@ enum Commands {
         #[arg(long, global = true)]
         json: bool,
     },
-    /// Manage the org registry, notice board, and worklog (Wave 1)
-    ///
-    /// Every mutating subcommand requires `--reason` (AD-032, and
-    /// WAVE1-DECISIONS §3.5).
+    /// Per-seat budget overrides and read-only views over a Holon organization
     Org {
         #[command(subcommand)]
         cmd: cmd_org::OrgSubcommand,

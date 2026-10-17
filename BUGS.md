@@ -56,7 +56,7 @@ today, independent of the gate repair.
   for a multi-message transcript. This is exactly the row-vs-message
   watermark defect audit plan 07 step 1′ describes; owner: the plan-07
   execution.
-- [ ] **H-2 — `tests::load_memory_manager_reads_existing_memory_file`**
+- [x] **H-2 — CLOSED 2026-10-18 (iter-908): the test and the legacy loader it pinned were deleted by plan 08 (memory-wire everywhere); nothing left to fix.** Original: `tests::load_memory_manager_reads_existing_memory_file`**
   (crates/operant-cli/src/main.rs:3282): `assertion left == right failed —
   left: 0, right: 1`. The legacy MEMORY.md `load_repo_memory_manager` loads
   0 of 1 entries. Plan 08 deletes this surface (memory-wire everywhere);
@@ -4308,7 +4308,7 @@ production cost of that miss is Main's to ticket.)
 Both live in the Loop C engine scheduled for deletion (W1.10). Recorded here
 so the defects outlive the files — Wave 2's merged controller owns the fixes.
 
-### S6 — Detector Block-verdict is a no-op: the "replace the tool output" comment is false (OPEN)
+### S6 — Detector Block-verdict is a no-op: the "replace the tool output" comment is false (CLOSED — `loop_/tool_loop.rs` is deleted; the merged controller in `tool_guardrails.rs` owns the verdict, see S7)
 
 `loop_/tool_loop.rs:1118-1126`: the `LoopDetectionResult::Block` arm logs,
 then calls `append_or_merge_system_message(history, "[Loop Detection —

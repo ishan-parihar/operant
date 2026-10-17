@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-908 — stale org `--reason` test retired; `org --help` banner fixed.**
+  `tests/org_reason.rs` drove `org employee/notice/worklog/sync/import`, which
+  iter-838 deleted (7 of 10 tests red on main). It now pins only the surviving
+  half of the mandate (`kanban block` requires `--reason`). `operant org --help`
+  no longer claims every mutating subcommand needs `--reason`. BUGS.md: H-2
+  and S6 closed (their code was deleted earlier).
+
 - **iter-904 — red-team audit correctness queue
   (`docs/plans/plan-2026-10-17-redteam-audit-of-remaining-gaps.md`).**
   - *Memory feedback channel (H-5):* post-turn session distillation made

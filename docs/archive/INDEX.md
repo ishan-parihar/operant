@@ -33,3 +33,4 @@
 | 2026-10-17 | docs/plans/plan-2026-10-12-tui-remaining-gaps-outline.md | its own header: 'the four live complaints — ALL CLOSED'; superseded by the 2026-10-13 TUI outline (ground truth iter-792) |
 | 2026-10-17 | docs/plans/plan-2026-10-09-remaining-gaps.md | Superseded by plan-2026-10-17-remaining-implementation-gaps.md (the post-audit-execution ground state: iters 862-901 landed) |
 | 2026-10-17 | docs/plans/plan-2026-10-13-tui-remaining-gaps-outline.md | Superseded by plan-2026-10-17-remaining-implementation-gaps.md (post-audit-execution ground state, iters 862-901) |
+| 2026-10-18 | docs/plans/plan-2026-10-13-qol-and-gaps-audit.md | Superseded by plan-2026-10-17-redteam-audit-of-remaining-gaps.md (iters 904-906 closed its correctness queue; remaining work is tracked there) |
