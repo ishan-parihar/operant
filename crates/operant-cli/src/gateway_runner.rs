@@ -4797,7 +4797,15 @@ mod tests {
                 .iter()
                 .rev()
                 .find(|m| m.role == operant_core::client::Role::User)
-                .map(|m| m.content.clone())
+                // The user's own text: the per-turn `<turn_context>` block
+                // (workspace files, recall) rides the latest user message.
+                .map(|m| {
+                    m.content
+                        .rsplit("</turn_context>\n\n")
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .unwrap_or_default();
             Ok(echo_chat_response(&format!("answer-{echo}")))
         }

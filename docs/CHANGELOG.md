@@ -19,6 +19,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-911 — cache-stable prompt layout (batch-06 P0) + native Anthropic
+  system-prompt loss.**
+  - *Layout:* per-turn volatile context (harness feed, memory recall,
+    workspace context, MoA guidance) used to sit in a system message between
+    the frozen prompt and the history, so any change invalidated the provider
+    prompt cache for the whole conversation after it. It now rides the tail as
+    a `<turn_context>` prefix on the latest user message (built once per turn,
+    reused across tool iterations, charged against the budget explicitly).
+    Everything before the latest user message is byte-stable between turns.
+    User-content, not a mid-conversation system message, so strict chat
+    templates accept it. The pre-compaction memory insight is inserted after
+    the system prefix instead of at index 0 (a user message ahead of the system
+    prompt). Pinned by
+    `turn_context_rides_the_tail_and_the_prefix_stays_byte_stable`.
+  - *Anthropic (opt-in `anthropic` feature):* `convert_request` kept only the
+    LAST system message, so whenever a volatile block existed the frozen prompt
+    (identity, skills, tool guidance) never reached the model. Every system
+    message is now sent as an ordered `system` block array; only the first (the
+    stable prefix) carries `cache_control`.
+  - Restored the `prompt_cache_guard` doc block that an earlier cleanup had
+    stranded away from its function.
+
 - **iter-910 — clippy gate green workspace-wide (`operant-cli` purge).** The
   allowlist gate (`scripts/clippy-warning-gate.sh`) now passes (and its 6 stale
   allowlist rows are pruned). ~120 dead items in `operant-cli` were deleted

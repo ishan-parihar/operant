@@ -633,6 +633,16 @@ pub fn micro_compact(
     Some(marker_text)
 }
 
+/// Wave-4 PromptCacheGuard: the frozen prefix (leading run of system
+/// messages) must survive every preflight rung byte-identical so
+/// provider prompt caches keep hitting across a session's calls.
+/// `decay_render` and `evict_to_budget` already preserve system
+/// messages by construction; this guard converts that implicit
+/// invariant into a checked one — drift from a future rung edit
+/// surfaces as a loud warning instead of a silent cache-bust tax.
+///
+/// Returns `true` when the prefix survived. Drift logs a warning in
+/// release and trips a `debug_assert` in test builds.
 pub fn prompt_cache_guard(prefix: &[Message], after: &[Message]) -> bool {
     let prefix_len = prefix.len();
     let ok = after.len() >= prefix_len

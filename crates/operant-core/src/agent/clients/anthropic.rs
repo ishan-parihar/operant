@@ -65,7 +65,10 @@ impl AnthropicModelClient {
     /// Without these breakpoints, the frozen-prefix split (iter-39) is purely
     /// logical — the API doesn't know which blocks to cache.
     fn convert_request(&self, request: &ChatRequest) -> Value {
-        let mut system: Option<String> = None;
+        // Every system message, in order: the agent sends the frozen prompt
+        // and the per-turn volatile block separately, and Anthropic has one
+        // top-level `system` field (a block array).
+        let mut system: Vec<String> = Vec::new();
         let mut messages: Vec<Value> = Vec::new();
 
         // Anthropic's API requires that ALL tool_result blocks from a single
@@ -90,7 +93,9 @@ impl AnthropicModelClient {
             match msg.role {
                 Role::System => {
                     flush_tool_results(&mut messages, &mut pending_tool_results);
-                    system = Some(msg.content.clone());
+                    if !msg.content.trim().is_empty() {
+                        system.push(msg.content.clone());
+                    }
                 }
                 Role::User => {
                     flush_tool_results(&mut messages, &mut pending_tool_results);
@@ -128,12 +133,23 @@ impl AnthropicModelClient {
         // includes the base prompt, skills, and instructions. Marking it
         // as cacheable means subsequent requests with the same system prompt
         // pay ~10x less (cache read vs fresh encoding).
-        if let Some(sys) = system {
-            body["system"] = json!([{
-                "type": "text",
-                "text": sys,
-                "cache_control": {"type": "ephemeral"}
-            }]);
+        // Only the FIRST block (the frozen prefix) carries the breakpoint: a
+        // volatile block after it changes per turn and must not evict the
+        // cached prefix.
+        if !system.is_empty() {
+            body["system"] = json!(
+                system
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| {
+                        let mut block = json!({"type": "text", "text": text});
+                        if i == 0 {
+                            block["cache_control"] = json!({"type": "ephemeral"});
+                        }
+                        block
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
 
         // Apply the full system_and_3 caching strategy to messages.
@@ -861,6 +877,35 @@ mod tests {
 
     fn make_request(messages: Vec<crate::client::Message>) -> ChatRequest {
         ChatRequest::new("claude-opus-4-5", messages)
+    }
+
+    /// The agent sends the frozen prompt and the per-turn volatile block as
+    /// TWO system messages. Anthropic has a single top-level `system` field;
+    /// the converter used to keep only the LAST system message, silently
+    /// dropping the frozen prompt (identity, skills, tool guidance) whenever
+    /// any volatile content existed. Every system message must survive, in
+    /// order, and only the first (the cache-stable prefix) carries the
+    /// cache breakpoint so a changing volatile block never evicts it.
+    #[test]
+    fn convert_request_keeps_every_system_message_in_order() {
+        use crate::client::Message;
+
+        let body = make_client().convert_request(&make_request(vec![
+            Message::system("FROZEN PROMPT"),
+            Message::system("VOLATILE CONTEXT"),
+            Message::user("hi"),
+        ]));
+        let blocks = body["system"].as_array().expect("system must be an array");
+        let texts: Vec<&str> = blocks.iter().filter_map(|b| b["text"].as_str()).collect();
+        assert_eq!(texts, ["FROZEN PROMPT", "VOLATILE CONTEXT"]);
+        assert!(
+            blocks[0].get("cache_control").is_some(),
+            "the frozen prefix carries the cache breakpoint"
+        );
+        assert!(
+            blocks[1].get("cache_control").is_none(),
+            "the volatile block must not carry a breakpoint"
+        );
     }
 
     /// Two consecutive Role::Tool messages (parallel tool results) must be

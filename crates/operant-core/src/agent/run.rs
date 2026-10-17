@@ -2339,23 +2339,22 @@ impl OperantAgent {
     pub(crate) async fn build_messages(&self, session_id: &str) -> Result<Vec<Message>> {
         let mut messages = Vec::new();
 
-        // ── Prompt-cache stability (iter-39) ─────────────────────────────
-        // Split the system prompt into TWO messages:
-        //   1. FROZEN PREFIX: base system prompt + skills. These rarely
-        //      change across turns, so keeping them byte-stable lets
-        //      Anthropic's prompt cache hit (cache reads cost ~10x less
-        //      than fresh prompt tokens).
-        //   2. VOLATILE SUFFIX: memory context + workspace context. These
-        //      change each turn (memory grows, workspace files change),
-        //      so they go in a separate message AFTER the frozen prefix.
-        //      The frozen prefix stays cache-stable; only the volatile
-        //      suffix + conversation history are re-processed each turn.
-        //
-        // This is a simplified version of magic-context's m[0]/m[1]
-        // cache layout. The full m[0]/m[1] scheme uses HARD/SOFT/SOFT+
-        // pass taxonomy + byte-identical replay; this implementation
-        // just splits into frozen vs volatile, which captures ~80% of
-        // the cache benefit with ~10% of the complexity.
+        // ── Prompt-cache stability (iter-39, plan 06 P0) ─────────────────
+        // The request is laid out so everything BEFORE the latest user
+        // message is byte-stable from one turn to the next:
+        //   1. FROZEN PREFIX (system): base prompt + skills. Rarely changes.
+        //   2. CONVERSATION HISTORY: append-only between turns.
+        //   3. TURN CONTEXT (volatile): harness feed, memory recall,
+        //      workspace context, MoA guidance. These change every turn, so
+        //      they ride at the TAIL — a `<turn_context>` prefix on the
+        //      latest user message — instead of sitting between the system
+        //      prompt and the history, where any change used to invalidate
+        //      the provider cache for the whole conversation after it. A
+        //      user-content prefix (not a mid-conversation system message)
+        //      is accepted by every provider, including strict chat
+        //      templates that reject non-leading system messages.
+        // Built once per turn here; the loop only appends after it, so the
+        // block is reused verbatim across the turn's tool iterations.
 
         // Build the frozen prefix (base system prompt + skills + memory
         // provider status line). Uses the shared helper to avoid
@@ -2371,9 +2370,8 @@ impl OperantAgent {
         }
         messages.push(Message::system(frozen_prefix));
 
-        // Volatile suffix: memory context + workspace context. These
-        // change each turn, so they're a separate message that doesn't
-        // bust the frozen prefix's cache entry.
+        // Volatile turn context: memory context + workspace context (see the
+        // layout note above — injected at the tail, after the ladder).
         let mut volatile_suffix = String::new();
         // (plan 11C3) the file-backed <long_term_memory> block is GONE —
         // memory reaches the prompt only through the provider's semantic
@@ -2426,19 +2424,20 @@ impl OperantAgent {
             volatile_suffix.push_str("\n</workspace_context>");
         }
 
-        if !volatile_suffix.trim().is_empty() {
-            messages.push(Message::system(volatile_suffix.trim().to_string()));
-        }
-
         // ── MoA guidance injection (G5, hermes moa_loop.py parity) ─────
-        // Per-turn Mixture-of-Agents guidance computed before run(); injected
-        // as a system message after the volatile suffix so the acting loop
-        // sees it for every iteration of this turn. Drained — it never leaks
-        // into the next turn (a plain turn with no MoA is byte-identical to
-        // before, preserving prompt-cache stability).
+        // Per-turn Mixture-of-Agents guidance computed before run(); part of
+        // the turn context so the acting loop sees it for every iteration of
+        // this turn. Drained — it never leaks into the next turn (a plain
+        // turn with no MoA is byte-identical to before, preserving
+        // prompt-cache stability).
         if let Some(guidance) = self.drain_moa_guidance() {
-            messages.push(Message::system(guidance));
+            volatile_suffix.push_str("\n\n");
+            volatile_suffix.push_str(&guidance);
         }
+        let turn_context = volatile_suffix.trim().to_string();
+        // The block is not in `messages` while the ladder runs, so its size
+        // is charged against the budget explicitly.
+        let turn_context_tokens = crate::context_management::estimate_tokens(&turn_context);
 
         // ── Micro-compaction (opt-in via `OPERANT_MICRO_COMPACTION`) ─────
         // Continuous folding AHEAD of the batch preflight ladder: once the
@@ -2500,9 +2499,11 @@ impl OperantAgent {
         // opening new work near the ceiling.
         let budget = self.config.context_window;
         let reserve = 4096; // tokens reserved for the model's response
-        let effective_budget = budget.saturating_sub(reserve);
+        let effective_budget = budget
+            .saturating_sub(reserve)
+            .saturating_sub(turn_context_tokens);
 
-        let mut estimated_tokens = self.estimate_current_tokens(&messages);
+        let mut estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
         let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
         let mut ladder_fired = false;
         let mut frozen_prefix: Vec<Message> = Vec::new();
@@ -2534,8 +2535,16 @@ impl OperantAgent {
                         insights_len = insights.len(),
                         "Memory provider pre-compress insights captured"
                     );
+                    // After the frozen system prefix, inside the region the
+                    // rungs below summarize — never at index 0, where a
+                    // user message ahead of the system prompt is invalid
+                    // for strict providers and busts the whole prefix.
+                    let at = messages
+                        .iter()
+                        .take_while(|m| m.role == crate::client::Role::System)
+                        .count();
                     messages.insert(
-                        0,
+                        at,
                         crate::client::Message::user(format!(
                             "[memory context before compaction]\n{insights}"
                         )),
@@ -2552,7 +2561,7 @@ impl OperantAgent {
                     "Preflight rung 1 (TOC/trim): historical tool results re-trimmed"
                 );
             }
-            estimated_tokens = self.estimate_current_tokens(&messages);
+            estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
 
             // ── Rung 2: decay — deterministic decay-render ──
             if estimated_tokens > preflight_threshold {
@@ -2562,7 +2571,7 @@ impl OperantAgent {
                     PREFLIGHT_DECAY_H50,
                     PREFLIGHT_DECAY_CONSTANT,
                 );
-                estimated_tokens = self.estimate_current_tokens(&messages);
+                estimated_tokens = self.estimate_current_tokens(&messages) + turn_context_tokens;
             }
 
             // ── Rung 3: summarize — LLM compression, summarize-before-evict ──
@@ -2653,6 +2662,24 @@ impl OperantAgent {
                 sanitizations = tool_sans,
                 "Sanitized tool calls for strict API"
             );
+        }
+
+        // ── Turn context (volatile tail) ─────────────────────────────────
+        // Attach the per-turn block to the latest user message, after every
+        // rung and the repairs above, so nothing before it changed (see the
+        // layout note at the top of this function). Rides the BUILT list
+        // only — the stored conversation keeps the user's own text.
+        if !turn_context.is_empty() {
+            if let Some(last_user) = messages.iter_mut().rev().find(|m| m.role == Role::User) {
+                last_user.content = format!(
+                    "<turn_context>\n{turn_context}\n</turn_context>\n\n{}",
+                    last_user.content
+                );
+            } else {
+                messages.push(Message::user(format!(
+                    "<turn_context>\n{turn_context}\n</turn_context>"
+                )));
+            }
         }
 
         // ── Wrap-up rung: final-call copy ────────────────────────────────

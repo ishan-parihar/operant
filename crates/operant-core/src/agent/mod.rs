@@ -1603,9 +1603,7 @@ mod tests {
         // G5: no guidance set → byte-identical to a plain turn (no MoA msg).
         let msgs = agent.build_messages("moa-test").await.unwrap();
         assert!(
-            !msgs
-                .iter()
-                .any(|m| m.role == Role::System && m.content.contains("Mixture of Agents")),
+            !msgs.iter().any(|m| m.content.contains("Mixture of Agents")),
             "no MoA message when guidance unset"
         );
 
@@ -1613,18 +1611,79 @@ mod tests {
         let msgs = agent.build_messages("moa-test").await.unwrap();
         let injected: Vec<_> = msgs
             .iter()
-            .filter(|m| m.role == Role::System && m.content.contains("Mixture of Agents"))
+            .filter(|m| m.content.contains("Mixture of Agents"))
             .collect();
         assert_eq!(injected.len(), 1, "guidance injected exactly once");
+        assert_eq!(
+            injected[0].role,
+            Role::User,
+            "guidance rides the tail (a turn_context prefix on the latest user message)"
+        );
 
         // Drained — the next turn is byte-identical again (no leak).
         let msgs = agent.build_messages("moa-test").await.unwrap();
         assert!(
-            !msgs
-                .iter()
-                .any(|m| m.role == Role::System && m.content.contains("Mixture of Agents")),
+            !msgs.iter().any(|m| m.content.contains("Mixture of Agents")),
             "guidance drained after one turn"
         );
+    }
+
+    /// Plan 06 P0: per-turn volatile context rides the TAIL. Two consecutive
+    /// turns with different turn context must serialize to the same bytes for
+    /// everything before the latest user message — that stable prefix is
+    /// what provider prompt caches hit — and the volatile text must live in
+    /// the latest user message, not in a system message at the head.
+    #[tokio::test]
+    async fn turn_context_rides_the_tail_and_the_prefix_stays_byte_stable() {
+        use crate::agent::clients::openai::OpenAIModelClient;
+        use crate::client::OpenAIClient;
+
+        let db =
+            Database::init(std::env::temp_dir().join("test_turn_context_tail.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent.user_message("first question").await;
+        agent.set_moa_guidance("[Mixture of Agents context — turn ONE]".to_string());
+        let turn1 = agent.build_messages("tail-test").await.unwrap();
+
+        agent
+            .add_message(crate::client::Message::assistant("first answer"))
+            .await;
+        agent.user_message("second question").await;
+        agent.set_moa_guidance("[Mixture of Agents context — turn TWO]".to_string());
+        let turn2 = agent.build_messages("tail-test").await.unwrap();
+
+        // Volatile text is in the latest user message only.
+        let last_user = |msgs: &[crate::client::Message]| {
+            msgs.iter().rposition(|m| m.role == Role::User).unwrap()
+        };
+        let (i1, i2) = (last_user(&turn1), last_user(&turn2));
+        assert!(turn1[i1].content.contains("turn ONE"));
+        assert!(turn1[i1].content.contains("first question"));
+        assert!(turn2[i2].content.contains("turn TWO"));
+        assert!(
+            turn1
+                .iter()
+                .chain(&turn2)
+                .filter(|m| m.role == Role::System)
+                .all(|m| !m.content.contains("Mixture of Agents")),
+            "no volatile text in any system message"
+        );
+
+        // Byte-stable head: turn 2's request starts with turn 1's request up
+        // to (not including) turn 1's latest user message.
+        let render = |msgs: &[crate::client::Message]| -> Vec<String> {
+            msgs.iter()
+                .map(|m| format!("{:?}|{}", m.role, m.content))
+                .collect()
+        };
+        assert_eq!(render(&turn1[..i1]), render(&turn2[..i1]));
     }
 
     #[serial]
