@@ -378,14 +378,11 @@ These are the user's intentional design choices. Do not replace, remove, or
   adapter code TBD)
 - 20 phantom platforms were purged in iter-50 (matrix, mattermost, signal, etc.)
 - Do NOT re-add purged platforms without a real adapter implementation
-- **The gateway registry is NOT the whole channel surface.** `operant-channels`
-  carries 31 `channel-*` features, 21 of them on by default (discord, slack,
-  signal, mattermost, irc, imessage, dingtalk, qq, bluesky, twitter, reddit,
-  notion, linq, wati, nextcloud, mochat, wecom, clawdtalk, webhook,
-  whatsapp-cloud, email); `channel-telegram` is opt-in behind the
-  `agentmemory`-independent `channel-telegram` feature. The preference above
-  scopes to the *gateway registry*; it is not a claim that the workspace has 7
-  messaging surfaces.
+- **The gateway registry IS the whole channel surface** (2026-10-17 purge):
+  the `operant-channels` / `operant-gateway` crates were deleted — nothing
+  in the binary ever called them (the working adapters live in
+  `operant-core/src/gateway/`). The 7-adapter registry list above is the
+  complete set of messaging surfaces.
 
 ### Native Tool Integrations
 - **AFT (Agent File Tools)**: 15 IDE-grade coding tools via subprocess
@@ -1339,8 +1336,7 @@ model = "gpt-4"       # Default model (override in user config)
 8. **Do not commit** `target/`, `*.sqlite` test artifacts, or `~/.operant/.env`.
 9. **Respect the design preferences** — Kokoro TTS, memory-wire memory,
     sourcehound browser/web tools, 7 platforms in the gateway registry (the
-    `operant-channels` crate separately default-enables 21 `channel-*`
-    features). Do not "improve" them.
+    deleted `operant-channels` crate is gone (2026-10-17 purge). Do not "improve" them.
 10. **Follow "Rust Code Standards"** — borrow before clone, typed errors in
     library crates, no `unwrap` in production, measure before claiming
     performance, regression test for every fix.

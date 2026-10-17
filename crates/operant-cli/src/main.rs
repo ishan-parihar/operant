@@ -20,7 +20,6 @@ mod cmd_debug;
 mod cmd_doctor;
 mod cmd_dump;
 mod cmd_gateway;
-mod cmd_hardware;
 mod cmd_hooks;
 mod cmd_import;
 mod cmd_insights;
@@ -31,7 +30,6 @@ mod cmd_memory;
 mod cmd_migrate;
 mod cmd_model;
 mod cmd_org;
-mod cmd_peripheral;
 mod cmd_plugins;
 mod cmd_profile;
 mod cmd_service;
@@ -476,22 +474,9 @@ enum Commands {
         #[arg(long, global = true)]
         json: bool,
     },
-    /// Discover and introspect USB hardware
-    Hardware {
-        #[command(subcommand)]
-        cmd: cmd_hardware::HardwareSubcommand,
-        /// Output as JSON (for scripting/CI)
-        #[arg(long, global = true)]
-        json: bool,
-    },
-    /// Manage hardware peripherals (STM32, RPi GPIO, etc.)
-    Peripheral {
-        #[command(subcommand)]
-        cmd: cmd_peripheral::PeripheralSubcommand,
-        /// Output as JSON (for scripting/CI)
-        #[arg(long, global = true)]
-        json: bool,
-    },
+    // (plan 10) Hardware / Peripheral subcommands deleted with the
+    // operant-hardware crate — STM32/Arduino flashing is not operant's
+    // surface (the audit's default).
     /// Migrate data from other agent runtimes
     Migrate {
         #[command(subcommand)]
@@ -3141,12 +3126,6 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Sop { cmd, json }) => {
             cmd_sop::handle_sop_command(&loaded.config, cmd.clone(), *json).await?;
-        }
-        Some(Commands::Hardware { cmd, json }) => {
-            cmd_hardware::handle_hardware_command(&loaded.config, cmd.clone(), *json).await?;
-        }
-        Some(Commands::Peripheral { cmd, json }) => {
-            cmd_peripheral::handle_peripheral_command(&loaded.config, cmd.clone(), *json).await?;
         }
         Some(Commands::Migrate { cmd, json }) => {
             cmd_migrate::handle_migrate_command(&loaded.config, cmd.clone(), *json).await?;

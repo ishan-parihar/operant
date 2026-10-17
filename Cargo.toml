@@ -7,17 +7,11 @@ members = [
     "crates/operant-core",
     "crates/operant-cli",
     "crates/operant-providers",
-    "crates/operant-channels",
     "crates/operant-memory",
     "crates/operant-plugins",
-    "crates/operant-gateway",
     "crates/operant-infra",
     "crates/operant-macros",
     "crates/operant-tools",
-    "crates/operant-runtime",
-    "crates/operant-hardware",
-    "crates/operant-tool-call-parser",
-    "crates/operant-tool-planning",
     "crates/operant-harness",
 ]
 
@@ -33,17 +27,11 @@ rust-version = "1.89"
 operant-api = { path = "crates/operant-api" }
 operant-config = { path = "crates/operant-config" }
 operant-providers = { path = "crates/operant-providers" }
-operant-channels = { path = "crates/operant-channels" }
 operant-memory = { path = "crates/operant-memory" }
 operant-plugins = { path = "crates/operant-plugins" }
-operant-gateway = { path = "crates/operant-gateway" }
 operant-infra = { path = "crates/operant-infra" }
 operant-macros = { path = "crates/operant-macros" }
 operant-tools = { path = "crates/operant-tools" }
-operant-runtime = { path = "crates/operant-runtime" }
-operant-hardware = { path = "crates/operant-hardware" }
-operant-tool-call-parser = { path = "crates/operant-tool-call-parser" }
-operant-tool-planning = { path = "crates/operant-tool-planning" }
 operant-harness = { path = "crates/operant-harness" }
 operant-os = { path = "crates/operant-os" }
 

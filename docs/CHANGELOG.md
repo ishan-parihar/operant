@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **iter-892 — plan 10 phase 1: six crates the binary never called are
+  gone (175,997 lines)** (audit plan 10, findings 17+18). The method:
+  grep `<crate>::` across every other crate — `operant-gateway` (16.7k
+  lines) was named by NOBODY; `operant-hardware` (9.6k) only by gateway;
+  `operant-channels` (60.8k) only by gateway (the real channel adapters
+  live in `operant-core/src/gateway/`); `operant-runtime` (85.5k) by one
+  cli call; `operant-tool-call-parser` (3.0k) and
+  `operant-tool-planning` (0.4k) only by runtime. The six form one
+  dependency island (channels' code names `operant_runtime::` directly),
+  so the plan's one-crate-per-commit had no compiling intermediate —
+  ONE cut, proven whole:
+  - The one real call (`core_observer_from_config`) moved into core as
+    `observer::observer_from_config` + `NoopObserver` (`backend = "none"`
+    → no-op; a configured otel/prometheus backend now warns once and
+    degrades to `ConsoleObserver` — those backends retired with the
+    crate; the user's config has `backend = "none"`).
+  - `operant-cli` loses the `gateway`, `hardware` and all `channel-*`
+    forwarding features (zero `cfg(feature = "channel-` users in
+    source — pure declarations), the `channel_feature_forwarding` test
+    (it pinned the deleted crates' manifest contract), and the
+    `operant hardware` / `operant peripheral` subcommands with
+    `cmd_hardware.rs` / `cmd_peripheral.rs` (STM32/Arduino flashing —
+    the plan's default; they never named the crate).
+  - Proof: `cargo check --workspace` 0 errors (12 members);
+    gate 2 = 1761/1 pre-existing (H-3); core lib green solo (battery
+    failures = the known parallel-DB flake class, all 7 named tests
+    solo-green); `operant --help` carries no hardware/peripheral
+    entries; README + AGENTS.md crate lists updated to the 12-member
+    truth.
+
 ### Fixed
 
 - **iter-891 — plan 06B: seat memory banks, one store, per-turn

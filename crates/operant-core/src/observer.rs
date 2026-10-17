@@ -202,6 +202,41 @@ impl<T: Observer + ?Sized> Observer for std::sync::Arc<T> {
     }
 }
 
+/// A no-op observer: the `[observability] backend = "none"` default —
+/// every lifecycle call lands nowhere. (plan 10 step 1: the factory that
+/// used to live in the deleted `operant-runtime` crate resolves to this
+/// or [`ConsoleObserver`]; the otel/prometheus backends went with the
+/// crate — the user config has `backend = "none"`, and a configured
+/// non-none backend now logs once and degrades to console.)
+pub struct NoopObserver;
+
+impl Observer for NoopObserver {
+    fn record_event(&self, _event: &ObserverEvent) {}
+    fn record_metric(&self, _metric: &ObserverMetric) {}
+    fn name(&self) -> &str {
+        "none"
+    }
+}
+
+/// (plan 10 step 1) The observer factory, core-local since the runtime
+/// crate's deletion: `none`/empty → [`NoopObserver`]; anything else → a
+/// one-line warning + [`ConsoleObserver`] (the otel/prometheus backends
+/// retired with `operant-runtime`).
+pub fn observer_from_config(
+    backend: &operant_config::schema::ObservabilityConfig,
+) -> std::sync::Arc<dyn Observer> {
+    match backend.backend.trim() {
+        "" | "none" => std::sync::Arc::new(NoopObserver),
+        other => {
+            tracing::warn!(
+                backend = other,
+                "observability backends were removed with the runtime crate — using the console observer"
+            );
+            std::sync::Arc::new(ConsoleObserver)
+        }
+    }
+}
+
 /// A simple console observer that logs events and metrics to stderr via `tracing`.
 ///
 /// This is a reference implementation. Production deployments should use

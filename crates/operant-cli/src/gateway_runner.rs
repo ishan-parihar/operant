@@ -4171,15 +4171,13 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             tokio::sync::mpsc::unbounded_channel::<operant_core::cronjobs::CronDelivery>();
 
         // v6 outline row 5 (the queued seam, now closed): the config-driven
-        // cron observer. `[observability] backend` selects it — the same
-        // factory the WS/ACP paths use, so backend semantics do not drift
-        // between surfaces. Default (`none`) yields the no-op observer: the
-        // scheduler mounts an observer unconditionally and an unconfigured
-        // gateway stays byte-identical.
+        // cron observer. `[observability] backend` selects it — the
+        // core-local factory (plan 10 step 1; the runtime crate's factory
+        // is gone with the crate). Default (`none`) yields the no-op
+        // observer: the scheduler mounts an observer unconditionally and
+        // an unconfigured gateway stays byte-identical.
         let cron_observer: Arc<dyn operant_core::observer::Observer> =
-            operant_runtime::agent::reconciled::core_observer_from_config(
-                &app_config.observability,
-            );
+            operant_core::observer::observer_from_config(&app_config.observability);
         // B′ (NEXT-IMPLEMENTATION-OUTLINE §3): the scheduled-run write
         // barrier, over the same app database the session store uses (:1027
         // derives it the same way). Every completed scheduled run now leaves

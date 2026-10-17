@@ -76,14 +76,11 @@ operant
 │   ├── operant-providers    LLM provider adapters
 │   ├── operant-memory       memory backends (memory-wire — the one engine)
 │   ├── operant-plugins      WASM plugin bridge
-│   ├── operant-gateway      messaging gateway (telegram, discord, …)
-│   ├── operant-channels     channel orchestrator
-│   ├── operant-runtime      autonomous runtime agent
 │   ├── operant-config       config schema · validation · defaults
 │   ├── operant-harness      unified harness (persistence seam + config)
-│   ├── operant-tool-call-parser   tool-call stream parsing
-│   ├── operant-tool-planning       tool planning
-│   └── …                    api · infra · macros · hardware (17 crates total)
+│   └── …                    api · infra · macros (12 crates total —
+│                           the 6 crates the binary never called were
+│                           deleted in the 2026-10-17 purge)
 ```
 
 ---
@@ -252,7 +249,7 @@ See [`operant.example.toml`](operant.example.toml) for the full reference — ev
 | `operant update integrations` | Force-check sourcehound/aft updates (auto: first use per session, 6h throttle) |
 | `operant debug memory` | This process's memory footprint: RSS, store size, thread count |
 
-`operant --help` lists the full set (sessions, checkpoints, profiles, auth, completion, backups, SOPs, hardware, and more).
+`operant --help` lists the full set (sessions, checkpoints, profiles, auth, completion, backups, SOPs, and more).
 
 ---
 
