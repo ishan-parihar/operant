@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-913 — dead session-picker port deleted (plan 05B B2.6).**
+  `operant_ui/session_picker*` and the six `operant_app` support modules only it
+  used (`session_picker_types`, `import`, `claude_live`, `catchup`,
+  `onboarding_flow`, `registry`) are gone: ~12.8k lines, 92 tests that
+  exercised only that unreachable code. `/resume` is unchanged (native
+  `session_browser`). Clippy gate and the remaining 1612 `operant-cli` tests
+  green.
+
 - **iter-912 — superseded fence-raster pipeline deleted.** `tui/latex.rs`,
   `tui/mermaid.rs`, `messages/cache.rs`, the per-frame raster drain in
   `render/mod.rs` and `pinned_images::pin_rasters` (~2.1k lines + tests) had

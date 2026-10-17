@@ -17,8 +17,6 @@ pub mod build;
 pub mod build_meta;
 pub mod bus;
 pub mod catalog_scheduler;
-pub mod catchup;
-pub mod claude_live;
 pub mod color_support;
 pub mod compaction;
 pub mod config_shim;
@@ -28,7 +26,6 @@ pub mod fuzzy;
 pub mod fuzzy_engine;
 pub mod graph_topology;
 pub mod id;
-pub mod import;
 pub mod info_widget;
 pub mod keybind;
 pub mod layout_utils;
@@ -37,7 +34,6 @@ pub mod markdown;
 pub mod memory;
 pub mod mermaid;
 pub mod mermaid_inline;
-pub mod onboarding_flow;
 // [port-decision] mermaid_inline re-declared at integration (reviving the earlier
 // un-declare): the ui_inline_image content surface calls into it, and most of it
 // is on disk already. The batch-4 remaining piece is the ratatui_image dep
@@ -56,11 +52,9 @@ pub mod protocol;
 pub mod provider;
 pub mod provider_catalog;
 pub mod provider_metadata;
-pub mod registry;
 pub mod safety;
 pub mod session;
 pub mod session_facts;
-pub mod session_picker_types;
 pub mod storage;
 pub mod theme_detect;
 pub mod tui_fns;

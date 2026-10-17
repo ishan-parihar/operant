@@ -109,9 +109,11 @@ today, independent of the gate repair.
   parallel operant-only implementations (`tui/latex.rs`, `tui/mermaid.rs`, the
   per-frame raster drain, `pinned_images::pin_rasters`, ~2.1k lines) had no
   producer on any production path and are deleted.
-- [ ] **Session picker port (B2.6) is test-only.** `operant_ui/session_picker*`
-  (~8.8k lines incl. tests) is reachable only from its own tests; `/resume`
-  uses the native `session_browser`. Delete with the legacy purge.
+- [x] **Session picker port (B2.6) — CLOSED 2026-10-18 (iter-913).** The ported
+  `operant_ui/session_picker*` (~8.8k lines incl. tests) was reachable only
+  from its own tests; `/resume` uses the native `session_browser`. Deleted
+  with its now-orphaned support modules (`operant_app::{session_picker_types,
+  import, claude_live, catchup, onboarding_flow, registry}`): ~12.8k lines.
 - [ ] **`device_auth_dialog` scaffold has no opener** (H-9 residual). Removing
   it changes the `overlays` flag list in ~every corpus golden, so it needs a
   deliberate re-prove pass.
