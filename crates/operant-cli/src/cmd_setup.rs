@@ -264,8 +264,12 @@ async fn reset_config() -> Result<()> {
     }
 
     let defaults = AppConfig::default();
+    // The reset's diff base: the runtime config as it stood (before the
+    // install_runtime_config swap) — only keys that actually differ from
+    // factory defaults are written back.
+    let current = operant_core::config::runtime_config();
     install_runtime_config(defaults.clone());
-    persist_config(&defaults)?;
+    persist_config(&current, &defaults)?;
 
     print_success("Configuration reset to defaults.");
     Ok(())
@@ -395,7 +399,7 @@ pub async fn run_setup_wizard(
 
     // Apply changes
     install_runtime_config(updated.clone());
-    persist_config(&updated)?;
+    persist_config(config, &updated)?;
 
     // Also sync to settings.json so the TUI picks up the new provider+model
     // immediately without needing a TUI-side /connect. Without this, the
@@ -1283,38 +1287,134 @@ async fn step_agent_settings(config: &mut AppConfig, _reconfigure: bool) -> Resu
 ///
 /// Writes to the first existing config path from `default_config_paths()`, or
 /// creates `operant.toml` in the current directory if none exist yet.
-fn persist_config(config: &AppConfig) -> Result<()> {
-    // Always write to ~/.operant/operant.toml — the global config. The
-    // setup wizard is for global settings, not project-specific overrides.
-    // Previously this wrote to the FIRST existing path from
-    // default_config_paths(), which could be ./operant.toml if the user
-    // ran setup from a directory containing one. That caused the "setup
-    // doesn't remember my config" bug — the wizard wrote to ./operant.toml
-    // but subsequent runs from other directories loaded ~/.operant/operant.toml
-    // which still had the old defaults.
-    // (iter-112 — fixes the user's reported bug.)
-    let config_path = dirs::home_dir()
-        .map(|h| h.join(".operant").join("operant.toml"))
-        .unwrap_or_else(|| PathBuf::from("operant.toml"));
+fn persist_config(old: &AppConfig, config: &AppConfig) -> Result<()> {
+    // (plan 09, the setup wizard's turn) The wizard used to serialize the
+    // WHOLE runtime struct (`toml::to_string_pretty`) to a HARDCODED
+    // ~/.operant/operant.toml: comments destroyed on every run, retired
+    // sections resurrected, `operant -c <path>` runs written to the wrong
+    // file, and env-sourced secrets flattened into the TOML. Now it diffs
+    // the mutated struct against the loaded file's parsed values and
+    // persists ONLY the changed dotted keys through the one surgical
+    // writer — in the file the process actually loaded (created 0600 on
+    // first run when there is no file yet).
+    // The diff base is the OLD struct (the config the wizard was handed),
+    // not the raw file: a field the file does not carry but the struct
+    // defaults is NOT a change — only what the wizard actually mutated
+    // between `old` and the new struct is persisted.
+    let old: toml::Value =
+        toml::Value::try_from(old).context("Failed to serialise the pre-wizard configuration")?;
+    if !operant_core::config::loaded_config_path().is_some_and(|p| p.exists()) {
+        {
+            // No config file was loaded (fresh install): fall back to the
+            // full write into the default global path, 0600 — the wizard
+            // has to create the file somewhere.
+            let config_path = dirs::home_dir()
+                .map(|h| h.join(".operant").join("operant.toml"))
+                .unwrap_or_else(|| PathBuf::from("operant.toml"));
+            if let Some(parent) = config_path.parent() {
+                std::fs::create_dir_all(parent).context("Failed to create config directory")?;
+            }
+            let toml_str =
+                toml::to_string_pretty(config).context("Failed to serialise configuration")?;
+            operant_core::fs_secrets::write_secret_file(&config_path, toml_str.as_bytes())
+                .with_context(|| {
+                    format!("Failed to write config to '{}'", config_path.display())
+                })?;
+            println!(
+                "  {} Configuration written to {}",
+                style("✓").green(),
+                style(config_path.display()).bold()
+            );
+            return Ok(());
+        }
+    };
+    let new: toml::Value =
+        toml::Value::try_from(config).context("Failed to serialise updated configuration")?;
 
-    // Ensure parent directory exists
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create config directory")?;
+    let mut changed = Vec::new();
+    collect_diff("", &old, &new, &mut changed);
+    if changed.is_empty() {
+        println!("  {} No changes to persist.", style("✓").green());
+        return Ok(());
     }
-
-    let toml_str =
-        toml::to_string_pretty(config).context("Failed to serialise configuration as TOML")?;
-
-    operant_core::fs_secrets::write_secret_file(&config_path, toml_str.as_bytes())
-        .with_context(|| format!("Failed to write config to '{}'", config_path.display()))?;
-
+    for (dotted, raw) in &changed {
+        operant_core::config::persist_config_key(dotted, raw)
+            .with_context(|| format!("persisting config key '{dotted}'"))?;
+    }
     println!(
-        "  {} Configuration written to {}",
+        "  {} {} config key(s) updated surgically — comments preserved",
         style("✓").green(),
-        style(config_path.display()).bold()
+        changed.len()
     );
-
     Ok(())
+}
+
+/// The wizard's changed-key walk: every leaf whose value differs between
+/// the loaded file (`old`) and the mutated struct (`new`) becomes a
+/// `(dotted, raw)` pair for the surgical writer. Raw values render back to
+/// the TOML literal `persist_config_key` coerces.
+fn collect_diff(
+    prefix: &str,
+    old: &toml::Value,
+    new: &toml::Value,
+    out: &mut Vec<(String, String)>,
+) {
+    match (old, new) {
+        (toml::Value::Table(o), toml::Value::Table(n)) => {
+            for (k, nv) in n.iter() {
+                let dotted = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                match o.get(k) {
+                    Some(ov) => collect_diff(&dotted, ov, nv, out),
+                    // A key the wizard added: persist it (and its subtree).
+                    None => push_subtree(&dotted, nv, out),
+                }
+            }
+        }
+        // A struct field that is not a table in the file (or vice versa):
+        // replace the whole leaf.
+        (o, n) if o != n => {
+            if let Some(raw) = toml_raw(n) {
+                out.push((prefix.to_string(), raw));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A whole added subtree: emit one pair per scalar leaf.
+fn push_subtree(dotted: &str, v: &toml::Value, out: &mut Vec<(String, String)>) {
+    match v {
+        toml::Value::Table(t) => {
+            for (k, child) in t.iter() {
+                push_subtree(&format!("{dotted}.{k}"), child, out);
+            }
+        }
+        other => {
+            if let Some(raw) = toml_raw(other) {
+                out.push((dotted.to_string(), raw));
+            }
+        }
+    }
+}
+
+/// Render a scalar leaf as the raw string the surgical writer coerces —
+/// strings WITHOUT quotes (the writer quotes), numbers and bools as-is.
+fn toml_raw(v: &toml::Value) -> Option<String> {
+    match v {
+        toml::Value::String(s) => Some(s.clone()),
+        toml::Value::Integer(i) => Some(i.to_string()),
+        toml::Value::Float(f) => Some(f.to_string()),
+        toml::Value::Boolean(b) => Some(b.to_string()),
+        // Arrays: toml::Value's Display renders the TOML literal
+        // (`["a", "b"]`), which persist_config_key's Item-parse arm
+        // accepts as a real array.
+        toml::Value::Array(_) => Some(v.to_string()),
+        _ => None,
+    }
 }
 
 /// Map a base URL to a human-readable provider name (for status display).
@@ -1414,4 +1514,83 @@ async fn step_governance(config: &mut AppConfig) -> Result<()> {
     ));
     print_info("Per-seat overrides: operant budget set <seat> --cap N [--mode hard]");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// persist_config_key writes into the process-global loaded-config
+    /// path (a LazyLock slot): the two wizard tests flip that slot, so they
+    /// MUST NOT interleave — same discipline as config.rs's env_lock.
+    static PATH_SLOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn path_slot_guard() -> std::sync::MutexGuard<'static, ()> {
+        PATH_SLOT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// (plan 09, the setup wizard's turn) The wizard's persist must be
+    /// SURGICAL: a model change writes `agent.model` and NOTHING else —
+    /// comments survive, sections the struct does not carry (a stale
+    /// `[pk]`) survive, and the write lands in the file the process
+    /// LOADED, not a hardcoded global path. The old whole-file
+    /// `toml::to_string_pretty` rewrite destroyed all three.
+    #[test]
+    fn wizard_persist_is_surgical() {
+        let _slot = path_slot_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg_path = dir.path().join("operant.toml");
+        std::fs::write(
+            &cfg_path,
+            "# my carefully written header comment\n[client]\nbase_url = \"http://localhost:20129/v1\"\n\n# an inline note the whole-file rewrite used to destroy\n[agent]\nmodel = \"old-model\"\n",
+        )
+        .expect("write config");
+        let loaded = operant_core::config::load_app_config(Some(&cfg_path)).expect("load");
+
+        // The wizard's shape: clone the loaded config, mutate one field.
+        let mut updated = loaded.config.clone();
+        updated.agent.model = "new-model".to_string();
+        persist_config(&loaded.config, &updated).expect("wizard persist");
+
+        let after = std::fs::read_to_string(&cfg_path).expect("re-read");
+        assert!(
+            after.contains("# my carefully written header comment"),
+            "comments must survive: {after}"
+        );
+        assert!(
+            after.contains("base_url = \"http://localhost:20129/v1\""),
+            "the client endpoint must survive: {after}"
+        );
+        assert!(
+            after.contains("new-model"),
+            "the changed key must land: {after}"
+        );
+        assert!(
+            !after.contains("old-model"),
+            "the old value must be replaced: {after}"
+        );
+    }
+
+    /// An array field (`fallback_models`) persists as a real TOML array,
+    /// not a quoted string.
+    #[test]
+    fn wizard_persist_writes_arrays_as_arrays() {
+        let _slot = path_slot_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg_path = dir.path().join("operant.toml");
+        std::fs::write(&cfg_path, "[agent]\nmodel = \"m\"\n").expect("write config");
+        let loaded = operant_core::config::load_app_config(Some(&cfg_path)).expect("load");
+
+        let mut updated = loaded.config.clone();
+        updated.agent.fallback_models = vec!["a".into(), "b".into()];
+        persist_config(&loaded.config, &updated).expect("wizard persist");
+
+        let after = std::fs::read_to_string(&cfg_path).expect("re-read");
+        assert!(
+            after.contains("fallback_models = [") || after.contains("fallback_models=["),
+            "the array must land as an array literal: {after}"
+        );
+        // And it must still parse through the real loader.
+        operant_core::config::load_app_config(Some(&cfg_path)).expect("re-load");
+    }
 }

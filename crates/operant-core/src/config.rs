@@ -2173,7 +2173,15 @@ pub fn persist_config_key(dotted: &str, raw_value: &str) -> Result<PathBuf> {
             ))
         })?;
     }
-    table.insert(leaf[0], coerce_scalar(raw_value));
+    // Array literals (the setup wizard's `fallback_models`, for example)
+    // arrive as raw TOML like `["a", "b"]` — parse them as the value they
+    // are; plain strings fail this parse and fall through to the scalar
+    // coercion (bare multi-word text is not a valid TOML value).
+    let item = match raw_value.trim().parse::<toml_edit::Item>() {
+        Ok(item) if !item.is_none() => item,
+        _ => coerce_scalar(raw_value),
+    };
+    table.insert(leaf[0], item);
 
     // Write to a sibling temp file with the original's mode, validate it
     // through the REAL loader, and only then rename over — the user's
