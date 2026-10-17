@@ -13,8 +13,8 @@ no matter how small — is one iteration, and every iteration follows the same
 five-step loop. Skipping a step is a protocol violation.
 
 Before ANY work, run the documentation wake check (see "Documentation Genome"
-at the end of this file): `./scripts/kb doctor` for live claims and staleness,
-`./scripts/kb feed --to <your-agent-id>` for mentions other agents left you.
+at the end of this file): `./scripts/genome doctor` for live claims and staleness,
+`./scripts/genome feed --to <your-agent-id>` for mentions other agents left you.
 
 ### The Iron Rule
 
@@ -398,7 +398,7 @@ These are the user's intentional design choices. Do not replace, remove, or
   `web_extract`, `web_crawl` + sourcehound browser provider (`tools/sourcehound.rs`
   + `browser_provider.rs`), driven over the `sourcehound` binary's MCP server
   (stdio). No API keys required
-- **LifeOS**: 22 Notion-backed holonic life-management tools (`lifeos_tools.rs`)
+- **LifeOS**: 22 Notion-backed holonic life-management tools (the `lifeos` cargo feature; the tool module is not in this tree)
   - Feature flag: `lifeos` cargo feature + `lifeos_enabled` in config
   - Requires `NOTION_API_TOKEN` env var
 
@@ -836,7 +836,7 @@ suggestions, tui
 ### TUI
 - Entry point works (`TuiApp::enter` → ratatui + crossterm)
 - Permission dialog system works (iter-20: real prompts instead of auto-approve)
-- TUI bridge routes events (`bridge.rs`: 111 lines)
+- TUI bridge routes events
 - Prompt-cache stability: frozen prefix + volatile suffix (iter-39)
 - Session caching: `clear_history` only on session change (iter-49)
 - Anthropic `cache_control` breakpoints (iter-54)
@@ -1351,11 +1351,11 @@ model = "gpt-4"       # Default model (override in user config)
 
 ---
 
-## Documentation Genome (project-kb)
+## Documentation Genome (genome)
 
-This repo runs the **project-kb genome**: a fixed set of documentation roles,
-each with ONE mutability class, enforced by `./scripts/kb` (stdlib Python, no
-dependencies). `kb.toml` maps every role to this repo's own paths — the defaults
+This repo runs the **genome**: a fixed set of documentation roles,
+each with ONE mutability class, enforced by `./scripts/genome` (stdlib Python, no
+dependencies). `genome.toml` maps every role to this repo's own paths — the defaults
 were adopted without moving files this repo already owns.
 
 ### Routing table — which document answers what
@@ -1380,41 +1380,41 @@ were adopted without moving files this repo already owns.
 | release history, dated | `docs/CHANGELOG.md` | append-only per release |
 | one-off 2026-08 design/parity/audit docs | `docs/*.md` reference shelf (HERMES_*, ORGANISM-*, *PLAN*, *AUDIT*) | frozen history — no edits, cite only |
 
-### The five laws (enforced by `kb lint` / `kb doctor`)
+### The five laws (enforced by `genome lint` / `genome doctor`)
 
 1. **One owner per question.** Two documents may not answer the same thing.
 2. **Every document has a mutability class.** Append-only files only gain lines;
    dated files are frozen; state docs are regenerated, old versions archived.
-3. **Nothing is deleted.** Superseded → `kb archive <path> --reason "<why>"`.
+3. **Nothing is deleted.** Superseded → `genome archive <path> --reason "<why>"`.
 4. **Statuses move through the vocabulary** (`open` `in-progress` `done`
    `rejected` `blocked`); terminal states name their evidence.
 5. **Parallel agents claim before they work**, post to the feed, and read their
    mentions on wake.
 
-### CLI quickstart (run `./scripts/kb --help`; every subcommand prints its rules)
+### CLI quickstart (run `./scripts/genome --help`; every subcommand prints its rules)
 
 ```bash
-./scripts/kb lint                    # schema + doctrine check — exit 2 on error
-./scripts/kb doctor                  # staleness, append-only violations, live claims
-./scripts/kb feed --to <agent-id>    # your mention inbox — FIRST on wake
-./scripts/kb post "msg" --wf <wf> --to @<agent>
-./scripts/kb plan "<title>"           # mint a dated-frozen plan
-./scripts/kb audit "<title>"          # mint a dated-frozen audit
-./scripts/kb wf new <wf> && ./scripts/kb wf add <wf> "<item>"
-./scripts/kb claim <item> / ./scripts/kb done <item> done --evidence <path>
-./scripts/kb log "<entry>" --agent <id>
-./scripts/kb ad "<title>" / ./scripts/kb rg "<title>"
-./scripts/kb handoff --write         # regenerate STATE.md (archives the old)
+./scripts/genome lint                    # schema + doctrine check — exit 2 on error
+./scripts/genome doctor                  # staleness, append-only violations, live claims
+./scripts/genome feed --to <agent-id>    # your mention inbox — FIRST on wake
+./scripts/genome post "msg" --wf <wf> --to @<agent>
+./scripts/genome plan "<title>"           # mint a dated-frozen plan
+./scripts/genome audit "<title>"          # mint a dated-frozen audit
+./scripts/genome wf new <wf> && ./scripts/genome wf add <wf> "<item>"
+./scripts/genome claim <item> / ./scripts/genome done <item> done --evidence <path>
+./scripts/genome log "<entry>" --agent <id>
+./scripts/genome rec recon <keywords>` (prior art first), then `./scripts/genome rec new ad\|rg "<title>" --recon <token> --orthogonal "<why>"
+./scripts/genome handoff --write         # regenerate STATE.md (archives the old)
 ```
 
 ### Fleet notes (this repo specifically)
 
 - The per-workflow boards are the collision guard between concurrent agents —
   the same job the `agent://<name>` channel and the iteration-label lookup do.
-  `kb claim` refuses a double-claim with exit 2; that, not politeness, is what
+  `genome claim` refuses a double-claim with exit 2; that, not politeness, is what
   stops two agents editing one board.
 - The register keeps `TODO.md`'s native `## Implemented` / `## Pending` /
-  `## Review` sections because autonomous mode parses them; `kb status` works
+  `## Review` sections because autonomous mode parses them; `genome status` works
   on register rows only once they exist as table rows.
 - `docs/plan-*.md` and `docs/audits/` were re-homed into `docs/plans/` and
   `docs/audit/` on adoption (2026-10-17, iter-900); the 2026-08 numbered

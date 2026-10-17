@@ -27,18 +27,18 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | TUI corpus runner | `env -u OPENAI_BASE_URL -u OPENAI_API_KEY python3 crates/operant-cli/tests/tui_scenarios/_run.py verify <name>` — scenarios without `agent_script` build a real agent and hang on live calls otherwise; per-scenario invocation prints progress; `OPERANT_BIN` must be a FRESH build copy |
 | live TUI repro | tmux `-L <fresh-socket>`, 110x45; `OPENAI_BASE_URL=http://localhost:20129/v1` (omp gateway → poolside/laguna); `OPERANT_TUI_DEBUG=1 OPERANT_TUI_EVENT_LOG=<path>` dumps the ring on clean `/quit`; `/tmp` is swept — recreate configs per repro |
 
-## Documentation CLI (`./scripts/kb`)
+## Documentation CLI (`./scripts/genome`)
 
 | task | command |
 |---|---|
-| schema + doctrine check | `./scripts/kb lint` (exit 2 on error; `--advisory` to triage) |
-| health: staleness, append-only violations, live claims | `./scripts/kb doctor` |
-| wake as a parallel agent | `./scripts/kb feed --to <your-id>` then `./scripts/kb doctor` |
-| claim / finish | `./scripts/kb claim <item>`; `./scripts/kb done <item> done --evidence <path>` |
-| mint records | `./scripts/kb plan "<title>"`, `kb audit`, `kb ad`, `kb rg` |
-| append entries | `./scripts/kb log "<entry>" --agent <id>`; `./scripts/kb post "<msg>" --wf <wf> --to @<agent>` |
-| supersede a doc | `./scripts/kb archive <path> --reason "<why>"` (tombstone + INDEX row; nothing is deleted) |
-| regenerate state | `./scripts/kb handoff --write` |
+| schema + doctrine check | `./scripts/genome lint` (exit 2 on error; `--advisory` to triage) |
+| health: staleness, append-only violations, live claims | `./scripts/genome doctor` |
+| wake as a parallel agent | `./scripts/genome feed --to <your-id>` then `./scripts/genome doctor` |
+| claim / finish | `./scripts/genome claim <item>`; `./scripts/genome done <item> done --evidence <path>` |
+| mint records | `./scripts/genome plan "<title>"`, `kb audit`, `kb ad`, `kb rg` |
+| append entries | `./scripts/genome log "<entry>" --agent <id>`; `./scripts/genome post "<msg>" --wf <wf> --to @<agent>` |
+| supersede a doc | `./scripts/genome archive <path> --reason "<why>"` (tombstone + INDEX row; nothing is deleted) |
+| regenerate state | `./scripts/genome handoff --write` |
 
 Role→path map: `kb.toml`. Routing table (which doc answers what): AGENTS.md
-"Documentation Genome (project-kb)".
+"Documentation Genome (genome)".

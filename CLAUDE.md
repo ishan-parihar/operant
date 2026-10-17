@@ -6,8 +6,8 @@
 > verification commands, release procedure, iteration protocol).
 >
 > **Documentation routing:** the question→owner map, the mutability classes,
-> and the `./scripts/kb` CLI live in AGENTS.md's "Documentation Genome
-> (project-kb)" section — run `./scripts/kb lint` before any doc commit.
+> and the `./scripts/genome` CLI live in AGENTS.md's "Documentation Genome
+> (genome)" section — run `./scripts/genome lint` before any doc commit.
 
 ## Build entry point
 

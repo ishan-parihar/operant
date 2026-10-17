@@ -1,3 +1,6 @@
+[genome]
+modules = ["core", "records", "agents", "ops"]
+
 # kb.toml — the role→path map. Edit freely; roles keep their meaning.
 [paths]
 agents = "AGENTS.md"
@@ -20,9 +23,9 @@ archive = "docs/archive"
 # are date-checked. docs/plans/ also holds the frozen 2026-08 numbering series
 # (001-018 — commit-stamped, not date-named) and batch subdirs; docs/audit/ holds
 # the live 2026-10-16 audit batch the same way.
-dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
-
 # legitimate non-repo references in AGENTS.md's routing table (E001 skips these)
-pointer_ignore = "SKILL.md autonomous-status.toml"
-
 # status vocabulary: open in-progress done rejected blocked (terminal: done rejected)
+
+[core]
+dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
+pointer_ignore = "SKILL.md autonomous-status.toml"
