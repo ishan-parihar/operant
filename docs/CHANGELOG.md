@@ -41,6 +41,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-893 — the setup wizard persists surgically (plan 09's third
+  surface, owner-directed backend integration)**. `operant setup`'s
+  persist did the same whole-file `toml::to_string_pretty` rewrite the
+  TUI's model picker did (iter-874): comments destroyed on every wizard
+  run, `operant -c <path>` runs written to a hardcoded
+  `~/.operant/operant.toml`, env-sourced secrets flattened into the
+  TOML. Now `persist_config` diffs the wizard's mutated struct against
+  the struct it was HANDED (the true wizard delta) and persists only
+  the changed dotted keys through plan 09's surgical writer, in the
+  file the process actually loaded. `operant setup reset` diffs the
+  runtime config against factory defaults the same way — a minimal
+  reset, not a rewrite. Array fields (`fallback_models`) land as real
+  TOML arrays: `persist_config_key` gained an Item-parse arm (raw
+  `[\"a\", \"b\"]` literals parse as arrays; plain strings still coerce
+  as scalars). A fresh install with no config file keeps the full 0600
+  write. Tests: `wizard_persist_is_surgical`,
+  `wizard_persist_writes_arrays_as_arrays` (serialized through a
+  path-slot lock — the loaded-config path is a process-global).
+  Gates: gate 2 = 1763/1 pre-existing (H-3); core lib persist 4/4;
+  corpus 61/62 (rewind-flow pre-existing); clippy parity.
+
 - **iter-891 — plan 06B: seat memory banks, one store, per-turn
   scoping** (audit plan 06B, the 11E remainder). The gateway agent
   recalled and retained in ONE bank for every chat and seat — a cast
