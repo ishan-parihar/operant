@@ -545,6 +545,8 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd_tui_debug::TuiSubcommand,
     },
+    /// Support development 💜
+    Donate,
 }
 
 #[expect(
@@ -3162,6 +3164,11 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Tui { cmd }) => {
             cmd_tui_debug::handle_tui_command(&loaded.config, cmd.clone()).await?;
+        }
+        Some(Commands::Donate) => {
+            println!("Star the repo  : https://github.com/ishan-parihar/operant");
+            println!("GitHub Sponsors: https://github.com/sponsors/ishan-parihar");
+            println!("Razorpay (UPI) : https://rzp.io/rzp/ishan-parihar");
         }
         None => {
             // No command provided - launch TUI in interactive mode
