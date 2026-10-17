@@ -25,6 +25,9 @@ const API_VIEWS: &[&str] = &[
     "api_approvals",
     "api_messages",
     "api_triggers",
+    "api_units",     // v4 (H2/R-04): the capability layer's units, with their owner
+    "api_services",  // v4: the per-service contract (effect/args/output/note/health)
+    "api_pool",      // v4: the pool edges a runtime indexes ("*" = org-wide surface)
 ];
 
 /// A Holon employee as published by `api_employees`.
@@ -112,6 +115,44 @@ pub struct Trigger {
     pub enabled: bool,
     pub failure_streak: i64,
     pub next_run_at: Option<String>,
+}
+
+/// A capability unit as published by `api_units` (v4): a pooled service, a surface, or a
+/// department's own declared genome. `owner` names the department that keeps a surface true.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Unit {
+    pub slug: String,
+    pub charter: String,
+    pub category: Option<String>,
+    pub tier: Option<String>,
+    pub owner: Option<String>,
+    pub synced_at: Option<String>,
+}
+
+/// One service a unit offers, as published by `api_services` (v4). A surface declares its
+/// contract as `args`/`output`; a foundation as `accepts`/`returns`. `effect` rules which
+/// posture may take the route (a write route is act-stage only); `note` is the prefer-this
+/// route line; `health` is the kernel's liveness probe command.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Service {
+    pub unit: String,
+    pub service: String,
+    pub command: Option<String>,
+    pub accepts: Option<String>,
+    pub returns: Option<String>,
+    pub effect: Option<String>,
+    pub args: Option<String>,
+    pub output: Option<String>,
+    pub note: Option<String>,
+    pub health: Option<String>,
+}
+
+/// One pool edge, as published by `api_pool` (v4): the unit, and the department that may use
+/// it. `"*"` in `dept` means org-wide — every entitled brief, including department-less work.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PoolEdge {
+    pub unit: String,
+    pub dept: String,
 }
 
 /// Read-only client over a Holon instance's `work.db`.
@@ -291,6 +332,51 @@ impl HolonApi {
             })
         })
     }
+
+    /// The capability layer's units (v4, H2/R-04): pooled services and surfaces, with the
+    /// owner that keeps a surface true.
+    pub fn units(&self) -> Result<Vec<Unit>> {
+        self.rows("api_units", |r| {
+            Ok(Unit {
+                slug: r.get(0)?,
+                charter: r.get(1)?,
+                category: r.get(2)?,
+                tier: r.get(3)?,
+                owner: r.get(4)?,
+                synced_at: r.get(5)?,
+            })
+        })
+    }
+
+    /// The per-service contract (v4): what each unit's services do, how to call them, and
+    /// which posture may. The future deferred-tool index consumes exactly this shape.
+    pub fn services(&self) -> Result<Vec<Service>> {
+        self.rows("api_services", |r| {
+            Ok(Service {
+                unit: r.get(0)?,
+                service: r.get(1)?,
+                command: r.get(2)?,
+                accepts: r.get(3)?,
+                returns: r.get(4)?,
+                effect: r.get(5)?,
+                args: r.get(6)?,
+                output: r.get(7)?,
+                note: r.get(8)?,
+                health: r.get(9)?,
+            })
+        })
+    }
+
+    /// The pool edges (v4): which department may use which unit; "*" is org-wide. The future
+    /// deferred-tool index derives an entitlement filter from this, never from names.
+    pub fn pool(&self) -> Result<Vec<PoolEdge>> {
+        self.rows("api_pool", |r| {
+            Ok(PoolEdge {
+                unit: r.get(0)?,
+                dept: r.get(1)?,
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -360,5 +446,69 @@ mod tests {
             refused.is_err(),
             "an api_version this build does not know still refuses: {refused:?}"
         );
+    }
+
+    /// iter-907 (H2/R-04, consumer side): a v4 kernel publishes the capability layer — units
+    /// with their owner, services with the per-service contract, and the pool edges. The
+    /// client reads all three; the future deferred-tool index (svc_<unit>_<service>) consumes
+    /// exactly this shape and derives entitlements from api_pool, never from names.
+    #[test]
+    fn a_v4_kernel_publishes_the_capability_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let db_dir = home.join("execution").join("runtime");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db = db_dir.join("work.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "CREATE TABLE api_meta (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO api_meta VALUES ('api_version', '4')", []).unwrap();
+        conn.execute(
+            "CREATE TABLE api_units (slug TEXT, charter TEXT, category TEXT, tier TEXT,
+             owner TEXT, synced_at TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE api_services (unit TEXT, service TEXT, command TEXT, accepts TEXT,
+             returns TEXT, effect TEXT, args TEXT, output TEXT, note TEXT, health TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute("CREATE TABLE api_pool (unit TEXT, dept TEXT)", []).unwrap();
+        conn.execute(
+            "INSERT INTO api_units VALUES ('browser', 'the web surface', 'surface', 'core',
+             'platform-ops', '2026-10-17T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO api_services VALUES ('browser', 'sourcehound', 'sourcehound', NULL,
+             NULL, 'read', 'sourcehound <group> <query>', 'json', 'prefer for any body',
+             'cloakctl doctor --json')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO api_pool VALUES ('browser', '*')", []).unwrap();
+
+        let api = HolonApi::open(&home).unwrap();
+        let units = api.units().unwrap();
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].slug, "browser");
+        assert_eq!(units[0].category.as_deref(), Some("surface"));
+        assert_eq!(units[0].owner.as_deref(), Some("platform-ops"));
+
+        let services = api.services().unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].effect.as_deref(), Some("read"));
+        assert_eq!(services[0].args.as_deref(), Some("sourcehound <group> <query>"));
+        assert_eq!(services[0].output.as_deref(), Some("json"));
+
+        let pool = api.pool().unwrap();
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool[0].dept, "*", "the org-wide surface edge is published");
     }
 }
