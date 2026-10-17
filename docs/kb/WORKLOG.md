@@ -12,3 +12,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-18T03:03** — iter-911: cache-stable layout (turn_context on latest user msg, ladder insight after system prefix) + Anthropic multi-system-message fix; batch-06 P0 landed (telemetry/P1+ remain)
 - **2026-10-18T03:08** — iter-912: delete superseded latex/mermaid raster pipeline (no producer on any prod path); R-LATEX closed as superseded
 - **2026-10-18T03:15** — iter-913: delete dead session-picker port + 6 orphaned operant_app modules (~12.8k lines); B2.6 closed
+- **2026-10-18T03:28** — iter-914: memory tool descriptions corrected to memory-wire; AGENTS.md cache-layout note; release 913 deployed (md5 f37fdbc3)

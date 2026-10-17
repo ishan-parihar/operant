@@ -66,7 +66,7 @@ impl OperantTool for MemoryStoreTool {
     }
 
     fn description(&self) -> &str {
-        "Store a piece of information in the builtin memory (MEMORY.md file store). Useful for remembering facts, preferences, or user information. When the agentmemory backend is active, prefer memory_save so the fact also lands in the shared semantic store."
+        "Store a fact in long-term memory (the memory-wire store) so future sessions can recall it. Useful for remembering facts, preferences, or user information. `key` and `blockType` are kept as tags; the same store backs memory_save and memory_smart_search."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -154,7 +154,7 @@ impl OperantTool for MemorySearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search the builtin memory (MEMORY.md file store) for information matching a query — matches content and tags. Facts saved via memory_save live in the agentmemory semantic store and are found with memory_smart_search, not this tool."
+        "Search long-term memory (the memory-wire store) for facts matching a query, ranked by relevance. Finds everything saved via memory_store or memory_save."
     }
 
     fn schema(&self) -> ToolSchema {
@@ -217,7 +217,7 @@ impl OperantTool for MemoryRecallTool {
     }
 
     fn description(&self) -> &str {
-        "Recall a specific memory by its key from the builtin memory (MEMORY.md file store). Facts saved via memory_save (agentmemory) are stored in the semantic store and recalled with memory_smart_search instead."
+        "Recall a remembered fact by the key it was stored under with memory_store (a semantic match on the key tag). For facts saved without a key, use memory_search."
     }
 
     fn schema(&self) -> ToolSchema {

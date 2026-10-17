@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-914 — memory tool descriptions stop lying to the model.**
+  `memory_store`, `memory_search` and `memory_recall` told the model they use
+  a "builtin MEMORY.md file store" and point to an "agentmemory" backend; all
+  three have run on memory-wire since plan 11C3 (and `memory_save` /
+  `memory_smart_search` are the same store). The descriptions now say so.
+  AGENTS.md's prompt-cache note reflects the iter-911 layout.
+
 - **iter-913 — dead session-picker port deleted (plan 05B B2.6).**
   `operant_ui/session_picker*` and the six `operant_app` support modules only it
   used (`session_picker_types`, `import`, `claude_live`, `catchup`,

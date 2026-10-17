@@ -407,8 +407,10 @@ These are the user's intentional design choices. Do not replace, remove, or
   (`context_management.rs`)
 - T3 (tool results) evicted first, T2 (reasoning) second, T1 (user/assistant) last
 - Recency reserve scales with context window: `budget/4096` clamped to [6, 50]
-- Prompt-cache stability: system prompt split into frozen prefix (base + skills)
-  + volatile suffix (memory + workspace)
+- Prompt-cache stability: system prompt = frozen prefix (base + skills); the
+  per-turn volatile context (memory recall, workspace, harness, MoA) rides the
+  TAIL as a `<turn_context>` prefix on the latest user message (iter-911), so
+  everything before the latest user message is byte-stable between turns
 
 ---
 
