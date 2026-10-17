@@ -591,6 +591,10 @@ mod tests {
     /// without touching the network, and an unparseable local version is
     /// reported as unknown instead of forcing an update decision.
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+    )]
     async fn check_resolves_versions_through_a_fake_gh() {
         let dir = std::env::temp_dir().join(format!("operant-fakegh-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

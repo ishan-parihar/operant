@@ -5,6 +5,8 @@
 //! tests pin the MERGE half: the envelope's own fields must survive, and the
 //! kernel's coalescing contract (driver measurement wins) must hold shape.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use operant_core::trajectory::holon_trajectory_json;
 
 #[test]

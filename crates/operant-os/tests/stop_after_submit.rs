@@ -7,6 +7,8 @@
 //!
 //! HOLON_REPO gates it (O-28: a skip is loud).
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::process::Command;
 
 fn holon_repo() -> Option<std::path::PathBuf> {

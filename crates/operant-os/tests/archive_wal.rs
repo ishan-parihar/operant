@@ -5,6 +5,8 @@
 //! must pass `integrity_check`; the org/ charter tree and a per-board
 //! kanban file must ride along; the manifest must name everything.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use operant_os::archive::archive_org_stores;
 
 #[test]
@@ -26,7 +28,7 @@ fn a_wal_committed_row_lands_in_the_snapshot_intact() {
         // the connection stays OPEN so no close-time checkpoint can fire
         let uncheckpointed = std::fs::read(h.join("database.db-wal")).expect("a -wal file exists");
         assert!(
-            uncheckpointed.len() > 0,
+            !uncheckpointed.is_empty(),
             "the fixture must actually hold pages in the -wal"
         );
         std::mem::forget(conn); // leak the handle: the -wal stays hot

@@ -36,15 +36,11 @@ in `## Review`, which autonomous mode never touches.
 
 - Rebuild `/settings` over `operant.toml` (toml_edit, comments kept), tabs per config section, live-apply where supported; retire the legacy settings.json screen
 - `[keybindings]` user overrides in `operant.toml` (`/keys` now shows the effective registry bindings + conflicts — iter-820; overrides remain)
-- `▸ thought for Xs` collapsed row when a Current-mode reasoning trace hides
 - Unify the gateway's `agent.show_reasoning` with the TUI reasoning display mode
 
 ## Review
 
 Owner decisions — not autonomous work:
 
-- Commands kept registered but not wired: `/commit`, `/commit-and-push`, `/commit-push-release`, `/cut-release`, `/git`, `/test`, `/swarm`, `/subagent`, `/subagent-model`, `/ssh`, `/remote` — implement or remove each
-- Reasoning effort: the effort picker is display-only (no provider request field); wire `reasoning_effort` (some providers reject it) or remove the picker
-- Esc / `/cancel` clears ALL tool rows of the session (`tool_use_blocks.clear()`), not just the cancelled turn's
 - Context management (magic-context review): agent-driven reduction (`ctx_reduce`) and a background historian instead of the synchronous summarize rung — larger core changes
 - BUGS.md R42-8: two live Telegram bot tokens unredacted in gateway.log

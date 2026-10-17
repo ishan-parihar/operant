@@ -5,8 +5,6 @@
 //! module only builds the sourcehound `IntegrationSpec` and kicks the
 //! once-per-session check from the first sourcehound tool call.
 
-use std::path::PathBuf;
-
 use crate::binary_updater::{InstallKind, IntegrationSpec};
 
 /// The sourcehound integration spec: single binary on PATH, SHA256SUMS
@@ -18,7 +16,7 @@ pub fn sourcehound_spec() -> Option<IntegrationSpec> {
         name: "sourcehound",
         repo: "ishan-parihar/sourcehound",
         asset_marker: "linux-x86_64",
-        install: InstallKind::ReplaceOnPath(PathBuf::from(bin)),
+        install: InstallKind::ReplaceOnPath(bin),
     })
 }
 

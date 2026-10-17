@@ -336,10 +336,6 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Attach a memory provider for long-term memory hooks. When set,
     /// the agent calls `sync_turn(user, assistant)` after each completed
     /// turn so the memory backend persists turn observations.

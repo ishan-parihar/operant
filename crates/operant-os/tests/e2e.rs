@@ -10,6 +10,8 @@
 //! the test never touches a network. `HOLON_REPO` gates it (O-28: a skip
 //! is loud).
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
@@ -280,7 +282,7 @@ fn real_prepare(repo: &std::path::Path, home: &std::path::Path, extra_toml: &str
         .get("prepared")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let prepared = prepared.as_object().map(|o| o.clone()).unwrap_or_default();
+    let prepared = prepared.as_object().cloned().unwrap_or_default();
     let env_map = prepared
         .get("env")
         .and_then(|v| v.as_object())

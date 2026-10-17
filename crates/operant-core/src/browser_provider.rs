@@ -10,7 +10,6 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::tools::sourcehound::Sourcehound;
-use reqwest;
 
 // ---------------------------------------------------------------------------
 // Trait

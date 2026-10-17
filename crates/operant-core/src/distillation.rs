@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use tracing::debug;
 
@@ -106,21 +105,6 @@ fn format_history_for_distillation(history: &[Message]) -> String {
         .map(|message| format!("{}: {}", message.role.as_str(), message.content.trim()))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn distilled_memory_id(fact: &str, index: usize) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    // (iter-144 — fixed A28: was DefaultHasher which is NOT stable across
-    // Rust versions — IDs would change when the toolchain updates. Now
-    // uses SHA-256 which is stable + already in deps.)
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(fact.as_bytes());
-    let hash = hex::encode(&hasher.finalize()[..8]);
-    format!("distilled_{}_{}_{}", now, index, hash)
 }
 
 #[cfg(test)]

@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-909 — clippy gate green for `operant-core` and `operant-os`.** The
+  gate (`scripts/clippy-warning-gate.sh`) had been failing at compile time:
+  an automated attribute pass left duplicated, mis-placed
+  `#[expect(clippy::expect_used)]` blocks (16 unfulfilled) while three real
+  `.expect()` sites carried none. The poisoned-lock sites
+  (`model()`, the tool-guardrail locks) now recover the guard instead of
+  panicking; dead code the gate surfaced is deleted (the DuckDuckGo-lite
+  scraper and its helpers, `visible_now`, `distilled_memory_id`,
+  `GLOBAL_AUTHORS`, an unused web-provider `urlencode`, an orphaned
+  prompt-cache-guard doc block, an empty authority-filter `impl`); the
+  `memory_store` tool no longer advertises an `importance` argument nothing
+  read; integration-test crates carry the standard
+  `#![allow(clippy::unwrap_used, clippy::expect_used)]` header. `operant-cli`
+  is still outstanding (tracked in BUGS.md).
+
 - **iter-908 — stale org `--reason` test retired; `org --help` banner fixed.**
   `tests/org_reason.rs` drove `org employee/notice/worklog/sync/import`, which
   iter-838 deleted (7 of 10 tests red on main). It now pins only the surviving

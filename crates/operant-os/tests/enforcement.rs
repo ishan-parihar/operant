@@ -5,6 +5,8 @@
 //! consult keyed on a seat that never matched (session UUID vs the exported
 //! employee), so the policy silently governed nothing.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::sync::Arc;
 
 use operant_core::org::seat_authority::SeatAuthority;

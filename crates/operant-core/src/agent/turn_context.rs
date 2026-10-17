@@ -50,10 +50,6 @@ pub struct TurnContext {
     clippy::expect_used,
     reason = "poisoned lock: panic is the intended recovery"
 )]
-#[expect(
-    clippy::expect_used,
-    reason = "poisoned lock: panic is the intended recovery"
-)]
 /// Run the once-per-turn setup and return the loop's input context.
 ///
 /// Performs:

@@ -399,9 +399,6 @@ async fn download_aft_release(tag: &str) -> Result<PathBuf> {
     Ok(bin_path)
 }
 
-/// Check for a newer aft release and download it in the background.
-/// Non-fatal — logs errors but doesn't propagate them.
-
 /// Map the current platform to the aft release asset name (v0.49.x naming:
 /// raw binaries, no target triple, no tarball extension).
 fn aft_asset_name() -> Result<String> {
@@ -962,6 +959,10 @@ mod tests {
     /// anything but a hang. The fake aft spews 1MB BEFORE answering, then
     /// responds to one request.
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "test-only: the std mutex serialises process-env mutation across the whole test"
+    )]
     async fn megabyte_stderr_child_still_serves_requests() {
         let dir = std::env::temp_dir().join(format!("operant-aft-stderr-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

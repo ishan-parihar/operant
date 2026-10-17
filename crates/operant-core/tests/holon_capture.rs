@@ -3,6 +3,8 @@
 //! skills and memory store stay byte-identical. Drives the real tool
 //! execute paths (skill_manage, memory_store) under the run env.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::sync::Arc;
 
 use serde_json::json;

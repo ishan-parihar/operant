@@ -26,6 +26,8 @@
 //! the developer's own exported keys. `env_clear` plus the explicit
 //! `env_remove` list is deliberate, not redundant.
 
+#![allow(clippy::unwrap_used)]
+
 // Integration test binaries are not covered by the `#![cfg_attr(test, ...)]`
 // exemption in main.rs, so the gate's -D flags reach here. `expect` is used only
 // to surface a failure loudly, which is what a test should do.

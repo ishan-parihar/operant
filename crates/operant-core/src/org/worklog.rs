@@ -816,6 +816,29 @@ pub struct WorklogRecord {
     pub result_truncated: bool,
 }
 
+/// The deterministic seat id a cron job derives (moved from the retired
+/// `employee` module, G+1): `emp-` + the first 12 bytes of the job id.
+/// Deterministic, stable under re-runs, and reproduces the organism's
+/// shape on hex ids. The scheduler still uses it for session keys.
+pub fn derive_employee_id(cron_job_id: &str) -> String {
+    const EMPLOYEE_ID_PREFIX: &str = "emp-";
+    const EMPLOYEE_ID_HEX_LEN: usize = 12;
+    let mut out = String::from(EMPLOYEE_ID_PREFIX);
+    let mut taken = 0usize;
+    for ch in cron_job_id.chars() {
+        if taken >= EMPLOYEE_ID_HEX_LEN {
+            break;
+        }
+        let len = ch.len_utf8();
+        if taken + len > EMPLOYEE_ID_HEX_LEN {
+            break;
+        }
+        out.push(ch);
+        taken += len;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1073,27 +1096,4 @@ mod tests {
             assert_eq!(entry.duration_s(), 0.0, "duration {bad} must clamp");
         }
     }
-}
-
-/// The deterministic seat id a cron job derives (moved from the retired
-/// `employee` module, G+1): `emp-` + the first 12 bytes of the job id.
-/// Deterministic, stable under re-runs, and reproduces the organism's
-/// shape on hex ids. The scheduler still uses it for session keys.
-pub fn derive_employee_id(cron_job_id: &str) -> String {
-    const EMPLOYEE_ID_PREFIX: &str = "emp-";
-    const EMPLOYEE_ID_HEX_LEN: usize = 12;
-    let mut out = String::from(EMPLOYEE_ID_PREFIX);
-    let mut taken = 0usize;
-    for ch in cron_job_id.chars() {
-        if taken >= EMPLOYEE_ID_HEX_LEN {
-            break;
-        }
-        let len = ch.len_utf8();
-        if taken + len > EMPLOYEE_ID_HEX_LEN {
-            break;
-        }
-        out.push(ch);
-        taken += len;
-    }
-    out
 }

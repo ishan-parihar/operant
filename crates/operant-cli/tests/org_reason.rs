@@ -27,6 +27,8 @@
 //! Integration test binaries are not covered by the `#![cfg_attr(test, ...)]`
 //! exemption in main.rs, so the clippy gate's -D flags reach here. `expect`
 //! is used only to surface a failure loudly, which is what a test should do.
+
+#![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
 
 use std::path::{Path, PathBuf};

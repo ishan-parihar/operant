@@ -3,6 +3,8 @@
 //! code paths (the recorder, the write fence, the budget check), not mocks
 //! of their internals.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::Path;
 
 fn holon_run_dir_with(policy: &str) -> (tempfile::TempDir, std::path::PathBuf) {

@@ -175,15 +175,13 @@ pub async fn run_body(
     // the kernel's published schema before the run hands in — a warning
     // here is the drift's first signal (the kernel's own submit remains
     // the authority). The stage comes from the run's policy document.
-    if let Some(brief_dir) = prepared.brief_md.parent() {
-        if let Ok(policy_text) = std::fs::read_to_string(brief_dir.join("policy.json"))
-            && let Ok(policy) = serde_json::from_str::<serde_json::Value>(&policy_text)
-            && let Some(stage) = policy.get("stage").and_then(|s| s.as_str())
-        {
-            if let Err(e) = crate::contract::validate_result(brief_dir, stage) {
-                tracing::warn!(stage, error = %e, "result.json failed its schema check (submit will refuse it)");
-            }
-        }
+    if let Some(brief_dir) = prepared.brief_md.parent()
+        && let Ok(policy_text) = std::fs::read_to_string(brief_dir.join("policy.json"))
+        && let Ok(policy) = serde_json::from_str::<serde_json::Value>(&policy_text)
+        && let Some(stage) = policy.get("stage").and_then(|s| s.as_str())
+        && let Err(e) = crate::contract::validate_result(brief_dir, stage)
+    {
+        tracing::warn!(stage, error = %e, "result.json failed its schema check (submit will refuse it)");
     }
 
     // A stop-after-submit body already handed in itself (the kernel's

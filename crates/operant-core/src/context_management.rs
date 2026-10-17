@@ -521,20 +521,6 @@ pub async fn semantic_compaction_cutoff(
 }
 
 // ---------------------------------------------------------------------------
-// Tiered eviction
-// ---------------------------------------------------------------------------
-
-/// Wave-4 PromptCacheGuard: the frozen prefix (leading run of system
-/// messages) must survive every preflight rung byte-identical so
-/// provider prompt caches keep hitting across a session's calls.
-/// `decay_render` and `evict_to_budget` already preserve system
-/// messages by construction; this guard converts that implicit
-/// invariant into a checked one — drift from a future rung edit
-/// surfaces as a loud warning instead of a silent cache-bust tax.
-///
-/// Returns `true` when the prefix survived. Drift logs a warning in
-/// release and trips a `debug_assert` in test builds.
-// ---------------------------------------------------------------------------
 // Micro-compaction (hermes micro-compaction parity; opt-in via
 // `OPERANT_MICRO_COMPACTION`, off by default)
 // ---------------------------------------------------------------------------

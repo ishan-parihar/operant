@@ -1768,7 +1768,7 @@ impl WebToolSettings {
         for (key, value, replacement) in pairs {
             if value.is_some_and(|v| !v.trim().is_empty()) {
                 let hint = replacement
-                    .map(|r| format!(" — web search is sourcehound-only now"))
+                    .map(|_| " — web search is sourcehound-only now".to_string())
                     .unwrap_or_else(|| {
                         " — removed; web search is sourcehound-only now".to_string()
                     });

@@ -50,11 +50,6 @@ impl SeatPolicyDb {
         );
     "#;
 
-    /// The additive column pre-697 files lack. Applied via the org layer's
-    /// `ensure_column` probe (never `PRAGMA user_version` — same discipline
-    /// as the schema above and `decisions_db`'s ALTER family).
-    const DELEGATION_COLUMN_DEF: &str = "TEXT";
-
     /// Open (or create) the seat_policies table in a sqlite file.
     ///
     /// Tests point this at a temp path; production points it at the shared

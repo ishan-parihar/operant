@@ -122,6 +122,7 @@ struct DelegateStubTool;
 #[derive(JsonSchema, Deserialize)]
 struct DelegateStubArgs {
     agent: String,
+    #[expect(dead_code, reason = "schema-only: the stub never reads the prompt")]
     prompt: String,
 }
 
@@ -586,7 +587,7 @@ async fn seat_deny_row_denies_without_prompting() {
 /// `delegate` tool simply runs.
 #[tokio::test]
 async fn ungoverned_seat_delegates_as_today() {
-    let mut w = world(
+    let w = world(
         vec![
             tool_call_response(
                 "delegate",

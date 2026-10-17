@@ -1226,8 +1226,10 @@ mod tests {
             feeds: AtomicUsize::new(0),
             turns: AtomicUsize::new(0),
         });
-        let mut config = GatewayConfig::default();
-        config.admins = vec!["admin".to_string()];
+        let config = GatewayConfig {
+            admins: vec!["admin".to_string()],
+            ..GatewayConfig::default()
+        };
         let gw = Arc::new(Gateway::new(config).with_handler(handler.clone()));
 
         // Channel post from a NON-ADMIN: capture must happen before the
@@ -2070,7 +2072,7 @@ mod tests {
             let r = gw
                 .send_to_platform(
                     "telegram",
-                    OutgoingMessage::new("chat-42", &format!("m{i}")),
+                    OutgoingMessage::new("chat-42", format!("m{i}")),
                 )
                 .await;
             assert!(r.is_err(), "the send itself still fails (i={i})");
@@ -2125,7 +2127,7 @@ mod tests {
             let r = gw
                 .send_message_return_id(
                     "telegram",
-                    OutgoingMessage::new("chat-7", &format!("m{i}")),
+                    OutgoingMessage::new("chat-7", format!("m{i}")),
                 )
                 .await;
             assert!(r.is_err());
@@ -2157,7 +2159,7 @@ mod tests {
         // byte-for-byte the old behavior.
         for i in 0..10 {
             let r = gw
-                .send_to_platform("telegram", OutgoingMessage::new("chat-9", &format!("m{i}")))
+                .send_to_platform("telegram", OutgoingMessage::new("chat-9", format!("m{i}")))
                 .await;
             assert!(r.is_err());
         }

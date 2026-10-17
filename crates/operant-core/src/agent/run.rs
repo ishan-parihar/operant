@@ -83,10 +83,6 @@ impl OperantAgent {
     /// request; negligible next to the LLM round-trip it precedes.
     #[expect(
         clippy::expect_used,
-        reason = "mutex poison recovery — a poisoned masked_tools lock is a programmer error, not a runtime condition"
-    )]
-    #[expect(
-        clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
     pub(crate) async fn tools_for_turn(
@@ -280,10 +276,6 @@ impl OperantAgent {
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"

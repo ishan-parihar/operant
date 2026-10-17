@@ -13,7 +13,6 @@
 //! No Holon run (no env var, no document) = no authority = today's behavior,
 //! byte-identical — invariant 5.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use operant_core::org::seat_authority::SeatAuthority;

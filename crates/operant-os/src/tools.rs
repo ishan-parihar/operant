@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use operant_core::schema::ToolSchema;
 use operant_core::tools::{OperantTool, ToolContext, ToolResult};
@@ -34,6 +34,10 @@ pub struct ToolDef {
 }
 
 /// The vendored kernel tool list — the output of `holon.mcp.tools()`.
+#[expect(
+    clippy::expect_used,
+    reason = "compile-time vendored JSON; a parse failure is a build-time invariant violation"
+)]
 pub static NATIVE_TOOLS: LazyLock<Vec<ToolDef>> = LazyLock::new(|| {
     static VENDOR: &str = include_str!("../vendor/holon-tools.json");
     serde_json::from_str(VENDOR)
@@ -157,7 +161,7 @@ impl OperantTool for NativeCliTool {
         operant_core::platform::is_holon_run()
     }
 
-    async fn execute(&self, args: Value, context: ToolContext) -> ToolResult {
+    async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         if !self.is_available() {
             return ToolResult::error(self.name(), "only available inside a Holon run".to_string());
         }
@@ -276,7 +280,6 @@ impl NativeCliTool {
         }
         // wait_with_output consumes the child: kill-on-timeout needs a
         // handle kept out of the move. Take the pid's kill right first.
-        let mut child = child;
         let wait = child.wait_with_output();
         match tokio::time::timeout(std::time::Duration::from_secs(120), wait).await {
             Ok(Ok(out)) => {

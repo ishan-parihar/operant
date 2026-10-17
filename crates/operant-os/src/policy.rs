@@ -178,7 +178,7 @@ impl PolicyDoc {
                 allow: OBSERVE_ALLOW
                     .iter()
                     .copied()
-                    .chain(crate::tools::native_tool_names().into_iter())
+                    .chain(crate::tools::native_tool_names())
                     .filter(|n| !OBSERVE_HOLON_DENY.contains(n))
                     .map(|s| s.to_string())
                     .collect(),

@@ -3,7 +3,8 @@
 //! environment must show neither the supervisor's secrets (channel
 //! tokens, provider keys, the Chair key) nor its HERMES_HOME.
 
-use std::process::Command;
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 
 use operant_os::run::Prepared;
 

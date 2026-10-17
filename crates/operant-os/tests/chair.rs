@@ -2,6 +2,8 @@
 //! the security boundary between "the organization's owner typed this" and
 //! "some chat user typed this". Exact-match only; degradation = nobody.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::Path;
 
 use operant_os::chair::{is_chair, run_as_chair};

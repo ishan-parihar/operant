@@ -656,61 +656,6 @@ impl ToolRegistry {
     }
 }
 
-// =====================================================================
-// Authority-filtered tool availability — §2.4
-// =====================================================================
-
-/// The authority binding declared for one tool.
-///
-/// §2.4: *"the tool registry is filtered by authority at agent construction. A
-/// `Department`-scoped agent is offered the department's tool surface. Reaching
-/// a sibling department's tooling requires the capability grant, which is
-/// individually recorded and individually revocable."*
-///
-/// ## `department: None` means a global tool
-///
-/// A tool with no department binding acts on no department's system —
-/// `datetime`, `web_search`, `file_read` on the agent's own workspace — so
-/// there is nothing for authority to gate and it is offered to every actor.
-/// A tool with a department binding belongs to that department's *surface*, and
-/// reaching it from outside requires a grant.
-///
-/// This is what keeps the change **additive**: the ~100 tools that predate the
-/// org layer carry no binding and keep exactly the availability they have
-/// today. Narrowing a tool is a declaration the mounting code makes at
-/// construction time, never something the model can influence.
-///
-/// ## Failing closed on a half-declared binding
-///
-
-impl ToolRegistry {
-    /// The tools that are registered, available, and not disabled by name or
-    /// toolset.
-    ///
-    /// The availability predicate [`Self::get_schemas`] applies, factored out
-    /// so the advertised list and the execution-time check cannot drift apart.
-    async fn visible_now(&self) -> Vec<Arc<dyn OperantTool>> {
-        let tools = self.tools.read().await;
-        let disabled_names = self.disabled_names.read().await;
-        let disabled_toolsets = self.disabled_toolsets.read().await;
-        tools
-            .values()
-            .filter(|t| {
-                if t.is_available() {
-                    !disabled_names.contains(t.name()) && !disabled_toolsets.contains(t.toolset())
-                } else {
-                    false
-                }
-            })
-            .cloned()
-            .collect()
-    }
-}
-
-// =====================================================================
-// End of the authority-filtered tool availability section (§2.4)
-// =====================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;

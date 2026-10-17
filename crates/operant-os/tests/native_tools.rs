@@ -13,6 +13,8 @@
 //! "SKIPPED" and exits 0 only when the env is unset (O-28's rule: a skip
 //! must be visible).
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::process::Command;
 
 fn holon_repo() -> Option<std::path::PathBuf> {

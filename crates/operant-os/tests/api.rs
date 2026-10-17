@@ -5,6 +5,8 @@
 //! Holon checkout path comes from `HOLON_REPO`; tests skip (with a stderr note)
 //! when the checkout is absent so a foreign machine does not spuriously fail.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::PathBuf;
 use std::process::Command;
 

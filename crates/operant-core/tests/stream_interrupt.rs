@@ -46,6 +46,8 @@
 //! No `#[allow]` anywhere — the test is written with `?` and atomics so it
 //! needs no lint escape hatch.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -262,7 +264,6 @@ async fn interrupt_during_tool_batch_pairs_every_call_without_repairs() -> Resul
         }
         async fn execute(&self, _args: Value, _ctx: ToolContext) -> ToolResult {
             std::future::pending::<()>().await;
-            #[expect(clippy::unreachable, reason = "pending never resolves")]
             unreachable!()
         }
     }

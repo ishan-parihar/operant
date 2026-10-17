@@ -4,9 +4,8 @@
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::schema::ToolSchema;
@@ -57,7 +56,6 @@ struct MemoryStoreArgs {
     key: String,
     content: String,
     block_type: Option<String>,
-    importance: Option<u8>,
     tags: Option<Vec<String>>,
 }
 
@@ -172,9 +170,6 @@ impl OperantTool for MemorySearchTool {
         };
 
         let max_results = args.max_results.unwrap_or(10).min(50);
-        let query_lower = args.query.to_lowercase();
-
-        let max_results = args.max_results.unwrap_or(10).min(50);
 
         // (plan 11C3) one backend: semantic recall over memory-wire.
         let Some(provider) = ACTIVE_MEMORY_PROVIDER.read().await.clone() else {
@@ -268,10 +263,6 @@ impl OperantTool for MemoryRecallTool {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    // Serializes tests that touch ACTIVE_MEMORY_PROVIDER so a routing test
-    // doesn't leak its global hook into parallel legacy tests.
-    static TEST_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn test_memory_store_schema() {

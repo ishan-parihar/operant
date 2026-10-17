@@ -339,10 +339,6 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     pub async fn clear_history(&self) {
         self.bump_conv_epoch(); // (plan 05) non-append mutation
         // Notify memory provider of session end before clearing.
@@ -448,10 +444,6 @@ impl OperantAgent {
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Gracefully shut down the memory sync executor.
     /// Drains pending jobs (up to 5s) then abandons remaining work.
     /// Call this during agent shutdown to avoid losing in-flight writes.
@@ -472,14 +464,6 @@ impl OperantAgent {
         &self.database
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// Update the model at runtime. Used by the gateway to apply
     /// per-session model overrides via /model command. (iter-162 —
     /// closes ponytail-audit gap B36: 'model_override is read but
@@ -494,7 +478,7 @@ impl OperantAgent {
         *self
             .model_override
             .write()
-            .expect("model_override RwLock poisoned — programmer error") = Some(new_model);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(new_model);
     }
 
     #[expect(
@@ -588,14 +572,6 @@ impl OperantAgent {
             .is_ok_and(|set| set.contains(model))
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     /// (plan 05) The agent's DB handle — the TUI's branch browser reads
     /// parent/child sessions for the fork tree.
     pub fn database(&self) -> &crate::database::Database {
@@ -606,16 +582,12 @@ impl OperantAgent {
     pub fn model(&self) -> String {
         self.model_override
             .read()
-            .expect("model_override RwLock poisoned — programmer error")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .map(|m| m.clone())
             .unwrap_or_else(|| self.config.model.clone())
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
@@ -642,10 +614,6 @@ impl OperantAgent {
     /// on the session id, which is what cron runs already key on).
     #[expect(
         clippy::expect_used,
-        reason = "RwLock poison recovery — a poisoned seat_id lock is a programmer error, not a runtime condition"
-    )]
-    #[expect(
-        clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
     pub fn seat_id(&self) -> Option<String> {
@@ -670,10 +638,6 @@ impl OperantAgent {
     /// one. Appended to the frozen prefix — see [`Self::build_frozen_prefix`].
     #[expect(
         clippy::expect_used,
-        reason = "RwLock poison recovery — a poisoned charter lock is a programmer error, not a runtime condition"
-    )]
-    #[expect(
-        clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"
     )]
     pub fn charter(&self) -> Option<String> {
@@ -693,10 +657,6 @@ impl OperantAgent {
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "poisoned lock: panic is the intended recovery"
-    )]
     #[expect(
         clippy::expect_used,
         reason = "invariant guaranteed by surrounding validation"

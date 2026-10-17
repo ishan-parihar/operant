@@ -16,7 +16,7 @@ use crate::{Error, Result};
 pub fn validate_result(run_dir: &Path, stage: &str) -> Result<()> {
     let raw = std::fs::read_to_string(run_dir.join("result.json"))
         .map_err(|e| Error::Protocol(format!("result.json unreadable: {e}")))?;
-    let doc: Value = serde_json::from_str(&raw).map_err(|e| Error::PolicyParse(e))?;
+    let doc: Value = serde_json::from_str(&raw).map_err(Error::PolicyParse)?;
     let schema_name = format!("{stage}-result.schema.json");
     // the schemas load from the vendored set at runtime (include_str
     // cannot be dynamic over the stage name)
@@ -25,7 +25,7 @@ pub fn validate_result(run_dir: &Path, stage: &str) -> Result<()> {
         .join(&schema_name);
     let schema_raw = std::fs::read_to_string(&schema_path)
         .map_err(|e| Error::Protocol(format!("schema {schema_name} unreadable: {e}")))?;
-    let schema: Value = serde_json::from_str(&schema_raw).map_err(|e| Error::PolicyParse(e))?;
+    let schema: Value = serde_json::from_str(&schema_raw).map_err(Error::PolicyParse)?;
     // Structural validation of the invariant's half: the envelope must
     // satisfy at least one schema variant. The schemas are JSON Schema;
     // a full validator crate is out of scope for this seam — the kernel

@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 
 use operant_core::agent::{AgentConfig, ChatRequest, ModelClient, OperantAgent, StreamChunk};
-use operant_core::client::{ChatResponse, Message};
+use operant_core::client::ChatResponse;
 use operant_core::database::Database;
 use operant_core::error::{Error, Result};
 use operant_core::tools::ToolRegistry;
@@ -74,8 +74,10 @@ fn test_agent(client: OneShotClient) -> OperantAgent {
     .unwrap();
     // Non-streaming: the mock serves the `chat` path, matching the
     // circuit-breaker harness's shape.
-    let mut config = AgentConfig::default();
-    config.stream = false;
+    let config = AgentConfig {
+        stream: false,
+        ..AgentConfig::default()
+    };
     OperantAgent::new(
         config,
         Box::new(client),

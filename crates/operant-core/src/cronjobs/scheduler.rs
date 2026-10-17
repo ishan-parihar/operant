@@ -16,9 +16,7 @@ const MAX_TRANSIENT_RETRIES: u8 = 2;
 /// the effective latency — a 30s re-arm lands within the next tick.
 const TRANSIENT_RETRY_BACKOFFS_SECS: [u64; 2] = [30, 120];
 use crate::error::Error;
-use crate::org::worklog::OutcomeSignals;
 use crate::org::worklog::UsageAccumulator;
-use crate::turn_end::{RESULT_SUMMARY_LIMIT, TurnEnd};
 
 /// Message sent from the cron scheduler to the gateway for delivery.
 /// `delivery_id` (iter-720) names the `cron_deliveries` ledger row the
@@ -912,6 +910,7 @@ fn seat_memory_path(org_root: &std::path::Path, seat_id: &str) -> std::path::Pat
 /// the file and its directory when absent — a cold-start seat's first
 /// socialization IS its first memory. `None` root = no-op (the caller
 /// warns); a failed write warns and never fails the session.
+#[cfg(test)]
 fn seat_memory_append(
     org_root: Option<&std::path::Path>,
     seat_id: &str,

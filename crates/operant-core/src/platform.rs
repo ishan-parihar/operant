@@ -129,7 +129,7 @@ pub fn operant_home() -> PathBuf {
 ///
 /// These live here (not in operant-os) because the agent loop and the cron
 /// tool — core code — read them; operant-os re-exports for its own call sites.
-
+///
 /// The run directory for THIS process if it is a Holon body: the dir the
 /// kernel prepared, carrying the brief, the policy and the result path.
 pub fn holon_run_dir() -> Option<PathBuf> {

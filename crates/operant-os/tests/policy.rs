@@ -6,6 +6,8 @@
 //! document becomes a SeatPolicy whose verdicts deny/escalate the right calls,
 //! and the pure `decide` floor behaves under both postures.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::PathBuf;
 
 use operant_core::org::seat_policy::{SeatDecision, SeatMode, decide};

@@ -482,10 +482,6 @@ impl OperantAgent {
     /// construction and would fake an identical-result streak. A Halt
     /// verdict triggers the interrupt flag and surfaces the root-cause
     /// summary as final content.
-    #[expect(
-        clippy::expect_used,
-        reason = "mutex poison recovery — a poisoned tool_guardrails lock is a programmer error, not a runtime condition"
-    )]
     async fn observe_guardrail_results(&self, results: &mut [ToolResult]) {
         use crate::tool_guardrails::{GuardrailDecision, RepeatPattern};
 
@@ -497,7 +493,7 @@ impl OperantAgent {
             let mut g = self
                 .tool_guardrails
                 .lock()
-                .expect("tool_guardrails lock poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for (idx, r) in results.iter().enumerate() {
                 if r.content
                     .starts_with(crate::tool_guardrails::SKIP_MESSAGE_PREFIX)
@@ -621,7 +617,7 @@ impl OperantAgent {
             let mut g = self
                 .tool_guardrails
                 .lock()
-                .expect("tool_guardrails lock poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let batch_exempt = results.iter().all(|r| g.is_exempt(&r.name));
             let mut saw_real = false;
             let mut all_ok = true;
@@ -649,7 +645,7 @@ impl OperantAgent {
                 let g = self
                     .tool_guardrails
                     .lock()
-                    .expect("tool_guardrails lock poisoned");
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 g.last_pattern()
                     .map(|p| match p {
                         crate::tool_guardrails::RepeatPattern::IdenticalOutput { count } => {
@@ -894,7 +890,7 @@ impl OperantAgent {
                     let mut g = self
                         .tool_guardrails
                         .lock()
-                        .expect("tool_guardrails lock poisoned");
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let d = g.observe(&name, &args_str);
                     (d, g.last_pattern())
                 };
@@ -1202,7 +1198,7 @@ impl OperantAgent {
                 // result.refusals[] is the blocker the kernel and the Chair
                 // read.
                 if let Some(run_dir) = crate::platform::holon_run_dir() {
-                    crate::org::record_refusal(&run_dir, &name, &why, "policy.json:escalate");
+                    crate::org::record_refusal(&run_dir, &name, why, "policy.json:escalate");
                     early_results[idx] = Some(ToolResult::error(
                         &tool_call.id,
                         format!(

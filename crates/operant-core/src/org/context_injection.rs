@@ -132,9 +132,6 @@ const MAX_ITEM_CHARS: usize = 400;
 /// a longer memory, not speculatively.
 const CAPTURE_RETENTION_DAYS: i64 = 7;
 
-/// The seats whose outputs are org-global broadcasts by role.
-const GLOBAL_AUTHORS: [&str; 2] = ["premiere", "chief-of-staff"];
-
 /// ponytail: authority is a static precedence ladder for phase 1 (no Wave 3
 /// department/authority model yet); the design doc's full ladder lands with
 /// it. Premiere outranks the chief; everyone else is a peer.
@@ -320,7 +317,6 @@ impl ContextInjector {
     /// G+1: the notice board retired to Holon (`api_messages`). The
     /// block is gone; callers of the old surface get an empty string —
     /// prompt byte-identical.
-    #[expect(dead_code)]
     pub fn pending_notices_block(&self, _employee_id: &str) -> String {
         String::new()
     }

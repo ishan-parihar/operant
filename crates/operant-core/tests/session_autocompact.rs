@@ -172,8 +172,10 @@ fn a_session_below_the_floor_is_not_compacted() {
 /// binding constraint, which is what this test is about.
 #[test]
 fn the_floor_boundary_is_exact() {
-    let mut config = AutocompactConfig::default();
-    config.keep_tail_tokens = 1_000;
+    let config = AutocompactConfig {
+        keep_tail_tokens: 1_000,
+        ..AutocompactConfig::default()
+    };
     let f = Fixture::with_config(config);
     let key = f.seed("emp-edge", &long_transcript(12, 200));
     let tokens = estimate_total_tokens(&f.store.peek(&key));
@@ -448,8 +450,10 @@ fn compaction_is_idempotent() {
 /// The record surviving is the part that is not negotiable.
 #[test]
 fn an_existing_record_survives_a_later_compaction() {
-    let mut config = AutocompactConfig::default();
-    config.keep_tail_tokens = 1_000;
+    let config = AutocompactConfig {
+        keep_tail_tokens: 1_000,
+        ..AutocompactConfig::default()
+    };
     let f = Fixture::with_config(config);
 
     // Head, large enough to clear the floor on its own.
@@ -573,10 +577,9 @@ fn the_floor_default_is_pinned() {
     // The idempotence argument depends on the tail budget exceeding the floor:
     // a compacted transcript must fall inside the next pass's tail walk, or a
     // second pass would find a fresh middle and compact again.
-    assert!(
+    const _: () = assert!(
         KEEP_TAIL_TOKENS > COMPACTION_FLOOR_TOKENS,
-        "idempotence depends on the tail budget ({KEEP_TAIL_TOKENS}) exceeding \
-         the floor ({COMPACTION_FLOOR_TOKENS})"
+        "idempotence depends on the tail budget exceeding the floor"
     );
 }
 

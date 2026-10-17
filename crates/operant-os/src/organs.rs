@@ -29,7 +29,7 @@ pub fn spawn_if_configured(config: &AppConfig) {
         let home = config.holon.home.clone();
         let bin = config.holon.bin.clone();
         let employees = config.holon.supervise_employees.clone();
-        let max = config.holon.max_concurrent_runs.max(1) as usize;
+        let max = config.holon.max_concurrent_runs.max(1);
         let bin_s = bin.clone();
         let home_s = home.clone();
         std::thread::spawn(move || {

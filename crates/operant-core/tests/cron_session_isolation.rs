@@ -40,6 +40,7 @@ struct World {
     _dir: tempfile::TempDir,
     gateway: Arc<OperantAgent>,
     scheduler: CronScheduler,
+    #[expect(dead_code, reason = "keeps the cron agent alive for the scheduler's lifetime")]
     cron: Arc<OperantAgent>,
     cron_db: Arc<CronDb>,
 }

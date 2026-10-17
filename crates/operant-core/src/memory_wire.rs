@@ -378,14 +378,13 @@ impl MemoryWireProvider<SqliteStore> {
             })
             .is_some()
         })
-        .map(|imported| {
+        .inspect(|&imported| {
             if imported > 0 {
                 tracing::info!(
                     count = imported,
                     "imported legacy MEMORY.md/USER.md entries into memory-wire"
                 );
             }
-            imported
         })
     }
 }

@@ -109,10 +109,6 @@ pub struct EmbeddingData {
 }
 
 impl OpenAIClient {
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
     /// Create a new OpenAI client
     pub fn new(config: ClientConfig) -> Self {
         // (iter-139 — fixed ponytail-audit bug A23: was .expect() which
@@ -2303,9 +2299,7 @@ Connection: close
                 let mut buf = [0u8; 4096];
                 let _ = sock.read(&mut buf).await;
                 let body_len = head.len() + tail.len() + "data: [DONE]\n\n".len();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-                );
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
                 let _ = sock.write_all(response.as_bytes()).await;
                 let write_chunk = |data: &[u8]| format!("{:x}\r\n", data.len());
                 let _ = sock.write_all(write_chunk(&head).as_bytes()).await;
@@ -2313,7 +2307,7 @@ Connection: close
                 let _ = sock.write_all(b"\r\n").await;
                 // small delay so reqwest yields `head` as its own chunk
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                let rest = format!("data: [DONE]\n\n");
+                let rest = "data: [DONE]\n\n";
                 let mut all = tail.clone();
                 all.extend_from_slice(rest.as_bytes());
                 let _ = sock.write_all(write_chunk(&all).as_bytes()).await;
@@ -2662,8 +2656,10 @@ Connection: close
     fn build_chat_request_includes_reasoning_effort_for_auto_openai_compatible() {
         // (plan 03) the user's shape: a local OpenAI-compatible proxy gets
         // plain `reasoning_effort`.
-        let mut config = ClientConfig::default();
-        config.base_url = "http://localhost:20129/v1".to_string();
+        let config = ClientConfig {
+            base_url: "http://localhost:20129/v1".to_string(),
+            ..ClientConfig::default()
+        };
         let client = OpenAIClient::new(config);
         let request = client
             .build_chat_request(
@@ -2686,8 +2682,10 @@ Connection: close
     )]
     #[test]
     fn build_chat_request_openrouter_uses_reasoning_object() {
-        let mut config = ClientConfig::default();
-        config.base_url = "https://openrouter.ai/api/v1".to_string();
+        let config = ClientConfig {
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            ..ClientConfig::default()
+        };
         let client = OpenAIClient::new(config);
         let request = client
             .build_chat_request(
