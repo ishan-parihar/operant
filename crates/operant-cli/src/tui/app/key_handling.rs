@@ -59,6 +59,16 @@ impl App {
             return false;
         }
 
+        // ── (plan 05B) the unified inline picker owns the keyboard while it
+        // is open — nav/filter/Enter/Esc, exactly jcode's semantics — before
+        // any other surface (the composer must not eat its letters as
+        // filter text).
+        if self.inline_interactive.is_some() {
+            if self.handle_inline_interactive_key(key.code, key.modifiers) {
+                return false;
+            }
+        }
+
         // Publish key event to debug bus (no-op when disabled).
         self.debug_hub.publish(crate::tui::debug::TuiEvent::Key {
             code: format!("{:?}", key.code),
@@ -1369,11 +1379,10 @@ impl App {
 
             // ---- Model picker (Ctrl+A) -----------------------------------
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // (plan 05B) the unified inline picker — same surface as
+                // /model, no provider-guessing.
                 if !self.is_streaming && self.credentials_live() {
-                    self.open_model_picker_for_provider(
-                        &self.active_provider.clone().unwrap_or_default(),
-                        None,
-                    );
+                    self.open_model_picker_inline();
                 }
             }
 
@@ -2347,4 +2356,153 @@ fn is_steer_command_input(text: &str) -> bool {
         rest.split_whitespace().next().unwrap_or_default(),
         "steer" | "queue"
     )
+}
+
+// ── (plan 05B) The unified inline picker's key handling ─────────────────────
+impl App {
+    /// jcode's `handle_inline_interactive_key`, the Model-picker subset:
+    /// Up/Down navigate rows (or the active row's options in column ≥ 1),
+    /// Left/Right/Tab cycle the column, typing filters (case-insensitive
+    /// substring — jcode's fuzzy matcher is not ported), Enter drills into
+    /// the row's options and applies on the last column, Esc clears the
+    /// filter first and closes second. Returns true when the key was
+    /// consumed (the caller must not forward it).
+    pub(super) fn handle_inline_interactive_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> bool {
+        let Some(picker) = self.inline_interactive.as_mut() else {
+            return false;
+        };
+        match code {
+            KeyCode::Esc => {
+                if !picker.filter.is_empty() {
+                    picker.filter.clear();
+                    Self::apply_inline_interactive_filter(picker);
+                } else {
+                    self.inline_interactive = None;
+                }
+                true
+            }
+            KeyCode::Up => {
+                if picker.column == 0 {
+                    picker.selected = picker.selected.saturating_sub(1);
+                } else if let Some(&idx) = picker.filtered.get(picker.selected) {
+                    let entry = &mut picker.entries[idx];
+                    entry.selected_option = entry.selected_option.saturating_sub(1);
+                }
+                true
+            }
+            KeyCode::Down => {
+                if picker.column == 0 {
+                    if picker.selected + 1 < picker.filtered.len() {
+                        picker.selected += 1;
+                    }
+                } else if let Some(&idx) = picker.filtered.get(picker.selected) {
+                    let entry = &mut picker.entries[idx];
+                    if entry.selected_option + 1 < entry.options.len() {
+                        entry.selected_option += 1;
+                    }
+                }
+                true
+            }
+            KeyCode::Left => {
+                if picker.column > 0 {
+                    picker.column -= 1;
+                }
+                true
+            }
+            KeyCode::Tab | KeyCode::Right => {
+                let max_col = picker
+                    .filtered
+                    .get(picker.selected)
+                    .and_then(|&idx| picker.entries.get(idx))
+                    .map(|e| e.options.len().saturating_sub(1))
+                    .unwrap_or(0);
+                if picker.column < max_col {
+                    picker.column += 1;
+                }
+                true
+            }
+            KeyCode::Backspace => {
+                picker.filter.pop();
+                Self::apply_inline_interactive_filter(picker);
+                true
+            }
+            KeyCode::Enter => {
+                // Apply the selected row. `picker` is borrowed mutably
+                // above; take the clone out, then act on `self`.
+                let Some(&idx) = picker.filtered.get(picker.selected) else {
+                    return true;
+                };
+                let entry = picker.entries[idx].clone();
+                // Column drill (jcode): a multi-option row steps into its
+                // options before applying; a one-option row applies at once.
+                if picker.column == 0 && entry.options.len() > 1 {
+                    picker.column = 1;
+                    return true;
+                }
+                if picker.column == 1 && entry.options.len() > 2 {
+                    picker.column = 2;
+                    return true;
+                }
+                self.inline_interactive = None;
+                self.apply_inline_picker_entry(&entry);
+                true
+            }
+            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.filter.push(c);
+                Self::apply_inline_interactive_filter(picker);
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// Case-insensitive substring filter (jcode's fuzzy matcher is not
+    /// ported; the model catalogue is small enough that this is exact).
+    pub(crate) fn apply_inline_interactive_filter(
+        picker: &mut crate::tui::operant_app::tui_fns::InlineInteractiveState,
+    ) {
+        if picker.filter.is_empty() {
+            picker.filtered = (0..picker.entries.len()).collect();
+            return;
+        }
+        let needle = picker.filter.to_lowercase();
+        picker.filtered = picker
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.name.to_lowercase().contains(&needle)
+                    || e.options
+                        .iter()
+                        .any(|o| o.provider.to_lowercase().contains(&needle))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if picker.selected >= picker.filtered.len() {
+            picker.selected = 0;
+        }
+    }
+
+    /// The apply step for the ONE action the picker carries today: a Model
+    /// row routes through plan 05A's `pending_model`/`pending_effort`
+    /// drain — the agent switches and the config persists from there.
+    fn apply_inline_picker_entry(&mut self, entry: &crate::tui::operant_app::tui_fns::PickerEntry) {
+        use crate::tui::operant_app::tui_fns::PickerAction;
+        match entry.action {
+            PickerAction::Model => {
+                self.pending_model = Some(entry.name.clone());
+                if let Some(effort) = entry.effort.clone() {
+                    self.pending_effort = Some(effort);
+                }
+                self.set_status_notice(format!("Model: {} (applying…)", entry.name));
+            }
+            _ => {
+                self.set_status_notice(format!("{} — no action in this picker", entry.name));
+            }
+        }
+    }
 }

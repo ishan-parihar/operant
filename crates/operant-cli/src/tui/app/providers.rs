@@ -9,7 +9,7 @@ use super::*;
 async fn fetch_endpoint_models(
     base_url: &str,
     api_key: Option<&str>,
-) -> Vec<crate::tui::model_picker::ModelEntry> {
+) -> Vec<crate::tui::operant_app::tui_fns::PickerEntry> {
     let url = format!("{base_url}/models");
     let mut req = reqwest::Client::new()
         .get(&url)
@@ -34,12 +34,7 @@ async fn fetch_endpoint_models(
         .map(|arr| {
             arr.iter()
                 .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
-                .map(|id| crate::tui::model_picker::ModelEntry {
-                    id: id.to_string(),
-                    display_name: id.to_string(),
-                    description: format!("from {}", base_url),
-                    is_current: false,
-                })
+                .map(|id| inline_model_row(id, &format!("from {base_url}"), ""))
                 .collect()
         })
         .unwrap_or_default()
@@ -115,7 +110,13 @@ impl App {
                     )))
                     .await;
                 } else {
-                    let _ = tx.send(Ok(models)).await;
+                    // (plan 05B) the channel carries the unified picker's
+                    // rows now; registry rows adapt at the boundary.
+                    let rows: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = models
+                        .iter()
+                        .map(|m| inline_model_row(&m.id, &m.description, ""))
+                        .collect();
+                    let _ = tx.send(Ok(rows)).await;
                 }
             });
         }
@@ -151,7 +152,13 @@ impl App {
     /// inferred from the MODEL NAME, which ignored the endpoint entirely
     /// (an omp-gateway endpoint showed OpenAI's catalogue) and confirmed
     /// to a "{provider}/{id}" the endpoint does not know.
-    pub(super) fn open_model_picker_for_endpoint(&mut self, title: Option<String>) {
+    /// (plan 05B) The unified inline picker over the AGENT'S OWN ENDPOINT:
+    /// rows from `GET {base_url}/models` plus the configured `[agent]`
+    /// model + fallback_models (marked "configured"), current row flagged.
+    /// The fetch rides the same model_fetch_rx → drain path the old
+    /// overlay used, so the picker opens instantly on the configured rows
+    /// and refreshes in place when the endpoint answers.
+    pub(super) fn open_model_picker_inline(&mut self) {
         let base_url = self
             .config
             .client
@@ -159,60 +166,64 @@ impl App {
             .trim_end_matches('/')
             .to_string();
         let api_key = self.config.client.api_key.clone();
+        let host = reqwest::Url::parse(&base_url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_else(|| "endpoint".to_string());
 
-        // The configured rows are available NOW; the endpoint rows land
-        // through the same model_fetch_rx → drain_model_fetch path the old
-        // picker used, so the picker opens instantly and refreshes in
-        // place when the fetch answers.
-        let mut configured: Vec<String> = std::iter::once(self.config.agent.model.clone())
+        let mut names: Vec<String> = std::iter::once(self.config.agent.model.clone())
             .chain(self.config.agent.fallback_models.iter().cloned())
             .filter(|m| !m.trim().is_empty())
             .collect();
-        configured.dedup();
-        let configured_rows: Vec<crate::tui::model_picker::ModelEntry> = configured
+        names.dedup();
+        let current = self.config.agent.model.clone();
+        let effort = {
+            use crate::tui::model_picker::effort::EffortLevel;
+            match self.effort_level {
+                EffortLevel::Low => "low",
+                EffortLevel::Normal => "normal",
+                EffortLevel::High => "high",
+                EffortLevel::Max => "max",
+            }
+        };
+        let mut entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = names
             .iter()
-            .map(|id| crate::tui::model_picker::ModelEntry {
-                id: id.clone(),
-                display_name: "configured".to_string(),
-                description: "[agent] model / fallback_models".to_string(),
-                is_current: *id == self.config.agent.model,
-            })
+            .map(|id| inline_model_row(id, "[agent] model / fallback_models", &effort))
             .collect();
+        for e in &mut entries {
+            e.is_current = e.name == current;
+        }
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         self.model_fetch_rx = Some(rx);
-        self.model_picker_fetch_pending = true;
-        self.model_picker.set_models(configured_rows.clone());
-        self.model_picker_provider_id = None;
-
-        let rows_for_spawn = configured_rows;
-        // Headless callers (tests, and any non-runtime context) have no
-        // reactor — the configured rows are already in place, so skip the
-        // fetch instead of panicking. Inside the TUI there is always a
-        // runtime.
+        self.model_picker_fetch_pending = false;
+        // Headless callers (tests, non-runtime contexts) have no reactor —
+        // the configured rows are already in place, so skip the fetch.
         if tokio::runtime::Handle::try_current().is_ok() {
+            let rows_for_spawn = entries.clone();
             tokio::spawn(async move {
                 let fetched = fetch_endpoint_models(&base_url, api_key.as_deref()).await;
-                // Endpoint rows first-class, configured kept, dedup by id.
                 let mut rows = fetched;
                 for c in rows_for_spawn {
-                    if !rows.iter().any(|r| r.id == c.id) {
+                    if !rows.iter().any(|r| r.name == c.name) {
                         rows.push(c);
                     }
                 }
                 let _ = tx.send(Ok(rows)).await;
             });
-        } else {
-            self.model_fetch_rx = None;
-            self.model_picker_fetch_pending = false;
         }
 
-        self.model_picker.open_with_title(
-            title.unwrap_or_else(|| "Select model".to_string()),
-            &self.config.agent.model,
-            self.effort_level,
-            self.fast_mode,
-        );
+        let selected = entries.iter().position(|e| e.is_current).unwrap_or(0);
+        let filtered = (0..entries.len()).collect();
+        self.inline_interactive = Some(crate::tui::operant_app::tui_fns::InlineInteractiveState {
+            kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
+            entries,
+            filtered,
+            selected,
+            column: 0,
+            filter: String::new(),
+            preview: false,
+        });
     }
 
     pub(super) fn activate_provider(
@@ -389,5 +400,38 @@ impl App {
         // re-emits history under the new palette.
         self.request_native_replay();
         self.status_message = Some(format!("Theme set to: {}", theme_name));
+    }
+}
+
+/// (plan 05B) One inline picker row for a model id.
+pub(super) fn inline_model_row(
+    id: &str,
+    detail: &str,
+    effort: &str,
+) -> crate::tui::operant_app::tui_fns::PickerEntry {
+    crate::tui::operant_app::tui_fns::PickerEntry {
+        name: id.to_string(),
+        options: vec![crate::tui::operant_app::tui_fns::PickerOption {
+            provider: "openai-compatible".to_string(),
+            api_method: "chat/completions".to_string(),
+            available: true,
+            detail: detail.to_string(),
+            estimated_reference_cost_micros: None,
+        }],
+        action: crate::tui::operant_app::tui_fns::PickerAction::Model,
+        selected_option: 0,
+        is_current: false,
+        is_default: false,
+        is_favorite: false,
+        recommended: false,
+        recommendation_rank: 0,
+        usage_score: 0,
+        old: false,
+        created_date: None,
+        effort: if effort.is_empty() {
+            None
+        } else {
+            Some(effort.to_string())
+        },
     }
 }

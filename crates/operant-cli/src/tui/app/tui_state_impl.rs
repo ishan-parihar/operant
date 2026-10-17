@@ -970,11 +970,9 @@ impl TuiState for App {
     fn inline_interactive_state(
         &self,
     ) -> Option<&crate::tui::operant_app::tui_fns::InlineInteractiveState> {
-        // [port-decision] inline_interactive_state: operant's pickers are
-        // separate overlay structs (`model_picker`, `agents_menu`,
-        // `skills_view`), not the ported unified picker; returns None — wire
-        // when the ported picker state lands.
-        None
+        // (plan 05B) the ported unified picker — live since the model +
+        // effort pickers moved onto it; the old overlay structs are gone.
+        self.inline_interactive.as_ref()
     }
 
     // ---- Overlay ----

@@ -267,11 +267,15 @@ fn test_vim_slash_command_toggles_vim() {
 
 #[test]
 fn test_model_slash_command_opens_picker() {
+    // (plan 05B) the unified inline picker, not the legacy overlay.
     let mut app = make_app();
     app.has_credentials = true;
-    assert!(!app.model_picker.visible);
+    assert!(app.inline_interactive.is_none());
     assert!(app.intercept_slash_command("model"));
-    assert!(app.model_picker.visible);
+    assert!(
+        app.inline_interactive
+            .is_some_and(|p| p.kind == crate::tui::operant_app::tui_fns::PickerKind::Model)
+    );
 }
 
 #[tokio::test]
@@ -1467,13 +1471,17 @@ fn test_question_mark_shortcut_types_into_non_empty_prompt() {
 
 #[test]
 fn test_ctrl_a_shortcut_opens_model_picker() {
+    // (plan 05B) Ctrl+A opens the same inline picker /model does.
     let mut app = make_app();
     app.has_credentials = true;
     app.active_provider = Some("anthropic".to_string());
 
     app.handle_key_event(press_key(KeyCode::Char('a'), KeyModifiers::CONTROL));
 
-    assert!(app.model_picker.visible);
+    assert!(
+        app.inline_interactive
+            .is_some_and(|p| p.kind == crate::tui::operant_app::tui_fns::PickerKind::Model)
+    );
 }
 
 #[test]
@@ -2478,7 +2486,7 @@ fn test_dialog_open_close_scenarios() {
         ("skills", "skills_view"),
         ("journey", "journey_view"),
         ("plugins", "plugins_hub"),
-        ("model", "model_picker"),
+        ("model", "inline_interactive"),
         ("effort", "effort_picker"),
         ("context", "context_viz"),
         ("agents", "agents_menu"),
@@ -5128,4 +5136,82 @@ fn removed_commands_are_absent() {
             "{name} is still registered (plan 02)"
         );
     }
+}
+
+// ── (plan 05B) the unified inline picker ────────────────────────────────
+
+/// `/model` opens the inline picker over the configured catalogue: the
+/// `[agent]` model is present, flagged current, and preselected.
+#[test]
+fn model_command_opens_the_inline_picker_on_the_configured_rows() {
+    let mut app = make_app();
+    assert!(app.inline_interactive.is_none());
+    assert!(app.handle_tui_command("model", ""));
+    let picker = app
+        .inline_interactive
+        .as_ref()
+        .expect("the inline picker must be open after /model");
+    assert_eq!(
+        picker.kind,
+        crate::tui::operant_app::tui_fns::PickerKind::Model
+    );
+    let current_row = picker
+        .entries
+        .iter()
+        .find(|e| e.is_current)
+        .expect("the configured model must be present");
+    assert_eq!(current_row.name, app.config.agent.model);
+    assert_eq!(
+        picker.entries[picker.filtered[picker.selected]].name,
+        current_row.name
+    );
+}
+
+/// Enter applies the selected row through plan 05A's pending_model drain
+/// seam; Esc closes without applying; typing filters.
+#[test]
+fn inline_picker_enter_applies_and_esc_closes() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = make_app();
+    app.config.agent.fallback_models = vec!["other-model".to_string()];
+    assert!(app.handle_tui_command("model", ""));
+    let key = |code: KeyCode| KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind: crossterm::event::KeyEventKind::Press,
+        state: crossterm::event::KeyEventState::NONE,
+    };
+
+    // Type a filter that matches nothing, clear it with Esc (first Esc
+    // clears the filter, second closes).
+    app.handle_key_event(key(KeyCode::Char('z')));
+    assert!(
+        app.inline_interactive
+            .as_ref()
+            .is_some_and(|p| p.filter == "z")
+    );
+    app.handle_key_event(key(KeyCode::Esc));
+    assert!(
+        app.inline_interactive
+            .as_ref()
+            .is_some_and(|p| p.filter.is_empty())
+    );
+    app.handle_key_event(key(KeyCode::Esc));
+    assert!(
+        app.inline_interactive.is_none(),
+        "the second Esc must close"
+    );
+
+    // Reopen; Enter on the single-option current row applies immediately.
+    assert!(app.handle_tui_command("model", ""));
+    app.handle_key_event(key(KeyCode::Enter));
+    assert!(
+        app.inline_interactive.is_none(),
+        "Enter must close the picker"
+    );
+    assert_eq!(
+        app.pending_model.as_deref(),
+        Some(app.config.agent.model.as_str()),
+        "Enter must route the pick to the pending_model drain"
+    );
 }

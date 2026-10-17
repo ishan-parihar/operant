@@ -41,6 +41,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-895 — plan 05B (first half): the jcode unified inline picker
+  is LIVE for /model, /models and Ctrl+A**. The ported renderer +
+  types (ui_inline_interactive.rs, PickerKind/Action/Entry/Option,
+  1.5k lines) were dead behind `inline_interactive_state()` returning
+  `None` — a `[port-decision]` stub. `App.inline_interactive` now holds
+  the picker state; the seam returns it and the renderer draws it
+  instantly (a command-suggestion-style popover above the composer).
+  The key handler is jcode's semantics, Model-subset: Up/Down navigate
+  rows (or the row's options in column ≥ 1), Left/Right/Tab cycle
+  columns, typing filters (Esc clears the filter first, closes
+  second), Enter drills into multi-option rows and applies on the last
+  column — routing through plan 05A's `pending_model`/`pending_effort`
+  drain (the agent switches, the config persists, the display
+  refreshes from the agent). Rows come from the same 05A catalogue:
+  `GET {base_url}/models` + the configured `[agent]` models (marked
+  "configured", current row flagged and preselected); the fetch rides
+  the existing model_fetch_rx drain and merges in place. The registry
+  fallback adapts at the boundary. `overlay_flags()` carries
+  `inline_interactive` (the legacy `model_picker` flag is gone; the
+  legacy overlay itself is deleted in the next iteration).
+  The model-picker corpus golden re-proved for the inline surface
+  (drift verified as intended first); two stale tests rewritten
+  (Ctrl+A and /model assert the inline state, not the dead overlay).
+  Tests: `model_command_opens_the_inline_picker_on_the_configured_rows`,
+  `inline_picker_enter_applies_and_esc_closes`. Gates: gate 2 =
+  1765/1 pre-existing (H-3); corpus 61/62 (rewind-flow pre-existing);
+  clippy seen=39 new=38 parity.
+
 - **iter-893 — the setup wizard persists surgically (plan 09's third
   surface, owner-directed backend integration)**. `operant setup`'s
   persist did the same whole-file `toml::to_string_pretty` rewrite the

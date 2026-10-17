@@ -217,6 +217,11 @@ pub struct App {
     /// (plan 05) Ctrl+B opened the branch browser — populate the fork tree
     /// from the agent's DB on the next pending-actions pass.
     pub pending_branch_list: bool,
+    /// (plan 05B) The ported jcode unified inline picker (model, effort),
+    /// when open. `Some` while the picker owns the keyboard; the renderer
+    /// draws it through `inline_interactive_state()`, and the key
+    /// dispatcher routes to `handle_inline_interactive_key` FIRST.
+    pub inline_interactive: Option<crate::tui::operant_app::tui_fns::InlineInteractiveState>,
     /// (plan 04) Enter in the branch browser: switch the agent to that
     /// session (a branch IS a session — the rewind fork makes one). Applied
     /// by the run loop's drain (`set_session_id` + display rebuild), the
@@ -630,9 +635,12 @@ pub struct App {
     pending_key: Option<crossterm::event::KeyEvent>,
     /// Receiver for model-list results fetched in the background when the
     /// /model picker opens.  Drained each frame so models appear as soon as
-    /// the fetch completes.
+    /// the fetch completes. (plan 05B) the rows are the unified picker's
+    /// `PickerEntry` — the legacy overlay's `ModelEntry` is retired.
     pub model_fetch_rx: Option<
-        tokio::sync::mpsc::Receiver<Result<Vec<crate::tui::model_picker::ModelEntry>, String>>,
+        tokio::sync::mpsc::Receiver<
+            Result<Vec<crate::tui::operant_app::tui_fns::PickerEntry>, String>,
+        >,
     >,
     /// Receiver for `UserQuestionRequest`s produced by the clarify tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.

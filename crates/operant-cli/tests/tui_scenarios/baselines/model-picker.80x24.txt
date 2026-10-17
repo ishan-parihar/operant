@@ -6,14 +6,14 @@
  operant · replay
  operant
  /model to switch · Offline Capture
- v0.2.1┌───────────────────────────────────────────────────────────────┐
- /login│ Select model                                                  │
- ● anth│ Search                                                        │
- ~     │                                                               │
-       │ ● offline-capture  configured  [agent] model / fallback_models│
-       │                                                               │
-1>     │ enter select                                                  │
-       └───────────────────────────────────────────────────Esc to close┘ Capture
+ v0.2.1
+ /login to add provider
+ ● anthropic(key)
+ ~
+▸ offline-capture current  openai-compatible · chat/completions
+↑↓ choose · Enter select · Esc cancel · Ctrl+O set default · Ctrl+N favorite · S
+1>
+                                                       ~ API key Offline Capture
 
 
 

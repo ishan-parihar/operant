@@ -37,7 +37,7 @@ OVERLAYS = {
     "help_overlay", "history_search_overlay", "global_search", "rewind_flow",
     "settings_screen", "theme_screen", "stats_dialog", "mcp_view", "agents_menu",
     "diff_viewer", "memory_file_selector", "skills_view", "plugins_hub",
-    "journey_view", "hooks_config_menu", "voice_mode_notice", "model_picker",
+    "journey_view", "hooks_config_menu", "voice_mode_notice", "inline_interactive",
     "session_browser", "session_branching", "export_dialog", "context_viz",
     "mcp_approval", "bypass_permissions_dialog", "effort_picker", "key_input_dialog",
     "custom_provider_dialog", "free_mode_dialog", "device_auth_dialog",

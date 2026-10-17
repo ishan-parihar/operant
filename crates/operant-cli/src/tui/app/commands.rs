@@ -49,7 +49,9 @@ impl App {
             ("plugins_hub", self.plugins_hub.visible),
             ("journey_view", self.journey_view.visible),
             ("hooks_config_menu", self.hooks_config_menu.visible),
-            ("model_picker", self.model_picker.visible),
+            // (plan 05B) the unified inline picker replaced the legacy
+            // model_picker overlay.
+            ("inline_interactive", self.inline_interactive.is_some()),
             ("session_browser", self.session_browser.visible),
             ("session_branching", self.session_branching.visible),
             ("export_dialog", self.export_dialog.visible),
@@ -491,10 +493,10 @@ impl App {
                     self.set_status_notice("Connect a provider to choose a model.".to_string());
                     return true;
                 }
-                // (plan 05A) the picker lists the AGENT'S ENDPOINT's models
-                // (config.client.base_url /models) plus the configured
-                // [agent] models — not a provider-guessed catalogue.
-                self.open_model_picker_for_endpoint(None);
+                // (plan 05B) the ported jcode unified inline picker over the
+                // agent's endpoint catalogue (05A's rows: base_url /models
+                // + the configured [agent] models).
+                self.open_model_picker_inline();
                 true
             }
             // /model-status — status-tier (command backlog tier 1):

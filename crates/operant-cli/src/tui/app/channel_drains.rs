@@ -133,7 +133,22 @@ impl App {
                         count: models.len(),
                         at: crate::tui::debug::event_bus::now_secs(),
                     });
-                self.model_picker.set_models(models);
+                // (plan 05B) the fetch refreshes the INLINE picker's rows
+                // in place (configured rows stay, dedup by name, current
+                // row re-flagged); the legacy overlay is retired.
+                if let Some(picker) = self.inline_interactive.as_mut() {
+                    for m in models {
+                        if !picker.entries.iter().any(|e| e.name == m.name) {
+                            picker.entries.push(m);
+                        }
+                    }
+                    let current = self.config.agent.model.clone();
+                    for e in &mut picker.entries {
+                        e.is_current = e.name == current;
+                    }
+                    picker.filter.clear();
+                    crate::tui::app::App::apply_inline_interactive_filter(picker);
+                }
                 self.model_fetch_rx = None;
                 self.model_picker_fetch_pending = false;
                 true
