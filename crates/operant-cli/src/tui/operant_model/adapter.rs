@@ -144,7 +144,19 @@ pub fn display_messages(app: &App) -> Vec<DisplayMessage> {
             ReasoningDisplayMode::Current => last_user.is_none_or(|user| index > user),
             ReasoningDisplayMode::Off => false,
         };
-        out.extend(expand_message(message, show_thinking));
+        // (plan 07 step 4) In Current mode a PAST turn's committed thinking
+        // collapses to the one-line summary (`▸ thought (N lines)` — the
+        // reasoning_summary_line_markup fold): the current turn keeps its
+        // traces, earlier turns keep a single dim trace line, exactly
+        // jcode's `Current` contract. Full mode is untouched (every line);
+        // the current turn's own blocks still render whole.
+        let collapse_past_thinking =
+            mode == ReasoningDisplayMode::Current && last_user.is_some_and(|user| index < user);
+        out.extend(expand_message_with_mode(
+            message,
+            show_thinking,
+            collapse_past_thinking,
+        ));
         if let Some(rows) = tool_rows_after.remove(&index) {
             out.extend(rows);
         }
@@ -345,6 +357,17 @@ fn parse_tool_input(input_json: &str) -> Value {
 /// `Text` blocks join into a single row in the message's own role; every
 /// other block flushes that accumulator and emits its own row.
 fn expand_message(message: &Message, show_thinking: bool) -> Vec<DisplayMessage> {
+    expand_message_with_mode(message, show_thinking, false)
+}
+
+/// `expand_message` with the (plan 07 step 4) past-turn collapse flag: a
+/// `Thinking` block of an earlier turn in `Current` mode folds to the
+/// single `▸ thought (N lines)` summary row instead of every line.
+fn expand_message_with_mode(
+    message: &Message,
+    show_thinking: bool,
+    collapse_past_thinking: bool,
+) -> Vec<DisplayMessage> {
     match &message.content {
         MessageContent::Text(text) => vec![role_row(&message.role, text.clone())],
         MessageContent::Blocks(blocks) => {
@@ -362,6 +385,19 @@ fn expand_message(message: &Message, show_thinking: bool) -> Vec<DisplayMessage>
                     other => {
                         flush_text_acc(&mut rows, &mut text_acc, &message.role);
                         match other {
+                            // (plan 07 step 4) past turn, Current mode: one dim
+                            // trace line, not the whole block. This arm MUST
+                            // precede `!show_thinking` — otherwise a past
+                            // turn hits the empty arm and vanishes.
+                            ContentBlock::Thinking { thinking, .. }
+                                if collapse_past_thinking =>
+                            {
+                                rows.push(DisplayMessage::reasoning(
+                                    crate::tui::operant_render_core::reasoning_summary_line_markup(
+                                        thinking.lines().count(),
+                                    ),
+                                ));
+                            }
                             ContentBlock::Thinking { .. } if !show_thinking => {}
                             ContentBlock::Thinking { thinking, .. } => {
                                 // Committed thinking must render dim+italic like
@@ -507,10 +543,17 @@ mod tests {
             "Current shows the current turn's trace"
         );
         app.messages.push(Message::user("thanks".to_string()));
+        // (plan 07 step 4) the next prompt COLLAPSES the previous turn's
+        // trace to the one-line summary (`▸ thought`) instead of hiding it
+        // entirely — the reasoning_summary_line_markup fold.
         assert_eq!(
             roles(&app),
-            ["user", "assistant", "user"],
-            "the next prompt hides the previous turn's trace"
+            ["user", "reasoning", "assistant", "user"],
+            "the next prompt collapses the previous turn's trace to the summary line"
+        );
+        assert!(
+            app_reasoning_contains_summary(&app),
+            "the collapsed row must carry the `▸ thought` summary"
         );
 
         // Section 2 — Off never shows reasoning anywhere: the handler
@@ -546,6 +589,78 @@ mod tests {
 
         // Restore the snapshot default so later tests are not poisoned.
         crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
+    }
+
+    /// (plan 07 step 4) In Current mode a PAST turn's committed thinking
+    /// folds to the one-line `▸ thought (N lines)` summary — the current
+    /// turn keeps its full trace, and Full mode still shows every line.
+    #[test]
+    fn current_mode_collapses_past_turn_thinking_to_the_summary_line() {
+        let _guard = crate::tui::operant_app::config_shim::reasoning_override_test_guard();
+        let multi_line_thinking = "line one\nline two\nline three".to_string();
+
+        // Current mode: the turn's own trace renders whole while it is the
+        // current turn…
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+            crate::tui::operant_app::config_shim::ReasoningDisplayMode::Current,
+        ));
+        let mut app = crate::tui::app::tests::make_app();
+        app.messages.push(Message::user("do it".to_string()));
+        app.messages
+            .push(Message::assistant_blocks(vec![ContentBlock::Thinking {
+                thinking: multi_line_thinking.clone(),
+                signature: String::new(),
+            }]));
+        let rows = display_messages(&app);
+        let thinking_rows: Vec<&crate::tui::operant_model::message::DisplayMessage> =
+            rows.iter().filter(|r| r.role == "reasoning").collect();
+        assert_eq!(thinking_rows.len(), 1);
+        assert!(
+            thinking_rows[0].content.contains("line one"),
+            "the CURRENT turn's own trace renders whole: {:?}",
+            thinking_rows[0].content
+        );
+
+        // …and collapses to `▸ thought (3 lines)` once the next prompt lands.
+        app.messages.push(Message::user("thanks".to_string()));
+        let rows = display_messages(&app);
+        let thinking_rows: Vec<&crate::tui::operant_model::message::DisplayMessage> =
+            rows.iter().filter(|r| r.role == "reasoning").collect();
+        assert_eq!(thinking_rows.len(), 1);
+        assert!(
+            thinking_rows[0].content.contains("▸ thought (3 lines)"),
+            "a past turn's trace must fold to the summary line: {:?}",
+            thinking_rows[0].content
+        );
+        assert!(
+            !thinking_rows[0].content.contains("line two"),
+            "the past block's body must not render: {:?}",
+            thinking_rows[0].content
+        );
+
+        // Full mode: the same past block shows every line, unchanged.
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(Some(
+            crate::tui::operant_app::config_shim::ReasoningDisplayMode::Full,
+        ));
+        let rows = display_messages(&app);
+        let thinking_rows: Vec<&crate::tui::operant_model::message::DisplayMessage> =
+            rows.iter().filter(|r| r.role == "reasoning").collect();
+        assert!(
+            thinking_rows[0].content.contains("line two"),
+            "Full mode must keep every line: {:?}",
+            thinking_rows[0].content
+        );
+        assert!(!thinking_rows[0].content.contains("▸ thought"));
+
+        // Restore the snapshot default so later tests are not poisoned.
+        crate::tui::operant_app::config_shim::set_reasoning_display_override(None);
+    }
+
+    /// True when any rendered reasoning row is the collapse summary.
+    fn app_reasoning_contains_summary(app: &crate::tui::app::App) -> bool {
+        display_messages(app)
+            .iter()
+            .any(|r| r.role == "reasoning" && r.content.contains("▸ thought"))
     }
 
     fn thinking_block_becomes_reasoning_row() {
