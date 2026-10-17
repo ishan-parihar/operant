@@ -47,7 +47,6 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use crate::tui::app::App;
-use crate::tui::vendor::style::theme;
 
 // The surface render functions, imported from their own modules. The table
 // delegates to them and to nothing else; each stays in the file its surface
@@ -78,9 +77,7 @@ use crate::tui::usage_overlay::{UsageMetrics, render_usage_overlay};
 // Helpers re-exported by the parent `render` module. (The base-chrome
 // renderers — transcript, input, status, suggestions, footer — are NOT here:
 // the ported jcode chrome owns them since iter-649.)
-use super::{
-    apply_selection_highlight, cache_selectable_row_text, is_modal_open, render_context_menu,
-};
+use super::{apply_selection_highlight, cache_selectable_row_text, render_context_menu};
 
 /// Which buffer a row reaches its surface through.
 ///
@@ -438,12 +435,6 @@ fn always_visible(_app: &App, _ctx: &mut FrameCtx) -> bool {
 fn visible_permission_dialog(app: &App, _ctx: &mut FrameCtx) -> bool {
     app.permission_request.is_some()
 }
-
-/// The error modal keys off the *current* notification's kind, not off an
-/// overlay flag.
-
-/// The one impure guard, and the reason `FrameCtx` reaches guards by `&mut`.
-///
 
 // ---------------------------------------------------------------------------
 // Row bodies — every one a delegation to the surface's own module
@@ -810,8 +801,6 @@ mod tests {
     /// guarded row before the post-pass surfaces. If it moved earlier, the
     /// banner and the selection passes would start painting over it; if it
     /// moved later, the debug overlay would cover it.
-    #[test]
-
     /// Both sinks are actually in use. If a future change routed every row
     /// through one of them, the sink column would be decoration and this would
     /// say so.

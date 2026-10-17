@@ -41,17 +41,14 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use crate::tui::image_render::{self, GraphicsProtocol};
-use crate::tui::messages::cache::hash_content;
+use crate::tui::image_render::GraphicsProtocol;
 use crate::tui::theme_colors;
 
 /// Raster resolution asked of `dvipng`, in DPI.
@@ -72,9 +69,6 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Size ceiling on the PNG read back from the toolchain. A formula that
 /// rasterises to a gigabyte is a bug or an attack, not a picture.
 const MAX_PNG_BYTES: u64 = 8 * 1024 * 1024;
-
-/// Size ceiling on one step's stderr, before it is shown to the user.
-const MAX_STDERR_BYTES: usize = 16 * 1024;
 
 /// Character ceiling on the error text kept for a failed render.
 const MAX_ERROR_CHARS: usize = 400;
@@ -100,16 +94,6 @@ const FENCE_WIDTH: usize = 22;
 pub trait PathProbe {
     /// Is `program` resolvable through `PATH`?
     fn on_path(&self, program: &str) -> bool;
-}
-
-/// The real `PATH`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SystemPath;
-
-impl PathProbe for SystemPath {
-    fn on_path(&self, program: &str) -> bool {
-        which::which(program).is_ok()
-    }
 }
 
 /// The external toolchain, if it is installed.
@@ -157,19 +141,7 @@ pub struct LatexEnv {
     pub toolchain: Option<Toolchain>,
 }
 
-impl LatexEnv {
-    /// Probe the terminal and `PATH` once per process.
-    ///
-    /// A `PATH` scan per frame would be a per-frame cost for an answer that
-    /// cannot change while the process runs.
-    pub fn detect() -> &'static LatexEnv {
-        static ENV: LazyLock<LatexEnv> = LazyLock::new(|| LatexEnv {
-            protocol: image_render::detect_graphics_protocol(),
-            toolchain: probe(&SystemPath),
-        });
-        &ENV
-    }
-}
+impl LatexEnv {}
 
 /// Is a usable toolchain installed? Pure, and both answers are reachable in a
 /// test without any TeX on the machine.
@@ -387,35 +359,6 @@ pub fn is_latex_lang(info: &str) -> bool {
     })
 }
 
-/// The lines one formula contributes to the transcript.
-pub fn formula_lines(source: &str, indent: &str) -> Vec<Line<'static>> {
-    lines(&resolve(source), source, indent)
-}
-
-/// Resolve one formula, starting a render only on its first sighting.
-///
-/// Never blocks: the raster runs on a worker thread, so the frame that
-/// discovers the formula shows "rendering…" and returns immediately.
-pub fn resolve(source: &str) -> LatexBlock {
-    let env = LatexEnv::detect();
-    match plan(env) {
-        LatexPlan::Source(why) => LatexBlock::Source { why },
-        LatexPlan::Render => {
-            let Some(toolchain) = env.toolchain else {
-                return LatexBlock::Source {
-                    why: Why::NoToolchain,
-                };
-            };
-            let key = hash_content(source);
-            CACHE.with(|cache| {
-                cached_resolve(&mut cache.borrow_mut(), key, || {
-                    spawn_worker(source, Arc::new(DviPng { toolchain }), env.protocol)
-                })
-            })
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // External toolchain invocation
 // ---------------------------------------------------------------------------
@@ -463,13 +406,6 @@ impl std::fmt::Display for RenderError {
 pub trait Renderer: Send + Sync {
     /// Turn the TeX source at `tex` into the PNG at `png`, or explain why not.
     fn render(&self, tex: &Path, png: &Path) -> Result<(), RenderError>;
-}
-
-/// The real toolchain: TeX to DVI, then DVI to PNG.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DviPng {
-    /// Which engines to invoke.
-    pub toolchain: Toolchain,
 }
 
 /// Step 1: the TeX -> DVI command line.
@@ -535,136 +471,6 @@ pub fn dvipng_argv(png: &Path, dvi: &Path) -> Vec<OsString> {
         .map(OsString::from)
         .chain([png.as_os_str(), dvi.as_os_str()].map(OsStr::to_os_string))
         .collect()
-}
-
-impl Renderer for DviPng {
-    /// Two steps, because `dvipng` reads DVI and never TeX. The command lines
-    /// and the reason for each flag are on [`tex_argv`] and [`dvipng_argv`].
-    fn render(&self, tex: &Path, png: &Path) -> Result<(), RenderError> {
-        // The .tex lives in a work dir, and so does everything the TeX pass
-        // writes there, so one recursive remove cleans up the whole run.
-        let dvi = tex.with_extension("dvi");
-
-        let mut child = match Command::new(self.toolchain.tex)
-            .args(tex_argv(tex))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => {
-                return Err(RenderError::Failed {
-                    tool: self.toolchain.tex,
-                    message: err.to_string(),
-                });
-            }
-        };
-        run_bounded(self.toolchain.tex, &mut child)?;
-
-        // A successful engine that wrote no DVI is a broken install, and saying
-        // so beats letting `dvipng` fail with something cryptic.
-        if !dvi.exists() {
-            return Err(RenderError::Failed {
-                tool: self.toolchain.tex,
-                message: format!("produced no DVI at {}", dvi.display()),
-            });
-        }
-
-        let mut child = match Command::new(self.toolchain.dvipng)
-            .args(dvipng_argv(png, &dvi))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => {
-                return Err(RenderError::Failed {
-                    tool: self.toolchain.dvipng,
-                    message: err.to_string(),
-                });
-            }
-        };
-        run_bounded(self.toolchain.dvipng, &mut child).map(|_| ())
-    }
-}
-
-/// Run one toolchain step to completion, bounded, and return its stderr.
-///
-/// Bounded twice over, because a subprocess that hangs is a TUI freeze and a
-/// subprocess that prints without limit is an OOM: a wall-clock timeout, and a
-/// size ceiling on the stderr read back.
-///
-/// The stderr read lives on its own thread with a bounded length, so a child
-/// that prints past the pipe buffer cannot wedge the poll loop. A `try_wait`
-/// error and a timeout are reported the same way, which is honest: in both
-/// cases the step did not complete and whatever it printed is all there is.
-fn run_bounded(tool: &'static str, child: &mut Child) -> Result<String, RenderError> {
-    let stderr = child.stderr.take();
-    let reader = std::thread::spawn(move || stderr.map_or_else(String::new, read_capped));
-
-    let deadline = Instant::now() + STEP_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {}
-            Err(_) => {
-                let _ = child.kill();
-                break None;
-            }
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let stderr = reader.join().unwrap_or_default();
-
-    let Some(status) = status else {
-        return Err(RenderError::Timeout {
-            tool,
-            message: detail(&stderr),
-        });
-    };
-    if !status.success() {
-        return Err(RenderError::Failed {
-            tool,
-            message: if stderr.is_empty() {
-                format!("exited with {status}")
-            } else {
-                stderr
-            },
-        });
-    }
-    Ok(stderr)
-}
-
-/// Read at most [`MAX_STDERR_BYTES`] from a pipe, then stop.
-///
-/// Bounded on purpose. Dropping the read end makes a child that keeps writing
-/// take `EPIPE` and stop, instead of growing this process without limit.
-fn read_capped(mut pipe: impl Read) -> String {
-    let mut buf: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 4096];
-    while buf.len() < MAX_STDERR_BYTES
-        && let Ok(n) = pipe.read(&mut chunk)
-        && n > 0
-    {
-        buf.extend_from_slice(&chunk[..n]);
-    }
-    String::from_utf8_lossy(&buf).trim().to_string()
-}
-
-/// ` — <stderr>` when the step said something, empty when it did not.
-fn detail(stderr: &str) -> String {
-    if stderr.is_empty() {
-        String::new()
-    } else {
-        format!(" — {stderr}")
-    }
 }
 
 /// Keep the toolchain's own message, bounded: an unbounded error dump floods the
@@ -892,8 +698,9 @@ fn source_block(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::image_render::PROTOCOL_FREE_ENV;
+    use crate::tui::messages::cache::hash_content;
     use std::sync::Barrier;
+    use std::time::Instant;
 
     const SRC: &str = "\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}";
 

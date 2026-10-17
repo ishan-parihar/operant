@@ -272,7 +272,7 @@ pub fn list_claude_code_sessions() -> Result<Vec<ClaudeCodeSessionInfo>> {
                     continue;
                 };
 
-                let session = claude_code_session_info_from_index(&path, &entry).or_else(|| {
+                let session = claude_code_session_info_from_index(&path, &entry).or({
                     // [port-decision] upstream calls
                     // `claude_code_session_info_from_file(&path, Some(&entry))`
                     // here. Not ported (see the fn's port-decision); a

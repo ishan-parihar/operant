@@ -13,30 +13,6 @@
 //!
 //! Used by `render::render_banner_block` (above the welcome panel).
 
-use crate::tui::vendor::style::theme;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-
-/// Full OPERANT wordmark — 7 lines × 56 columns.
-///
-/// ```text
-///   ___  ___  __  __ ______ _   _ _____  _____  _____
-///  / _ \| _ \|  \/  |  ___| | | /  ___|/  __ \|  ___|
-/// / /_\ \ | | | .  . | |__ | | | \ `--. | /  \/| |__
-/// |  _  | | | | |\/| |  __|| | | |`--. \| |    |  __|
-/// | | | | |/ /| |  | | |___| |_| /\__/ /\ \__/\| |___
-/// \_| |_/___/ \_|  |_/\____/ \___/\____/  \____/\____/
-/// ```
-fn accent_style() -> Style {
-    Style::default()
-        .fg(theme::accent_color())
-        .add_modifier(Modifier::BOLD)
-}
-
-fn dim_style() -> Style {
-    Style::default().fg(theme::dim_color())
-}
-
 pub const FULL_ART: [&str; 7] = [
     " ██████╗ ██████╗ ███████╗██████╗  █████╗ ███╗   ██╗████████╗",
     "██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗████╗  ██║╚══██╔══╝",
@@ -47,101 +23,9 @@ pub const FULL_ART: [&str; 7] = [
     "                                                              ",
 ];
 
-/// Compact OPERANT wordmark — 4 lines × 32 columns.
-///
-/// ```text
-///   ___  ___  ___ ___
-///  / _ \| _ \| __| _ \
-/// | (_) | |_/ /|__ \   /
-///  \___/|_| |_|___/_|_|
-/// ```
-pub const COMPACT_ART: [&str; 4] = [
-    "  ___  ___  ___ ___    ",
-    " / _ \\| _ \\| __| _ \\   ",
-    "| (_) | |_/ /|__ \\   / ",
-    " \\___/|_| |_|___/_|_|  ",
-];
-
-/// Returns the right banner art for the given terminal width.
-///
-/// - `>= 80 cols` → full art (56-wide, 7-tall)
-/// - `>= 40 cols` → compact art (24-wide, 4-tall)
-/// - `< 40 cols`  → no art (caller falls back to a styled text line)
-pub fn pick_art(width: u16) -> Option<&'static [&'static str]> {
-    if width >= 80 {
-        Some(&FULL_ART)
-    } else if width >= 40 {
-        Some(&COMPACT_ART)
-    } else {
-        None
-    }
-}
-
-/// Render the banner as styled ratatui lines.
-///
-/// Each line of the ASCII art is split into two spans: the bulk of the glyph
-/// (which gets the accent color + bold) and the trailing whitespace (which is
-/// left unstyled to avoid bleeding the accent color into adjacent cells).
-pub fn banner_lines(width: u16) -> Vec<Line<'static>> {
-    let mut out: Vec<Line<'static>> = Vec::new();
-
-    if let Some(art) = pick_art(width) {
-        for line in art {
-            // Trim trailing spaces for the styled span; keep the leading
-            // indent intact so the wordmark stays centered.
-            let trimmed = line.trim_end();
-            let trailing_len = line.len().saturating_sub(trimmed.len());
-            let mut spans: Vec<Span<'static>> = Vec::with_capacity(2);
-            if !trimmed.is_empty() {
-                spans.push(Span::styled(trimmed.to_string(), accent_style()));
-            }
-            if trailing_len > 0 {
-                spans.push(Span::raw(" ".repeat(trailing_len)));
-            }
-            out.push(Line::from(spans));
-        }
-    } else {
-        // Below 40 cols: styled single-line wordmark + dim version tag.
-        out.push(Line::from(vec![
-            Span::styled("OPERANT", accent_style()),
-            Span::raw(" "),
-            Span::styled("·", dim_style()),
-            Span::raw(" "),
-            Span::styled("the personal AI agent", dim_style()),
-        ]));
-    }
-
-    out
-}
-
-/// Convenience: render the banner plus a dim subtitle line.
-///
-/// The subtitle is the version string, e.g. `v0.1.3`. Used by the welcome
-/// screen to give the wordmark a base without taking an extra layout slot.
-pub fn banner_with_subtitle(width: u16, version: &str) -> Vec<Line<'static>> {
-    let mut lines = banner_lines(width);
-    if width >= 40 {
-        // Underline the wordmark with a dim rule + version tag.
-        let rule_width = (width as usize).clamp(20, 56);
-        let version_label = format!(" v{} ", version);
-        let rule_total =
-            rule_width.saturating_sub(crate::tui::render::display_width(&version_label));
-        let left_rule = "─".repeat(rule_total / 2);
-        let right_rule = "─".repeat(rule_total - rule_total / 2);
-        lines.push(Line::from(vec![
-            Span::styled(left_rule, dim_style()),
-            Span::styled(version_label, dim_style()),
-            Span::styled(right_rule, dim_style()),
-        ]));
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::layout::Rect;
-    use ratatui::widgets::Widget;
 
     #[test]
     fn full_art_is_seven_lines_uniform_width() {
@@ -154,50 +38,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compact_art_is_four_lines() {
-        assert_eq!(COMPACT_ART.len(), 4, "compact art must be 4 lines tall");
-    }
-
-    #[test]
-    fn pick_art_responsive_thresholds() {
-        assert!(pick_art(80).is_some(), ">=80 cols → full art");
-        assert!(pick_art(120).is_some());
-        assert!(pick_art(40).is_some(), ">=40 cols → compact art");
-        assert!(pick_art(60).is_some());
-        assert!(pick_art(39).is_none(), "<40 cols → no art");
-        assert!(pick_art(20).is_none());
-    }
-
-    #[test]
-    fn banner_lines_full_width_returns_eight_lines() {
-        // 7 art lines + 1 subtitle rule.
-        let lines = banner_lines(100);
-        assert_eq!(lines.len(), 7, "banner_lines(100) returns 7 art lines");
-        let with_sub = banner_with_subtitle(100, "0.1.3");
-        assert_eq!(
-            with_sub.len(),
-            8,
-            "banner_with_subtitle adds a subtitle rule"
-        );
-    }
-
-    #[test]
-    fn banner_lines_compact_width_returns_four_lines() {
-        let lines = banner_lines(50);
-        assert_eq!(
-            lines.len(),
-            4,
-            "banner_lines(50) returns 4 compact art lines"
-        );
-    }
-
-    #[test]
-    fn banner_lines_narrow_returns_one_line_fallback() {
-        let lines = banner_lines(30);
-        assert_eq!(lines.len(), 1, "<40 cols falls back to single styled line");
-    }
-
     // ── Theme-driven accent ────────────────────────────────────────────────
     //
     // The wordmark emits the `Accent` role's FROZEN default, and the per-frame
@@ -206,63 +46,6 @@ mod tests {
     // over: the emitted colour is theme-independent by design, and the
     // resolved colour only exists after the pass. So these tests drive the real
     // pipeline: paint, substitute, read the cell back.
-
-    /// Run `f` with `theme` active, then restore the default palette. Shares
-    /// the palette lock the other theme-mutating tests serialize on. The
-    /// palette is process-global, so both the render call and the expected
-    /// colour must be read *inside* the closure.
-    fn with_theme<T>(theme: &str, f: impl FnOnce() -> T) -> T {
-        let _guard = crate::tui::theme_colors::tests::ACTIVE_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::tui::theme_colors::set_active_theme(theme);
-        let out = f();
-        crate::tui::theme_colors::set_active_theme("default");
-        out
-    }
-
-    /// The colour the call site EMITS: always the role default, by design.
-    #[test]
-    fn wordmark_emits_the_accent_role_default() {
-        for width in [100, 50, 30] {
-            let fg = banner_lines(width)
-                .into_iter()
-                .next()
-                .and_then(|line| line.spans.first().map(|s| s.style.fg))
-                .unwrap_or(None);
-            assert_eq!(
-                fg,
-                Some(theme::accent_color()),
-                "width {width} must emit the role default so the buffer can substitute it"
-            );
-        }
-    }
-
-    /// The resolved colour after the per-frame substitution, which is where the
-    /// active theme actually shows up.
-    #[test]
-    fn banner_wordmark_follows_the_active_theme_accent() {
-        let paint = |width: u16| {
-            let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 8));
-            for (row, line) in banner_lines(width).into_iter().enumerate() {
-                line.render(Rect::new(0, row as u16, 60, 1), &mut buf);
-            }
-            crate::tui::vendor::style::theme_mode::adapt_buffer_for_display(&mut buf);
-            buf[(0, 0)].fg
-        };
-
-        let nord = with_theme("nord", || (paint(100), crate::tui::theme_colors::accent()));
-        assert_eq!(
-            nord.0, nord.1,
-            "after substitution the wordmark must show the active theme's accent"
-        );
-
-        let monokai = with_theme("monokai", || paint(100));
-        assert_ne!(nord.0, monokai, "switching theme must repaint the wordmark");
-
-        // The narrow (<40 col) fallback path goes through the same substitution.
-        assert_eq!(with_theme("nord", || paint(30)), nord.0);
-    }
 
     // ── The durable gate: no hardcoded default-theme amber anywhere else ───
     //

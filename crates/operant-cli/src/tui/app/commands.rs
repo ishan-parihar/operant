@@ -1,7 +1,6 @@
 //! Command handling methods.
 
 use super::*;
-use crossterm::execute;
 
 impl App {
     #[allow(dead_code)] // Used in tests
@@ -304,10 +303,10 @@ impl App {
             // names whose jcode counterparts are the same surface as an
             // already-handled command — route instead of falling through to
             // the model as literal text.
-            "commands" => return self.intercept_slash_command_with_args_impl("help", args),
-            "models" => return self.intercept_slash_command_with_args_impl("model", args),
+            "commands" => self.intercept_slash_command_with_args_impl("help", args),
+            "models" => self.intercept_slash_command_with_args_impl("model", args),
             "split" | "split-view" => {
-                return self.intercept_slash_command_with_args_impl("splitview", args);
+                self.intercept_slash_command_with_args_impl("splitview", args)
             }
 
             "config" | "settings" => {
@@ -1051,7 +1050,7 @@ impl App {
             // it. Distinct from /keybindings above, which edits the JSON file.
             "keys" | "hotkeys" => {
                 let registry = &*crate::tui::keybindings::DEFAULT_KEYBINDINGS;
-                let report = registry.usage_report(&self.slash_usage);
+                let _report = registry.usage_report(&self.slash_usage);
                 // Flush here so a freshly-pressed chord is always reflected,
                 // rather than waiting for the next periodic flush.
                 self.slash_usage.save();
@@ -1070,7 +1069,7 @@ impl App {
             // `?` is the help alias the registry advertises (and the core
             // def lists under "help"); the 2026-10-14 no-unwired test caught
             // it landing the core fallback. Route it like `commands` does.
-            "?" => return self.intercept_slash_command_with_args_impl("help", args),
+            "?" => self.intercept_slash_command_with_args_impl("help", args),
             "help" => {
                 // Toggle the help overlay (same as pressing `?` or F1).
                 // Bug #8 from iter-82 audit: previously only opened (never
@@ -1518,9 +1517,7 @@ impl App {
                 self.shell_out_to_subcommand("gateway", "status");
                 true
             }
-            "title" => {
-                return self.intercept_slash_command_with_args_impl("rename", args);
-            }
+            "title" => self.intercept_slash_command_with_args_impl("rename", args),
             // /whoami — show what the agent knows about the user.
             // (P1-9 from UX audit — transparency + trust.)
             "whoami" => {
@@ -2145,6 +2142,60 @@ impl App {
     // Add a message directly (e.g. from a non-streaming source).
 }
 
+// ── (plan 07 step 5) the alternate-screen guard for full-screen overlays ──
+impl App {
+    /// Which overlays are "full-screen" in jcode chrome terms: they cover
+    /// the whole frame, so in native-scroll mode they must NOT paint into
+    /// the scroll region (their rows would duplicate history that is
+    /// already in scrollback). The unified inline picker is deliberately
+    /// NOT here — it renders inline inside the live region by design
+    /// (plan 05B).
+    fn full_screen_overlay_open(&self) -> bool {
+        self.terminal_scroll_mode
+            && self.overlay_flags().iter().any(|(name, visible)| {
+                *visible
+                    && !matches!(
+                        *name,
+                        "inline_interactive"
+                            | "voice_mode_notice"
+                            | "selection_highlight"
+                            | "selection_row_cache"
+                            | "context_menu"
+                            | "command_palette"
+                            | "permission_request"
+                            | "mcp_approval"
+                            | "ask_user_dialog"
+                    )
+            })
+    }
+
+    /// Called once per frame before the draw. Takes the alternate screen
+    /// when a full-screen overlay opens under it and leaves it when the
+    /// last one closes (requesting a native replay — the transcript
+    /// re-emits at the current width, so nothing stale survives the
+    /// overlay's cover).
+    pub(super) fn sync_overlay_alt_screen<
+        B: ratatui::backend::Backend + super::SynchronizedUpdate,
+    >(
+        &mut self,
+        terminal: &mut ratatui::Terminal<B>,
+    ) {
+        let want = self.full_screen_overlay_open();
+        if want && !self.overlay_alt_active {
+            let _ = terminal.backend_mut().enter_alt_screen();
+            let _ = terminal.backend_mut().clear();
+            self.overlay_alt_active = true;
+        } else if !want && self.overlay_alt_active {
+            let _ = terminal.backend_mut().leave_alt_screen();
+            self.overlay_alt_active = false;
+            // (plan 07 §2) the overlay covered native history rows — the
+            // watermark still counts them, but they are stale on screen;
+            // replay re-emits the whole transcript at the current width.
+            self.request_native_replay();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2394,8 +2445,10 @@ mod tests {
         let db = std::sync::Arc::new(
             operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
         );
-        let mut cfg = operant_core::agent::AgentConfig::default();
-        cfg.stream = false;
+        let cfg = operant_core::agent::AgentConfig {
+            stream: false,
+            ..operant_core::agent::AgentConfig::default()
+        };
         std::sync::Arc::new(operant_core::agent::OperantAgent::new(
             cfg,
             Box::new(EchoClient),
@@ -2820,59 +2873,5 @@ mod tests {
             "a dangerous shape must never auto-approve, even on a matching entry"
         );
         assert!(app2.permission_request.is_some(), "it opens the dialog");
-    }
-}
-
-// ── (plan 07 step 5) the alternate-screen guard for full-screen overlays ──
-impl App {
-    /// Which overlays are "full-screen" in jcode chrome terms: they cover
-    /// the whole frame, so in native-scroll mode they must NOT paint into
-    /// the scroll region (their rows would duplicate history that is
-    /// already in scrollback). The unified inline picker is deliberately
-    /// NOT here — it renders inline inside the live region by design
-    /// (plan 05B).
-    fn full_screen_overlay_open(&self) -> bool {
-        self.terminal_scroll_mode
-            && self.overlay_flags().iter().any(|(name, visible)| {
-                *visible
-                    && !matches!(
-                        *name,
-                        "inline_interactive"
-                            | "voice_mode_notice"
-                            | "selection_highlight"
-                            | "selection_row_cache"
-                            | "context_menu"
-                            | "command_palette"
-                            | "permission_request"
-                            | "mcp_approval"
-                            | "ask_user_dialog"
-                    )
-            })
-    }
-
-    /// Called once per frame before the draw. Takes the alternate screen
-    /// when a full-screen overlay opens under it and leaves it when the
-    /// last one closes (requesting a native replay — the transcript
-    /// re-emits at the current width, so nothing stale survives the
-    /// overlay's cover).
-    pub(super) fn sync_overlay_alt_screen<
-        B: ratatui::backend::Backend + super::SynchronizedUpdate,
-    >(
-        &mut self,
-        terminal: &mut ratatui::Terminal<B>,
-    ) {
-        let want = self.full_screen_overlay_open();
-        if want && !self.overlay_alt_active {
-            let _ = terminal.backend_mut().enter_alt_screen();
-            let _ = terminal.backend_mut().clear();
-            self.overlay_alt_active = true;
-        } else if !want && self.overlay_alt_active {
-            let _ = terminal.backend_mut().leave_alt_screen();
-            self.overlay_alt_active = false;
-            // (plan 07 §2) the overlay covered native history rows — the
-            // watermark still counts them, but they are stale on screen;
-            // replay re-emits the whole transcript at the current width.
-            self.request_native_replay();
-        }
     }
 }

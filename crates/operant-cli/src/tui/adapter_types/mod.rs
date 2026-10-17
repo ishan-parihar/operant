@@ -1,6 +1,5 @@
 // adapter_types/mod.rs — All adapter/TUI types (decomposed from adapter_types.rs).
 
-pub mod anthropic_client;
 pub mod auth;
 pub mod codex_oauth;
 pub mod config;

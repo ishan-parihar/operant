@@ -214,13 +214,13 @@ fn fill_realistic(buf: &mut Buffer, indexed_fanout: usize) {
                     3 => "╭",
                     _ => "·",
                 });
-                if roll % 17 == 0 {
+                if roll.is_multiple_of(17) {
                     cell.modifier.insert(Modifier::BOLD);
                 }
-                if roll % 23 == 0 {
+                if roll.is_multiple_of(23) {
                     cell.modifier.insert(Modifier::ITALIC);
                 }
-                if roll % 29 == 0 {
+                if roll.is_multiple_of(29) {
                     cell.underline_color = role(Role::Accent);
                 }
             }

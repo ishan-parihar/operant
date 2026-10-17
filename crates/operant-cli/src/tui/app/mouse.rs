@@ -619,8 +619,6 @@ impl App {
     // draining, it is stored in `self.pending_key` and will be replayed at
     // the top of the next event-loop iteration.
     pub(super) fn try_detect_paste_burst(&mut self, first: char) -> Option<String> {
-        use crossterm::event::{Event, KeyCode, KeyEventKind};
-
         // Minimum number of chars (including `first`) to classify as a paste.
         // Two or more is enough: at 120 WPM the inter-key interval is ~60 ms,
         // so a second char in the same zero-timeout drain is extremely unlikely

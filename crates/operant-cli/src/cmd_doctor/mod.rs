@@ -171,88 +171,6 @@ fn clock_organ_verdict(home: &std::path::Path) -> ClockVerdict {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ClockVerdict, clock_organ_verdict, doctor_exit_code};
-
-    /// G3 regression: doctor must distinguish a ticking clock organ from
-    /// a dead one. Before the liveness stamp it printed OK unconditionally.
-    #[test]
-    fn clock_verdict_reads_the_liveness_stamp() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let home = dir.path();
-        let stamp_dir = home.join(".clock");
-        std::fs::create_dir_all(&stamp_dir).expect("stamp dir");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        // No stamp yet — the organ never completed a tick.
-        assert_eq!(clock_organ_verdict(home), ClockVerdict::NeverTicked);
-
-        // Fresh stamp (the organs.rs writer's exact format: unix seconds).
-        std::fs::write(stamp_dir.join("last_tick"), now.to_string()).expect("stamp");
-        match clock_organ_verdict(home) {
-            ClockVerdict::Fresh(age) => assert!(age <= 2, "fresh stamp read as {age}s old"),
-            other => panic!("a fresh stamp must be Fresh, got {other:?}"),
-        }
-
-        // Stale stamp — one past the 300s bound.
-        std::fs::write(stamp_dir.join("last_tick"), (now - 301).to_string()).expect("stale");
-        match clock_organ_verdict(home) {
-            ClockVerdict::Stale(age) => {
-                assert!(age >= 301, "stale stamp read as {age}s old")
-            }
-            other => panic!("a stale stamp must be Stale, got {other:?}"),
-        }
-
-        // Garbage stamp — treated as never ticked, never a panic.
-        std::fs::write(stamp_dir.join("last_tick"), "not-a-number").expect("garbage");
-        assert_eq!(clock_organ_verdict(home), ClockVerdict::NeverTicked);
-    }
-
-    fn issues(n: usize) -> Vec<String> {
-        (0..n).map(|i| format!("issue {i}")).collect()
-    }
-
-    #[test]
-    fn a_clean_doctor_run_exits_zero() {
-        assert_eq!(doctor_exit_code(&[], &[]), 0);
-    }
-
-    /// The regression: doctor found things and reported success anyway.
-    #[test]
-    fn finding_issues_exits_nonzero() {
-        assert_eq!(doctor_exit_code(&issues(4), &[]), 1);
-    }
-
-    /// Manual issues count too — a caller gating on the exit code cannot tell
-    /// Manual issues are advisories ("git not found (recommended)"), not
-    /// failures. Counting them meant a healthy install with unconfigured
-    /// optional integrations could never exit 0 — 13 such advisories were
-    /// present on a working machine — so the exit code carried no information
-    /// at all. This pins the corrected contract: advisories are displayed, and
-    /// they do not gate a caller.
-    #[test]
-    fn manual_issues_do_not_fail_the_run() {
-        assert_eq!(doctor_exit_code(&[], &issues(1)), 0);
-        assert_eq!(doctor_exit_code(&[], &issues(13)), 0);
-    }
-
-    /// …but a real issue still fails even alongside advisories, which is the
-    /// half of the contract that matters for scripting.
-    #[test]
-    fn real_issue_fails_even_with_advisories_present() {
-        assert_eq!(doctor_exit_code(&issues(1), &issues(5)), 1);
-    }
-
-    #[test]
-    fn a_single_issue_is_enough_to_fail() {
-        assert_eq!(doctor_exit_code(&["one".to_string()], &[]), 1);
-    }
-}
-
 /// O-25: org-mode lines. The read-API call goes through the same
 /// `operant_os::api` every org view uses (mode=ro, the version gate), so
 /// what doctor says is what `operant org holon` will hit.
@@ -397,5 +315,87 @@ fn print_holon_org_checks(config: &AppConfig) {
         None => check_info(
             "[holon] no org archive taken yet — run `operant org holon archive` before retiring live readers",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClockVerdict, clock_organ_verdict, doctor_exit_code};
+
+    /// G3 regression: doctor must distinguish a ticking clock organ from
+    /// a dead one. Before the liveness stamp it printed OK unconditionally.
+    #[test]
+    fn clock_verdict_reads_the_liveness_stamp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let home = dir.path();
+        let stamp_dir = home.join(".clock");
+        std::fs::create_dir_all(&stamp_dir).expect("stamp dir");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // No stamp yet — the organ never completed a tick.
+        assert_eq!(clock_organ_verdict(home), ClockVerdict::NeverTicked);
+
+        // Fresh stamp (the organs.rs writer's exact format: unix seconds).
+        std::fs::write(stamp_dir.join("last_tick"), now.to_string()).expect("stamp");
+        match clock_organ_verdict(home) {
+            ClockVerdict::Fresh(age) => assert!(age <= 2, "fresh stamp read as {age}s old"),
+            other => panic!("a fresh stamp must be Fresh, got {other:?}"),
+        }
+
+        // Stale stamp — one past the 300s bound.
+        std::fs::write(stamp_dir.join("last_tick"), (now - 301).to_string()).expect("stale");
+        match clock_organ_verdict(home) {
+            ClockVerdict::Stale(age) => {
+                assert!(age >= 301, "stale stamp read as {age}s old")
+            }
+            other => panic!("a stale stamp must be Stale, got {other:?}"),
+        }
+
+        // Garbage stamp — treated as never ticked, never a panic.
+        std::fs::write(stamp_dir.join("last_tick"), "not-a-number").expect("garbage");
+        assert_eq!(clock_organ_verdict(home), ClockVerdict::NeverTicked);
+    }
+
+    fn issues(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("issue {i}")).collect()
+    }
+
+    #[test]
+    fn a_clean_doctor_run_exits_zero() {
+        assert_eq!(doctor_exit_code(&[], &[]), 0);
+    }
+
+    /// The regression: doctor found things and reported success anyway.
+    #[test]
+    fn finding_issues_exits_nonzero() {
+        assert_eq!(doctor_exit_code(&issues(4), &[]), 1);
+    }
+
+    /// Manual issues count too — a caller gating on the exit code cannot tell
+    /// Manual issues are advisories ("git not found (recommended)"), not
+    /// failures. Counting them meant a healthy install with unconfigured
+    /// optional integrations could never exit 0 — 13 such advisories were
+    /// present on a working machine — so the exit code carried no information
+    /// at all. This pins the corrected contract: advisories are displayed, and
+    /// they do not gate a caller.
+    #[test]
+    fn manual_issues_do_not_fail_the_run() {
+        assert_eq!(doctor_exit_code(&[], &issues(1)), 0);
+        assert_eq!(doctor_exit_code(&[], &issues(13)), 0);
+    }
+
+    /// …but a real issue still fails even alongside advisories, which is the
+    /// half of the contract that matters for scripting.
+    #[test]
+    fn real_issue_fails_even_with_advisories_present() {
+        assert_eq!(doctor_exit_code(&issues(1), &issues(5)), 1);
+    }
+
+    #[test]
+    fn a_single_issue_is_enough_to_fail() {
+        assert_eq!(doctor_exit_code(&["one".to_string()], &[]), 1);
     }
 }

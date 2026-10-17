@@ -61,9 +61,8 @@ use crate::tui::adapter_types::{sample_completion_verb, sample_spinner_verb};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use operant_core::agent::AgentEvent;
 use ratatui::Terminal;
-use ratatui::style::Color;
 use std::cell::{Cell, RefCell};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::debug;
 
 // ---------------------------------------------------------------------------
@@ -275,8 +274,6 @@ pub struct App {
     /// Speech mode intensity: "lite", "full", "ultra".
     /// Current agent mode name: "build", "plan", "explore", etc.
     pub agent_mode: Option<String>,
-    /// Accent color for TUI chrome (currently fixed at the build/default accent).
-    pub accent_color: Color,
     /// Set when the agent mode changes (e.g. via `/personality`) so the main
     /// loop can update the query config and tool list to match.
     pub agent_mode_changed: bool,
@@ -603,8 +600,6 @@ pub struct App {
     /// Count of in-progress background tasks (drives the footer pill).
     /// Background task status text shown in footer pill.
     /// External status line command output (from CLAUDE_STATUS_COMMAND).
-    /// Whether auto-compact is enabled (from settings).
-    pub auto_compact_enabled: bool,
     /// Guard to prevent re-triggering auto-compact while one is in flight.
 
     /// Receiver for AgentEvent messages from the agent. (iter-114 — was
@@ -692,8 +687,6 @@ pub struct App {
     pub last_selectable_area: Cell<ratatui::layout::Rect>,
     /// The prompt input area from the last render frame (used for focus routing).
     pub last_input_area: Cell<ratatui::layout::Rect>,
-    /// The footer's right column area (where tips are shown) from the last render.
-    pub footer_right_column_area: Cell<ratatui::layout::Rect>,
     /// Which area of the TUI currently has keyboard focus.
     pub focus: FocusTarget,
     /// Maps virtual_row_index → thinking_block_hash for click detection.

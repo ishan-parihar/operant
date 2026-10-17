@@ -257,14 +257,10 @@ pub fn render_dialog_select(frame: &mut Frame, state: &DialogSelectState, area: 
         height: HEADER_HEIGHT.saturating_sub(1),
         ..layout.header_area
     };
-    let mut header_lines: Vec<Line<'static>> = Vec::new();
-    header_lines.push(Line::from(""));
-    header_lines.push(modal_search_line(
-        &state.filter,
-        "Search",
-        dim,
-        theme_colors::text(),
-    ));
+    let header_lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        modal_search_line(&state.filter, "Search", dim, theme_colors::text()),
+    ];
 
     frame.render_widget(Paragraph::new(header_lines).bg(dialog_bg), search_area);
 

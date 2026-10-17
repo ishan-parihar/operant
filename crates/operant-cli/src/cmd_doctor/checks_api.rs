@@ -484,10 +484,10 @@ pub async fn run_api_checks(config: &AppConfig, issues: &mut Vec<String>) {
     // it actually authenticates as. Catches wrong-token configs (the gateway
     // would otherwise start fine and fail only at runtime, as 409 contention
     // against whichever box holds the right token).
-    if config.gateway.telegram_enabled {
-        if let Some(token) = config.gateway.telegram_token.clone() {
-            handles.push(tokio::spawn(probe_telegram_bot(token)));
-        }
+    if config.gateway.telegram_enabled
+        && let Some(token) = config.gateway.telegram_token.clone()
+    {
+        handles.push(tokio::spawn(probe_telegram_bot(token)));
     }
 
     // -- Collect all results ----------------------------------------------------

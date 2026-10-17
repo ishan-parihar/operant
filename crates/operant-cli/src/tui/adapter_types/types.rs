@@ -146,13 +146,4 @@ impl Message {
     pub fn get_all_text(&self) -> String {
         self.text_content()
     }
-    pub fn get_tool_use_blocks(&self) -> Vec<&ContentBlock> {
-        match &self.content {
-            MessageContent::Blocks(blocks) => blocks
-                .iter()
-                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
-                .collect(),
-            _ => vec![],
-        }
-    }
 }

@@ -100,6 +100,30 @@ today, independent of the gate repair.
   off-by-one root in the autonomous loop's round accounting is likely;
   diagnose once, fix once. Owner: its own iteration.
 
+## OPEN — Found by the iter-910 dead-code purge (2026-10-18)
+
+- [ ] **R-LATEX — fenced ` ```latex ` / ` ```mermaid ` blocks do not render as formulas/diagrams.**
+  `tui/latex.rs` (1.4k lines) and `tui/mermaid.rs` (0.7k) implement the full
+  ladder (graphics-protocol probe, `dvipng`/`mmdc` toolchain, worker thread,
+  cache, fallback source block) and are covered by their own tests, but no
+  production path calls `plan`/`resolve`/`lines` — only the raster drain
+  (`drain_ready_rasters`, `LandedRasters`) is live. The transcript renderer
+  moved to the vendored `operant_markdown`, and the code-fence hook did not
+  come with it. Both modules carry `cfg_attr(not(test), expect(dead_code))`
+  naming this entry. Fix = call `latex::lines` / `mermaid::lines` from the
+  code-fence arm of the live markdown renderer; or delete both modules if the
+  feature is not wanted.
+- [ ] **Session picker port (B2.6) is test-only.** `operant_ui/session_picker*`
+  (~8.8k lines incl. tests) is reachable only from its own tests; `/resume`
+  uses the native `session_browser`. Delete with the legacy purge.
+- [ ] **`device_auth_dialog` scaffold has no opener** (H-9 residual). Removing
+  it changes the `overlays` flag list in ~every corpus golden, so it needs a
+  deliberate re-prove pass.
+- **Corpus note:** `_run.py verify` drifts on this machine for environmental
+  reasons (offline `aft update` notice, `~/.operant/slash-usage.json` order in
+  `typeahead-suggestions`); several scenarios also drift only when run in the
+  full batch and pass solo. `_validate.py` has 21 pre-existing ledger errors.
+
 ## OPEN — Duplicate tool rows mid-turn (2026-10-14 batch, plan 01)
 
 - [ ] **S1 (OSC-8 / pinned-image post-draw writes)** — UNRESOLVED, live-only.

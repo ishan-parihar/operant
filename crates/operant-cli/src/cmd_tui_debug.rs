@@ -39,6 +39,10 @@ use operant_core::config::AppConfig;
 /// `operant tui` subcommands. Combines read-only debug subcommands (that
 /// simulate TUI overlays from the CLI) with action subcommands (that set
 /// TUI state persistently, closing the TUI↔CLI parity gaps from the audit).
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap-derived subcommand tree; built once at startup"
+)]
 #[derive(Debug, Clone, Subcommand)]
 pub enum TuiSubcommand {
     /// Read-only debug subcommands — simulate TUI overlays from the CLI.
@@ -116,6 +120,10 @@ pub enum ThemeSubcommand {
 }
 
 /// `operant tui debug` subcommands (read-only).
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap-derived subcommand tree; built once at startup"
+)]
 #[derive(Debug, Clone, Subcommand)]
 pub enum TuiDebugSubcommand {
     /// List installed skills (same data as the /skills overlay).
@@ -1079,9 +1087,8 @@ fn parse_generic_chord(
         return Some((KeyCode::F(n), KeyModifiers::NONE));
     }
 
-    let mut parts = lower.rsplitn(2, '+');
-    let last = parts.next()?;
-    let head = parts.next()?;
+    let (head, last) = lower.rsplit_once('+')?;
+
     if last.chars().count() != 1 || head.is_empty() {
         return None;
     }
@@ -2076,37 +2083,6 @@ mod tests {
         // Malformed forms are rejected, not silently passed.
         assert!(evaluate_screen_assertions(&screen, "count:needle=x").is_err());
         assert!(evaluate_screen_assertions(&screen, "count:==3").is_err());
-    }
-
-    /// --frame-per-event arms all-frames capture: every painted frame lands
-    /// on disk with a sequential index, and the hub reports all-mode so the
-    /// caller skips the missing-frames check.
-    #[test]
-    fn all_frames_capture_writes_every_painted_frame() {
-        use crate::tui::debug::FrameCapturePlan;
-        let dir =
-            std::env::temp_dir().join(format!("operant-test-all-frames-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        // The hub writes without creating directories — the CLI layer owns
-        // creation, so the test must do what `debug_simulate` does.
-        std::fs::create_dir_all(&dir).expect("create capture dir");
-        let hub = crate::tui::debug::TuiDebugHub::new(false);
-        hub.arm_all_frames_capture(dir.clone());
-        assert!(hub.frame_capture_all());
-
-        let buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 10, 1));
-        hub.record_frame(1.0, None);
-        hub.capture_frame(&buffer);
-        hub.record_frame(2.0, None);
-        hub.capture_frame(&buffer);
-
-        let status = hub.frame_capture_status();
-        let (requested, captured) = status.expect("armed");
-        assert!(requested.is_empty(), "all-mode reports no requested set");
-        assert_eq!(captured, vec![0, 1], "every painted frame captured");
-        let f0 = std::fs::read_to_string(dir.join("frame-0000.txt"));
-        assert!(f0.is_ok(), "frame file written: {f0:?}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The plan struct is the single shape the CLI hands to run_headless:

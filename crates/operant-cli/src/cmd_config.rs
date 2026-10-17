@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::{AppConfig, install_runtime_config, runtime_config};
-use serde_json::Value;
 
 /// Config subcommand variants.
 #[derive(Debug, Clone, Subcommand)]
@@ -427,6 +426,7 @@ fn handle_migrate(apply: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn config_subcommand_show_does_not_panic() {

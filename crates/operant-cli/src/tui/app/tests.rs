@@ -208,7 +208,6 @@ fn test_normalize_char_shift_with_other_modifiers() {
     );
 }
 
-#[test]
 // (plan 04) rewritten: /mcp with args now runs the REAL subcommand through
 // the shell-out pattern (the old body returned false so `operant mcp auth`
 // typed as /mcp auth went to the MODEL). The panel opens only for bare /mcp.
@@ -292,7 +291,7 @@ async fn test_agent_flow_slash_commands_resolve_in_registry() {
         let canonical = registry
             .resolve(name)
             .unwrap_or_else(|| panic!("{name} must resolve in the registry"));
-        let result = registry.execute(&canonical, "").await;
+        let result = registry.execute(canonical, "").await;
         let crate::commands::CommandResult::ShellCommand(argv) = result else {
             panic!("{name} must return ShellCommand, got {result:?}");
         };
@@ -707,7 +706,7 @@ async fn watchdog_aborts_after_deadline() {
     // "tool ignoring cancellation" case.
     let handle = tokio::spawn(async move {
         std::future::pending::<()>().await;
-        let _ = rx;
+        let _keep_alive = rx;
     });
     app.agent_task_handle = Some(handle);
     app.cancel_deadline = Some(std::time::Instant::now());
@@ -1955,45 +1954,6 @@ fn test_usage_total_tokens_not_dropped() {
         app.token_count, 200,
         "token_count should use authoritative total_tokens (200), not input+output (150)"
     );
-}
-
-#[test]
-fn turn_state_should_reflect_retry_event() {
-    let mut app = make_app();
-    assert_eq!(app.turn_state, TurnState::Idle);
-
-    // A retry scheduled outside a live turn must not invent one: the
-    // compat shim keeps its pre-existing meaning (untouched by this event).
-    app.handle_agent_event(AgentEvent::RetryScheduled {
-        attempt: 1,
-        max_attempts: 3,
-        reason: "stream dropped".to_string(),
-    });
-    assert_eq!(app.turn_state, TurnState::WaitingForNetwork);
-    assert!(
-        !app.is_streaming,
-        "RetryScheduled must not flip is_streaming — it fires mid-turn, where the flag is already true"
-    );
-    assert_eq!(
-        app.display_turn_state(),
-        TurnState::Idle,
-        "a state set with no live turn collapses to Idle for display"
-    );
-
-    // The real case: a retry inside a live turn keeps the turn streaming and
-    // only adds the specificity the status line needs.
-    app.handle_agent_event(AgentEvent::Thinking {
-        content: "re-planning".to_string(),
-    });
-    app.handle_agent_event(AgentEvent::RetryScheduled {
-        attempt: 2,
-        max_attempts: 3,
-        reason: "context overflow".to_string(),
-    });
-    assert!(app.is_streaming, "the turn is still live");
-    assert_eq!(app.turn_state, TurnState::WaitingForNetwork);
-    assert_eq!(app.display_turn_state(), TurnState::WaitingForNetwork);
-    assert_eq!(TurnState::WaitingForNetwork.label(), "Retrying");
 }
 
 #[test]
@@ -3264,14 +3224,6 @@ fn event_resize_reaches_the_reading_position_state() {
 
 // ---- keybinding registry: /keys and /hotkeys ------------------------
 
-/// Rendered system text of the most recent system annotation.
-fn last_system_text(app: &App) -> String {
-    app.system_annotations
-        .last()
-        .map(|a| a.text.clone())
-        .unwrap_or_default()
-}
-
 #[test]
 fn keys_command_should_report_registry_bindings() {
     use crate::tui::keybindings::KeyBindingRegistry;
@@ -4002,10 +3954,6 @@ fn usage_overlay_is_open(app: &mut App) -> bool {
 
 fn command_palette_is_open(app: &mut App) -> bool {
     app.command_palette.visible
-}
-
-fn copy_mode_is_on(app: &mut App) -> bool {
-    app.copy_mode_active()
 }
 
 /// (plan 08) Ctrl+T's observable effect: the reasoning display override

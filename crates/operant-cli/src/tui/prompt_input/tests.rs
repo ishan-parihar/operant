@@ -11,8 +11,6 @@ use super::vim::{
     motion_first_nonblank, motion_gg, motion_w,
 };
 use super::*;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 
 // ---- VimMode --------------------------------------------------------
 

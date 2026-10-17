@@ -172,12 +172,4 @@ impl App {
     // -------------------------------------------------------------------
     // Query event handling
     // -------------------------------------------------------------------
-
-    /// Push a completed assistant message and trigger auto-scroll bookkeeping.
-    pub(crate) fn push_assistant_message(&mut self, text: String) {
-        let msg = Message::assistant(text);
-        self.messages.push(msg);
-        self.invalidate_transcript();
-        self.on_new_message();
-    }
 }

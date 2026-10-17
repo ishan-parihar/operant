@@ -113,8 +113,8 @@ fn cmd_budget_list(config: &AppConfig) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<20} {:<12} {:<8} {:<8} {}",
-        "SEAT", "CAP", "BASIS", "WINDOW", "MODE"
+        "{:<20} {:<12} {:<8} {:<8} MODE",
+        "SEAT", "CAP", "BASIS", "WINDOW"
     );
     for row in rows {
         println!(

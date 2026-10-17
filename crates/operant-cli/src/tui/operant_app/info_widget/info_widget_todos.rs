@@ -83,15 +83,9 @@ fn aggregate_todo_confidence<'a>(
         weighted_sum += u32::from(state.legacy_score()) * weight;
         total_weight += weight;
     }
-    if total_weight == 0 {
-        None
-    } else {
-        Some(
-            crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(
-                ((weighted_sum + total_weight / 2) / total_weight) as u8,
-            ),
-        )
-    }
+    (weighted_sum + total_weight / 2)
+        .checked_div(total_weight)
+        .map(|score| crate::tui::operant_app::todo::ConfidenceState::from_legacy_score(score as u8))
 }
 
 fn confidence_style(state: Option<crate::tui::operant_app::todo::ConfidenceState>) -> Style {
@@ -380,7 +374,7 @@ fn sort_todos_by_status<'a>(
     todos: &[&'a crate::tui::operant_app::todo::TodoItem],
 ) -> Vec<&'a crate::tui::operant_app::todo::TodoItem> {
     let mut sorted: Vec<&crate::tui::operant_app::todo::TodoItem> = todos.to_vec();
-    sorted.sort_by(|a, b| status_sort_rank(&a.status).cmp(&status_sort_rank(&b.status)));
+    sorted.sort_by_key(|a| status_sort_rank(&a.status));
     sorted
 }
 
@@ -599,7 +593,7 @@ pub(super) fn render_todos_widget(data: &InfoWidgetData, inner: Rect) -> Framed 
     // Sort todos: in_progress first, then pending, then completed
     let mut sorted_todos: Vec<&crate::tui::operant_app::todo::TodoItem> =
         data.todos.iter().collect();
-    sorted_todos.sort_by(|a, b| status_sort_rank(&a.status).cmp(&status_sort_rank(&b.status)));
+    sorted_todos.sort_by_key(|a| status_sort_rank(&a.status));
 
     // Render todos (limit based on available height)
     for todo in sorted_todos.iter().take(budget) {
@@ -693,7 +687,7 @@ pub(super) fn render_todos_expanded(data: &InfoWidgetData, inner: Rect) -> Vec<L
     // Sort todos: in_progress first, then pending, then completed
     let mut sorted_todos: Vec<&crate::tui::operant_app::todo::TodoItem> =
         data.todos.iter().collect();
-    sorted_todos.sort_by(|a, b| status_sort_rank(&a.status).cmp(&status_sort_rank(&b.status)));
+    sorted_todos.sort_by_key(|a| status_sort_rank(&a.status));
 
     // Render todos with priority colors
     for todo in sorted_todos.iter().take(available_lines) {

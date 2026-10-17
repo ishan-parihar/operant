@@ -40,7 +40,6 @@ const PAINT_THRESHOLD: f32 = 0.035;
 /// disk leaving a decaying afterglow, three staggered rings expand outward
 /// from the center, and a bright signal core pulses at the origin. See the
 /// module doc for the determinism and cost contract.
-
 pub fn sample_signal(
     elapsed: f32,
     sw: usize,

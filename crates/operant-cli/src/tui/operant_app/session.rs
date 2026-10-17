@@ -133,6 +133,10 @@ pub use crate::tui::operant_model::vendor_types::SessionStatus;
 /// `operant-session-types` so the foundation/import layer can match on it without
 /// depending on any `operant-tui-*` crate. The session-picker UI re-exports it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "variant names mirror the external tool each session belongs to"
+)]
 pub enum ResumeTarget {
     JcodeSession {
         session_id: String,

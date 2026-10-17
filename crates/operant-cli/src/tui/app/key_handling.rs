@@ -10,19 +10,6 @@ const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 
 // ---- 2026-10-14 batch, plan 03: effort wire mapping ----
 
-/// The agent's wire value for a UI effort level. The picker's four levels
-/// map onto the request field's ladder; "" (empty) is only reachable via
-/// `effort-set off` (Shift+Tab's cycle-off position).
-fn effort_wire_value(level: crate::tui::model_effort::EffortLevel) -> String {
-    use crate::tui::model_effort::EffortLevel;
-    match level {
-        EffortLevel::Low => "low".to_string(),
-        EffortLevel::Normal => "medium".to_string(),
-        EffortLevel::High => "high".to_string(),
-        EffortLevel::Max => "xhigh".to_string(),
-    }
-}
-
 impl App {
     /// Shift+Tab (plan 03 decision 1; plan 10 cleared the permission cycle
     /// off this key): cycle effort off → low → medium → high → xhigh → off,
@@ -63,10 +50,10 @@ impl App {
         // is open — nav/filter/Enter/Esc, exactly jcode's semantics — before
         // any other surface (the composer must not eat its letters as
         // filter text).
-        if self.inline_interactive.is_some() {
-            if self.handle_inline_interactive_key(key.code, key.modifiers) {
-                return false;
-            }
+        if self.inline_interactive.is_some()
+            && self.handle_inline_interactive_key(key.code, key.modifiers)
+        {
+            return false;
         }
 
         // Publish key event to debug bus (no-op when disabled).
@@ -1230,20 +1217,20 @@ impl App {
             {
                 // Composer shift-selection (jcode textarea selection): the
                 // in-input selection wins — copy it and stop, never exit.
-                if let Some(sel) = self.prompt_input.selection_text() {
-                    if !sel.is_empty() {
-                        let outcome = crate::tui::clipboard::copy(&sel);
-                        self.prompt_input.selection_clear();
-                        self.push_notice(
-                            if outcome.is_copied() {
-                                NotificationKind::Info
-                            } else {
-                                NotificationKind::Warning
-                            },
-                            outcome.status_message(),
-                        );
-                        return false;
-                    }
+                if let Some(sel) = self.prompt_input.selection_text()
+                    && !sel.is_empty()
+                {
+                    let outcome = crate::tui::clipboard::copy(&sel);
+                    self.prompt_input.selection_clear();
+                    self.push_notice(
+                        if outcome.is_copied() {
+                            NotificationKind::Info
+                        } else {
+                            NotificationKind::Warning
+                        },
+                        outcome.status_message(),
+                    );
+                    return false;
                 }
                 // If text is selected, copy it to clipboard instead of quitting.
                 let sel_text = self.refresh_selection_text();

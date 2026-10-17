@@ -1206,16 +1206,16 @@ impl MessageHandler for GatewayMessageHandler {
                         // and never sees the personal bank or another
                         // seat's (the owner's unbound chats keep the
                         // personal bank).
-                        self.agent.memory_provider().map(|p| {
+                        if let Some(p) = self.agent.memory_provider() {
                             p.set_scope(&operant_core::memory_wire::MemoryScope::Seat {
                                 identity: emp,
                             })
-                        });
+                        }
                     } else {
                         // Unbound = the owner's own turn: the personal bank.
-                        self.agent.memory_provider().map(|p| {
+                        if let Some(p) = self.agent.memory_provider() {
                             p.set_scope(&operant_core::memory_wire::MemoryScope::Personal)
-                        });
+                        }
                     }
                     self.agent.set_charter(None);
                     tracing::debug!(
@@ -3055,15 +3055,16 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                     entry.input_tokens += u64::from(input_tokens);
                     entry.output_tokens += u64::from(output_tokens);
                 }
-                AgentEvent::Cost { cost_usd, .. } => {
-                    // iter-632: the cost half of the metering wire —
-                    // emitted right after Usage from the models_dev
-                    // catalog rates. `None` (model not in catalog) is a
-                    // legitimate zero-cost estimate, not an error.
-                    if let Some(cost) = cost_usd {
-                        let mut map = turn_usage_for_events.lock().await;
-                        map.entry(key).or_default().cost_usd += cost;
-                    }
+                // iter-632: the cost half of the metering wire — emitted right
+                // after Usage from the models_dev catalog rates. `None` (model
+                // not in catalog) is a legitimate zero-cost estimate, so it
+                // matches no arm.
+                AgentEvent::Cost {
+                    cost_usd: Some(cost),
+                    ..
+                } => {
+                    let mut map = turn_usage_for_events.lock().await;
+                    map.entry(key).or_default().cost_usd += cost;
                 }
                 AgentEvent::Error { error } => {
                     // Surface errors to the user.
@@ -3269,7 +3270,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 // actionable reason. Attended requests never reach this
                 // consult — their behavior is unchanged either way.
                 if req.unattended
-                    && let Some(reason) =
+                    && let Some(_reason) =
                         unattended_no_channel_verdict(&unattended_posture_for_perm)
                 {
                     tracing::warn!(
@@ -4822,8 +4823,10 @@ mod tests {
         let db = Arc::new(
             operant_core::database::Database::init(dir.path().join("agent.sqlite")).expect("db"),
         );
-        let mut cfg = operant_core::agent::AgentConfig::default();
-        cfg.stream = false; // the scripted client answers through `chat`
+        let cfg = operant_core::agent::AgentConfig {
+            stream: false, // the scripted client answers through `chat`
+            ..operant_core::agent::AgentConfig::default()
+        };
         let agent = Arc::new(operant_core::agent::OperantAgent::new(
             cfg,
             Box::new(SlowEchoClient { delay_ms }),

@@ -15,20 +15,13 @@
 // operant-only surfaces still call (selection's copy-badge pool, tool group
 // lines, text measurement) plus the async-raster hash cache.
 
-pub(crate) mod cache;
 pub(crate) mod operant_overlays;
 pub(crate) mod selection;
 pub(crate) mod tools;
 pub(crate) mod utils;
 
-pub(crate) use cache::RenderedLineItem;
 pub(crate) use selection::{
     apply_selection_highlight, cache_selectable_row_text, render_context_menu,
-};
-pub(crate) use tools::{build_tool_names, render_system_annotation_lines};
-pub(crate) use utils::{
-    is_modal_open, shimmer_spans, spinner_char, spinner_color, truncate_end, truncate_middle,
-    truncate_text,
 };
 // The width seam, re-exported at `pub` so sibling modules can `pub use` it.
 pub use utils::{balanced_wrap, display_width, take_width};
@@ -39,9 +32,7 @@ pub use utils::{balanced_wrap, display_width, take_width};
 // table, and the post-draw passes. The surface render functions moved into
 // `dispatch.rs`, which imports each one from the module its surface lives in.
 use crate::tui::app::App;
-use crate::tui::vendor::style::theme_mode;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout};
 
 // Spinner frames matching the TypeScript SpinnerGlyph: platform-specific base
 // characters mirrored (forward + reverse) for a smooth pulse effect.
@@ -51,14 +42,6 @@ const SPINNER: &[char] = &[
     '\u{00b7}', '\u{2722}', '*', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273d}', '\u{273b}',
     '\u{2736}', '*', '\u{2722}', '\u{00b7}',
 ];
-#[cfg(not(target_os = "windows"))]
-const SPINNER: &[char] = &[
-    '\u{00b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273d}', '\u{273b}',
-    '\u{2736}', '\u{2733}', '\u{2722}', '\u{00b7}',
-];
-const WELCOME_BOX_HEIGHT: u16 = 9;
-const STATUS_THINKING: &str = "thinking";
-const STATUS_THINKING_ELLIPSIS: &str = "thinking\u{2026}";
 pub fn render_app(frame: &mut Frame, app: &App) {
     let size = frame.area();
 
@@ -253,52 +236,6 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
-    /// One full `render_app` at `w`x40, post-substitution.
-    fn painted_frame_at(app: &App, w: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(w, 40)).expect("test backend");
-        terminal.draw(|f| render_app(f, app)).expect("draw");
-        terminal.backend().buffer().clone()
-    }
-
-    /// A transcript tall enough that a rewrap genuinely moves content: each
-    /// message wraps to several rows, so narrowing the terminal changes which row
-    /// any given message occupies.
-    fn app_with_wrapping_transcript() -> App {
-        let mut app = make_app();
-        for i in 0..24 {
-            app.messages
-                .push(crate::tui::adapter_types::types::Message::user(format!(
-                    "message {i} {}",
-                    "padding so this message wraps across several terminal rows and a \
-                     rewrap genuinely moves it. "
-                        .repeat(3)
-                )));
-        }
-        app
-    }
-
-    /// The end-to-end proof for the resize anchor, through the real render path:
-    /// paint wide, arm the anchor the way `Event::Resize` does, paint narrow,
-    /// reconcile, then paint again — and the message at the top of the viewport
-    /// must be the same one the reader was looking at before the resize.
-    ///
-    /// This is the half `app::tests` stands in for. Those drive the reconcile
-    /// with hand-written rows; only a real rewrap shows that the content address
-    /// survives it and that the resolved row is where the renderer says it is.
-    ///
-    /// The assertion is on identity, not on a row number: a row index cannot
-    /// survive a resize by definition, which is the whole reason `ContentPos`
-    /// exists.
-
-    /// The observable half of the help overlay's narrow-terminal collapse: the
-    /// two-column split has width floors, and when they cannot both be met the
-    /// split is not drawn at all — so the column divider disappears rather than
-    /// both columns being crushed to unreadable widths.
-    ///
-    /// Asserted on pixels because that is the behaviour: at 120 the divider is
-    /// there, at 60 it is gone. The 120x40 golden already pins the wide geometry,
-    /// so this only has to show the narrow case collapses instead of crushing.
-
     /// The distinct foreground colours present in a frame, as `Color`.
     fn foregrounds(buf: &Buffer) -> Vec<Color> {
         let mut seen: Vec<Color> = buf.content.iter().map(|c| c.fg).collect();
@@ -328,9 +265,6 @@ mod tests {
             );
         });
     }
-
-    /// The base fill is the largest surface in the frame and was a hardcoded
-    /// `Color::Black` until the role migration. It must follow the theme.
 
     /// The accent bar / prompt rule is the surface `ACCENT_BUILD` used to freeze
     /// to the default theme's amber, which is why `/theme` could not repaint it

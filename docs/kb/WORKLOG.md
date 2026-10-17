@@ -8,3 +8,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-18T00:31** · `claude` — iter-906: W3-2 /stop cancels queued gateway turns (race-free via running_session mutex); K-2 not reproducing; D-6 accepted
 - **2026-10-18T01:45** — iter-908: retired stale org_reason tests (org layer deleted iter-838), fixed org --help banner, closed BUGS H-2/S6, archived the 10-13 QoL plan (kb lint clean)
 - **2026-10-18T02:10** — iter-909: clippy gate green for operant-core + operant-os (duplicated expect attrs removed, poison-recovering locks, dead code deleted, test-crate headers); operant-cli remains
+- **2026-10-18T02:48** — iter-910: clippy gate green workspace-wide; operant-cli dead-code purge (~120 items, 19 tests); device-auth scenario parked; BUGS R-LATEX/session-picker findings

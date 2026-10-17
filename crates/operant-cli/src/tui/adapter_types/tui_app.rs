@@ -25,7 +25,7 @@ impl TuiApp {
         no_mouse: bool,
         dangerously_skip_permissions: bool,
     ) -> anyhow::Result<Self> {
-        use crate::commands::{CommandContext, CommandHandler, CommandRegistry, CommandResult};
+        use crate::commands::CommandRegistry;
         use crate::tui::adapter_types::cost::CostTracker;
         use std::sync::Arc;
 
@@ -893,62 +893,62 @@ impl TuiApp {
         }
         // (plan 05) Ctrl+B: populate the branch browser with the current
         // session's fork tree (parent + children) from the agent's DB.
-        if std::mem::take(&mut app.pending_branch_list) {
-            if let Some(agent) = agent {
-                let current = agent.session_id().unwrap_or_default();
-                let mut branches = Vec::new();
-                if let Ok(parent) = agent.database().session_parent(&current) {
-                    if let Some(parent) = parent {
-                        let short: String = parent.chars().take(8).collect();
-                        branches.push(crate::tui::session_branching::BranchInfo {
-                            id: parent.clone(),
-                            name: format!("{short} (parent)"),
-                            created_at: String::new(),
-                            is_current: false,
-                        });
-                    }
-                }
-                if let Ok(children) = agent.database().child_sessions(&current) {
-                    for (id, title) in children {
-                        let label = title.unwrap_or_else(|| {
-                            format!("{} (fork)", id.chars().take(8).collect::<String>())
-                        });
-                        branches.push(crate::tui::session_branching::BranchInfo {
-                            id,
-                            name: label,
-                            created_at: String::new(),
-                            is_current: false,
-                        });
-                    }
-                }
-                let at = app.session_branching.branch_at_message;
-                app.session_branching.open(branches, at);
+        if std::mem::take(&mut app.pending_branch_list)
+            && let Some(agent) = agent
+        {
+            let current = agent.session_id().unwrap_or_default();
+            let mut branches = Vec::new();
+            if let Ok(parent) = agent.database().session_parent(&current)
+                && let Some(parent) = parent
+            {
+                let short: String = parent.chars().take(8).collect();
+                branches.push(crate::tui::session_branching::BranchInfo {
+                    id: parent.clone(),
+                    name: format!("{short} (parent)"),
+                    created_at: String::new(),
+                    is_current: false,
+                });
             }
+            if let Ok(children) = agent.database().child_sessions(&current) {
+                for (id, title) in children {
+                    let label = title.unwrap_or_else(|| {
+                        format!("{} (fork)", id.chars().take(8).collect::<String>())
+                    });
+                    branches.push(crate::tui::session_branching::BranchInfo {
+                        id,
+                        name: label,
+                        created_at: String::new(),
+                        is_current: false,
+                    });
+                }
+            }
+            let at = app.session_branching.branch_at_message;
+            app.session_branching.open(branches, at);
         }
         // (plan 05) rewind selector: sync marks from the agent while open
         // (or while a /rewind <n> confirmation is pending — the numeric
         // path resolves against the mark list without opening the UI),
         // service the preview request, execute the fork on Enter.
-        if app.rewind_selector.visible || app.pending_rewind_confirm.is_some() {
-            if let Some(agent) = agent {
-                let marks: Vec<(u64, String)> = agent
-                    .rewind_marks()
-                    .into_iter()
-                    .map(|m| (m.turn_id, m.text))
-                    .collect();
-                let display_texts = app.user_prompt_texts_for_filter();
-                app.rewind_selector.sync_marks(marks, &display_texts);
-                if std::mem::take(&mut app.pending_rewind_preview) {
-                    if let Some(turn_id) = app.rewind_selector.selected_turn_id() {
-                        match agent.preview_rewind(turn_id).await {
-                            Ok((prefix, tokens)) => {
-                                app.rewind_selector.preview = Some((prefix.len(), tokens));
-                            }
-                            Err(e) => {
-                                app.rewind_selector.notice = Some(e.to_string());
-                                app.rewind_selector.preview = None;
-                            }
-                        }
+        if (app.rewind_selector.visible || app.pending_rewind_confirm.is_some())
+            && let Some(agent) = agent
+        {
+            let marks: Vec<(u64, String)> = agent
+                .rewind_marks()
+                .into_iter()
+                .map(|m| (m.turn_id, m.text))
+                .collect();
+            let display_texts = app.user_prompt_texts_for_filter();
+            app.rewind_selector.sync_marks(marks, &display_texts);
+            if std::mem::take(&mut app.pending_rewind_preview)
+                && let Some(turn_id) = app.rewind_selector.selected_turn_id()
+            {
+                match agent.preview_rewind(turn_id).await {
+                    Ok((prefix, tokens)) => {
+                        app.rewind_selector.preview = Some((prefix.len(), tokens));
+                    }
+                    Err(e) => {
+                        app.rewind_selector.notice = Some(e.to_string());
+                        app.rewind_selector.preview = None;
                     }
                 }
             }
@@ -1115,46 +1115,44 @@ impl TuiApp {
         }
         // (plan 03) effort change first: the agent applies it to the very
         // next request.
-        if let Some(effort) = std::mem::take(&mut app.pending_effort) {
-            if let Some(agent) = agent {
-                agent.set_reasoning_effort(if effort.is_empty() {
-                    None
-                } else {
-                    Some(effort.clone())
-                });
-                let shown = if effort.is_empty() {
-                    "off".to_string()
-                } else {
-                    effort
-                };
-                app.set_status_notice(format!("Reasoning effort: {shown}"));
-            }
+        if let Some(effort) = std::mem::take(&mut app.pending_effort)
+            && let Some(agent) = agent
+        {
+            agent.set_reasoning_effort(if effort.is_empty() {
+                None
+            } else {
+                Some(effort.clone())
+            });
+            let shown = if effort.is_empty() {
+                "off".to_string()
+            } else {
+                effort
+            };
+            app.set_status_notice(format!("Reasoning effort: {shown}"));
         }
         // (plan 05A) model switch: ONE source of truth — the agent applies
         // it, and the display (model_name, config, context window, cost
         // tracker) refreshes FROM the agent, never from a parallel copy.
         // Persist through the surgical writer (plan 09): agent.model only.
-        if let Some(model) = std::mem::take(&mut app.pending_model) {
-            if let Some(agent) = agent {
-                agent.set_model(model.clone());
-                let applied = agent.model().to_string();
-                app.model_name = applied.clone();
-                app.config.agent.model = applied.clone();
-                if let Some(tracker) = std::sync::Arc::get_mut(&mut app.cost_tracker) {
-                    tracker.set_model(&applied);
-                }
-                app.refresh_context_window_size();
-                // Context is fresh on a new model.
-                app.context_used_tokens = 0;
-                match operant_core::config::persist_config_key("agent.model", &applied) {
-                    Ok(path) => app.set_status_notice(format!(
-                        "Model: {applied} (persisted to {})",
-                        path.display()
-                    )),
-                    Err(e) => {
-                        app.set_status_notice(format!("Model: {applied} (persist failed: {e})"))
-                    }
-                }
+        if let Some(model) = std::mem::take(&mut app.pending_model)
+            && let Some(agent) = agent
+        {
+            agent.set_model(model.clone());
+            let applied = agent.model().to_string();
+            app.model_name = applied.clone();
+            app.config.agent.model = applied.clone();
+            if let Some(tracker) = std::sync::Arc::get_mut(&mut app.cost_tracker) {
+                tracker.set_model(&applied);
+            }
+            app.refresh_context_window_size();
+            // Context is fresh on a new model.
+            app.context_used_tokens = 0;
+            match operant_core::config::persist_config_key("agent.model", &applied) {
+                Ok(path) => app.set_status_notice(format!(
+                    "Model: {applied} (persisted to {})",
+                    path.display()
+                )),
+                Err(e) => app.set_status_notice(format!("Model: {applied} (persist failed: {e})")),
             }
         }
         if std::mem::take(&mut app.pending_compact) {

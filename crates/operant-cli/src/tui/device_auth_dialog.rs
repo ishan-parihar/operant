@@ -30,6 +30,10 @@ pub enum DeviceAuthStatus {
     /// Dialog is idle / not started.
     Idle,
     /// Requesting the device code from the authorization server.
+    #[expect(
+        dead_code,
+        reason = "no opener since H-9 (iter-905); the scaffold is retained until the overlay-flag goldens are re-proven"
+    )]
     WaitingForCode,
     /// User code is displayed; waiting for the user to authorize in-browser.
     #[allow(dead_code)] // Prepared for device auth state machine
@@ -79,17 +83,6 @@ impl DeviceAuthDialogState {
             interval: 5,
             auth_url: String::new(),
         }
-    }
-
-    /// Open the dialog for a specific provider and begin the auth flow.
-    pub fn open(&mut self, provider_id: String, provider_name: String) {
-        self.visible = true;
-        self.provider_id = provider_id;
-        self.provider_name = provider_name;
-        self.status = DeviceAuthStatus::WaitingForCode;
-        self.user_code.clear();
-        self.verification_uri.clear();
-        self.device_code.clear();
     }
 
     /// Close and reset the dialog.

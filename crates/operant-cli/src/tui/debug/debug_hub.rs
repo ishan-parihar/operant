@@ -185,15 +185,6 @@ impl TuiDebugHub {
         });
     }
 
-    /// `true` when the armed capture is in all-frames mode.
-    pub fn frame_capture_all(&self) -> bool {
-        self.inner
-            .frame_capture
-            .lock()
-            .as_ref()
-            .is_some_and(|c| c.all)
-    }
-
     /// Called from the run loop with the *just-rendered* buffer, immediately
     /// after `record_frame`. Writes the buffer as trimmed text rows when this
     /// frame was requested, and does nothing otherwise.

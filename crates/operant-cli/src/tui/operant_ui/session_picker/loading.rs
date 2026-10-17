@@ -1712,7 +1712,7 @@ pub(super) fn crashed_sessions_from_all_sessions(
         return None;
     }
 
-    crashed.sort_by(|a, b| b.last_message_time.cmp(&a.last_message_time));
+    crashed.sort_by_key(|s| std::cmp::Reverse(s.last_message_time));
 
     Some(CrashedSessionsInfo {
         session_ids: crashed.iter().map(|s| s.id.clone()).collect(),
@@ -1946,7 +1946,7 @@ fn load_sessions_inner(bypass_cache: bool) -> Result<Vec<SessionInfo>> {
     });
     sessions.extend(external_sessions);
 
-    sessions.sort_by(|a, b| b.last_message_time.cmp(&a.last_message_time));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.last_message_time));
 
     #[cfg(test)]
     run_before_session_list_cache_publish_hook();

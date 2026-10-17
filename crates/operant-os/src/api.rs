@@ -25,9 +25,9 @@ const API_VIEWS: &[&str] = &[
     "api_approvals",
     "api_messages",
     "api_triggers",
-    "api_units",     // v4 (H2/R-04): the capability layer's units, with their owner
-    "api_services",  // v4: the per-service contract (effect/args/output/note/health)
-    "api_pool",      // v4: the pool edges a runtime indexes ("*" = org-wide surface)
+    "api_units",    // v4 (H2/R-04): the capability layer's units, with their owner
+    "api_services", // v4: the per-service contract (effect/args/output/note/health)
+    "api_pool",     // v4: the pool edges a runtime indexes ("*" = org-wide surface)
 ];
 
 /// A Holon employee as published by `api_employees`.
@@ -465,7 +465,8 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute("INSERT INTO api_meta VALUES ('api_version', '4')", []).unwrap();
+        conn.execute("INSERT INTO api_meta VALUES ('api_version', '4')", [])
+            .unwrap();
         conn.execute(
             "CREATE TABLE api_units (slug TEXT, charter TEXT, category TEXT, tier TEXT,
              owner TEXT, synced_at TEXT)",
@@ -478,7 +479,8 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute("CREATE TABLE api_pool (unit TEXT, dept TEXT)", []).unwrap();
+        conn.execute("CREATE TABLE api_pool (unit TEXT, dept TEXT)", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO api_units VALUES ('browser', 'the web surface', 'surface', 'core',
              'platform-ops', '2026-10-17T00:00:00Z')",
@@ -492,7 +494,8 @@ mod tests {
             [],
         )
         .unwrap();
-        conn.execute("INSERT INTO api_pool VALUES ('browser', '*')", []).unwrap();
+        conn.execute("INSERT INTO api_pool VALUES ('browser', '*')", [])
+            .unwrap();
 
         let api = HolonApi::open(&home).unwrap();
         let units = api.units().unwrap();
@@ -504,7 +507,10 @@ mod tests {
         let services = api.services().unwrap();
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].effect.as_deref(), Some("read"));
-        assert_eq!(services[0].args.as_deref(), Some("sourcehound <group> <query>"));
+        assert_eq!(
+            services[0].args.as_deref(),
+            Some("sourcehound <group> <query>")
+        );
         assert_eq!(services[0].output.as_deref(), Some("json"));
 
         let pool = api.pool().unwrap();

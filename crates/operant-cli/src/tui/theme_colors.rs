@@ -587,53 +587,6 @@ pub fn disabled() -> Color {
 // chrome migration moved them to the `Dim` role instead, because the base
 // chrome is the one surface whose colour `/theme` must visibly repaint.
 
-/// The dimmest text tier used by the dialogs. Was `Rgb(90, 90, 90)`.
-///
-/// `DIALOG_MUTED` and `DIALOG_TEXT_BRIGHT` used to sit beside this as fixed
-/// neutral greys outside the palette. They had no role, so `/theme` could not
-/// repaint them — the exact defect that gap inventory item 2 described. The
-/// Wave 3 migration replaced every call site with the matching
-/// `vendor::style::theme` role and removed both constants; a fixed grey with no
-/// role is a palette leak, not a design token.
-pub const DIALOG_DIM: Color = Color::Rgb(90, 90, 90);
-
-/// The brightest of the dialog text tiers: a SELECTED item's description line,
-/// and the "press Enter to use custom model" hint.
-///
-/// DO NOT confuse this with [`text_selection_bg`], which has the IDENTICAL value
-/// in all eight themes. That equality makes it look like a provably safe palette
-/// substitution, and it is not: every use of this constant is a FOREGROUND,
-/// while `text_selection_bg` is a BACKGROUND role. Swapping them would be
-/// value-preserving today and wrong the moment someone changes
-/// `text_selection_bg` for an unrelated reason — selected text would silently
-/// move with it. Equal value, different role.
-///
-/// It is brighter than [`DIALOG_MUTED`] (`Rgb(180, 180, 180)`), which is the
-/// point: a selected description should stand out from the unselected `dim`
-/// fallback beside it.
-pub const DIALOG_TEXT_BRIGHT: Color = Color::Rgb(200, 200, 200);
-
-/// A tool call that failed: the error glyph, its label, the standalone
-/// block's preview, and the group header's error count.
-///
-/// This is deliberately a constant rather than a `palette` lookup, and the
-/// reason is accessibility rather than convenience. `Rgb(255, 140, 0)` is the
-/// `error` value of the **deuteranopia** palette, which is not a coincidence:
-/// a red/green-safe palette has to use orange, because red is exactly the
-/// colour a deuteranope cannot reliably tell from green. Hardcoding it means
-/// tool errors are colourblind-safe on every theme, and the price is that a
-/// user on any other theme also gets orange.
-///
-/// Do NOT "fix" this to `palette.error()`. That is the obvious theme
-/// substitution and it is wrong: `error` ranges from `Rgb(191, 97, 106)`
-/// (nord) to `Rgb(255, 140, 0)` (deuteranopia), so routing through the palette
-/// changes the rendered colour on seven of eight themes. Whether tool errors
-/// *should* follow the theme is a genuine per-theme appearance decision
-/// (BUGS.md R40-30), and it is not this constant's job to make it silently.
-/// The value here is identical to the previous literal at all six sites, so
-/// nothing about the rendering changes.
-pub const TOOL_ERROR: Color = Color::Rgb(255, 140, 0);
-
 /// The highlighted background behind a search-match substring, used by both the
 /// inline transcript search and the global-search overlay.
 ///
@@ -702,19 +655,6 @@ pub(crate) mod tests {
         assert_eq!(palette.success, Color::Rgb(0, 150, 200));
         // Error should be orange, not red
         assert_eq!(palette.error, Color::Rgb(255, 140, 0));
-    }
-
-    /// Pins [`TOOL_ERROR`] to the palette value that justifies it.
-    ///
-    /// The six tool-error sites deliberately bypass `palette.error()`, which is
-    /// only defensible while the constant IS the deuteranopia palette's error
-    /// colour: a red/green-safe palette uses orange, which is precisely what
-    /// makes tool errors colourblind-safe on every theme. Editing the constant
-    /// to any other value silently drops that property while leaving the
-    /// rationale in its doc comment intact, so tie the two together.
-    #[test]
-    fn tool_error_constant_tracks_the_deuteranopia_error_value() {
-        assert_eq!(TOOL_ERROR, ColorPalette::for_theme("deuteranopia").error);
     }
 
     #[test]

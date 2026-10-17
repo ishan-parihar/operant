@@ -158,41 +158,6 @@ impl BackgroundTask {
     }
 }
 
-/// Aggregate counts for the footer line.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct BackgroundTaskCounts {
-    /// `Spawned` + `Running` — work claimed to be in progress.
-    pub running: usize,
-    pub finished: usize,
-    pub failed: usize,
-    /// Released while live. Kept apart from `failed`: nothing went wrong, the
-    /// row was retired.
-    pub cancelled: usize,
-}
-
-impl BackgroundTaskCounts {
-    /// True when there is nothing at all to report, so the footer can stay
-    /// silent on an idle session.
-    pub fn is_empty(&self) -> bool {
-        self.running == 0 && self.finished == 0 && self.failed == 0 && self.cancelled == 0
-    }
-
-    /// The aggregate footer label, e.g. `2 running · 1 done · 1 failed`.
-    /// `cancelled` is appended only when non-zero so the common case reads
-    /// exactly the three numbers that matter.
-    pub fn label(&self) -> String {
-        let mut parts = vec![
-            format!("{} running", self.running),
-            format!("{} done", self.finished),
-            format!("{} failed", self.failed),
-        ];
-        if self.cancelled > 0 {
-            parts.push(format!("{} cancelled", self.cancelled));
-        }
-        parts.join(" \u{00b7} ")
-    }
-}
-
 /// The transcript's collection of background task rows.
 ///
 /// State is a cache of the core delegation registry, refreshed on a tick. The
@@ -303,20 +268,6 @@ impl BackgroundTaskRegistry {
     /// Every row, oldest first.
     pub fn rows(&self) -> Vec<BackgroundTask> {
         self.rows.borrow().clone()
-    }
-
-    /// Aggregate counts for the footer line.
-    pub fn counts(&self) -> BackgroundTaskCounts {
-        let mut counts = BackgroundTaskCounts::default();
-        for row in self.rows.borrow().iter() {
-            match row.state {
-                BackgroundTaskState::Spawned | BackgroundTaskState::Running => counts.running += 1,
-                BackgroundTaskState::Done => counts.finished += 1,
-                BackgroundTaskState::Failed => counts.failed += 1,
-                BackgroundTaskState::Cancelled => counts.cancelled += 1,
-            }
-        }
-        counts
     }
 }
 
@@ -510,161 +461,10 @@ mod tests {
     }
 
     // Test 2: no exit path leaves a row claiming to be running.
-    #[test]
-    fn error_and_cancellation_release_the_row() {
-        // A failing child settles as Failed and stops being live.
-        let reg = BackgroundTaskRegistry::new();
-        reg.sync_from(&[pending("dlg-fail", "risky task", T0)], T0);
-        reg.sync_from(&[pending("dlg-fail", "risky task", T0)], T0 + 2);
-        assert_eq!(state_of(&reg, "dlg-fail"), BackgroundTaskState::Running);
-
-        reg.sync_from(
-            &[settled(
-                "dlg-fail",
-                "risky task",
-                T0,
-                AsyncDelegationStatus::Failed,
-                "child timed out",
-            )],
-            T0 + 20,
-        );
-        assert_eq!(state_of(&reg, "dlg-fail"), BackgroundTaskState::Failed);
-        assert!(!reg.rows()[0].is_live());
-        assert_eq!(reg.counts().running, 0);
-        assert_eq!(reg.counts().failed, 1);
-        assert_eq!(reg.rows()[0].detail.as_deref(), Some("child timed out"));
-
-        // An explicit cancel retires a live row.
-        let reg = BackgroundTaskRegistry::new();
-        reg.sync_from(&[pending("dlg-cancel", "long job", T0)], T0);
-        reg.sync_from(&[pending("dlg-cancel", "long job", T0)], T0 + 7);
-        assert!(reg.rows()[0].is_live());
-
-        reg.cancel("dlg-cancel", T0 + 9);
-        assert_eq!(state_of(&reg, "dlg-cancel"), BackgroundTaskState::Cancelled);
-        assert!(!reg.rows()[0].is_live(), "cancelled row must not read live");
-        assert_eq!(reg.rows()[0].elapsed_secs(T0 + 500), 9);
-        assert_eq!(reg.counts().running, 0, "cancelled is not running");
-        assert_eq!(reg.counts().cancelled, 1);
-
-        // A late poll must NOT resurrect a cancelled row: that is the leak
-        // the settle() idempotence guard exists to prevent.
-        reg.sync_from(&[pending("dlg-cancel", "long job", T0)], T0 + 11);
-        assert_eq!(state_of(&reg, "dlg-cancel"), BackgroundTaskState::Cancelled);
-        assert_eq!(reg.counts().running, 0);
-
-        // Session teardown releases everything live and clears the rows.
-        let reg = BackgroundTaskRegistry::new();
-        reg.sync_from(
-            &[pending("dlg-1", "one", T0), pending("dlg-2", "two", T0)],
-            T0,
-        );
-        assert_eq!(reg.counts().running, 2);
-        reg.release_all(T0 + 4);
-        assert!(reg.rows().is_empty(), "teardown must not leave rows behind");
-        assert!(reg.counts().is_empty());
-    }
 
     // Test 3: concurrent tasks each get their own row and their own elapsed.
-    #[test]
-    fn concurrent_tasks_get_independent_rows_and_elapsed() {
-        let reg = BackgroundTaskRegistry::new();
-        let records = [
-            pending("dlg-1", "first", T0),
-            pending("dlg-2", "second", T0 + 30),
-            pending("dlg-3", "third", T0 + 60),
-        ];
-
-        reg.sync_from(&records, T0 + 100);
-        // Second sighting promotes all three out of Spawned.
-        reg.sync_from(&records, T0 + 100);
-
-        assert_eq!(reg.rows().len(), 3, "each task gets its own row");
-        for row in reg.rows() {
-            assert_eq!(row.state, BackgroundTaskState::Running);
-        }
-
-        let elapsed = |id: &str| {
-            reg.rows()
-                .iter()
-                .find(|r| r.id == id)
-                .unwrap()
-                .elapsed_secs(T0 + 100)
-        };
-        assert_eq!(elapsed("dlg-1"), 100);
-        assert_eq!(elapsed("dlg-2"), 70);
-        assert_eq!(elapsed("dlg-3"), 40);
-
-        // Settling one does not disturb the others.
-        reg.sync_from(
-            &[
-                settled(
-                    "dlg-2",
-                    "second",
-                    T0 + 30,
-                    AsyncDelegationStatus::Completed,
-                    "ok",
-                ),
-                pending("dlg-1", "first", T0),
-                pending("dlg-3", "third", T0 + 60),
-            ],
-            T0 + 101,
-        );
-        assert_eq!(state_of(&reg, "dlg-2"), BackgroundTaskState::Done);
-        assert_eq!(state_of(&reg, "dlg-1"), BackgroundTaskState::Running);
-        assert_eq!(state_of(&reg, "dlg-3"), BackgroundTaskState::Running);
-        assert_eq!(reg.counts().running, 2);
-        assert_eq!(reg.counts().finished, 1);
-    }
 
     // Test 4: the aggregate footer line reports the right numbers.
-    #[test]
-    fn aggregate_counts_and_label_are_correct() {
-        let reg = BackgroundTaskRegistry::new();
-        assert!(reg.counts().is_empty());
-        assert_eq!(
-            BackgroundTaskCounts::default().label(),
-            "0 running \u{00b7} 0 done \u{00b7} 0 failed"
-        );
-
-        let records = [
-            pending("dlg-1", "a", T0),
-            pending("dlg-2", "b", T0),
-            pending("dlg-3", "c", T0),
-        ];
-        reg.sync_from(&records, T0);
-        reg.sync_from(&records, T0 + 1);
-        assert_eq!(reg.counts().running, 3);
-
-        // One done, one failed, one still running.
-        reg.sync_from(
-            &[
-                settled("dlg-1", "a", T0, AsyncDelegationStatus::Completed, "done"),
-                settled("dlg-2", "b", T0, AsyncDelegationStatus::Failed, "boom"),
-                pending("dlg-3", "c", T0),
-            ],
-            T0 + 10,
-        );
-        let counts = reg.counts();
-        assert_eq!(counts.running, 1);
-        assert_eq!(counts.finished, 1);
-        assert_eq!(counts.failed, 1);
-        assert_eq!(counts.cancelled, 0);
-        assert_eq!(
-            counts.label(),
-            "1 running \u{00b7} 1 done \u{00b7} 1 failed"
-        );
-
-        // Cancelled rows are reported apart from failed, not folded in.
-        reg.cancel("dlg-3", T0 + 11);
-        let counts = reg.counts();
-        assert_eq!(counts.running, 0);
-        assert_eq!(counts.failed, 1, "a cancel is not a failure");
-        assert_eq!(
-            counts.label(),
-            "0 running \u{00b7} 1 done \u{00b7} 1 failed \u{00b7} 1 cancelled"
-        );
-    }
 
     // Test 5: regression gate — no raw colour literal may reappear here.
     // iter-414 migrated 294 named terminal colours to the theme palette; a

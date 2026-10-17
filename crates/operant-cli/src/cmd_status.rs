@@ -37,25 +37,25 @@ pub async fn handle_status_command(config: &AppConfig, deep: bool, json: bool) -
                 || std::path::PathBuf::from("architecture.toml").exists()
                 || std::path::PathBuf::from("architecture.toml.example").exists();
             hs["config_exists"] = json!(arch_path_exists);
-            if let Ok(raw) = std::fs::read_to_string(&file) {
-                if let Ok(arch) = operant_harness::Architecture::from_toml(&raw) {
-                    hs["row_count"] = json!(arch.rows.len());
-                    hs["active_count"] = json!(arch.active().count());
-                    // C3 (018 rebuild): best-effort live boot so the harness
-                    // line exposes the mount outcome counters (Active vs
-                    // Pending at boot) instead of only file row counts —
-                    // the r16 audit S6 "half-observable" gap.
-                    let snap = crate::cmd_architecture::boot_metrics_snapshot(&arch).await;
-                    hs["metrics"] = json!({
-                        "mount_success": snap.mount_success,
-                        "mount_pending": snap.mount_pending,
-                        "mount_failed": snap.mount_failed,
-                        "replace_success": snap.replace_success,
-                        "replace_failed": snap.replace_failed,
-                        "unmount_calls": snap.unmount_calls,
-                        "unwind_invocations": snap.unwind_invocations,
-                    });
-                }
+            if let Ok(raw) = std::fs::read_to_string(&file)
+                && let Ok(arch) = operant_harness::Architecture::from_toml(&raw)
+            {
+                hs["row_count"] = json!(arch.rows.len());
+                hs["active_count"] = json!(arch.active().count());
+                // C3 (018 rebuild): best-effort live boot so the harness
+                // line exposes the mount outcome counters (Active vs
+                // Pending at boot) instead of only file row counts —
+                // the r16 audit S6 "half-observable" gap.
+                let snap = crate::cmd_architecture::boot_metrics_snapshot(&arch).await;
+                hs["metrics"] = json!({
+                    "mount_success": snap.mount_success,
+                    "mount_pending": snap.mount_pending,
+                    "mount_failed": snap.mount_failed,
+                    "replace_success": snap.replace_success,
+                    "replace_failed": snap.replace_failed,
+                    "unmount_calls": snap.unmount_calls,
+                    "unwind_invocations": snap.unwind_invocations,
+                });
             }
         }
         hs

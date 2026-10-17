@@ -1145,6 +1145,10 @@ pub fn tui_category(name: &str) -> &'static str {
 }
 
 /// A single entry for TUI typeahead suggestions and help overlay.
+#[expect(
+    dead_code,
+    reason = "description/aliases are table data rendered only by the legacy help path"
+)]
 #[derive(Clone)]
 pub struct TuiSlashCommand {
     pub name: &'static str,

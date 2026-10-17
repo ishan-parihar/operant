@@ -76,7 +76,7 @@ impl App {
             .trim_end_matches('/')
             .to_string();
         let api_key = self.config.client.api_key.clone();
-        let host = reqwest::Url::parse(&base_url)
+        let _host = reqwest::Url::parse(&base_url)
             .ok()
             .and_then(|u| u.host_str().map(str::to_string))
             .unwrap_or_else(|| "endpoint".to_string());
@@ -98,7 +98,7 @@ impl App {
         };
         let mut entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = names
             .iter()
-            .map(|id| inline_model_row(id, "[agent] model / fallback_models", &effort))
+            .map(|id| inline_model_row(id, "[agent] model / fallback_models", effort))
             .collect();
         for e in &mut entries {
             e.is_current = e.name == current;
@@ -142,7 +142,7 @@ impl App {
         provider_name: String,
         status_prefix: &str,
     ) {
-        let picker_title = provider_name.clone();
+        let _picker_title = provider_name.clone();
         self.set_provider_default(provider_id.clone());
         self.persist_provider_and_model();
         self.has_credentials = true;

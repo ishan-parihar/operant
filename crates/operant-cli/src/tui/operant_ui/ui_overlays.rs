@@ -169,7 +169,7 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         ])
     };
 
-    let alt = crate::tui::operant_app::keybind::alt_chord;
+    let _alt = crate::tui::operant_app::keybind::alt_chord;
     let key_entry = |key: &str, desc: &str| -> Line<'static> {
         Line::from(vec![
             Span::styled("    ", Style::default()),

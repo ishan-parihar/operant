@@ -27,8 +27,8 @@ fn with_mermaid_placeholder_mode<T>(f: impl FnOnce() -> T) -> T {
         .expect("mermaid placeholder test lock");
     crate::tui::operant_app::mermaid::set_video_export_mode(true);
     let _reset = ResetVideoExportMode;
-    let result = f();
-    result
+
+    f()
 }
 
 fn with_serialized_mermaid_state<T>(f: impl FnOnce() -> T) -> T {
@@ -764,7 +764,7 @@ fn render_side_panel_markdown_live_syncs_file_content() {
     assert!(crate::tui::operant_app::side_panel::refresh_linked_page_content(&mut snapshot, None));
     let page = snapshot.focused_page().expect("focused page");
 
-    let first = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
+    let first = render_side_panel_markdown_cached(page, Rect::new(0, 0, 24, 20), false, false);
     let first_text: Vec<String> = first
         .lines
         .iter()
@@ -781,7 +781,7 @@ fn render_side_panel_markdown_live_syncs_file_content() {
     assert!(crate::tui::operant_app::side_panel::refresh_linked_page_content(&mut snapshot, None));
     let page = snapshot.focused_page().expect("focused page");
 
-    let second = render_side_panel_markdown_cached(&page, Rect::new(0, 0, 24, 20), false, false);
+    let second = render_side_panel_markdown_cached(page, Rect::new(0, 0, 24, 20), false, false);
     let second_text: Vec<String> = second
         .lines
         .iter()
@@ -904,7 +904,7 @@ fn prewarm_focused_side_panel_reuses_markdown_cache_on_first_draw() {
     let page = snapshot.focused_page().expect("focused page");
     let pane_area = estimate_side_panel_pane_area(120, 40, 40).expect("side panel area");
     let inner = side_panel_content_area(pane_area).expect("side panel content area");
-    let _ = render_side_panel_markdown_cached(&page, inner, false, false);
+    let _ = render_side_panel_markdown_cached(page, inner, false, false);
     let after_draw = markdown::thread_render_count();
 
     assert!(

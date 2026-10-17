@@ -3,7 +3,7 @@
 // else touches them (the "heals on scroll" ghost-row shape). Route through
 // tracing or a status notice; the only exemptions are the #[expect] sites
 // with a reason (logger self-failure, where tracing is dead) and cfg(test).
-#![deny(clippy::print_stdout, clippy::print_stderr)]
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 
 pub mod adapter_types;
 pub mod provider;
@@ -69,10 +69,6 @@ pub mod mcp_view;
 pub mod messages;
 pub mod model_effort;
 pub mod notifications;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "lands before its cutover wiring (W5 animations)")
-)]
 pub mod operant_anim;
 #[cfg_attr(
     not(test),
@@ -132,14 +128,27 @@ pub mod slash_usage;
 pub mod space;
 pub mod stats_dialog;
 pub mod terminal_setup;
-pub mod virtual_list;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
 pub mod free_mode_dialog;
 pub mod hooks_config_menu;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fenced-block renderer is not wired into the live transcript (BUGS.md R-LATEX); only the raster drain is live"
+    )
+)]
 pub mod latex;
 pub mod memory_file_selector;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "fenced-block renderer is not wired into the live transcript (BUGS.md R-LATEX); only the raster drain is live"
+    )
+)]
 pub mod mermaid;
 pub mod theme_colors;
 pub mod theme_screen;

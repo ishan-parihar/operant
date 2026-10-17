@@ -29,37 +29,14 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
 
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use crate::tui::image_render::{self, GraphicsProtocol};
-use crate::tui::messages::cache::hash_content;
+use crate::tui::image_render::GraphicsProtocol;
 use crate::tui::theme_colors;
-
-/// Raster ceiling asked of the external renderer, in CSS pixels.
-///
-/// Fixed on purpose. Because the raster does not depend on the terminal width,
-/// the cache key can be the diagram source alone and a resize never re-spawns
-/// the renderer.
-const RASTER_SIZE: &str = "1200";
-
-/// Wall-clock ceiling on one render. A cold `npx` resolves a package (and
-/// possibly a browser) on first use, so this is generous; the worker thread
-/// means the frame loop waits for nothing either way.
-const RENDER_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Size ceiling on the PNG read back from the renderer. A diagram that
-/// rasterises to a gigabyte is a bug or an attack, not a picture.
-const MAX_PNG_BYTES: u64 = 8 * 1024 * 1024;
-
-/// Size ceiling on the renderer's stderr, before it is shown to the user.
-const MAX_STDERR_BYTES: usize = 16 * 1024;
 
 /// Character ceiling on the error text kept for a failed render.
 const MAX_ERROR_CHARS: usize = 400;
@@ -95,14 +72,6 @@ impl ExternalRenderer {
         program: "mmdc",
         args: &[],
     };
-
-    /// `npx` fallback. The package version is pinned for the same supply-chain
-    /// reason `@agentmemory` is pinned: `npx -y` would otherwise execute
-    /// whatever the registry serves at the moment a transcript is opened.
-    pub const NPX: Self = Self {
-        program: "npx",
-        args: &["-y", "@mermaid-js/mermaid-cli@12.0.0"],
-    };
 }
 
 impl std::fmt::Display for ExternalRenderer {
@@ -120,26 +89,7 @@ pub struct MermaidEnv {
     pub renderer: Option<ExternalRenderer>,
 }
 
-impl MermaidEnv {
-    /// Probe the terminal and `PATH` once per process.
-    ///
-    /// A `PATH` scan per frame would be a per-frame cost for an answer that
-    /// cannot change while the process runs.
-    pub fn detect() -> &'static MermaidEnv {
-        static ENV: LazyLock<MermaidEnv> = LazyLock::new(|| MermaidEnv {
-            protocol: image_render::detect_graphics_protocol(),
-            renderer: probe_renderer(),
-        });
-        &ENV
-    }
-}
-
-fn probe_renderer() -> Option<ExternalRenderer> {
-    // Standalone first: `mmdc` starts in milliseconds, `npx` does not.
-    [ExternalRenderer::MMDC, ExternalRenderer::NPX]
-        .into_iter()
-        .find(|renderer| which::which(renderer.program).is_ok())
-}
+impl MermaidEnv {}
 
 // ---------------------------------------------------------------------------
 // The ladder
@@ -293,194 +243,9 @@ pub fn is_mermaid_lang(info: &str) -> bool {
         .is_some_and(|tag| tag.eq_ignore_ascii_case("mermaid"))
 }
 
-/// The lines one diagram contributes to the transcript.
-pub fn diagram_lines(source: &str, indent: &str) -> Vec<Line<'static>> {
-    let diagram = resolve(source);
-    lines(&diagram, source, indent)
-}
-
-/// Resolve one diagram, starting a render only on its first sighting.
-///
-/// Never blocks: the raster runs on a worker thread, so the frame that
-/// discovers the diagram shows "rendering…" and returns immediately.
-pub fn resolve(source: &str) -> MermaidDiagram {
-    let env = MermaidEnv::detect();
-    match plan(env) {
-        MermaidPlan::Source(why) => MermaidDiagram::Source { why },
-        MermaidPlan::Render => {
-            let Some(renderer) = env.renderer else {
-                return MermaidDiagram::Source {
-                    why: Why::NoExternalRenderer,
-                };
-            };
-            let key = hash_content(source);
-            CACHE.with(|cache| {
-                cached_resolve(&mut cache.borrow_mut(), key, || {
-                    let slot = Arc::new(Mutex::new(None));
-                    let worker = Arc::clone(&slot);
-                    let owned = source.to_string();
-                    std::thread::spawn(move || {
-                        let outcome = rasterise(&owned, &renderer, env.protocol);
-                        if let Ok(mut ready) = worker.lock() {
-                            *ready = Some(outcome);
-                        }
-                    });
-                    slot
-                })
-            })
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // External renderer invocation
 // ---------------------------------------------------------------------------
-
-/// Run the external renderer over `source` and return the PNG it wrote.
-///
-/// Bounded twice over, because a subprocess that hangs is a TUI freeze and a
-/// subprocess that prints without limit is an OOM: a wall-clock timeout, and a
-/// size ceiling on both the stderr read back and the PNG.
-fn rasterise(
-    source: &str,
-    renderer: &ExternalRenderer,
-    protocol: GraphicsProtocol,
-) -> MermaidDiagram {
-    // Not a `tempfile::TempDir`: the PNG outlives this call (the frame that
-    // discovers the diagram is not the frame that paints it), so the caller
-    // owns the file and removes it once the escape sequence is built.
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let base = std::env::temp_dir().join(format!("operant-mermaid-{stamp}"));
-    let input = base.with_extension("mmd");
-    let output = base.with_extension("png");
-
-    if let Err(err) = std::fs::write(&input, source) {
-        return MermaidDiagram::Failed {
-            error: format!("cannot write diagram: {err}"),
-        };
-    }
-
-    // `--size`, not the old `-w`: mermaid-cli renamed it. Verified against
-    // `mmdc --help` at @mermaid-js/mermaid-cli 12.0.0.
-    let mut child = match Command::new(renderer.program)
-        .args(renderer.args)
-        .arg("-i")
-        .arg(&input)
-        .arg("-o")
-        .arg(&output)
-        .arg("-b")
-        .arg("transparent")
-        .arg("--size")
-        .arg(RASTER_SIZE)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            let _ = std::fs::remove_file(&input);
-            return MermaidDiagram::Failed {
-                error: format!("{renderer}: {err}"),
-            };
-        }
-    };
-
-    // stderr goes to its own thread with a bounded read, so a child that
-    // prints past the pipe buffer cannot wedge the poll loop below.
-    let stderr = child.stderr.take();
-    let reader = std::thread::spawn(move || stderr.map_or_else(String::new, read_capped));
-
-    let deadline = Instant::now() + RENDER_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {}
-            Err(_) => {
-                let _ = child.kill();
-                break None;
-            }
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let stderr = reader.join().unwrap_or_default();
-    let _ = std::fs::remove_file(&input);
-
-    let Some(status) = status else {
-        let _ = std::fs::remove_file(&output);
-        return MermaidDiagram::Failed {
-            error: clamp_error(format!(
-                "{renderer} did not finish within {}s{}",
-                RENDER_TIMEOUT.as_secs(),
-                detail(&stderr)
-            )),
-        };
-    };
-
-    if !status.success() {
-        let _ = std::fs::remove_file(&output);
-        return MermaidDiagram::Failed {
-            error: clamp_error(if stderr.is_empty() {
-                format!("{renderer} exited with {status}")
-            } else {
-                stderr
-            }),
-        };
-    }
-
-    match std::fs::metadata(&output) {
-        Ok(meta) if meta.len() > MAX_PNG_BYTES => {
-            let _ = std::fs::remove_file(&output);
-            MermaidDiagram::Failed {
-                error: format!(
-                    "rendered PNG is {} KiB, over the {} KiB ceiling",
-                    meta.len() / 1024,
-                    MAX_PNG_BYTES / 1024
-                ),
-            }
-        }
-        Ok(_) => MermaidDiagram::Rendered {
-            png: output,
-            protocol,
-        },
-        Err(err) => MermaidDiagram::Failed {
-            error: format!("{renderer} wrote no PNG: {err}"),
-        },
-    }
-}
-
-/// Read at most [`MAX_STDERR_BYTES`] from a pipe, then stop.
-///
-/// Bounded on purpose. Dropping the read end makes a child that keeps writing
-/// take `EPIPE` and stop, instead of growing this process without limit.
-fn read_capped(mut pipe: impl Read) -> String {
-    let mut buf: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 4096];
-    while buf.len() < MAX_STDERR_BYTES
-        && let Ok(n) = pipe.read(&mut chunk)
-        && n > 0
-    {
-        buf.extend_from_slice(&chunk[..n]);
-    }
-    String::from_utf8_lossy(&buf).trim().to_string()
-}
-
-/// ` — <stderr>` when the renderer said something, empty when it did not.
-fn detail(stderr: &str) -> String {
-    if stderr.is_empty() {
-        String::new()
-    } else {
-        format!(" — {stderr}")
-    }
-}
 
 /// Keep the renderer's own message, bounded: an unbounded error dump floods the
 /// transcript, which is the same as showing nothing useful.
@@ -625,7 +390,8 @@ fn source_block(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::image_render::PROTOCOL_FREE_ENV;
+    use crate::tui::image_render;
+    use crate::tui::messages::cache::hash_content;
 
     const SRC: &str = "graph TD;\n  A-->B;";
 

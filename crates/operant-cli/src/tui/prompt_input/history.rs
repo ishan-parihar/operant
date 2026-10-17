@@ -76,14 +76,6 @@ impl PromptInputState {
         }
     }
 
-    /// Alt+Y: Cycle through kill ring backward.
-    pub fn yank_pop(&mut self) {
-        if self.mode == InputMode::Readonly {
-            return;
-        }
-        self.kill_ring.cycle_backward();
-    }
-
     // ---- Named registers ----
 
     /// Store `text` in the named register `register`.

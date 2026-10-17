@@ -132,7 +132,7 @@ pub(crate) fn gather_git_info_in(dir: Option<&std::path::Path>) -> Option<GitInf
     }
     // Newest first, so the file being worked on stays visible under the cap.
     // Deleted files have no mtime and sort last.
-    all_files.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    all_files.sort_by_key(|f| std::cmp::Reverse(f.modified_at));
     let dirty_total = all_files.len();
     all_files.truncate(10);
     let dirty_files = all_files;

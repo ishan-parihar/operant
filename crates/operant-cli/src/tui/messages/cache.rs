@@ -6,6 +6,7 @@
 // content equality instead of a pre-hash. `hash_content` survives because
 // `tui/mermaid.rs` uses it; the module path is kept so that import resolves.)
 
+#[cfg(test)]
 /// Fast, non-crypto hash for content strings. Quality matters more than speed
 /// here since we're hashing short-to-medium text snippets on every frame.
 pub fn hash_content(text: &str) -> u64 {

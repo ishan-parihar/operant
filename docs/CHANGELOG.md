@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-910 — clippy gate green workspace-wide (`operant-cli` purge).** The
+  allowlist gate (`scripts/clippy-warning-gate.sh`) now passes (and its 6 stale
+  allowlist rows are pruned). ~120 dead items in `operant-cli` were deleted
+  with the tests that exercised only them (virtual list, the Anthropic model
+  client stub, render cache, banner/rustle/shimmer helpers, `messages::tools`,
+  truncation helpers, background-task counters, 19 tests total); orphaned doc
+  blocks and an unreachable duplicate gateway `/session` arm were removed; three
+  never-read `App` fields (`accent_color`, `auto_compact_enabled`,
+  `footer_right_column_area`) and the `EffortPicker`/`ModelPicker` priority
+  variants are gone; staged data-table fields and CLI-shaped lints carry
+  `#[expect(..., reason)]`. The device-auth corpus scenario is parked in
+  `excluded.json` (nothing opens that dialog since H-9). New findings
+  (unwired LaTeX/mermaid fence rendering) are in BUGS.md.
+
 - **iter-909 — clippy gate green for `operant-core` and `operant-os`.** The
   gate (`scripts/clippy-warning-gate.sh`) had been failing at compile time:
   an automated attribute pass left duplicated, mis-placed

@@ -33,8 +33,6 @@ pub use vim::{DotRepeatAction, VimFindKind, VimMode, VimPendingState, apply_vim_
 
 // Only `tests.rs` needs this in scope (it resolves `Color` through
 // `use super::*`); production code reads its colours from `theme_colors`.
-#[cfg(test)]
-use ratatui::style::Color;
 
 // `Color` stays imported: `tests.rs` picks it up through `use super::*`.
 // The accent is read through `theme_colors::accent()` at its use site in

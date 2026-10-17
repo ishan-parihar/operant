@@ -13,6 +13,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
     Info,
+    #[expect(
+        dead_code,
+        reason = "part of the notification vocabulary; no producer yet"
+    )]
     Success,
     Warning,
     Error,

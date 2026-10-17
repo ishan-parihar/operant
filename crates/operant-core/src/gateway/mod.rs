@@ -2070,10 +2070,7 @@ mod tests {
         // Three failing sends each reach the adapter and walk the breaker.
         for i in 0..3 {
             let r = gw
-                .send_to_platform(
-                    "telegram",
-                    OutgoingMessage::new("chat-42", format!("m{i}")),
-                )
+                .send_to_platform("telegram", OutgoingMessage::new("chat-42", format!("m{i}")))
                 .await;
             assert!(r.is_err(), "the send itself still fails (i={i})");
         }
@@ -2125,10 +2122,7 @@ mod tests {
 
         for i in 0..3 {
             let r = gw
-                .send_message_return_id(
-                    "telegram",
-                    OutgoingMessage::new("chat-7", format!("m{i}")),
-                )
+                .send_message_return_id("telegram", OutgoingMessage::new("chat-7", format!("m{i}")))
                 .await;
             assert!(r.is_err());
         }

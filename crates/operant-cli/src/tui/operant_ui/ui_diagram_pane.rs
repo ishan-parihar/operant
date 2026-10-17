@@ -441,6 +441,10 @@ pub fn debug_probe_pinned_diagram(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "test probe; every argument is an independent layout input"
+)]
 pub(crate) fn debug_probe_pinned_diagram_with_font(
     diagram: &info_widget::DiagramInfo,
     area: Rect,

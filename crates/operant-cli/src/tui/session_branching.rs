@@ -125,45 +125,11 @@ impl SessionBranchingState {
         }
     }
 
-    /// Confirm creating a new branch. Returns `(name, at_message)` if valid.
-    /// Resets to browse mode.
-    pub fn confirm_create_new(&mut self) -> Option<(String, usize)> {
-        if self.mode != BranchBrowserMode::CreateNew {
-            return None;
-        }
-        let name = self.create_input.trim().to_string();
-        if name.is_empty() {
-            return None;
-        }
-        // Validate that the name doesn't conflict with existing branches.
-        if self.branches.iter().any(|b| b.name == name) {
-            return None; // Name conflict
-        }
-        self.mode = BranchBrowserMode::Browse;
-        self.create_input.clear();
-        Some((name, self.branch_at_message))
-    }
-
     /// Start the delete confirmation flow.
     pub fn start_delete_confirm(&mut self) {
         if self.selected_branch().is_some() {
             self.mode = BranchBrowserMode::ConfirmDelete;
         }
-    }
-
-    /// Confirm deletion of the selected branch.
-    /// Returns the branch ID if confirmed, None otherwise.
-    pub fn confirm_delete(&mut self) -> Option<String> {
-        if self.mode != BranchBrowserMode::ConfirmDelete {
-            return None;
-        }
-        let branch_id = self.selected_branch()?.id.clone();
-        self.branches.retain(|b| b.id != branch_id);
-        self.mode = BranchBrowserMode::Browse;
-        if self.selected_idx >= self.branches.len() && self.selected_idx > 0 {
-            self.selected_idx -= 1;
-        }
-        Some(branch_id)
     }
 
     /// Cancel the current mode:

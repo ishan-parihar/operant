@@ -38,7 +38,7 @@
 //! upstream call sites (session_picker loading_tests) compile and stay
 //! semantically inert against the constant snapshot.
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 
 pub use crate::tui::operant_model::vendor_types::DiffDisplayMode;
 

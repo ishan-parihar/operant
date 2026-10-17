@@ -40,7 +40,12 @@ fn help_overlay_filter() {
 
 #[test]
 fn modal_search_line_separates_leading_space_from_cursor() {
-    let line = modal_search_line("", "Search", theme_colors::muted(), theme_colors::text());
+    let line = modal_search_line(
+        "",
+        "Search",
+        crate::tui::theme_colors::muted(),
+        crate::tui::theme_colors::text(),
+    );
     assert_eq!(line.spans.len(), 3);
     assert_eq!(line.spans[0].content.as_ref(), " ");
     assert_eq!(line.spans[1].content.as_ref(), "S");
@@ -199,20 +204,22 @@ fn rewind_selector_defaults_closed_and_opens_on_last() {
 
 #[test]
 fn rewind_selector_filter_matches_case_insensitive() {
-    let mut sel = crate::tui::rewind_selector::RewindSelectorState::default();
-    sel.entries = vec![
-        crate::tui::rewind_selector::RewindEntry {
-            turn_id: 1,
-            text: "Fix the login bug".to_string(),
-            compacted: false,
-        },
-        crate::tui::rewind_selector::RewindEntry {
-            turn_id: 2,
-            text: "Refactor the parser".to_string(),
-            compacted: false,
-        },
-    ];
-    sel.filter = "LOGIN".to_string();
+    let mut sel = crate::tui::rewind_selector::RewindSelectorState {
+        filter: "LOGIN".to_string(),
+        entries: vec![
+            crate::tui::rewind_selector::RewindEntry {
+                turn_id: 1,
+                text: "Fix the login bug".to_string(),
+                compacted: false,
+            },
+            crate::tui::rewind_selector::RewindEntry {
+                turn_id: 2,
+                text: "Refactor the parser".to_string(),
+                compacted: false,
+            },
+        ],
+        ..Default::default()
+    };
     assert_eq!(sel.filtered_indices(), vec![0]);
     sel.filter.clear();
     assert_eq!(sel.filtered_indices(), vec![0, 1]);

@@ -25,30 +25,30 @@ pub async fn handle_version_command(_config: &AppConfig, detailed: bool) -> Resu
         }
         // (plan 11B) integrations: installed vs latest, same check path as
         // doctor.
-        if let Some(v) = operant_core::tools::sourcehound_update::check().await {
-            if let Some(i) = v.installed {
-                let latest = v
-                    .latest
-                    .map(operant_core::binary_updater::version_string)
-                    .unwrap_or_else(|| "unknown".to_string());
-                println!(
-                    "sourcehound: {} (latest {latest})",
-                    operant_core::binary_updater::version_string(i)
-                );
-            }
+        if let Some(v) = operant_core::tools::sourcehound_update::check().await
+            && let Some(i) = v.installed
+        {
+            let latest = v
+                .latest
+                .map(operant_core::binary_updater::version_string)
+                .unwrap_or_else(|| "unknown".to_string());
+            println!(
+                "sourcehound: {} (latest {latest})",
+                operant_core::binary_updater::version_string(i)
+            );
         }
         let aft = operant_core::aft_bridge::aft_spec();
-        if let Ok(v) = operant_core::binary_updater::check(&aft).await {
-            if let Some(i) = v.installed {
-                let latest = v
-                    .latest
-                    .map(operant_core::binary_updater::version_string)
-                    .unwrap_or_else(|| "unknown".to_string());
-                println!(
-                    "aft: {} (latest {latest})",
-                    operant_core::binary_updater::version_string(i)
-                );
-            }
+        if let Ok(v) = operant_core::binary_updater::check(&aft).await
+            && let Some(i) = v.installed
+        {
+            let latest = v
+                .latest
+                .map(operant_core::binary_updater::version_string)
+                .unwrap_or_else(|| "unknown".to_string());
+            println!(
+                "aft: {} (latest {latest})",
+                operant_core::binary_updater::version_string(i)
+            );
         }
     } else {
         println!("{} (memory-wire {short})", env!("CARGO_PKG_VERSION"));

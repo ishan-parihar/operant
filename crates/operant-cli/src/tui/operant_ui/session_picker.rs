@@ -1409,6 +1409,10 @@ impl SessionPicker {
         // Read cache geometry through a short-lived borrow so the scroll-offset
         // clamp below can take `&mut self` without conflict.
         let (show_scrollbar, total_lines, first_match_line) = {
+            #[expect(
+                clippy::expect_used,
+                reason = "preview_cache is populated earlier in this function"
+            )]
             let cache = self
                 .preview_cache
                 .as_ref()
@@ -1462,6 +1466,10 @@ impl SessionPicker {
         // tick O(viewport height) rather than O(total wrapped lines).
         let visible_end = (scroll + visible_height).min(total_lines);
         let visible_lines: Vec<Line<'static>> = {
+            #[expect(
+                clippy::expect_used,
+                reason = "preview_cache is populated earlier in this function"
+            )]
             let cache = self
                 .preview_cache
                 .as_ref()

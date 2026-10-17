@@ -245,6 +245,10 @@ async fn cmd_list(config: &AppConfig, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the `cron create` flag set one-to-one"
+)]
 async fn cmd_create(
     config: &AppConfig,
     name: &str,
@@ -709,8 +713,8 @@ async fn cmd_history(config: &AppConfig, id: &str, limit: Option<usize>) -> Resu
 
     println!("Recent runs for '{id}' (newest first):");
     println!(
-        "{:<26} {:<9} {:<11} {}",
-        "FINISHED AT", "OUTCOME", "ORIGIN", "ERROR"
+        "{:<26} {:<9} {:<11} ERROR",
+        "FINISHED AT", "OUTCOME", "ORIGIN"
     );
     for run in runs {
         println!(

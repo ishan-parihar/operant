@@ -138,7 +138,6 @@ impl App {
             effort_level: initial_effort,
             agent_mode: None,
             agent_mode_changed: false,
-            accent_color: crate::tui::vendor::style::theme::accent_color(),
             agent_status: Vec::new(),
             cursor_pos: 0,
             auto_scroll: true,
@@ -278,7 +277,6 @@ impl App {
             .and_then(|repo_root| {
                 crate::tui::adapter_types::git_utils::get_current_branch(&repo_root)
             }),
-            auto_compact_enabled: false,
             agent_event_rx: None,
             permission_rx: None,
             pending_permission_response_tx: None,
@@ -321,7 +319,6 @@ impl App {
             last_msg_area: Cell::new(ratatui::layout::Rect::default()),
             last_selectable_area: Cell::new(ratatui::layout::Rect::default()),
             last_input_area: Cell::new(ratatui::layout::Rect::default()),
-            footer_right_column_area: Cell::new(ratatui::layout::Rect::default()),
             focus: FocusTarget::Input,
             thinking_row_map: RefCell::new(std::collections::HashMap::new()),
             message_row_map: RefCell::new(std::collections::HashMap::new()),

@@ -5,7 +5,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-
 use operant_os::run::Prepared;
 
 fn dump_driver(dir: &std::path::Path) -> std::path::PathBuf {

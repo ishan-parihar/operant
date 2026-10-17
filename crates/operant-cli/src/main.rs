@@ -65,13 +65,11 @@ mod prompt_helpers;
 pub mod provider;
 mod tui;
 
-pub(crate) use tui::app;
 pub(crate) use tui::dialogs;
 pub(crate) use tui::free_mode_dialog;
 pub(crate) use tui::image_paste;
 pub(crate) use tui::input;
 pub(crate) use tui::mcp_view;
-pub(crate) use tui::messages;
 pub(crate) use tui::notifications;
 pub(crate) use tui::osc8;
 pub(crate) use tui::permissions_picker;
@@ -1383,6 +1381,10 @@ async fn build_agent_core(
 /// instance over the same store. The fix is hoisting: the host constructs
 /// the `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` pair ONCE and
 /// threads the SAME pair through this overload for every agent it builds.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit dependency injection; a config struct would only rename the arguments"
+)]
 async fn build_agent_core_with_memory(
     config: &AppConfig,
     system_prompt: Option<&str>,
@@ -1477,12 +1479,11 @@ async fn build_agent_core_with_memory(
     let harness = harness.map(|(h, _, _)| h);
     // S2 — make harness_dump/mount/unmount visible to the model. The
     // tools themselves gate mount/unmount on approval (ToolContext.metadata["approval"]).
-    if let Some(h) = &harness {
-        if let Err(e) =
+    if let Some(h) = &harness
+        && let Err(e) =
             operant_core::tools::harness_tools::register_harness_tools(&registry, h.clone()).await
-        {
-            warn!(error = %e, "harness: tool registration failed");
-        }
+    {
+        warn!(error = %e, "harness: tool registration failed");
     }
 
     Ok(AgentCore {
@@ -1828,6 +1829,10 @@ pub(crate) async fn create_runtime_agent(
 /// ONE `(MemoryManager, Option<Arc<dyn MemoryProvider>>)` pair constructed
 /// at their entry point so every agent built in the process shares the
 /// same memory backend.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit dependency injection; a config struct would only rename the arguments"
+)]
 pub(crate) async fn create_runtime_agent_with(
     config: &AppConfig,
     behavior: &BehaviorSettings,
@@ -2209,20 +2214,10 @@ fn configure_checkpoints(config: &AppConfig) {
     );
 }
 
-/// Attach the primary provider's credential pool to the agent (hermes
-/// `_credential_pool` pattern) for the agent-loop last-resort rotation.
-///
-/// When a pool registry is supplied (built by
-/// [`create_model_client_with_fallback`]), the agent shares the *same* pool
-/// instance the pooled client uses, so exhaustion/cooldown state stays
-/// consistent between the client-layer rotation and the agent-loop rotation.
-/// Without a registry (e.g. tests), a local pool is seeded from the env var
-/// + `client.additional_api_keys` as before.
 /// `[agent]` config-file DEFAULTS for the env-armed knobs (iter-723): the
 /// guardian-LLM approval arm (iter-713) and micro-compaction (iter-714).
 /// Each applies only when its `OPERANT_*` env var is UNSET — the env var
-/// (and the explicit `with_*` builders) still win when present. Mirrors
-/// Mirrors `attach_credential_pool`'s post-construction modifier shape.
+/// (and the explicit `with_*` builders) still win when present.
 pub(crate) fn apply_agent_config_defaults(
     mut agent: OperantAgent,
     behavior: &BehaviorSettings,
@@ -3287,8 +3282,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut config = AppConfig::default();
-        config.database_path = dir.join("database.db");
+        let mut config = AppConfig {
+            database_path: dir.join("database.db"),
+            ..AppConfig::default()
+        };
         config.skills.root_dir = dir.join("skills");
         config.skills.memory_dir = dir.join("memory");
         std::fs::create_dir_all(&config.skills.root_dir).unwrap();

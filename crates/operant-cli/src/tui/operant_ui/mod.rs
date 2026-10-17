@@ -90,13 +90,6 @@ pub(crate) mod viewport;
 // decl block (copy_selection) or the integrator added (frame_metrics is above):
 #[path = "copy_selection.rs"]
 pub(crate) mod copy_selection;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "lands before its cutover wiring (App-seam adaptation)"
-    )
-)]
 #[path = "ui_diff.rs"]
 mod ui_diff;
 use ui_diff::{
@@ -860,14 +853,14 @@ pub(crate) fn invalidate_prepared_caches() {
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = FullPrepCacheState::default();
 }
 
-/// The reader's content position from the last drawn frame, in content
-/// coordinates (which message / raw line was under the reader's top row).
-///
-/// The publisher used to be operant's deleted `render_messages`
-/// (`App::last_render_content_pos`); the ported chrome resolves the anchor
-/// from the prepared frame instead, so it records here and `TuiState::
-/// pending_resize_anchor` reads it back. `None` before the first draw, or when
-/// the top row carries no content identity.
+// The reader's content position from the last drawn frame, in content
+// coordinates (which message / raw line was under the reader's top row).
+//
+// The publisher used to be operant's deleted `render_messages`
+// (`App::last_render_content_pos`); the ported chrome resolves the anchor
+// from the prepared frame instead, so it records here and `TuiState::
+// pending_resize_anchor` reads it back. `None` before the first draw, or when
+// the top row carries no content identity.
 thread_local! {
     static RESOLVED_READER_ANCHOR: std::cell::Cell<Option<crate::tui::operant_model::ContentPos>> =
         const { std::cell::Cell::new(None) };
@@ -4098,10 +4091,10 @@ fn draw_inner(frame: &mut Frame, app: &dyn TuiState) {
         }
     }
 
-    if let Some(capture) = &mut debug_capture {
-        if capture.info_widgets.is_none() {
-            capture.info_widgets = None;
-        }
+    if let Some(capture) = &mut debug_capture
+        && capture.info_widgets.is_none()
+    {
+        capture.info_widgets = None;
     }
 
     if visual_debug_overlay_enabled() {

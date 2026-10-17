@@ -122,7 +122,7 @@ fn live_claude_sessions_in(root: &Path) -> Result<Vec<LiveClaudeSession>> {
             sessions.push(LiveClaudeSession::from_record(record, path));
         }
     }
-    sessions.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
     Ok(sessions)
 }
 

@@ -129,23 +129,6 @@ impl App {
             && self.streaming_text.is_empty()
     }
 
-    /// Push a synthetic system annotation into the conversation pane.
-    /// It will appear after the current last message.
-    /// Push a notification and, for Error-kind notifications, reset the error
-    /// modal scroll offset so a newly arrived error is always shown from the top.
-    pub fn push_notification(
-        &mut self,
-        kind: NotificationKind,
-        msg: String,
-        duration_secs: Option<u64>,
-    ) {
-        // P4-2: the overlay-banner queue is gone; the duration argument is
-        // dead weight kept only so callers compile during the migration.
-        // The routing taxonomy lives in push_notice.
-        let _ = duration_secs;
-        self.push_notice(kind, msg);
-    }
-
     /// Set the transient status-line notice (jcode `set_status_notice`
     /// parity, P4-2). Single write seam: stamps `status_message_set_at` so
     /// the `status_detail`/`status_notice` accessors can self-hide the

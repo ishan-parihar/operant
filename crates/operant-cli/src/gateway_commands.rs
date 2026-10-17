@@ -8,7 +8,6 @@ use chrono::Utc;
 use operant_core::config::{AppConfig, ToolProgressMode};
 use operant_core::gateway::Gateway;
 use operant_core::interrupt::InterruptFlag;
-use std::str::FromStr;
 
 /// Runtime context passed to command handlers for stateful operations.
 ///
@@ -971,27 +970,6 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                 }
             }
             msg
-        }
-
-        "session" => {
-            let mut lines = vec!["*Session Info:*".to_string()];
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
-                {
-                    lines.push(format!("• ID: `{}`", session.session_id));
-                    lines.push(format!("• Platform: `{}`", session.platform));
-                    lines.push(format!("• Created: `{}`", session.created_at));
-                    lines.push(format!("• Last active: `{}`", session.last_active));
-                } else {
-                    lines.push("• No active session.".to_string());
-                }
-                lines.push(format!("• Total sessions: {}", store.get_session_count()));
-            } else {
-                lines.push("• Gateway not connected.".to_string());
-                lines.push("• Use CLI: `operant sessions list`".to_string());
-            }
-            lines.join("\n")
         }
 
         "queue" => {
@@ -2170,7 +2148,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     seat.to_string()
                 }
             };
-            let Some(approver) = crate::gateway_runner::seat_approver() else {
+            let Some(_approver) = crate::gateway_runner::seat_approver() else {
                 return Some(
                     "The genome is not wired in this process — start the gateway first.".into(),
                 );

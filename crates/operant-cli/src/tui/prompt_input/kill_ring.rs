@@ -60,29 +60,6 @@ impl KillRing {
         }
     }
 
-    /// Cycle backward through kill ring (Alt+Y after paste).
-    pub fn cycle_backward(&mut self) {
-        if self.entries.is_empty() {
-            return;
-        }
-
-        match self.current_index {
-            None => {
-                // Start cycling from the second-to-last entry
-                if self.entries.len() > 1 {
-                    self.current_index = Some(self.entries.len() - 2);
-                }
-            }
-            Some(0) => {
-                // Wrap around to the end
-                self.current_index = Some(self.entries.len() - 1);
-            }
-            Some(idx) => {
-                self.current_index = Some(idx - 1);
-            }
-        }
-    }
-
     /// Mark that a non-kill action occurred (resets consecutive kill combination).
     pub fn mark_non_kill(&mut self) {
         self.last_was_kill = false;

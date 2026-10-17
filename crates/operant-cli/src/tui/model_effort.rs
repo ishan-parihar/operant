@@ -33,53 +33,8 @@ impl EffortLevel {
             Self::Max => "max",
         }
     }
-
-    /// Cycle to next level; skips `Max` when the selected model does not
-    /// support it.
-    pub fn next(self, supports_max: bool) -> Self {
-        match self {
-            Self::Low => Self::Normal,
-            Self::Normal => Self::High,
-            Self::High => {
-                if supports_max {
-                    Self::Max
-                } else {
-                    Self::Low
-                }
-            }
-            Self::Max => Self::Low,
-        }
-    }
-
-    /// Cycle to previous level.
-    pub fn prev(self, supports_max: bool) -> Self {
-        match self {
-            Self::Low => {
-                if supports_max {
-                    Self::Max
-                } else {
-                    Self::High
-                }
-            }
-            Self::Normal => Self::Low,
-            Self::High => Self::Normal,
-            Self::Max => Self::High,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Model capability helpers
 // ---------------------------------------------------------------------------
-
-/// Returns `true` for models that support extended thinking / effort levels.
-pub fn model_supports_effort(id: &str) -> bool {
-    id.starts_with("claude-3-7")
-        || id.starts_with("claude-opus-4")
-        || id.starts_with("claude-sonnet-4")
-}
-
-/// Returns `true` for models that support the maximum effort tier.
-pub fn model_supports_max_effort(id: &str) -> bool {
-    id.starts_with("claude-opus-4")
-}

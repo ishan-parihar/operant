@@ -47,13 +47,13 @@ use super::*;
 
 impl App {
     /// 5. Drain MCP reconnect status messages from the background reconnect
-    /// task. Runs on EVERY frame (tick drain) so a completion message renders
-    /// the moment it is posted — no keystroke required. The last message wins;
-    /// the channel is drained to empty so a burst of updates collapses to the
-    /// final state. (iter-326 — tick-based status drain.)
-    /// (plan 11B) Drain the shared binary updater's once-per-session notice
-    /// into the status line — "sourcehound updated 1.6.0 → 1.7.0" or the
-    /// failure reason, visible instead of debug-only.
+    ///    task. Runs on EVERY frame (tick drain) so a completion message renders
+    ///    the moment it is posted — no keystroke required. The last message wins;
+    ///    the channel is drained to empty so a burst of updates collapses to the
+    ///    final state. (iter-326 — tick-based status drain.)
+    ///    (plan 11B) Drain the shared binary updater's once-per-session notice
+    ///    into the status line — "sourcehound updated 1.6.0 → 1.7.0" or the
+    ///    failure reason, visible instead of debug-only.
     pub(super) fn drain_update_notice(&mut self) -> bool {
         use operant_core::binary_updater::UpdateNotice;
         let Some(notice) = operant_core::binary_updater::take_pending_notice() else {
@@ -174,13 +174,13 @@ impl App {
     }
 
     /// 4. Drain user-question requests from the clarify tool. The
-    /// clarify tool pushes a UserQuestionRequest (question + choices
-    /// + reply_tx) and blocks awaiting the reply. We open the
-    /// ask_user_dialog with the reply_tx — when the user confirms,
-    /// the dialog sends the answer via reply_tx, and the clarify
-    /// tool receives it and returns it as the tool result.
-    /// (iter-97 — closes Bug #2 from iter-82 audit. The sender side
-    /// is wired in TuiApp::run via set_user_question_sender.)
+    ///    clarify tool pushes a UserQuestionRequest (question, choices
+    ///    and reply_tx) and blocks awaiting the reply. We open the
+    ///    ask_user_dialog with the reply_tx — when the user confirms,
+    ///    the dialog sends the answer via reply_tx, and the clarify
+    ///    tool receives it and returns it as the tool result.
+    ///    (iter-97 — closes Bug #2 from iter-82 audit. The sender side
+    ///    is wired in TuiApp::run via set_user_question_sender.)
     ///
     /// At most one request per frame (if-let, not while-let) so a burst of
     /// questions cannot starve the render loop.
@@ -209,7 +209,7 @@ impl App {
     }
 
     /// 3. Drain background session-load results. Replace app.messages
-    /// with the loaded (role, content) pairs.
+    ///    with the loaded (role, content) pairs.
     pub(super) fn drain_session_load(&mut self) -> bool {
         let Some(ref mut rx) = self.session_load_rx else {
             return false;
@@ -275,12 +275,12 @@ impl App {
     }
 
     /// 8. Drain pending tool permission requests from the agent. Each
-    /// request is converted into a `PermissionRequest` dialog and shown
-    /// to the user; the per-request `response_tx` is stashed in
-    /// `pending_permission_response_tx` so the user's choice can be
-    /// routed back when the dialog is dismissed. If a dialog is already
-    /// active (rare — the agent blocks on each request), the new
-    /// request is denied to avoid deadlock.
+    ///    request is converted into a `PermissionRequest` dialog and shown
+    ///    to the user; the per-request `response_tx` is stashed in
+    ///    `pending_permission_response_tx` so the user's choice can be
+    ///    routed back when the dialog is dismissed. If a dialog is already
+    ///    active (rare — the agent blocks on each request), the new
+    ///    request is denied to avoid deadlock.
     ///
     /// Returns `true` only when a dialog was actually opened: a request
     /// auto-approved or auto-denied above paints nothing.
@@ -434,14 +434,17 @@ impl App {
         // is_streaming flip when the channel is empty.
         if self.is_simulating
             && self.simulation_one_event_per_frame
-            && self.agent_event_rx.as_ref().is_some_and(|rx| rx.len() > 0)
+            && self
+                .agent_event_rx
+                .as_ref()
+                .is_some_and(|rx| !rx.is_empty())
         {
-            if let Some(rx) = &mut self.run_complete_rx {
-                if rx.try_recv().is_ok() {
-                    let (tx, fresh) = tokio::sync::oneshot::channel();
-                    let _ = tx.send(Ok(()));
-                    self.run_complete_rx = Some(fresh);
-                }
+            if let Some(rx) = &mut self.run_complete_rx
+                && rx.try_recv().is_ok()
+            {
+                let (tx, fresh) = tokio::sync::oneshot::channel();
+                let _ = tx.send(Ok(()));
+                self.run_complete_rx = Some(fresh);
             }
             return true;
         }

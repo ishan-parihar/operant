@@ -2950,6 +2950,10 @@ pub(crate) fn input_cursor_pos_from_screen(
     ))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every argument is an independent layout input"
+)]
 pub(crate) fn wrap_input_text<'a>(
     input: &str,
     cursor_pos: usize,

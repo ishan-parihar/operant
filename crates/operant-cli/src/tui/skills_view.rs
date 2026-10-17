@@ -261,7 +261,7 @@ fn column_widths(avail: u16) -> (u16, u16, u16) {
     let free = avail.saturating_sub(ROW_PREFIX_W);
     if free >= NAME + CATEGORY + VERSION + 2 {
         (NAME, CATEGORY, VERSION)
-    } else if free >= NAME + CATEGORY + 1 {
+    } else if free > NAME + CATEGORY {
         (NAME, CATEGORY, 0)
     } else if free >= NAME {
         (NAME, 0, 0)

@@ -47,6 +47,10 @@ pub enum SystemMessageStyle {
 pub struct SystemAnnotation {
     pub after_index: usize,
     pub text: String,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "annotation style is currently uniform")
+    )]
     pub style: SystemMessageStyle,
 }
 
@@ -171,16 +175,12 @@ pub enum DialogPriority {
     FreeMode = 80,
     /// Import config dialog
     ImportConfig = 90,
-    /// Effort picker
-    EffortPicker = 100,
     /// Connect dialog
     Connect = 110,
     /// Import config picker
     ImportConfigPicker = 120,
     /// Command palette
     CommandPalette = 130,
-    /// Model picker
-    ModelPicker = 140,
     /// Settings screen
     Settings = 150,
     /// Export dialog
@@ -284,36 +284,7 @@ pub enum TurnState {
     Compacting,
 }
 
-impl TurnState {
-    /// Short human label for the transient status line. The renderer appends
-    /// the ellipsis, so no variant carries a trailing `…`.
-    pub fn label(self) -> &'static str {
-        match self {
-            TurnState::Idle => "Idle",
-            TurnState::Sending => "Sending",
-            TurnState::Connecting => "Connecting",
-            TurnState::Thinking => "Thinking",
-            TurnState::Streaming => "Streaming",
-            TurnState::RunningTool => "Running tool",
-            TurnState::WaitingForApproval => "Awaiting approval",
-            TurnState::WaitingForNetwork => "Retrying",
-            TurnState::Compacting => "Compacting context",
-        }
-    }
-
-    /// True when the state names something the generic shimmer can't
-    /// express, so the status line must show it even when `status_message`
-    /// is empty.
-    pub fn is_noteworthy(self) -> bool {
-        matches!(
-            self,
-            TurnState::RunningTool
-                | TurnState::WaitingForApproval
-                | TurnState::WaitingForNetwork
-                | TurnState::Compacting
-        )
-    }
-}
+impl TurnState {}
 
 /// Represents an active or completed tool invocation visible in the UI.
 #[derive(Debug, Clone)]

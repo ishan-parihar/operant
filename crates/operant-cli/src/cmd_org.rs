@@ -69,11 +69,9 @@
 //!    [`operator_entry`].
 //! 3. `org import` writes nothing, by design — see the note at the top.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
 use operant_core::config::AppConfig;
-use rusqlite::OptionalExtension;
-use std::path::{Path, PathBuf};
 
 use crate::cmd_budget::BudgetSubcommand;
 
@@ -179,14 +177,6 @@ pub enum OrgSubcommand {
     /// `org holon archive` is the one-time org-store snapshot (phase G).
     #[command(subcommand)]
     Holon(HolonAction),
-}
-
-fn rfc3339_now() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
-
-fn now_epoch() -> i64 {
-    chrono::Utc::now().timestamp()
 }
 
 /// Dispatch an `org` subcommand.
@@ -304,8 +294,6 @@ fn holon_api(config: &AppConfig) -> Result<operant_os::api::HolonApi> {
 }
 
 async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
-    use operant_os::api::HolonApi;
-
     // Phase G: the archive touches only the OPERANT home — the read API
     // (and its live-instance gate) is irrelevant, and a not-yet-imported
     // box archives before anything else.
