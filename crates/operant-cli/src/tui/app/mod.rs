@@ -271,8 +271,6 @@ pub struct App {
     pub has_credentials: bool,
     /// Current effort level (controls extended-thinking budget_tokens).
     pub effort_level: EffortLevel,
-    /// Whether fast mode is currently active (model locked to FAST_MODE_MODEL).
-    pub fast_mode: bool,
     /// Active speech mode: None = normal, Some("caveman") / Some("rocky").
     /// Speech mode intensity: "lite", "full", "ultra".
     /// Current agent mode name: "build", "plan", "explore", etc.

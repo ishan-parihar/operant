@@ -27,7 +27,7 @@ ESCAPES = set("nt\\")
 
 # app/commands.rs::debug_snapshot()
 SNAP_TOP = {"should_exit", "is_streaming", "is_simulating", "plan_mode", "show_help",
-            "show_reasoning", "fast_mode", "messages", "status_message", "model",
+            "show_reasoning", "messages", "status_message", "model",
             "provider", "focus", "token_count", "any_modal_open", "overlays",
             # non-modal surfaces, deliberately not in `overlays` — see the
             # comment in debug_snapshot()
@@ -56,7 +56,7 @@ SURFACES = [
     ("footer bar", "render/footer.rs::render_footer", "footer-bar"),
     ("usage overlay", "usage_overlay.rs::render_usage_overlay", "usage-overlay"),
     ("permission dialog", "dialogs/permission.rs::render_permission_dialog", "permission-dialog"),
-    ("rewind flow", "overlays.rs::render_rewind_flow", "rewind-flow"),
+    ("rewind selector", "rewind_selector.rs::draw_rewind_selector", "rewind-selector"),
     ("help overlay", "overlays.rs::render_help_overlay", "help-overlay"),
     ("history search overlay", "overlays.rs::render_history_search_overlay", "history-search-overlay"),
     ("settings screen", "settings_screen.rs::render_settings_screen", "settings-screen"),

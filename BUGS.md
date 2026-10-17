@@ -23,16 +23,14 @@ two jobs at once — no lock needed there. D-6's remaining half (can a cron
 run overlap a GATEWAY turn?) is moot: cron runs on its own agent (BUGS
 D-3, kept).
 
-- [ ] **H-8 — `/fast` lies in two places** (2026-10-16, audit plan 03 §6
-  remainder). The TUI's `/fast` flips `App.fast_mode`, which nothing in
-  the agent reads (the model picker's fast column and Shift+Tab toggle
-  are coherent UI, but the knob reaches no agent behavior); the
-  GATEWAY's `/fast` writes `fast_mode` into session metadata that no
-  handler reads (gateway_commands.rs:1571-1595 — writes only).
-  Disposition per the plan: delete the TUI arm + the picker's fast
-  column (an iteration with `prove` regeneration of the picker goldens);
-  the gateway twin belongs to the gateway line (peer surface — do not
-  grab from the TUI slice). Owner: the plan-03 close-out.
+- [x] **H-8 — CLOSED 2026-10-17 (iter-904): `/fast` removed on both
+  surfaces.** The TUI arm flipped `App.fast_mode`, which no agent code
+  read, and the gateway twin wrote `fast_mode` session metadata nothing
+  read — a toggle that reported "enabled" while doing nothing. Deleted:
+  the TUI arm + `App.fast_mode`, the `/fast` registrations (TUI registry,
+  CLI `CommandDef`, gateway `CommandDef`, the `/help` line), the gateway
+  handler. `test_fast_is_not_a_command` pins it. If provider priority
+  tiers are wanted later, wire them to a real request field first.
 
 - [ ] **H-9 — connect-dialog dead-end stubs** (plan 04 leftover). The
   run loop's MCP-panel auth and device-auth flows print "not yet wired —
@@ -59,7 +57,7 @@ today, independent of the gate repair.
   left: 0, right: 1`. The legacy MEMORY.md `load_repo_memory_manager` loads
   0 of 1 entries. Plan 08 deletes this surface (memory-wire everywhere);
   fix or remove with it.
-- [ ] **H-3 — `tui::render::operant_overlays::tests::dispatch_rows_are_the_registered_surfaces_in_paint_order`**
+- [x] **H-3 — CLOSED 2026-10-17 (iter-904): the test's expected order was stale, the table was right.** `rewind_flow` was replaced by `rewind_selector` (iter-838) and `effort_picker` deleted (iter-896); `EXPECTED` updated, the retired `rewind-flow` scenario + goldens deleted (superseded by the `rewind-selector` scenarios), `_validate.py` repointed. Original entry: `tui::render::operant_overlays::tests::dispatch_rows_are_the_registered_surfaces_in_paint_order`
   (crates/operant-cli/src/tui/render/operant_overlays.rs:747): `row 2 is
   `settings_screen`, expected `rewind_flow``. The overlay dispatch table and
   the test's expected paint order disagree — one of the two is stale from a
@@ -75,19 +73,19 @@ today, independent of the gate repair.
   **CLOSED 2026-10-16: parallel-DB flake** — solo rerun green (1 passed,
   0 failed, 0.01s), and the full lib re-ran green under `--no-fail-fast`
   (2271 passed, 0 failed). The known K-class; no code change.
-- [ ] **H-5 — `memory_is_a_multi_turn_feedback_channel`**
+- [x] **H-5 — CLOSED 2026-10-17** — root: the post-turn session distillation made an LLM call BEFORE checking for a memory-wire store, consuming the next turn's scripted reply (and, in production, spending one call per turn with nowhere to write). `distill_session_to_memory` now resolves the provider first and skips the call without one. Recall itself was never broken (turn 2 carried the recall line). Original entry: `memory_is_a_multi_turn_feedback_channel`
   (crates/operant-core/tests/memory_feedback.rs:289): `assertion left ==
   right failed — left: "default", right: "TURN-2-ANSWER"`. Turn 2's recall
   returns the default prompt instead of the remembered answer — the
   multi-turn memory feedback channel is broken at the seam. Owner: plan 08
   (memory unification) or its own iteration if 08's rewire doesn't
   incidentally fix it.
-- [ ] **H-6 — `pause_gate_holds_then_releases`**
+- [x] **H-6 — CLOSED 2026-10-17** — green 2/2. The residual timeout seen on boxes where models.dev is unreachable was the per-turn cost lookup waiting out a 15s fetch for an unmapped provider; `get_model_capabilities` now maps the provider before fetching and failed fetches back off 300s. Original entry: `pause_gate_holds_then_releases`
   (crates/operant-core/tests/pause_gate.rs:115): `the model must not be
   reached while the estop is engaged`. The e-stop hold failed in the
   integration harness — the pause gate let a model call through while
   paused. Owner: its own iteration; this is a safety gate.
-- [ ] **H-7 — review_discipline noop-round accounting is off by one**
+- [x] **H-7 — CLOSED 2026-10-17** — not round accounting: (1) the distillation call (H-5) ate one scripted reply per turn → the `[12,13]` vs `[11,12]` shift; (2) `is_malformed_tool_output` parsed the whole tool body, so the agent's own appended `[Tool loop warning: …]` made valid JSON "malformed" and injected an anomaly retry (`below_interval`). It now checks only the leading JSON value. 6/6 green. Original entry: review_discipline noop-round accounting is off by one
   (crates/operant-core/tests/review_discipline.rs:571 and 4 siblings —
   `noop_rounds_exit_the_daemon_before_the_iteration_cap`,
   `thirty_iteration_turn_fires_one_review_after_the_turn_not_mid_loop`,
@@ -563,7 +561,7 @@ still has zero callers.
 
 ## OPEN — Unowned debt on mainline (2026-10-03)
 
-### K-1 — `tools::kernel` roundtrip tests fail on `origin/main` (OPEN, unowned)
+### K-1 — `tools::kernel` roundtrip tests fail on `origin/main` (CLOSED 2026-10-17 — 8/8 green in the main tree; see AGENTS.md rule 6 on worktrees lacking the sidecar venv)
 
 `tools::kernel::tests::ping_roundtrip` and
 `tools::kernel::tests::harness_apply_and_rollback_roundtrip` fail on a clean

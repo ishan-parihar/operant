@@ -27,6 +27,15 @@ pub async fn distill_session_to_memory(
         return Ok(0);
     }
 
+    // Resolve the store BEFORE the LLM call: with no memory-wire provider
+    // attached the distilled facts have nowhere to go, and the call would be
+    // pure spend (and, in tests, would eat a scripted response meant for the
+    // next turn — BUGS H-5).
+    let Some(provider) = crate::tools::memory_tools::active_memory_provider().await else {
+        debug!("no memory-wire provider attached; skipping session distillation");
+        return Ok(0);
+    };
+
     let transcript = format_history_for_distillation(&history);
     if transcript.trim().is_empty() {
         return Ok(0);
@@ -57,20 +66,8 @@ pub async fn distill_session_to_memory(
 
         // (plan 11C3) retain into the memory-wire provider's active
         // instance — the same store the tools and recall use.
-        let provider = crate::tools::memory_tools::active_memory_provider().await;
-        match provider {
-            Some(provider) => {
-                provider.retain_fact(trimmed, &["distilled".to_string(), "long_term".to_string()]);
-                stored += 1;
-            }
-            None => {
-                // No provider attached (standalone use): report it rather
-                // than silently dropping the distilled facts.
-                return Err(Error::Agent(
-                    "distillation found no attached memory provider".to_string(),
-                ));
-            }
-        }
+        provider.retain_fact(trimmed, &["distilled".to_string(), "long_term".to_string()]);
+        stored += 1;
     }
 
     debug!(stored, "Distilled session facts into long-term memory");

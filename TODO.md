@@ -30,6 +30,7 @@ in `## Review`, which autonomous mode never touches.
 - Subprocess hygiene: child stderr drains (no 64KB-pipe freezes), warmups reaped (no zombies), tool-output retention budgeted at 4MB (iter-848/850)
 - `operant debug memory` + `docs/MEMORY_BUDGET.md` footprint surfaces (iter-851)
 - Memory banks: `bank_for(identity, scope)` — seat banks (`emp:*`) isolated from the personal bank (iter-856)
+- Terminal-scroll watermark keyed on message boundaries, not rows (BUGS K-3, iter-887)
 
 ## Pending
 
@@ -38,7 +39,6 @@ in `## Review`, which autonomous mode never touches.
 - `▸ thought for Xs` collapsed row when a Current-mode reasoning trace hides
 - Unify the gateway's `agent.show_reasoning` with the TUI reasoning display mode
 - BUGS.md K-4: gate the `operant_runtime` observer call so `--no-default-features` builds
-- BUGS.md K-3: key the terminal-scroll watermark on message boundaries, not rows
 
 ## Review
 

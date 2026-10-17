@@ -55,6 +55,14 @@ struct ModelsDevCache {
 
 const CACHE_TTL_SECS: f64 = 3600.0; // 1 hour
 
+/// After a failed network fetch, skip the network for this long. Without it
+/// an unreachable models.dev made every caller (the per-turn cost lookup
+/// included) wait out the full request timeout, every time.
+const NETWORK_RETRY_BACKOFF_SECS: u64 = 300;
+
+/// Unix seconds of the last failed network fetch (0 = none).
+static LAST_NETWORK_FAILURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn cache_path() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_default();
     path.push(".operant");
@@ -84,31 +92,47 @@ pub async fn fetch_models_dev(
         if age < CACHE_TTL_SECS {
             return Ok((cache.models, cache.providers));
         }
-        let stale = Some(cache);
-        match fetch_from_network().await {
-            Ok((models, providers)) => {
-                let new_cache = ModelsDevCache {
-                    models: models.clone(),
-                    providers: providers.clone(),
-                    cached_at: now_secs(),
-                };
-                if let Ok(json) = serde_json::to_string(&new_cache) {
-                    let _ = fs::write(&cache_path, json);
-                }
-                return Ok((models, providers));
-            }
-            Err(_) => {
-                if let Some(stale) = stale {
-                    return Ok((stale.models, stale.providers));
-                }
-            }
-        }
+        // Stale: refresh, falling back to the stale copy if offline.
+        return Ok(fetch_and_store(&cache_path)
+            .await
+            .unwrap_or((cache.models, cache.providers)));
     }
 
-    fetch_from_network().await
+    fetch_and_store(&cache_path).await
+}
+
+/// Network fetch that writes the disk cache on success — the cold path
+/// used to skip the write, so a box without a cache refetched forever.
+async fn fetch_and_store(
+    cache_path: &PathBuf,
+) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
+    let (models, providers) = fetch_from_network().await?;
+    let new_cache = ModelsDevCache {
+        models: models.clone(),
+        providers: providers.clone(),
+        cached_at: now_secs(),
+    };
+    if let Ok(json) = serde_json::to_string(&new_cache) {
+        let _ = fs::write(cache_path, json);
+    }
+    Ok((models, providers))
 }
 
 async fn fetch_from_network() -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
+    use std::sync::atomic::Ordering;
+    let last = LAST_NETWORK_FAILURE.load(Ordering::Relaxed);
+    if last != 0 && (now_secs() as u64).saturating_sub(last) < NETWORK_RETRY_BACKOFF_SECS {
+        return Err("models.dev fetch failed recently; backing off".to_string());
+    }
+    let result = fetch_from_network_uncached().await;
+    if result.is_err() {
+        LAST_NETWORK_FAILURE.store(now_secs() as u64, Ordering::Relaxed);
+    }
+    result
+}
+
+async fn fetch_from_network_uncached()
+-> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -149,8 +173,10 @@ pub async fn lookup_models_dev_context(provider: &str, model: &str) -> Option<u6
 
 /// Look up full capability metadata for a provider+model combo.
 pub async fn get_model_capabilities(provider: &str, model: &str) -> Option<ModelCapabilities> {
-    let (models, _) = fetch_models_dev(false).await.ok()?;
+    // Map first: an unmapped provider can never match, so it must not pay
+    // for a (possibly 15s-timeout) catalog fetch on every turn.
     let dev_provider = provider_to_models_dev(provider)?;
+    let (models, _) = fetch_models_dev(false).await.ok()?;
     match_capabilities(&models, dev_provider, model)
 }
 

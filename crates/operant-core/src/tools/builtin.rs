@@ -346,9 +346,12 @@ mod tests {
     async fn test_register_all_builtin_tools() {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         let (_tmp, skills_dir) = setup_skills_dir();
-        let database = Arc::new(Database::init(PathBuf::from("test_all_builtin.db")).unwrap());
-        let cron_db = Arc::new(CronDb::init(PathBuf::from("test_all_cron.db")).unwrap());
-        let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_all_kanban.db")).unwrap());
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_all_builtin.db")).unwrap());
+        let cron_db =
+            Arc::new(CronDb::init(std::env::temp_dir().join("test_all_cron.db")).unwrap());
+        let kanban_db =
+            Arc::new(KanbanDb::init(std::env::temp_dir().join("test_all_kanban.db")).unwrap());
         let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
         register_builtin_tools(
             &registry,
@@ -383,9 +386,12 @@ mod tests {
         let registry = ToolRegistry::new(Duration::from_secs(5));
         let (_tmp, skills_dir) = setup_skills_dir();
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
-        let database = Arc::new(Database::init(PathBuf::from("test_with_sub.db")).unwrap());
-        let cron_db = Arc::new(CronDb::init(PathBuf::from("test_with_sub_cron.db")).unwrap());
-        let kanban_db = Arc::new(KanbanDb::init(PathBuf::from("test_with_sub_kanban.db")).unwrap());
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_with_sub.db")).unwrap());
+        let cron_db =
+            Arc::new(CronDb::init(std::env::temp_dir().join("test_with_sub_cron.db")).unwrap());
+        let kanban_db =
+            Arc::new(KanbanDb::init(std::env::temp_dir().join("test_with_sub_kanban.db")).unwrap());
 
         let memory_dir = skills_dir.parent().unwrap_or(&skills_dir).join("memory");
         register_builtin_tools_with_sub_agent(

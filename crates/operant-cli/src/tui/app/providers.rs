@@ -143,7 +143,6 @@ impl App {
         status_prefix: &str,
     ) {
         let picker_title = provider_name.clone();
-        self.fast_mode = false;
         self.set_provider_default(provider_id.clone());
         self.persist_provider_and_model();
         self.has_credentials = true;

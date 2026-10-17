@@ -1404,7 +1404,6 @@ pub fn set_max_global_workers(count: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn parse_args_accepts_object_argument() {
@@ -1529,7 +1528,7 @@ mod tests {
             vec![],
             std::collections::HashSet::new(),
             std::collections::HashSet::new(),
-            Arc::new(Database::init(PathBuf::from("test_sub_ts.db")).unwrap()),
+            Arc::new(Database::init(std::env::temp_dir().join("test_sub_ts.db")).unwrap()),
             None,
         );
         let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
@@ -1552,7 +1551,7 @@ mod tests {
             vec!["builtin".to_string()],
             std::collections::HashSet::new(),
             std::collections::HashSet::new(),
-            Arc::new(Database::init(PathBuf::from("test_sub_orch.db")).unwrap()),
+            Arc::new(Database::init(std::env::temp_dir().join("test_sub_orch.db")).unwrap()),
             None,
         );
         // Orchestrators retain the delegation toolset (hermes
@@ -1576,7 +1575,7 @@ mod tests {
             vec!["builtin".to_string(), "web".to_string()],
             std::collections::HashSet::new(),
             disabled_toolsets,
-            Arc::new(Database::init(PathBuf::from("test_sub_disabled.db")).unwrap()),
+            Arc::new(Database::init(std::env::temp_dir().join("test_sub_disabled.db")).unwrap()),
             None,
         );
         let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
@@ -1600,7 +1599,7 @@ mod tests {
             vec!["memory".to_string(), "delegation".to_string()],
             std::collections::HashSet::new(),
             std::collections::HashSet::new(),
-            Arc::new(Database::init(PathBuf::from("test_sub_stripped.db")).unwrap()),
+            Arc::new(Database::init(std::env::temp_dir().join("test_sub_stripped.db")).unwrap()),
             None,
         );
         let ts = tool.compute_child_toolsets(SubAgentRole::Leaf);
@@ -1620,7 +1619,8 @@ mod tests {
         use crate::tools::ToolRegistry;
 
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
-        let database = Arc::new(Database::init(PathBuf::from("test_child_reg.db")).unwrap());
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_child_reg.db")).unwrap());
         let tool = SubAgentTool::with_parent_tool_policy(
             &client,
             "gpt-4.1",
@@ -1663,7 +1663,8 @@ mod tests {
 
         let client = OpenAIClient::new(crate::client::ClientConfig::default());
         let disabled_tools = std::collections::HashSet::from(["terminal".to_string()]);
-        let database = Arc::new(Database::init(PathBuf::from("test_child_disabled.db")).unwrap());
+        let database =
+            Arc::new(Database::init(std::env::temp_dir().join("test_child_disabled.db")).unwrap());
         let tool = SubAgentTool::with_parent_tool_policy(
             &client,
             "gpt-4.1",

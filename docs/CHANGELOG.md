@@ -17,6 +17,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hints, star/donate CTA epilogue gated by `--no-cta`, referencing
   `operant donate`); README badge band cleaned to the CI badge.
 
+### Fixed
+
+- **iter-904 — red-team audit correctness queue
+  (`docs/plans/plan-2026-10-17-redteam-audit-of-remaining-gaps.md`).**
+  - *Memory feedback channel (H-5):* post-turn session distillation made
+    its LLM call before checking for a memory-wire store, so every turn
+    spent a model call with nowhere to write (and consumed the next
+    turn's scripted reply in tests). It now resolves the store first and
+    skips the call without one. `memory_feedback` green.
+  - *Review discipline (H-7):* tool results carrying the agent's own
+    appended `[Tool loop warning: …]` were classified "unparseable tool
+    output" and triggered anomaly retries; the malformed-JSON check now
+    inspects only the leading JSON value. The off-by-one round counts
+    were the H-5 call shifting scripted replies. `review_discipline` 6/6.
+  - *models.dev lookup (H-6 residual):* per-turn cost lookup waited out a
+    15 s fetch for providers models.dev doesn't map, and re-attempted it
+    every turn when offline; it now maps first, backs off 300 s after a
+    failed fetch, and writes the disk cache on cold success.
+  - *`/fast` removed (H-8):* the toggle set a flag no agent code read, on
+    both the TUI and the gateway. Command, field, registrations and help
+    line deleted.
+  - *Overlay paint-order test (H-3):* expectation updated for the
+    `rewind_selector` replacement and `effort_picker` deletion; the retired
+    `rewind-flow` corpus scenario and goldens removed; help-overlay goldens
+    re-proven without the `/fast` line.
+  - *Test hygiene:* relative-path SQLite test DBs in `operant-core`
+    (`test_*.sqlite` in CWD) raced with tests that `chdir`, flaking 7
+    tests; they now live in the temp dir. `operant-core --lib` 2277/2277
+    across repeated runs.
+- BUGS.md hygiene: H-5/H-6/H-7/H-8 and K-1 closed with root causes; TODO.md
+  K-3 row moved to Implemented (done in iter-887).
+
 ### Docs
 
 - **iter-903 — the 2026-10-16 raw audit is integrated into the kb**

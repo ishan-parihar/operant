@@ -249,12 +249,21 @@ pub fn is_empty_tool_result(body: &str) -> bool {
 /// not parse. A tool that answers with malformed JSON has failed, and the
 /// model cannot build an answer on it — the correctness check the
 /// prior art calls a "tool-output schema check".
+///
+/// Only the LEADING JSON value is checked: the agent itself appends
+/// annotations after a tool's body (e.g. `[Tool loop warning: …]`), and a
+/// whole-body parse flagged those valid results as malformed (BUGS H-7).
 pub fn is_malformed_tool_output(body: &str) -> bool {
     let trimmed = body.trim();
     if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
         return false;
     }
-    serde_json::from_str::<serde_json::Value>(trimmed).is_err()
+    !matches!(
+        serde_json::Deserializer::from_str(trimmed)
+            .into_iter::<serde_json::Value>()
+            .next(),
+        Some(Ok(_))
+    )
 }
 
 /// Run every detector over the trailing tool batch of a turn plus the
@@ -449,6 +458,10 @@ mod tests {
         // Valid JSON → clean.
         assert!(!is_malformed_tool_output(r#"{"a": 1}"#));
         assert!(!is_malformed_tool_output("[1, 2, 3]"));
+        // Valid JSON followed by the agent's own loop-warning annotation.
+        assert!(!is_malformed_tool_output(
+            "{\"ok\":true}\n\n[Tool loop warning: identical result 5 times]"
+        ));
         // Free-form text that is not claiming to be JSON → not this detector.
         assert!(!is_malformed_tool_output("plain output"));
         assert!(!is_malformed_tool_output("key: value"));

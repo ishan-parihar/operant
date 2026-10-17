@@ -249,7 +249,7 @@ mod tests {
         // action" — the model calls `kanban show` expecting a listing. Show
         // without a task_id must fall back to listing, never error.
         let db = Arc::new(
-            KanbanDb::init(std::path::PathBuf::from("test_kanban_show_fallback.db")).unwrap(),
+            KanbanDb::init(std::env::temp_dir().join("test_kanban_show_fallback.db")).unwrap(),
         );
         let tool = KanbanTool::new(db);
         let args: KanbanToolArgs = serde_json::from_value(json!({"action": "show"})).unwrap();

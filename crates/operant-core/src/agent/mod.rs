@@ -1480,7 +1480,7 @@ mod tests {
         let mut skill_manager = SkillManager::new(skills_dir);
         skill_manager.load_all().unwrap();
 
-        let db = Database::init(std::path::PathBuf::from("test_guidance.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_guidance.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -1520,7 +1520,7 @@ mod tests {
 
         let slot = Arc::new(PromptSlot::new());
         const SECTION_PAYLOAD: &str = "kernel-section payload";
-        let db = Database::init(std::path::PathBuf::from("test_c1_slot.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_c1_slot.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -1569,7 +1569,7 @@ mod tests {
         use crate::agent::clients::openai::OpenAIModelClient;
         use crate::client::OpenAIClient;
 
-        let db = Database::init(std::path::PathBuf::from("test_guidance_none.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_guidance_none.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -1589,7 +1589,7 @@ mod tests {
         use crate::agent::clients::openai::OpenAIModelClient;
         use crate::client::OpenAIClient;
 
-        let db = Database::init(std::path::PathBuf::from("test_moa_guidance.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_moa_guidance.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -1646,7 +1646,7 @@ mod tests {
             )
             .await;
 
-        let db = Database::init(std::path::PathBuf::from("test_db.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_db.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -1907,7 +1907,7 @@ mod tests {
             .await
             .unwrap();
 
-        let db = Database::init(std::path::PathBuf::from("test_db_lcm.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_db_lcm.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -2006,7 +2006,7 @@ mod tests {
             context_window: 8_000,
             ..AgentConfig::default()
         };
-        let db = Database::init(std::path::PathBuf::from("test_db_lcm_rollup.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_db_lcm_rollup.sqlite")).unwrap();
         let agent = OperantAgent::new(
             agent_cfg,
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -2130,7 +2130,8 @@ mod tests {
         use crate::client::OpenAIClient;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(16);
-        let db = Database::init(std::path::PathBuf::from("test_compaction_events.sqlite")).unwrap();
+        let db =
+            Database::init(std::env::temp_dir().join("test_compaction_events.sqlite")).unwrap();
         let agent = OperantAgent::with_events(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -2244,7 +2245,7 @@ mod tests {
         use crate::agent::clients::openai::OpenAIModelClient;
         use crate::client::OpenAIClient;
 
-        let db = Database::init(std::path::PathBuf::from("test_db_resp.sqlite")).unwrap();
+        let db = Database::init(std::env::temp_dir().join("test_db_resp.sqlite")).unwrap();
         let agent = OperantAgent::new(
             AgentConfig::default(),
             Box::new(OpenAIModelClient::new(OpenAIClient::new(
@@ -2482,7 +2483,7 @@ mod tests {
         };
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let db = Database::init(std::path::PathBuf::from(format!(
+        let db = Database::init(std::env::temp_dir().join(format!(
             "test_seat_budget_{}_{}.sqlite",
             std::process::id(),
             n
@@ -3183,7 +3184,7 @@ mod tests {
         };
         // Unique per call — parallel tests must never share the SQLite file.
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let db = Database::init(std::path::PathBuf::from(format!(
+        let db = Database::init(std::env::temp_dir().join(format!(
             "test_loop_timeout_{}_{n}.sqlite",
             std::process::id()
         )))
@@ -3442,10 +3443,9 @@ mod tests {
         let config = AgentConfig::default();
         let registry = ToolRegistry::new(Duration::from_secs(1));
         registry.register(EchoTool).await.unwrap();
-        let db = Database::init(std::path::PathBuf::from(format!(
-            "test_db_dedupe_{}.sqlite",
-            std::process::id()
-        )))
+        let db = Database::init(
+            std::env::temp_dir().join(format!("test_db_dedupe_{}.sqlite", std::process::id())),
+        )
         .unwrap();
         let agent = OperantAgent::new(
             config,
@@ -3499,10 +3499,9 @@ mod tests {
         let config = AgentConfig::default();
         let registry = ToolRegistry::new(Duration::from_secs(1));
         registry.register(EchoTool).await.unwrap();
-        let db = Database::init(std::path::PathBuf::from(format!(
-            "test_db_nodedupe_{}.sqlite",
-            std::process::id()
-        )))
+        let db = Database::init(
+            std::env::temp_dir().join(format!("test_db_nodedupe_{}.sqlite", std::process::id())),
+        )
         .unwrap();
         let agent = OperantAgent::new(
             config,

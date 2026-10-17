@@ -664,7 +664,6 @@ mod tests {
     const EXPECTED: &[(&str, Sink)] = &[
         ("usage_overlay", Sink::Frame),
         ("permission_dialog", Sink::Frame),
-        ("rewind_flow", Sink::Frame),
         ("settings_screen", Sink::Frame),
         ("theme_screen", Sink::Frame),
         ("stats_dialog", Sink::Buffer),
@@ -680,8 +679,8 @@ mod tests {
         ("import_config_dialog", Sink::Frame),
         ("bypass_permissions_dialog", Sink::Frame),
         ("ask_user_dialog", Sink::Buffer),
-        ("effort_picker", Sink::Frame),
         ("permissions_picker", Sink::Frame),
+        ("rewind_selector", Sink::Frame),
         ("import_config_picker", Sink::Frame),
         ("connect_dialog", Sink::Frame),
         ("key_input_dialog", Sink::Frame),

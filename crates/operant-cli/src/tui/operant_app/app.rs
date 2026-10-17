@@ -272,7 +272,6 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
         "Set reasoning effort (off|minimal|low|medium|high|xhigh)",
     ),
     RegisteredCommand::hidden("/effort-set", "Internal: set effort on the live agent"),
-    RegisteredCommand::public("/fast", "Toggle fast mode"),
     RegisteredCommand::public(
         "/thinking-display",
         "Show/hide the model's thinking text (off/full/current)",

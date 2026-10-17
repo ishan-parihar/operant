@@ -136,7 +136,6 @@ impl App {
             active_provider: initial_active_provider,
             has_credentials,
             effort_level: initial_effort,
-            fast_mode: false,
             agent_mode: None,
             agent_mode_changed: false,
             accent_color: crate::tui::vendor::style::theme::accent_color(),

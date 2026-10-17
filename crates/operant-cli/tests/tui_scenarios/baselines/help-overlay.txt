@@ -8,7 +8,6 @@
 │    /model <name>  Switch to a different model                                                                        │
 │    /agents  Configure models for agent roles                                                                         │
 │    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)                             │
-│    /fast [on|off|status|default ...]  Toggle fast mode                                                               │
 │    /config  Show active configuration                                                                                │
 │    /config init  Create default config file                                                                          │
 │    /config edit  Open config in $EDITOR                                                                              │
@@ -37,4 +36,5 @@
 │    /save [label]  Bookmark session for /resume                                                                       │
 │    /rename <name>|--clear  Set or clear current session name                                                         │
 │                                                                                                                      │
+│  ─────────────────────────────────────────────────                                                                   │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for details ─────────────────────────────────┘

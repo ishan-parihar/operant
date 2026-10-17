@@ -8,7 +8,6 @@
 │    /model <name>  Switch to a different model                                │
 │    /agents  Configure models for agent roles                                 │
 │    /effort <level>  Set effort (none|minimal|low|medium|high|xhigh|max|swarm|│
-│    /fast [on|off|status|default ...]  Toggle fast mode                       │
 │    /config  Show active configuration                                        │
 │    /config init  Create default config file                                  │
 │    /config edit  Open config in $EDITOR                                      │
@@ -21,4 +20,5 @@
 │    /changelog  Show recent changes in this build                             │
 │                                                                              │
 │  ─────────────────────────────────────────────────                           │
+│                                                                              │
 └ Esc to close · mouse wheel/j/k scroll · Space/PageUp page · /help <cmd> for d┘

@@ -98,7 +98,6 @@ impl App {
             "plan_mode": self.plan_mode,
             "show_help": self.show_help,
             "show_reasoning": self.show_reasoning,
-            "fast_mode": self.fast_mode,
             "messages": self.messages.len(),
             "status_message": self.status_message,
             "model": self.model_name,
@@ -611,16 +610,6 @@ impl App {
                 };
                 self.set_status_notice(format!("Vim mode {}.", status));
                 self.refresh_prompt_input();
-                true
-            }
-            "fast" => {
-                self.fast_mode = !self.fast_mode;
-                let status = if self.fast_mode {
-                    "enabled"
-                } else {
-                    "disabled"
-                };
-                self.set_status_notice(format!("Fast mode {}.", status));
                 true
             }
             "plan" => {

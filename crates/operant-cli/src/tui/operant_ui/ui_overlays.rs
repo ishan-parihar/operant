@@ -194,10 +194,6 @@ pub(super) fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: usize, ap
         "/effort <level>",
         "Set effort (none|minimal|low|medium|high|xhigh|max|swarm|swarm-deep)",
     ));
-    lines.push(help_entry(
-        "/fast [on|off|status|default ...]",
-        "Toggle fast mode",
-    ));
     lines.push(help_entry("/config", "Show active configuration"));
     lines.push(help_entry("/config init", "Create default config file"));
     lines.push(help_entry("/config edit", "Open config in $EDITOR"));

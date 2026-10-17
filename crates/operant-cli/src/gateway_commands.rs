@@ -336,14 +336,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         admin_only: false,
     },
     CommandDef {
-        name: "fast",
-        description: "Toggle fast mode",
-        aliases: &[],
-        category: "Config",
-        args_hint: "[normal|fast|status]",
-        admin_only: false,
-    },
-    CommandDef {
         name: "footer",
         description: "Toggle message footer",
         aliases: &[],
@@ -1557,47 +1549,6 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     "🧠 Reasoning display **disabled**.".into()
                 }
                 _ => "Usage: `/reasoning [show|hide|status]`".into(),
-            }
-        }
-
-        "fast" => {
-            let a = _args.trim();
-            match a {
-                "" | "status" => {
-                    let mut msg = String::from("⚡ Fast mode status:");
-                    if let Some(gateway) = ctx.gateway {
-                        let store = gateway.get_session_store();
-                        if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id) {
-                            let fast = session.metadata.get("fast_mode").map(|s| s.as_str()) == Some("true");
-                            msg.push_str(&format!(" Session override: `{}`", if fast { "fast" } else { "normal" }));
-                        } else {
-                            msg.push_str(" **normal** (default).");
-                        }
-                    } else {
-                        msg.push_str(" **normal** (default).");
-                    }
-                    msg.push_str("\nUsage: `/fast [normal|fast|status]`");
-                    msg
-                }
-                "normal" => {
-                    if let Some(gateway) = ctx.gateway {
-                        let store = gateway.get_session_store();
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("fast_mode".to_string(), "false".to_string()),
-                        ]);
-                    }
-                    "⚡ Switched to **normal** mode.".into()
-                }
-                "fast" => {
-                    if let Some(gateway) = ctx.gateway {
-                        let store = gateway.get_session_store();
-                        store.update_session_metadata(ctx.platform, ctx.user_id, ctx.channel_id, &[
-                            ("fast_mode".to_string(), "true".to_string()),
-                        ]);
-                    }
-                    "⚡ Switched to **fast** mode (uses quicker responses).".into()
-                }
-                _ => "Usage: `/fast [normal|fast|status]`".into(),
             }
         }
 

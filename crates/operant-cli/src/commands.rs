@@ -633,12 +633,6 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
     )
     .with_args("[level|show|hide]"),
     CommandDef::new(
-        "fast",
-        "Toggle fast mode — OpenAI Priority Processing / Anthropic Fast Mode",
-        "Configuration",
-    )
-    .with_args("[normal|fast|status]"),
-    CommandDef::new(
         "skin",
         "Show or change the display skin/theme",
         "Configuration",
@@ -1126,9 +1120,7 @@ impl TuiCategory {
 /// Return the TUI category for a given command name.
 pub fn tui_category(name: &str) -> &'static str {
     match name {
-        "connect" | "model" | "fast" | "effort" | "provider" => {
-            TuiCategory::ModelAndProvider.as_str()
-        }
+        "connect" | "model" | "effort" | "provider" => TuiCategory::ModelAndProvider.as_str(),
         "changes" | "diff" | "review" | "rewind" | "export" | "copy" | "history" | "retry"
         | "undo" | "rollback" | "stop" | "refresh" | "rename" | "replay" | "replay-diff" => {
             TuiCategory::ReviewAndHistory.as_str()

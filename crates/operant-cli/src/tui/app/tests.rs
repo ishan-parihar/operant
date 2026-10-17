@@ -1088,13 +1088,10 @@ fn tasks_overlay_should_be_fully_removed() {
 }
 
 #[test]
-fn test_fast_slash_command_toggles_fast_mode() {
+fn test_fast_is_not_a_command() {
+    // H-8: /fast toggled a flag no agent code read — removed, not faked.
     let mut app = make_app();
-    assert!(!app.fast_mode);
-    assert!(app.intercept_slash_command("fast"));
-    assert!(app.fast_mode);
-    assert!(app.intercept_slash_command("fast"));
-    assert!(!app.fast_mode);
+    assert!(!app.intercept_slash_command("fast"));
 }
 
 #[test]
