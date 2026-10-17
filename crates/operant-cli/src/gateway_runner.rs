@@ -839,6 +839,10 @@ struct GatewayMessageHandler {
     /// chat, so handing it to a non-running session's command context
     /// would let that session stop someone else's turn.
     running_session: std::sync::Mutex<Option<String>>,
+    /// Sessions whose still-queued turn the user `/stop`ped (W3-2). Written
+    /// and consumed under the `running_session` mutex, so a stop decided
+    /// "not running yet" can never race the turn's claim of the lock.
+    cancelled_queued: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl GatewayMessageHandler {
@@ -859,6 +863,30 @@ impl GatewayMessageHandler {
             turn_inflight.get(session_key).cloned()
         } else {
             None
+        }
+    }
+
+    /// W3-2: `/stop` for a session whose turn is registered in
+    /// `turn_inflight` but has not claimed `turn_lock` yet. Marks it so the
+    /// turn exits the moment it would start. `false` = nothing queued (the
+    /// session is idle or its turn is the running one).
+    fn cancel_if_queued(
+        &self,
+        turn_inflight: &HashMap<String, InterruptFlag>,
+        session_key: &str,
+    ) -> bool {
+        let running = self
+            .running_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if running.as_deref() != Some(session_key) && turn_inflight.contains_key(session_key) {
+            self.cancelled_queued
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(session_key.to_string());
+            true
+        } else {
+            false
         }
     }
 }
@@ -1003,6 +1031,15 @@ impl MessageHandler for GatewayMessageHandler {
                 .running_session
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
+            // W3-2: the user `/stop`ped this turn while it was queued.
+            if self
+                .cancelled_queued
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&session_key)
+            {
+                return Err(operant_core::Error::Interrupted);
+            }
             *running = Some(session_key.clone());
         }
         // Arm a clean interrupt latch at TURN START. This used to run in
@@ -2252,6 +2289,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         .map(Arc::new),
         turn_lock: tokio::sync::Mutex::new(()),
         running_session: std::sync::Mutex::new(None),
+        cancelled_queued: Default::default(),
     });
     gateway = gateway.with_handler(handler.clone());
 
@@ -3495,6 +3533,17 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                                     )
                                     .with_thread_id(msg.thread_id);
                                     gw.send_to_platform(&platform, response).await?;
+                                } else if cmd_def.name == "stop"
+                                    && handler_for_stop.cancel_if_queued(&turn_inflight, &session_key)
+                                {
+                                    // W3-2: the turn is waiting on another
+                                    // chat's turn — cancel it before it starts.
+                                    let response = OutgoingMessage::new(
+                                        &msg.channel_id,
+                                        "⏹️ **Cancelled your queued message** (it was waiting behind another chat's turn).",
+                                    )
+                                    .with_thread_id(msg.thread_id);
+                                    gw.send_to_platform(&platform, response).await?;
                                 } else {
                                     let ctx = CommandContext::new(
                                         Some(&gw),
@@ -4634,6 +4683,7 @@ mod tests {
             context_injection: Some(injector),
             turn_lock: tokio::sync::Mutex::new(()),
             running_session: std::sync::Mutex::new(None),
+            cancelled_queued: Default::default(),
         };
 
         // Unmapped channel → the `premiere` default (same default as the
@@ -4796,6 +4846,7 @@ mod tests {
             context_injection: None,
             turn_lock: tokio::sync::Mutex::new(()),
             running_session: std::sync::Mutex::new(None),
+            cancelled_queued: Default::default(),
         })
     }
 
@@ -4907,6 +4958,59 @@ mod tests {
         );
 
         turn.await.expect("join A").expect("A completes normally");
+    }
+
+    /// W3-2: `/stop` for a session whose turn is queued behind another
+    /// chat's turn cancels it — the queued turn exits with `Interrupted`
+    /// the moment it would start, and never runs the agent.
+    #[tokio::test]
+    async fn stop_cancels_a_queued_turn_before_it_starts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handler = slow_echo_handler(&dir, 300);
+        let key_a = "telegram:c-a:u-a".to_string();
+        let key_b = "discord:c-b:u-b".to_string();
+        let mut turn_inflight: HashMap<String, InterruptFlag> = HashMap::new();
+        turn_inflight.insert(key_a.clone(), handler.agent.interrupt_flag());
+        turn_inflight.insert(key_b.clone(), handler.agent.interrupt_flag());
+
+        let h = Arc::clone(&handler);
+        let msg_a = IncomingMessage::new("telegram", "u-a", "A", "c-a", "from-A");
+        let turn_a = tokio::spawn(async move { h.handle(msg_a).await });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while handler
+            .running_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_deref()
+            != Some(key_a.as_str())
+        {
+            assert!(std::time::Instant::now() < deadline, "A never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // B queues behind A, then B's user /stops it.
+        let h = Arc::clone(&handler);
+        let msg_b = IncomingMessage::new("discord", "u-b", "B", "c-b", "from-B");
+        let turn_b = tokio::spawn(async move { h.handle(msg_b).await });
+        assert!(
+            handler.cancel_if_queued(&turn_inflight, &key_b),
+            "B is registered but not running: its /stop must cancel the queued turn"
+        );
+        assert!(
+            !handler.cancel_if_queued(&turn_inflight, &key_a),
+            "the RUNNING turn is stopped via the interrupt flag, not the queue path"
+        );
+        assert!(
+            !handler.cancel_if_queued(&turn_inflight, "slack:idle"),
+            "an idle session has nothing queued"
+        );
+
+        turn_a.await.expect("join A").expect("A completes normally");
+        let b = turn_b.await.expect("join B");
+        assert!(
+            matches!(b, Err(operant_core::Error::Interrupted)),
+            "B must exit Interrupted without running: {b:?}"
+        );
     }
 
     /// iter-632 regression (Wave-4 metering wire): a turn's accumulated

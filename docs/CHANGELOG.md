@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BUGS.md hygiene: H-5/H-6/H-7/H-8 and K-1 closed with root causes; TODO.md
   K-3 row moved to Implemented (done in iter-887).
 
+- **iter-906 — `/stop` cancels a queued gateway turn (W3-2).** A turn
+  waiting on another chat's turn used to ignore `/stop` ("nothing to
+  stop") and run later. It is now marked cancelled race-free under the
+  turn-lock claim mutex, replies "Cancelled your queued message", and exits
+  `Interrupted` without running the agent. K-2 no longer reproduces; D-6
+  recorded as an accepted limit.
 - **iter-905 — connect-dialog dead ends and MCP panel auth (H-9), native
   scroll docs (plan 07 step 6).** The `openai-codex` connect row no longer
   opens a device-auth dialog that could never complete (it takes an API key

@@ -5,3 +5,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-17T19:06** · `308` — iter-903 label duplicated on origin/main: 2b6bda01 (plan 07 step 4, peer) and 179b55bf (docs: 2026-10-16 audit integration, agent 308). No history rewrite per fleet rules — cosmetic defect; iteration numbering continues at iter-904.
 - **2026-10-18T00:09** · `claude` — iter-904: audit correctness queue — H-5 (distillation ate scripted reply), H-7 (loop-warning annotation misread as malformed JSON), models.dev fetch backoff, /fast removed (H-8), 7 flaky relative-path test DBs moved to temp; BUGS/TODO/CHANGELOG updated
 - **2026-10-18T00:29** · `claude` — iter-905: H-9 connect dead ends removed + MCP panel auth wired to real OAuth; plan 07 step 6 docs (README/example toml); K-4 verified closed
+- **2026-10-18T00:31** · `claude` — iter-906: W3-2 /stop cancels queued gateway turns (race-free via running_session mutex); K-2 not reproducing; D-6 accepted

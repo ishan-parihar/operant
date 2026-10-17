@@ -7,7 +7,7 @@ retarget to the end of `handle`; interrupt reset and cron-origin moved
 inside the lock; `/stop` only attaches to the session that holds the lock).
 Residual, accepted for now:
 
-- [ ] **W3-2 — `/stop` for a QUEUED session is a no-op.** With the turn
+- [x] **W3-2 — CLOSED 2026-10-18 (iter-906): `/stop` now cancels a queued turn.** `GatewayMessageHandler::cancel_if_queued` marks the session (under the same mutex the turn uses to claim `turn_lock`, so it cannot race the claim); the turn exits `Error::Interrupted` the moment it would start, and `/stop` replies "Cancelled your queued message". `stop_cancels_a_queued_turn_before_it_starts` pins it. Original entry: `/stop` for a QUEUED session is a no-op. With the turn
   lock, a session whose turn is waiting for the lock has an entry in
   `turn_inflight` but is not running, so its `/stop` gets no flag and
   reports "nothing to stop"; the turn runs when its turn comes. Cancelling
@@ -512,7 +512,7 @@ interleaved `sync_turn` retains silently lose one side's write.
   green again (4/4 memory-filtered bin tests). The interim caution — do not
   enable cron jobs that retain memories — is lifted.
 
-### D-6 — Cron shares process-global sub-agent limits with the gateway (OPEN, P2)
+### D-6 — Cron shares process-global sub-agent limits with the gateway (OPEN, P2 — accepted limit: per-agent budgets are a redesign of the `sub_agent_tool` statics, not a patch; cron already runs jobs sequentially)
 
 `sub_agent_tool`'s limits are process-global statics (`sub_agent_tool.rs:158-175`):
 `MAX_SPAWN_DEPTH`, `ORCHESTRATOR_ENABLED`, `MAX_CONCURRENT_CHILDREN`,
@@ -591,7 +591,7 @@ future bisect will land here.
 - **Next step**: read `kernel/mod.rs` around `:285` and establish why the
   roundtrip asserts false. The isolated failure is the cheap lead.
 
-### K-2 — `loop_request_timeout` budget tests fail order-dependently under the broad `config` battery (OPEN, unowned)
+### K-2 — `loop_request_timeout` budget tests fail order-dependently under the broad `config` battery (NOT REPRODUCING 2026-10-18 — `--lib -- config` 59/59 and three full `operant-core --lib` runs 2277/2277 after iter-904 moved relative-path test DBs to the temp dir; reopen if it recurs)
 
 `agent::tests::loop_request_timeout_uses_configured_budget` and
 `agent::tests::loop_request_timeout_never_lowers_configured_budget` (both names
