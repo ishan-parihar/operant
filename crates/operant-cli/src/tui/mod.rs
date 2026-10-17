@@ -133,23 +133,7 @@ pub mod free_mode_dialog;
 pub mod hooks_config_menu;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fenced-block renderer is not wired into the live transcript (BUGS.md R-LATEX); only the raster drain is live"
-    )
-)]
-pub mod latex;
 pub mod memory_file_selector;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "fenced-block renderer is not wired into the live transcript (BUGS.md R-LATEX); only the raster drain is live"
-    )
-)]
-pub mod mermaid;
 pub mod theme_colors;
 pub mod theme_screen;
 pub mod usage_overlay;

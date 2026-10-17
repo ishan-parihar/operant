@@ -10,3 +10,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-18T02:10** — iter-909: clippy gate green for operant-core + operant-os (duplicated expect attrs removed, poison-recovering locks, dead code deleted, test-crate headers); operant-cli remains
 - **2026-10-18T02:48** — iter-910: clippy gate green workspace-wide; operant-cli dead-code purge (~120 items, 19 tests); device-auth scenario parked; BUGS R-LATEX/session-picker findings
 - **2026-10-18T03:03** — iter-911: cache-stable layout (turn_context on latest user msg, ladder insight after system prefix) + Anthropic multi-system-message fix; batch-06 P0 landed (telemetry/P1+ remain)
+- **2026-10-18T03:08** — iter-912: delete superseded latex/mermaid raster pipeline (no producer on any prod path); R-LATEX closed as superseded

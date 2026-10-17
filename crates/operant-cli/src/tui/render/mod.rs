@@ -121,18 +121,6 @@ pub fn render_app(frame: &mut Frame, app: &App) {
         return;
     }
 
-    // ---- Async raster producers (operant-only) ---------------------------
-    // A mermaid/latex block rasterises on a worker thread, so the picture lands
-    // some frames after the transcript first showed the placeholder. When a
-    // raster lands, the ported prepared-frame caches hold that stale row.
-    let mut landed = crate::tui::mermaid::drain_ready_rasters();
-    let formulas = crate::tui::latex::drain_ready_rasters();
-    if landed.resolved || formulas.resolved {
-        crate::tui::operant_ui::invalidate_prepared_caches();
-    }
-    landed.pngs.extend(formulas.pngs);
-    crate::tui::pinned_images::pin_rasters(&app.pinned_images, &landed);
-
     // Pinned graphics re-emit every registered graphic EVERY frame at a fixed
     // rect (see tui::pinned_images); the queue is still drained once because
     // the attachment is consumed. [port-decision] the claim area is the whole

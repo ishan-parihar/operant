@@ -68,8 +68,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::tui::image_paste::{PastedImage, render_attachment};
-use crate::tui::image_render::{self, ImageRenderConfig, RenderedImage};
-use crate::tui::mermaid::LandedRasters;
+use crate::tui::image_render::RenderedImage;
 use crate::tui::usage_overlay;
 
 /// DECSC — save the cursor position.
@@ -230,25 +229,6 @@ pub fn pin_pasted(reg: &PinnedImageRegistry, queue: &RefCell<Vec<PastedImage>>) 
         if reg.add(&render_attachment(&image)) {
             pinned += 1;
         }
-    }
-    pinned
-}
-
-/// Route freshly landed mermaid rasters into the registry; returns how many
-/// were pinned.
-///
-/// The PNG is deleted here rather than kept: the escape sequence is the only
-/// thing anyone reads from here on, and the registry now holds a copy of it. A
-/// diagram the ladder resolved to source text has no PNG and pins nothing — the
-/// source is in the transcript either way.
-pub fn pin_rasters(reg: &PinnedImageRegistry, landed: &LandedRasters) -> usize {
-    let mut pinned = 0;
-    for png in &landed.pngs {
-        let rendered = image_render::render_image(png, &ImageRenderConfig::default());
-        if reg.add(&rendered) {
-            pinned += 1;
-        }
-        let _ = std::fs::remove_file(png);
     }
     pinned
 }
@@ -656,7 +636,6 @@ mod tests {
 
         for needle in [
             "pinned_images::pin_pasted",
-            "pinned_images::pin_rasters",
             // Pre-flush half: layout + blank, inside the draw closure.
             "pinned_images::prepare_strip",
         ] {

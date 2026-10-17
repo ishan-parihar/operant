@@ -3,7 +3,6 @@
 //!
 //! Each message type has a dedicated render function.
 
-pub(crate) mod cache;
 mod helpers;
 mod markdown_enhanced;
 

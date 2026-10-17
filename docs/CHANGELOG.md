@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-912 — superseded fence-raster pipeline deleted.** `tui/latex.rs`,
+  `tui/mermaid.rs`, `messages/cache.rs`, the per-frame raster drain in
+  `render/mod.rs` and `pinned_images::pin_rasters` (~2.1k lines + tests) had
+  no producer on any production path: mermaid renders through the vendored
+  `operant_app::mermaid` renderer and math degrades to unicode by design. No
+  behavior change. BUGS.md R-LATEX (filed in iter-910) is closed as
+  superseded.
+
 - **iter-911 — cache-stable prompt layout (batch-06 P0) + native Anthropic
   system-prompt loss.**
   - *Layout:* per-turn volatile context (harness feed, memory recall,

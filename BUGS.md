@@ -102,17 +102,13 @@ today, independent of the gate repair.
 
 ## OPEN — Found by the iter-910 dead-code purge (2026-10-18)
 
-- [ ] **R-LATEX — fenced ` ```latex ` / ` ```mermaid ` blocks do not render as formulas/diagrams.**
-  `tui/latex.rs` (1.4k lines) and `tui/mermaid.rs` (0.7k) implement the full
-  ladder (graphics-protocol probe, `dvipng`/`mmdc` toolchain, worker thread,
-  cache, fallback source block) and are covered by their own tests, but no
-  production path calls `plan`/`resolve`/`lines` — only the raster drain
-  (`drain_ready_rasters`, `LandedRasters`) is live. The transcript renderer
-  moved to the vendored `operant_markdown`, and the code-fence hook did not
-  come with it. Both modules carry `cfg_attr(not(test), expect(dead_code))`
-  naming this entry. Fix = call `latex::lines` / `mermaid::lines` from the
-  code-fence arm of the live markdown renderer; or delete both modules if the
-  feature is not wanted.
+- [x] **R-LATEX — CLOSED 2026-10-18 (iter-912): superseded, not missing.** Fenced
+  ` ```mermaid ` blocks render through the vendored `operant_app::mermaid` path
+  (`operant_markdown/markdown_render_full.rs`); math is degraded to unicode by
+  design until `mdwright-latex` lands (`markdown_render_support.rs`). The
+  parallel operant-only implementations (`tui/latex.rs`, `tui/mermaid.rs`, the
+  per-frame raster drain, `pinned_images::pin_rasters`, ~2.1k lines) had no
+  producer on any production path and are deleted.
 - [ ] **Session picker port (B2.6) is test-only.** `operant_ui/session_picker*`
   (~8.8k lines incl. tests) is reachable only from its own tests; `/resume`
   uses the native `session_browser`. Delete with the legacy purge.
