@@ -311,12 +311,20 @@ async fn test_agent_flow_slash_commands_resolve_in_registry() {
 #[test]
 fn test_dialog_tier_slash_commands_are_consumed() {
     // /login and /logout previously fell through to the model as literal
-    // prompt text; they must intercept (connect dialog). /observe was
-    // removed in the 2026-10-14 dead-command sweep (plan 02) — unregistered
-    // names must fall through to the model per the iter-790 design.
+    // prompt text; they must intercept. Since plan 05B B2.7 /login
+    // suspends to the setup wizard (pending_shell_command), /logout
+    // answers from the status line. /observe was removed in the
+    // 2026-10-14 dead-command sweep (plan 02) — unregistered names must
+    // fall through to the model per the iter-790 design.
     let mut app = make_app();
-    assert!(app.intercept_slash_command("login"));
-    assert!(app.connect_dialog.visible);
+    assert!(
+        app.intercept_slash_command("login"),
+        "/login must intercept (never fall through to the model)"
+    );
+    assert!(
+        app.pending_shell_command.is_some(),
+        "/login suspends to the setup wizard — the provider/model backend"
+    );
     assert!(app.intercept_slash_command("logout"));
     assert!(
         !app.intercept_slash_command("observe"),

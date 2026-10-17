@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
+### Fixed
+
+- **iter-898 — plan 05B B2.7 first half: `/login` runs operant's own
+  provider backend** (owner-directed integration). `/login` (and
+  `/init`) now suspend to `operant setup provider` — the setup wizard
+  is the real provider/model backend (fuzzy provider select, key
+  prompt, model choice, and since iter-893 a surgical persist), driven
+  through the existing `shell_out_to_subcommand` seam (the `/setup`
+  suspend-and-run pattern). `/logout` answers honestly: keys live in
+  `~/.operant/.env`, run `/login` to change the provider or key. The
+  in-TUI connect dialog stays reachable for first-run boot and
+  `/connect` (it works — BUGS.md H-9's dead ends are the remaining
+  reason to retire it, queued as its own block). The tier test now
+  pins the new semantics (`pending_shell_command` armed for /login).
+  Gates: gate 2 = 1740 / 2 = H-3 pre-existing + the known palette-race
+  flake (solo-green); corpus 61/62 (rewind-flow pre-existing); clippy
+  seen=39 new=38 parity.
 
 - **iter-896 — plan 05B (second half): the legacy model/effort picker
   overlays are deleted** (the twin surfaces the unified inline picker

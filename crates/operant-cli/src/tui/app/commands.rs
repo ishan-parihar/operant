@@ -1024,20 +1024,25 @@ impl App {
             // registry advertises them but the handler returned false, so
             // they fell through to the model as literal prompt text. The
             // connect dialog IS the login surface; route like /connect.
+            // /login, /init — (plan 05B B2.7, owner-directed) operant's
+            // provider/model backend IS the setup wizard (`operant setup
+            // provider` — fuzzy provider select, key prompt, model choice,
+            // and since iter-893 a SURGICAL persist). The wizard suspends
+            // the TUI and runs in the terminal, exactly the /setup
+            // suspend-and-run pattern; the in-TUI connect dialog stays
+            // reachable at first-run boot and via /connect.
             "init" | "login" => {
-                self.connect_dialog.open();
+                self.shell_out_to_subcommand("setup", "provider");
                 true
             }
-            // /logout — same surface family. The TUI holds no credential
-            // material to drop (keys live in ~/.operant/.env or the auth
-            // store, which the connect dialog manages), so logout shows
-            // the dialog and tells the user where the keys actually are
+            // /logout — the TUI holds no credential material to drop
+            // (keys live in ~/.operant/.env or the auth store), so say
+            // where they are and route back to the same setup backend
             // instead of pretending a state change happened.
             "logout" => {
-                self.connect_dialog.open();
-                self.push_system_message(
-                    "Logout: API keys live in ~/.operant/.env or the auth store — manage them from the connect dialog.".to_string(),
-                    crate::tui::app::SystemMessageStyle::Info,
+                self.set_status_notice(
+                    "Keys live in ~/.operant/.env — run /login (the setup wizard) to change the provider or key."
+                        .to_string(),
                 );
                 true
             }
