@@ -1161,7 +1161,24 @@ impl MessageHandler for GatewayMessageHandler {
                     // mode; ungoverned (None) in personal mode. No charter
                     // injection — job descriptions are Holon's now.
                     if let Some(emp) = entry.employee_id.clone() {
-                        self.agent.set_seat_id(emp);
+                        self.agent.set_seat_id(emp.clone());
+                        // (plan 06B) the turn's memory bank follows the
+                        // seat binding — inside the turn lock, so a
+                        // concurrent chat's seat can never interleave: a
+                        // seat's turn recalls and retains in `emp:<id>`
+                        // and never sees the personal bank or another
+                        // seat's (the owner's unbound chats keep the
+                        // personal bank).
+                        self.agent.memory_provider().map(|p| {
+                            p.set_scope(&operant_core::memory_wire::MemoryScope::Seat {
+                                identity: emp,
+                            })
+                        });
+                    } else {
+                        // Unbound = the owner's own turn: the personal bank.
+                        self.agent.memory_provider().map(|p| {
+                            p.set_scope(&operant_core::memory_wire::MemoryScope::Personal)
+                        });
                     }
                     self.agent.set_charter(None);
                     tracing::debug!(

@@ -287,6 +287,13 @@ pub trait MemoryProvider: Send + Sync {
     /// Flush queues and close connections.
     async fn shutdown(&self) {}
 
+    /// (plan 06B) Retarget the provider at another scope's bank — the
+    /// gateway calls this inside the turn lock so a seat's turn recalls
+    /// and retains in `emp:<id>` and the owner's in the personal bank.
+    /// Default no-op: providers without banks (and Holon runs, which
+    /// never write operant memory — O-22) keep their construction scope.
+    fn set_scope(&self, _scope: &crate::memory_wire::MemoryScope) {}
+
     // -- Optional lifecycle hooks (override to opt in) ----------------------
 
     /// Called at the start of each turn with the user message.

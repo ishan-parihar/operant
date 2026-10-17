@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-891 — plan 06B: seat memory banks, one store, per-turn
+  scoping** (audit plan 06B, the 11E remainder). The gateway agent
+  recalled and retained in ONE bank for every chat and seat — a cast
+  seat's turns polluted the owner's personal memory and every seat
+  shared it. `MemoryWireProvider.bank` is now a runtime-switchable
+  `RwLock<String>` with `set_scope(&MemoryScope)` (one store; the bank
+  is only a key), the `MemoryProvider` trait gained the same seam as a
+  default no-op method (Holon runs keep their construction scope —
+  O-22: a Holon run never writes operant memory), and the gateway
+  handler retargets it INSIDE the turn lock right after the seat
+  binding: a bound seat's turn runs in `emp:<sanitized-id>`, an
+  unbound (owner) turn in the personal bank. The seat id is sanitized
+  by the existing `bank_for` ([a-z0-9_-], ≤32) so a hostile seat id
+  cannot forge bank names. Test:
+  `set_scope_partitions_seat_and_personal_banks` — a personal fact
+  never leaks into a seat's recall and vice versa, both directions.
+  Gates: gate 2 = 1761/1 pre-existing (H-3); core lib green solo (the
+  9 battery failures are the parallel-DB disk-I/O flake class — all
+  11 named tests solo-green); corpus 61/62 (rewind-flow pre-existing);
+  clippy seen=39 new=38 parity — zero delta.
+
 - **iter-890 — plan 08: ONE memory engine everywhere** (audit plan 08,
   finding 10). The agent moved to memory-wire in 11C3, but every surface
   around it still read the legacy files: `operant memory list/store/

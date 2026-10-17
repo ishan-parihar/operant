@@ -151,7 +151,11 @@ where
 /// boundary and to drive the wiring tests through a store we fully control.
 pub struct MemoryWireProvider<S: Store = SqliteStore> {
     service: Arc<MemoryService<S>>,
-    bank: String,
+    /// (plan 06B) the bank id is a runtime-switchable key behind a RwLock:
+    /// the gateway flips a seat's turn between the personal bank and its
+    /// `emp:<id>` bank with `set_scope` — one store, one provider, per-turn
+    /// scoping.
+    bank: std::sync::RwLock<String>,
     /// (plan 11C3) False when the on-disk open failed and `new` fell back
     /// to an in-memory store — the legacy import must not rename the
     /// user's MEMORY.md against a store that dies with the process.
@@ -163,8 +167,18 @@ impl<S: Store> MemoryWireProvider<S> {
     pub fn from_service(service: MemoryService<S>, bank: impl Into<String>) -> Self {
         Self {
             service: Arc::new(service),
-            bank: bank.into(),
+            bank: std::sync::RwLock::new(bank.into()),
             persistent: false,
+        }
+    }
+
+    /// (plan 06B) retarget this provider at another scope's bank. Called
+    /// by the gateway inside the turn lock, before the turn runs: a seat's
+    /// turn recalls and retains in `emp:<id>`, the owner's in the personal
+    /// bank. One store — the bank is only a key.
+    pub fn set_scope(&self, scope: &MemoryScope) {
+        if let Ok(mut b) = self.bank.write() {
+            *b = bank_for(scope);
         }
     }
 
@@ -183,9 +197,11 @@ impl<S: Store> MemoryWireProvider<S> {
             .take(ASSISTANT_TURN_CHARS)
             .collect::<String>();
         let content = format!("User: {u}\nAssistant: {a}");
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
-        guard("retain_turn", || svc.retain(bank, &content, None));
+        guard("retain_turn", || svc.retain(&bank, &content, None));
     }
 
     /// Recall for a query, returning a formatted text block. Uses
@@ -195,10 +211,12 @@ impl<S: Store> MemoryWireProvider<S> {
         if query.trim().is_empty() {
             return String::new();
         }
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
         let hits = guard("recall", || {
-            svc.recall_with_weights(bank, query, 2000, &FusionWeights::SHIPPED)
+            svc.recall_with_weights(&bank, query, 2000, &FusionWeights::SHIPPED)
         });
         let Some(hits) = hits else {
             return String::new();
@@ -228,10 +246,12 @@ impl<S: Store> MemoryWireProvider<S> {
         if content.trim().is_empty() {
             return None;
         }
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
         guard("retain_fact", || {
-            svc.retain_tagged(bank, content, None, tags)
+            svc.retain_tagged(&bank, content, None, tags)
         })
     }
 
@@ -243,36 +263,44 @@ impl<S: Store> MemoryWireProvider<S> {
     /// One page of the provider's bank, newest first (the memory-wire
     /// store's page order).
     pub fn list_page(&self, limit: usize, offset: usize) -> Vec<memory_wire::memory::Memory> {
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
-        guard("list_memories", || svc.list_memories(bank, limit, offset)).unwrap_or_default()
+        guard("list_memories", || svc.list_memories(&bank, limit, offset)).unwrap_or_default()
     }
 
     /// One memory by id, or `None` (absent in this bank reads as absent).
     pub fn memory_by_id(&self, id: &str) -> Option<memory_wire::memory::Memory> {
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
-        guard("get_memory", || svc.get_memory(bank, id)).flatten()
+        guard("get_memory", || svc.get_memory(&bank, id)).flatten()
     }
 
     /// Delete one memory; `false` when it was not in the bank.
     pub fn delete_memory_by_id(&self, id: &str) -> bool {
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
-        guard("delete_memory", || svc.delete_memory(bank, id)).unwrap_or(false)
+        guard("delete_memory", || svc.delete_memory(&bank, id)).unwrap_or(false)
     }
 
     /// Row count + age bounds for the provider's bank (zeroes when the
     /// service is degraded — the doctor and `stats` print what they get).
     pub fn memory_bank_stats(&self) -> Option<memory_wire::store::BankStats> {
-        let bank = &self.bank;
+        // (plan 06B) clone the key out of the lock: the service call
+        // outlives any guard we could hold here.
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
-        guard("bank_stats", || svc.bank_stats(bank))
+        guard("bank_stats", || svc.bank_stats(&bank))
     }
 
     /// The provider's bank id (the `--bank` default the CLI prints).
-    pub fn bank_id(&self) -> &str {
-        &self.bank
+    pub fn bank_id(&self) -> String {
+        self.bank.read().map(|b| b.clone()).unwrap_or_default()
     }
 }
 
@@ -306,7 +334,7 @@ impl MemoryWireProvider<SqliteStore> {
         };
         Ok(Self {
             service: Arc::new(MemoryService::new(store)),
-            bank: DEFAULT_BANK.to_string(),
+            bank: std::sync::RwLock::new(DEFAULT_BANK.to_string()),
             persistent,
         })
     }
@@ -317,15 +345,15 @@ impl MemoryWireProvider<SqliteStore> {
     /// seat writes never land in the personal bank and a personal
     /// provider's recall never sees them.
     pub fn scoped(storage_dir: PathBuf, scope: &MemoryScope) -> Result<Self> {
-        let mut provider = Self::new(storage_dir)?;
-        provider.bank = bank_for(scope);
+        let provider = Self::new(storage_dir)?;
+        provider.set_scope(scope);
         Ok(provider)
     }
 
     /// (plan 11E) The bank this provider instance serves (diagnostics and
     /// the seat-side wiring).
-    pub fn bank(&self) -> &str {
-        &self.bank
+    pub fn bank(&self) -> String {
+        self.bank.read().map(|b| b.clone()).unwrap_or_default()
     }
 
     /// (plan 11C3) The one-time MEMORY.md/USER.md import. The storage dir
@@ -343,7 +371,7 @@ impl MemoryWireProvider<SqliteStore> {
             return Ok(0);
         }
         let service = Arc::clone(&self.service);
-        let bank = self.bank.clone();
+        let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         crate::memory_import::import_legacy_files(storage_dir, |content, tags| {
             guard("import_legacy", || {
                 service.retain_tagged(&bank, &content, None, &tags)
@@ -368,6 +396,13 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
 {
     fn name(&self) -> &str {
         "memory_wire"
+    }
+
+    /// (plan 06B) the trait seam routes to the concrete switch — the
+    /// gateway calls this through `dyn MemoryProvider` inside the turn
+    /// lock, so it must live on the trait, not just the concrete type.
+    fn set_scope(&self, scope: &MemoryScope) {
+        MemoryWireProvider::set_scope(self, scope);
     }
 
     fn is_available(&self) -> bool {
@@ -493,6 +528,54 @@ mod tests {
     fn in_memory_provider() -> MemoryWireProvider<SqliteStore> {
         let store = SqliteStore::open_in_memory().expect("open in-memory store");
         MemoryWireProvider::from_service(MemoryService::new(store), "test")
+    }
+
+    /// (plan 06B) per-turn scoping: `set_scope` retargets the ONE store —
+    /// a seat's retain is invisible to the personal bank and vice versa,
+    /// and switching back re-exposes what the seat bank holds.
+    #[test]
+    fn set_scope_partitions_seat_and_personal_banks() {
+        // Construct over the DEFAULT bank so `Personal` scoping is a
+        // no-op switch at the start (in_memory_provider's "test" bank is
+        // not what set_scope(Personal) targets).
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let provider =
+            MemoryWireProvider::from_service(MemoryService::new(store), super::DEFAULT_BANK);
+        // Personal: remember a fact.
+        provider
+            .retain_fact("personal bank fact", &[])
+            .expect("personal retain");
+        // A seat's turn: switch, remember a DIFFERENT fact, switch back.
+        provider.set_scope(&MemoryScope::Seat {
+            identity: "eng-alice".to_string(),
+        });
+        assert_eq!(provider.bank_id(), "emp:eng-alice");
+        provider
+            .retain_fact("seat bank fact", &[])
+            .expect("seat retain");
+        provider.set_scope(&MemoryScope::Personal);
+        assert_eq!(provider.bank_id(), DEFAULT_BANK);
+        let recalled = provider.recall_text("bank fact", 5);
+        assert!(
+            recalled.contains("personal bank fact"),
+            "the personal bank must recall only its own rows, got: {recalled}"
+        );
+        assert!(
+            !recalled.contains("seat bank fact"),
+            "a seat's row must never leak into the personal recall"
+        );
+        provider.set_scope(&MemoryScope::Seat {
+            identity: "eng-alice".to_string(),
+        });
+        let seat_recalled = provider.recall_text("bank fact", 5);
+        assert!(
+            seat_recalled.contains("seat bank fact"),
+            "the seat bank must recall its own rows"
+        );
+        assert!(
+            !seat_recalled.contains("personal bank fact"),
+            "the personal bank must never leak into a seat's recall"
+        );
     }
 
     /// (plan 08) the CLI/agent unification acceptance: a fact stored
