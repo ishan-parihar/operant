@@ -153,6 +153,12 @@ pub trait ModelClient: Send + Sync {
     fn set_api_key(&self, _api_key: &str) {
         // Default no-op — not all clients store the key directly
     }
+
+    /// Retarget the client at another OpenAI-compatible endpoint at runtime
+    /// (the TUI's `/connect`). `api_key` is the new endpoint's credential, or
+    /// `None` for a keyless endpoint. Default no-op: wrappers forward it,
+    /// concrete clients that cannot be retargeted ignore it.
+    fn set_endpoint(&self, _base_url: &str, _api_key: Option<&str>) {}
 }
 
 // ---------------------------------------------------------------------------

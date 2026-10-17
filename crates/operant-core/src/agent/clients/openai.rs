@@ -41,6 +41,13 @@ impl ModelClient for OpenAIModelClient {
         self.inner.set_api_key(api_key);
     }
 
+    fn set_endpoint(&self, base_url: &str, api_key: Option<&str>) {
+        self.inner.set_base_url(base_url);
+        // An empty key clears the rotation override, so a keyless endpoint
+        // never inherits the previous provider's key.
+        self.inner.set_api_key(api_key.unwrap_or(""));
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<crate::client::ChatResponse> {
         let tools = if request.tools.is_empty() {
             None

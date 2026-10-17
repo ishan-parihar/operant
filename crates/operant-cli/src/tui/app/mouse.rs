@@ -536,6 +536,39 @@ impl App {
         false
     }
 
+    // The dialogs that own a text field while they are open: the API-key
+    // prompt, the custom-provider URL+key form, the free-mode key form, and
+    // the /connect search box. Text — typed, burst-typed, or pasted — belongs
+    // to them, never to the composer behind them.
+    pub(super) fn text_dialog_visible(&self) -> bool {
+        self.key_input_dialog.visible
+            || self.custom_provider_dialog.visible
+            || self.free_mode_dialog.visible
+            || self.connect_dialog.visible
+    }
+
+    // Insert `text` into whichever text dialog is open. Control characters
+    // (the CR/LF a pasted key usually drags along, stray escapes) are
+    // dropped so a pasted secret can't smuggle a newline into the field.
+    // Returns `false` when no text dialog is open.
+    pub(super) fn insert_text_into_dialog(&mut self, text: &str) -> bool {
+        if !self.text_dialog_visible() {
+            return false;
+        }
+        for ch in text.chars().filter(|c| !c.is_control()) {
+            if self.key_input_dialog.visible {
+                self.key_input_dialog.insert_char(ch);
+            } else if self.custom_provider_dialog.visible {
+                self.custom_provider_dialog.insert_char(ch);
+            } else if self.free_mode_dialog.visible {
+                self.free_mode_dialog.insert_char(ch);
+            } else {
+                self.connect_dialog.filter_push(ch);
+            }
+        }
+        true
+    }
+
     // Handle a paste data string (from `Event::Paste` or Ctrl+V text fallback).
     //
     // If the pasted text resolves to an existing filesystem path:
@@ -596,7 +629,7 @@ impl App {
             && !self.history_search_overlay.visible
             && !self.settings_screen.visible
             && !self.theme_screen.visible
-            && !self.key_input_dialog.visible
+            && !self.text_dialog_visible()
             && self.prompt_input.vim_mode == crate::prompt_input::VimMode::Insert
     }
 

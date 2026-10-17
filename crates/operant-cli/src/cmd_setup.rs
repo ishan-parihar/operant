@@ -526,6 +526,12 @@ pub(crate) async fn step_provider_and_model(config: &mut AppConfig, full: bool) 
     print_success(&format!("Provider set to {}", provider_name));
     println!();
 
+    // A key entered for the previous provider is wrong for this one — don't
+    // offer to "keep" it (it would be sent to the new host).
+    if provider_key != current_provider_key {
+        config.client.api_key = None;
+    }
+
     // Set base URL from the selected provider
     if !selected_provider.default_base_url.is_empty() {
         config.client.base_url = selected_provider.default_base_url.to_string();
@@ -1333,6 +1339,14 @@ fn persist_config(old: &AppConfig, config: &AppConfig) -> Result<()> {
 
     let mut changed = Vec::new();
     collect_diff("", &old, &new, &mut changed);
+    // `collect_diff` only walks keys the NEW struct still carries, so a key
+    // the wizard CLEARED (an `Option` that serialises to nothing) was never
+    // persisted — "Clear API key" left the old key in the file.
+    let key_cleared = old.get("client").and_then(|c| c.get("api_key")).is_some()
+        && new.get("client").and_then(|c| c.get("api_key")).is_none();
+    if key_cleared {
+        changed.push(("client.api_key".to_string(), String::new()));
+    }
     if changed.is_empty() {
         println!("  {} No changes to persist.", style("✓").green());
         return Ok(());
@@ -1340,6 +1354,18 @@ fn persist_config(old: &AppConfig, config: &AppConfig) -> Result<()> {
     for (dotted, raw) in &changed {
         operant_core::config::persist_config_key(dotted, raw)
             .with_context(|| format!("persisting config key '{dotted}'"))?;
+    }
+    // `~/.operant/.env` pins win over the TOML at load time — keep them in
+    // step with the provider just chosen, or the choice silently reverts.
+    if changed
+        .iter()
+        .any(|(k, _)| k == "client.base_url" || k == "client.api_key")
+    {
+        crate::env_store::sync_endpoint_pins(
+            &config.client.base_url,
+            config.client.api_key.as_deref(),
+        )
+        .context("updating the .env endpoint pins")?;
     }
     println!(
         "  {} {} config key(s) updated surgically — comments preserved",

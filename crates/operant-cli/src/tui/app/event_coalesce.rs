@@ -111,11 +111,7 @@ impl App {
                     && self.permission_request.is_none()
                     && !self.history_search_overlay.visible =>
             {
-                if self.key_input_dialog.visible {
-                    for ch in data.chars() {
-                        self.key_input_dialog.insert_char(ch);
-                    }
-                } else {
+                if !self.insert_text_into_dialog(&data) {
                     self.handle_paste_data(data);
                     self.refresh_prompt_input();
                 }

@@ -481,6 +481,15 @@ impl OperantAgent {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(new_model);
     }
 
+    /// Retarget the agent's model client at another OpenAI-compatible
+    /// endpoint at runtime (`/connect`). Takes `&self` like [`Self::set_model`].
+    /// Without this the client built at startup keeps hitting the original
+    /// `client.base_url` no matter which provider the user picks.
+    pub fn set_endpoint(&self, base_url: &str, api_key: Option<&str>) {
+        tracing::info!(base_url, "Agent endpoint retargeted at runtime");
+        self.client.set_endpoint(base_url, api_key);
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "poisoned lock: panic is the intended recovery"

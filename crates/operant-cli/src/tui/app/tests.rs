@@ -5120,6 +5120,102 @@ fn model_command_opens_the_inline_picker_on_the_configured_rows() {
     );
 }
 
+/// `/connect` must retarget the AGENT, not just the display: the endpoint the
+/// live client talks to, the key, and the provider's default model are all
+/// queued for `tui_app` to drain, and the config the model picker reads
+/// follows. (Before: only `active_provider` flipped; requests kept going to
+/// the original `client.base_url` with the new provider's model name.)
+#[test]
+fn connect_queues_a_live_endpoint_retarget() {
+    let mut app = make_app();
+    app.config.client.base_url = "http://localhost:20129/v1".into();
+    app.config.agent.model = "small-stack".into();
+
+    let endpoint = App::connect_endpoint("anthropic", None, Some("sk-ant-test".into()));
+    assert_eq!(
+        endpoint,
+        Some((
+            "https://api.anthropic.com/v1".to_string(),
+            Some("sk-ant-test".to_string())
+        ))
+    );
+    app.activate_provider(
+        "anthropic".into(),
+        "Anthropic".into(),
+        "Connected to",
+        endpoint,
+    );
+    assert_eq!(
+        app.pending_endpoint,
+        Some((
+            "https://api.anthropic.com/v1".to_string(),
+            Some("sk-ant-test".to_string())
+        ))
+    );
+    assert_eq!(app.config.client.base_url, "https://api.anthropic.com/v1");
+    assert_eq!(app.config.client.api_key.as_deref(), Some("sk-ant-test"));
+    // The provider's default model rides pending_model so the AGENT switches.
+    assert_eq!(
+        app.pending_model.as_deref(),
+        Some(
+            crate::provider::provider_by_name("anthropic")
+                .unwrap()
+                .default_model
+        )
+    );
+}
+
+/// Pasted text belongs to the open text dialog, not the composer behind it —
+/// the custom-provider form (URL + key) used to lose every paste, so a user
+/// could not paste an API key into `/connect`.
+#[test]
+fn paste_and_burst_text_go_to_the_open_dialog_not_the_composer() {
+    let mut app = make_app();
+    app.custom_provider_dialog.open(
+        "custom-openai".into(),
+        "Custom OpenAI-Compatible".into(),
+        None,
+    );
+    assert!(app.text_dialog_visible());
+    assert!(
+        !app.prompt_is_accepting_text(),
+        "paste-burst detection must stand down while a text dialog is open"
+    );
+
+    // CR/LF dragged along by a copied secret are dropped, not inserted.
+    assert!(app.insert_text_into_dialog("http://127.0.0.1:20128/v1\r\n"));
+    app.custom_provider_dialog.move_next_field();
+    assert!(app.insert_text_into_dialog("sk-test-123\n"));
+    let (url, key) = app.custom_provider_dialog.take_values();
+    assert_eq!(url, "http://127.0.0.1:20128/v1");
+    assert_eq!(key, "sk-test-123");
+    assert_eq!(app.prompt_input.text, "", "composer untouched");
+
+    app.custom_provider_dialog.close();
+    assert!(!app.insert_text_into_dialog("x"), "no dialog, no routing");
+}
+
+#[test]
+fn connect_endpoint_prefers_custom_url_and_skips_virtual_providers() {
+    assert_eq!(
+        App::connect_endpoint(
+            "custom-openai",
+            Some("http://gpu:8000/v1".into()),
+            Some("k".into())
+        ),
+        Some(("http://gpu:8000/v1".to_string(), Some("k".to_string())))
+    );
+    // Local provider: catalog URL, no key.
+    assert_eq!(
+        App::connect_endpoint("ollama", None, None),
+        Some(("http://localhost:11434/v1".to_string(), None))
+    );
+    // No single HTTP endpoint (acp://, templated, or unknown) -> no retarget.
+    assert_eq!(App::connect_endpoint("copilot-acp", None, None), None);
+    assert_eq!(App::connect_endpoint("azure", None, Some("k".into())), None);
+    assert_eq!(App::connect_endpoint("no-such-provider", None, None), None);
+}
+
 /// Enter applies the selected row through plan 05A's pending_model drain
 /// seam; Esc closes without applying; typing filters.
 #[test]

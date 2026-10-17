@@ -84,6 +84,28 @@ pub fn get_env_value(key: &str) -> Option<String> {
     load_env().remove(key)
 }
 
+/// Keep the `.env` endpoint pins in step with a provider the user just chose.
+///
+/// `OPENAI_BASE_URL` / `OPENAI_API_KEY` in `.env` are applied OVER the TOML
+/// (`apply_env_overrides`), so a provider picked in `operant setup` or the
+/// TUI's `/connect` — persisted to `client.*` — was silently overridden on the
+/// next launch by whatever the pin held. A pin that is not present is left
+/// absent; one that is present is rewritten (a keyless endpoint clears the
+/// key pin, so the previous provider's key is never sent to the new host).
+pub fn sync_endpoint_pins(base_url: &str, api_key: Option<&str>) -> Result<()> {
+    let pins = load_env();
+    if pins.contains_key("OPENAI_BASE_URL") {
+        save_env_value("OPENAI_BASE_URL", base_url)?;
+    }
+    if pins.contains_key("OPENAI_API_KEY") {
+        match api_key.filter(|k| !k.is_empty()) {
+            Some(key) => save_env_value("OPENAI_API_KEY", key)?,
+            None => remove_env_value("OPENAI_API_KEY")?,
+        }
+    }
+    Ok(())
+}
+
 /// Save (write or update) a single `KEY=VALUE` in the `.env` file.
 ///
 /// Uses an atomic-write pattern: writes to a temporary file first, then
@@ -199,6 +221,35 @@ mod tests {
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ))
+    }
+
+    #[test]
+    fn sync_endpoint_pins_rewrites_only_pins_that_exist() {
+        with_env(|path| {
+            fs::write(
+                path,
+                "OPENAI_BASE_URL=http://localhost:20129/v1\nOPENAI_API_KEY=old-key\nOTHER=keep\n",
+            )
+            .unwrap();
+            sync_endpoint_pins("https://api.anthropic.com/v1", Some("new-key")).unwrap();
+            let env = load_env_from(path);
+            assert_eq!(env["OPENAI_BASE_URL"], "https://api.anthropic.com/v1");
+            assert_eq!(env["OPENAI_API_KEY"], "new-key");
+            assert_eq!(env["OTHER"], "keep");
+
+            // A keyless endpoint must not inherit the previous provider's key.
+            sync_endpoint_pins("http://localhost:11434/v1", None).unwrap();
+            let env = load_env_from(path);
+            assert_eq!(env["OPENAI_BASE_URL"], "http://localhost:11434/v1");
+            assert!(!env.contains_key("OPENAI_API_KEY"));
+        });
+        with_env(|path| {
+            // No pins present: nothing is created.
+            fs::write(path, "OTHER=keep\n").unwrap();
+            sync_endpoint_pins("https://api.openai.com/v1", Some("k")).unwrap();
+            let env = load_env_from(path);
+            assert!(!env.contains_key("OPENAI_BASE_URL") && !env.contains_key("OPENAI_API_KEY"));
+        });
     }
 
     fn with_env<F: FnOnce(&Path)>(f: F) {

@@ -136,14 +136,21 @@ impl App {
         });
     }
 
+    /// Make `provider_id` the live provider. `endpoint` is the
+    /// `(base_url, api_key)` the agent must now talk to — `None` for
+    /// composite/virtual providers (free mode) that have no single endpoint.
     pub(super) fn activate_provider(
         &mut self,
         provider_id: String,
         provider_name: String,
         status_prefix: &str,
+        endpoint: Option<(String, Option<String>)>,
     ) {
         let _picker_title = provider_name.clone();
         self.set_provider_default(provider_id.clone());
+        if let Some((base_url, api_key)) = endpoint {
+            self.retarget_endpoint(&provider_id, base_url, api_key);
+        }
         self.persist_provider_and_model();
         self.has_credentials = true;
         self.status_message = Some(format!("{} {}.", status_prefix, provider_name));
@@ -152,6 +159,64 @@ impl App {
         let _ = Self::persist_onboarding_complete();
         // (plan 05B) the unified inline picker — same surface as /model.
         self.open_model_picker_inline();
+    }
+
+    /// The endpoint `/connect` should point the agent at: the user's own URL
+    /// (custom provider) or the catalog default, plus the key just entered.
+    /// `None` when the catalog has no URL for `provider_id`.
+    pub(super) fn connect_endpoint(
+        provider_id: &str,
+        custom_url: Option<String>,
+        api_key: Option<String>,
+    ) -> Option<(String, Option<String>)> {
+        let base_url = custom_url.or_else(|| {
+            crate::provider::provider_by_name(provider_id)
+                .map(|p| p.default_base_url.to_string())
+                // acp:// / cloudcode-pa:// are not HTTP endpoints, and a
+                // `{resource}` template (azure) is not a URL until filled in.
+                .filter(|u| u.starts_with("http") && !u.contains('{'))
+        })?;
+        Some((base_url, api_key.filter(|k| !k.is_empty())))
+    }
+
+    /// `/connect` used to record the key in the TUI's own auth store and flip
+    /// `active_provider`, but the agent's client — built once at startup from
+    /// `client.base_url` — never heard about it, so every request kept going
+    /// to the ORIGINAL endpoint (with the new provider's model name). This
+    /// updates the displayed config, queues the live client retarget
+    /// (drained in `tui_app.rs`), persists `client.*` so the choice survives
+    /// a restart, and rewrites any `.env` pin that would override it.
+    fn retarget_endpoint(&mut self, provider_id: &str, base_url: String, api_key: Option<String>) {
+        self.config.client.base_url = base_url.clone();
+        self.config.client.api_key = api_key.clone();
+        // A catalog provider brings its own default model; a custom endpoint
+        // keeps the current one (the picker that opens next lists the
+        // endpoint's own models).
+        if let Some(def) = crate::provider::provider_by_name(provider_id)
+            && !def.default_model.is_empty()
+        {
+            self.pending_model = Some(def.default_model.to_string());
+            self.config.agent.model = def.default_model.to_string();
+        }
+        let persisted = operant_core::config::persist_config_key("client.base_url", &base_url)
+            .and_then(|_| {
+                operant_core::config::persist_config_key(
+                    "client.api_key",
+                    api_key.as_deref().unwrap_or(""),
+                )
+            });
+        // Pins only follow a successful write: a failed persist must not
+        // leave `.env` pointing somewhere the TOML does not.
+        match persisted {
+            Err(e) => self.set_status_notice(format!("Could not persist provider: {e}")),
+            Ok(_) => {
+                if let Err(e) = crate::env_store::sync_endpoint_pins(&base_url, api_key.as_deref())
+                {
+                    self.set_status_notice(format!("Could not update .env endpoint pins: {e}"));
+                }
+            }
+        }
+        self.pending_endpoint = Some((base_url, api_key));
     }
 
     pub(super) fn persist_custom_provider_base_url(&self, base_url: &str) {
@@ -398,5 +463,40 @@ impl super::App {
             filter: String::new(),
             preview: false,
         });
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// One-shot HTTP server answering `GET /v1/models` with an OpenAI-style
+    /// list; returns the base URL (`http://127.0.0.1:<port>/v1`).
+    async fn mock_models_server(body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        format!("http://127.0.0.1:{port}/v1")
+    }
+
+    #[tokio::test]
+    async fn endpoint_model_list_populates_picker_rows() {
+        let base =
+            mock_models_server(r#"{"data":[{"id":"free-stack"},{"id":"small-stack"}]}"#).await;
+        let rows = fetch_endpoint_models(&base, Some("k")).await;
+        let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["free-stack", "small-stack"]);
     }
 }

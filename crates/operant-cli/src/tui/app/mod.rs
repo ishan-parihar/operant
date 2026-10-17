@@ -176,6 +176,10 @@ pub struct App {
     /// (plan 03) Effort change waiting for the next agent-touching tick —
     /// `run_pending_agent_actions` applies it to the live agent.
     pub pending_effort: Option<String>,
+    /// `/connect` result awaiting the agent: `(base_url, api_key)`. Drained
+    /// next to `pending_model` in `tui_app.rs` so the live client is
+    /// retargeted, not just the config.
+    pub pending_endpoint: Option<(String, Option<String>)>,
     /// (plan 05A) The model the user picked — applied to the AGENT (and
     /// persisted) by the run loop's pending-action drain, one source of
     /// truth: agent.set_model → app.model_name = agent.model(). The old

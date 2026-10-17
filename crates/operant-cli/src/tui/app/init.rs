@@ -290,6 +290,7 @@ impl App {
             pending_compact: false,
             pending_effort: (!toml_effort.is_empty()).then(|| toml_effort.clone()),
             pending_model: None,
+            pending_endpoint: None,
             agent_interrupt: None,
             cancel_deadline: None,
             pending_repair_partial: None,

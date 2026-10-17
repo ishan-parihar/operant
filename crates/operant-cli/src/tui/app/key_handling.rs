@@ -207,7 +207,7 @@ impl App {
                         };
                         self.auth_store.set(&provider_id, credential);
                         self.device_auth_dialog.close();
-                        self.activate_provider(provider_id, provider_name, "Connected to");
+                        self.activate_provider(provider_id, provider_name, "Connected to", None);
                         return false;
                     }
                 }
@@ -265,6 +265,31 @@ impl App {
             return false;
         }
 
+        // Ctrl+V / Cmd+V into the custom-provider, free-mode and /connect
+        // dialogs (the API-key prompt below has its own arm). It used to fall
+        // through to the generic Char arm and type a literal `v`.
+        if (self.custom_provider_dialog.visible
+            || self.free_mode_dialog.visible
+            || self.connect_dialog.visible)
+            && matches!(key.code, KeyCode::Char('v'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+        {
+            match crate::image_paste::read_clipboard_text() {
+                Some(text) if !text.is_empty() => {
+                    self.insert_text_into_dialog(&text);
+                }
+                Some(_) => {
+                    self.push_notice(NotificationKind::Warning, "Clipboard is empty".to_string())
+                }
+                None => self.push_notice(
+                    NotificationKind::Warning,
+                    "Could not read clipboard".to_string(),
+                ),
+            }
+            return false;
+        }
+
         if self.key_input_dialog.visible {
             match key.code {
                 KeyCode::Esc => {
@@ -275,11 +300,18 @@ impl App {
                     let provider_name = self.key_input_dialog.provider_name.clone();
                     let api_key = self.key_input_dialog.take_key();
                     if !api_key.is_empty() {
+                        let endpoint =
+                            Self::connect_endpoint(&provider_id, None, Some(api_key.clone()));
                         self.auth_store.set(
                             &provider_id,
                             crate::tui::adapter_types::StoredCredential::ApiKey { key: api_key },
                         );
-                        self.activate_provider(provider_id, provider_name, "Connected to");
+                        self.activate_provider(
+                            provider_id,
+                            provider_name,
+                            "Connected to",
+                            endpoint,
+                        );
                     }
                 }
                 KeyCode::Backspace => {
@@ -307,7 +339,7 @@ impl App {
                         );
                     }
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
                     self.key_input_dialog.insert_char(c);
                 }
@@ -342,6 +374,7 @@ impl App {
                             "free".to_string(),
                             "Free Mode".to_string(),
                             "Connected to",
+                            None,
                         );
                     } else {
                         self.free_mode_dialog.move_next();
@@ -350,7 +383,7 @@ impl App {
                 KeyCode::Backspace => {
                     self.free_mode_dialog.backspace();
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
                     self.free_mode_dialog.insert_char(c);
                 }
@@ -377,11 +410,21 @@ impl App {
                         let provider_name = self.custom_provider_dialog.provider_name.clone();
                         let (base_url, api_key) = self.custom_provider_dialog.take_values();
                         self.persist_custom_provider_base_url(&base_url);
+                        let endpoint = Self::connect_endpoint(
+                            &provider_id,
+                            Some(base_url),
+                            Some(api_key.clone()),
+                        );
                         self.auth_store.set(
                             &provider_id,
                             crate::tui::adapter_types::StoredCredential::ApiKey { key: api_key },
                         );
-                        self.activate_provider(provider_id, provider_name, "Connected to");
+                        self.activate_provider(
+                            provider_id,
+                            provider_name,
+                            "Connected to",
+                            endpoint,
+                        );
                     } else {
                         self.custom_provider_dialog.move_next_field();
                     }
@@ -389,7 +432,7 @@ impl App {
                 KeyCode::Backspace => {
                     self.custom_provider_dialog.backspace();
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     let c = normalize_char_with_shift(c, key.modifiers);
                     self.custom_provider_dialog.insert_char(c);
                 }
@@ -435,10 +478,12 @@ impl App {
                         match selected.id.as_str() {
                             // Local providers — activate immediately, no key needed
                             "ollama" | "lmstudio" | "llamacpp" => {
+                                let endpoint = Self::connect_endpoint(&selected.id, None, None);
                                 self.activate_provider(
                                     selected.id.clone(),
                                     selected.title.clone(),
                                     "Switched to",
+                                    endpoint,
                                 );
                             }
                             // "Free" composite mode — collects any subset of the
@@ -499,7 +544,7 @@ impl App {
                 KeyCode::Backspace => {
                     self.connect_dialog.filter_pop();
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.connect_dialog.filter_push(c);
                 }
                 _ => {}

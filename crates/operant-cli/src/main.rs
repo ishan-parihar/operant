@@ -894,11 +894,17 @@ fn create_model_client_with_fallback(
     let pool_registry = build_pool_registry(config, provider, &primary_cfg);
     // Primary client is pooled too: same-provider multi-key rotation happens
     // inside the client on 429/401/billing (hermes pool-per-provider parity).
-    let primary_pooled: Box<dyn operant_core::agent::ModelClient> =
-        Box::new(operant_core::agent::PooledModelClient::new(
+    let primary_pooled: Box<dyn operant_core::agent::ModelClient> = Box::new(
+        operant_core::agent::PooledModelClient::new(
             std::sync::Arc::from(create_model_client(provider, config)),
             pool_registry.get_or_create(provider),
-        ));
+        )
+        // No key + a local endpoint is an unauthenticated server
+        // (ollama, lm-studio), not a missing setup step.
+        .with_keyless_ok(operant_core::client::is_local_endpoint(
+            &primary_cfg.base_url,
+        )),
+    );
 
     let has_chain =
         !config.providers.models.is_empty() || !config.providers.fallback_chain.is_empty();

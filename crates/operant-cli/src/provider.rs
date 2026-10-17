@@ -367,7 +367,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "anthropic",
         display_name: "Anthropic",
         description: "Claude models — safety-focused, strong reasoning",
-        default_base_url: "https://api.anthropic.com",
+        default_base_url: "https://api.anthropic.com/v1",
         default_model: "claude-sonnet-4-20250514",
         env_var: "ANTHROPIC_API_KEY",
         env_vars: &[
@@ -393,7 +393,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "google",
         display_name: "Google AI Studio",
         description: "Gemini models — strong multimodal capabilities",
-        default_base_url: "https://generativelanguage.googleapis.com/v1beta",
+        default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
         default_model: "gemini-2.0-flash",
         env_var: "GOOGLE_API_KEY",
         env_vars: &["GOOGLE_API_KEY", "GEMINI_API_KEY", "GEMINI_BASE_URL"],
@@ -648,7 +648,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "minimax",
         display_name: "MiniMax",
         description: "MiniMax models — text + voice, Chinese AI",
-        default_base_url: "https://api.minimax.io/anthropic",
+        default_base_url: "https://api.minimax.io/v1",
         default_model: "MiniMax-M2.7",
         env_var: "MINIMAX_API_KEY",
         env_vars: &["MINIMAX_API_KEY", "MINIMAX_BASE_URL"],
@@ -660,7 +660,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "minimax-cn",
         display_name: "MiniMax (China)",
         description: "MiniMax via Chinese endpoint",
-        default_base_url: "https://api.minimaxi.com/anthropic",
+        default_base_url: "https://api.minimaxi.com/v1",
         default_model: "MiniMax-M2.7",
         env_var: "MINIMAX_CN_API_KEY",
         env_vars: &["MINIMAX_CN_API_KEY", "MINIMAX_CN_BASE_URL"],
@@ -930,7 +930,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         name: "cohere",
         display_name: "Cohere",
         description: "Command-R series — enterprise RAG focus",
-        default_base_url: "https://api.cohere.com/v1",
+        default_base_url: "https://api.cohere.ai/compatibility/v1",
         default_model: "command-r-plus",
         env_var: "COHERE_API_KEY",
         env_vars: &["COHERE_API_KEY"],
@@ -1335,7 +1335,7 @@ pub fn provider_from_url(base_url: &str) -> Option<&'static ProviderDef> {
         provider_by_name("xai")
     } else if lower.contains("nvidia.com") {
         provider_by_name("nvidia")
-    } else if lower.contains("cohere.com") {
+    } else if lower.contains("cohere.com") || lower.contains("cohere.ai") {
         provider_by_name("cohere")
     } else if lower.contains("perplexity.ai") {
         provider_by_name("perplexity")
@@ -1344,7 +1344,15 @@ pub fn provider_from_url(base_url: &str) -> Option<&'static ProviderDef> {
     } else if lower.contains("huggingface") || lower.contains("hf.co") {
         provider_by_name("huggingface")
     } else if lower.contains("localhost") || lower.contains("127.0.0.1") {
-        provider_by_name("ollama")
+        // Only the well-known local servers have a port that identifies them.
+        // Any other loopback URL (a local proxy, a gateway) is a custom
+        // endpoint: labelling it "Ollama" made `setup` show the wrong
+        // "currently active" provider and skip the key prompt.
+        match reqwest::Url::parse(base_url).ok().and_then(|u| u.port()) {
+            Some(11434) => provider_by_name("ollama"),
+            Some(1234) => provider_by_name("lmstudio"),
+            _ => None,
+        }
     } else if lower.contains("minimax.io") || lower.contains("minimaxi.com") {
         provider_by_name("minimax")
     } else if lower.contains("z.ai") || lower.contains("bigmodel.cn") {
@@ -1380,6 +1388,51 @@ pub fn provider_from_url(base_url: &str) -> Option<&'static ProviderDef> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn loopback_urls_identify_only_known_local_servers() {
+        assert_eq!(
+            provider_from_url("http://localhost:11434/v1").unwrap().name,
+            "ollama"
+        );
+        assert_eq!(
+            provider_from_url("http://127.0.0.1:1234/v1").unwrap().name,
+            "lmstudio"
+        );
+        // A local proxy is NOT Ollama: no provider is inferred from the port.
+        assert!(provider_from_url("http://127.0.0.1:20128/v1").is_none());
+        assert!(provider_from_url("http://localhost:8000/v1").is_none());
+    }
+
+    /// The agent talks `{base_url}/chat/completions` (OpenAI-compatible). A
+    /// catalog default that is the vendor's NATIVE-protocol root 404s on the
+    /// first request of a freshly connected provider.
+    #[test]
+    fn catalog_urls_are_openai_compatible_roots() {
+        let url = |n: &str| provider_by_name(n).unwrap().default_base_url;
+        assert_eq!(url("anthropic"), "https://api.anthropic.com/v1");
+        assert_eq!(
+            url("google"),
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        );
+        assert_eq!(url("cohere"), "https://api.cohere.ai/compatibility/v1");
+        for p in PROVIDERS
+            .iter()
+            .filter(|p| p.default_base_url.starts_with("http"))
+        {
+            assert!(
+                !p.default_base_url.ends_with("/anthropic"),
+                "{} points at an Anthropic-protocol root",
+                p.name
+            );
+        }
+        // Detection still recognises the corrected URLs.
+        assert_eq!(
+            provider_from_url(url("anthropic")).unwrap().name,
+            "anthropic"
+        );
+        assert_eq!(provider_from_url(url("cohere")).unwrap().name, "cohere");
+    }
     use super::*;
 
     #[test]
@@ -1561,7 +1614,7 @@ mod tests {
         let profile = StaticProviderProfile::new(def);
         assert_eq!(profile.name(), "anthropic");
         assert_eq!(profile.display_name(), "Anthropic");
-        assert_eq!(profile.base_url(), Some("https://api.anthropic.com"));
+        assert_eq!(profile.base_url(), Some("https://api.anthropic.com/v1"));
         assert_eq!(profile.api_key_env(), Some("ANTHROPIC_API_KEY"));
         assert!(profile.supports_vision());
         assert!(profile.supports_streaming());

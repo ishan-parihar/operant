@@ -19,6 +19,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-915 — provider/model selection and the agent loop, end to end.**
+  Reproduced against a live proxy: `/connect` flipped the displayed provider
+  but the agent kept calling the ORIGINAL `client.base_url`, so every
+  request still went to the old host with the new model name. Fixed:
+  - `/connect` now retargets the live client (`OpenAIClient::set_base_url`,
+    `ModelClient::set_endpoint`, `OperantAgent::set_endpoint`), persists
+    `client.*`, and rewrites the `~/.operant/.env` `OPENAI_BASE_URL` /
+    `OPENAI_API_KEY` pins that otherwise override the TOML at launch. A
+    runtime-retargeted client never sends the previous provider's key to the
+    new host.
+  - `operant setup` labels a non-catalog loopback endpoint "Custom" (it was
+    "Ollama (Local)" for any `localhost`/`127.0.0.1` URL; only ports 11434 and
+    1234 identify a local server), clears the previous provider's key when the
+    provider changes, persists a cleared API key, and keeps the `.env` pins in
+    step with `client.base_url` / `client.api_key`.
+  - Catalog base URLs are OpenAI-compatible roots: anthropic
+    `https://api.anthropic.com/v1`, google `.../v1beta/openai`, cohere
+    `https://api.cohere.ai/compatibility/v1`, minimax `.../v1`.
+  - Pasting into `/connect`, the custom-provider form and the free-mode form
+    now reaches the open dialog (it went to the composer, and a paste burst
+    was treated as a prompt). Ctrl+V works in those dialogs too.
+  - The `/model` picker's endpoint fetch runs while the TUI loop holds its
+    worker (`block_in_place` on the multi-thread runtime) and a model chosen
+    in a picker is applied before the next prompt is sent.
+  - A keyless local endpoint (ollama, lm-studio, an open gateway) passes
+    through the credential pool instead of failing "no API key configured";
+    a keyless remote host keeps the actionable error.
+  Verified: a headless `operant run` and a TUI turn both complete a
+  `shell`-tool round trip against the connected endpoint; the wizard persists
+  endpoint, model and key with matching `.env` pins. Tests: operant-core lib
+  2274 pass; operant-cli bin 1601 pass; clippy gate green.
+
 - **iter-914 — memory tool descriptions stop lying to the model.**
   `memory_store`, `memory_search` and `memory_recall` told the model they use
   a "builtin MEMORY.md file store" and point to an "agentmemory" backend; all

@@ -429,6 +429,12 @@ impl ModelClient for FallbackModelClient {
         self.inner.provider_name()
     }
 
+    fn set_endpoint(&self, base_url: &str, api_key: Option<&str>) {
+        // Only the primary is retargeted; fallback providers keep their own
+        // endpoints.
+        self.inner.set_endpoint(base_url, api_key);
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         if !self.fallback_enabled || self.fallback_models.is_empty() {
             // Fast path: no fallback configured, passthrough

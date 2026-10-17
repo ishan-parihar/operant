@@ -305,8 +305,14 @@ impl TuiApp {
                 Self::run_pending_agent_actions(&mut self.app, Some(agent)).await;
             }
 
-            match self.app.run(&mut terminal) {
+            match run_app_loop(&mut self.app, &mut terminal) {
                 Ok(Some(input)) => {
+                    // A model / provider / effort chosen in a picker INSIDE
+                    // `run()` only set a `pending_*` flag. Apply it to the
+                    // agent now, before this input is acted on — it used to
+                    // wait for the next slash command, so the prompt right
+                    // after a /model pick still went out on the OLD model.
+                    Self::run_pending_agent_actions(&mut self.app, agent.as_ref()).await;
                     // Poll bridge/gateway connection state updates from handler.
                     if let Some(ref mut rx) = self.app.bridge_state_rx {
                         while let Ok(state) = rx.try_recv() {
@@ -754,6 +760,12 @@ impl TuiApp {
             }
             match self.app.run(&mut terminal) {
                 Ok(Some(input)) => {
+                    // A model / provider / effort chosen in a picker INSIDE
+                    // `run()` only set a `pending_*` flag. Apply it to the
+                    // agent now, before this input is acted on — it used to
+                    // wait for the next slash command, so the prompt right
+                    // after a /model pick still went out on the OLD model.
+                    Self::run_pending_agent_actions(&mut self.app, agent.as_ref()).await;
                     // Intercept slash commands exactly like the interactive
                     // run loop (see TuiApp::run) so the simulator is faithful:
                     // submitting "/help" opens the help overlay instead of
@@ -1130,6 +1142,14 @@ impl TuiApp {
             };
             app.set_status_notice(format!("Reasoning effort: {shown}"));
         }
+        // `/connect`: retarget the live client at the chosen provider's
+        // endpoint BEFORE the model switch below, so the very next request
+        // goes to the new host with the new key.
+        if let Some((base_url, api_key)) = std::mem::take(&mut app.pending_endpoint)
+            && let Some(agent) = agent
+        {
+            agent.set_endpoint(&base_url, api_key.as_deref());
+        }
         // (plan 05A) model switch: ONE source of truth — the agent applies
         // it, and the display (model_name, config, context window, cost
         // tracker) refreshes FROM the agent, never from a parallel copy.
@@ -1173,6 +1193,26 @@ impl TuiApp {
             // re-emits it under the compacted view.
             app.request_native_replay();
         }
+    }
+}
+
+/// Drive the synchronous TUI loop without starving the runtime.
+///
+/// `App::run` blocks its thread for the whole interactive session. A task it
+/// `tokio::spawn`s (the `/models` fetch behind the picker, the session list)
+/// lands in THIS worker's LIFO slot, which other workers never steal — so it
+/// never ran and the picker stayed on its one configured row.
+/// `block_in_place` hands the worker's queue to another thread first. It is
+/// only legal on the multi-thread flavor; a current-thread runtime (tests,
+/// `#[tokio::test]`) runs the loop in place as before.
+fn run_app_loop(
+    app: &mut crate::tui::app::App,
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+) -> anyhow::Result<Option<String>> {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(|| app.run(terminal)),
+        _ => app.run(terminal),
     }
 }
 

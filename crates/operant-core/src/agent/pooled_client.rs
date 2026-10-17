@@ -38,6 +38,11 @@ pub struct PooledModelClient {
     /// Serializes key selection + runtime swap + request so concurrent
     /// callers can't race the shared client's runtime key.
     gate: Arc<tokio::sync::Mutex<()>>,
+    /// An EMPTY pool means "unauthenticated server" rather than "nothing was
+    /// configured" only for a local endpoint (ollama, lm-studio, a LAN
+    /// gateway); there the call passes straight through. For a remote host an
+    /// empty pool keeps the actionable "run `operant setup`" error.
+    keyless_ok: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PooledModelClient {
@@ -51,7 +56,19 @@ impl PooledModelClient {
             inner,
             pool,
             gate: Arc::new(tokio::sync::Mutex::new(())),
+            keyless_ok: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Allow an empty pool to pass through (see [`Self::keyless_ok`]).
+    pub fn with_keyless_ok(self, ok: bool) -> Self {
+        self.keyless_ok
+            .store(ok, std::sync::atomic::Ordering::Relaxed);
+        self
+    }
+
+    fn passthrough(&self) -> bool {
+        self.pool.is_empty() && self.keyless_ok.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Extract a provider-supplied recovery timestamp from the error, when
@@ -185,6 +202,10 @@ impl ModelClient for PooledModelClient {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let _guard = self.gate.lock().await;
+        if self.passthrough() {
+            // Keyless local endpoint: nothing to rotate, call straight through.
+            return self.inner.chat(request).await;
+        }
         self.rotate_loop_chat(&request).await
     }
 
@@ -195,6 +216,9 @@ impl ModelClient for PooledModelClient {
         // The gate covers key selection + stream establishment; the returned
         // stream is self-contained and doesn't hold the lock.
         let _guard = self.gate.lock().await;
+        if self.passthrough() {
+            return self.inner.chat_streaming(request).await;
+        }
         let max_attempts = self.pool.len().max(1);
         let mut last_err: Option<Error> = None;
 
@@ -266,6 +290,28 @@ impl ModelClient for PooledModelClient {
         // Forward so the agent-loop rotation (last-resort path) also swaps
         // the runtime key through this wrapper.
         self.inner.set_api_key(api_key);
+    }
+
+    fn set_endpoint(&self, base_url: &str, api_key: Option<&str>) {
+        // The pool's keys belong to the OLD endpoint: drop them and seed the
+        // new endpoint's key, or the next request rotates a stale credential
+        // back in. A keyless endpoint leaves the pool empty (passthrough).
+        for cred in self.pool.list() {
+            self.pool.remove(&cred.id);
+        }
+        if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
+            self.pool.add(PooledCredential::new(
+                "connect",
+                crate::credential_pool::AuthType::ApiKey,
+                key,
+                "tui /connect",
+            ));
+        }
+        self.keyless_ok.store(
+            crate::client::is_local_endpoint(base_url),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.inner.set_endpoint(base_url, api_key);
     }
 }
 
@@ -404,6 +450,40 @@ mod tests {
 
     fn recording() -> Arc<std::sync::Mutex<Vec<String>>> {
         Arc::new(std::sync::Mutex::new(Vec::new()))
+    }
+
+    #[tokio::test]
+    async fn empty_pool_is_a_passthrough_for_keyless_endpoints() {
+        // ollama / lm-studio / an open gateway carry no key: the wrapper used
+        // to fail with "no API key is configured" instead of calling through.
+        let seen = recording();
+        let client = ScriptedClient::new(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, pool_with(&[])).with_keyless_ok(true);
+        let resp = pooled
+            .chat(request())
+            .await
+            .expect("keyless call goes through");
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("Hello!"));
+        assert!(seen.lock().unwrap().is_empty(), "no key was swapped in");
+    }
+
+    #[tokio::test]
+    async fn set_endpoint_replaces_the_old_endpoints_keys() {
+        // After /connect the pool must hold ONLY the new endpoint's key, or
+        // the next request rotates the previous provider's key back in.
+        let seen = recording();
+        let client = ScriptedClient::new(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, pool_with(&["old-key"]));
+        pooled.set_endpoint("http://new.example/v1", Some("new-key"));
+        pooled.chat(request()).await.expect("chat after retarget");
+        assert_eq!(seen.lock().unwrap().as_slice(), ["new-key"]);
+
+        // A keyless LOCAL target empties the pool and passes through; a
+        // keyless REMOTE one keeps the actionable error.
+        pooled.set_endpoint("http://localhost:11434/v1", None);
+        assert!(pooled.pool.is_empty() && pooled.passthrough());
+        pooled.set_endpoint("https://api.openai.com/v1", None);
+        assert!(!pooled.passthrough());
     }
 
     #[tokio::test]

@@ -63,6 +63,29 @@ impl From<&ClientSettings> for ClientConfig {
     }
 }
 
+/// Whether `base_url` points at this machine or its private network — the
+/// only places an unauthenticated OpenAI-compatible server is plausible
+/// (ollama, lm-studio, a LAN gateway). A public host with no key is a
+/// misconfiguration worth reporting, not a keyless server.
+pub fn is_local_endpoint(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(d)) => {
+            let d = d.to_ascii_lowercase();
+            d == "localhost"
+                || d.ends_with(".localhost")
+                || d.ends_with(".local")
+                || d.ends_with(".lan")
+                || d.ends_with(".internal")
+        }
+        None => false,
+    }
+}
+
 /// HTTP client for streaming requests: connect timeout only, no total
 /// timeout (see `OpenAIClient::stream_http_client`).
 fn stream_http_client(config: &ClientConfig) -> Client {
@@ -93,6 +116,9 @@ pub struct OpenAIClient {
     /// used instead of `config.api_key` — the pool rotates keys without
     /// rebuilding the client.
     api_key_override: Arc<RwLock<Option<String>>>,
+    /// Runtime endpoint retarget (`/connect`): when set, replaces
+    /// `config.base_url` for every request. Shared across clones.
+    base_url_override: Arc<RwLock<Option<String>>>,
 }
 
 /// Response envelope for the OpenAI-compatible `/embeddings` endpoint.
@@ -133,6 +159,7 @@ impl OpenAIClient {
             http_client,
             rate_limiter,
             api_key_override: Arc::new(RwLock::new(None)),
+            base_url_override: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -149,6 +176,7 @@ impl OpenAIClient {
             http_client,
             rate_limiter,
             api_key_override: Arc::new(RwLock::new(None)),
+            base_url_override: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -168,6 +196,25 @@ impl OpenAIClient {
         }
     }
 
+    /// Retarget this client at another OpenAI-compatible endpoint without
+    /// rebuilding it. An empty `base_url` clears the override.
+    pub fn set_base_url(&self, base_url: &str) {
+        let value = Some(base_url.trim().to_string()).filter(|u| !u.is_empty());
+        if let Ok(mut slot) = self.base_url_override.write() {
+            *slot = value;
+        }
+    }
+
+    /// Effective base URL: the runtime override if set, else the configured one.
+    pub(crate) fn base_url(&self) -> String {
+        if let Ok(slot) = self.base_url_override.read()
+            && let Some(url) = slot.as_deref()
+        {
+            return url.to_string();
+        }
+        self.config.base_url.clone()
+    }
+
     /// Effective API key: the runtime override (credential-pool rotation)
     /// if set, else the configured key, else a stable fallback.
     fn effective_api_key(&self) -> String {
@@ -176,10 +223,16 @@ impl OpenAIClient {
         {
             return key.to_string();
         }
+        // After a runtime retarget the configured key belongs to the OLD
+        // endpoint — never send it to the new host.
+        let retargeted = self
+            .base_url_override
+            .read()
+            .is_ok_and(|slot| slot.is_some());
         self.config
             .api_key
             .clone()
-            .filter(|k| !k.is_empty())
+            .filter(|k| !retargeted && !k.is_empty())
             .unwrap_or_else(|| "default".to_string())
     }
 
@@ -197,7 +250,10 @@ impl OpenAIClient {
     }
 
     pub(crate) fn config_clone(&self) -> ClientConfig {
-        self.config.clone()
+        ClientConfig {
+            base_url: self.base_url(),
+            ..self.config.clone()
+        }
     }
 
     pub(crate) fn http_client_clone(&self) -> Client {
@@ -263,7 +319,8 @@ impl OpenAIClient {
 
     /// Build the chat completions URL
     fn build_url(&self, endpoint: &str) -> Result<reqwest::Url> {
-        let base = self.config.base_url.trim_end_matches('/');
+        let base_url = self.base_url();
+        let base = base_url.trim_end_matches('/');
         let url = format!("{}/chat/completions{}", base, endpoint);
         reqwest::Url::parse(&url).map_err(|e| Error::InvalidUrl(e.to_string()))
     }
@@ -341,7 +398,8 @@ impl OpenAIClient {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
-        let base = self.config.base_url.trim_end_matches('/');
+        let base_url = self.base_url();
+        let base = base_url.trim_end_matches('/');
         let url = reqwest::Url::parse(&format!("{base}/embeddings"))
             .map_err(|e| Error::InvalidUrl(e.to_string()))?;
         let headers = self.build_headers()?;
@@ -716,7 +774,7 @@ impl OpenAIClient {
         // caching strategy (system prompt + last 3 non-system messages) to
         // reduce input token costs by ~75% on multi-turn conversations.
         // This matches hermes-agent's prompt_caching.py strategy.
-        if self.config.base_url.contains("openrouter") {
+        if self.base_url().contains("openrouter") {
             crate::agent::clients::prompt_caching::apply_cache_control(
                 &mut api_messages,
                 self.config.prompt_cache_ttl,
@@ -778,7 +836,7 @@ impl OpenAIClient {
         if let Some(effort) = reasoning_effort {
             apply_reasoning_field(
                 &mut request,
-                &self.config.base_url,
+                &self.base_url(),
                 model,
                 effort,
                 shape,
@@ -1800,6 +1858,53 @@ fn normalize_sse_buffer(buffer: &mut String) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn local_endpoint_detection() {
+        for local in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:20128/v1",
+            "http://[::1]:8080/v1",
+            "http://192.168.1.20:1234/v1",
+            "http://10.0.0.5/v1",
+            "http://gpu-box.local:8000/v1",
+        ] {
+            assert!(is_local_endpoint(local), "{local}");
+        }
+        for remote in [
+            "https://api.openai.com/v1",
+            "http://8.8.8.8/v1",
+            "https://openrouter.ai/api/v1",
+            "not a url",
+        ] {
+            assert!(!is_local_endpoint(remote), "{remote}");
+        }
+    }
+
+    #[test]
+    fn set_base_url_retargets_and_never_leaks_the_old_key() {
+        let client = OpenAIClient::new(ClientConfig {
+            base_url: "http://old.example/v1".to_string(),
+            api_key: Some("old-provider-key".to_string()),
+            ..ClientConfig::default()
+        });
+        assert_eq!(client.base_url(), "http://old.example/v1");
+        assert_eq!(client.effective_api_key(), "old-provider-key");
+
+        client.set_base_url("http://new.example/v1/");
+        assert_eq!(client.base_url(), "http://new.example/v1/");
+        assert_eq!(
+            client.build_url("").unwrap().as_str(),
+            "http://new.example/v1/chat/completions"
+        );
+        // The configured key belongs to the OLD host.
+        assert_eq!(client.effective_api_key(), "default");
+        client.set_api_key("new-provider-key");
+        assert_eq!(client.effective_api_key(), "new-provider-key");
+
+        client.set_base_url("");
+        assert_eq!(client.base_url(), "http://old.example/v1");
+    }
     use super::*;
 
     #[test]
