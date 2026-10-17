@@ -42,106 +42,16 @@ async fn fetch_endpoint_models(
 
 impl App {
     fn display_default_model_for_provider(&self, provider_id: &str) -> String {
-        crate::tui::model_picker::default_model_for_provider(provider_id, &self.model_registry)
-    }
-
-    pub(super) fn open_model_picker_for_provider(
-        &mut self,
-        provider_id: &str,
-        title: Option<String>,
-    ) {
-        self.dismiss_error_notifications();
-
-        let cache_path = dirs::cache_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("operant")
-            .join("models.json");
-        if cache_path.exists() {
-            self.model_registry.load_cache(&cache_path);
-        }
-
-        let models = crate::tui::model_picker::models_for_provider_from_registry(
+        crate::tui::adapter_types::model_registry::default_model_for_provider(
             provider_id,
             &self.model_registry,
-        );
-        self.model_picker.set_models(models);
-        self.model_picker_provider_id = Some(provider_id.to_string());
-        self.model_picker_fetch_pending = true;
-
-        // Fetch models from provider's API in background
-        let settings = crate::tui::adapter_types::Settings::load_sync().unwrap_or_default();
-        let api_key = self.auth_store.api_key_for(
-            provider_id
-                .parse::<crate::tui::adapter_types::ProviderId>()
-                .unwrap_or(crate::tui::adapter_types::ProviderId::Other(
-                    provider_id.to_string(),
-                )),
-        );
-        let base_url = settings
-            .providers
-            .get(provider_id)
-            .and_then(|p| p.api_base.clone())
-            .or_else(|| {
-                crate::provider::PROVIDERS
-                    .iter()
-                    .find(|p| p.name == provider_id)
-                    .map(|p| p.default_base_url.to_string())
-            });
-
-        if let (Some(key), Some(url)) = (api_key, base_url) {
-            let provider_id = provider_id.to_string();
-            let mut registry = self.model_registry.clone();
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            self.model_fetch_rx = Some(rx);
-            tokio::spawn(async move {
-                let _fetch_result = registry
-                    .fetch_from_provider_async(&provider_id, &key, &url)
-                    .await;
-                // Check if fetch returned any models; if empty, it's likely an error
-                let models = crate::tui::model_picker::models_for_provider_from_registry(
-                    &provider_id,
-                    &registry,
-                );
-                if models.is_empty() {
-                    // Fetch failed - send error
-                    let _ = tx.send(Err(format!(
-                        "Failed to fetch models from {} (rate limit, auth error, or network issue)",
-                        provider_id
-                    )))
-                    .await;
-                } else {
-                    // (plan 05B) the channel carries the unified picker's
-                    // rows now; registry rows adapt at the boundary.
-                    let rows: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = models
-                        .iter()
-                        .map(|m| inline_model_row(&m.id, &m.description, ""))
-                        .collect();
-                    let _ = tx.send(Ok(rows)).await;
-                }
-            });
-        }
-
-        let provider_prefix = format!("{}/", provider_id);
-        let current_model = if self.active_provider.as_deref() == Some(provider_id) {
-            self.model_name
-                .strip_prefix(&provider_prefix)
-                .unwrap_or(self.model_name.as_str())
-                .to_string()
-        } else {
-            let default_model = self.display_default_model_for_provider(provider_id);
-            default_model
-                .strip_prefix(&provider_prefix)
-                .unwrap_or(default_model.as_str())
-                .to_string()
-        };
-
-        self.model_picker.open_with_title(
-            title.unwrap_or_else(|| "Select model".to_string()),
-            &current_model,
-            self.effort_level,
-            self.fast_mode,
-        );
+        )
     }
+
+    // (plan 05B) open_model_picker_for_provider deleted with the legacy
+    // overlay: the registry fallback now adapts its rows at the
+    // model_fetch_rx boundary (see open_model_picker_inline), so the
+    // provider-keyed opener has no callers and no state to open.
 
     /// (plan 05A) The /model picker for the AGENT'S OWN ENDPOINT: rows come
     /// from `GET {config.client.base_url}/models` with the client's own key
@@ -178,7 +88,7 @@ impl App {
         names.dedup();
         let current = self.config.agent.model.clone();
         let effort = {
-            use crate::tui::model_picker::effort::EffortLevel;
+            use crate::tui::model_effort::EffortLevel;
             match self.effort_level {
                 EffortLevel::Low => "low",
                 EffortLevel::Normal => "normal",
@@ -241,7 +151,8 @@ impl App {
         // Mark onboarding as complete now that the user has connected a
         // provider. (P0-2 from UX audit — was never called.)
         let _ = Self::persist_onboarding_complete();
-        self.open_model_picker_for_provider(&provider_id, Some(picker_title));
+        // (plan 05B) the unified inline picker — same surface as /model.
+        self.open_model_picker_inline();
     }
 
     pub(super) fn persist_custom_provider_base_url(&self, base_url: &str) {
@@ -311,7 +222,7 @@ impl App {
     pub(super) fn resolve_stale_model(&mut self, model: &str) -> String {
         if model.ends_with("/default") {
             let provider = model.strip_suffix("/default").unwrap_or(model);
-            let resolved = crate::tui::model_picker::default_model_for_provider(
+            let resolved = crate::tui::adapter_types::model_registry::default_model_for_provider(
                 provider,
                 &self.model_registry,
             );
@@ -433,5 +344,60 @@ pub(super) fn inline_model_row(
         } else {
             Some(effort.to_string())
         },
+    }
+}
+
+impl super::App {
+    /// (plan 05B) The effort rows in the unified inline picker: one row per
+    /// wire level, the current level flagged and preselected. Enter routes
+    /// through the plan-03 `pending_effort` drain (the agent applies it to
+    /// the very next request).
+    pub(super) fn open_effort_picker_inline(&mut self) {
+        use crate::tui::model_effort::EffortLevel;
+        let current = self.effort_level;
+        let rows: &[(EffortLevel, &str, &str)] = &[
+            (EffortLevel::Low, "low", "minimal reasoning effort"),
+            (EffortLevel::Normal, "normal", "balanced reasoning effort"),
+            (EffortLevel::High, "high", "deep reasoning effort"),
+            (EffortLevel::Max, "max", "maximum reasoning effort"),
+        ];
+        let entries: Vec<crate::tui::operant_app::tui_fns::PickerEntry> = rows
+            .iter()
+            .map(
+                |(level, wire, detail)| crate::tui::operant_app::tui_fns::PickerEntry {
+                    name: format!("{} {}", level.symbol(), wire),
+                    options: vec![crate::tui::operant_app::tui_fns::PickerOption {
+                        provider: "reasoning".to_string(),
+                        api_method: "effort".to_string(),
+                        available: true,
+                        detail: detail.to_string(),
+                        estimated_reference_cost_micros: None,
+                    }],
+                    action: crate::tui::operant_app::tui_fns::PickerAction::Model,
+                    selected_option: 0,
+                    is_current: *level == current,
+                    is_default: *level == EffortLevel::Normal,
+                    is_favorite: false,
+                    recommended: false,
+                    recommendation_rank: 0,
+                    usage_score: 0,
+                    old: false,
+                    created_date: None,
+                    // The apply step needs the WIRE value, not the display name.
+                    effort: Some(wire.to_string()),
+                },
+            )
+            .collect();
+        let selected = entries.iter().position(|e| e.is_current).unwrap_or(1);
+        let filtered = (0..entries.len()).collect();
+        self.inline_interactive = Some(crate::tui::operant_app::tui_fns::InlineInteractiveState {
+            kind: crate::tui::operant_app::tui_fns::PickerKind::Model,
+            entries,
+            filtered,
+            selected,
+            column: 0,
+            filter: String::new(),
+            preview: false,
+        });
     }
 }

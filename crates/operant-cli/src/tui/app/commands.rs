@@ -29,7 +29,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 34] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 33] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -61,7 +61,6 @@ impl App {
                 "bypass_permissions_dialog",
                 self.bypass_permissions_dialog.visible,
             ),
-            ("effort_picker", self.effort_picker.visible),
             ("permissions_picker", self.permissions_picker.visible),
             ("key_input_dialog", self.key_input_dialog.visible),
             (
@@ -839,8 +838,7 @@ impl App {
                 let _ = std::fs::remove_file(&cache);
                 crate::tui::operant_app::provider::catalog_scheduler::bump_catalog_generation();
                 if self.credentials_live() {
-                    let provider = self.active_provider.clone().unwrap_or_default();
-                    self.open_model_picker_for_provider(&provider, None);
+                    self.open_model_picker_inline();
                     self.set_status_notice("Refreshing the model catalog…".to_string());
                 } else {
                     self.connect_dialog.open();
@@ -947,9 +945,12 @@ impl App {
                 true
             }
             "effort" => {
-                // Open the picker dialog so users can pick an effort level
-                // visually instead of cycling/typing the level (issue #149).
-                self.effort_picker.open(self.effort_level);
+                // (plan 05B) the same unified inline picker, effort rows:
+                // one row per wire level, the current one flagged and
+                // preselected. Enter routes through the plan-03
+                // pending_effort drain. The legacy effort_picker overlay
+                // is retired with this.
+                self.open_effort_picker_inline();
                 true
             }
             "effort-set" => {
@@ -967,10 +968,10 @@ impl App {
                 }
                 self.pending_effort = Some(value.clone());
                 self.effort_level = match value.as_str() {
-                    "minimal" | "low" => crate::tui::model_picker::effort::EffortLevel::Low,
-                    "medium" => crate::tui::model_picker::effort::EffortLevel::Normal,
-                    "xhigh" => crate::tui::model_picker::effort::EffortLevel::Max,
-                    "high" => crate::tui::model_picker::effort::EffortLevel::High,
+                    "minimal" | "low" => crate::tui::model_effort::EffortLevel::Low,
+                    "medium" => crate::tui::model_effort::EffortLevel::Normal,
+                    "xhigh" => crate::tui::model_effort::EffortLevel::Max,
+                    "high" => crate::tui::model_effort::EffortLevel::High,
                     _ => self.effort_level,
                 };
                 true
@@ -1709,11 +1710,8 @@ impl App {
                 true
             }
             CommandResult::OpenModelPicker => {
-                let provider = self
-                    .active_provider
-                    .clone()
-                    .unwrap_or_else(|| "anthropic".to_string());
-                self.open_model_picker_for_provider(&provider, None);
+                // (plan 05B) the unified inline picker.
+                self.open_model_picker_inline();
                 true
             }
             CommandResult::OpenThemePicker => {
@@ -1772,7 +1770,8 @@ impl App {
                 true
             }
             CommandResult::OpenEffortPicker => {
-                self.effort_picker.open(self.effort_level);
+                // (plan 05B) the unified inline picker's effort rows.
+                self.open_effort_picker_inline();
                 true
             }
             CommandResult::OpenConnect => {
@@ -1908,7 +1907,6 @@ impl App {
         self.plugins_hub.close();
         self.journey_view.close();
         self.hooks_config_menu.close();
-        self.model_picker.close();
         self.session_browser.close();
         self.session_branching.close();
         self.export_dialog.dismiss();

@@ -67,7 +67,6 @@ use crate::tui::import_config_dialog::render_import_config_dialog;
 use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
 use crate::tui::memory_file_selector::render_memory_file_selector;
-use crate::tui::model_picker::render_model_picker;
 use crate::tui::overlays::render_global_search;
 use crate::tui::session_branching::render_session_branching;
 use crate::tui::session_browser::render_session_browser;
@@ -183,7 +182,6 @@ overlay_visible_guards!(
     is_visible_import_config_dialog => import_config_dialog,
     is_visible_bypass_permissions_dialog => bypass_permissions_dialog,
     is_visible_ask_user_dialog => ask_user_dialog,
-    is_visible_effort_picker => effort_picker,
     is_visible_permissions_picker => permissions_picker,
     is_visible_rewind_selector => rewind_selector,
     is_visible_import_config_picker => import_config_picker,
@@ -193,7 +191,6 @@ overlay_visible_guards!(
     is_visible_free_mode_dialog => free_mode_dialog,
     is_visible_device_auth_dialog => device_auth_dialog,
     is_visible_command_palette => command_palette,
-    is_visible_model_picker => model_picker,
     is_visible_session_browser => session_browser,
     is_visible_session_branching => session_branching,
     is_visible_export_dialog => export_dialog,
@@ -314,12 +311,6 @@ const OVERLAYS: &[Entry] = &[
         sink: Sink::Buffer,
     },
     Entry {
-        name: "effort_picker",
-        visible: is_visible_effort_picker,
-        paint: paint_effort_picker,
-        sink: Sink::Frame,
-    },
-    Entry {
         name: "permissions_picker",
         visible: is_visible_permissions_picker,
         paint: paint_permissions_picker,
@@ -372,12 +363,6 @@ const OVERLAYS: &[Entry] = &[
         visible: is_visible_command_palette,
         paint: paint_command_palette,
         sink: Sink::Frame,
-    },
-    Entry {
-        name: "model_picker",
-        visible: is_visible_model_picker,
-        paint: paint_model_picker,
-        sink: Sink::Buffer,
     },
     Entry {
         name: "session_browser",
@@ -546,10 +531,6 @@ fn paint_ask_user_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_ask_user_dialog(&app.ask_user_dialog, ctx.size, frame.buffer_mut());
 }
 
-fn paint_effort_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    crate::effort_picker::render_effort_picker(frame, &app.effort_picker, ctx.size);
-}
-
 fn paint_permissions_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     crate::permissions_picker::render_permissions_picker(frame, &app.permissions_picker, ctx.size);
 }
@@ -586,10 +567,6 @@ fn paint_device_auth_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
 
 fn paint_command_palette(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.command_palette, ctx.size);
-}
-
-fn paint_model_picker(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_model_picker(&app.model_picker, ctx.size, frame.buffer_mut());
 }
 
 fn paint_session_browser(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
@@ -712,7 +689,6 @@ mod tests {
         ("free_mode_dialog", Sink::Frame),
         ("device_auth_dialog", Sink::Frame),
         ("command_palette", Sink::Frame),
-        ("model_picker", Sink::Buffer),
         ("session_browser", Sink::Buffer),
         ("session_branching", Sink::Buffer),
         ("export_dialog", Sink::Frame),

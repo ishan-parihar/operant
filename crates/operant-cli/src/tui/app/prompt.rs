@@ -200,7 +200,7 @@ impl App {
             || self.import_config_picker.visible
             || self.import_config_dialog.visible
             || self.command_palette.visible
-            || self.model_picker.visible
+            || self.inline_interactive.is_some()
             || self.settings_screen.visible
             || self.export_dialog.visible
             || self.bypass_permissions_dialog.visible

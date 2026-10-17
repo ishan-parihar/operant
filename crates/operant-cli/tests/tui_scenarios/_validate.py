@@ -39,7 +39,7 @@ OVERLAYS = {
     "diff_viewer", "memory_file_selector", "skills_view", "plugins_hub",
     "journey_view", "hooks_config_menu", "voice_mode_notice", "inline_interactive",
     "session_browser", "session_branching", "export_dialog", "context_viz",
-    "mcp_approval", "bypass_permissions_dialog", "effort_picker", "key_input_dialog",
+    "mcp_approval", "bypass_permissions_dialog", "key_input_dialog",
     "custom_provider_dialog", "free_mode_dialog", "device_auth_dialog",
     "connect_dialog", "import_config_picker", "import_config_dialog",
     "command_palette", "ask_user_dialog", "permission_request"}

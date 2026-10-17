@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **iter-896 — plan 05B (second half): the legacy model/effort picker
+  overlays are deleted** (the twin surfaces the unified inline picker
+  replaced). `tui/model_picker/{models,render,state,tests}.rs`,
+  `tui/model_picker.rs` and `tui/effort_picker.rs` (~1,240 lines) are
+  gone; `effort.rs` survives as `tui/model_effort.rs` (the
+  `EffortLevel` type), and `ModelEntry` + the registry model helpers
+  moved whole into `adapter_types/model_registry.rs` (their one home —
+  they feed provider-switch defaults, not a picker UI). `App` loses
+  `model_picker`, `model_picker_provider_id` and the
+  `open_model_picker_for_provider` opener (the registry fallback adapts
+  its rows at the model_fetch_rx boundary); the connect flow
+  (`activate_provider`) opens the unified picker; mouse/prompt gating
+  follows `inline_interactive`; the overlay dispatch table, paint-order
+  test and corpus vocabulary drop the two retired rows.
+  `/effort` now opens the SAME unified inline picker with the four
+  effort rows (glyph + wire name, current flagged, default marked);
+  Enter routes through the plan-03 `pending_effort` drain — the
+  effort-picker corpus golden re-proved for the inline surface.
+  Gates: gate 2 = 1740 passed / 2 = H-3 pre-existing + one
+  palette-race flake (solo-green, same class as accent_role — the
+  deletion shifted test interleaving, not the race); corpus 61/62
+  (rewind-flow pre-existing); clippy seen=39 new=38 parity.
+
 - **iter-892 — plan 10 phase 1: six crates the binary never called are
   gone (175,997 lines)** (audit plan 10, findings 17+18). The method:
   grep `<crate>::` across every other crate — `operant-gateway` (16.7k

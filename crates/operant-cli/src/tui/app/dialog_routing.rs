@@ -34,9 +34,6 @@ impl App {
         if self.import_config_dialog.visible {
             return Some(DialogPriority::ImportConfig);
         }
-        if self.effort_picker.visible {
-            return Some(DialogPriority::EffortPicker);
-        }
         if self.connect_dialog.visible {
             return Some(DialogPriority::Connect);
         }
@@ -45,9 +42,6 @@ impl App {
         }
         if self.command_palette.visible {
             return Some(DialogPriority::CommandPalette);
-        }
-        if self.model_picker.visible {
-            return Some(DialogPriority::ModelPicker);
         }
         if self.settings_screen.visible {
             return Some(DialogPriority::Settings);

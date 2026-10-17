@@ -336,6 +336,7 @@ mod tests {
     /// to the default theme's amber, which is why `/theme` could not repaint it
     /// on seven of eight themes. Assert the resolved accent really lands in the
     /// finished frame, not merely that the two frames differ somehow.
+
     #[test]
     fn accent_role_reaches_the_frame() {
         let accent_in_frame = |name: &str, app: &App| {

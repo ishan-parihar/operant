@@ -1,19 +1,18 @@
 {
   "name": "effort-picker",
-  "surface": "crates/operant-cli/src/effort_picker.rs::render_effort_picker",
+  "surface": "crates/operant-cli/src/tui/operant_ui/ui_inline_interactive.rs::model_suggestion_lines",
   "opens_with": "/effort",
   "keys": "/effort<enter>",
   "size": "120x40",
   "assert": [
-    "overlays.effort_picker == true",
+    "overlays.inline_interactive == true",
     "any_modal_open == true"
   ],
   "assert_screen": [
-    "contains:Effort level",
-    "contains:normal",
-    "contains:high"
+    "contains:Enter select",
+    "contains:reasoning \u00b7 effort"
   ],
   "baseline": "effort-picker.txt",
   "style_baseline": "effort-picker.style.txt",
-  "notes": "Radio group with a distinct glyph per level (circle / half / three-quarter / full). The selection cursor sits on the CURRENT level, so which row is marked is ENV-dependent (settings.json) while the four level names are not. Smallest overlay in the corpus, which makes it the best canary for the modal-shadow and border-accent code shared by all of them."
+  "notes": "(plan 05B) /effort opens the unified inline picker's effort rows (one row per wire level, current flagged); Enter routes through the pending_effort drain. The legacy effort_picker radio overlay is deleted."
 }

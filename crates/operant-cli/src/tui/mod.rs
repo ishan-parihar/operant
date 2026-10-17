@@ -47,7 +47,6 @@ pub mod device_auth_dialog;
 pub mod dialog_select;
 pub mod dialogs;
 pub mod diff_viewer;
-pub mod effort_picker;
 pub mod export_dialog;
 pub mod figures;
 pub mod image_paste;
@@ -68,7 +67,7 @@ pub mod journey_view;
 pub mod keybindings;
 pub mod mcp_view;
 pub mod messages;
-pub mod model_picker;
+pub mod model_effort;
 pub mod notifications;
 #[cfg_attr(
     not(test),

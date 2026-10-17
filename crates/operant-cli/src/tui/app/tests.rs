@@ -2487,7 +2487,7 @@ fn test_dialog_open_close_scenarios() {
         ("journey", "journey_view"),
         ("plugins", "plugins_hub"),
         ("model", "inline_interactive"),
-        ("effort", "effort_picker"),
+        ("effort", "inline_interactive"),
         ("context", "context_viz"),
         ("agents", "agents_menu"),
         ("export", "export_dialog"),

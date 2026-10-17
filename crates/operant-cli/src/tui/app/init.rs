@@ -59,7 +59,9 @@ impl App {
                     .join("models.json");
                 probe_reg.load_cache(&probe_cache);
                 let resolved =
-                    crate::tui::model_picker::default_model_for_provider(provider, &probe_reg);
+                    crate::tui::adapter_types::model_registry::default_model_for_provider(
+                        provider, &probe_reg,
+                    );
                 if resolved != format!("{}/default", provider) {
                     config.agent.model = resolved.clone();
                     resolved
@@ -213,7 +215,6 @@ impl App {
             plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
             journey_view: crate::tui::journey_view::JourneyViewState::new(),
             hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
-            model_picker: ModelPickerState::new(),
             session_browser: SessionBrowserState::new(),
             session_branching: crate::tui::session_branching::SessionBranchingState::new(),
             export_dialog: ExportDialogState::new(),
@@ -225,7 +226,6 @@ impl App {
 
             bypass_permissions_dialog:
                 crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState::new(),
-            effort_picker: crate::tui::effort_picker::EffortPickerState::new(),
             permissions_picker: crate::tui::permissions_picker::PermissionsPickerState::new(),
             key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState::new(),
             custom_provider_dialog:
@@ -244,7 +244,6 @@ impl App {
                 reg
             },
             model_picker_fetch_pending: false,
-            model_picker_provider_id: None,
             session_list_pending: false,
             session_list_rx: None,
             session_load_pending: None,

@@ -12,17 +12,17 @@
 
 
  operant · replay
- operant                              ┌──────────────────────────────────────────┐
- /model to switch · Offline Capture   │ Effort level                             │
- v0.2.1                               │    ○  low                                │
- /login to add provider               │  › ◐  normal                             │
- ● anthropic(key)                     │    ◕  high                               │
- ~                                    │    ●  max                                │
-                                      │                                          │
-                                      │  ↑/↓ to choose · Enter to apply · Esc to │
-1>                                    │                                          │
-                                      │                                          │             ~ API key Offline Capture
-                                      └──────────────────────────────Esc to close┘
+ operant
+ /model to switch · Offline Capture
+ v0.2.1
+  ○ low                     reasoning · effort
+▸ ◐ normal default current  reasoning · effort
+  ◕ high                    reasoning · effort
+  ● max                     reasoning · effort
+↑↓ choose · Enter select · Esc cancel · Ctrl+O set default · Ctrl+N favorite · Shift+Tab switch active model to next fav
+1>
+                                                                                               ~ API key Offline Capture
+
 
 
 

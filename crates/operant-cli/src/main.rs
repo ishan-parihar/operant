@@ -67,7 +67,6 @@ mod tui;
 
 pub(crate) use tui::app;
 pub(crate) use tui::dialogs;
-pub(crate) use tui::effort_picker;
 pub(crate) use tui::free_mode_dialog;
 pub(crate) use tui::image_paste;
 pub(crate) use tui::input;

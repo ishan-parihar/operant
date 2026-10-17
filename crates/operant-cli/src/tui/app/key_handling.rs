@@ -13,8 +13,8 @@ const KEY_USAGE_FLUSH_EVERY: u32 = 64;
 /// The agent's wire value for a UI effort level. The picker's four levels
 /// map onto the request field's ladder; "" (empty) is only reachable via
 /// `effort-set off` (Shift+Tab's cycle-off position).
-fn effort_wire_value(level: crate::tui::model_picker::effort::EffortLevel) -> String {
-    use crate::tui::model_picker::effort::EffortLevel;
+fn effort_wire_value(level: crate::tui::model_effort::EffortLevel) -> String {
+    use crate::tui::model_effort::EffortLevel;
     match level {
         EffortLevel::Low => "low".to_string(),
         EffortLevel::Normal => "medium".to_string(),
@@ -28,7 +28,7 @@ impl App {
     /// off this key): cycle effort off → low → medium → high → xhigh → off,
     /// forwarding each step to the agent via the pending-action channel.
     pub(crate) fn cycle_effort(&mut self) {
-        use crate::tui::model_picker::effort::EffortLevel;
+        use crate::tui::model_effort::EffortLevel;
         let (next_level, wire) = match self.effort_level {
             EffortLevel::Low => (EffortLevel::Normal, "medium".to_string()),
             EffortLevel::Normal => (EffortLevel::High, "high".to_string()),
@@ -151,30 +151,6 @@ impl App {
                         );
                     }
                     self.bypass_permissions_dialog.dismiss();
-                }
-                _ => {}
-            }
-            return false;
-        }
-
-        // Effort picker dialog (/effort).
-        if self.effort_picker.visible {
-            match key.code {
-                KeyCode::Esc => self.effort_picker.close(),
-                KeyCode::Up | KeyCode::Char('k') => self.effort_picker.select_prev(),
-                KeyCode::Down | KeyCode::Char('j') => self.effort_picker.select_next(),
-                KeyCode::Enter => {
-                    let chosen = self.effort_picker.current();
-                    self.effort_level = chosen;
-                    self.effort_picker.close();
-                    // (plan 03) forward the wire value to the agent through
-                    // the pending-action channel.
-                    self.pending_effort = Some(effort_wire_value(chosen));
-                    self.set_status_notice(format!(
-                        "Effort set to {} {}.",
-                        chosen.symbol(),
-                        chosen.label()
-                    ));
                 }
                 _ => {}
             }
@@ -668,60 +644,6 @@ impl App {
         }
 
         // Invalid-config dialog intercepts Enter/Esc to dismiss
-
-        // Model picker intercepts navigation and Esc
-        if self.model_picker.visible {
-            match key.code {
-                KeyCode::Esc => self.model_picker.close(),
-                KeyCode::Home => self.model_picker.select_first(),
-                KeyCode::End => self.model_picker.select_last(),
-                KeyCode::Up => self.model_picker.select_prev(),
-                KeyCode::Down => self.model_picker.select_next(),
-                KeyCode::Left => self.model_picker.effort_prev(),
-                KeyCode::Right => self.model_picker.effort_next(),
-                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.model_picker.select_prev()
-                }
-                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.model_picker.select_next()
-                }
-                KeyCode::Enter => {
-                    if let Some((model_id, effort)) = self.model_picker.confirm() {
-                        // If user picked a model other than the fast-mode model
-                        // while fast mode was active, turn fast mode off.
-                        if self.fast_mode
-                            && !self.model_picker.is_selected_fast_mode_model(&model_id)
-                        {
-                            self.fast_mode = false;
-                        }
-                        if let Some(e) = effort {
-                            self.effort_level = e;
-                            // (plan 03) forward the wire value to the agent.
-                            self.pending_effort = Some(effort_wire_value(e));
-                        }
-                        // (plan 05A) The picked id IS the model id — the
-                        // catalogue rows come from the agent's own
-                        // endpoint, so the old "{provider}/{id}" munging
-                        // (built from a GUESSED provider) produced ids the
-                        // endpoint does not know. The apply goes through
-                        // pending_model: the drain calls agent.set_model,
-                        // refreshes the display from agent.model() (one
-                        // source of truth), and persists via the surgical
-                        // writer.
-                        self.set_model(model_id.clone());
-                        self.pending_model = Some(model_id.clone());
-                        let effort_hint = effort
-                            .map(|e| format!(" [{}]", e.label()))
-                            .unwrap_or_default();
-                        self.set_status_notice(format!("Model: {model_id}{}", effort_hint));
-                    }
-                }
-                KeyCode::Backspace => self.model_picker.pop_filter_char(),
-                KeyCode::Char(c) => self.model_picker.push_filter_char(c),
-                _ => {}
-            }
-            return false;
-        }
 
         // Session branching overlay intercepts navigation and Esc
         if self.session_branching.visible {

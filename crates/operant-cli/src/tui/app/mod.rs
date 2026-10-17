@@ -41,7 +41,7 @@ use crate::tui::diff_viewer::DiffViewerState;
 use crate::tui::export_dialog::{ExportDialogState, ExportFormat};
 use crate::tui::import_config_dialog::ImportConfigDialogState;
 use crate::tui::mcp_view::{McpServerView, McpToolView, McpViewState, McpViewStatus};
-use crate::tui::model_picker::{EffortLevel, ModelPickerState};
+use crate::tui::model_effort::EffortLevel;
 use crate::tui::notifications::NotificationKind;
 use crate::tui::overlays::{GlobalSearchState, HelpOverlay, HistorySearchOverlay};
 use crate::tui::prompt_input::{InputMode, PromptInputState, VimMode};
@@ -514,7 +514,6 @@ pub struct App {
     /// Memory update notification banner.
     /// MCP elicitation dialog (form requested by an MCP server).
     /// Model picker overlay (/model command).
-    pub model_picker: ModelPickerState,
     /// Session browser overlay (/session, /resume, /rename, /export).
     pub session_browser: SessionBrowserState,
     /// Session branching overlay (Ctrl+B) — create and switch branches.
@@ -546,7 +545,6 @@ pub struct App {
         crate::tui::bypass_permissions_dialog::BypassPermissionsDialogState,
     /// First-launch onboarding welcome dialog.
     /// Effort-level picker (/effort with no args).
-    pub effort_picker: crate::tui::effort_picker::EffortPickerState,
     pub permissions_picker: crate::tui::permissions_picker::PermissionsPickerState,
     /// API key input dialog (opened from /connect for key-based providers).
     pub key_input_dialog: crate::tui::key_input_dialog::KeyInputDialogState,
@@ -567,7 +565,6 @@ pub struct App {
     pub model_picker_fetch_pending: bool,
     /// The provider ID that the model picker was opened for (used when the
     /// fetch is triggered from /connect before the provider is activated).
-    pub model_picker_provider_id: Option<String>,
     /// When `true`, the main event loop should spawn an async task to load
     /// the session list from disk and populate the session browser.
     pub session_list_pending: bool,
