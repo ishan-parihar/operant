@@ -4,6 +4,10 @@
 > Read it top-to-bottom first; this file is a Claude-Code-specific supplement,
 > not a substitute. Where the two disagree, AGENTS.md wins (release line,
 > verification commands, release procedure, iteration protocol).
+>
+> **Documentation routing:** the question→owner map, the mutability classes,
+> and the `./scripts/kb` CLI live in AGENTS.md's "Documentation Genome
+> (project-kb)" section — run `./scripts/kb lint` before any doc commit.
 
 ## Build entry point
 
@@ -15,7 +19,8 @@ advance. Regression test: `scripts/tests/build_sh_test.sh`.
 
 ## Operant Project Context
 
-- Current release line: `0.1.4`
+- Current release line: see AGENTS.md (`0.2.1`) — this line was stale at
+  `0.1.4`; AGENTS.md is the authority
 - Runtime config is TOML-first and shared through `crates/operant-core/src/config.rs`
 - Rich CLI/TUI uses `ratatui` and lives under `crates/operant-cli/src/tui/`
 - Autonomous coding mode lives in `crates/operant-cli/src/autonomous.rs` and is launched through `operant autonomous` or `operant run --autonomous`
@@ -24,7 +29,10 @@ advance. Regression test: `scripts/tests/build_sh_test.sh`.
 - The workspace view has `Conversation`, `Reasoning`, `Activity`, and management panels for `MCP`, `Skills`, and `Behavior`
 - When config fields change, update `operant.example.toml` in the repo root in the same change
 - When user-facing behavior changes, update `README.md`, `CHANGELOG.md`, and screenshots in `assets/` if the UI changed materially
-- Tagged releases are created from `CHANGELOG.md`: push `vX.Y.Z`, then GitHub Actions builds artifacts and publishes the GitHub Release from the matching changelog section
+- Tagged releases follow AGENTS.md's LOCAL procedure (`docs/CHANGELOG.md`
+  section → commit → push tag → local `scripts/build.sh --release` →
+  `gh release create`). GitHub Actions is quota-exhausted and `workflow_dispatch`
+  -only — never push/tag-trigger a workflow.
 - Preferred verification commands:
   - `cargo fmt --all`
   - `cargo check --workspace`

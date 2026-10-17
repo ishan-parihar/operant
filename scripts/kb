@@ -1,0 +1,1140 @@
+#!/usr/bin/env python3
+"""kb — the project knowledge-base manager.
+
+The kernel of the `project-kb` skill: a fixed genome of documentation roles,
+each with a mutability class, plus the machinery that keeps a multi-agent
+project coherent — per-workflow kanbans with claim semantics, an append-only
+agent feed for cross-agent messages, schema linting, tombstoned archiving,
+and a doctor that reports staleness and conflicts.
+
+One file, stdlib only. Run `kb --help` for commands, `kb help <cmd>` for one.
+
+Project layout is declared in `kb.toml` at the repo root (written by
+`kb init`, editable by hand — roles map to paths, so an existing repo keeps
+its own conventions). Roles default to:
+
+    docs/            AGENTS.md routing table at the root is the entry contract
+    docs/handoff/    STATE.md (current snapshot), README.md (fresh-agent entry)
+    docs/plans/      dated, frozen at publication
+    docs/audit/      dated, frozen
+    docs/decisions/  AD-NNN-slug.md — immutable once numbered
+    docs/regressions/ RG-NNN-slug.md — immutable once numbered
+    docs/kb/         CLOSED.md, WORKLOG.md, feed.md, workflows/<wf>.md
+    docs/archive/    tombstoned history + INDEX.md
+
+Exit codes: 0 ok, 1 usage, 2 lint/claim failure. `--advisory` downgrades
+lint failures to a report.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fcntl
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------- constants
+
+STATUS_VOCAB = ("open", "in-progress", "done", "rejected", "blocked")
+TERMINAL = ("done", "rejected")
+
+DEFAULTS = {
+    "agents": "AGENTS.md",
+    "state": "docs/handoff/STATE.md",
+    "entry": "docs/handoff/README.md",
+    "register": "TODO.md",
+    "ledger": "docs/kb/CLOSED.md",
+    "worklog": "docs/kb/WORKLOG.md",
+    "feed": "docs/kb/feed.md",
+    "workflows": "docs/kb/workflows",
+    "decisions": "docs/decisions",
+    "regressions": "docs/regressions",
+    "plans": "docs/plans",
+    "audits": "docs/audit",
+    "closed": "docs/kb/CLOSED.md",
+    "runbook": "docs/RUNBOOK.md",
+    "archive": "docs/archive",
+}
+DATED_ROLES = ("plans", "audits")
+TOMBSTONE = re.compile(r"<!--\s*kb: tombstone target=\"([^\"]+)\"")
+
+ERR_LINT = 2
+
+
+def now() -> str:
+    return dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
+
+
+def today() -> str:
+    return dt.datetime.now().strftime("%Y-%m-%d")
+
+
+def die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[valid-type]
+    print(f"kb: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+# ---------------------------------------------------------------- toml-lite
+
+def _parse_kb_toml(path: Path) -> dict:
+    """Parse the `[paths]` section of kb.toml. The file is deliberately tiny —
+    one section of `key = "value"` strings — so a 10-line reader beats a
+    dependency."""
+    out = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("["):
+            continue
+        m = re.match(r'([\w-]+)\s*=\s*"(.*)"', line)
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def find_root(start: Path | None = None) -> tuple[Path, dict]:
+    p = (start or Path.cwd()).resolve()
+    for cand in [p, *p.parents]:
+        f = cand / "kb.toml"
+        if f.is_file():
+            m = {**DEFAULTS, **_parse_kb_toml(f)}
+            return cand, m
+    die("no kb.toml found upward of cwd — run `kb init` at the repo root first")
+
+
+def require_file_role(mapping: dict, role: str, cmd: str) -> None:
+    """Writer/command gate for pointer-mapped roles. Reads (doctor) report
+    pointer forms as legitimately-elsewhere; WRITES must never follow the
+    pointer note into a literal path — the fresh-agent red-team on holon
+    showed an ungated `kb post` creating a directory named after the overlay
+    note. Every command that writes a role dies here when the role is not
+    this repo's to write."""
+    form, target = role_form(mapping, role)
+    if form == "overlay":
+        die(f"the {role} role lives in the operator's overlay ({target}) — "
+            f"`{cmd}` there, not in this repo")
+    if form == "native":
+        die(f"the {role} role is owned by a native mechanism ({target}) — "
+            f"`{cmd}` does not write it; use that mechanism")
+
+
+def role_path(root: Path, mapping: dict, role: str) -> Path:
+    p = mapping[role]
+    if p.startswith("overlay:") or p.startswith("native:"):
+        # Pointer forms (see role_form): the role legitimately lives elsewhere —
+        # in the operator's overlay repo, or in a repo-native mechanism. Resolve
+        # to a placeholder that existence checks skip; callers that need the
+        # distinction use role_form.
+        return root / p.split(":", 1)[1]
+    return (root / p).resolve()
+
+
+def role_form(mapping: dict, role: str) -> tuple[str, str]:
+    """(form, target) for a role's kb.toml value. Forms:
+
+    - ``file`` — a path inside this repo; the kb CLI checks it.
+    - ``overlay:<path>`` — the role lives in the operator's private overlay
+      repo (holon's universal/overlay split): reported as "in the overlay",
+      never as missing. The path names where it lives THERE.
+    - ``native:<note>`` — the role is owned by a repo-native mechanism the kb
+      CLI must defer to, not shadow (e.g. holon's guard-enforced regression
+      ledger inside AGENTS.md). Reported as such, never as missing.
+    """
+    v = mapping[role]
+    if v.startswith("overlay:"):
+        return "overlay", v.split(":", 1)[1]
+    if v.startswith("native:"):
+        return "native", v.split(":", 1)[1]
+    return "file", v
+
+
+# ------------------------------------------------------------- shared write
+
+class Guarded:
+    """flock-guarded read-modify-write for the files parallel agents mutate:
+    the feed, the kanbans, the register. Agents are slow (human-scale turn
+    times), but a claim is exactly the moment two agents race — the lock makes
+    double-claims and interleaved feed writes impossible, not merely unlikely."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.lock = path.with_suffix(path.suffix + ".lock")
+
+    def __enter__(self):
+        self.lock.parent.mkdir(parents=True, exist_ok=True)
+        self.fd = open(self.lock, "a+")
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        self.fd.close()
+        return False
+
+
+def replace_row(path: Path, row_id: str, cells: list[str]) -> bool:
+    """Rewrite one markdown table row (first cell == row_id) in place.
+    Returns False when the row is absent. Locking is the caller's job."""
+    lines = path.read_text().splitlines()
+    for i, ln in enumerate(lines):
+        if not ln.lstrip().startswith("|"):
+            continue
+        parts = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if parts and parts[0] == row_id:
+            lines[i] = "| " + " | ".join(cells) + " |"
+            path.write_text("\n".join(lines) + "\n")
+            return True
+    return False
+
+
+def find_row(path: Path, row_id: str) -> list[str] | None:
+    for ln in path.read_text().splitlines():
+        if not ln.lstrip().startswith("|"):
+            continue
+        parts = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if parts and parts[0] == row_id:
+            return parts
+    return None
+
+
+# -------------------------------------------------------------------- init
+
+STACK_GATES = {
+    "Cargo.toml": "cargo build --release --locked && cargo test --locked",
+    "pyproject.toml": "pytest -q",
+    "package.json": "npm test",
+    "go.mod": "go test ./...",
+}
+
+
+def cmd_init(args) -> None:
+    root = Path.cwd().resolve()
+    if (root / "kb.toml").is_file() and not args.force:
+        die("kb.toml already exists — `kb` refuses to overwrite; edit it by hand")
+
+    gate = next((g for f, g in STACK_GATES.items() if (root / f).is_file()), "declare your build/test gate here")
+
+    made, skipped = [], []
+
+    def write(rel: str, body: str) -> None:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            skipped.append(rel)
+            return
+        p.write_text(body)
+        made.append(rel)
+
+    write("kb.toml", KB_TOML)
+    write("AGENTS.md", AGENTS_TPL.replace("{{GATE}}", gate))
+    write("TODO.md", REGISTER_TPL)
+    write("docs/handoff/README.md", ENTRY_TPL)
+    write("docs/handoff/STATE.md", STATE_TPL)
+    write("docs/RUNBOOK.md", RUNBOOK_TPL)
+    write("docs/kb/CLOSED.md", CLOSED_TPL)
+    write("docs/kb/WORKLOG.md", WORKLOG_TPL)
+    write("docs/kb/feed.md", FEED_TPL)
+    for d in ("docs/plans", "docs/audit", "docs/decisions", "docs/regressions",
+              "docs/kb/workflows", "docs/archive"):
+        (root / d).mkdir(parents=True, exist_ok=True)
+    write("docs/archive/INDEX.md", "| date | original | reason |\n|---|---|---|\n")
+
+    # flock lock files are runtime state, not documentation — keep them out
+    # of version control (the eval-1 run had to clean these up by hand).
+    gi = root / ".gitignore"
+    if not gi.exists() or "*.lock" not in gi.read_text():
+        with open(gi, "a") as f:
+            f.write("\n# kb flock artifacts\n*.lock\n")
+        made.append(".gitignore (+*.lock)")
+
+    print(f"kb init: created {len(made)} files, skipped {len(skipped)} existing")
+    for m in made:
+        print(f"  + {m}")
+    for s in skipped:
+        print(f"  = {s} (kept)")
+    if not (root / ".git").is_dir():
+        print("note: not a git repo — `git init` + a first commit makes doctor's "
+              "append-only ledger guard and state-freshness checks live")
+    print("next: fill AGENTS.md's routing table, then `kb lint`")
+
+
+# -------------------------------------------------------------------- lint
+
+def _routing_pointers(text: str, ignore: set[str]) -> list[str]:
+    """Backticked path-like tokens, checked PER LINE and only when fully
+    path-shaped. Prose legitimately backticks globs (`docs/*.md`), placeholders
+    (`adapters/<name>/README.md`), shell vars (`$holon`) and files that live
+    elsewhere by design (an instance's `BRIEF.md`, an overlay's STATUS) — a
+    cross-line span once swallowed half a ledger table, so: per line, strict
+    shape, and the adopting repo's kb.toml `pointer_ignore` list declares the
+    references that are legitimate non-repo paths."""
+    out = []
+    for ln in text.splitlines():
+        for tok in re.findall(r"`([^`]*)`", ln):
+            if re.fullmatch(r"[\w./-]+\.(?:md|toml|json)", tok) and tok not in ignore:
+                out.append(tok)
+    return out
+
+
+def cmd_lint(args) -> None:
+    root, m = find_root()
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # routing-table pointer integrity + tombstone references
+    agents_p = role_path(root, m, "agents")
+    if agents_p.is_file():
+        text = agents_p.read_text()
+        ignore = set(m.get("pointer_ignore", "").split())
+        for ptr in _routing_pointers(text, ignore):
+            if not (root / ptr).exists():
+                errors.append(f"E001 routing table points at missing file: `{ptr}`")
+            else:
+                mt = TOMBSTONE.search((root / ptr).read_text())
+                if mt:
+                    errors.append(f"E005 routing table points at a tombstone: `{ptr}`")
+    else:
+        warnings.append("W000 no AGENTS.md routing table found")
+
+    # register: status vocab + terminal rows need evidence
+    reg = role_path(root, m, "register")
+    if reg.is_file():
+        header = None
+        for ln in reg.read_text().splitlines():
+            if not ln.lstrip().startswith("|"):
+                continue
+            parts = [c.strip() for c in ln.strip().strip("|").split("|")]
+            if parts[0] in (":---", "---", ":-:", "") or set(parts[0]) <= set(":- "):
+                continue
+            if header is None:
+                header = parts
+                continue
+            rid, status = parts[0], parts[1] if len(parts) > 1 else ""
+            if status and status not in STATUS_VOCAB:
+                errors.append(f"E002 register row {rid}: status `{status}` not in {STATUS_VOCAB}")
+            # E003: a terminal row must carry its recorded verdict transition
+            # (`→ [date] …`) in the item cell — the notes cell is optional
+            # metadata, not evidence, so an empty notes cell is not a violation.
+            if status in TERMINAL and (len(parts) < 3 or "→ [" not in parts[2]):
+                errors.append(f"E003 terminal row {rid} has no recorded verdict (expected `→ [YYYY-MM-DD] <evidence>`) in the item cell")
+            # E010: a terminal row that cites a path is claiming falsifiability —
+            # the path must exist and be file-shaped (E009 parity for the register;
+            # found by the eval-3 run's dead-citation catch). Routes and bare names
+            # (`/mcp`, `docs`) are prose, not evidence pointers.
+            if status in TERMINAL and len(parts) > 2:
+                for tok in re.findall(r"`([^`]+)`", parts[2]):
+                    if re.fullmatch(r"[\w./-]+\.(?:md|json|txt|csv|toml|py|rs)", tok) \
+                            and not (root / tok).exists():
+                        errors.append(f"E010 terminal row {rid} cites a missing evidence file: `{tok}`")
+    # kb.toml keys beyond [paths]: dated_pattern (the dated-frozen filename
+    # pattern, for repos whose dated dirs also hold living reference docs),
+    # pointer_ignore (legitimate non-repo references in the agent contract).
+
+    # dated roles: files of the dated-frozen kind must carry a date — position
+    # is convention (prefix or suffix both freeze). A repo whose dated dirs hold
+    # living reference docs too declares the dated kind's filename pattern in
+    # kb.toml `dated_pattern`; only matching files are date-checked.
+    dated_pat = re.compile(m.get("dated_pattern", "."))
+    for role in DATED_ROLES:
+        d = role_path(root, m, role)
+        if d.is_dir():
+            for f in d.glob("*.md"):
+                if dated_pat.search(f.name) and not re.search(r"\d{4}-\d{2}-\d{2}", f.name):
+                    errors.append(f"E004 {role} file without a date: {f.name}")
+
+    # one-owner-per-question: title-token overlap between plans
+    plans = role_path(root, m, "plans")
+    if plans.is_dir():
+        titles = []
+        for f in sorted(plans.glob("*.md")):
+            body = f.read_text()
+            if "kb: tombstone" in body:
+                continue  # archived duplicates are history, not live owners
+            for ln in body.splitlines():
+                if ln.startswith("#"):
+                    titles.append((f.name, set(re.findall(r"[a-z0-9]{4,}", ln.lower()))))
+                    break
+        for i in range(len(titles)):
+            for j in range(i + 1, len(titles)):
+                a, b = titles[i][1], titles[j][1]
+                if a and b and len(a & b) / len(a | b) >= 0.5:
+                    warnings.append(
+                        f"W006 plans `{titles[i][0]}` and `{titles[j][0]}` answer the same question "
+                        f"— keep one owner, archive the other with a tombstone")
+
+    # archive discipline: every archived doc must have an INDEX row
+    arch = role_path(root, m, "archive")
+    if arch.is_dir():
+        idx = arch / "INDEX.md"
+        idx_text = idx.read_text() if idx.is_file() else ""
+        for f in arch.glob("*.md"):
+            if f.name != "INDEX.md" and f.name not in idx_text:
+                warnings.append(f"W007 archive file not in INDEX.md: {f.name}")
+
+    # ledger: every cited evidence path must resolve — a verdict pointing at
+    # nothing is unfalsifiable (found by the eval-3 run: the fixture ledger
+    # cited an eval/ artifact that did not exist, and nothing caught it)
+    closed = role_path(root, m, "ledger")
+    if closed.is_file():
+        for ln in closed.read_text().splitlines():
+            if ln.lstrip().startswith("|"):
+                continue
+            for tok in re.findall(r"`([^`]+\.(?:md|json|txt))`", ln):
+                if "/" in tok and not (root / tok).exists():
+                    errors.append(f"E009 ledger cites a missing evidence file: `{tok}`")
+
+    # workflow boards: claim conflicts
+    wf_dir = role_path(root, m, "workflows")
+    if wf_dir.is_dir():
+        for f in sorted(wf_dir.glob("*.md")):
+            for ln in f.read_text().splitlines():
+                if ln.lstrip().startswith("|") and "claimed" in ln:
+                    continue
+                parts = [c.strip() for c in ln.strip().strip("|").split("|")]
+                if len(parts) > 3 and parts[1] == "in-progress" and parts[3] and parts[3] != "—":
+                    m2 = re.search(r"claimed-by `?([A-Za-z0-9_.-]+)", parts[3])
+                    errors.append(
+                        f"E008 {f.name} row {parts[0]}: in-progress without a well-formed claim "
+                        f"(use `kb claim`)")
+
+    for w in warnings:
+        print(w)
+    for e in errors:
+        print(e)
+    code = 0
+    if errors:
+        print(f"\nlint: {len(errors)} error(s), {len(warnings)} warning(s)")
+        code = ERR_LINT if not args.advisory else 0
+    else:
+        print(f"lint: clean ({len(warnings)} warning(s))")
+    raise SystemExit(code)
+
+
+# ------------------------------------------------------------------ status
+
+def cmd_status(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "register", "kb status")
+    reg = role_path(root, m, "register")
+    if args.status not in STATUS_VOCAB:
+        die(f"status must be one of {STATUS_VOCAB}")
+    if args.status in TERMINAL and not args.evidence:
+        die(f"`{args.id} -> {args.status}` is terminal: name the evidence with --evidence (a path that exists)")
+    if args.evidence and not (root / args.evidence).exists():
+        die(f"evidence path does not exist: {args.evidence}")
+    with Guarded(reg):
+        row = find_row(reg, args.id)
+        if row is None:
+            die(f"no register row with id `{args.id}`")
+        cells = list(row)
+        # A register row claimed by another agent is that agent's work item —
+        # the same collision guard the workflow boards carry. The claim lives
+        # in the notes cell as `claimed-by \<agent\`` (templates.md).
+        notes = cells[3] if len(cells) > 3 else ""
+        held = re.search(r"claimed-by `?([A-Za-z0-9_.-]+)", notes)
+        if held and args.agent and held.group(1) != args.agent:
+            die(f"`{args.id}` is claimed by {held.group(1)} — post to the feed or "
+                f"claim it yourself before transitioning it", code=ERR_LINT)
+        cells[1] = args.status
+        note = f" — verdict: {args.note}" if args.note else ""
+        if args.status in TERMINAL:
+            cells[2] = (cells[2] + f" → [{today()}] {args.evidence}{note}").strip()
+        if not replace_row(reg, args.id, cells):
+            die("row vanished mid-write — rerun")
+    print(f"register: {args.id} → {args.status}"
+          + (f" (evidence: {args.evidence})" if args.evidence else ""))
+
+
+def cmd_claim_register(args) -> None:
+    """Claim a strategic register row. Operational items live on workflow
+    boards (kb claim <wf-item>); a register row may still be worked by two
+    agents at once unless it carries a claim — this is that claim, flock-guarded,
+    with the same `claimed-by` grammar as the boards. The claim APPENDS to the
+    notes cell: notes carry context (evidence links, who-waits-on-whom) that a
+    claim must never erase."""
+    root, m = find_root()
+    require_file_role(m, "register", "kb claim-register")
+    reg = role_path(root, m, "register")
+    with Guarded(reg):
+        row = find_row(reg, args.id)
+        if row is None:
+            die(f"no register row with id `{args.id}`")
+        cells = list(row)
+        notes = cells[3] if len(cells) > 3 else ""
+        held = re.search(r"claimed-by `?([A-Za-z0-9_.-]+)", notes)
+        if held and held.group(1) != agent_id(args):
+            die(f"`{args.id}` is claimed by {held.group(1)} — do not double-claim; "
+                f"post to the feed if you need it handed over", code=ERR_LINT)
+        claim = f"claimed-by `{agent_id(args)}` since {now()}"
+        cells[3] = f"{notes} · {claim}".strip(" ·") if notes else claim
+        if not replace_row(reg, args.id, cells):
+            die("row vanished mid-write — rerun")
+    posted = _post(root, m, agent_id(args), f"claiming register row `{args.id}`", None, None, None)
+    suffix = " (posted to the feed)" if posted else " (feed lives elsewhere — no in-repo post)"
+    print(f"register: {args.id} claimed by {agent_id(args)}{suffix}")
+
+
+# ----------------------------------------------------------------- archive
+
+def _dated_record(root: Path, mapping: dict, role: str, title: str, tpl: str) -> None:
+    """Mint a dated-frozen record (plan/audit): the filename carries the
+    date because the date IS the freeze stamp."""
+    d = role_path(root, mapping, role)
+    d.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
+    p = d / f"{today()}-{slug}.md"
+    if p.exists():
+        die(f"{p.relative_to(root)} already exists — pick a different title")
+    p.write_text(tpl.replace("{{TITLE}}", title).replace("{{DATE}}", today()))
+    print(p.relative_to(root))
+
+
+def cmd_plan(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "plans", "kb plan")
+    _dated_record(root, m, "plans", args.title, PLAN_TPL)
+
+
+def cmd_audit(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "audits", "kb audit")
+    _dated_record(root, m, "audits", args.title, AUDIT_TPL)
+
+
+def cmd_archive(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "archive", "kb archive")
+    src = (Path(args.path)).resolve()
+    if not src.is_file() or root not in src.parents:
+        die(f"{args.path} is not a file inside this project")
+    arch = role_path(root, m, "archive")
+    rel = src.relative_to(root)
+    if not args.reason:
+        die("archiving requires --reason: the tombstone is how a future agent avoids a phantom")
+    dst = arch / src.name
+    if dst.exists():
+        die(f"archive already holds {src.name}")
+    src.rename(dst)
+    (arch / "INDEX.md").parent.mkdir(parents=True, exist_ok=True)
+    with open(arch / "INDEX.md", "a") as f:
+        f.write(f"| {today()} | {rel.as_posix()} | {args.reason} |\n")
+    src.write_text(
+        f"# {src.stem} (superseded)\n\n"
+        f'<!-- kb: tombstone target="{dst.relative_to(root).as_posix()}" -->\n\n'
+        f"Moved to `{dst.relative_to(root).as_posix()}` on {today()}.\n\n"
+        f"**Reason:** {args.reason}\n"
+    )
+    print(f"archived {rel} → {dst.relative_to(root).as_posix()} (tombstone left in place)")
+    # pointers to the moved doc are now phantoms — say where
+    agents_p = role_path(root, m, "agents")
+    if agents_p.is_file() and rel.as_posix() in agents_p.read_text():
+        print(f"NOTE: AGENTS.md still references `{rel.as_posix()}` — update the routing table")
+
+
+# ------------------------------------------------------- decisions/regressions
+
+def _numbered_record(root: Path, mapping: dict, role: str, prefix: str, title: str, tpl: str) -> None:
+    d = role_path(root, mapping, role)
+    d.mkdir(parents=True, exist_ok=True)
+    nums = [int(m.group(1)) for f in d.glob(f"{prefix}-*.md")
+            if (m := re.match(rf"{prefix}-(\d{{3}})-", f.name))]
+    n = max(nums, default=0) + 1
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
+    p = d / f"{prefix}-{n:03d}-{slug}.md"
+    p.write_text(tpl.replace("{{N}}", f"{n:03d}").replace("{{TITLE}}", title).replace("{{DATE}}", today()))
+    print(p.relative_to(root))
+
+
+def cmd_ad(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "decisions", "kb ad")
+    _numbered_record(root, m, "decisions", "AD", args.title, AD_TPL)
+
+
+def cmd_rg(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "regressions", "kb rg")
+    _numbered_record(root, m, "regressions", "RG", args.title, RG_TPL)
+
+
+PLAN_TPL = """# {{TITLE}}
+
+Dated-frozen: published `{{DATE}}`; a plan that changes is a new plan, this one
+is archived with a reason. Mechanism first, gates before results.
+
+## Mechanism
+
+(why this should work, argued before any measurement)
+
+## Gates / success criteria
+
+(fixed before the run; a gate that moves after the number is not a gate)
+
+## Cost
+
+"""
+
+AUDIT_TPL = """# {{TITLE}}
+
+Dated-frozen: audited `{{DATE}}`; findings must mark verified vs asserted.
+
+## Scope
+
+(what was checked)
+
+## Findings
+
+- **[verified/asserted]** (finding — evidence for verified, basis for asserted)
+
+"""
+
+
+# ------------------------------------------------------------------ worklog
+
+def cmd_log(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "worklog", "kb log")
+    wl = role_path(root, m, "worklog")
+    wl.parent.mkdir(parents=True, exist_ok=True)
+    aid = agent_id(args)
+    with Guarded(wl):
+        with open(wl, "a") as f:
+            head = f"- **{now()}** · `{aid}` — " if args.agent else f"- **{now()}** — "
+            f.write(head + args.entry + "\n")
+    print(f"worklog: appended ({wl.relative_to(root)})")
+
+
+# ------------------------------------------------------------------ workflows
+
+def agent_id(args) -> str:
+    aid = getattr(args, "agent", None) or os.environ.get("KB_AGENT_ID") or f"agent-{os.uname().nodename}"
+    return aid
+
+
+def _wf_path(root: Path, mapping: dict, wf: str) -> Path:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", wf):
+        die(f"workflow name `{wf}` must be kebab-case")
+    return role_path(root, mapping, "workflows") / f"{wf}.md"
+
+
+def cmd_wf(args) -> None:
+    root, m = find_root()
+    sub = args.wf_cmd
+    form, target = role_form(m, "workflows")
+    if form != "file":
+        if sub == "list":
+            print(f"workflows: {target} — this repo holds no kb boards; use that mechanism")
+            return
+        die(f"the workflows role is {'overlay' if form == 'overlay' else 'native'}-owned ({target}) — "
+            f"`kb wf` does not write boards here")
+    if sub == "new":
+        p = _wf_path(root, m, args.name)
+        if p.exists():
+            die(f"workflow board exists: {p.relative_to(root)}")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(WF_TPL.replace("{{WF}}", args.name))
+        print(f"workflow: {p.relative_to(root)} created")
+    elif sub == "add":
+        p = _wf_path(root, m, args.name)
+        if not p.exists():
+            die(f"no workflow board `{args.name}` — `kb wf new {args.name}` first")
+        with Guarded(p):
+            ids = [int(r.group(1)) for ln in p.read_text().splitlines()
+                   if (r := re.match(r"\|\s*" + re.escape(args.name) + r"-(\d+)", ln))]
+            n = max(ids, default=0) + 1
+            with open(p, "a") as f:
+                f.write(f"| {args.name}-{n:03d} | open | {args.item} | — | — |\n")
+        print(f"{args.name}-{n:03d} added (open)")
+    elif sub == "list":
+        d = role_path(root, m, "workflows")
+        if not d.is_dir():
+            die("no workflows directory")
+        for f in sorted(d.glob("*.md")):
+            rows = [ln for ln in f.read_text().splitlines() if ln.lstrip().startswith("|")]
+            open_n = sum(1 for r in rows if "| open |" in r)
+            print(f"{f.stem:24} {len(rows) - 2:3} rows, {open_n} open")
+    else:
+        die(f"unknown wf subcommand: {sub} (new|add|list)")
+
+
+def _find_item_board(root: Path, m: dict, item: str) -> tuple[Path, str]:
+    """Locate the one board holding a row id. Ids are minted as `<wf>-NNN` on
+    their own board, and a wf name may itself contain hyphens, so deriving the
+    board by splitting the id is wrong — searching the boards is unambiguous."""
+    d = role_path(root, m, "workflows")
+    if d.is_dir():
+        for f in sorted(d.glob("*.md")):
+            if find_row(f, item) is not None:
+                return f, f.stem
+    die(f"no workflow board holds row `{item}` — `kb wf list` shows the boards")
+
+
+def cmd_claim(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "workflows", "kb claim")
+    p, wf = _find_item_board(root, m, args.item)
+    if args.workflow and args.workflow != wf:
+        die(f"`{args.item}` lives on board `{wf}`, not `{args.workflow}`")
+    with Guarded(p):
+        row = find_row(p, args.item)
+        if row is None:
+            die(f"no row `{args.item}` on board {wf}")
+        parts = list(row)
+        claimed_by = parts[3] if len(parts) > 3 else "—"
+        already = re.search(r"claimed-by `?([A-Za-z0-9_.-]+)", claimed_by or "")
+        if already and already.group(1) != agent_id(args):
+            die(
+                f"`{args.item}` is claimed by {already.group(1)} "
+                f"(status: {parts[1]}) — post to the feed or claim another item; do not double-claim",
+                code=ERR_LINT)
+        parts[1] = "in-progress"
+        parts[3] = f"claimed-by `{agent_id(args)}` since {now()}"
+        if not replace_row(p, args.item, parts):
+            die("row vanished mid-write — rerun")
+    print(f"{args.item}: claimed by {agent_id(args)} (posted your identity to the feed — see `kb feed`)")
+    _post(root, m, agent_id(args), f"claiming `{args.item}` on board `{wf}`", wf, None, None)
+
+
+def cmd_wf_done(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "workflows", "kb done")
+    p, wf = _find_item_board(root, m, args.item)
+    if args.workflow and args.workflow != wf:
+        die(f"`{args.item}` lives on board `{wf}`, not `{args.workflow}`")
+    if args.new_status in TERMINAL and not args.evidence:
+        die(f"`{args.item} -> {args.new_status}` is terminal: --evidence names where the verdict lives")
+    with Guarded(p):
+        row = find_row(p, args.item)
+        if row is None:
+            die(f"no row `{args.item}` on board {wf}")
+        parts = list(row)
+        parts[1] = args.new_status
+        if args.new_status in TERMINAL:
+            parts[4] = f"[{today()}] {args.evidence} — {args.note or ''}".strip(" —")
+        if not replace_row(p, args.item, parts):
+            die("row vanished mid-write — rerun")
+    print(f"{args.item} → {args.new_status}")
+    _post(root, m, agent_id(args), f"`{args.item}` → {args.new_status}"
+          + (f" (evidence: {args.evidence})" if args.evidence else ""), wf, None, None)
+
+
+# --------------------------------------------------------------------- feed
+
+def _next_feed_id(text: str) -> str:
+    ids = [int(r.group(1)) for ln in text.splitlines() if (r := re.search(r"\*\*\[F(\d{4})\]", ln))]
+    return f"F{max(ids, default=0) + 1:04d}"
+
+
+def _post(root: Path, m: dict, aid: str, msg: str, wf: str | None, to: str | None, reply: str | None) -> str | None:
+    # The feed may be pointer-mapped (overlay:/native:): claims and board
+    # transitions call this to ANNOUNCE — the announcement is skipped, never
+    # splatted into a literal path (explicit `kb post` is gated in cmd_post).
+    if role_form(m, "feed")[0] != "file":
+        return None
+    feed = role_path(root, m, "feed")
+    feed.parent.mkdir(parents=True, exist_ok=True)
+    with Guarded(feed):
+        text = feed.read_text() if feed.exists() else ""
+        fid = _next_feed_id(text)
+        head = f"- **[{fid}]** {now()} · `{aid}`"
+        if wf:
+            head += f" · wf:{wf}"
+        if to:
+            head += f" · @{to}"
+        if reply:
+            head += f" · → {reply}"
+        with open(feed, "a") as f:
+            f.write(f"{head} — {msg}\n")
+    return fid
+
+
+def cmd_post(args) -> None:
+    root, m = find_root()
+    require_file_role(m, "feed", "kb post")
+    # Accept `--to @agent` and `--to agent` identically — the CLI always writes
+    # the mention with its own `@`, so a user-supplied one must not duplicate.
+    to = args.to.lstrip("@") if args.to else None
+    fid = _post(root, m, agent_id(args), args.message, args.workflow, to, args.reply)
+    print(f"feed: [{fid}] by {agent_id(args)}")
+
+
+def cmd_feed(args) -> None:
+    root, m = find_root()
+    form, target = role_form(m, "feed")
+    if form != "file":
+        die(f"the feed role is {'overlay' if form == 'overlay' else 'native'}-owned ({target}) — "
+            f"this repo deliberately holds no feed; read your mentions there")
+    feed = role_path(root, m, "feed")
+    if not feed.is_file():
+        die("no feed yet — `kb post` starts it")
+    lines = feed.read_text().splitlines()
+    if args.since:
+        try:
+            lines = lines[lines.index(next(l for l in lines if f"[{args.since}]" in l)) + 1:]
+        except StopIteration:
+            die(f"--since {args.since}: no such feed id")
+    for ln in lines:
+        if args.workflow and f"wf:{args.workflow}" not in ln:
+            continue
+        to = args.to.lstrip("@") if args.to else None
+        if to and f"@{to}" not in ln and f"`{to}`" not in ln:
+            continue
+        print(ln)
+
+
+# ------------------------------------------------------------------ doctor
+
+def cmd_doctor(args) -> None:
+    root, m = find_root()
+    findings: list[str] = []
+
+    # state freshness: the STATE doc should name the current git HEAD
+    state = role_path(root, m, "state")
+    sform, _ = role_form(m, "state")
+    git_head = ""
+    in_git = False
+    try:
+        r = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=root,
+                           capture_output=True, text=True)
+        in_git = r.stdout.strip() == "true"
+        git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                                  capture_output=True, text=True).stdout.strip()
+    except FileNotFoundError:
+        pass
+    if not in_git:
+        findings.append("append-only guard inactive: not a git repo — `git init` + a first commit makes the ledger/doctor checks live")
+    if state.is_file() and git_head and sform == "file":
+        heads = re.findall(r"\b[0-9a-f]{40}\b", state.read_text())
+        if heads and heads[0] != git_head:
+            findings.append(f"stale state: STATE.md names {heads[0][:8]}, repo HEAD is {git_head[:8]} — run `kb handoff`")
+
+    # append-only ledger: deletions in the last commit are rewrites
+    ledger = role_path(root, m, "ledger")
+    rel = ledger.relative_to(root).as_posix() if ledger.is_file() else None
+    if rel and git_head:
+        diff = subprocess.run(["git", "diff", "HEAD~1", "HEAD", "--", rel],
+                              cwd=root, capture_output=True, text=True).stdout
+        removed = sum(1 for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---"))
+        if removed:
+            findings.append(f"append-only violation: {removed} line(s) removed from {rel} in the last commit")
+
+    # missing roles — pointer forms (overlay:/native:) are legitimately
+    # elsewhere; say where instead of reporting them missing
+    for role in ("agents", "state", "entry", "register", "worklog", "feed", "closed", "runbook"):
+        form, target = role_form(m, role)
+        if form == "overlay":
+            print(f"in overlay: {role} → {target} (the operator's private overlay repo)")
+        elif form == "native":
+            print(f"native mechanism: {role} → {target}")
+        elif not role_path(root, m, role).exists():
+            findings.append(f"missing role: {role} ({m[role]})")
+
+    # stale current-state docs (untouched 30d) — only roles this repo actually holds
+    for role in ("state", "entry", "runbook"):
+        form, _ = role_form(m, role)
+        if form != "file":
+            continue
+        p = role_path(root, m, role)
+        if p.is_file():
+            age = (dt.datetime.now().timestamp() - p.stat().st_mtime) / 86400
+            if age > 30:
+                findings.append(f"stale {role}: untouched for {age:.0f} days")
+
+    # terminal register rows without verdict text
+    reg = role_path(root, m, "register")
+    if reg.is_file():
+        for ln in reg.read_text().splitlines():
+            if ln.lstrip().startswith("|"):
+                parts = [c.strip() for c in ln.strip().strip("|").split("|")]
+                if len(parts) > 2 and parts[1] in TERMINAL and "→ [" not in parts[2]:
+                    findings.append(f"{parts[0]}: terminal without a recorded verdict")
+
+    # feed head: the read-state anchor for the wake protocol (`kb feed --since`)
+    feed = role_path(root, m, "feed")
+    if feed.is_file():
+        ids = [int(r.group(1)) for ln in feed.read_text().splitlines()
+               if (r := re.search(r"\*\*\[F(\d{4})\]", ln))]
+        if ids:
+            print(f"feed head: F{max(ids):04d} — pass --since F{max(ids):04d} to read only newer messages")
+
+    # live claims across boards (the parallel-agent map)
+    wf_dir = role_path(root, m, "workflows")
+    if wf_dir.is_dir():
+        for f in sorted(wf_dir.glob("*.md")):
+            for ln in f.read_text().splitlines():
+                if "claimed-by" in ln and "| in-progress |" in ln:
+                    print(f"live claim  {ln.strip()[:100]}")
+
+    if findings:
+        print(f"doctor: {len(findings)} finding(s)")
+        for f in findings:
+            print(f"  - {f}")
+    else:
+        print("doctor: healthy")
+
+
+# ----------------------------------------------------------------- handoff
+
+def cmd_handoff(args) -> None:
+    root, m = find_root()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                          capture_output=True, text=True).stdout.strip() or "(not a git repo)"
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root,
+                             capture_output=True, text=True).stdout.strip()
+    dirty = subprocess.run(["git", "status", "--short"], cwd=root,
+                            capture_output=True, text=True).stdout.strip()
+    reg = role_path(root, m, "register")
+    open_rows = []
+    if reg.is_file():
+        for ln in reg.read_text().splitlines():
+            if ln.lstrip().startswith("|"):
+                parts = [c.strip() for c in ln.strip().strip("|").split("|")]
+                if len(parts) > 1 and parts[1] in ("open", "in-progress", "blocked"):
+                    open_rows.append(f"  - [{parts[1]}] {parts[0]}: {parts[2][:80]}")
+    wl = role_path(root, m, "worklog")
+    tail = wl.read_text().splitlines()[-5:] if wl.is_file() else []
+    out = [
+        f"# State — {today()}",
+        "",
+        f"Repo branch `{branch}`, HEAD `{head}`."
+        + (f" Working tree dirty ({len(dirty.splitlines())} paths)." if dirty else " Tree clean."),
+        "",
+        "## Open register rows",
+        *(open_rows or ["  (none — everything terminal)"]),
+        "",
+        "## Recent worklog",
+        *(tail or ["  (empty)"]),
+        "",
+        "Regenerate with `kb handoff`. Live claims: see `kb doctor`.",
+    ]
+    if args.write:
+        form, target = role_form(m, "state")
+        if form != "file":
+            die(f"the state role is {'overlay-owned (at ' + target + ')' if form == 'overlay' else 'native (' + target + ')'} — "
+                f"run `kb handoff` inside that repo; this one deliberately holds no state")
+        role_path(root, m, "state").write_text("\n".join(out) + "\n")
+        print(f"wrote {m['state']}")
+    else:
+        print("\n".join(out))
+
+
+# ----------------------------------------------------------------- templates
+
+KB_TOML = """# kb.toml — the role→path map. Edit freely; roles keep their meaning.
+[paths]
+""" + "\n".join(f'{k} = "{v}"' for k, v in DEFAULTS.items()) + """
+
+# status vocabulary: open in-progress done rejected blocked (terminal: done rejected)
+"""
+
+AGENTS_TPL = """# AGENTS.md — the entry contract
+
+Orientation, build gates, and **which document owns which question**. An agent
+reading only this file must know where every answer lives.
+
+## What this project is
+
+(one paragraph)
+
+## Build / test gate
+
+```
+{{GATE}}
+```
+
+## Routing table — which document answers what
+
+| question | answer lives in |
+|---|---|
+| what is this / how to build / the rules | this file |
+| where does the project stand right now | `docs/handoff/STATE.md` |
+| what does a fresh agent read, in order | `docs/handoff/README.md` |
+| what is left to do, and what was decided about each item | `TODO.md` |
+| how will we do X (pre-registered plan) | `docs/plans/` (dated, frozen) |
+| what was audited, what was found | `docs/audit/` (dated, frozen) |
+| why X is the way it is | `docs/decisions/` (AD-NNN, immutable) |
+| what bit us, and the law it produced | `docs/regressions/` (RG-NNN, immutable) |
+| what was tried and rejected — do not re-litigate | `docs/kb/CLOSED.md` (append-only) |
+| exact commands, environment traps | `docs/RUNBOOK.md` |
+| what happened, session by session | `docs/kb/WORKLOG.md` (append-only) |
+| cross-agent messages, claims, mentions | `docs/kb/feed.md` (append-only) |
+| in-flight work per workflow, with claims | `docs/kb/workflows/` |
+| superseded history | `docs/archive/` (tombstones at the original paths) |
+
+## Rules
+
+1. One owner per question. Two documents may not answer the same thing.
+2. Every document has a mutability class (see `kb help lint`): append-only
+   files only ever gain lines; dated files are frozen; state docs are
+   regenerated, old versions archived with tombstones.
+3. Nothing is deleted. Superseded → `kb archive --reason`.
+4. Register/workflow rows move through the status vocabulary; terminal states
+   name their evidence.
+5. Parallel agents: claim before you work (`kb claim`), post to the feed
+   (`kb post`), read your mentions on wake (`kb feed --to <you>`).
+"""
+
+REGISTER_TPL = """# TODO — the register
+
+One row per work item; rows update in place, verdicts append — never delete.
+`kb status <id> <state> --evidence <path>` is the supervised transition.
+
+| id | status | item / verdict | notes |
+|---|---|---|---|
+"""
+
+ENTRY_TPL = """# Handoff — what a fresh agent reads, in order
+
+| # | file | why |
+|---|---|---|
+| 1 | `AGENTS.md` | the rules and the routing table |
+| 2 | `docs/handoff/STATE.md` | where the project stands |
+| 3 | `TODO.md` | the register: what is open, what was decided |
+| 4 | `docs/kb/CLOSED.md` | what was rejected — do not re-litigate |
+| 5 | `docs/RUNBOOK.md` | exact commands |
+
+**On wake as a parallel agent:** `kb feed --to <your-id>` first — other agents
+may have left you messages — then `kb doctor` for live claims and staleness.
+"""
+
+STATE_TPL = """# State
+
+Regenerate with `kb handoff --write`. The old state goes to the archive, never
+the trash.
+"""
+
+RUNBOOK_TPL = """# Runbook — exact commands, environment traps
+
+| task | command | traps |
+|---|---|---|
+"""
+
+CLOSED_TPL = """# CLOSED — tried and rejected
+
+Append-only. An entry names the item, the verdict, and the measurement that
+killed it. Re-proposing a closed item needs new evidence, not enthusiasm.
+"""
+
+WORKLOG_TPL = "# Worklog\n\nAppend-only: `kb log \"<entry>\"` — one entry per unit of work.\n"
+
+FEED_TPL = """# Agent feed
+
+Append-only cross-agent channel. `kb post \"msg\" --wf <workflow> --to <agent>`
+writes; `kb feed --to <you> --since <F####>` reads your mentions. A waking
+agent reads its mentions before touching shared state.
+"""
+
+WF_TPL = """# Workflow: {{WF}}
+
+A scoped kanban — parallel agents on different workflows never share a board.
+`kb wf add {{WF}} \"item\"`, `kb claim <id>`, `kb wf done <id> --evidence <path>`.
+The `claimed-by` column is the collision guard: do not start work on an item
+another agent has claimed.
+
+| id | status | item | claim | verdict |
+|---|---|---|---|---|
+"""
+
+AD_TPL = """# AD-{{N}}: {{TITLE}}
+
+Immutable once numbered. Correcting a decision means a *new* AD that supersedes
+this one by name.
+
+- **Date:** {{DATE}}
+- **Context:** (what forced the choice)
+- **Decision:** (the law, stated so an agent can apply it without asking)
+- **Consequences:** (what this makes easy, what it forecloses)
+"""
+
+RG_TPL = """# RG-{{N}}: {{TITLE}}
+
+Immutable once numbered: a regression is a bite plus the law that prevents it.
+
+- **Date:** {{DATE}}
+- **Symptom:** (what it looked like when it broke)
+- **Root cause:** (the mechanism, not the proximate typo)
+- **Law:** (the rule that would have prevented it)
+"""
+
+
+# ---------------------------------------------------------------------- main
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="kb", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("init", help="cold-start the KB in this repo (never overwrites)")
+    s.add_argument("--force", action="store_true")
+    s.set_defaults(fn=cmd_init)
+
+    s = sub.add_parser("lint", help="schema + doctrine check (exit 2 on error)")
+    s.add_argument("--advisory", action="store_true", help="report, never fail")
+    s.set_defaults(fn=cmd_lint)
+
+    s = sub.add_parser("plan", help="mint a dated, frozen plan document")
+    s.add_argument("title"); s.set_defaults(fn=cmd_plan)
+
+    s = sub.add_parser("audit", help="mint a dated, frozen audit document")
+    s.add_argument("title"); s.set_defaults(fn=cmd_audit)
+
+    s = sub.add_parser("claim-register", help="claim a strategic register row as this agent")
+    s.add_argument("id"); s.add_argument("--agent")
+    s.set_defaults(fn=cmd_claim_register)
+
+    s = sub.add_parser("status", help="supervised register status transition")
+    s.add_argument("id"); s.add_argument("status")
+    s.add_argument("--evidence"); s.add_argument("--note"); s.add_argument("--agent")
+    s.set_defaults(fn=cmd_status)
+
+    s = sub.add_parser("archive", help="move a doc to the archive, tombstone behind")
+    s.add_argument("path"); s.add_argument("--reason", required=True)
+    s.set_defaults(fn=cmd_archive)
+
+    s = sub.add_parser("ad", help="mint the next AD-NNN decision record")
+    s.add_argument("title"); s.set_defaults(fn=cmd_ad)
+
+    s = sub.add_parser("rg", help="mint the next RG-NNN regression record")
+    s.add_argument("title"); s.set_defaults(fn=cmd_rg)
+
+    s = sub.add_parser("log", help="append a worklog entry")
+    s.add_argument("entry"); s.add_argument("--agent")
+    s.set_defaults(fn=cmd_log)
+
+    s = sub.add_parser("wf", help="workflow kanbans: new|add|list")
+    s.add_argument("wf_cmd"); s.add_argument("name", nargs="?"); s.add_argument("item", nargs="?")
+    s.set_defaults(fn=cmd_wf)
+
+    s = sub.add_parser("claim", help="claim a workflow item as this agent")
+    s.add_argument("item"); s.add_argument("--workflow"); s.add_argument("--agent")
+    s.set_defaults(fn=cmd_claim)
+
+    s = sub.add_parser("done", help="move a workflow item to a new status")
+    s.add_argument("item"); s.add_argument("new_status", choices=STATUS_VOCAB)
+    s.add_argument("--workflow"); s.add_argument("--evidence"); s.add_argument("--note"); s.add_argument("--agent")
+    s.set_defaults(fn=cmd_wf_done)
+
+    s = sub.add_parser("post", help="post to the agent feed")
+    s.add_argument("message")
+    s.add_argument("--wf", dest="workflow"); s.add_argument("--to"); s.add_argument("--reply"); s.add_argument("--agent")
+    s.set_defaults(fn=cmd_post)
+
+    s = sub.add_parser("feed", help="read the feed (your mentions on wake)")
+    s.add_argument("--wf", dest="workflow"); s.add_argument("--to"); s.add_argument("--since")
+    s.set_defaults(fn=cmd_feed)
+
+    s = sub.add_parser("doctor", help="staleness, conflicts, append-only violations")
+    s.set_defaults(fn=cmd_doctor)
+
+    s = sub.add_parser("handoff", help="regenerate the state snapshot")
+    s.add_argument("--write", action="store_true")
+    s.set_defaults(fn=cmd_handoff)
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

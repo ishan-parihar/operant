@@ -125,3 +125,6 @@ skills/.curator/
 # the provisioner re-downloads them on demand.
 local/libclang.deb
 local/onnxruntime*.tgz
+
+# kb flock artifacts
+*.lock

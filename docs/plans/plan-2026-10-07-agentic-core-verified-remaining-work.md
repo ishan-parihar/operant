@@ -5,7 +5,7 @@
 > source with file:line evidence, plus inline spot-checks. **Parent authority:**
 > `docs/OPENHUMAN-AGENTIC-LOGIC-PORT-PLAN.md` (this doc is its audit-qualified
 > refinement), `docs/REMAINING-GAPS.md` (org layer), and
-> `docs/plan-2026-10-07-organism-operational-memory.md` (org operational slices).
+> `docs/plans/plan-2026-10-07-organism-operational-memory.md` (org operational slices).
 >
 > **Purpose:** kill redundant work. Several items the port plan lists as "to
 > build" already exist, and several items my earlier outline listed as "dead"

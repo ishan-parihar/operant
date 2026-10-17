@@ -119,7 +119,7 @@ trading-systems/
 
 | Iter | Scope | Files |
 |---|---|---|
-| **1** | This plan (docs only) | `docs/plan-2026-10-09-meta-skill-creator-nested-references.md` |
+| **1** | This plan (docs only) | `docs/plans/plan-2026-10-09-meta-skill-creator-nested-references.md` |
 | **2** | **Rewrite meta-skill-creator** (canonical, repo) | `skills/software-development/meta-skill-creator/SKILL.md`, `references/templates.md`, new `references/writing-guide.md`, `scripts/registry.py` |
 | **3** | **Rust lockstep** | `crates/operant-core/src/tools/skills_tool.rs`, `crates/operant-cli/src/cmd_skills.rs`, `crates/operant-core/src/agent/mod.rs` (prompt block), tests, `CHANGELOG.md` |
 | **4** | **Migration script + pilot tree** | new `scripts/migrate_to_references.py`, `skills/creative/website-design/**` |

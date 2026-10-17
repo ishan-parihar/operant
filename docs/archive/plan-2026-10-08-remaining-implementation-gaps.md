@@ -280,7 +280,7 @@ decision→charter amendment path. Depends on 5's predicates and read
 surfaces. Socialization phases 2/3 ride the same unblock.
 
 ### Item 7 — Gap 5 phase 2: platform read adapters (L per-platform, last) — RE-SCOPED 2026-10-09
-- **Superseded by `docs/plan-2026-10-09-remaining-gaps.md`**: the owner
+- **Superseded by `docs/plans/plan-2026-10-09-remaining-gaps.md`**: the owner
   supplied a live Telegram token (@ip_zeroclaw_bot) on 2026-10-09; the
   delivery hop is closed and inbound DMs work end-to-end. Live testing found
   two concrete bugs (offset store not keyed per bot; session entry never

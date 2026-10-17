@@ -12,6 +12,10 @@ This repository is operated under a strict **iteration model**. Every change —
 no matter how small — is one iteration, and every iteration follows the same
 five-step loop. Skipping a step is a protocol violation.
 
+Before ANY work, run the documentation wake check (see "Documentation Genome"
+at the end of this file): `./scripts/kb doctor` for live claims and staleness,
+`./scripts/kb feed --to <your-agent-id>` for mentions other agents left you.
+
 ### The Iron Rule
 
 > **ALWAYS PUSH COMMITS AFTER EACH ITERATION.**
@@ -303,9 +307,9 @@ gitignore is doing its job; leave them alone.
   panels for `MCP`, `Skills`, and `Behavior`
 - When config fields change, update `operant.example.toml` in the repo root in
   the same change
-- When user-facing behavior changes, update `README.md`, `CHANGELOG.md`, and
+- When user-facing behavior changes, update `README.md`, `docs/CHANGELOG.md`, and
   screenshots in `assets/` if the UI changed materially
-- Tagged releases are created from `CHANGELOG.md` and built on the LOCAL
+- Tagged releases are created from `docs/CHANGELOG.md` and built on the LOCAL
   machine — never on GitHub. The Actions quota is exhausted, so every
   workflow is `workflow_dispatch`-only: no push and no tag triggers anything.
   Release procedure: write the dated `## [X.Y.Z]` section, commit, push the
@@ -1093,7 +1097,7 @@ cargo test -p operant-cli  --bin operant
 2. Read the Python implementation for reference, but do not copy idioms.
 3. Implement in Rust following existing patterns in this repo.
 4. Add tests under `crates/<crate>/tests/` or inline `#[cfg(test)]` modules.
-5. Update `CHANGELOG.md` and `operant.example.toml` if config changed.
+5. Update `docs/CHANGELOG.md` and `operant.example.toml` if config changed.
 6. Commit + push.
 
 **Port from Python (hermes-agent)**
@@ -1342,3 +1346,76 @@ model = "gpt-4"       # Default model (override in user config)
     performance, regression test for every fix.
 11. **When in doubt, ask.** Pushing back is welcome; silently doing the wrong
     thing is not.
+
+---
+
+## Documentation Genome (project-kb)
+
+This repo runs the **project-kb genome**: a fixed set of documentation roles,
+each with ONE mutability class, enforced by `./scripts/kb` (stdlib Python, no
+dependencies). `kb.toml` maps every role to this repo's own paths — the defaults
+were adopted without moving files this repo already owns.
+
+### Routing table — which document answers what
+
+| question | answer lives in | mutability class |
+|---|---|---|
+| what is this / build gate / which doc answers what | `AGENTS.md` | superseded-in-place (old → archive) |
+| where does the project stand right now | `docs/handoff/STATE.md` | current snapshot — regenerate, archive old |
+| what a fresh agent reads, in order | `docs/handoff/README.md` | current |
+| what is left to do, decided per item (autonomous mode's ledger) | `TODO.md` | rows update, verdicts append — never delete |
+| how we will do X (pre-registered, current work) | `docs/plans/` (dated `plan-YYYY-MM-DD-*`, frozen) | dated-frozen |
+| what was audited, what was found | `docs/audit/` (dated, frozen) | dated-frozen |
+| why X is the way it is | `docs/decisions/` (AD-NNN-*.md) | immutable once numbered |
+| what bit us, and the law it produced | `docs/regressions/` (RG-NNN-*.md) | immutable once numbered |
+| what was tried and rejected — do not re-litigate | `docs/kb/CLOSED.md` | append-only |
+| what happened, unit of work by unit of work | `docs/kb/WORKLOG.md` | append-only |
+| cross-agent messages, claims, mentions | `docs/kb/feed.md` | append-only |
+| in-flight work for ONE workflow, claim-guarded | `docs/kb/workflows/<wf>.md` | rows update, claims guarded |
+| exact commands, environment traps | `docs/RUNBOOK.md` | current, surgical edits |
+| superseded history (findable, never deleted) | `docs/archive/` (tombstones at the original paths, an `docs/archive/INDEX.md` row each) | tombstone + pointer |
+| open audit findings and fix state (repo-native) | `BUGS.md` (root — NOT the kb ledger; the CLOSED ledger holds *rejected proposals*) | rows update, verdicts append |
+| release history, dated | `docs/CHANGELOG.md` | append-only per release |
+| one-off 2026-08 design/parity/audit docs | `docs/*.md` reference shelf (HERMES_*, ORGANISM-*, *PLAN*, *AUDIT*) | frozen history — no edits, cite only |
+
+### The five laws (enforced by `kb lint` / `kb doctor`)
+
+1. **One owner per question.** Two documents may not answer the same thing.
+2. **Every document has a mutability class.** Append-only files only gain lines;
+   dated files are frozen; state docs are regenerated, old versions archived.
+3. **Nothing is deleted.** Superseded → `kb archive <path> --reason "<why>"`.
+4. **Statuses move through the vocabulary** (`open` `in-progress` `done`
+   `rejected` `blocked`); terminal states name their evidence.
+5. **Parallel agents claim before they work**, post to the feed, and read their
+   mentions on wake.
+
+### CLI quickstart (run `./scripts/kb --help`; every subcommand prints its rules)
+
+```bash
+./scripts/kb lint                    # schema + doctrine check — exit 2 on error
+./scripts/kb doctor                  # staleness, append-only violations, live claims
+./scripts/kb feed --to <agent-id>    # your mention inbox — FIRST on wake
+./scripts/kb post "msg" --wf <wf> --to @<agent>
+./scripts/kb plan "<title>"           # mint a dated-frozen plan
+./scripts/kb audit "<title>"          # mint a dated-frozen audit
+./scripts/kb wf new <wf> && ./scripts/kb wf add <wf> "<item>"
+./scripts/kb claim <item> / ./scripts/kb done <item> done --evidence <path>
+./scripts/kb log "<entry>" --agent <id>
+./scripts/kb ad "<title>" / ./scripts/kb rg "<title>"
+./scripts/kb handoff --write         # regenerate STATE.md (archives the old)
+```
+
+### Fleet notes (this repo specifically)
+
+- The per-workflow boards are the collision guard between concurrent agents —
+  the same job the `agent://<name>` channel and the iteration-label lookup do.
+  `kb claim` refuses a double-claim with exit 2; that, not politeness, is what
+  stops two agents editing one board.
+- The register keeps `TODO.md`'s native `## Implemented` / `## Pending` /
+  `## Review` sections because autonomous mode parses them; `kb status` works
+  on register rows only once they exist as table rows.
+- `docs/plan-*.md` and `docs/audits/` were re-homed into `docs/plans/` and
+  `docs/audit/` on adoption (2026-10-17, iter-900); the 2026-08 numbered
+  `plans/` series and the 2026-08 docs/BUGS.md copy were archived with
+  tombstones. Cite `docs/plans/plan-YYYY-MM-DD-*.md`, not the pre-iter-900
+  paths.
