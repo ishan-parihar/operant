@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **iter-902 — `operant donate` command + installer star/donate CTA**
+  (owner-directed integration). New `Donate` command printing the repo,
+  GitHub Sponsors, and Razorpay (UPI) links; `scripts/install.sh`
+  rewritten as a per-user installer (root guard with `--force-root`
+  override, package-manager-aware preflight with per-distro install
+  hints, star/donate CTA epilogue gated by `--no-cta`, referencing
+  `operant donate`); README badge band cleaned to the CI badge.
+
+### Docs
+
+- **iter-903 — the 2026-10-16 raw audit is integrated into the kb**
+  (`docs/audit/2026-10-16-operant-audit/`: the INDEX, the 20 ranked
+  findings, and the eleven standalone plan files with `file:line`
+  evidence that drove iters 894–901). Its execution-order note (02 test
+  gate first, safety before features, crate purge last) stays the
+  operating contract for follow-ups. Side fix: the iter-900 re-homing
+  left four dangling `docs/plan-*` references (two CHANGELOG paths, two
+  in PLAN-TUI-OVERHAUL{,-v1}.md) — repointed at `docs/plans/`.
+
 ### Fixed
 
 - **iter-898 — plan 05B B2.7 first half: `/login` runs operant's own
@@ -1495,7 +1516,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing semantics). Both adapter tests pinned to the sentinel
   contract; style goldens reshaped (C8C8C3 plain → 646464+italic dim),
   re-proven deterministic, corpus 0-drift. Suite 1750/0.
-- **iter-778 — post-P4-2 remaining-gaps outline** (`docs/plan-2026-10-12-tui-remaining-gaps-outline.md`):
+- **iter-778 — post-P4-2 remaining-gaps outline** (`docs/plans/plan-2026-10-12-tui-remaining-gaps-outline.md`):
   all four live complaints now closed; the queue reduces to the 62
   fall-through commands (four honest tiers: wire-only aliases, port-decision
   unregisters, real-feature seams, registry noise), the P4-6 slow-frame
@@ -1528,7 +1549,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[observability]` seam + the cron outcome quartet, iter-772), row 6b
   (the progress-token stall rung, iter-773) and §2 P1-A (the
   per-channel dispatch breaker, iter-774) are all marked landed in
-  `docs/plan-2026-10-09-remaining-gaps-outline-v6.md`, each with its
+  `docs/plans/plan-2026-10-09-remaining-gaps-outline-v6.md`, each with its
   landed-shape note (what shipped, what proves it). Docs-only — no
   code changes.
 

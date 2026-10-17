@@ -291,7 +291,7 @@ was too broad. Split it.
 Peer WIP is **uncommitted and must not be staged or reformatted**:
 `crates/operant-core/tests/stream_interrupt.rs`, `crates/operant-core/src/agent/stream_retry_budget.rs`,
 `crates/operant-cli/src/gateway_commands.rs`, `gateway_runner.rs`, `BUGS.md`, `Cargo.toml`,
-`Cargo.lock`, `docs/plan-2026-09-29-telegram-loop.md`, `plans/telegram-ux-fixes.md`,
+`Cargo.lock`, `docs/plans/plan-2026-09-29-telegram-loop.md`, `plans/telegram-ux-fixes.md`,
 `docs/ORGANISM-OS-UPGRADE-OUTLINE.md`, plus the dirty `crates/operant-core/src/agent/*` files.
 
 `cargo fmt --all` will touch `gateway_commands.rs:517` and dirty the tree. Use

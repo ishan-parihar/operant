@@ -280,7 +280,7 @@ files than the iteration changed means the change was too broad — split it.
 Peer WIP is uncommitted and **must not be staged, reformatted, or stashed**:
 `crates/operant-core/tests/stream_interrupt.rs`, `crates/operant-core/src/agent/stream_retry_budget.rs`,
 `crates/operant-cli/src/gateway_commands.rs`, `gateway_runner.rs`, `BUGS.md`, `Cargo.toml`,
-`Cargo.lock`, `docs/plan-2026-09-29-telegram-loop.md`, `plans/telegram-ux-fixes.md`,
+`Cargo.lock`, `docs/plans/plan-2026-09-29-telegram-loop.md`, `plans/telegram-ux-fixes.md`,
 `docs/ORGANISM-OS-UPGRADE-OUTLINE.md`, plus dirty `crates/operant-core/src/agent/*`.
 
 Consequences for this work:
