@@ -62,10 +62,10 @@ pub const BRIDGE_TOOL_NAMES: &[&str] = &[TOOL_SEARCH_NAME, TOOL_DESCRIBE_NAME, T
 /// actually fit.
 const CHARS_PER_TOKEN: f64 = 4.0;
 
-/// Whether a tool name is deferrable. Only MCP server tools (`mcp_*`)
-/// defer; every native tool stays eager.
+/// Whether a tool name is deferrable. MCP server tools (`mcp_*`) and Holon
+/// pooled services (`svc_*`, H2) defer; every native tool stays eager.
 pub fn is_deferrable(name: &str) -> bool {
-    name.starts_with("mcp_")
+    name.starts_with("mcp_") || name.starts_with("svc_")
 }
 
 /// Result of assembling the model-visible tools array.
@@ -196,7 +196,11 @@ fn server_summary(deferred: &[ToolSchema]) -> String {
         // `mcp_<server>_<tool>` — strip the leading `mcp_` and take the
         // first underscore-delimited segment as the server name (tool
         // names may themselves contain underscores).
-        let rest = s.name.strip_prefix("mcp_").unwrap_or(&s.name);
+        let rest = s
+            .name
+            .strip_prefix("mcp_")
+            .or_else(|| s.name.strip_prefix("svc_"))
+            .unwrap_or(&s.name);
         let server = match rest.split_once('_') {
             Some((server, _)) => server,
             None => rest,
@@ -856,5 +860,21 @@ mod tests {
         let text = build_listing(&deferred, &ts("auto", "auto", 4000), 128_000);
         assert!(text.contains("mcp_s_alpha"), "{text}");
         assert!(text.contains("Alpha"), "{text}");
+    }
+
+    /// H2: service tools (`svc_*`) are a second deferred source, so they take the
+    /// same bridge and turn-driven path as `mcp_*` tools.
+    #[test]
+    fn svc_tools_defer_through_the_same_bridge() {
+        assert!(is_deferrable("svc_browser_sourcehound"));
+        assert!(!is_deferrable("file_read"));
+        let all = vec![
+            ToolSchema::new("file_read", "read a file", json!({})),
+            ToolSchema::new("svc_browser_sourcehound", "search the web", json!({})),
+        ];
+        let assembled = assemble_tools(all, &ToolSearchSettings::default(), 0);
+        let deferred: Vec<&str> = assembled.deferred.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(deferred, ["svc_browser_sourcehound"]);
+        assert!(assembled.visible.iter().any(|s| s.name == TOOL_SEARCH_NAME));
     }
 }

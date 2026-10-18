@@ -45,11 +45,13 @@ pub fn run_policy() -> Option<crate::Result<PolicyDoc>> {
 struct RunPolicySource {
     seat: String,
     policy: PolicyDoc,
+    /// the read services this run indexed (H2): observe allows them by name
+    service_reads: Vec<String>,
 }
 
 impl SeatPolicySource for RunPolicySource {
     fn policy_for(&self, employee_id: &str) -> Option<SeatPolicy> {
-        (employee_id == self.seat).then(|| self.policy.seat_policy())
+        (employee_id == self.seat).then(|| self.policy.seat_policy_with_services(&self.service_reads))
     }
 }
 
@@ -57,7 +59,10 @@ impl SeatPolicySource for RunPolicySource {
 /// one. Databases live under the isolated operant home (`HERMES_HOME`) — the
 /// same home the adapter installer prepared — so escalations from Holon runs
 /// never touch the operator's own org stores.
-pub fn holon_authority(_home: &std::path::Path) -> crate::Result<Option<Arc<SeatAuthority>>> {
+pub fn holon_authority(
+    _home: &std::path::Path,
+    service_reads: &[String],
+) -> crate::Result<Option<Arc<SeatAuthority>>> {
     let Some(loaded) = run_policy() else {
         return Ok(None);
     };
@@ -68,6 +73,7 @@ pub fn holon_authority(_home: &std::path::Path) -> crate::Result<Option<Arc<Seat
         RunPolicySource {
             seat: holon_seat(),
             policy,
+            service_reads: service_reads.to_vec(),
         },
     )))))
 }

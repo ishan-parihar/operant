@@ -30,6 +30,7 @@ pub mod organs;
 pub mod policy;
 pub mod run;
 pub mod run_env;
+pub mod service_index;
 pub mod supervisor;
 pub mod tools;
 

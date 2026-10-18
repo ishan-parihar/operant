@@ -1018,6 +1018,14 @@ pub(crate) async fn build_registry(
     // on the same env, so registering is inert outside a Holon run.
     if operant_core::platform::is_holon_run() || config.holon.enabled {
         operant_os::tools::register_all(&registry).await;
+        // H2: the pooled services this run's seat is entitled to, as deferred svc_* tools
+        if let Some(home) = operant_os::service_index::holon_home(&config.holon.home) {
+            match operant_os::service_index::for_run(&home) {
+                Ok(Some(run)) => run.register(&registry).await,
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "holon service index unavailable"),
+            }
+        }
     }
 
     // Memory provider tools (agentmemory_*) are registered via the MCP
@@ -2007,9 +2015,15 @@ pub(crate) async fn create_agent_without_events(
         // seat-authority consult on every tool call. Not a Holon run (no env
         // var, or the kernel predates policy.json): no authority, today's
         // behavior byte-identical — invariant 5.
-        if let Some(authority) =
-            operant_os::enforcement::holon_authority(&operant_core::platform::operant_home())
-                .map_err(|e| anyhow::anyhow!("holon enforcement: {e}"))?
+        let service_reads = operant_os::service_index::holon_home(&config.holon.home)
+            .and_then(|home| operant_os::service_index::for_run(&home).ok().flatten())
+            .map(|run| run.read_names())
+            .unwrap_or_default();
+        if let Some(authority) = operant_os::enforcement::holon_authority(
+            &operant_core::platform::operant_home(),
+            &service_reads,
+        )
+        .map_err(|e| anyhow::anyhow!("holon enforcement: {e}"))?
         {
             let seat = operant_os::enforcement::holon_seat();
             tracing::info!(

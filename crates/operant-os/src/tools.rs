@@ -90,7 +90,7 @@ fn kernel_command(bin: Option<&str>) -> Vec<String> {
 }
 
 /// Minimal shell-word split (POSIX single/double quotes, no escapes).
-fn split_word_list(s: &str) -> Vec<String> {
+pub(crate) fn split_word_list(s: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut cur = String::new();
     let mut in_single = false;

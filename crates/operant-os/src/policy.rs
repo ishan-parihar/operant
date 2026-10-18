@@ -167,6 +167,14 @@ impl PolicyDoc {
     /// Act: yolo with the document's deny list — the approved plan runs, the
     /// hardline blocklist still applies (it fires before any seat mode).
     pub fn seat_policy(&self) -> SeatPolicy {
+        self.seat_policy_with_services(&[])
+    }
+
+    /// [`Self::seat_policy`] plus the read services a Holon run indexed (H2).
+    /// Observe allows exactly those names on top of the observer list (write
+    /// services are never named, so they escalate and are denied unattended);
+    /// act is unchanged (yolo with the deny list already admits them).
+    pub fn seat_policy_with_services(&self, read_services: &[String]) -> SeatPolicy {
         match self.posture.as_str() {
             "act" => SeatPolicy {
                 mode: SeatMode::Yolo,
@@ -181,6 +189,7 @@ impl PolicyDoc {
                     .chain(crate::tools::native_tool_names())
                     .filter(|n| !OBSERVE_HOLON_DENY.contains(n))
                     .map(|s| s.to_string())
+                    .chain(read_services.iter().cloned())
                     .collect(),
                 deny: self.deny.clone(),
             },
