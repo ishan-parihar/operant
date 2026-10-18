@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-918 — the context window is read after the models.dev fetch.**
+  iter-917 refreshed the window before `load_models_dev()` ran, so on a cold
+  cache the first frame used the per-provider fallback and nothing re-read it
+  until the model changed. Both startup paths now refresh after the fetch.
 - **iter-917 — the context meter reads the model's real window from models.dev.**
   The TUI looked the window up in `ModelRegistry::get`, which never carried a
   window: every model in the static seed lists read 0 and the meter was hidden,
