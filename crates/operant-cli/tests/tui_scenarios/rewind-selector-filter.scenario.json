@@ -11,8 +11,7 @@
     "contains:filter: parser",
     "contains:Rewind to a previous prompt"
   ],
-  "deterministic": true,
-  "baseline": "rewind-selector-filter.txt",
+    "baseline": "rewind-selector-filter.txt",
   "style_baseline": "rewind-selector-filter.style.txt",
   "notes": "2026-10-14 batch, plan 05: the filter bar. f opens it, typed text shows live in the header (filter: parser). Pairs with rewind-selector.txt — the two goldens pin the closed and open filter surfaces."
 }

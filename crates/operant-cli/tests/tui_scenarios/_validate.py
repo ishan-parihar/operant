@@ -21,17 +21,23 @@ errors, warnings = [], []
 # cmd_tui_debug.rs::parse_key_sequence — the explicit table, plus the two
 # generic grammars parse_generic_chord() adds on top of it.
 NAMED = {"enter", "esc", "escape", "tab", "up", "down", "left", "right",
-         "backspace", "bs", "ctrl+a", "ctrl+c", "ctrl+t", "ctrl+r", "shift+tab"}
+         "pageup", "pgup", "pagedown", "pgdn", "backspace", "bs", "ctrl+a", "ctrl+c", "ctrl+t", "ctrl+r", "shift+tab"}
 GENERIC_CHORD = re.compile(r"(?:(?:ctrl|control|alt|meta|option|shift)\+)+[^<>,+\s]$")
 ESCAPES = set("nt\\")
 
 # app/commands.rs::debug_snapshot()
-SNAP_TOP = {"should_exit", "is_streaming", "is_simulating", "plan_mode", "show_help",
-            "show_reasoning", "messages", "status_message", "model",
-            "provider", "focus", "token_count", "any_modal_open", "overlays",
-            # non-modal surfaces, deliberately not in `overlays` — see the
-            # comment in debug_snapshot()
-            "usage_overlay", "debug_overlay"}
+def _snapshot_top_keys():
+    # Derived from the json!({ ... }) literal in debug_snapshot(): top-level keys
+    # are the 12-space-indented `"key":` lines. Transcribing them drifted (five
+    # keys added since), so the validator reads the source directly.
+    src = (REPO / "crates/operant-cli/src/tui/app/commands.rs").read_text(encoding="utf-8")
+    body = src[src.index("fn debug_snapshot"):]
+    body = body[body.index("json!({"):body.index("\n        })")]
+    keys = set(re.findall(r'^ {12}"([a-z_0-9]+)":', body, re.M))
+    if not keys:
+        raise SystemExit("could not derive debug_snapshot() keys from commands.rs")
+    return keys
+SNAP_TOP = _snapshot_top_keys()
 # app/commands.rs::overlay_flags()  (34 entries, array length asserted in the crate)
 OVERLAYS = {
     "help_overlay", "history_search_overlay", "global_search", "rewind_flow",
@@ -71,7 +77,6 @@ SURFACES = [
     ("plugins hub", "plugins_hub.rs::render_plugins_hub", "plugins-hub"),
     ("journey view", "journey_view.rs::render_journey_view", "journey-view"),
     ("hooks config menu", "hooks_config_menu.rs::render_hooks_config_menu", "hooks-config-menu"),
-    ("voice mode notice", "voice_mode_notice.rs::render_voice_mode_notice", "voice-mode-notice"),
     ("import config dialog", "import_config_dialog.rs::render_import_config_dialog", "import-config-dialog"),
     ("bypass permissions dialog", "bypass_permissions_dialog.rs::render_bypass_permissions_dialog", "bypass-permissions-dialog"),
     ("ask user dialog", "ask_user_dialog.rs::render_ask_user_dialog", "ask-user-dialog"),
@@ -88,8 +93,6 @@ SURFACES = [
     ("export dialog", "export_dialog.rs::render_export_dialog", "export-dialog"),
     ("context viz", "context_viz.rs::render_context_viz", "context-viz"),
     ("mcp approval dialog", "dialogs/mcp_approval.rs::render_mcp_approval_dialog", "mcp-approval-dialog"),
-    ("error modal", "render/utils.rs::render_error_modal", "error-modal"),
-    ("notification banner", "notifications.rs::render_notification_banner", "notification-banner"),
     ("selection highlight", "render/selection.rs::apply_selection_highlight", "selection-highlight"),
     ("context menu", "render/selection.rs::render_context_menu", "context-menu"),
     ("thinking row (streaming)", "render/messages.rs::render_thinking_item", "thinking-block-streaming"),
@@ -247,17 +250,27 @@ print(f"[4] assert paths checked: {len(scenarios)}")
 
 
 # ---- 5. assert_screen clauses ------------------------------------------------
+def _screen_clause_error(cl):
+    if cl.startswith(("contains:", "not-contains:")):
+        return None
+    if cl.startswith("count:"):
+        # cmd_tui_debug.rs splits on the first "==": `count:NEEDLE==N`
+        needle, sep, n = cl[len("count:"):].partition("==")
+        if sep and needle.strip() and n.strip().isdigit():
+            return None
+        return "must be count:NEEDLE==N with a numeric N"
+    return "must start with contains:, not-contains:, or count:"
 for name, d in scenarios.items():
     for cl in d.get("assert_screen", []):
-        if not (cl.startswith("contains:") or cl.startswith("not-contains:")):
-            errors.append(f"{name}: assert_screen '{cl}' must start with contains: or "
-                          f"not-contains:")
+        err = _screen_clause_error(cl)
+        if err:
+            errors.append(f"{name}: assert_screen '{cl}' {err}")
         if "," in cl:
             errors.append(f"{name}: assert_screen '{cl}' contains a comma, which "
                           f"evaluate_screen_assertions uses as the clause separator")
     for v in d.get("variants", []) or []:
         for cl in v.get("assert_screen", []):
-            if not (cl.startswith("contains:") or cl.startswith("not-contains:")):
+            if _screen_clause_error(cl):
                 errors.append(f"{name}.variants: bad assert_screen '{cl}'")
 print(f"[5] assert_screen clauses checked: {len(scenarios)}")
 
@@ -278,8 +291,9 @@ for name, d in scenarios.items():
     except Exception as e:
         errors.append(f"{name}: agent_script '{s}' does not parse: {e}")
         continue
-    if not isinstance(evs, list) or not evs:
-        errors.append(f"{name}: agent_script '{s}' must be a non-empty array")
+    # An empty array is a deliberate fixture: a turn with no agent events (no-events.json).
+    if not isinstance(evs, list):
+        errors.append(f"{name}: agent_script '{s}' must be an array")
         continue
     for i, ev in enumerate(evs):
         t = ev.get("type")
@@ -294,7 +308,8 @@ for name, d in scenarios.items():
         if keys - req - opt:
             errors.append(f"{name}: {s}[{i}] ({t}) has unknown field(s) "
                           f"{sorted(keys - req - opt)}")
-    if evs[-1].get("type") not in ("done", "error"):
+    # An empty script never terminates: it is the pending-turn fixture (no-events.json).
+    if evs and evs[-1].get("type") not in ("done", "error"):
         errors.append(f"{name}: {s} must terminate with a done or error event, got "
                       f"{evs[-1].get('type')!r}")
 orphans = {p.name for p in (ROOT / "agent_scripts").glob("*.json")} - used_scripts

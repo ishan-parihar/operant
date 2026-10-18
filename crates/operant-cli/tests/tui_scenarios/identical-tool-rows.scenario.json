@@ -13,7 +13,6 @@
   ],
   "notes": "2026-10-14 batch, plan 01: hash-collision stressor — eight IDENTICAL read_file calls (same args, same output) so every stable_cache_hash collides, then all completing in order. The count must be exactly 8: the historical duplicate-row symptom is a row rendered by both a reused body-cache base and a fresh tail. Oracle evidence (2026-10-15): 19 frames, 0 prep-oracle mismatches; per-frame rows monotone 1..8 then steady 8 — the body cache stitches this shape correctly.",
   "agent_script": "many-identical-tools.json",
-  "deterministic": true,
-  "baseline": "identical-tool-rows.txt",
+    "baseline": "identical-tool-rows.txt",
   "style_baseline": "identical-tool-rows.style.txt"
 }
