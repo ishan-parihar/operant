@@ -766,13 +766,15 @@ pub(crate) fn validate_proxy_url(field: &str, url: &str) -> Result<()> {
 pub(crate) fn set_proxy_env_pair(key: &str, value: Option<&str>) {
     let lowercase_key = key.to_ascii_lowercase();
     if let Some(value) = value.and_then(|candidate| normalize_proxy_url_option(Some(candidate))) {
-        // SAFETY: called during single-threaded config init before async runtime starts.
+        // SAFETY: no production path calls this on a live runtime; startup calls it from
+        // `apply_startup_proxy` before the tokio runtime is built (BUGS.md RT-6b).
         unsafe {
             std::env::set_var(key, &value);
             std::env::set_var(lowercase_key, value);
         }
     } else {
-        // SAFETY: called during single-threaded config init before async runtime starts.
+        // SAFETY: no production path calls this on a live runtime; startup calls it from
+        // `apply_startup_proxy` before the tokio runtime is built (BUGS.md RT-6b).
         unsafe {
             std::env::remove_var(key);
             std::env::remove_var(lowercase_key);
@@ -781,7 +783,8 @@ pub(crate) fn set_proxy_env_pair(key: &str, value: Option<&str>) {
 }
 
 pub(crate) fn clear_proxy_env_pair(key: &str) {
-    // SAFETY: called during single-threaded config init before async runtime starts.
+    // SAFETY: no production path calls this on a live runtime; startup calls it from
+    // `apply_startup_proxy` before the tokio runtime is built (BUGS.md RT-6b).
     unsafe {
         std::env::remove_var(key);
         std::env::remove_var(key.to_ascii_lowercase());

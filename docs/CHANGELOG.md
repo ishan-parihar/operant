@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns `Result`, and the error names the path. The tokio runtime is built after the `.env` load,
   so that load no longer races worker threads. Two `set_var` writes in the auth commands are removed,
   since the key is read back from `~/.operant/.env`, not the process environment.
+- **iter-944 — `[proxy]` in `operant.toml` takes effect at startup.** The file rejected a `[proxy]` table, so proxy settings could not be set in the file the CLI reads. The table is now part of the config, and it is applied before the runtime is built. With `scope = "environment"` it also exports `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` for child processes. A per-turn `.env` reload now writes only a value that changed.
 
 - **iter-935 — `[memory] audit_enabled` and `response_cache_enabled` no longer stop the config from loading.**
   The memory-factory module docs told users to write these keys, but the live `[memory]` table

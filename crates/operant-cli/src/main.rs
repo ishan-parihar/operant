@@ -2812,6 +2812,10 @@ fn main() -> Result<()> {
         CliConfig::default()
     });
 
+    // Apply the `[proxy]` table before the runtime exists, so the environment
+    // export cannot race a runtime thread (see `apply_startup_proxy`).
+    operant_core::config::apply_startup_proxy(cli.config.as_deref())?;
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -678,3 +678,13 @@ max_concurrent_runs = 2
 # fire `holon tick` on the no-agent cron (every 2 minutes) instead of a
 # systemd timer — the clock belongs to the resident runtime
 clock = false
+
+# Outbound HTTP proxy for provider and tool clients. Applied at startup.
+# [proxy]
+# enabled = false
+# scope = "zeroclaw"          # "environment" (also exports to child processes) | "zeroclaw" | "services"
+# http_proxy = "http://127.0.0.1:7890"
+# https_proxy = "http://127.0.0.1:7890"
+# all_proxy = "socks5://127.0.0.1:1080"
+# no_proxy = ["localhost", "127.0.0.1"]
+# services = []

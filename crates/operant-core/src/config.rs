@@ -21,6 +21,8 @@ pub struct AppConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
     pub client: ClientSettings,
+    /// Outbound HTTP proxy for provider and tool clients (`[proxy]`), applied at startup.
+    pub proxy: operant_config::schema::ProxyConfig,
     pub agent: BehaviorSettings,
     pub autonomous: AutonomousSettings,
     pub logging: LoggingSettings,
@@ -106,6 +108,7 @@ impl Default for AppConfig {
         Self {
             version: Some(2),
             client: ClientSettings::default(),
+            proxy: Default::default(),
             agent: BehaviorSettings::default(),
             autonomous: AutonomousSettings::default(),
             logging: LoggingSettings::default(),
@@ -2309,6 +2312,23 @@ pub(crate) fn operant_config_dir_override() -> Option<PathBuf> {
     Some(PathBuf::from(custom))
 }
 
+/// Apply the `[proxy]` table before the tokio runtime is built.
+///
+/// Sets the runtime proxy config that the provider and tool clients read. With
+/// `scope = "environment"` it also exports the variables for child processes.
+/// `main` calls this before the runtime exists, so no runtime thread can read
+/// the environment during the export.
+pub fn apply_startup_proxy(explicit: Option<&Path>) -> Result<()> {
+    let loaded = load_app_config(explicit)?;
+    let proxy = loaded.config.proxy;
+    proxy.validate().map_err(|e| Error::Config(e.to_string()))?;
+    if proxy.enabled && proxy.scope == operant_config::schema::ProxyScope::Environment {
+        proxy.apply_to_process_env();
+    }
+    operant_config::schema::set_runtime_proxy_config(proxy);
+    Ok(())
+}
+
 pub fn default_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
@@ -2501,6 +2521,19 @@ fn apply_path_override(name: &str, target: &mut PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proxy_table_parses_from_operant_toml() {
+        let config: AppConfig = toml::from_str(
+            "[proxy]\nenabled = true\nscope = \"environment\"\nhttp_proxy = \"http://127.0.0.1:7890\"\n",
+        )
+        .expect("valid [proxy] table");
+        assert!(config.proxy.enabled);
+        assert_eq!(
+            config.proxy.scope,
+            operant_config::schema::ProxyScope::Environment
+        );
+    }
+
     use super::*;
     use serial_test::serial;
     use std::ffi::OsString;
