@@ -680,36 +680,6 @@ mod tests {
             .any(|r| r.role == "reasoning" && r.content.contains("▸ thought"))
     }
 
-    fn thinking_block_becomes_reasoning_row() {
-        let mut app = make_app();
-        app.messages.push(Message::assistant_blocks(vec![
-            ContentBlock::Thinking {
-                thinking: "let me think".to_string(),
-                signature: String::new(),
-            },
-            ContentBlock::Text {
-                text: "answer".to_string(),
-            },
-        ]));
-
-        let rows = display_messages(&app);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].role, "reasoning");
-        // Committed thinking is stored sentinel-wrapped (glitch 3,
-        // 2026-10-12): the markdown renderer keys dim+italic off
-        // REASONING_SENTINEL; raw text rendered as plain body text.
-        assert_eq!(
-            rows[0].content,
-            format!(
-                "*{}let me think{}*  \n\n",
-                crate::tui::operant_render_core::REASONING_SENTINEL,
-                crate::tui::operant_render_core::REASONING_SENTINEL
-            )
-        );
-        assert_eq!(rows[1].role, "assistant");
-        assert_eq!(rows[1].content, "answer");
-    }
-
     #[test]
     fn api_error_block_becomes_error_row() {
         let mut app = make_app();

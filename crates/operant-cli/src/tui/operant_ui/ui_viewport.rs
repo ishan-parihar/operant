@@ -1604,11 +1604,6 @@ fn set_pinned_todo_more_area(area: Option<Rect>) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn set_pinned_todo_more_area_for_test(area: Option<Rect>) {
-    set_pinned_todo_more_area(area);
-}
-
 fn compute_prompt_preview_line_count(
     wrapped_user_prompt_starts: &[usize],
     user_prompt_texts: &[String],

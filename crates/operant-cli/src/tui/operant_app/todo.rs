@@ -78,10 +78,6 @@ macro_rules! semantic_state {
                 }
             }
 
-            /// How many ordered levels separate two states.
-            pub fn level(&self) -> u8 {
-                *self as u8
-            }
         }
 
         impl<'de> Deserialize<'de> for $name {

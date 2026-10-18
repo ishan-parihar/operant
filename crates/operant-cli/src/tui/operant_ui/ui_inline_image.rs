@@ -402,11 +402,6 @@ pub(crate) struct AnchoredInlineImages {
 }
 
 impl AnchoredInlineImages {
-    #[cfg(test)]
-    pub(crate) fn has_anchored(&self) -> bool {
-        !self.by_tool.is_empty() || !self.by_prompt.is_empty()
-    }
-
     /// Items that will NOT be placed inside the transcript body: unanchored
     /// images plus anchored images whose anchor target does not exist among
     /// `messages` (e.g. live images for a tool whose transcript entry was
@@ -454,15 +449,6 @@ impl AnchoredInlineImages {
         }
         items
     }
-}
-
-/// Resolve rendered images into anchored buckets (tool call / user prompt /
-/// unanchored). Same lazy header-only cost profile as [`resolve_item`].
-#[cfg(test)]
-pub(crate) fn resolve_anchored_items(
-    images: &[crate::tui::operant_app::session::RenderedImage],
-) -> AnchoredInlineImages {
-    resolve_anchored_items_inner(images, true)
 }
 
 fn resolve_anchored_items_inner(
@@ -801,9 +787,6 @@ mod tests {
             uses_text_fallback: false,
         }
     }
-
-    /// 1x1 transparent PNG used by the materialize tests below.
-    const MATERIALIZE_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
     #[cfg(any())]
     // [port-decision] engine-registry assertion gated:
@@ -1302,10 +1285,6 @@ mod tests {
         );
     }
 
-    /// 1x1 red PNG distinct from `MATERIALIZE_PNG_B64` so payload-release
-    /// tests own their image id.
-    const MATERIALIZE_PNG_B64_RELEASE: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
-
     /// PayloadRegistry::remove must keep byte accounting and the eviction
     /// queue in sync.
     #[test]
@@ -1325,24 +1304,6 @@ mod tests {
         // Removing an absent id is a no-op.
         reg.remove(42);
         assert_eq!(reg.map.len(), 1);
-    }
-
-    /// 1x1 transparent PNG, used to exercise the real header parse.
-    const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-
-    fn rendered_image(
-        anchor: Option<crate::tui::operant_app::session::RenderedImageAnchor>,
-    ) -> crate::tui::operant_app::session::RenderedImage {
-        crate::tui::operant_app::session::RenderedImage {
-            history_message_index: None,
-            media_type: "image/png".to_string(),
-            data: TINY_PNG_B64.to_string(),
-            label: Some("tiny.png".to_string()),
-            source: crate::tui::operant_app::session::RenderedImageSource::ToolResult {
-                tool_name: "read".to_string(),
-            },
-            anchor,
-        }
     }
 
     #[cfg(any())]

@@ -1106,20 +1106,6 @@ pub(crate) fn note_widget_pass_skipped() {
     }
 }
 
-/// Clear the remembered per-frame widget placements (and anchors). Tests that
-/// assert on placement-dependent behavior (e.g. the swarm strip standing down
-/// while the dock is visible) call this so state from earlier tests in the
-/// same process cannot leak into their frame.
-#[cfg(test)]
-pub(crate) fn clear_widget_placements_for_tests() {
-    let mut guard = get_or_init_state();
-    if let Some(state) = guard.as_mut() {
-        state.placements.clear();
-        state.anchors.clear();
-        state.swarm_dock_last_engaged = None;
-    }
-}
-
 /// Calculate the height needed for a specific widget type
 pub(crate) fn calculate_widget_height(
     kind: WidgetKind,

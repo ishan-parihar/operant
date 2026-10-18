@@ -73,7 +73,7 @@ the bust permission; `/ctx-flush` (named in the plan) does not exist.
 
 The dead-code purge of the `operant-cli` TUI tree kept the items below on purpose. Each one is
 reported dead by the compiler, and removing it would change behaviour or needs a design call.
-The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the warning gate stays green.
+The `dead_code` warnings that remain are tracked in `.ci/clippy-allowlist.txt` (52 files after iter-941), so the warning gate stays green.
 
 - [x] **Device-auth flow cannot finish — FIXED iter-937.** The dialog had no opener, so its states were
   unreachable. The scaffold is deleted with its key handling, dialog priority, and overlay entries rather
@@ -81,13 +81,17 @@ The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the wa
 - [x] **OAuth token fields unused — FIXED iter-940.** `StoredCredential::OAuthToken` had no constructor after the
   device-auth scaffold went (iter-937), so the variant, its `save` arm, and its `refresh` and `expires` fields
   are removed. `api_key_for` is an irrefutable `let` now that the enum has one variant.
+- [x] **Dead TUI items remain — FIXED iter-941.** The `dead_code` items the compiler flags in
+  `crates/operant-cli/src/tui/` are deleted (9 files, 506 lines), except names whose removal broke the build;
+  those stay allowlisted. The allowlist drops from 58 to 52 entries. Whole-module deletion was tried first and
+  removed nothing: every top-level TUI module is still reached by live code.
 - [ ] **Event and notification variants never built.** `notifications.rs:16` (`Success`),
   `bridge_state.rs:19` (`Reconnecting`, `Failed`, `OutboundOnly`), `debug/event_bus.rs:28` (`Mouse`,
   `Resize`, `Paste`, `OverlayOpened`, `OverlayClosed`), `mcp_view.rs:28` (`Error`), and
   `dialogs/permission.rs:35` (`Bash`, `PowerShell`, `FileRead`, `FileWrite`).
-- [ ] **Legacy header kept.** `operant_ui/ui_header.rs` (1811 lines) is live: `operant_ui/mod.rs` draws
-  the header from it. It was named as legacy in the 2026-10-18 TUI purge request. Replacing it with a
-  jcode / oh-my-pi style header is a design decision for the owner.
+- [x] **Legacy header kept — decided iter-941.** `operant_ui/ui_header.rs` (1811 lines) is live: `operant_ui/mod.rs`
+  draws the header from it. Decision: keep it. A jcode / oh-my-pi style header is a visual redesign, not a
+  bug, so it stays out of the production-grade bug pass. Its dead items are removed like the rest of the tree.
 - [x] **`commands.rs` dead layer (P6.8, 17 attributes) — FIXED iter-936.** The 17 `#[allow(dead_code)]`
   attributes are gone, and the items they hid are deleted: `CommandCategory`, every `CommandResult`
   variant except `Message` and `ShellCommand`, the `CommandDef` category and help fields,

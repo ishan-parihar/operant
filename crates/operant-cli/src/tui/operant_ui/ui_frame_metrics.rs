@@ -1164,28 +1164,6 @@ pub(crate) fn record_slow_frame_sample(sample: SlowFrameSample) {
 }
 
 #[cfg(test)]
-pub(crate) fn clear_slow_frame_history_for_tests() {
-    let mut history = slow_frame_history()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    history.samples.clear();
-    history.last_log_at_ms = None;
-    reset_frame_perf_stats();
-    set_last_chat_scrollbar_visible(false);
-}
-
-#[cfg(test)]
-pub(crate) fn clear_flicker_frame_history_for_tests() {
-    let mut history = flicker_frame_history()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    history.samples.clear();
-    history.events.clear();
-    history.last_log_at_ms = None;
-    set_last_chat_scrollbar_visible(false);
-}
-
-#[cfg(test)]
 mod draw_call_tests {
     use super::*;
 

@@ -31,27 +31,6 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-// [port-source] operant-base/src/storage.rs:24-38 — test-env serialization
-// helpers, ported verbatim (upstream gates on `any(test, feature = "test-support")`;
-// operant's callers are all #[cfg(test)], so cfg(test) alone is the equivalent
-// gate). Deviation: OnceLock+get_or_init → LazyLock per repo rule rs-lazylock
-// (initializer is known at declaration time).
-#[cfg(test)]
-use std::sync::{LazyLock, Mutex, MutexGuard};
-
-#[cfg(test)]
-pub(crate) fn test_env_lock() -> &'static Mutex<()> {
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    &ENV_LOCK
-}
-
-#[cfg(test)]
-pub(crate) fn lock_test_env() -> MutexGuard<'static, ()> {
-    test_env_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 pub fn set_directory_permissions_owner_only(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {

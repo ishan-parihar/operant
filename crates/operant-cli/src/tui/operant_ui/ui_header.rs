@@ -32,14 +32,6 @@ fn unseen_changelog_entries() -> Vec<String> {
     get_unseen_changelog_entries().clone()
 }
 
-#[cfg(test)]
-pub(crate) fn set_unseen_changelog_entries_override_for_tests(entries: Option<Vec<String>>) {
-    let mut guard = unseen_changelog_entries_override()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *guard = entries;
-}
-
 pub(crate) fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -546,98 +538,6 @@ fn abbreviate_home(path: &str) -> String {
     path.to_string()
 }
 
-#[cfg(test)]
-fn truncate_to_width(text: &str, width: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= width {
-        return text.to_string();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    if width == 1 {
-        return "…".to_string();
-    }
-
-    let mut truncated = text
-        .chars()
-        .take(width.saturating_sub(1))
-        .collect::<String>();
-    truncated.push('…');
-    truncated
-}
-
-#[cfg(test)]
-fn choose_header_candidate(width: usize, candidates: Vec<String>) -> String {
-    let mut last_non_empty = String::new();
-    for candidate in candidates
-        .into_iter()
-        .filter(|candidate| !candidate.trim().is_empty())
-    {
-        if candidate.chars().count() <= width {
-            return candidate;
-        }
-        last_non_empty = candidate;
-    }
-
-    truncate_to_width(&last_non_empty, width)
-}
-
-#[cfg(test)]
-fn semver_core() -> String {
-    semver()
-        .split('-')
-        .next()
-        .unwrap_or_else(semver)
-        .to_string()
-}
-
-#[cfg(test)]
-fn semver_minor() -> String {
-    let core = semver_core();
-    let parts: Vec<&str> = core.split('.').collect();
-    if parts.len() >= 2 {
-        format!("{}.{}", parts[0], parts[1])
-    } else {
-        core
-    }
-}
-
-#[cfg(test)]
-fn version_display_candidates() -> Vec<String> {
-    let full = format!("operant {}", semver());
-    let core = format!("operant {}", semver_core());
-    let minor = format!("operant {}", semver_minor());
-    let shortest = semver_minor();
-    vec![full, core, minor, shortest]
-}
-
-#[cfg(test)]
-fn configured_auth_count(auth: &AuthStatus) -> usize {
-    [
-        auth.subscription,
-        auth.anthropic.state,
-        auth.openrouter,
-        auth.azure,
-        auth.openai,
-        auth.cursor,
-        auth.copilot,
-        auth.gemini,
-        auth.antigravity,
-        auth.google,
-    ]
-    .into_iter()
-    .filter(|state| *state != AuthState::NotConfigured)
-    .count()
-}
-
-#[cfg(test)]
-pub(super) fn build_persistent_header(app: &dyn TuiState, width: u16) -> Vec<Line<'static>> {
-    let auth = app.auth_status();
-    let active = ActiveCredentialOverrides::from_app(app);
-    build_persistent_header_with_auth(app, width, &auth, active)
-}
-
 fn build_persistent_header_with_auth(
     app: &dyn TuiState,
     width: u16,
@@ -854,13 +754,6 @@ fn build_persistent_header_with_auth(
     }
 
     lines
-}
-
-#[cfg(test)]
-pub(crate) fn build_header_lines(app: &dyn TuiState, width: u16) -> Vec<Line<'static>> {
-    let auth = app.auth_status();
-    let active = ActiveCredentialOverrides::from_app(app);
-    build_header_lines_with_auth(app, width, &auth, active)
 }
 
 fn build_header_lines_with_auth(

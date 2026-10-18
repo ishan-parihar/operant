@@ -599,73 +599,6 @@ impl BodyCacheState {
         }
     }
 
-    #[cfg(test)]
-    fn get_exact(&mut self, key: &BodyCacheKey) -> Option<Arc<PreparedMessages>> {
-        self.get_exact_with_kind(key).map(|(prepared, _)| prepared)
-    }
-
-    #[cfg(test)]
-    fn best_incremental_base(
-        &self,
-        key: &BodyCacheKey,
-        _msg_count: usize,
-    ) -> Option<(Arc<PreparedMessages>, usize)> {
-        let regular = self
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.msg_count > 0
-                    && entry.key.width == key.width
-                    && entry.key.diff_mode == key.diff_mode
-                    && entry.key.diagram_mode == key.diagram_mode
-                    && entry.key.centered == key.centered
-                    && entry.key.mermaid_aspect_bucket == key.mermaid_aspect_bucket
-                    // Anchored inline images render inside the body, and a
-                    // late-arriving image may target an already-prepared
-                    // message; only reuse bases built with the same image set.
-                    && entry.key.pin_images == key.pin_images
-                    && entry.key.inline_images_visible == key.inline_images_visible
-                    && entry.key.images_signature == key.images_signature
-                    && entry.key.expanded_images_version == key.expanded_images_version
-                    && entry.key.swarm_members_signature == key.swarm_members_signature
-            })
-            .max_by_key(|entry| entry.msg_count)
-            .map(|entry| (entry.prepared.clone(), entry.msg_count));
-        let oversized = self
-            .oversized_entries
-            .iter()
-            .filter(|entry| {
-                entry.msg_count > 0
-                    && entry.key.width == key.width
-                    && entry.key.diff_mode == key.diff_mode
-                    && entry.key.diagram_mode == key.diagram_mode
-                    && entry.key.centered == key.centered
-                    && entry.key.mermaid_aspect_bucket == key.mermaid_aspect_bucket
-                    // Anchored inline images render inside the body, and a
-                    // late-arriving image may target an already-prepared
-                    // message; only reuse bases built with the same image set.
-                    && entry.key.pin_images == key.pin_images
-                    && entry.key.inline_images_visible == key.inline_images_visible
-                    && entry.key.images_signature == key.images_signature
-                    && entry.key.expanded_images_version == key.expanded_images_version
-                    && entry.key.swarm_members_signature == key.swarm_members_signature
-            })
-            .max_by_key(|entry| entry.msg_count)
-            .map(|entry| (entry.prepared.clone(), entry.msg_count));
-
-        match (regular, oversized) {
-            (Some(left), Some(right)) => {
-                if left.1 >= right.1 {
-                    Some(left)
-                } else {
-                    Some(right)
-                }
-            }
-            (Some(entry), None) | (None, Some(entry)) => Some(entry),
-            (None, None) => None,
-        }
-    }
-
     fn take_best_incremental_base(
         &mut self,
         key: &BodyCacheKey,
@@ -920,11 +853,6 @@ impl FullPrepCacheState {
             self.oversized_entries.push_front(entry);
             Some((prepared, CacheEntryKind::Oversized))
         }
-    }
-
-    #[cfg(test)]
-    fn get_exact(&mut self, key: &FullPrepCacheKey) -> Option<Arc<PreparedChatFrame>> {
-        self.get_exact_with_kind(key).map(|(prepared, _)| prepared)
     }
 
     fn insert(&mut self, key: FullPrepCacheKey, prepared: Arc<PreparedChatFrame>) {
@@ -1577,26 +1505,6 @@ pub(crate) fn last_chat_frame() -> Option<Arc<PreparedChatFrame>> {
     }
 }
 
-// [port-source] ui.rs:1502-1603
-/// The one lock guarding process-global render state in tests.
-///
-/// Render snapshots, scroll metrics, flicker history, and prompt positions all
-/// live in process globals, so *every* test that renders must serialize on the
-/// same mutex. Two separate helpers previously each defined their own private
-/// lock, which serialized nothing between them and produced failures that
-/// appeared only under parallelism (same root cause as issue #593). Both now
-/// delegate here.
-#[cfg(test)]
-pub(crate) fn render_state_test_lock() -> RenderStateTestGuard {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let guard = LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    RENDER_STATE_LOCK_HELD.with(|held| held.set(true));
-    RenderStateTestGuard { _guard: guard }
-}
-
 /// Guard for [`render_state_test_lock`] that also records ownership on this
 /// thread, so a nested `clear_test_render_state_for_tests` can tell it is
 /// already inside the lock instead of deadlocking on it.
@@ -1612,73 +1520,11 @@ impl Drop for RenderStateTestGuard {
     }
 }
 
-/// Take the render-state lock unless this thread already holds it.
-///
-/// `clear_test_render_state_for_tests` mutates the same globals the lock
-/// protects, but it is called from both locked contexts (rendering tests) and
-/// unlocked ones (`create_test_app`, used by ~570 tests). Acquiring
-/// unconditionally would deadlock the former; not acquiring at all lets the
-/// latter wipe state from under the former, which is the race behind
-/// operant-tui's intermittent layout failures.
-///
-/// Tracking ownership per thread lets one function serve both: the outermost
-/// holder owns the guard, and nested calls become no-ops.
-#[cfg(test)]
-fn with_render_state_lock<T>(body: impl FnOnce() -> T) -> T {
-    if render_state_lock_held() {
-        return body();
-    }
-
-    let _guard = render_state_test_lock();
-    body()
-}
-
 #[cfg(test)]
 thread_local! {
     /// Whether this thread currently holds the render-state lock. Set by
     /// [`render_state_test_lock`]'s guard so nested clears can detect it.
     static RENDER_STATE_LOCK_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-fn render_state_lock_held() -> bool {
-    RENDER_STATE_LOCK_HELD.with(|held| held.get())
-}
-
-#[cfg(test)]
-pub(crate) fn clear_test_render_state_for_tests() {
-    with_render_state_lock(clear_test_render_state_locked)
-}
-
-/// The actual reset, run with the render-state lock held.
-#[cfg(test)]
-fn clear_test_render_state_locked() {
-    set_last_max_scroll(0);
-    set_pinned_pane_total_lines(0);
-    set_last_diff_pane_effective_scroll(0);
-    set_last_diff_pane_max_scroll(0);
-    set_last_total_wrapped_lines(0);
-    set_last_resolved_chat_scroll(0);
-    TEST_TAIL_FOLLOW_SNAP_PENDING.with(|cell| cell.set(false));
-    // Flicker events recorded by sibling tests add a "⚠ flicker detected"
-    // notification line to subsequent renders, shifting every layout-sensitive
-    // assertion (click mapping, snapshot rows).
-    frame_metrics::clear_flicker_frame_history_for_tests();
-    TEST_LAST_LAYOUT.with(|snapshot| {
-        *snapshot.borrow_mut() = None;
-    });
-    TEST_LAST_CHAT_FRAME.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-    TEST_LAST_STATUS_AREA.with(|snapshot| {
-        *snapshot.borrow_mut() = None;
-    });
-    set_visible_copy_targets(Vec::new());
-    clear_copy_viewport_snapshot();
-
-    TEST_PROMPT_VIEWPORT_STATE.with(|state| {
-        *state.borrow_mut() = PromptViewportState::default();
-    });
 }
 
 // [port-source] ui.rs:1605-1616 — the upstream test-only onboarding draw hook
@@ -1990,50 +1836,6 @@ pub(crate) fn record_side_pane_snapshot_precomputed(
     );
 }
 
-// [port-source] ui.rs:1915-1956
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Viewport snapshot helpers carry explicit render state to avoid hidden globals in call sites"
-)]
-#[cfg(test)]
-pub(crate) fn record_copy_viewport_snapshot(
-    wrapped_plain_lines: Arc<Vec<String>>,
-    wrapped_copy_offsets: Arc<Vec<usize>>,
-    raw_plain_lines: Arc<Vec<String>>,
-    wrapped_line_map: Arc<Vec<WrappedLineMap>>,
-    scroll: usize,
-    visible_end: usize,
-    content_area: Rect,
-    left_margins: &[u16],
-) {
-    record_copy_pane_snapshot(
-        crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat,
-        wrapped_plain_lines,
-        wrapped_copy_offsets,
-        raw_plain_lines,
-        wrapped_line_map,
-        scroll,
-        visible_end,
-        content_area,
-        left_margins,
-    );
-}
-
-/// Record a real `ChatFrame` viewport snapshot for tests. Unlike
-/// `record_copy_viewport_snapshot` (which records a `Dense` snapshot that cannot
-/// resolve inline-image label lines), this preserves the `PreparedChatFrame` so
-/// `inline_image_id_for_label_line` works end to end.
-#[cfg(test)]
-pub(crate) fn record_copy_viewport_frame_snapshot_for_test(
-    prepared: Arc<PreparedChatFrame>,
-    scroll: usize,
-    visible_end: usize,
-    content_area: Rect,
-    left_margins: &[u16],
-) {
-    record_copy_viewport_frame_snapshot(prepared, scroll, visible_end, content_area, left_margins);
-}
-
 // [port-source] ui.rs:1958-1971
 pub(crate) fn line_left_margins_for_area(lines: &[Line<'static>], area_width: u16) -> Vec<u16> {
     lines
@@ -2180,15 +1982,6 @@ pub(crate) fn copy_viewport_line_text(abs_line: usize) -> Option<String> {
     )
 }
 
-// [port-source] ui.rs:2348-2351
-#[cfg(test)]
-pub(crate) fn side_pane_visible_range() -> Option<(usize, usize)> {
-    let snapshot = copy_snapshot_for_pane(
-        crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane,
-    )?;
-    Some((snapshot.scroll, snapshot.visible_end))
-}
-
 /// Copy text of one chat content line between two SCREEN columns
 /// (inclusive; `None` = line edge), read synchronously from the last drawn
 /// frame's copy snapshot — never from the painted cell buffer, which lags a
@@ -2323,63 +2116,6 @@ pub(crate) fn render_native_scrollbar(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-// [port-source] ui.rs:2606-2657
-/// Debug dump of the live chat snapshot's inline-image regions plus the screen
-/// coordinates of each visible label line (the click target that cycles the
-/// image size), so external drivers (debug socket) can compute real click
-/// targets against the running TUI.
-pub(crate) fn debug_chat_image_regions_json() -> String {
-    let Some(snapshot) =
-        copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)
-    else {
-        return "{\"error\":\"no chat snapshot\"}".to_string();
-    };
-    let prepared = match &snapshot.data {
-        CopyViewportData::ChatFrame { prepared } => prepared.clone(),
-        CopyViewportData::Dense { .. } => {
-            return "{\"error\":\"dense snapshot (no image regions)\"}".to_string();
-        }
-    };
-    let area = snapshot.content_area;
-    let regions: Vec<serde_json::Value> = prepared
-        .image_regions
-        .iter()
-        .map(|region| {
-            let label_line = region.abs_line_idx.saturating_sub(1);
-            let label_text = snapshot.wrapped_plain_line(label_line).unwrap_or("");
-            let label_visible = label_line >= snapshot.scroll && label_line < snapshot.visible_end;
-            // The whole label line is clickable now; report its first cell as
-            // the badge coordinate so existing drivers keep working.
-            let badge_screen = label_visible.then(|| {
-                let rel_row = label_line - snapshot.scroll;
-                let left_margin = snapshot.left_margins.get(rel_row).copied().unwrap_or(0);
-                serde_json::json!({
-                    "col": area.x as usize + left_margin as usize,
-                    "row": area.y as usize + rel_row,
-                })
-            });
-            serde_json::json!({
-                "hash": region.hash,
-                "render": format!("{:?}", region.render),
-                "abs_line_idx": region.abs_line_idx,
-                "end_line": region.end_line,
-                "height": region.height,
-                "width": region.width,
-                "label_text": label_text,
-                "badge_screen": badge_screen,
-            })
-        })
-        .collect();
-    serde_json::to_string_pretty(&serde_json::json!({
-        "scroll": snapshot.scroll,
-        "visible_end": snapshot.visible_end,
-        "content_area": {
-            "x": area.x, "y": area.y, "width": area.width, "height": area.height,
-        },
-        "image_regions": regions,
-    }))
-    .unwrap_or_else(|_| "{}".to_string())
-} // [port-source] operant-tui-render/src/swarm_gallery.rs:63 — upstream's derived
 // constant, inlined because operant's operant_render/swarm_gallery.rs kept the
 // base const but excised this one (see that file's [port-excision] note: the
 // strip renderers are W7). Same formula, same base const.
