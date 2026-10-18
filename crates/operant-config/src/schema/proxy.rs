@@ -564,7 +564,8 @@ impl ProxyConfig {
         for selector in self.normalized_services() {
             if !is_supported_proxy_service_selector(&selector) {
                 anyhow::bail!(
-                    "Unsupported proxy service selector '{selector}'. Use tool `proxy_config` action `list_services` for valid values"
+                    "Unsupported proxy service selector '{selector}'. Valid service keys: {}",
+                    Self::supported_service_keys().join(", ")
                 );
             }
         }

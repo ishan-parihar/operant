@@ -57,7 +57,6 @@ pub mod pdf_read;
 pub mod pipeline;
 pub mod poll;
 pub mod project_intel;
-pub mod proxy_config;
 pub mod pushover;
 pub mod reaction;
 pub mod report_template_tool;

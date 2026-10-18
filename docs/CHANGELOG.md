@@ -89,6 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **iter-947 — `[display] show_reasoning` is removed; `[agent] show_reasoning` is the one key.** The CLI config had two keys for the TUI reasoning display, and `[display]` overrode `[agent]`, so the two could disagree. The TUI and the gateway now both read `[agent] show_reasoning`. A `[display] show_reasoning` key left in the CLI config is ignored. A user who set `[display] show_reasoning = false` should move that value to `[agent]`.
 
+- **iter-949 — the unregistered `proxy_config` agent tool is removed.** Nothing registered it, and its writes went to `config.toml`, which no part of the CLI reads. Proxy settings are configured in `[proxy]` in `operant.toml`, applied at startup. The tool's test lock went with it: the web-search tests no longer need one. The selector error now names the valid service keys.
+
 ### Fixed
 
 - **iter-942 — a log file that cannot be opened is a startup error, not a panic.** `init_logging`
