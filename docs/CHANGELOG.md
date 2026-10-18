@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-927 — one lock for the process-global palette (plan P6.11).** The palette tests
+  held two locks over one global. `theme_colors::tests::ACTIVE_LOCK` serialized the
+  theme tests and the render test, and the vendored `STYLE_TEST_LOCK` serialized the
+  palette and theme-mode tests. `set_active_theme` writes the vendored palette too, so a
+  palette test could interleave with the render test and flip its accent. `ACTIVE_LOCK`
+  is now the same mutex as `STYLE_TEST_LOCK`. The flake was not reproduced before or after
+  (eight full-binary runs green, three before and five after), so this closes a verified
+  race by construction, not a reproduced failure. Still open: tests that call `App::new`
+  without the lock also write the theme.
+
 - **iter-926 — every provider has a listing endpoint or is named as having none (plan P1).**
   `wire_family` covered 24 of the 42 providers in `PROVIDERS`; `kimi-coding-cn`,
   `minimax-cn`, `alibaba-coding-plan`, `lmstudio`, `nous`, `arcee`, `gmi`, and `qwen-oauth`

@@ -21,3 +21,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-18T13:29** — iter-924 — gateway follows /connect and /model (plan P0.4): per-message operant.toml endpoint check retargets the gateway agent; baseline at handler construction
 - **2026-10-18T13:37** — iter-925 — provider_metadata default_model (dead static table) removed; closes the static-default-model sweep of plan P2
 - **2026-10-18T13:59** — iter-926 — every provider has a listing endpoint or is named as having none (plan P1): wire_family covers the 8 missing OpenAI-compatible providers; 7 no-listing providers named in NO_LISTING_ENDPOINT; test walks all 42 PROVIDERS entries
+- **2026-10-18T15:00** — iter-927 — the palette tests share one lock (plan P6.11): ACTIVE_LOCK aliases the vendored STYLE_TEST_LOCK; the two locks over the global palette let a palette test interleave with the render test; flake not reproduced before or after (8 full runs green)

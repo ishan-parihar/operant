@@ -630,7 +630,12 @@ pub(crate) mod tests {
     /// interleave. Every mutating test takes this lock and restores the default
     /// palette before releasing it. `pub(crate)` so `tui::color_depth`'s
     /// precomputation test can serialize against these mutations too.
-    pub(crate) static ACTIVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ///
+    /// This is the vendored palette's `STYLE_TEST_LOCK`, not a second lock. Both
+    /// name the same process-global palette: `set_active_theme` writes the vendor
+    /// palette through `sync_role_palette`, so two separate locks let a palette
+    /// test and a render test interleave and flip the frame's accent.
+    pub(crate) use crate::tui::vendor::style::STYLE_TEST_LOCK as ACTIVE_LOCK;
 
     /// Run `f` with `theme` active, then restore the default palette.
     fn with_theme<T>(theme: &str, f: impl FnOnce() -> T) -> T {

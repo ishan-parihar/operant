@@ -249,6 +249,11 @@ mocked, and live Anthropic and Google verification (no key here).
   `switching_theme_repaints_the_frame` mutates in parallel. Serialize or isolate the
   palette state.
 
+  **Status (iter-927):** the two locks are one (`ACTIVE_LOCK` aliases `STYLE_TEST_LOCK`).
+  Not reproduced before or after. Still open: tests that call `App::new` without the lock
+  also write the theme (`scroll_anchor`, `messaging`, `scroll_emit`, `redraw_reason`,
+  `ui_header`, `permissions`, `adapter`, `debug`).
+
 ## Cost
 
 - **P0–P3 (runtime catalog):** the critical path. About one iteration per phase. Most of
