@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-933 — a pending tool's name is no longer printed three times.** While a tool
+  call was queued or running, the status line repeated `Queued <tool>…` next to the tool
+  row and the spinner footer, which already named the tool. The status line is no longer
+  set at tool start; the row and the footer carry the state. Regression test:
+  `tui::app::tests::tool_start_leaves_the_status_line_to_the_tool_row`.
 - **iter-930 — settings.json survives upgrades and failed writes.** `Settings` had no
   container-level `serde(default)`, so a settings file missing any field failed to load.
   The next write from any of the twelve read-then-save sites then replaced the whole

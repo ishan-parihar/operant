@@ -30,6 +30,28 @@
 
 Open under this section: the context engine's `assemble` runs every turn, not gated by
 the bust permission; `/ctx-flush` (named in the plan) does not exist.
+## CLOSED — Pending tool name printed three times (iter-933)
+
+- [x] **A pending call showed its name three times.** `ToolStart` set the status notice to
+  `Queued <tool>…` / `Running <tool>…` (origin: iter-347, when the notice was the only
+  indicator). The spinner footer (`running <tool>`) and the transcript row (`○ <tool>`)
+  later named the tool too, so the notice repeated it on its own line above the prompt.
+  Live capture in tmux before the fix (installed iter-929 binary, mock provider, five
+  `aft_read` calls): a frame held 7 `aft_read` lines, including `Queued aft_read…` in the
+  footer and above the prompt. The `ToolStart` handler no longer sets the notice. Same
+  capture after the fix (debug build): the pending state is the row plus the footer, and no
+  frame exceeds 6 `aft_read` lines. Regression:
+  `tui::app::tests::tool_start_leaves_the_status_line_to_the_tool_row`.
+
+## OPEN — Guardrail-skipped tool calls render as success (2026-10-18)
+
+- [ ] **A skipped duplicate call shows ✓.** When the identical-call guardrail skips a repeat,
+  the model receives `Guardrail: tool '<name>' was already called with identical arguments N
+  times this turn. Skipping this duplicate call…` as the tool result, and the TUI draws it as
+  a completed row (`✓ aft_read · 57 tok`), which says the read ran. The fix belongs in the
+  agent: a skipped call should finish with `success: false` or a distinct skipped status, so
+  both the row and the model's view agree. Found while driving the live TUI in tmux.
+
 ## OPEN — TUI legacy purge residue (owner decisions, 2026-10-18)
 
 The dead-code purge of the `operant-cli` TUI tree kept the items below on purpose. Each one is

@@ -154,12 +154,6 @@ impl App {
                     });
                     false
                 };
-                self.set_status_notice(format!(
-                    "{} {}…",
-                    if started { "Running" } else { "Queued" },
-                    tool_name
-                ));
-
                 // Track subagent spawns for the status-bar HUD.
                 if tool_name == "delegate_task" || tool_name == "spawn_subagent" {
                     self.agent_status.retain(|(id, _)| id != &tool_id);

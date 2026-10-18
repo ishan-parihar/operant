@@ -2689,6 +2689,22 @@ fn tool_should_transition_queued_to_running_on_permit_acquire() {
     assert!(!app.tool_use_blocks[0].status.is_pending());
 }
 
+// The tool row and the spinner footer already name the tool and its state. A
+// status notice repeating "Queued <tool>…" printed the name a third time while
+// the call was pending.
+#[test]
+fn tool_start_leaves_the_status_line_to_the_tool_row() {
+    let mut app = make_app();
+    app.status_message = None;
+    app.handle_agent_event(AgentEvent::ToolStart {
+        tool_call_id: "call_1".to_string(),
+        name: "aft_read".to_string(),
+        arguments: r#"{"file_path":"README.md"}"#.to_string(),
+    });
+    assert_eq!(app.tool_use_blocks.len(), 1);
+    assert_eq!(app.status_message, None);
+}
+
 // ---- P0-2: per-iteration text grouping (2026-10-09 live audit) ----
 //
 // Providers interleave content deltas around tool_call deltas in one
