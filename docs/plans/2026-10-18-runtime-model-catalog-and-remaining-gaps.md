@@ -162,6 +162,12 @@ touches code), per AGENTS.md.
 - **P1.4** Switch setup step 2 to `model_catalog`. Delete `fetch_models_for_provider`.
 - **P1.5** Add the "could not list models" notice to setup, matching `/model`.
 
+**Status (iter-921):** P1.1, P1.3, P1.4, P1.5 done; the legacy `ProviderProfile` layer
+(second fetcher) deleted with its tests. P1.2 partly: Ollama uses `/v1/models`, not
+`/api/tags` (the OpenAI-compatible route; native path dropped). Not done: a mock test per
+one of the 42 providers (only the three wire families are mocked), and live verification
+of Anthropic and Google listing (no key here).
+
 ### P2 — delete the static catalog
 
 - **P2.1** Remove `models` and `default_model` from `ProviderDef`. Update the 42 entries.

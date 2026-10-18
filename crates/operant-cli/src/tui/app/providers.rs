@@ -1,43 +1,47 @@
 //! Provider and model management methods.
 
 use super::*;
+use crate::provider::{provider_from_url, wire_family};
+use operant_core::model_catalog::{CatalogSource, Request, WireFamily, resolve};
 
-// (plan 05A) Fetch the endpoint's own model list: OpenAI-style
-// `GET {base_url}/models` with the client's key — the same endpoint the
-// agent's requests hit. Never a row source on its own: the configured
-// `[agent]` models are always merged in by the caller.
+// (plan 05A) The endpoint's own model list through the runtime catalog: its
+// `/models` in the provider's wire family (OpenAI-style when the URL names no
+// known provider), then models.dev when that is empty. Never a row source on
+// its own: the configured `[agent]` models are always merged in by the caller.
 async fn fetch_endpoint_models(
     base_url: &str,
     api_key: Option<&str>,
 ) -> Result<Vec<crate::tui::operant_app::tui_fns::PickerEntry>, String> {
-    let url = format!("{base_url}/models");
-    let mut req = reqwest::Client::new()
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(10));
-    if let Some(key) = api_key {
-        req = req.bearer_auth(key);
+    let known = provider_from_url(base_url);
+    let catalog = resolve(Request {
+        provider_name: known.map_or("", |p| p.name),
+        family: Some(
+            known
+                .and_then(|p| wire_family(p.name))
+                .unwrap_or(WireFamily::OpenAiCompat),
+        ),
+        base_url,
+        api_key,
+        configured: &[],
+    })
+    .await;
+    if catalog.rows.is_empty() {
+        return Err(catalog
+            .notice
+            .unwrap_or_else(|| format!("GET {base_url}/models listed no models")));
     }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("GET {url} failed: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("GET {url} returned {}", resp.status()));
-    }
-    let parsed: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("GET {url} did not return JSON: {e}"))?;
-    parsed
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
-                .map(|id| inline_model_row(id, &format!("from {base_url}"), ""))
-                .collect()
+    Ok(catalog
+        .rows
+        .iter()
+        .map(|row| {
+            let from = match row.source {
+                CatalogSource::Live => format!("from {base_url}"),
+                CatalogSource::ModelsDev => "from models.dev".to_string(),
+                CatalogSource::Configured => "[agent] model".to_string(),
+            };
+            inline_model_row(&row.id, &from, "")
         })
-        .ok_or_else(|| format!("GET {url} returned no `data` list"))
+        .collect())
 }
 
 impl App {

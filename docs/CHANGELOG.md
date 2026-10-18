@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-921 — one live model fetcher for every provider (plan P1).** The `/model`
+  picker and `operant setup` both list models through `operant_core::model_catalog::resolve`:
+  the provider's own `/models` in its wire family, then models.dev when that is empty,
+  then the configured models. Anthropic now sends `x-api-key` with `anthropic-version`
+  and Google sends `key` in the query (the picker sent bearer to every endpoint, which
+  Anthropic's native `/v1/models` rejects). Errors name the endpoint without the key; setup and `/model`
+  both show the reason when the live list is missing. Removed the second fetcher
+  (`fetch_models_for_provider` and its helpers) and the test-only `ProviderProfile` /
+  `ProviderRegistry` layer in `provider.rs`, which carried its own `fetch_models`.
+  Ollama uses the OpenAI-compatible `/v1/models` route rather than a native `/api/tags`
+  path; that route is not yet checked against a live Ollama. Live Anthropic and Google
+  listing is unverified here (no key on this machine); wire behavior is covered by
+  mockito tests.
+
 - **iter-920 — models.dev rows are read from their real schema.** The fetch hit
   `https://models.dev/api/v1/models` and expected flat rows (`context_window`,
   `cost_input`), but models.dev publishes a provider-keyed catalog with the window

@@ -28,7 +28,8 @@ use operant_core::config::{
 use crate::env_store::{remove_env_value, save_env_value};
 use crate::gateway_platforms::all_platforms;
 use crate::prompt_helpers::*;
-use crate::provider::{PROVIDERS, fetch_models_for_provider, provider_by_name, provider_from_url};
+use crate::provider::{PROVIDERS, provider_by_name, provider_from_url, wire_family};
+use operant_core::model_catalog::{Request, resolve};
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -585,7 +586,18 @@ pub(crate) async fn step_provider_and_model(config: &mut AppConfig, full: bool) 
             // User chose "Fetch live models"
             let api_key = config.client.api_key.as_deref().unwrap_or("");
             let fetched: Vec<String> = if !api_key.is_empty() {
-                fetch_models_for_provider(selected_provider, api_key).await
+                let catalog = resolve(Request {
+                    provider_name: selected_provider.name,
+                    family: wire_family(selected_provider.name),
+                    base_url: &config.client.base_url,
+                    api_key: Some(api_key),
+                    configured: &[],
+                })
+                .await;
+                if let Some(reason) = &catalog.notice {
+                    print_warning(&format!("Live model list unavailable ({reason})."));
+                }
+                catalog.rows.into_iter().map(|row| row.id).collect()
             } else {
                 Vec::new()
             };
@@ -606,7 +618,7 @@ pub(crate) async fn step_provider_and_model(config: &mut AppConfig, full: bool) 
                 };
             } else {
                 print_success(&format!(
-                    "Loaded {} live models from {}",
+                    "Loaded {} models for {}",
                     fetched.len(),
                     provider_name
                 ));

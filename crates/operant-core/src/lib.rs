@@ -90,6 +90,7 @@ pub mod memory_provider;
 pub mod memory_wire;
 pub mod migrations;
 pub mod moa;
+pub mod model_catalog;
 pub mod models_dev;
 pub mod oauth;
 pub mod oauth_refresh;
