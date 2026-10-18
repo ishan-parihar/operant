@@ -41,7 +41,7 @@ which = "6.0"
 
 # Optional deps for feature-gated modules
 fantoccini = { version = "0.22.1", optional = true, default-features = false, features = ["rustls-tls"] }
-pdf-extract = { version = "0.10", optional = true }
+pdf-extract = { version = "0.12", optional = true }
 
 [features]
 default = []

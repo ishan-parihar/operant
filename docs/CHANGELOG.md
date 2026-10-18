@@ -82,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so that load no longer races worker threads. Two `set_var` writes in the auth commands are removed,
   since the key is read back from `~/.operant/.env`, not the process environment.
 - **iter-944 — `[proxy]` in `operant.toml` takes effect at startup.** The file rejected a `[proxy]` table, so proxy settings could not be set in the file the CLI reads. The table is now part of the config, and it is applied before the runtime is built. With `scope = "environment"` it also exports `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` for child processes. A per-turn `.env` reload now writes only a value that changed.
+- **iter-944 — dependency security advisories.** `cargo audit` reported 21 vulnerabilities. The lock now carries `extism` 1.41.0 (with `wasmtime` 49.0.3), `rustls` 0.23.46, `quinn-proto` 0.11.19, `h2` 0.4.20, and `aws-lc-sys` 0.46. The `rag-pdf` feature uses `pdf-extract` 0.12 (`lopdf` 0.42.0). Three `zip` advisories remain; no workspace code reaches them (see BUGS.md RT-18).
 
 - **iter-935 — `[memory] audit_enabled` and `response_cache_enabled` no longer stop the config from loading.**
   The memory-factory module docs told users to write these keys, but the live `[memory]` table
