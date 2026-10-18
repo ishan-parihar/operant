@@ -78,8 +78,9 @@ The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the wa
 - [x] **Device-auth flow cannot finish — FIXED iter-937.** The dialog had no opener, so its states were
   unreachable. The scaffold is deleted with its key handling, dialog priority, and overlay entries rather
   than wired. The real OAuth device flow in `operant-core/src/oauth/device.rs` is unchanged.
-- [ ] **OAuth token fields unused.** `adapter_types/auth.rs:16`: `StoredCredential::OAuthToken` fields
-  `refresh` and `expires` are never read. Wire token refresh and expiry, or drop the fields.
+- [x] **OAuth token fields unused — FIXED iter-940.** `StoredCredential::OAuthToken` had no constructor after the
+  device-auth scaffold went (iter-937), so the variant, its `save` arm, and its `refresh` and `expires` fields
+  are removed. `api_key_for` is an irrefutable `let` now that the enum has one variant.
 - [ ] **Event and notification variants never built.** `notifications.rs:16` (`Success`),
   `bridge_state.rs:19` (`Reconnecting`, `Failed`, `OutboundOnly`), `debug/event_bus.rs:28` (`Mouse`,
   `Resize`, `Paste`, `OverlayOpened`, `OverlayClosed`), `mcp_view.rs:28` (`Error`), and

@@ -1,4 +1,3 @@
-operant|dead_code|crates/operant-cli/src/tui/adapter_types/auth.rs
 operant|dead_code|crates/operant-cli/src/tui/adapter_types/free_catalog.rs
 operant|dead_code|crates/operant-cli/src/tui/adapter_types/types.rs
 operant|dead_code|crates/operant-cli/src/tui/app/commands.rs

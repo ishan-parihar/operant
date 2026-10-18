@@ -8,14 +8,7 @@ pub struct AuthStore {
 
 #[derive(Debug, Clone)]
 pub enum StoredCredential {
-    ApiKey {
-        key: String,
-    },
-    OAuthToken {
-        access: String,
-        refresh: String,
-        expires: u64,
-    },
+    ApiKey { key: String },
 }
 
 impl AuthStore {
@@ -65,9 +58,6 @@ impl AuthStore {
                 StoredCredential::ApiKey { key } => {
                     map.insert(provider.clone(), key.clone());
                 }
-                StoredCredential::OAuthToken { access, .. } => {
-                    map.insert(provider.clone(), access.clone());
-                }
             }
         }
         let json = serde_json::to_string_pretty(&map)?;
@@ -81,10 +71,8 @@ impl AuthStore {
     }
     pub fn api_key_for(&self, provider: impl Into<String>) -> Option<String> {
         let provider = provider.into();
-        match self.credentials.get(&provider)? {
-            StoredCredential::ApiKey { key } => Some(key.clone()),
-            _ => None,
-        }
+        let StoredCredential::ApiKey { key } = self.credentials.get(&provider)?;
+        Some(key.clone())
     }
     pub fn has_any_key(&self) -> bool {
         self.credentials

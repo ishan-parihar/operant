@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`StoredCredential::OAuthToken` removed (iter-940).** Nothing constructed it once the device-auth scaffold
+  was gone, so its `refresh` and `expires` fields were never read. `api_key_for` no longer needs a fallback arm.
 - **`channel-nostr` placeholder feature removed (iter-939).** No crate enabled it, so its gated
   `NostrConfig`, impl, relays helper, and `channels.nostr` field were never compiled into a shipped build.
   The README lists `voice-wake` as the only remaining empty feature flag.
