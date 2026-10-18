@@ -331,6 +331,17 @@ fn display_message_from_tool_block(app: &App, block: &ToolUseBlock) -> DisplayMe
         status if status.is_pending() && preview.trim().is_empty() => {
             TOOL_PENDING_PREVIEW.to_string()
         }
+        // (iter-933) The guardrail refused a repeat and the model got the skip
+        // text instead of a result. The turn still counts as successful for
+        // the loop circuit (stream.rs), so only this row shows the difference.
+        // ponytail: a real output that starts with "Guardrail: " also matches;
+        // a typed skip flag on ToolResult would remove that, at the cost of a
+        // field on every provider's result path.
+        ToolStatus::Done
+            if preview.starts_with(operant_core::tool_guardrails::SKIP_MESSAGE_PREFIX) =>
+        {
+            "⊘ skipped — repeated call not run".to_string()
+        }
         _ => preview,
     };
     DisplayMessage::tool(
@@ -492,6 +503,22 @@ mod tests {
             output_preview: Some("done".to_string()),
             input_json: r#"{"file_path":"a.rs"}"#.to_string(),
         }
+    }
+
+    /// A repeat the guardrail refused completes `Done` carrying the skip text.
+    /// The row must not read as a call that ran.
+    #[test]
+    fn guardrail_skip_is_not_shown_as_a_completed_call() {
+        let app = make_app();
+        let block = ToolUseBlock {
+            output_preview: Some(format!(
+                "{}tool 'aft_read' was already called with identical arguments 3 times this turn.",
+                operant_core::tool_guardrails::SKIP_MESSAGE_PREFIX
+            )),
+            ..tool_block("call_skip", "aft_read", 0)
+        };
+        let row = display_message_from_tool_block(&app, &block);
+        assert!(row.content.starts_with('⊘'), "got {:?}", row.content);
     }
 
     #[test]

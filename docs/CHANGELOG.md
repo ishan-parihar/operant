@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-934 — a guardrail-refused repeat no longer renders as a completed call.** The
+  identical-call guardrail's skip result showed `✓ <tool>`, which said the read ran. The row
+  now shows `⊘ skipped — repeated call not run`, and the header draws `⊘` for any `⊘`-prefixed
+  row, so a cancelled call no longer draws `✓` either. The agent still reports skips as
+  `success: true`, because the degenerate-loop circuit counts failures.
 - **iter-933 — a pending tool's name is no longer printed three times.** While a tool
   call was queued or running, the status line repeated `Queued <tool>…` next to the tool
   row and the spinner footer, which already named the tool. The status line is no longer

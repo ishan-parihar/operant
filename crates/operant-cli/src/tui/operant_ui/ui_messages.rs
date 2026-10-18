@@ -4046,6 +4046,10 @@ pub(crate) fn render_tool_message(
     } else if msg.content == crate::tui::operant_model::TOOL_PENDING_PREVIEW {
         // Queued/running: no outcome yet, so neither ✓ nor ✗.
         ("○", rgb(150, 150, 150))
+    } else if msg.content.starts_with('⊘') {
+        // Cancelled or refused by the guardrail: no outcome either, so not ✓
+        // (iter-933: both used to fall through to ✓).
+        ("⊘", rgb(150, 150, 150))
     } else if is_error {
         ("✗", rgb(220, 100, 100))
     } else {

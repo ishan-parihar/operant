@@ -43,14 +43,19 @@ the bust permission; `/ctx-flush` (named in the plan) does not exist.
   frame exceeds 6 `aft_read` lines. Regression:
   `tui::app::tests::tool_start_leaves_the_status_line_to_the_tool_row`.
 
-## OPEN — Guardrail-skipped tool calls render as success (2026-10-18)
+## CLOSED — Guardrail-skipped tool calls render as success (iter-934)
 
-- [ ] **A skipped duplicate call shows ✓.** When the identical-call guardrail skips a repeat,
-  the model receives `Guardrail: tool '<name>' was already called with identical arguments N
-  times this turn. Skipping this duplicate call…` as the tool result, and the TUI draws it as
-  a completed row (`✓ aft_read · 57 tok`), which says the read ran. The fix belongs in the
-  agent: a skipped call should finish with `success: false` or a distinct skipped status, so
-  both the row and the model's view agree. Found while driving the live TUI in tmux.
+- [x] **A skipped duplicate call showed ✓.** The identical-call guardrail's skip result reached
+  the TUI as a `Done` block, so the row read `✓ aft_read · 57 tok` and said the read ran.
+  Fixed on the render side: the adapter recognises a `Done` block whose output starts with
+  `tool_guardrails::SKIP_MESSAGE_PREFIX` and shows `⊘ skipped — repeated call not run`; the
+  row header draws `⊘` for any `⊘`-prefixed content (this also fixes the cancelled row, which
+  drew `✓`). The agent keeps `success: true` for skips on purpose (stream.rs, the degenerate-loop
+  circuit counts failures), so the agent side was not changed. Known ceiling: a real output that
+  begins with `Guardrail: ` matches too. Live capture (debug build, mock repeating an identical
+  call): repeats 1–2 `✓`, repeats 3–5 `⊘`. Regressions:
+  `operant_model::adapter::tests::guardrail_skip_is_not_shown_as_a_completed_call` and
+  `operant_ui::messages::tests::render_tool_message_marks_a_skipped_call_as_neither_success_nor_failure`.
 
 ## OPEN — TUI legacy purge residue (owner decisions, 2026-10-18)
 

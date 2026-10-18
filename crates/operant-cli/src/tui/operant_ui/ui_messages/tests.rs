@@ -3278,6 +3278,38 @@ fn render_tool_message_never_draws_an_empty_edit_diff_frame() {
     }
 }
 
+/// A refused repeat and a cancelled call both used to draw ✓. Neither produced an
+/// outcome, so the header shows neither ✓ nor ✗.
+#[test]
+fn render_tool_message_marks_a_skipped_call_as_neither_success_nor_failure() {
+    let msg = DisplayMessage {
+        role: "tool".to_string(),
+        content: "⊘ skipped — repeated call not run".to_string(),
+        tool_calls: Vec::new(),
+        duration_secs: None,
+        title: None,
+        tool_data: Some(crate::tui::operant_model::vendor_types::ToolCall {
+            id: "call_skip".to_string(),
+            name: "aft_read".to_string(),
+            input: serde_json::json!({"file_path": "README.md"}),
+            intent: None,
+            thought_signature: None,
+        }),
+    };
+    let lines = render_tool_message(
+        &msg,
+        100,
+        crate::tui::operant_app::config_shim::DiffDisplayMode::Inline,
+    );
+    let plain = lines
+        .iter()
+        .map(extract_line_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(plain.contains("⊘ aft_read"), "{plain}");
+    assert!(!plain.contains("✓ aft_read"), "{plain}");
+}
+
 #[test]
 fn render_tool_message_marks_failed_apply_patch_without_empty_diff() {
     let msg = DisplayMessage {
