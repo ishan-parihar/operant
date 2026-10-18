@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`commands.rs` dead command layer removed (iter-936).** The 17 `#[allow(dead_code)]` attributes
+  that hid it are gone, and the items they covered are deleted: `CommandCategory`, every
+  `CommandResult` variant no caller constructs (only `Message` and `ShellCommand` remain), the
+  `CommandDef` category and help fields (`CommandDef::new` now takes name and description), the unused
+  `CommandRegistry` helpers, `resolve_command`, and the skill and TUI slash caches. The tests that
+  covered them are removed; the resolve and execute tests now run against `CommandRegistry`.
 - **TUI legacy purge — dead code removed from the `operant-cli` TUI tree (2026-10-18).**
   684 items the compiler reported dead in both the production and the test build were
   deleted, with the impl blocks, nested items, and trait-method overrides that depended

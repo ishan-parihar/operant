@@ -12,66 +12,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::LazyLock;
 
 use anyhow::Result;
-
-// ---------------------------------------------------------------------------
-// CommandCategory
-// ---------------------------------------------------------------------------
-
-/// Category for grouping slash commands in help output.
-///
-/// Mirrors Python's `CommandDef.category` field with typed variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)] // Prepared for help text grouping
-pub enum CommandCategory {
-    /// Session management (new, stop, history, etc.)
-    Session,
-    /// Configuration (model, provider, config, etc.)
-    Configuration,
-    /// Tools and skills management
-    ToolsAndSkills,
-    /// Informational commands (help, status, memory, etc.)
-    Info,
-    /// Exit commands
-    Exit,
-}
-
-impl CommandCategory {
-    /// Return the display string matching the Python convention.
-    #[allow(dead_code)] // Prepared for help text display
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Session => "Session",
-            Self::Configuration => "Configuration",
-            Self::ToolsAndSkills => "Tools & Skills",
-            Self::Info => "Info",
-            Self::Exit => "Exit",
-        }
-    }
-}
-
-impl fmt::Display for CommandCategory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl TryFrom<&str> for CommandCategory {
-    type Error = anyhow::Error;
-
-    fn try_from(s: &str) -> Result<Self> {
-        match s {
-            "Session" => Ok(Self::Session),
-            "Configuration" => Ok(Self::Configuration),
-            "Tools & Skills" | "ToolsAndSkills" => Ok(Self::ToolsAndSkills),
-            "Info" => Ok(Self::Info),
-            "Exit" => Ok(Self::Exit),
-            _ => anyhow::bail!("Unknown command category: {}", s),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,163 +35,31 @@ pub struct CommandContext<'a> {
 /// Ported from the Claurst `CommandResult` pattern, adapted for Operant's TUI.
 #[must_use]
 #[non_exhaustive]
-#[allow(dead_code)] // All variants are prepared for command dispatch — many not yet wired to handlers
 pub enum CommandResult {
     // ── Display ────────────────────────────────────────────────────────────
     /// Display a message to the user (does NOT go to the model).
     Message(String),
-    /// Display an error message to the user.
-    Error(String),
-    /// No visible output (command was handled silently).
-    Silent,
 
     // ── Conversation ───────────────────────────────────────────────────────
-    /// Inject a message into the conversation as though the user typed it.
-    /// The string is the prompt text sent to the agent.
-    UserMessage(String),
-    /// Clear the conversation history and reset streaming state.
-    ClearConversation,
-    /// Start a completely fresh session (clear + reset cost/title).
-    NewSession,
-    /// Replace the conversation with a specific message list (used by /rewind).
-    SetMessages(Vec<String>),
 
     // ── Configuration ──────────────────────────────────────────────────────
-    /// Toggle a boolean setting and show the new state.
-    ToggleSetting { name: &'static str, enabled: bool },
-    /// Cycle a string setting through a list of values.
-    CycleSetting { name: &'static str, current: String },
-    /// Update the session goal.
-    SetGoal(Option<String>),
 
     // ── Overlay / UI ───────────────────────────────────────────────────────
-    /// Open the help overlay.
-    OpenHelp,
-    /// Open the model picker overlay.
-    OpenModelPicker,
-    /// Open the theme picker.
-    OpenThemePicker,
-    /// Open the session browser.
-    OpenSessionBrowser,
-    /// Open the stats/cost dialog.
-    OpenStats,
-    /// Open the MCP server browser.
-    OpenMcp,
-    /// Open the agents overlay.
-    OpenAgents,
-    /// Open the diff viewer.
-    OpenDiff,
-    /// Open the memory file browser.
-    OpenMemory,
-    /// Open the skills browser.
-    OpenSkills,
-    /// Open the plugins browser.
-    OpenPlugins,
-    /// Open the hooks config browser.
-    OpenHooks,
-    /// Open the import-config picker.
-    OpenImportConfig,
-    /// Open the export dialog.
-    OpenExport,
-    /// Open the effort-level picker.
-    OpenEffortPicker,
-    /// Open the connect-a-provider dialog.
-    OpenConnect,
-    /// Open the global search dialog.
-    OpenSearch,
-    /// Open the settings screen.
-    OpenSettings,
-    /// Open the context visualization.
-    OpenContext,
-    /// Open the journey view.
-    OpenJourney,
 
     // ── Session state ──────────────────────────────────────────────────────
-    /// Stop the current streaming turn.
-    StopStreaming,
-    /// Retry the last user message.
-    Retry,
-    /// Undo the last user+assistant exchange.
-    Undo,
 
     // ── Clipboard ──────────────────────────────────────────────────────────
-    /// Copy the last assistant response to clipboard.
-    CopyLastResponse,
 
     // ── Shell ──────────────────────────────────────────────────────────────
     /// Run a shell command (e.g. /setup spawns an interactive subprocess).
     ShellCommand(Vec<String>),
-
     // ── Exit ───────────────────────────────────────────────────────────────
-    /// Exit the CLI.
-    Exit,
 }
 
-#[allow(dead_code)] // Prepared convenience constructors for future command handlers
 impl CommandResult {
     /// Convenience: create a Message variant.
     pub fn message(text: impl Into<String>) -> Self {
         Self::Message(text.into())
-    }
-
-    /// Convenience: create an Error variant.
-    pub fn error(text: impl Into<String>) -> Self {
-        Self::Error(text.into())
-    }
-
-    /// Convenience: create a ToggleSetting variant.
-    pub fn toggle(name: &'static str, enabled: bool) -> Self {
-        Self::ToggleSetting { name, enabled }
-    }
-
-    /// Convenience: create a CycleSetting variant.
-    pub fn cycle(name: &'static str, current: impl Into<String>) -> Self {
-        Self::CycleSetting {
-            name,
-            current: current.into(),
-        }
-    }
-
-    /// Extract the message text if this is a Message variant.
-    /// Useful for testing and simple string-based dispatch.
-    pub fn message_text(&self) -> Option<&str> {
-        match self {
-            Self::Message(s) => Some(s.as_str()),
-            _ => None,
-        }
-    }
-
-    /// Return true if this is a Message variant.
-    pub fn is_message(&self) -> bool {
-        matches!(self, Self::Message(_))
-    }
-
-    /// Return true if this is a Silent variant.
-    pub fn is_silent(&self) -> bool {
-        matches!(self, Self::Silent)
-    }
-
-    /// Return true if this is an Error variant.
-    pub fn is_error(&self) -> bool {
-        matches!(self, Self::Error(_))
-    }
-
-    /// Return true if this is an Exit variant.
-    pub fn is_exit(&self) -> bool {
-        matches!(self, Self::Exit)
-    }
-
-    /// Return true if this variant is display-only (no TUI-side action needed).
-    pub fn is_display_only(&self) -> bool {
-        matches!(self, Self::Message(_) | Self::Error(_) | Self::Silent)
-    }
-
-    /// Return true if this variant requires TUI-side handling
-    /// (overlay opens, setting toggles, conversation control, etc).
-    /// Inverted from `is_display_only()` so it never goes stale when new
-    /// variants are added.
-    pub fn is_overlay_or_action(&self) -> bool {
-        !self.is_display_only()
     }
 }
 
@@ -257,45 +67,7 @@ impl fmt::Debug for CommandResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Message(s) => write!(f, "Message({:?})", s),
-            Self::Error(s) => write!(f, "Error({:?})", s),
-            Self::Silent => write!(f, "Silent"),
-            Self::UserMessage(s) => write!(f, "UserMessage({:?})", s),
-            Self::ClearConversation => write!(f, "ClearConversation"),
-            Self::NewSession => write!(f, "NewSession"),
-            Self::SetMessages(v) => write!(f, "SetMessages({} msgs)", v.len()),
-            Self::ToggleSetting { name, enabled } => {
-                write!(f, "ToggleSetting({:?}, {})", name, enabled)
-            }
-            Self::CycleSetting { name, current } => {
-                write!(f, "CycleSetting({:?}, {:?})", name, current)
-            }
-            Self::SetGoal(g) => write!(f, "SetGoal({:?})", g),
-            Self::OpenHelp => write!(f, "OpenHelp"),
-            Self::OpenModelPicker => write!(f, "OpenModelPicker"),
-            Self::OpenThemePicker => write!(f, "OpenThemePicker"),
-            Self::OpenSessionBrowser => write!(f, "OpenSessionBrowser"),
-            Self::OpenStats => write!(f, "OpenStats"),
-            Self::OpenMcp => write!(f, "OpenMcp"),
-            Self::OpenAgents => write!(f, "OpenAgents"),
-            Self::OpenDiff => write!(f, "OpenDiff"),
-            Self::OpenMemory => write!(f, "OpenMemory"),
-            Self::OpenSkills => write!(f, "OpenSkills"),
-            Self::OpenPlugins => write!(f, "OpenPlugins"),
-            Self::OpenHooks => write!(f, "OpenHooks"),
-            Self::OpenImportConfig => write!(f, "OpenImportConfig"),
-            Self::OpenExport => write!(f, "OpenExport"),
-            Self::OpenEffortPicker => write!(f, "OpenEffortPicker"),
-            Self::OpenConnect => write!(f, "OpenConnect"),
-            Self::OpenSearch => write!(f, "OpenSearch"),
-            Self::OpenSettings => write!(f, "OpenSettings"),
-            Self::OpenContext => write!(f, "OpenContext"),
-            Self::OpenJourney => write!(f, "OpenJourney"),
-            Self::StopStreaming => write!(f, "StopStreaming"),
-            Self::Retry => write!(f, "Retry"),
-            Self::Undo => write!(f, "Undo"),
-            Self::CopyLastResponse => write!(f, "CopyLastResponse"),
             Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
-            Self::Exit => write!(f, "Exit"),
         }
     }
 }
@@ -304,46 +76,7 @@ impl fmt::Display for CommandResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Message(s) => write!(f, "{}", s),
-            Self::Error(s) => write!(f, "Error: {}", s),
-            Self::Silent => Ok(()),
-            Self::UserMessage(s) => write!(f, "[user message: {}]", s),
-            Self::ClearConversation => write!(f, "[clear conversation]"),
-            Self::NewSession => write!(f, "[new session]"),
-            Self::SetMessages(v) => write!(f, "[restored {} messages]", v.len()),
-            Self::ToggleSetting { name, enabled } => {
-                write!(f, "[{}: {}]", name, if *enabled { "on" } else { "off" })
-            }
-            Self::CycleSetting { name, current } => {
-                write!(f, "[{}: {}]", name, current)
-            }
-            Self::SetGoal(None) => write!(f, "SetGoal(None)"),
-            Self::SetGoal(Some(g)) => write!(f, "SetGoal(Some({:?}))", g),
-            Self::OpenHelp => write!(f, "[open help]"),
-            Self::OpenModelPicker => write!(f, "[open model picker]"),
-            Self::OpenThemePicker => write!(f, "[open theme picker]"),
-            Self::OpenSessionBrowser => write!(f, "[open session browser]"),
-            Self::OpenStats => write!(f, "[open stats]"),
-            Self::OpenMcp => write!(f, "[open MCP]"),
-            Self::OpenAgents => write!(f, "[open agents]"),
-            Self::OpenDiff => write!(f, "[open diff]"),
-            Self::OpenMemory => write!(f, "[open memory]"),
-            Self::OpenSkills => write!(f, "[open skills]"),
-            Self::OpenPlugins => write!(f, "[open plugins]"),
-            Self::OpenHooks => write!(f, "[open hooks]"),
-            Self::OpenImportConfig => write!(f, "[open import config]"),
-            Self::OpenExport => write!(f, "[open export]"),
-            Self::OpenEffortPicker => write!(f, "[open effort picker]"),
-            Self::OpenConnect => write!(f, "[open connect]"),
-            Self::OpenSearch => write!(f, "[open search]"),
-            Self::OpenSettings => write!(f, "[open settings]"),
-            Self::OpenContext => write!(f, "[open context]"),
-            Self::OpenJourney => write!(f, "[open journey]"),
-            Self::StopStreaming => write!(f, "[stop streaming]"),
-            Self::Retry => write!(f, "[retry last message]"),
-            Self::Undo => write!(f, "[undo last exchange]"),
-            Self::CopyLastResponse => write!(f, "[copy last response]"),
             Self::ShellCommand(cmds) => write!(f, "ShellCommand({:?})", cmds),
-            Self::Exit => write!(f, "[exit]"),
         }
     }
 }
@@ -386,17 +119,11 @@ pub struct CommandDef {
     pub name: &'static str,
     /// One-line human-readable description.
     pub description: &'static str,
-    /// Category for grouping in help output (e.g. "Session", "Info").
-    pub category: &'static str,
     /// Alternative names that resolve to this command.
     pub aliases: &'static [&'static str],
     /// Argument hint shown in help (e.g. `"<prompt>"`, `"<key> <value>"`).
     pub args_hint: &'static str,
-    /// Detailed help text shown by `/help <command>`.
-    #[allow(dead_code)] // Prepared for /help <command> detailed view
-    pub help: &'static str,
     /// Only available in interactive CLI (not in gateway/messaging).
-    #[allow(dead_code)] // cli_only is used for command filtering, not yet wired up
     pub cli_only: bool,
     /// Only available in messaging platforms (not in CLI).
     pub gateway_only: bool,
@@ -408,29 +135,16 @@ pub struct CommandDef {
 
 impl CommandDef {
     /// Create a new command definition with minimal fields.
-    pub const fn new(
-        name: &'static str,
-        description: &'static str,
-        category: &'static str,
-    ) -> Self {
+    pub const fn new(name: &'static str, description: &'static str) -> Self {
         Self {
             name,
             description,
-            category,
             aliases: &[],
             args_hint: "",
-            help: "",
             cli_only: false,
             gateway_only: false,
             gateway_config_gate: None,
         }
-    }
-
-    /// Set the detailed help text.
-    #[allow(dead_code)] // Prepared for /help <command> detailed view
-    pub const fn with_help(mut self, help: &'static str) -> Self {
-        self.help = help;
-        self
     }
 
     /// Set aliases for this command.
@@ -473,400 +187,244 @@ impl CommandDef {
 /// [`CommandRegistry`] at startup.
 pub static COMMAND_REGISTRY: &[CommandDef] = &[
     // ── Session ─────────────────────────────────────────────────────────────
-    CommandDef::new(
-        "start",
-        "Acknowledge platform start pings without a reply",
-        "Session",
-    )
-    .gateway_only(),
-    CommandDef::new(
-        "new",
-        "Start a new session (fresh session ID + history)",
-        "Session",
-    )
-    .with_args("[name]")
-    .with_aliases(&["n", "clear"]),
-    CommandDef::new(
-        "topic",
-        "Enable or inspect Telegram DM topic sessions",
-        "Session",
-    )
-    .gateway_only()
-    .with_args("[off|help|session-id]"),
+    CommandDef::new("start", "Acknowledge platform start pings without a reply").gateway_only(),
+    CommandDef::new("new", "Start a new session (fresh session ID + history)")
+        .with_args("[name]")
+        .with_aliases(&["n", "clear"]),
+    CommandDef::new("topic", "Enable or inspect Telegram DM topic sessions")
+        .gateway_only()
+        .with_args("[off|help|session-id]"),
     CommandDef::new(
         "redraw",
         "Force a full UI repaint (recovers from terminal drift)",
-        "Session",
     )
     .cli_only(),
-    CommandDef::new("save", "Save the current conversation", "Session")
+    CommandDef::new("save", "Save the current conversation")
         .cli_only()
         .with_aliases(&["export"]),
-    CommandDef::new(
-        "retry",
-        "Retry the last message (resend to agent)",
-        "Session",
-    ),
-    CommandDef::new(
-        "undo",
-        "Back up N user turns and re-prompt (default 1)",
-        "Session",
-    )
-    .with_args("[N]"),
-    CommandDef::new("title", "Set a title for the current session", "Session").with_args("[name]"),
+    CommandDef::new("retry", "Retry the last message (resend to agent)"),
+    CommandDef::new("undo", "Back up N user turns and re-prompt (default 1)").with_args("[N]"),
+    CommandDef::new("title", "Set a title for the current session").with_args("[name]"),
     CommandDef::new(
         "branch",
         "Branch the current session (explore a different path)",
-        "Session",
     )
     .with_args("[name]"),
     CommandDef::new(
         "compress",
         "Compress conversation context (add 'here [N]' to keep recent N turns)",
-        "Session",
     )
     .with_args("[here [N] | focus topic]"),
-    CommandDef::new(
-        "rollback",
-        "List or restore filesystem checkpoints",
-        "Session",
-    )
-    .with_args("[number]"),
-    CommandDef::new("stop", "Kill all running background processes", "Session"),
-    CommandDef::new("approve", "Approve a pending dangerous command", "Session")
+    CommandDef::new("rollback", "List or restore filesystem checkpoints").with_args("[number]"),
+    CommandDef::new("stop", "Kill all running background processes"),
+    CommandDef::new("approve", "Approve a pending dangerous command")
         .gateway_only()
         .with_args("[session|always]"),
-    CommandDef::new("deny", "Deny a pending dangerous command", "Session").gateway_only(),
-    CommandDef::new("background", "Run a prompt in the background", "Session")
+    CommandDef::new("deny", "Deny a pending dangerous command").gateway_only(),
+    CommandDef::new("background", "Run a prompt in the background")
         .with_aliases(&["bg"])
         .with_args("<prompt>"),
-    CommandDef::new("agents", "Show active agents and running tasks", "Session")
-        .with_aliases(&["tasks"]),
+    CommandDef::new("agents", "Show active agents and running tasks").with_aliases(&["tasks"]),
     CommandDef::new(
         "queue",
         "Queue a prompt for the next turn (doesn't interrupt)",
-        "Session",
     )
     .with_args("<prompt>"),
     CommandDef::new(
         "steer",
         "Inject a message after the next tool call without interrupting",
-        "Session",
     )
     .with_args("<prompt>"),
     CommandDef::new(
         "goal",
         "Set a standing goal Operant works on across turns until achieved",
-        "Session",
     )
     .with_args("[text | pause | resume | clear | status]"),
-    CommandDef::new(
-        "subgoal",
-        "Add or manage extra criteria on the active goal",
-        "Session",
-    )
-    .with_args("[text | remove N | clear]"),
-    CommandDef::new(
-        "status",
-        "Show session, model, token, and context info",
-        "Session",
-    ),
-    CommandDef::new("resume", "Resume a previously-named session", "Session").with_args("[name]"),
-    CommandDef::new("sethome", "Set this chat as the home channel", "Session")
+    CommandDef::new("subgoal", "Add or manage extra criteria on the active goal")
+        .with_args("[text | remove N | clear]"),
+    CommandDef::new("status", "Show session, model, token, and context info"),
+    CommandDef::new("resume", "Resume a previously-named session").with_args("[name]"),
+    CommandDef::new("sethome", "Set this chat as the home channel")
         .gateway_only()
         .with_aliases(&["set-home"]),
-    CommandDef::new("sessions", "Browse and resume previous sessions", "Session"),
+    CommandDef::new("sessions", "Browse and resume previous sessions"),
     // ── Configuration ───────────────────────────────────────────────────────
-    CommandDef::new("model", "Switch model for this session", "Configuration")
+    CommandDef::new("model", "Switch model for this session")
         .with_args("[model] [--provider name] [--global] [--refresh]"),
-    CommandDef::new("provider", "Switch LLM provider", "Configuration").with_args("<name>"),
-    CommandDef::new("config", "Show current configuration", "Configuration")
+    CommandDef::new("provider", "Switch LLM provider").with_args("<name>"),
+    CommandDef::new("config", "Show current configuration")
         .cli_only()
         .with_args("[key] [value]"),
     CommandDef::new(
         "codex-runtime",
         "Toggle codex app-server runtime for OpenAI/Codex models",
-        "Configuration",
     )
     .with_aliases(&["codex_runtime"])
     .with_args("[auto|codex_app_server]"),
-    CommandDef::new(
-        "profile",
-        "Show active profile name and home directory",
-        "Info",
-    ),
-    CommandDef::new(
-        "personality",
-        "Set a predefined personality",
-        "Configuration",
-    )
-    .with_args("[name]"),
-    CommandDef::new(
-        "statusbar",
-        "Toggle the context/model status bar",
-        "Configuration",
-    )
-    .cli_only()
-    .with_aliases(&["sb"]),
+    CommandDef::new("profile", "Show active profile name and home directory"),
+    CommandDef::new("personality", "Set a predefined personality").with_args("[name]"),
+    CommandDef::new("statusbar", "Toggle the context/model status bar")
+        .cli_only()
+        .with_aliases(&["sb"]),
     CommandDef::new(
         "verbose",
         "Cycle tool progress display: off -> new -> all -> verbose",
-        "Configuration",
     )
     .cli_only()
     .with_config_gate("display.tool_progress_command"),
     CommandDef::new(
         "footer",
         "Toggle gateway runtime-metadata footer on final replies",
-        "Configuration",
     )
     .with_args("[on|off|status]"),
     CommandDef::new(
         "yolo",
         "Toggle YOLO mode (skip all dangerous command approvals)",
-        "Configuration",
     ),
-    CommandDef::new(
-        "reasoning",
-        "Manage reasoning effort and display",
-        "Configuration",
-    )
-    .with_args("[level|show|hide]"),
-    CommandDef::new(
-        "skin",
-        "Show or change the display skin/theme",
-        "Configuration",
-    )
-    .cli_only()
-    .with_args("[name]"),
-    CommandDef::new(
-        "indicator",
-        "Pick the TUI busy-indicator style",
-        "Configuration",
-    )
-    .cli_only()
-    .with_args("[kaomoji|emoji|unicode|ascii]"),
-    CommandDef::new(
-        "busy",
-        "Control what Enter does while Operant is working",
-        "Configuration",
-    )
-    .cli_only()
-    .with_args("[queue|steer|interrupt|status]"),
+    CommandDef::new("reasoning", "Manage reasoning effort and display")
+        .with_args("[level|show|hide]"),
+    CommandDef::new("skin", "Show or change the display skin/theme")
+        .cli_only()
+        .with_args("[name]"),
+    CommandDef::new("indicator", "Pick the TUI busy-indicator style")
+        .cli_only()
+        .with_args("[kaomoji|emoji|unicode|ascii]"),
+    CommandDef::new("busy", "Control what Enter does while Operant is working")
+        .cli_only()
+        .with_args("[queue|steer|interrupt|status]"),
     // ── Tools & Skills ──────────────────────────────────────────────────────
     CommandDef::new(
         "tools",
         "Manage tools: /tools [list|disable|enable] [name...]",
-        "Tools & Skills",
     )
     .cli_only()
     .with_args("[list|disable|enable] [name...]"),
-    CommandDef::new(
-        "skills",
-        "Search, install, inspect, or manage skills",
-        "Tools & Skills",
-    )
-    .cli_only()
-    .with_aliases(&["skill"])
-    .with_config_gate("skills.write_approval"),
+    CommandDef::new("skills", "Search, install, inspect, or manage skills")
+        .cli_only()
+        .with_aliases(&["skill"])
+        .with_config_gate("skills.write_approval"),
     CommandDef::new(
         "memory",
         "Review pending memory writes / toggle the approval gate",
-        "Tools & Skills",
     )
     .with_aliases(&["mem"])
     .with_args("[pending|approve|reject|approval] [id|on|off]"),
     CommandDef::new(
         "bundles",
         "List skill bundles (aliases /<name> for multiple skills)",
-        "Tools & Skills",
     ),
-    CommandDef::new("cron", "Manage scheduled tasks", "Tools & Skills")
+    CommandDef::new("cron", "Manage scheduled tasks")
         .cli_only()
         .with_args("[subcommand]"),
     CommandDef::new(
         "suggestions",
         "Review suggested automations (accept/dismiss)",
-        "Tools & Skills",
     )
     .with_aliases(&["suggest"])
     .with_args("[accept|dismiss N | catalog]"),
     CommandDef::new(
         "curator",
         "Background skill maintenance (status, run, pin, archive, list-archived)",
-        "Tools & Skills",
     )
     .with_args("[subcommand]"),
     CommandDef::new(
         "kanban",
         "Multi-profile collaboration board (tasks, links, comments)",
-        "Tools & Skills",
     )
     .with_aliases(&["k"])
     .with_args("[subcommand]"),
-    CommandDef::new(
-        "reload",
-        "Reload .env variables into the running session",
-        "Tools & Skills",
-    )
-    .cli_only(),
-    CommandDef::new(
-        "reload-mcp",
-        "Reload MCP servers from config",
-        "Tools & Skills",
-    )
-    .with_aliases(&["reload_mcp"]),
+    CommandDef::new("reload", "Reload .env variables into the running session").cli_only(),
+    CommandDef::new("reload-mcp", "Reload MCP servers from config").with_aliases(&["reload_mcp"]),
     CommandDef::new(
         "reload-skills",
         "Re-scan ~/.operant/skills/ for newly installed or removed skills",
-        "Tools & Skills",
     )
     .with_aliases(&["reload_skills"]),
     CommandDef::new(
         "browser",
         "Connect browser tools to your live Chromium-family browser via CDP",
-        "Tools & Skills",
     )
     .cli_only()
     .with_args("[connect|disconnect|status]"),
-    CommandDef::new(
-        "plugins",
-        "List installed plugins and their status",
-        "Tools & Skills",
-    )
-    .cli_only(),
+    CommandDef::new("plugins", "List installed plugins and their status").cli_only(),
     // ── Info ─────────────────────────────────────────────────────────────────
-    CommandDef::new(
-        "commands",
-        "Browse all commands and skills (paginated)",
-        "Info",
-    )
-    .gateway_only()
-    .with_args("[page]"),
-    CommandDef::new("help", "Show available commands", "Info").with_aliases(&["?", "h"]),
+    CommandDef::new("commands", "Browse all commands and skills (paginated)")
+        .gateway_only()
+        .with_args("[page]"),
+    CommandDef::new("help", "Show available commands").with_aliases(&["?", "h"]),
     CommandDef::new(
         "restart",
         "Gracefully restart the gateway after draining active runs",
-        "Session",
     )
     .gateway_only(),
     CommandDef::new(
         "usage",
         "Show token usage and rate limits for the current session",
-        "Info",
     ),
-    CommandDef::new("insights", "Show usage insights and analytics", "Info").with_args("[days]"),
-    CommandDef::new(
-        "platforms",
-        "Show gateway/messaging platform status",
-        "Info",
-    )
-    .cli_only()
-    .with_aliases(&["gateway"]),
+    CommandDef::new("insights", "Show usage insights and analytics").with_args("[days]"),
+    CommandDef::new("platforms", "Show gateway/messaging platform status")
+        .cli_only()
+        .with_aliases(&["gateway"]),
     CommandDef::new(
         "platform",
         "Pause, resume, or list a failing gateway platform",
-        "Info",
     )
     .gateway_only()
     .with_args("<pause|resume|list> [name]"),
-    CommandDef::new(
-        "copy",
-        "Copy the last assistant response to clipboard",
-        "Info",
-    )
-    .cli_only()
-    .with_args("[number]"),
-    CommandDef::new(
-        "paste",
-        "Attach clipboard image from your clipboard",
-        "Info",
-    )
-    .cli_only(),
-    CommandDef::new(
-        "image",
-        "Attach a local image file for your next prompt",
-        "Info",
-    )
-    .cli_only()
-    .with_args("<path>"),
-    CommandDef::new(
-        "update",
-        "Update Operant Agent to the latest version",
-        "Info",
-    ),
-    CommandDef::new("version", "Show Operant Agent version", "Info").with_aliases(&["v"]),
+    CommandDef::new("copy", "Copy the last assistant response to clipboard")
+        .cli_only()
+        .with_args("[number]"),
+    CommandDef::new("paste", "Attach clipboard image from your clipboard").cli_only(),
+    CommandDef::new("image", "Attach a local image file for your next prompt")
+        .cli_only()
+        .with_args("<path>"),
+    CommandDef::new("update", "Update Operant Agent to the latest version"),
+    CommandDef::new("version", "Show Operant Agent version").with_aliases(&["v"]),
     CommandDef::new(
         "debug",
         "Upload debug report (system info + logs) and get shareable links",
-        "Info",
     ),
-    CommandDef::new(
-        "whoami",
-        "Show your slash command access (admin / user)",
-        "Info",
-    ),
-    CommandDef::new("time", "Show the current time", "Info"),
-    CommandDef::new("session", "Show current session info", "Info").with_aliases(&["s"]),
-    CommandDef::new("doctor", "Run diagnostics", "Info"),
-    CommandDef::new("init", "Initialize AGENTS.md for this project", "Session"),
-    CommandDef::new("login", "Log in to Operant", "Session"),
-    CommandDef::new("logout", "Log out of Operant", "Session"),
-    CommandDef::new(
-        "refresh",
-        "Clear saved provider auth and model caches",
-        "Session",
-    ),
-    CommandDef::new(
-        "providers",
-        "List available AI providers and their status",
-        "Info",
-    ),
+    CommandDef::new("whoami", "Show your slash command access (admin / user)"),
+    CommandDef::new("time", "Show the current time"),
+    CommandDef::new("session", "Show current session info").with_aliases(&["s"]),
+    CommandDef::new("doctor", "Run diagnostics"),
+    CommandDef::new("init", "Initialize AGENTS.md for this project"),
+    CommandDef::new("login", "Log in to Operant"),
+    CommandDef::new("logout", "Log out of Operant"),
+    CommandDef::new("refresh", "Clear saved provider auth and model caches"),
+    CommandDef::new("providers", "List available AI providers and their status"),
     // ── Exit ─────────────────────────────────────────────────────────────────
-    CommandDef::new("exit", "Exit the CLI", "Exit")
+    CommandDef::new("exit", "Exit the CLI")
         .cli_only()
         .with_aliases(&["quit", "q"]),
     // ── TUI-only commands (intercepted by the TUI, not in gateway) ────────
-    CommandDef::new("rename", "Set a title for the current session", "Session")
+    CommandDef::new("rename", "Set a title for the current session")
         .cli_only()
         .with_args("[name]"),
-    CommandDef::new(
-        "journey",
-        "Browse skills + memories timeline",
-        "Tools & Skills",
-    )
-    .cli_only(),
-    CommandDef::new("setup", "Re-run the setup wizard", "Configuration").cli_only(),
-    CommandDef::new("mouse", "Show mouse capture info", "Info").cli_only(),
-    CommandDef::new("terminal-setup", "Show terminal capability info", "Info").cli_only(),
+    CommandDef::new("journey", "Browse skills + memories timeline").cli_only(),
+    CommandDef::new("setup", "Re-run the setup wizard").cli_only(),
+    CommandDef::new("mouse", "Show mouse capture info").cli_only(),
+    CommandDef::new("terminal-setup", "Show terminal capability info").cli_only(),
     // ── Agent flows (tier 3) ─────────────────────────────────────────────
     // One-shot agent sessions launched via the /setup suspend-and-run escape
     // hatch; handlers registered in register_agent_flow_handlers (tui_app.rs).
     CommandDef::new(
         "improve",
         "Autonomously improve the repository (TODO.md ledger)",
-        "Agent flows",
     )
     .with_aliases(&["cut-improve"]),
     CommandDef::new(
         "judge",
         "Launch a one-shot judge session over the current conversation",
-        "Agent flows",
     ),
     CommandDef::new(
         "refactor",
         "Run a safe refactor loop with independent review",
-        "Agent flows",
     ),
-    CommandDef::new(
-        "fix",
-        "Recover when the model cannot continue",
-        "Agent flows",
-    ),
+    CommandDef::new("fix", "Recover when the model cannot continue"),
     CommandDef::new(
         "triage",
         "Triage new GitHub issues and autonomously fix the safe ones",
-        "Agent flows",
     ),
 ];
 
@@ -954,97 +512,6 @@ impl CommandRegistry {
             }
         }
     }
-
-    /// Return the number of registered commands.
-    #[allow(dead_code)] // len is used for command count display, not yet wired up
-    pub fn len(&self) -> usize {
-        self.defs.len()
-    }
-
-    /// Return true if no commands are registered.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.defs.is_empty()
-    }
-
-    /// Collect commands grouped by category, in display order.
-    #[allow(dead_code)] // Prepared for help text display
-    pub fn commands_by_category(&self) -> Vec<(&'static str, Vec<&'static CommandDef>)> {
-        let mut categories: Vec<(&str, Vec<&CommandDef>)> = Vec::new();
-        let mut seen_canonical = std::collections::HashSet::new();
-
-        for cmd in COMMAND_REGISTRY.iter() {
-            if self.defs.contains_key(cmd.name) && seen_canonical.insert(cmd.name) {
-                let cat = cmd.category;
-                match categories.iter_mut().find(|(c, _)| *c == cat) {
-                    Some((_, list)) => list.push(cmd),
-                    None => categories.push((cat, vec![cmd])),
-                }
-            }
-        }
-        categories
-    }
-
-    /// Format help text for all registered commands, organized by category.
-    #[allow(dead_code)] // Prepared for help text display
-    pub fn format_help(&self) -> String {
-        let mut output = String::from("Available commands:\n\n");
-
-        for (category, commands) in self.commands_by_category() {
-            output.push_str(&format!("  {}:\n", category));
-            for cmd in &commands {
-                let aliases = if cmd.aliases.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", cmd.aliases.join(", "))
-                };
-                let args = if cmd.args_hint.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", cmd.args_hint)
-                };
-                output.push_str(&format!(
-                    "    /{:<12}{:<20}  {}\n",
-                    format!("{}{}", cmd.name, args),
-                    aliases,
-                    cmd.description
-                ));
-            }
-            output.push('\n');
-        }
-
-        output
-    }
-
-    #[allow(dead_code)] // Prepared for command enumeration
-    pub fn all_commands(&self) -> Vec<&'static CommandDef> {
-        let mut seen = std::collections::HashSet::new();
-        let mut cmds = Vec::new();
-        for cmd in COMMAND_REGISTRY {
-            if seen.insert(cmd.name) {
-                cmds.push(cmd);
-            }
-        }
-        cmds
-    }
-
-    #[allow(dead_code)] // Prepared for command completion
-    pub fn slash_completions(&self, prefix: &str) -> Vec<String> {
-        let trimmed = prefix.trim_start_matches('/');
-        COMMAND_REGISTRY
-            .iter()
-            .filter(|cmd| {
-                cmd.name.starts_with(trimmed) || cmd.aliases.iter().any(|a| a.starts_with(trimmed))
-            })
-            .flat_map(|cmd| {
-                let mut names = vec![format!("/{}", cmd.name)];
-                for alias in cmd.aliases {
-                    names.push(format!("/{}", alias));
-                }
-                names
-            })
-            .collect()
-    }
 }
 
 impl Default for CommandRegistry {
@@ -1067,15 +534,6 @@ pub fn build_command_map() -> HashMap<&'static str, &'static CommandDef> {
         }
     }
     map
-}
-
-/// Resolve a user-provided command name (with or without leading `/`) to its
-/// canonical name. Returns `None` if no match.
-#[allow(dead_code)] // Command registry: items prepared for help text / gateway filtering
-pub fn resolve_command(input: &str) -> Option<&'static str> {
-    let trimmed = input.trim().trim_start_matches('/');
-    let map = build_command_map();
-    map.get(trimmed).map(|cmd| cmd.name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,191 +619,6 @@ pub struct TuiSlashCommand {
 // Skill command discovery (cached via LazyLock)
 // ---------------------------------------------------------------------------
 
-/// Leaked string helper for converting dynamic strings to `&'static str`.
-///
-/// Used when building the cached skill command list. The leaked memory
-/// lives for the process lifetime, which is acceptable because skills are
-/// loaded once at startup and cached until exit.
-fn leak_str(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
-}
-
-/// Load skill commands from disk. Called once by the `LazyLock` cache.
-///
-/// Each installed skill with a `SKILL.md` file becomes a TUI slash
-/// command discoverable in the typeahead and help overlay. Skills without
-/// a description are given a default placeholder.
-fn load_skill_commands_from_disk() -> Vec<TuiSlashCommand> {
-    use operant_core::platform::operant_skills_dir;
-    use operant_core::skills::SkillManager;
-
-    let skills_dir = operant_skills_dir();
-    if !skills_dir.exists() {
-        tracing::debug!("Skills directory does not exist: {}", skills_dir.display());
-        return Vec::new();
-    }
-
-    let mut mgr = SkillManager::new(skills_dir);
-    match mgr.load_all() {
-        Ok(skills) => {
-            tracing::debug!("Loaded {} skills for TUI slash commands", skills.len());
-            skills
-                .into_iter()
-                .map(|skill| {
-                    let description = if skill.description.is_empty() {
-                        format!("Skill: {}", skill.name)
-                    } else {
-                        skill.description
-                    };
-                    TuiSlashCommand {
-                        name: leak_str(skill.name),
-                        description: leak_str(description),
-                        category: "Skills",
-                        aliases: &[],
-                    }
-                })
-                .collect()
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load skills for TUI slash commands: {}", e);
-            Vec::new()
-        }
-    }
-}
-
-/// Cached skill slash commands, loaded from disk once on first access.
-///
-/// This `LazyLock` ensures filesystem I/O happens only once, not on every
-/// typeahead keystroke. The cache is immutable for the process lifetime;
-/// use `reload_skill_cache` (when implemented) to invalidate.
-static CACHED_SKILL_COMMANDS: LazyLock<Vec<TuiSlashCommand>> =
-    LazyLock::new(load_skill_commands_from_disk);
-
-/// Return all installed skill commands as TUI slash commands.
-///
-/// Results are cached in a [`LazyLock`] — the first call triggers disk I/O;
-/// subsequent calls return the cached list with zero overhead.
-pub fn skill_slash_commands() -> &'static [TuiSlashCommand] {
-    &CACHED_SKILL_COMMANDS
-}
-
-/// Cached merged list of built-in + skill TUI slash commands.
-///
-/// Built-in commands are static data from `COMMAND_REGISTRY`; skill commands
-/// are cached in [`CACHED_SKILL_COMMANDS`]. Both are immutable for the
-/// process lifetime, so this `LazyLock` is the single cache point for the
-/// entire typeahead + help overlay pipeline.
-static CACHED_TUI_COMMANDS: LazyLock<Vec<TuiSlashCommand>> = LazyLock::new(|| {
-    let mut commands: Vec<TuiSlashCommand> = COMMAND_REGISTRY
-        .iter()
-        .filter(|cmd| !cmd.gateway_only)
-        .map(|cmd| TuiSlashCommand {
-            name: cmd.name,
-            description: cmd.description,
-            category: tui_category(cmd.name),
-            aliases: cmd.aliases,
-        })
-        .collect();
-    // Merge in installed skill commands (already cached in CACHED_SKILL_COMMANDS)
-    commands.extend(skill_slash_commands().iter().cloned());
-    commands
-});
-
-/// All slash commands available in the TUI, derived from `COMMAND_REGISTRY`.
-///
-/// This is the **single source of truth** for:
-/// - Typeahead suggestions (when user types `/`)
-/// - Help overlay entries (? / F1 / /help)
-/// - Command palette (Ctrl+K)
-///
-/// Commands are filtered: `gateway_only` commands are excluded from TUI.
-/// Category labels use `tui_category()` for user-facing grouping.
-///
-/// Results are cached in a [`LazyLock`] — the first call builds the merged
-/// list; subsequent calls return a zero-allocation reference.
-pub fn tui_slash_commands() -> &'static [TuiSlashCommand] {
-    &CACHED_TUI_COMMANDS
-}
-
-/// Return commands grouped by TUI category for help overlay display.
-///
-/// Returns `(category_name, commands)` pairs. Commands within each category
-/// are sorted by name for consistent display.
-#[allow(dead_code)] // Prepared for TUI help overlay grouping
-pub fn tui_commands_by_category() -> Vec<(&'static str, Vec<&'static TuiSlashCommand>)> {
-    let commands = tui_slash_commands();
-    let mut categories: Vec<(&str, Vec<&TuiSlashCommand>)> = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
-
-    for cmd in commands {
-        if seen_names.insert(cmd.name) {
-            let cat = cmd.category;
-            match categories.iter_mut().find(|(c, _)| *c == cat) {
-                Some((_, list)) => list.push(cmd),
-                None => categories.push((cat, vec![cmd])),
-            }
-        }
-    }
-    // Sort commands within each category by name for consistent display.
-    for (_, cmds) in &mut categories {
-        cmds.sort_by(|a, b| a.name.cmp(b.name));
-    }
-    categories
-}
-
-/// Format full help text for all built-in commands.
-#[allow(dead_code)]
-pub fn format_help_text() -> String {
-    let mut output = String::from("Available commands:\n\n");
-    let categories = commands_by_category();
-
-    for (category, commands) in &categories {
-        output.push_str(&format!("  {}:\n", category));
-        for cmd in commands {
-            let aliases = if cmd.aliases.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", cmd.aliases.join(", "))
-            };
-            let args = if cmd.args_hint.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", cmd.args_hint)
-            };
-            output.push_str(&format!(
-                "    /{:<12}{:<20}  {}\n",
-                format!("{}{}", cmd.name, args),
-                aliases,
-                cmd.description
-            ));
-        }
-        output.push('\n');
-    }
-
-    output
-}
-
-/// Return commands grouped by category in display order.
-///
-/// Dynamically builds category boundaries from the registry instead of
-/// relying on hardcoded index ranges.
-#[allow(dead_code)]
-pub fn commands_by_category() -> Vec<(&'static str, Vec<&'static CommandDef>)> {
-    let mut categories: Vec<(&str, Vec<&CommandDef>)> = Vec::new();
-    let mut seen_canonical = std::collections::HashSet::new();
-
-    for cmd in COMMAND_REGISTRY {
-        if seen_canonical.insert(cmd.name) {
-            let cat = cmd.category;
-            match categories.iter_mut().find(|(c, _)| *c == cat) {
-                Some((_, list)) => list.push(cmd),
-                None => categories.push((cat, vec![cmd])),
-            }
-        }
-    }
-    categories
-}
-
 // ---------------------------------------------------------------------------
 // Gateway helpers
 // ---------------------------------------------------------------------------
@@ -1365,46 +638,34 @@ mod tests {
     // -- CommandDef tests ---------------------------------------------------
 
     #[test]
-    fn test_command_def_new() {
-        let def = CommandDef::new("test", "A test command", "Testing");
-        assert_eq!(def.name, "test");
-        assert_eq!(def.description, "A test command");
-        assert_eq!(def.category, "Testing");
-        assert!(def.aliases.is_empty());
-        assert!(def.args_hint.is_empty());
-        assert!(!def.cli_only);
-        assert!(!def.gateway_only);
-    }
-
-    #[test]
     fn test_command_def_with_aliases() {
-        let def = CommandDef::new("cmd", "Has aliases", "Test").with_aliases(&["c", "command"]);
+        let def = CommandDef::new("cmd", "Has aliases").with_aliases(&["c", "command"]);
         assert_eq!(def.aliases, &["c", "command"]);
     }
 
     #[test]
     fn test_command_def_with_args() {
-        let def = CommandDef::new("cmd", "Takes args", "Test").with_args("<name>");
+        let def = CommandDef::new("cmd", "Takes args").with_args("<name>");
         assert_eq!(def.args_hint, "<name>");
     }
 
     #[test]
     fn test_command_def_cli_only() {
-        let def = CommandDef::new("cmd", "CLI only", "Test").cli_only();
+        let def = CommandDef::new("cmd", "CLI only").cli_only();
         assert!(def.cli_only);
         assert!(!def.gateway_only);
     }
 
     #[test]
     fn test_command_def_gateway_only() {
-        let def = CommandDef::new("cmd", "Gateway only", "Test").gateway_only();
+        let def = CommandDef::new("cmd", "Gateway only").gateway_only();
         assert!(def.gateway_only);
         assert!(!def.cli_only);
     }
 
     #[test]
     fn test_command_def_with_config_gate() {
-        let def = CommandDef::new("cmd", "Gated", "Test")
+        let def = CommandDef::new("cmd", "Gated")
             .cli_only()
             .with_config_gate("display.tool_progress_command");
         assert!(def.cli_only);
@@ -1412,32 +673,6 @@ mod tests {
             def.gateway_config_gate,
             Some("display.tool_progress_command")
         );
-    }
-
-    #[test]
-    fn test_command_category_display() {
-        assert_eq!(CommandCategory::Session.as_str(), "Session");
-        assert_eq!(CommandCategory::Configuration.as_str(), "Configuration");
-        assert_eq!(CommandCategory::ToolsAndSkills.as_str(), "Tools & Skills");
-        assert_eq!(CommandCategory::Info.as_str(), "Info");
-        assert_eq!(CommandCategory::Exit.as_str(), "Exit");
-    }
-
-    #[test]
-    fn test_command_category_try_from_str() {
-        assert_eq!(
-            CommandCategory::try_from("Session").unwrap(),
-            CommandCategory::Session
-        );
-        assert_eq!(
-            CommandCategory::try_from("Tools & Skills").unwrap(),
-            CommandCategory::ToolsAndSkills
-        );
-        assert_eq!(
-            CommandCategory::try_from("ToolsAndSkills").unwrap(),
-            CommandCategory::ToolsAndSkills
-        );
-        assert!(CommandCategory::try_from("Unknown").is_err());
     }
 
     // -- Static registry tests ----------------------------------------------
@@ -1466,19 +701,6 @@ mod tests {
             "Registry should have >= 70 commands, got {}",
             COMMAND_REGISTRY.len()
         );
-    }
-
-    #[test]
-    fn test_all_categories_have_commands() {
-        let cats = commands_by_category();
-        assert!(!cats.is_empty(), "Must have at least one category");
-        for (category, defs) in &cats {
-            assert!(
-                !defs.is_empty(),
-                "Category '{}' must have at least one command",
-                category
-            );
-        }
     }
 
     // -- build_command_map tests --------------------------------------------
@@ -1517,77 +739,9 @@ mod tests {
 
     // -- resolve_command tests ----------------------------------------------
 
-    #[test]
-    fn test_resolve_canonical() {
-        assert_eq!(resolve_command("help"), Some("help"));
-        assert_eq!(resolve_command("exit"), Some("exit"));
-    }
-
-    #[test]
-    fn test_resolve_with_slash() {
-        assert_eq!(resolve_command("/help"), Some("help"));
-        assert_eq!(resolve_command("/exit"), Some("exit"));
-    }
-
-    #[test]
-    fn test_resolve_alias() {
-        assert_eq!(resolve_command("q"), Some("exit"));
-        assert_eq!(resolve_command("n"), Some("new"));
-        assert_eq!(resolve_command("bg"), Some("background"));
-    }
-
-    #[test]
-    fn test_resolve_unknown() {
-        assert_eq!(resolve_command("nonexistent"), None);
-        assert_eq!(resolve_command(""), None);
-    }
-
-    #[test]
-    fn test_resolve_with_leading_whitespace() {
-        assert_eq!(resolve_command("  help"), Some("help"));
-    }
-
     // -- format_help_text tests ---------------------------------------------
 
-    #[test]
-    fn test_format_help_text_includes_categories() {
-        let help = format_help_text();
-        assert!(help.contains("Session"));
-        assert!(help.contains("Configuration"));
-        assert!(help.contains("Tools & Skills"));
-        assert!(help.contains("Info"));
-        assert!(help.contains("Exit"));
-    }
-
-    #[test]
-    fn test_format_help_text_includes_commands() {
-        let help = format_help_text();
-        assert!(help.contains("/help"));
-        assert!(help.contains("/exit"));
-        assert!(help.contains("/new"));
-    }
-
-    #[test]
-    fn test_format_help_text_includes_descriptions() {
-        let help = format_help_text();
-        assert!(help.contains("Show available commands"));
-        assert!(help.contains("Start a new session"));
-    }
-
-    #[test]
-    fn test_format_help_text_contains_aliases() {
-        let help = format_help_text();
-        assert!(help.contains("n") || help.contains("clear"));
-        assert!(help.contains("q") || help.contains("quit"));
-    }
-
     // -- CommandRegistry tests ----------------------------------------------
-
-    #[test]
-    fn test_registry_new_is_not_empty() {
-        let registry = CommandRegistry::new();
-        assert!(!registry.is_empty());
-    }
 
     #[test]
     fn test_registry_resolve() {
@@ -1629,99 +783,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_registry_execute_unhandled_returns_fallback() {
-        let registry = CommandRegistry::new();
-        let result = registry.execute("help", "").await;
-        let text = result.message_text().expect("expected Message variant");
-        assert!(text.contains("not yet wired"));
-    }
-
-    #[tokio::test]
-    async fn test_registry_execute_unknown() {
-        let registry = CommandRegistry::new();
-        let result = registry.execute("nonexistent", "").await;
-        let text = result.message_text().expect("expected Message variant");
-        assert!(text.contains("Unknown command"));
-    }
-
-    #[tokio::test]
-    async fn test_registry_execute_registered_handler() {
-        let mut registry = CommandRegistry::new();
-
-        struct EchoHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for EchoHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(format!("echo: {}", ctx.args))
-            }
-        }
-
-        registry
-            .register_handler("help", Box::new(EchoHandler))
-            .unwrap();
-
-        let result = registry.execute("help", "hello").await;
-        assert_eq!(result.message_text(), Some("echo: hello"));
-    }
-
-    #[tokio::test]
-    async fn test_registry_execute_resolves_alias() {
-        let mut registry = CommandRegistry::new();
-
-        struct EchoHandler;
-        #[async_trait::async_trait]
-        impl CommandHandler for EchoHandler {
-            async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
-                CommandResult::message(format!("echo: {}", ctx.args))
-            }
-        }
-
-        registry
-            .register_handler("exit", Box::new(EchoHandler))
-            .unwrap();
-
-        // Execute via alias "q"
-        let result = registry.execute("q", "bye").await;
-        assert_eq!(result.message_text(), Some("echo: bye"));
-    }
-
-    #[test]
-    fn test_registry_format_help() {
-        let registry = CommandRegistry::new();
-        let help = registry.format_help();
-        assert!(help.contains("Session"));
-        assert!(help.contains("Configuration"));
-        assert!(help.contains("Tools & Skills"));
-        assert!(help.contains("Info"));
-        assert!(help.contains("Exit"));
-        assert!(help.contains("/help"));
-        assert!(help.contains("/exit"));
-    }
-
-    #[test]
-    fn test_commands_by_category_order() {
-        let cats = commands_by_category();
-        assert_eq!(cats[0].0, "Session");
-        assert_eq!(cats[1].0, "Configuration");
-        // Info appears before Tools & Skills in COMMAND_REGISTRY (profile cmd)
-        assert_eq!(cats[2].0, "Info");
-        assert_eq!(cats[3].0, "Tools & Skills");
-        assert_eq!(cats[4].0, "Exit");
-    }
-
-    #[test]
-    fn test_registry_commands_by_category() {
-        let registry = CommandRegistry::new();
-        let cats = registry.commands_by_category();
-        assert!(!cats.is_empty());
-        // All expected categories present
-        let cat_names: Vec<&str> = cats.iter().map(|(c, _)| *c).collect();
-        assert!(cat_names.contains(&"Session"));
-        assert!(cat_names.contains(&"Info"));
-        assert!(cat_names.contains(&"Exit"));
-    }
-
     // -- Core 10 commands tests ----------------------------------------------
 
     #[test]
@@ -1754,54 +815,11 @@ mod tests {
 
     // -- all_commands tests --------------------------------------------------
 
-    #[test]
-    fn test_all_commands_returns_all_canonicals() {
-        let registry = CommandRegistry::new();
-        let all = registry.all_commands();
-        assert_eq!(all.len(), COMMAND_REGISTRY.len());
-        let names: Vec<&str> = all.iter().map(|c| c.name).collect();
-        assert!(names.contains(&"help"));
-        assert!(names.contains(&"stop"));
-        assert!(names.contains(&"sessions"));
-    }
-
     // -- slash_completions tests ---------------------------------------------
 
     #[test]
-    fn test_slash_completions_empty_prefix() {
-        let registry = CommandRegistry::new();
-        let completions = registry.slash_completions("/");
-        assert!(!completions.is_empty());
-        assert!(completions.contains(&"/help".to_string()));
-        assert!(completions.contains(&"/exit".to_string()));
-    }
-
-    #[test]
-    fn test_slash_completions_partial_match() {
-        let registry = CommandRegistry::new();
-        let completions = registry.slash_completions("/he");
-        assert!(completions.contains(&"/help".to_string()));
-        assert!(!completions.contains(&"/exit".to_string()));
-    }
-
-    #[test]
-    fn test_slash_completions_alias_match() {
-        let registry = CommandRegistry::new();
-        let completions = registry.slash_completions("/q");
-        assert!(completions.contains(&"/quit".to_string()));
-        assert!(completions.contains(&"/q".to_string()));
-    }
-
-    #[test]
-    fn test_slash_completions_no_match() {
-        let registry = CommandRegistry::new();
-        let completions = registry.slash_completions("/zzz");
-        assert!(completions.is_empty());
-    }
-
-    #[test]
     fn test_gateway_config_gate_default_none() {
-        let def = CommandDef::new("test", "Test", "Info");
+        let def = CommandDef::new("test", "Test");
         assert!(def.gateway_config_gate.is_none());
     }
 
@@ -1986,18 +1004,6 @@ mod tests {
     // --- Display variant tests (per reviewer suggestion) ---
 
     #[test]
-    fn test_display_set_goal_none() {
-        let r = CommandResult::SetGoal(None);
-        assert_eq!(format!("{}", r), "SetGoal(None)");
-    }
-
-    #[test]
-    fn test_display_set_goal_some() {
-        let r = CommandResult::SetGoal(Some("my goal".to_string()));
-        assert_eq!(format!("{}", r), "SetGoal(Some(\"my goal\"))");
-    }
-
-    #[test]
     fn test_display_shell_command() {
         let r = CommandResult::ShellCommand(vec!["ls".to_string(), "-la".to_string()]);
         assert_eq!(format!("{}", r), "ShellCommand([\"ls\", \"-la\"])");
@@ -2013,5 +1019,93 @@ mod tests {
     fn test_display_shell_command_empty() {
         let r = CommandResult::ShellCommand(vec![]);
         assert_eq!(format!("{}", r), "ShellCommand([])");
+    }
+    #[test]
+    fn test_resolve_canonical() {
+        let registry = CommandRegistry::new();
+        assert_eq!(registry.resolve("help"), Some("help"));
+        assert_eq!(registry.resolve("exit"), Some("exit"));
+    }
+
+    #[test]
+    fn test_resolve_with_slash() {
+        let registry = CommandRegistry::new();
+        assert_eq!(registry.resolve("/help"), Some("help"));
+        assert_eq!(registry.resolve("/exit"), Some("exit"));
+    }
+
+    #[test]
+    fn test_resolve_alias() {
+        let registry = CommandRegistry::new();
+        assert_eq!(registry.resolve("q"), Some("exit"));
+        assert_eq!(registry.resolve("n"), Some("new"));
+        assert_eq!(registry.resolve("bg"), Some("background"));
+    }
+
+    #[test]
+    fn test_resolve_unknown() {
+        let registry = CommandRegistry::new();
+        assert_eq!(registry.resolve("nonexistent"), None);
+        assert_eq!(registry.resolve(""), None);
+    }
+
+    #[test]
+    fn test_resolve_with_leading_whitespace() {
+        let registry = CommandRegistry::new();
+        assert_eq!(registry.resolve("  help"), Some("help"));
+    }
+
+    struct EchoHandler;
+
+    #[async_trait::async_trait]
+    impl CommandHandler for EchoHandler {
+        async fn execute(&self, ctx: &CommandContext<'_>) -> CommandResult {
+            CommandResult::message(format!("echo: {}", ctx.args))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_execute_registered_handler() {
+        let mut registry = CommandRegistry::new();
+        registry
+            .register_handler("help", Box::new(EchoHandler))
+            .unwrap();
+
+        let CommandResult::Message(text) = registry.execute("help", "hello").await else {
+            panic!("expected Message");
+        };
+        assert_eq!(text, "echo: hello");
+    }
+
+    #[tokio::test]
+    async fn test_registry_execute_resolves_alias() {
+        let mut registry = CommandRegistry::new();
+        registry
+            .register_handler("exit", Box::new(EchoHandler))
+            .unwrap();
+
+        // Execute via alias "q"
+        let CommandResult::Message(text) = registry.execute("q", "bye").await else {
+            panic!("expected Message");
+        };
+        assert_eq!(text, "echo: bye");
+    }
+
+    #[tokio::test]
+    async fn test_registry_execute_unknown() {
+        let registry = CommandRegistry::new();
+        let CommandResult::Message(text) = registry.execute("nonexistent", "").await else {
+            panic!("expected Message");
+        };
+        assert!(text.contains("Unknown command"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_execute_unhandled_returns_fallback() {
+        let registry = CommandRegistry::new();
+        let CommandResult::Message(text) = registry.execute("help", "").await else {
+            panic!("expected Message");
+        };
+        assert!(text.contains("not yet wired"));
     }
 }

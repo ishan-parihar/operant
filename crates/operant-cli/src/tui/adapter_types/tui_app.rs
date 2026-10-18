@@ -383,12 +383,9 @@ impl TuiApp {
                                         crate::tui::app::SystemMessageStyle::Info,
                                     );
                                 }
-                                CommandResult::Error(e) => {
-                                    self.app.status_message = Some(format!("Command error: {}", e));
-                                }
                                 other => {
-                                    // Other CommandResult intents (OpenHelp, Exit, etc.)
-                                    // are handled by the TUI intercept in app.rs.
+                                    // Other CommandResult intents (ShellCommand) are
+                                    // handled by the TUI intercept in app.rs.
                                     tracing::debug!("Deferred CommandResult variant: {:?}", other);
                                 }
                             }

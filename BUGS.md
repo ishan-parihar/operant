@@ -87,17 +87,13 @@ The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the wa
 - [ ] **Legacy header kept.** `operant_ui/ui_header.rs` (1811 lines) is live: `operant_ui/mod.rs` draws
   the header from it. It was named as legacy in the 2026-10-18 TUI purge request. Replacing it with a
   jcode / oh-my-pi style header is a design decision for the owner.
-- [ ] **`commands.rs` dead layer (P6.8, 17 attributes).** Its `#[allow(dead_code)]` attributes hide
-  the following. Removing the attributes alone makes the compiler report all of them, so the gate goes
-  red. Removal means these items, their 650 lines of tests in `commands.rs`, and the `Error` and
-  other dead arms that `adapter_types/tui_app.rs` matches on: `CommandCategory` (enum and impls);
-  every `CommandResult` variant except `Message`; `CommandResult::{error, toggle, cycle, is_*}`;
-  `CommandDef::{category, help, with_help}` (set in `COMMAND_REGISTRY`); `CommandRegistry::{len,
-  is_empty, commands_by_category, format_help, all_commands, slash_completions}`; `resolve_command`;
-  `leak_str`; `load_skill_commands_from_disk`; `CACHED_SKILL_COMMANDS`, `CACHED_TUI_COMMANDS`;
-  `skill_slash_commands`, `tui_slash_commands`, `tui_commands_by_category`, `format_help_text`,
-  `commands_by_category`. Live symbols: `CommandContext`, `CommandHandler`, `CommandResult::Message`,
-  `CommandRegistry`, `tui_category`, `COMMAND_REGISTRY`.
+- [x] **`commands.rs` dead layer (P6.8, 17 attributes) — FIXED iter-936.** The 17 `#[allow(dead_code)]`
+  attributes are gone, and the items they hid are deleted: `CommandCategory`, every `CommandResult`
+  variant except `Message` and `ShellCommand`, the `CommandDef` category and help fields,
+  the dead `CommandRegistry` helpers, `resolve_command`, and the skill and TUI slash caches. The tests
+  that covered them are removed; the resolve and execute tests now run against `CommandRegistry`.
+  `adapter_types/tui_app.rs` and `tui/app/commands.rs` lost the matching arms. Still open: the two
+  `intercept_slash_command{,_with_args}` fns in `tui/app/commands.rs` are dead and remain allowlisted.
 - [x] **`[memory] audit_enabled` / `response_cache_enabled` crashed config load (FIXED iter-935).**
   The live `[memory]` table parses into `MemorySettings` (`operant-core/src/config.rs`), which is
   `deny_unknown_fields` and had no such fields. A file carrying either key failed with
