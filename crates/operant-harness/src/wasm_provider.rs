@@ -8,9 +8,6 @@
 //! protocol exercises. A future `plugins-wasm` build can replace this factory
 //! with one that actually calls `operant_plugins::runtime::create_plugin`.
 
-#[allow(unused_imports)]
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::claim::Claim;
@@ -102,6 +99,7 @@ mod tests {
     use crate::Harness;
     use crate::KernelOptions;
     use crate::composition::ArchitectureRow;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn wasm_provider_mount_and_replace_bumps_generation() {

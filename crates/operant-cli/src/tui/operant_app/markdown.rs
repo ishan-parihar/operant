@@ -11,15 +11,12 @@
 // operant_markdown/mod.rs:90-:93): every `pub use` that does not resolve in
 // operant_markdown is commented out with a [port-unresolved] marker; the two
 // integrator options are re-adding the latex module or excising callers.
-#[allow(unused_imports)] // re-export surface: the transcript renderers land at the cutover
+#[cfg(test)]
+pub use crate::tui::operant_markdown::thread_render_count;
 pub use crate::tui::operant_markdown::{
-    CopyTargetKind, IncrementalMarkdownRenderer, MERMAID_PENDING_PLACEHOLDER_TEXT,
-    MarkdownDebugStats, MarkdownMemoryProfile, RawCopyTarget, center_code_blocks,
-    debug_memory_profile, extract_copy_targets_from_rendered_lines, highlight_line,
-    line_is_mermaid_pending_placeholder, mermaid_rendering_enabled, progress_bar,
-    recenter_structured_blocks_for_display, render_markdown, render_markdown_lazy,
-    render_markdown_with_width, set_center_code_blocks, thread_render_count,
-    with_center_code_blocks, with_mermaid_rendering_override, wrap_line, wrap_lines,
+    center_code_blocks, highlight_line, line_is_mermaid_pending_placeholder,
+    recenter_structured_blocks_for_display, render_markdown, render_markdown_with_width,
+    set_center_code_blocks, wrap_line, wrap_lines,
 };
 // [port-unresolved] encode_handterm_latex_apc: not exported by operant's operant_markdown
 // [port-unresolved] handterm_native_latex_for_hash: not exported by operant's operant_markdown

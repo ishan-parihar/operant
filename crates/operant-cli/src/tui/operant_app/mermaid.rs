@@ -46,12 +46,15 @@ use super::color_support::rgb;
 // returns the honest `None` ("no picker, no protocol"), which is the exact
 // value upstream's VIDEO_EXPORT_MODE/inference-failure arm returns — and the
 // call sites only ever ask `.is_some()`.
-#[allow(unused_imports)] // re-export: engine-side hooks consumed at W6
+#[cfg(test)]
 pub use crate::tui::operant_app::mermaid_inline::{
-    TERMINAL_IMAGE_FALLBACK_NOTE, current_preferred_aspect_ratio_bucket, inline_fit_geometry,
-    inline_fit_geometry_upscaled, inline_image_dims, inline_image_id, inline_image_is_materialized,
-    is_video_export_mode, mermaid_inline_expand_epoch, register_inline_level_geometries,
-    set_mermaid_inline_expand_level, text_image_fallback_note_line, uses_text_image_fallback,
+    TERMINAL_IMAGE_FALLBACK_NOTE, set_mermaid_inline_expand_level,
+};
+pub use crate::tui::operant_app::mermaid_inline::{
+    current_preferred_aspect_ratio_bucket, inline_fit_geometry, inline_fit_geometry_upscaled,
+    inline_image_dims, inline_image_id, inline_image_is_materialized, is_video_export_mode,
+    mermaid_inline_expand_epoch, register_inline_level_geometries, text_image_fallback_note_line,
+    uses_text_image_fallback,
 };
 
 const INLINE_IMAGE_MARKER_PREFIX: &str = "\x00IIMG:";

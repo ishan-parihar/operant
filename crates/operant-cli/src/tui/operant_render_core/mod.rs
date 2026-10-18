@@ -34,22 +34,18 @@ pub mod preprocess;
 pub mod reasoning;
 pub mod wrap;
 
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+#[cfg(test)]
 pub use markdown::parse_markdown;
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
 pub use math::{render_display_latex, render_inline_latex};
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
-pub use model::{
-    Alignment, Block, BlockKind, Document, FillRole, StyleRole, StyledLine, StyledSpan, TextAttrs,
-};
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
-pub use preprocess::{escape_currency_dollars, normalize_latex_math};
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+pub use model::Alignment;
+#[cfg(test)]
+pub use model::{BlockKind, Document, FillRole, StyleRole, StyledLine, StyledSpan};
+pub use preprocess::normalize_latex_math;
 pub use reasoning::{
-    REASONING_SENTINEL, reasoning_line_content, reasoning_line_markup, reasoning_partial_markup,
+    REASONING_SENTINEL, reasoning_line_markup, reasoning_partial_markup,
     reasoning_summary_line_markup,
 };
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+#[cfg(test)]
 pub use wrap::{ColumnWidth, WidthMeasure, wrap_line};
 
 #[cfg(test)]

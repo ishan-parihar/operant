@@ -26,7 +26,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
+use std::sync::{LazyLock, Mutex};
 
 /// One image to render inline, resolved from a `RenderedImage`.
 #[derive(Clone)]

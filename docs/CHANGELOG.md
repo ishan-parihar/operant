@@ -93,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-950 — the blanket `allow(unused_imports)` attributes are removed.** Seventy-three attributes hid unused imports across the TUI. The compiler reports the imports they hid, and the dead ones are removed. Re-exports used only by tests are gated with `#[cfg(test)]`, not deleted. Behavior is unchanged: the full workspace test run is 7394 passed, 0 failed.
+
 - **iter-942 — a log file that cannot be opened is a startup error, not a panic.** `init_logging`
   returns `Result`, and the error names the path. The tokio runtime is built after the `.env` load,
   so that load no longer races worker threads. Two `set_var` writes in the auth commands are removed,

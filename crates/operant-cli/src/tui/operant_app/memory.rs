@@ -8,8 +8,6 @@
 //! memory/activity.rs: MEMORY_ACTIVITY (:7), STALENESS_TIMEOUT_SECS (:13),
 //! check_staleness (:123). [port-excision] activity.rs's remote-snapshot
 //! plumbing and the rest of memory-types (graph, store) are not ported.
-#[allow(unused_imports)] // re-export: serde derives consumed by cutover writers
-use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::Instant;
 

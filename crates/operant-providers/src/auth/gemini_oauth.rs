@@ -19,7 +19,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 // Re-export for external use (used by main.rs)
-#[allow(unused_imports)]
 pub use crate::auth::oauth_common::{PkceState, generate_pkce_state};
 
 /// Get Gemini OAuth client ID from environment.

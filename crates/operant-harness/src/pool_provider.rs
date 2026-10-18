@@ -4,9 +4,6 @@
 //! defined in the host crate. This provider's only job is to install
 //! that tool through the `tool` seam at activate time.
 
-#[allow(unused_imports)]
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::claim::Claim;
@@ -214,7 +211,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::provider::Seam;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// Capture-seam used to assert install routing.
     struct CaptureSeam {

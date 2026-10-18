@@ -31,16 +31,6 @@ pub mod palette;
 pub mod theme;
 pub mod theme_mode;
 
-#[allow(unused_imports)]
-pub use color::{indexed_to_rgb, rgb};
-#[allow(unused_imports)]
-pub use palette::{ALL_ROLES, Palette, Role, palette, role_color, set_palette};
-#[allow(unused_imports)]
-pub use theme_mode::{
-    ThemeMode, adapt_buffer, adapt_buffer_for_display, adapt_buffer_for_theme,
-    adapt_color_for_theme, is_light_theme, set_theme_mode, theme_mode,
-};
-
 /// The active palette and theme mode are process-global. One lock serializes
 /// every test that reads or mutates them, wherever the test lives (palette and
 /// theme-mode tests used to carry separate locks and could interleave).

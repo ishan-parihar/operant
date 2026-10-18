@@ -21,32 +21,6 @@
 //! pickers) are unported waves; no ported renderer calls them.
 //! context_info/context_snapshot stay (ContextInfo and ContextSnapshot are
 //! ported). Everything else in the trait is verbatim.
-#[allow(unused_imports)] // re-export: TuiState trait method defaults consume at cutover
-use crate::tui::operant_app::app::ProcessingStatus;
-#[allow(unused_imports)] // re-export: TuiState trait method defaults consume at cutover
-use crate::tui::operant_app::auth::ActiveCredential;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_app::bus::BatchProgress;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_app::info_widget::AmbientWidgetData;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_app::prompt::ContextInfo;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_app::protocol::SwarmMemberStatus;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_app::provider::ActiveProvider;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_app::session::RenderedImage;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_model::ContentPos;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_model::DisplayMessage;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_model::vendor_types::ToolCall;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use crate::tui::operant_ui::copy_selection::{CopySelectionRange, CopySelectionStatus};
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackgroundTaskRowStatus {

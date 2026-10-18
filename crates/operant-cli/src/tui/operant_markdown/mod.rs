@@ -93,12 +93,14 @@ mod context;
 mod wrap;
 
 #[cfg(test)]
+pub use context::set_diagram_mode_override;
+#[cfg(test)]
 pub(crate) use context::with_markdown_spacing_mode_override;
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+#[cfg(test)]
+pub use context::with_mermaid_rendering_override;
 pub use context::{
     center_code_blocks, mermaid_rendering_enabled, set_center_code_blocks,
-    set_diagram_mode_override, with_center_code_blocks, with_deferred_mermaid_render_context,
-    with_diagram_mode_scope, with_mermaid_rendering_override,
+    with_deferred_mermaid_render_context, with_diagram_mode_scope,
 };
 use context::{
     deferred_mermaid_render_context_enabled, effective_diagram_mode,
@@ -122,11 +124,12 @@ pub mod render_support;
 // the legacy `render_markdown*` path below remains authoritative). No caller
 // outside the adapter itself uses it.
 
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
-pub use render_full::{render_markdown_with_width, thread_render_count};
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+pub use render_full::render_markdown_with_width;
+#[cfg(test)]
+pub use render_full::thread_render_count;
+#[cfg(test)]
 pub use render_lazy::render_markdown_lazy;
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+#[cfg(test)]
 pub use render_support::extract_copy_targets_from_rendered_lines;
 
 // [port-decision] operant-render-core WAS ported at integration (as
@@ -143,10 +146,9 @@ pub use render_support::extract_copy_targets_from_rendered_lines;
 /// `operant-tui-*` crate. Re-exported here so existing
 /// `operant_tui_markdown::{reasoning_line_markup, reasoning_partial_markup,
 /// REASONING_SENTINEL}` paths keep working.
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
-pub use crate::tui::operant_render_core::{
-    REASONING_SENTINEL, reasoning_line_markup, reasoning_partial_markup,
-};
+pub use crate::tui::operant_render_core::REASONING_SENTINEL;
+#[cfg(test)]
+pub use crate::tui::operant_render_core::reasoning_line_markup;
 
 /// One-line collapsed reasoning summary markup (e.g. `▸ thought (3 lines)`).
 ///
@@ -154,7 +156,7 @@ pub use crate::tui::operant_render_core::{
 /// streaming layer can format it without depending on any `operant-tui-*` crate.
 /// Re-exported here so the existing
 /// `operant_tui_markdown::reasoning_summary_line_markup` path keeps working.
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+#[cfg(test)]
 pub use crate::tui::operant_render_core::reasoning_summary_line_markup;
 
 use render_support::{
@@ -167,7 +169,6 @@ fn should_render_mermaid_block(lang: Option<&str>) -> bool {
         && lang.map(mermaid::is_mermaid_lang).unwrap_or(false)
         && mermaid::native_image_protocol_available()
 }
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
 pub use render_support::highlight_line;
 
 // Syntax highlighting resources (loaded once)
@@ -475,7 +476,7 @@ fn hash_code(code: &str, lang: Option<&str>) -> u64 {
 /// performance during LLM streaming.
 #[path = "markdown_incremental.rs"]
 mod incremental;
-#[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
+#[cfg(test)]
 pub use incremental::IncrementalMarkdownRenderer;
 // [port-decision] markdown_incremental.rs (311) was a planned skip, but three
 // in-scope test files construct IncrementalMarkdownRenderer and jcode's own

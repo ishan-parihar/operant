@@ -124,8 +124,7 @@ struct SidePanelRenderCacheState {
 #[path = "ui_pinned_mermaid_debug.rs"]
 mod mermaid_debug_support;
 pub use mermaid_debug_support::{
-    SidePanelDebugStats, SidePanelLiveDebugSnapshot, SidePanelMermaidProbe,
-    SidePanelMermaidProbeRect, SidePanelVisibleMermaidDebug,
+    SidePanelDebugStats, SidePanelLiveDebugSnapshot, SidePanelVisibleMermaidDebug,
 };
 use mermaid_debug_support::{build_side_panel_mermaid_probe_from_image, probe_rect};
 

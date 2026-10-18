@@ -5,13 +5,12 @@
 use ratatui::text::{Line, Span};
 use std::sync::Arc;
 
-#[cfg(test)]
-use super::TEST_VISIBLE_COPY_TARGETS;
 #[cfg(not(test))]
+#[cfg(test)]
 use super::visible_copy_targets_state;
 use super::{
     CopyTarget, CopyTargetKind, EditToolRange, ImageRegion, PreparedChatFrame, PreparedMessages,
-    PreparedSection, VisibleCopyTarget, WrappedLineMap, body_cache, full_prep_cache, pinned_ui,
+    PreparedSection, WrappedLineMap,
 };
 
 fn estimate_lines_bytes(lines: &[Line<'static>]) -> usize {

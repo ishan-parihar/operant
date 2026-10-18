@@ -17,11 +17,8 @@
 //! `impl App` block, reload_persisted_background_tasks_note.
 // [port-decision] upstream path is app::helpers::model_names (a subdir of app);
 // the renderers' sedded refs keep that shape via this re-export.
-#[allow(unused_imports)] // re-export: consumers are the cutover-bound TuiState defaults
 pub use crate::tui::operant_app::helpers;
 
-#[allow(unused_imports)] // re-export: consumer lands at the cutover (W4 pickers)
-use crate::tui::operant_app::message::ConnectionPhase;
 use crate::tui::operant_app::prompt::swarm_root_reasoning_effort;
 use std::time::Instant;
 

@@ -27,7 +27,6 @@ pub const MEMORY_CONTEXT_CLOSE: &str = "[/Memory context]";
 /// agentmemory REST backend (hybrid semantic memory via the local server).
 pub mod agentmemory;
 /// Audit-trail decorator backend (logs all operations to SQLite).
-#[allow(unused_imports)]
 /// Memory backend kind / profile metadata and classification.
 pub mod backend;
 /// Line-based markdown chunking for long-document ingestion.
@@ -75,9 +74,7 @@ pub mod traits;
 /// Vector math: cosine similarity, serialization, hybrid merge.
 pub mod vector;
 
-#[allow(unused_imports)]
 pub use agentmemory::AgentMemory;
-#[allow(unused_imports)]
 pub use backend::{
     MemoryBackendKind, MemoryBackendProfile, classify_memory_backend, default_memory_backend_key,
     memory_backend_profile, selectable_memory_backends,
@@ -87,17 +84,13 @@ pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
 pub use namespaced::NamespacedMemory;
 pub use none::NoneMemory;
-#[allow(unused_imports)]
 pub use policy::PolicyEnforcer;
 #[cfg(feature = "memory-postgres")]
-#[allow(unused_imports)]
 pub use postgres::PostgresMemory;
 pub use qdrant::QdrantMemory;
-#[allow(unused_imports)]
 pub use retrieval::{RetrievalConfig, RetrievalPipeline};
 pub use sqlite::SqliteMemory;
 pub use traits::Memory;
-#[allow(unused_imports)]
 pub use traits::{
     ExportFilter, MemoryCategory, MemoryEntry, MemoryResult, ProceduralMessage,
     is_recent_recall_query, normalize_recent_recall_query,

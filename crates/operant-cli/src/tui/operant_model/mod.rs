@@ -33,44 +33,25 @@ mod prepared;
 #[path = "swarm_collapse.rs"]
 pub mod swarm_collapse;
 pub mod transcription;
-#[allow(unused_imports)]
-pub use swarm_collapse::{
-    CollapsibleSwarmContent, encode_collapsible_swarm_content, parse_collapsible_swarm_content,
-    toggle_collapsible_swarm_content,
-};
+pub use swarm_collapse::parse_collapsible_swarm_content;
+#[cfg(test)]
+pub use swarm_collapse::{encode_collapsible_swarm_content, toggle_collapsible_swarm_content};
 pub(crate) mod tool_display;
 pub(crate) mod vendor_types;
 mod wrapped_line_map;
 
-#[allow(unused_imports)]
 pub use adapter::{TOOL_PENDING_PREVIEW, display_messages, live_tool_rows};
-#[allow(unused_imports)]
-pub use anchor::{
-    Anchor, ContentPos, anchor_at_row, content_pos_at_row, message_row_ranges, resolve,
-    resolve_content_pos,
-};
-#[allow(unused_imports)]
+#[cfg(test)]
+pub use anchor::Anchor;
+pub use anchor::{ContentPos, content_pos_at_row, resolve_content_pos};
 pub use cache::{
     MessageCacheContext, centered_wrap_width, get_cached_message_lines,
     left_pad_lines_for_centered_mode,
 };
-#[allow(unused_imports)]
-pub use message::{
-    DisplayMessage, TranscriptPreviewLabels, latest_user_transcript_preview,
-    normalize_transcript_preview_text, transcript_preview_line, transcript_preview_lines,
-    truncate_transcript_preview,
-};
-#[allow(unused_imports)]
+pub use message::DisplayMessage;
 pub use prepared::{
     CopyTarget, EditToolRange, ImageRegion, ImageRegionRender, MessageBoundary, PreparedChatFrame,
     PreparedMessages, PreparedSection, PreparedSectionKind,
 };
-#[allow(unused_imports)]
-pub use tool_display::{
-    canonical_tool_name, concise_tool_error_summary, edit_render_name, is_edit_tool_name,
-    resolve_display_tool_name, tool_output_looks_failed, truncate_middle_display,
-};
-#[allow(unused_imports)]
-pub use vendor_types::{DiffDisplayMode, RenderedMessage, ResponseStats, ToolCall};
-#[allow(unused_imports)]
+pub use vendor_types::ToolCall;
 pub use wrapped_line_map::WrappedLineMap;

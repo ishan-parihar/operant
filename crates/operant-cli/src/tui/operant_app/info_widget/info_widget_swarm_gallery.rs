@@ -12,7 +12,6 @@
 // [port-decision] the gated strip/tree bodies (batch-5 sweep) are the only
 // upstream consumers of these; the allow keeps the verbatim imports silent
 // until the swarm_tiles surface returns.
-#[allow(unused_imports)]
 use crate::tui::operant_app::protocol::SwarmMemberStatus;
 // [port-decision] import list trimmed at batch-4: the SwarmTile-bound strip
 // renderers (render_gallery, render_swarm_dock, render_swarm_live_card,
@@ -20,13 +19,8 @@ use crate::tui::operant_app::protocol::SwarmMemberStatus;
 // SwarmStripHint) live in the excised swarm_tiles surface (iter-591); the
 // fns that used them are gated below. The chat-card closure resolves against
 // the re-rooted partial operant_render::swarm_gallery leaf.
-#[allow(unused_imports)]
-use crate::tui::operant_render::swarm_gallery::{
-    GalleryMember, display_order, humanize_age, is_active_status, status_accent, status_glyph,
-};
+use crate::tui::operant_render::swarm_gallery::{GalleryMember, humanize_age};
 use ratatui::prelude::*;
-#[allow(unused_imports)]
-use std::collections::{HashMap, HashSet};
 
 fn member_label(member: &SwarmMemberStatus) -> String {
     member

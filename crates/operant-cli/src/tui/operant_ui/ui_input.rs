@@ -13,7 +13,6 @@ use super::{
 use crate::tui::operant_app::app;
 use crate::tui::operant_app::color_support::rgb;
 use crate::tui::operant_app::info_widget::occasional_status_tip;
-use crate::tui::operant_app::layout_utils;
 use crate::tui::operant_app::message::ConnectionPhase;
 use crate::tui::operant_app::session_facts;
 use crate::tui::operant_app::tui_fns::detect_kv_cache_problem;

@@ -14,7 +14,6 @@
 // the child renderers + frame draw path; until the cutover wires them, the
 // imports are unused by construction. Pruned/audited at the cutover + W7
 // grep-gate pass — not a blanket pass on future edits to living code.
-#![allow(unused_imports)]
 // [port-decision] expect list trimmed at batch-3: four of the six upstream
 // lints no longer fire (their trigger code — the App-bound draw path — is
 // deferred to the cutover), and an unfulfilled expect is itself a warning.
@@ -36,7 +35,6 @@ use std::time::{Duration, Instant};
 
 #[path = "ui_animations.rs"]
 mod animations;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 pub(crate) use animations::{
     disabled_animation_names, idle_animation_debug_json, idle_animation_reserved_height,
     record_idle_animation_area,
@@ -93,21 +91,14 @@ use ui_diff::{
 pub(crate) mod display_width;
 #[path = "ui/selection_highlight.rs"]
 pub(crate) mod selection_highlight;
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-pub(crate) use display_width::{
-    clamp_display_col, display_col_slice, display_col_to_byte_offset, line_display_width,
-};
+pub(crate) use display_width::{clamp_display_col, display_col_slice, line_display_width};
 
-#[cfg(test)]
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
-pub(crate) use box_utils::truncate_line_to_width;
 use box_utils::{
     line_plain_text, render_rounded_box, truncate_line_preserving_suffix_to_width,
     truncate_line_with_ellipsis_to_width,
 };
 use changelog::get_grouped_changelog;
-#[cfg(test)]
-use changelog::{ChangelogEntry, group_changelog_entries, parse_changelog_from};
+pub(crate) use frame_metrics::recent_flicker_ui_notice;
 use frame_metrics::{
     ChatLayoutMetrics, FLICKER_NOTICE_COPY_KEY, FullPrepPhaseMetrics, ViewportMetrics,
     begin_frame_resource_sample, finalize_frame_metrics, note_body_built, note_body_cache_hit,
@@ -117,24 +108,12 @@ use frame_metrics::{
     note_prep_aspect, note_prep_overflow, note_prep_prepare_at, note_prep_restage,
     note_viewport_metrics, reset_frame_perf_stats, viewport_stability_hash,
 };
-pub(crate) use frame_metrics::{
-    DrawCallAttribution, FrameInputAttribution, frame_input_attribution_snapshot,
-    record_draw_call_attribution, wall_clock_ms,
-};
-pub(crate) use frame_metrics::{debug_draw_call_history, recent_flicker_ui_notice};
 // [port-source] ui.rs:107-120 — diagram_pane child FLIPPED live at the cutover:
 // ui_diagram_pane.rs is on disk (33KB); every symbol below was verified present in it
 // before the flip (draw_pinned_diagram :783, estimate_*_pane_height/width :661/:674,
 // pinned_diagram_preferred_aspect_ratio :260, the two debug-probe entry points, and
 // the cfg(test) helpers :444/:502/:636/:698/:732).
 pub(crate) use diagram_pane::reset_pinned_diagram_debug_snapshot;
-pub use diagram_pane::{PinnedDiagramLiveDebugSnapshot, PinnedDiagramProbeRect};
-#[cfg(test)]
-use diagram_pane::{
-    debug_probe_pinned_diagram_with_font, div_ceil_u32,
-    estimate_pinned_diagram_pane_width_with_font, is_diagram_poor_fit,
-    vcenter_fitted_image_with_font,
-};
 use diagram_pane::{
     draw_pinned_diagram, estimate_pinned_diagram_pane_height, estimate_pinned_diagram_pane_width,
     pinned_diagram_preferred_aspect_ratio,
@@ -147,37 +126,18 @@ pub(crate) use crate::tui::operant_app::output_style::adapt_buffer_for_emoji_pre
 // SidePanelMermaidProbeRect / debug_probe_side_panel_mermaid reach the parent through
 // ui_pinned.rs:126-129 (`pub use mermaid_debug_support::{…}`), which was verified before
 // the flip; draw_side_panel_markdown is `pub(super)` at ui_pinned.rs:526.
-pub(crate) use header::capitalize;
 use inline_ui::{draw_inline_ui, inline_ui_height};
 
 use memory_estimates::{estimate_prepared_chat_frame_bytes, estimate_prepared_messages_bytes};
-#[cfg(test)]
-use memory_ui::{
-    MemoryTileItem, choose_memory_tile_span, parse_memory_display_entries, plan_memory_tile,
-};
 use memory_ui::{group_into_tiles, render_memory_tiles, split_by_display_width};
 use messages::get_cached_message_lines;
-#[cfg_attr(test, allow(unused_imports))]
 pub(crate) use messages::{
-    SWARM_AGENT_SNAPSHOT_TITLE, compact_swarm_await_summary, render_assistant_message,
-    render_background_task_message, render_reasoning_message, render_swarm_message,
-    render_system_message, render_tool_message, render_usage_message,
+    render_assistant_message, render_background_task_message, render_reasoning_message,
+    render_swarm_message, render_system_message, render_tool_message, render_usage_message,
 };
+pub(crate) use pinned_ui::clear_side_panel_debug_snapshot;
 use pinned_ui::draw_side_panel_markdown;
-pub use pinned_ui::{SidePanelDebugStats, SidePanelMermaidProbe, SidePanelMermaidProbeRect};
-pub(crate) use pinned_ui::{
-    clear_side_panel_debug_snapshot, clear_side_panel_render_caches, prewarm_focused_side_panel,
-};
-#[cfg(test)]
-use viewport::compute_visible_margins;
 use viewport::draw_messages;
-#[cfg(test)]
-#[allow(unused_imports)]
-pub(crate) use viewport::{
-    copy_badge_reserved_width, expand_badge_reserved_width, pick_copy_badge_line,
-    reserve_copy_badge_margins, truncate_line_for_copy_badge,
-    truncate_line_in_place_to_width as truncate_copy_badge_line_to_width,
-};
 
 use crate::tui::operant_app::color_support;
 use crate::tui::operant_app::color_support::rgb;
@@ -186,7 +146,6 @@ use crate::tui::operant_app::visual_debug;
 // :3150 ImageRegionCapture, :3269 MessageCapture, :3424 MarginsCapture, :3600
 // RenderTimingCapture). Upstream reaches them through ui.rs's `use super::*` glob;
 // operant spells them out since the glob is not re-exported here.
-#[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 use crate::tui::operant_app::visual_debug::{
     FrameCaptureBuilder, ImageRegionCapture, MarginsCapture, MessageCapture, RenderTimingCapture,
 };
@@ -264,8 +223,6 @@ use layout_support::{
     centered_content_block_width, clear_area, draw_right_rail_chrome, left_aligned_content_inset,
     left_pad_lines_to_block_width, right_rail_border_style,
 };
-#[cfg(test)]
-pub(crate) use status_support::calculate_input_lines;
 use status_support::{
     format_status_for_debug, is_running_stable_release, semver, shorten_model_name,
 };

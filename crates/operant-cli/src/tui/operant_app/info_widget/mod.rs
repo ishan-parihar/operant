@@ -52,10 +52,9 @@ use self::info_widget_overview::{InfoPageKind, MAX_TODO_LINES, compute_page_layo
 // workspace_map / workspace_map_widget are unported (documented at tui_state.rs:18-21).
 // Re-activate if workspace_map is ever ported.
 use crate::tui::operant_app::ambient::AmbientStatus;
-#[allow(unused_imports)]
 pub use crate::tui::operant_app::memory::{
-    InjectedMemoryItem, MemoryActivity, MemoryEvent, MemoryEventKind, MemoryState, PipelineState,
-    StepResult, StepStatus,
+    MemoryActivity, MemoryEvent, MemoryEventKind, MemoryState, PipelineState, StepResult,
+    StepStatus,
 };
 use crate::tui::operant_app::prompt::ContextInfo;
 use crate::tui::operant_app::protocol::SwarmMemberStatus;
@@ -78,10 +77,9 @@ use frame::Framed;
 use git::{
     changes_has_data, changes_height, changes_legend, render_changes_framed, render_git_widget,
 };
-#[allow(unused_imports)]
-pub(crate) use git::{edited_paths_from_tool_call, resolve_edited_path};
-#[allow(unused_imports)]
-pub use graph::{GraphEdge, GraphNode, graph_node_score};
+#[cfg(test)]
+pub use graph::graph_node_score;
+pub use graph::{GraphEdge, GraphNode};
 pub(crate) use memory_utils::is_traceworthy_memory_event;
 use memory_utils::{memory_active_summary, memory_last_trace_summary, memory_state_detail};
 use model::{render_model_info, render_model_widget, runtime_has_data, runtime_height};
@@ -89,7 +87,7 @@ use swarm_background::{render_background_compact, render_background_widget, rend
 use text::{truncate_smart, truncate_with_ellipsis};
 pub(crate) use tips::occasional_status_tip;
 use tips::render_tips_widget;
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use todos_render::swarm_plan_todos;
 use todos_render::{render_todos_compact, render_todos_expanded, render_todos_widget};
 use usage_render::{render_usage_compact, render_usage_widget};

@@ -129,9 +129,6 @@ fn infer_selfdev_action_from_display_text(text: Option<&str>) -> Option<&'static
 #[path = "ui_tools/batch.rs"]
 mod batch;
 
-#[cfg(test)]
-#[allow(unused_imports)] // test-only re-export; exercised by the cutover's batch tests
-pub(super) use batch::parse_batch_sub_outputs;
 pub(crate) use batch::{batch_subcall_intent, batch_subcall_params};
 pub(super) use batch::{parse_batch_completion_counts, parse_batch_sub_outputs_by_index};
 
