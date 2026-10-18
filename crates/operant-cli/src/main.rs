@@ -544,16 +544,12 @@ enum Commands {
     Donate,
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
 fn init_logging(
     verbose: bool,
     cli_log_level: Option<&str>,
     logging: &LoggingSettings,
     rich_output: bool,
-) {
+) -> Result<()> {
     let env_filter = if verbose {
         EnvFilter::new(format!("{}", Level::DEBUG))
     } else if let Some(level) = cli_log_level {
@@ -574,11 +570,15 @@ fn init_logging(
     let effective_rich_output = rich_output && !verbose;
     match select_log_target(logging, effective_rich_output) {
         LogTarget::File => {
+            let path = logging
+                .log_file
+                .as_ref()
+                .context("log target is a file but no log_file is configured")?;
             let file = OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(logging.log_file.as_ref().expect("log file should exist"))
-                .expect("failed to open log file");
+                .open(path)
+                .with_context(|| format!("failed to open log file {path}"))?;
             let writer = Mutex::new(file);
             match logging.format.as_str() {
                 "json" => subscriber
@@ -609,6 +609,7 @@ fn init_logging(
             _ => subscriber.with(layer.pretty()).init(),
         },
     }
+    Ok(())
 }
 
 fn select_log_target(logging: &LoggingSettings, rich_output: bool) -> LogTarget {
@@ -2796,19 +2797,29 @@ fn restore_default_sigpipe_disposition() {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     restore_default_sigpipe_disposition();
 
     let cli = Cli::parse();
 
     // Load CLI-level config (.env file + HERMES_* env overrides; config.yaml
-    // is deprecated — operant.toml below is the sole file-based config source)
+    // is deprecated — operant.toml below is the sole file-based config source).
+    // This runs BEFORE the tokio runtime is built: `CliConfig::load()` writes
+    // `.env` values into the process environment, and that is only sound while
+    // no worker thread exists to read it concurrently.
     let cli_config = CliConfig::load().unwrap_or_else(|e| {
         eprintln!("Warning: Failed to load CLI config: {}. Using defaults.", e);
         CliConfig::default()
     });
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build the tokio runtime")?
+        .block_on(run(cli, cli_config))
+}
+
+async fn run(cli: Cli, cli_config: CliConfig) -> Result<()> {
     // Secret redaction toggle (hermes `HERMES_REDACT_SECRETS` parity). The
     // core loop redacts tool output / message content at the LLM boundary;
     // honor `security.redact_secrets` (default true) from CLI config.
@@ -2914,7 +2925,7 @@ async fn main() -> Result<()> {
         cli.log_level.as_deref(),
         &loaded.config.logging,
         effective_rich_output,
-    );
+    )?;
 
     if cli.debug_tui {
         tracing::debug!(target: "tui_wiring", "--debug-tui flag enabled");
@@ -3194,6 +3205,25 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// A log path that cannot be opened is a startup error that names the path,
+    /// not a panic. The open happens before the subscriber is installed, so
+    /// this test does not touch the process-wide tracing subscriber.
+    #[test]
+    fn init_logging_reports_an_unopenable_log_file_instead_of_panicking() {
+        let logging = LoggingSettings {
+            log_file: Some("/nonexistent-operant-dir/operant.log".to_string()),
+            ..LoggingSettings::default()
+        };
+        let err = init_logging(false, None, &logging, false)
+            .expect_err("an unopenable log file must be an error");
+        let text = format!("{err:#}");
+        assert!(text.contains("failed to open log file"), "{text}");
+        assert!(
+            text.contains("/nonexistent-operant-dir/operant.log"),
+            "{text}"
+        );
+    }
 
     /// The regression this pins: with stdin closed, `operant chat` spun forever
     /// printing `You: ` because EOF and a blank line both produced an empty

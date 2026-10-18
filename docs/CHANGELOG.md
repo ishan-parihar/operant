@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`glm.rs` removed (iter-942).** The file was not compiled (no `mod` declaration, no caller), and
+  its comment in `lib.rs` is gone with it. It remains in git history.
 - **Dead TUI items removed (iter-941).** Functions, constants, and types that the all-features gate flagged as
   never used are deleted from `crates/operant-cli/src/tui/`. Names the compiler still needed are kept. The clippy
   allowlist drops from 58 to 52 entries.
@@ -70,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.ci/clippy-allowlist.txt` and in `BUGS.md`.
 
 ### Fixed
+
+- **iter-942 — a log file that cannot be opened is a startup error, not a panic.** `init_logging`
+  returns `Result`, and the error names the path. The tokio runtime is built after the `.env` load,
+  so that load no longer races worker threads. Two `set_var` writes in the auth commands are removed,
+  since the key is read back from `~/.operant/.env`, not the process environment.
 
 - **iter-935 — `[memory] audit_enabled` and `response_cache_enabled` no longer stop the config from loading.**
   The memory-factory module docs told users to write these keys, but the live `[memory]` table

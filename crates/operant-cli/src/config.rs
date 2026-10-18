@@ -1852,20 +1852,13 @@ pub fn load_dotenv_file(path: &Path) -> ConfigResult<()> {
             let expanded = expand_env_vars(value);
 
             if std::env::var(key).is_err() {
-                // SAFETY: single-threaded at the point this runs.
-                // `load_dotenv_file` is reached only from `CliConfig::load()`
-                // (this file, step 2 of its documented load order), which
-                // executes once during startup config load. At that moment the
-                // only tokio worker is the one polling `main`'s future: no
-                // agent, gateway, channel, or provider task has been spawned
-                // yet, and this process performs no other `set_var` before
-                // this point. So no thread can be concurrently reading the
-                // environment, which is the precondition `set_var` needs.
-                //
-                // It IS set to default-false, so it cannot pre-empt a variable
-                // a user exported deliberately. See the sibling sites in
-                // `cmd_auth.rs` and `operant-core/src/env_passthrough.rs` for
-                // the cases that cannot make this claim.
+                // SAFETY: no other thread can read the environment here.
+                // `load_dotenv_file` is reached only from `CliConfig::load()`,
+                // and `main` (main.rs) calls that before it builds the tokio
+                // runtime, so no worker thread exists yet. This is enforced by
+                // the order in `main`, not by a comment alone: moving the load
+                // after the runtime would break it. The `is_err()` guard keeps
+                // a variable the user exported deliberately from being replaced.
                 unsafe {
                     std::env::set_var(key, expanded);
                 }
