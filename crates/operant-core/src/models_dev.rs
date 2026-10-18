@@ -139,7 +139,7 @@ async fn fetch_from_network_uncached()
         .map_err(|e| e.to_string())?;
 
     let resp = client
-        .get("https://models.dev/api/v1/models")
+        .get(MODELS_DEV_URL)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -149,20 +149,68 @@ async fn fetch_from_network_uncached()
     }
 
     let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-
-    let models = body
-        .get("models")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let providers = body
-        .get("providers")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
+    let (models, providers) = normalize_catalog(&body);
+    if models.is_empty() {
+        return Err("models.dev catalog had no models".to_string());
+    }
     Ok((models, providers))
+}
+
+/// models.dev's full catalog: a provider-keyed object, one entry per provider.
+const MODELS_DEV_URL: &str = "https://models.dev/api.json";
+
+/// Flatten models.dev's provider-keyed catalog into the flat rows the
+/// capability readers use (`provider_id`, `context_window`, `cost_input`, ...).
+///
+/// The nested schema keeps the window at `limit.context` and the price at
+/// `cost.input` (USD per million tokens); the readers used to expect flat
+/// keys, so every real row read as "unknown".
+pub(crate) fn normalize_catalog(
+    root: &serde_json::Value,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    use serde_json::{Value, json};
+
+    let mut models = Vec::new();
+    let mut providers = Vec::new();
+    let Some(root) = root.as_object() else {
+        return (models, providers);
+    };
+    let at = |m: &Value, path: &str| m.pointer(path).cloned().unwrap_or(Value::Null);
+
+    for (provider_key, provider) in root {
+        let Some(provider) = provider.as_object() else {
+            continue;
+        };
+        providers.push(json!({
+            "id": provider_key,
+            "name": provider.get("name").cloned().unwrap_or(Value::Null),
+            "env": provider.get("env").cloned().unwrap_or(Value::Null),
+            "doc": provider.get("doc").cloned().unwrap_or(Value::Null),
+        }));
+        let Some(entries) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
+        for (model_key, m) in entries {
+            models.push(json!({
+                "provider_id": provider_key,
+                "id": m.get("id").and_then(Value::as_str).unwrap_or(model_key),
+                "name": at(m, "/name"),
+                "context_window": at(m, "/limit/context"),
+                "max_output": at(m, "/limit/output"),
+                "tool_call": m.get("tool_call").and_then(Value::as_bool).unwrap_or(false),
+                "reasoning": m.get("reasoning").and_then(Value::as_bool).unwrap_or(false),
+                "structured_output": m
+                    .get("structured_output")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "input_modalities": at(m, "/modalities/input"),
+                "output_modalities": at(m, "/modalities/output"),
+                "cost_input": at(m, "/cost/input"),
+                "cost_output": at(m, "/cost/output"),
+            }));
+        }
+    }
+    (models, providers)
 }
 
 /// Look up context window for a provider+model combo.
@@ -201,8 +249,13 @@ fn match_capabilities(
     model: &str,
 ) -> Option<ModelCapabilities> {
     for m in models {
-        let m_provider = m.get("provider_id").and_then(|v| v.as_str())?;
-        let m_id = m.get("id").and_then(|v| v.as_str())?;
+        // A malformed row is skipped, not allowed to hide the rows after it.
+        let (Some(m_provider), Some(m_id)) = (
+            m.get("provider_id").and_then(|v| v.as_str()),
+            m.get("id").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
 
         if m_provider == dev_provider && (m_id == model || m_id.ends_with(&format!("/{model}"))) {
             return Some(ModelCapabilities {
@@ -319,5 +372,68 @@ mod tests {
     fn test_cache_path() {
         let path = cache_path();
         assert!(path.to_string_lossy().contains("models_dev_cache"));
+    }
+
+    /// Rows copied from models.dev's nested schema (values as published).
+    fn nested_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "anthropic": {
+                "id": "anthropic", "name": "Anthropic", "env": ["ANTHROPIC_API_KEY"],
+                "models": {
+                    "claude-haiku-4-5": {
+                        "id": "claude-haiku-4-5", "name": "Claude Haiku 4.5 (latest)",
+                        "reasoning": true, "tool_call": true, "structured_output": true,
+                        "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]},
+                        "limit": {"context": 200000, "output": 64000},
+                        "cost": {"input": 1, "output": 5, "cache_read": 0.1}
+                    }
+                }
+            },
+            "openai": {
+                "id": "openai", "name": "OpenAI", "env": ["OPENAI_API_KEY"],
+                "models": {
+                    "gpt-4o": {
+                        "id": "gpt-4o", "reasoning": false, "tool_call": true,
+                        "modalities": {"input": ["text", "image"], "output": ["text"]},
+                        "limit": {"context": 128000, "output": 16384},
+                        "cost": {"input": 2.5, "output": 10}
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn normalize_flattens_the_nested_schema_into_the_reader_shape() {
+        let (models, providers) = normalize_catalog(&nested_fixture());
+        assert_eq!(providers.len(), 2);
+        assert_eq!(models.len(), 2);
+        let haiku = models
+            .iter()
+            .find(|m| m["id"] == "claude-haiku-4-5")
+            .unwrap();
+        assert_eq!(haiku["provider_id"], "anthropic");
+        assert_eq!(haiku["context_window"], 200000);
+        assert_eq!(haiku["max_output"], 64000);
+        assert_eq!(haiku["cost_input"], 1.0);
+        assert_eq!(haiku["cost_output"], 5.0);
+    }
+
+    #[test]
+    fn capabilities_are_read_from_a_normalized_catalog() {
+        let (models, _) = normalize_catalog(&nested_fixture());
+        let caps = match_capabilities(&models, "anthropic", "claude-haiku-4-5").unwrap();
+        assert_eq!(caps.context_window, Some(200000));
+        assert_eq!(caps.max_output, Some(64000));
+        assert!(caps.supports_tools && caps.supports_reasoning && caps.supports_vision);
+        assert_eq!(caps.cost_output_per_million, Some(5.0));
+        assert!(match_capabilities(&models, "openai", "claude-haiku-4-5").is_none());
+    }
+
+    #[test]
+    fn a_malformed_row_does_not_hide_the_rows_after_it() {
+        let (mut models, _) = normalize_catalog(&nested_fixture());
+        models.insert(0, serde_json::json!({"id": "orphan-without-provider"}));
+        assert!(match_capabilities(&models, "anthropic", "claude-haiku-4-5").is_some());
     }
 }

@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-920 — models.dev rows are read from their real schema.** The fetch hit
+  `https://models.dev/api/v1/models` and expected flat rows (`context_window`,
+  `cost_input`), but models.dev publishes a provider-keyed catalog with the window
+  at `limit.context` and the price at `cost.input` (USD per million). Every capability
+  lookup returned `None` for real rows, so the context meter, the cost estimate, and
+  the agentic-model listing all fell back. The fetch now reads
+  `https://models.dev/api.json` and flattens it (`normalize_catalog`) into the rows
+  the readers already use. `match_capabilities` also no longer returns `None` for the
+  whole catalog when one row lacks `provider_id`. Tests run against rows copied from
+  models.dev's published schema. Not verified live: models.dev was unreachable from
+  the build host during this iteration.
 - **iter-918 — the context window is read after the models.dev fetch.**
   iter-917 refreshed the window before `load_models_dev()` ran, so on a cold
   cache the first frame used the per-provider fallback and nothing re-read it
@@ -30,10 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cached_capabilities` for the window, with the per-provider defaults as the
   offline fallback. The now-unused registry lookup and its `ModelInfo` /
   `RegistryModelEntry` types are removed.
-  **Known gap:** the models.dev parser reads flat keys (`context_window`) while
-  models.dev's schema nests the window at `limit.context`, so the lookup returns
-  `None` for real rows and the fallback is what runs. Fix is P0.2 in
-  `docs/plans/2026-10-18-runtime-model-catalog-and-remaining-gaps.md`.
+  The lookup was inert against real data until iter-920 (see there).
 - **iter-916 — `/model` says why the endpoint's model list is missing.**
   The picker fetch returned an empty list on every failure (connection
   refused, HTTP error, non-JSON), so an unreachable endpoint looked like a
