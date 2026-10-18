@@ -86,7 +86,7 @@ impl OperantTool for McpManagementTool {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "call_tool returns a Value, which always serializes"
     )]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let parsed: McpManagementArgs = match serde_json::from_value(args) {

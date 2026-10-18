@@ -926,7 +926,7 @@ impl McpStdioClient {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "error_response is a json! object, which always serializes"
     )]
     /// Send a JSON-RPC request over stdin and read response from stdout
     /// (single attempt — the wrapper above handles recovery).

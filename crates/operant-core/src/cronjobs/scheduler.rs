@@ -365,7 +365,7 @@ impl CronScheduler {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "`script` is Ok here: the `is_err()` branch above returns early"
     )]
     async fn run_script_job(&self, job: &CronJob) -> (bool, String, String, Option<String>, bool) {
         debug!("Running script job {}: {}", job.id, job.name);

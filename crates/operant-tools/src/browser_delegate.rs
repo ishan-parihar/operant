@@ -66,10 +66,7 @@ impl BrowserDelegateTool {
         cmd
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
+    #[expect(clippy::expect_used, reason = "static regex literal")]
     /// Extract URLs from free-form text and validate each against domain policy.
     ///
     /// Prevents policy bypass by embedding blocked URLs in the `task` text,

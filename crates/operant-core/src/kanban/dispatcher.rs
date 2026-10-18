@@ -47,7 +47,7 @@ impl Dispatcher {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a host clock before 1970 is unrecoverable misconfiguration; timestamps cannot be recorded"
     )]
     pub fn claim_task(&self, task_id: &str, worker: &str) -> Result<i64, Error> {
         let conn = self.lock_conn()?;
@@ -75,7 +75,7 @@ impl Dispatcher {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a host clock before 1970 is unrecoverable misconfiguration; timestamps cannot be recorded"
     )]
     pub fn complete_run(
         &self,
@@ -106,7 +106,7 @@ impl Dispatcher {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a host clock before 1970 is unrecoverable misconfiguration; timestamps cannot be recorded"
     )]
     pub fn fail_run(&self, task_id: &str, run_id: i64, error_msg: &str) -> Result<(), Error> {
         let conn = self.lock_conn()?;
@@ -132,7 +132,7 @@ impl Dispatcher {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a host clock before 1970 is unrecoverable misconfiguration; timestamps cannot be recorded"
     )]
     pub fn gc(&self, older_than_days: i64) -> Result<(usize, usize, usize), Error> {
         let conn = self.lock_conn()?;

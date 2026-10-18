@@ -2459,7 +2459,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[tokio::test]
     async fn chat_streaming_counts_corrupted_sse_payloads_as_dropped() {
@@ -2538,7 +2538,7 @@ Connection: close
     #[expect(
         clippy::unwrap_used,
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the oversized body is generated in-test; a failure fails this test"
     )]
     #[tokio::test]
     async fn bounded_error_body_truncates_oversized_response() {
@@ -2583,7 +2583,7 @@ Connection: close
     #[expect(
         clippy::unwrap_used,
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the small body is a literal; a failure fails this test"
     )]
     #[tokio::test]
     async fn bounded_error_body_reads_small_response_fully() {
@@ -2701,7 +2701,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     /// `build_chat_request` now threads `max_tokens` and `temperature` into
     /// the JSON body. Previously these fields existed on `ChatRequest` but
@@ -2729,7 +2729,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn build_chat_request_omits_max_tokens_and_temperature_when_none() {
@@ -2755,7 +2755,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn build_chat_request_includes_reasoning_effort_for_auto_openai_compatible() {
@@ -2783,7 +2783,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn build_chat_request_openrouter_uses_reasoning_object() {
@@ -2810,7 +2810,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn build_chat_request_omits_reasoning_when_none() {
@@ -2834,7 +2834,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn anthropic_thinking_budget_clamps_below_max_tokens_and_drops_temperature() {
@@ -2864,7 +2864,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn minimal_and_xhigh_clamp_for_plain_effort_shape() {
@@ -2886,7 +2886,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the request is built from literal options; a build failure is a test bug"
     )]
     #[test]
     fn build_chat_request_includes_only_max_tokens_when_temperature_none() {
@@ -2911,7 +2911,7 @@ Connection: close
     #[expect(
         clippy::unwrap_used,
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[test]
     fn tool_call_function_tolerates_explicit_null_fields() {
@@ -2934,7 +2934,7 @@ Connection: close
     #[expect(
         clippy::unwrap_used,
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[test]
     fn tool_call_function_tolerates_null_arguments_fragment() {
@@ -2951,7 +2951,7 @@ Connection: close
     #[expect(
         clippy::unwrap_used,
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[test]
     fn tool_call_function_null_fields_survive_sse_event_parse() {
@@ -2987,7 +2987,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[test]
     fn sse_error_event_surfaces_as_rate_limited() {
@@ -3006,7 +3006,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[test]
     fn sse_error_event_surfaces_as_authentication() {
@@ -3024,7 +3024,7 @@ Connection: close
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the SSE payload is a literal; a parse failure fails this test"
     )]
     #[test]
     fn sse_error_event_surfaces_as_context_length() {
@@ -3053,7 +3053,7 @@ Connection: close
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the local mock server answers with literal JSON; a failure fails this test"
     )]
     /// Raw-TCP embeddings server helper: replies to POST /embeddings with
     /// the given JSON body.
@@ -3079,7 +3079,7 @@ Connection: close
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the local mock server answers with literal JSON; a failure fails this test"
     )]
     #[tokio::test]
     async fn embeddings_returns_vector_per_input_in_order() {
@@ -3104,7 +3104,7 @@ Connection: close
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the local mock server answers with literal JSON; a failure fails this test"
     )]
     #[tokio::test]
     async fn embeddings_rejects_partial_response() {
@@ -3129,7 +3129,7 @@ Connection: close
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the local mock server answers with literal JSON; a failure fails this test"
     )]
     #[tokio::test]
     async fn embeddings_rejects_out_of_range_index() {
@@ -3151,7 +3151,7 @@ Connection: close
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the local mock server answers with literal JSON; a failure fails this test"
     )]
     #[tokio::test]
     async fn embeddings_rejects_empty_vector() {

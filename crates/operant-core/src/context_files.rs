@@ -37,10 +37,7 @@ const THREAT_PATTERNS: &[(&str, &str)] = &[
     ),
 ];
 
-#[expect(
-    clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
+#[expect(clippy::expect_used, reason = "static regex literals")]
 static THREAT_REGEXES: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
     THREAT_PATTERNS
         .iter()

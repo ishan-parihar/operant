@@ -266,7 +266,7 @@ fn server_hash(url: &str) -> String {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "binding port 0 fails only when no ephemeral port is free; the callback server cannot start without one"
 )]
 /// Find an available TCP port on localhost.
 fn find_free_port() -> u16 {
@@ -635,7 +635,7 @@ impl TokenStorage {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "Unix reads /dev/urandom, present on every supported Unix host; the non-Unix fallback is RT-19"
 )]
 /// Generate a PKCE code verifier (128 random bytes, base64url-encoded).
 fn generate_code_verifier() -> String {

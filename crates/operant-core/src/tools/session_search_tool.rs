@@ -302,7 +302,7 @@ impl OperantTool for SessionSearchTool {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "query is Some here: None and empty queries returned early above"
     )]
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
         let query = args

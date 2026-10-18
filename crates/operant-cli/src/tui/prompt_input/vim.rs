@@ -446,7 +446,7 @@ pub(super) fn apply_operator_range(
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "each unwrap sits behind `key.len() == 1`, and a one-byte key holds exactly one char"
 )]
 /// Process a single key press in vim mode.
 /// Returns `true` when text was modified (caller should push undo snapshot).
@@ -560,7 +560,7 @@ pub fn apply_vim_key(
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "each unwrap sits behind `key.len() == 1`, and a one-byte key holds exactly one char"
 )]
 pub(super) fn vim_idle(
     mode: &mut VimMode,
@@ -586,7 +586,7 @@ pub(super) fn vim_idle(
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "each unwrap sits behind `key.len() == 1`, and a one-byte key holds exactly one char"
 )]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vim_count(
@@ -1179,7 +1179,7 @@ pub(super) fn vim_g(
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "each unwrap sits behind `key.len() == 1`, and a one-byte key holds exactly one char"
 )]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vim_operator(
@@ -1355,7 +1355,7 @@ pub(super) fn vim_operator(
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "each unwrap sits behind `key.len() == 1`, and a one-byte key holds exactly one char"
 )]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vim_operator_count(

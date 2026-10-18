@@ -1027,7 +1027,7 @@ async fn handle_vim(_config: &AppConfig, state: Option<String>) -> Result<()> {
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "kb_path is config_dir() joined with a file name, so it always has a parent"
 )]
 /// `operant tui keybindings` — open the user keybindings file in $EDITOR.
 async fn handle_keybindings(_config: &AppConfig) -> Result<()> {

@@ -383,7 +383,7 @@ impl ToolCallParser {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "serializing a Map<String, Value> cannot fail"
     )]
     /// Extract tool call from parsed JSON
     fn extract_tool_call_from_json(&self, value: &Value) -> Option<ToolCall> {

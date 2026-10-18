@@ -119,7 +119,7 @@ fn has_serde_skip(field: &syn::Field) -> bool {
 )]
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "Fields::Named is matched above, so each field has an ident"
 )]
 pub fn derive_configurable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

@@ -583,7 +583,7 @@ fn relativize_path(line: &str, workspace_prefix: &str) -> String {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "static regex literals (MATCH_RE, CONTEXT_RE)"
 )]
 /// Parse content output line and determine whether it is a real match line.
 ///

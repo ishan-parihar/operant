@@ -245,7 +245,7 @@ impl PermissionRequest {
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "default_options() is a fixed, non-empty list, so pop yields the deny option"
     )]
     /// Bash options: 4 standard + optional 5th prefix-based rule.
     pub fn bash_options(suggested_prefix: Option<&str>) -> Vec<PermissionOption> {

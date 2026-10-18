@@ -381,7 +381,7 @@ impl AnthropicProvider {
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "each unwrap follows an is_some check on the same last() element"
     )]
     fn convert_messages(messages: &[ChatMessage]) -> (Option<SystemPrompt>, Vec<NativeMessage>) {
         let mut system_text = None;
@@ -596,7 +596,7 @@ impl AnthropicProvider {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "NativeChatRequest is a plain struct of serializable fields"
     )]
     /// Build a streaming request body from a `NativeChatRequest`.
     fn build_streaming_request(request: &NativeChatRequest<'_>) -> serde_json::Value {

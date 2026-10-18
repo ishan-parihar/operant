@@ -134,7 +134,7 @@ impl LinkedInClient {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
     )]
     fn api_headers(&self, token: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -194,10 +194,7 @@ impl LinkedInClient {
         Ok(response)
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
+    #[expect(clippy::expect_used, reason = "body is a json!() object built above")]
     pub async fn create_post(
         &self,
         text: &str,
@@ -558,7 +555,7 @@ impl LinkedInClient {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
     )]
     /// Register an image asset with LinkedIn, upload binary data, and return the asset URN.
     ///
@@ -634,10 +631,7 @@ impl LinkedInClient {
         Ok(image_urn)
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
+    #[expect(clippy::expect_used, reason = "body is a json!() object built above")]
     /// Create a post with an attached image.
     pub async fn create_post_with_image(
         &self,

@@ -39,17 +39,13 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
 async fn cmd_create(_config: &AppConfig, output: Option<PathBuf>) -> Result<()> {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let backup_name = format!("operant_backup_{}", secs);
-    let base = output.unwrap_or_else(|| std::env::current_dir().unwrap());
+    let base = match output {
+        Some(path) => path,
+        None => std::env::current_dir()?,
+    };
     let backup_dir = base.join(&backup_name);
     fs::create_dir_all(&backup_dir)?;
 
@@ -71,10 +67,6 @@ async fn cmd_create(_config: &AppConfig, output: Option<PathBuf>) -> Result<()> 
     Ok(())
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
 async fn cmd_list(_config: &AppConfig) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let mut found = false;
@@ -88,7 +80,7 @@ async fn cmd_list(_config: &AppConfig) -> Result<()> {
                 .modified()
                 .unwrap_or(SystemTime::UNIX_EPOCH)
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             println!("  {}  ({})", name_str, secs);
             found = true;

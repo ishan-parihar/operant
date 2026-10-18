@@ -732,10 +732,7 @@ impl<T: Provider + ?Sized> Provider for Arc<T> {
     }
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
+#[expect(clippy::expect_used, reason = "fmt::Write into a String cannot fail")]
 /// Build tool instructions text for prompt-guided tool calling.
 pub fn build_tool_instructions_text(tools: &[ToolSpec]) -> String {
     let mut instructions = String::new();

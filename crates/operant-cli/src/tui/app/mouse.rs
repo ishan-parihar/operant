@@ -756,7 +756,7 @@ impl App {
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "`menu` was copied out of `context_menu_state` earlier in this handler; nothing clears it before this write"
     )]
     /// Detect if a click is a double-click based on timing and position.
     /// Returns true if the click is within ~500ms and ~5px of the last click.

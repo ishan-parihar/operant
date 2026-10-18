@@ -5,7 +5,7 @@ use super::*;
 impl App {
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "the `1 =>` arm matches a block count of one, so pop yields that block"
     )]
     pub(crate) fn flush_streamed_assistant_message(&mut self) {
         if self.streaming_text.trim().is_empty() && self.streaming_thinking.trim().is_empty() {

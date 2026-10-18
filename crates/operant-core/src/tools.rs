@@ -165,16 +165,20 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
     /// Create a successful result
+    ///
+    /// A `content` that fails to serialize (e.g. a map with non-string keys)
+    /// comes back as an error result rather than panicking the tool call.
     pub fn success<T: Serialize>(tool_call_id: impl Into<String>, content: T) -> Self {
-        let content =
-            serde_json::to_string(&content).expect("serializable tool result always serializes");
+        let tool_call_id = tool_call_id.into();
+        let content = match serde_json::to_string(&content) {
+            Ok(content) => content,
+            Err(e) => {
+                return Self::error(tool_call_id, format!("tool result not serializable: {e}"));
+            }
+        };
         Self {
-            tool_call_id: tool_call_id.into(),
+            tool_call_id,
             name: String::new(),
             success: true,
             content,
@@ -183,20 +187,23 @@ impl ToolResult {
         }
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
     /// Create a successful result with tool name
+    ///
+    /// Serialization failure is reported as an error result, as in [`Self::success`].
     pub fn success_with_name<T: Serialize>(
         name: impl Into<String>,
         tool_call_id: impl Into<String>,
         content: T,
     ) -> Self {
-        let content =
-            serde_json::to_string(&content).expect("serializable tool result always serializes");
+        let tool_call_id = tool_call_id.into();
+        let content = match serde_json::to_string(&content) {
+            Ok(content) => content,
+            Err(e) => {
+                return Self::error(tool_call_id, format!("tool result not serializable: {e}"));
+            }
+        };
         Self {
-            tool_call_id: tool_call_id.into(),
+            tool_call_id,
             name: name.into(),
             success: true,
             content,
@@ -863,5 +870,19 @@ mod tests {
         // the id evaporating).
         let cloned = with_id.clone();
         assert_eq!(cloned.session_id.as_deref(), Some("sess-abc123"));
+    }
+
+    #[test]
+    fn success_reports_unserializable_content_as_an_error_result() {
+        let mut content: HashMap<(i32, i32), i32> = HashMap::new();
+        content.insert((1, 2), 3);
+        let result = ToolResult::success("call-1", content);
+        assert!(!result.success);
+        assert!(
+            result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("not serializable"))
+        );
     }
 }

@@ -9,7 +9,7 @@ use super::*;
 impl PromptInputState {
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "each unwrap sits behind `key.len() == 1`, and a one-byte key holds exactly one char"
     )]
     /// Apply a vim command using the full state-machine key handler.
     pub fn vim_command(&mut self, key: &str) {

@@ -901,7 +901,7 @@ except Exception as e:
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "engine_lock is Some after the init block above returns on failure"
     )]
     async fn kokoro_local(&self, args: &TtsArgs) -> ToolResult {
         let voice = if args.voice.is_empty() {

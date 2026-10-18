@@ -67,7 +67,7 @@ pub fn get_operant_home() -> PathBuf {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "env_path ends in `profiles` (checked above), so it has two parents"
 )]
 /// Get the default operant root (before profile resolution).
 ///

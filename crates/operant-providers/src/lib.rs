@@ -1202,7 +1202,7 @@ pub fn create_provider_with_url(
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "the match guard tested base_url(name).is_some() for the same name"
 )]
 /// Factory: create provider with optional base URL and runtime options.
 #[allow(clippy::too_many_lines)]
@@ -4471,7 +4471,7 @@ mod tests {
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "test fixture: the builder inserted X-Title just above; a missing key fails this test"
     )]
     #[test]
     fn provider_runtime_options_extra_headers_passed_through() {

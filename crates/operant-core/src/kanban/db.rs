@@ -528,10 +528,7 @@ impl KanbanDb {
         Ok(true)
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
-    )]
+    #[expect(clippy::expect_used, reason = "a serde_json::Value always serializes")]
     pub fn heartbeat_worker(
         &self,
         tid: &str,

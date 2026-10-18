@@ -199,7 +199,7 @@ impl MarkdownConverter {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a regex match always has group 0; the code-block regex defines group 2"
     )]
     /// Extract fenced code blocks (` ``` … ``` `) and replace them with
     /// sentinel-bounded placeholders. The optional language tag (e.g.
@@ -234,7 +234,7 @@ impl MarkdownConverter {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a regex match always has group 0; the inline-code regex defines group 1"
     )]
     /// Extract inline code spans (`` `code` ``) and replace them with
     /// sentinel-bounded placeholders.

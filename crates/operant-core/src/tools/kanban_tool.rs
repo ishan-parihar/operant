@@ -47,7 +47,7 @@ impl KanbanTool {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "result is a json! value built in this arm, so it always serializes"
     )]
     fn handle(&self, args: KanbanToolArgs) -> Result<String> {
         let action = args.action.to_lowercase();

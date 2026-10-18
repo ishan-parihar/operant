@@ -128,7 +128,7 @@ impl PlatformAdapter for WebhookAdapter {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "NOTION_SEMAPHORE is a static that is never closed, so acquire cannot fail"
     )]
     async fn start_with_channel(
         &self,
@@ -586,11 +586,12 @@ impl PlatformAdapter for WebhookAdapter {
             .with_state((tx, secret, holon));
 
         // Spawn the HTTP server
+        // Bind before spawning: a port conflict must come back as this method's
+        // error (the caller logs it), not as a panic inside a detached task that
+        // leaves the adapter reporting itself as started.
+        let listener = tokio::net::TcpListener::bind(addr).await?;
         tokio::spawn(async move {
             info!("Webhook HTTP server starting");
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("Failed to bind webhook listener");
             if let Err(e) = axum::serve(listener, app).await {
                 error!(error = %e, "Webhook HTTP server error");
             }
@@ -607,5 +608,23 @@ impl PlatformAdapter for WebhookAdapter {
     ) -> Result<String> {
         // Webhook adapter is inbound-only
         Ok(String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn start_with_channel_returns_bind_error_when_port_is_taken() {
+        let Ok(occupied) = std::net::TcpListener::bind("127.0.0.1:0") else {
+            panic!("an ephemeral loopback port should bind");
+        };
+        let Ok(addr) = occupied.local_addr() else {
+            panic!("a bound listener has a local address");
+        };
+        let adapter = WebhookAdapter::new(true).with_addr(addr.to_string());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        assert!(adapter.start_with_channel(tx).await.is_err());
     }
 }

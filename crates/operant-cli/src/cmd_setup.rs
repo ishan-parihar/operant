@@ -735,7 +735,7 @@ fn step_fallback_and_strategy(
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "`*slot` was assigned `Some` on the lines above the unwrap"
 )]
 /// Configure auxiliary models for specialized tasks.
 fn step_auxiliary_models(config: &mut AppConfig) -> Result<()> {

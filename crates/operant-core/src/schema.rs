@@ -73,7 +73,7 @@ impl ToolSchema {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "is_string() was checked above, so as_str() is Some"
     )]
     /// Sanitize and repair input arguments against the schema properties and required fields.
     /// This fixes cases where the model or gateway proxy outputs type mismatches (e.g. empty objects

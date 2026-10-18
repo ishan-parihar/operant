@@ -22,7 +22,7 @@ pub async fn handle_insights_command(config: &AppConfig, cmd: InsightsSubcommand
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "both unwraps sit inside the `!sessions.is_empty()` branch"
 )]
 async fn cmd_sessions(config: &AppConfig, _days: u64) -> Result<()> {
     let db = Database::init(config.database_path.clone()).context("Failed to open database")?;

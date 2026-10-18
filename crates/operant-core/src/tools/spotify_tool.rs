@@ -35,7 +35,7 @@ impl SpotifyClient {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
     )]
     fn headers(&self) -> reqwest::header::HeaderMap {
         let token = spotify_token().unwrap_or_default();

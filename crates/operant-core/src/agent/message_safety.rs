@@ -267,7 +267,7 @@ pub fn repair_message_sequence(messages: &mut Vec<Message>) -> usize {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "guarded by the `messages.is_empty()` return above"
 )]
 /// Append a synthetic assistant turn when an interrupted tail is a tool result.
 ///
@@ -317,7 +317,7 @@ fn is_thinking_only(msg: &Message) -> bool {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "each unwrap sits inside a branch guarded by `!merged.is_empty()`"
 )]
 /// Drop thinking-only assistant messages and merge consecutive user messages.
 ///

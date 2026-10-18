@@ -65,7 +65,7 @@ impl CommandProvider {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "the placeholder regex always captures group 1 or group 2"
     )]
     fn render_template(&self, placeholders: &HashMap<String, String>) -> Result<String, TtsError> {
         // Match {name} or {{name}} but not escaped {{}}

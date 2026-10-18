@@ -87,7 +87,7 @@ fn ls_remote_head(url: &str, git_ref: &str, timeout_secs: u64) -> Option<String>
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "CARGO_MANIFEST_DIR is crates/operant-cli, so both parent lookups succeed"
 )]
 /// Return the operant-rs project root (parent of `crates/operant-cli/`).
 fn project_root() -> &'static Path {

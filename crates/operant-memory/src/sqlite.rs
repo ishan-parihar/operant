@@ -394,7 +394,7 @@ impl SqliteMemory {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "a SHA-256 digest is 32 bytes, so the 8-byte prefix always converts"
     )]
     /// Deterministic content hash for embedding cache.
     /// Uses SHA-256 (truncated) instead of DefaultHasher, which is

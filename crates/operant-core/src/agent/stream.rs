@@ -673,7 +673,7 @@ impl OperantAgent {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "masked_tools is held only for short non-panicking sections; poisoning is treated as a bug"
     )]
     /// Execute tools and handle self-healing
     pub(crate) async fn execute_tools(&self, tool_calls: Vec<ToolCall>) -> Result<Vec<ToolResult>> {

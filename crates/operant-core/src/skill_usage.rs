@@ -132,7 +132,7 @@ impl UsageTelemetry {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "the record was inserted on the line above"
     )]
     /// Ensure a record exists, creating a default one if needed.
     fn ensure_record(&mut self, name: &str) -> &mut UsageRecord {

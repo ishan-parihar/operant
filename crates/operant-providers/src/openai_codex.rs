@@ -958,7 +958,7 @@ fn extract_stream_error_message(event: &Value) -> Option<String> {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "valid_up_to marks the end of a valid UTF-8 prefix (Utf8Error contract)"
 )]
 fn append_utf8_stream_chunk(
     body: &mut String,
@@ -1010,7 +1010,7 @@ fn append_utf8_stream_chunk(
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "pending holds only an incomplete UTF-8 suffix, which never decodes as complete"
 )]
 #[cfg_attr(
     not(test),
@@ -1070,7 +1070,7 @@ fn parse_responses_body(body: &str) -> anyhow::Result<ResponsesTurnResult> {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "pending holds only an incomplete UTF-8 suffix, which never decodes as complete"
 )]
 /// Read the response body incrementally via `bytes_stream()` to avoid
 /// buffering the entire SSE payload in memory.  The previous implementation

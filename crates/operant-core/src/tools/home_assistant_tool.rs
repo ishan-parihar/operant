@@ -78,7 +78,7 @@ fn get_config() -> (String, String) {
 
 #[expect(
     clippy::expect_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "panics if the token is not header-safe; a fallible path is tracked as RT-20"
 )]
 /// Build authorization headers for the Home Assistant REST API.
 ///

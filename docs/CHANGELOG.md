@@ -93,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-952 — every `expect` reason names its invariant, and four runtime panics are now errors (RT-5, RT-21).** The 96 `#[expect]` sites that said "invariant guaranteed by surrounding validation" each name the invariant their code relies on. Six attributes were removed where the call now returns an error: the webhook listener bind, `operant backup create` and `list`, the `operant service logs` tail, the gateway session-store path, and tool-result serialization. A webhook port conflict now returns an error from `start_with_channel` instead of panicking a detached task, and `ToolResult::success` returns an error result for content that fails to serialize. Two gaps stay open and are tracked: the PKCE verifier's non-Unix fallback (RT-19) and token-to-header panics in the Home Assistant, Spotify, and LinkedIn tools (RT-20).
+
 - **iter-951 — the TUI corpus validator passes.** Its snapshot-key and key-name tables had drifted from the Rust source, so it reported errors for scenarios that were correct. The tables are now read from the source, and the empty pending-turn script is a valid fixture. Three ledger rows for removed surfaces are deleted. The scenarios touched are re-run: 13 of 13 pass.
 
 - **iter-950 — the blanket `allow(unused_imports)` attributes are removed.** Seventy-three attributes hid unused imports across the TUI. The compiler reports the imports they hid, and the dead ones are removed. Re-exports used only by tests are gated with `#[cfg(test)]`, not deleted. Behavior is unchanged: the full workspace test run is 7394 passed, 0 failed.

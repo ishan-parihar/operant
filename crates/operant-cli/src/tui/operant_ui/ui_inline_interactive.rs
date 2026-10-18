@@ -374,7 +374,7 @@ fn fuzzy_match_positions(pattern: &str, text: &str) -> Vec<usize> {
 
 #[expect(
     clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
+    reason = "notice_rows is nonzero only when notice is Some"
 )]
 /// Compact, borderless model choices for the command-suggestion surface.
 /// Uses the existing picker state so filtering, routes and hotkeys are unchanged.

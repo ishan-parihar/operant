@@ -672,7 +672,7 @@ impl OperantAgent {
 
     #[expect(
         clippy::expect_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "lock poisoning means a writer panicked mid-update; treated as a bug, not recovered"
     )]
     /// Assign the session this agent persists into.
     ///

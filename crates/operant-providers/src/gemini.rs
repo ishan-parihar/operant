@@ -1069,7 +1069,7 @@ impl GeminiProvider {
 
     #[expect(
         clippy::unwrap_used,
-        reason = "invariant guaranteed by surrounding validation"
+        reason = "ManagedOAuth is only built when auth_service is Some"
     )]
     async fn send_generate_content(
         &self,

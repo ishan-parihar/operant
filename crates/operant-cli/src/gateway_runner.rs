@@ -2008,10 +2008,6 @@ fn build_session_context(
     ctx
 }
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
 /// Start the gateway with the provided application configuration.
 ///
 /// Constructs a `GatewayConfig` from `app_config.gateway.*` fields,
@@ -2068,8 +2064,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // iter-678 (gap 1): hoist the handle — the cron scheduler's usage drain
     // writes through the SAME store the budget rollup reads.
     let persistent_session_store: Option<std::sync::Arc<operant_core::PersistentSessionStore>> =
-        operant_core::PersistentSessionStore::open(session_db_path.to_str().unwrap())
-            .ok()
+        session_db_path
+            .to_str()
+            .and_then(|path| operant_core::PersistentSessionStore::open(path).ok())
             .map(std::sync::Arc::new);
     if let Some(store) = persistent_session_store.clone() {
         gateway = gateway.with_persistent_sessions(store);

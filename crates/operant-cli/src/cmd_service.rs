@@ -31,10 +31,6 @@ pub enum ServiceSubcommand {
 
 const SERVICE_NAME: &str = "operant";
 
-#[expect(
-    clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
 pub fn handle_service_command(
     _config: &AppConfig,
     cmd: ServiceSubcommand,
@@ -150,11 +146,13 @@ pub fn handle_service_command(
                     println!("Following log output (Ctrl-C to stop)...");
                     // Use tail -f if available
                     std::process::Command::new("tail")
-                        .args(["-n", &lines.to_string(), "-f", log_file.to_str().unwrap()])
+                        .args(["-n", &lines.to_string(), "-f"])
+                        .arg(&log_file)
                         .status()?;
                 } else {
                     let output = std::process::Command::new("tail")
-                        .args(["-n", &lines.to_string(), log_file.to_str().unwrap()])
+                        .args(["-n", &lines.to_string()])
+                        .arg(&log_file)
                         .output()?;
                     print!("{}", String::from_utf8_lossy(&output.stdout));
                 }
