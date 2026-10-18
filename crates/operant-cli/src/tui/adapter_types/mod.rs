@@ -24,6 +24,6 @@ pub use import_config::{
     ImportPaths, ImportSelection, build_import_preview, execute_import, summarize_import_result,
 };
 pub use items::{
-    AuthStore, FREE_CATALOG, FreeUpstream, LaunchMode, ModelRegistry, ProviderId, StoredCredential,
-    TuiApp, context_window_for_model, sample_completion_verb, sample_spinner_verb,
+    AuthStore, FREE_CATALOG, FreeUpstream, LaunchMode, ProviderId, StoredCredential, TuiApp,
+    context_window_for_model, sample_completion_verb, sample_spinner_verb,
 };

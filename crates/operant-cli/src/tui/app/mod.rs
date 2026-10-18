@@ -560,10 +560,6 @@ pub struct App {
     pub free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState,
     /// Device code / browser auth dialog (GitHub Copilot device flow, Anthropic OAuth).
     pub device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState,
-    /// Shared provider registry for dynamic model fetching.
-    /// Model registry populated from models.dev — single source of truth for
-    /// all provider models shown in the `/model` picker.
-    pub model_registry: crate::tui::adapter_types::ModelRegistry,
     /// When `true`, the main event loop should spawn an async task to fetch
     /// the model list from the current provider's `list_models()` API.
     pub model_picker_fetch_pending: bool,
@@ -641,6 +637,9 @@ pub struct App {
             Result<Vec<crate::tui::operant_app::tui_fns::PickerEntry>, String>,
         >,
     >,
+    /// Default model for a provider just connected, resolved from its live list.
+    /// Drained each frame into `pending_model` so the agent switches to it.
+    pub default_model_rx: Option<tokio::sync::oneshot::Receiver<String>>,
     /// Receiver for `UserQuestionRequest`s produced by the clarify tool.
     /// When a question arrives, `ask_user_dialog` is populated and shown.
     /// The reply_tx in the request is stored in `pending_permission_response_tx`
@@ -1129,6 +1128,7 @@ impl App {
 
             // Drain background model-fetch results.
             self.drain_model_fetch();
+            self.drain_default_model();
 
             // Spawn async session-list load when requested.
             if self.session_list_pending {

@@ -311,12 +311,24 @@ pub async fn list_agentic_models(provider: &str) -> Vec<String> {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
+    agentic_ids(&models, provider)
+}
 
-    let dev_provider = match provider_to_models_dev(provider) {
-        Some(p) => p,
-        None => return Vec::new(),
+/// Agentic model ids for `provider` read from the on-disk cache only: no network,
+/// any age. Empty when there is no cache or it does not parse.
+pub fn cached_agentic_models(provider: &str) -> Vec<String> {
+    let Ok(content) = fs::read_to_string(cache_path()) else {
+        return Vec::new();
     };
+    let Ok(cache) = serde_json::from_str::<ModelsDevCache>(&content) else {
+        return Vec::new();
+    };
+    agentic_ids(&cache.models, provider)
+}
 
+/// The normalized rows of `provider` that support tool calls, in catalog order,
+/// with TTS, embedding, and other non-chat models dropped.
+fn agentic_ids(models: &[serde_json::Value], provider: &str) -> Vec<String> {
     let noise_keywords = [
         "tts",
         "text-to-speech",
@@ -328,6 +340,10 @@ pub async fn list_agentic_models(provider: &str) -> Vec<String> {
         "speech-to-text",
         "stt",
     ];
+
+    let Some(dev_provider) = provider_to_models_dev(provider) else {
+        return Vec::new();
+    };
 
     models
         .iter()
@@ -359,6 +375,18 @@ pub async fn list_agentic_models(provider: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agentic_ids_keep_tool_callers_for_the_provider_and_drop_noise() {
+        let models = vec![
+            serde_json::json!({"provider_id": "anthropic", "id": "claude-a", "tool_call": true}),
+            serde_json::json!({"provider_id": "anthropic", "id": "claude-b", "tool_call": false}),
+            serde_json::json!({"provider_id": "anthropic", "id": "tts-x", "tool_call": true}),
+            serde_json::json!({"provider_id": "openai", "id": "gpt-x", "tool_call": true}),
+        ];
+        assert_eq!(agentic_ids(&models, "anthropic"), ["claude-a"]);
+        assert!(agentic_ids(&models, "no-such-provider").is_empty());
+    }
 
     #[test]
     fn test_provider_mapping() {

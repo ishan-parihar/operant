@@ -555,89 +555,38 @@ pub(crate) async fn step_provider_and_model(config: &mut AppConfig, full: bool) 
     step_api_key(config, provider_key, provider_name)?;
 
     // ── Part C — Select model (now with API key available for live fetch) ─
-    let models_for_provider: Vec<&str> = if selected_provider.models.is_empty() {
-        Vec::new()
-    } else {
-        selected_provider.models.to_vec()
-    };
+    // The model list is the provider's own live list in the wire family it speaks,
+    // with models.dev as the fallback. There is no compiled-in list to fall back to.
+    let api_key = config.client.api_key.as_deref().filter(|k| !k.is_empty());
+    let catalog = resolve(Request {
+        provider_name: selected_provider.name,
+        family: wire_family(selected_provider.name),
+        base_url: &config.client.base_url,
+        api_key,
+        configured: &[],
+    })
+    .await;
+    if let Some(reason) = &catalog.notice {
+        print_warning(&format!("Live model list unavailable ({reason})."));
+    }
+    let models: Vec<String> = catalog.rows.into_iter().map(|row| row.id).collect();
 
-    if models_for_provider.is_empty() {
+    if models.is_empty() {
         let custom = prompt_text("Enter model name", &config.agent.model)?;
         config.agent.model = custom;
     } else {
-        let fetch_label = format!("🔄  Fetch live models from {}", provider_name);
-        let mut model_display: Vec<String> = vec![fetch_label];
-        model_display.extend(models_for_provider.iter().map(|m| m.to_string()));
-        model_display.push("✏️  Custom (enter model name manually)".to_string());
-
-        let default_idx = model_display[1..model_display.len() - 1]
+        let mut display = models.clone();
+        display.push("✏️  Custom (enter model name manually)".to_string());
+        let default_idx = models
             .iter()
             .position(|m| m == &config.agent.model)
-            .map(|i| i + 1)
-            .unwrap_or(1);
-
-        let model_sel = prompt_fuzzy_select(
-            "Select a model",
-            &model_display,
-            default_idx.min(model_display.len().saturating_sub(1)),
-        )?;
-
-        if model_sel == 0 {
-            // User chose "Fetch live models"
-            let api_key = config.client.api_key.as_deref().unwrap_or("");
-            let fetched: Vec<String> = if !api_key.is_empty() {
-                let catalog = resolve(Request {
-                    provider_name: selected_provider.name,
-                    family: wire_family(selected_provider.name),
-                    base_url: &config.client.base_url,
-                    api_key: Some(api_key),
-                    configured: &[],
-                })
-                .await;
-                if let Some(reason) = &catalog.notice {
-                    print_warning(&format!("Live model list unavailable ({reason})."));
-                }
-                catalog.rows.into_iter().map(|row| row.id).collect()
-            } else {
-                Vec::new()
-            };
-
-            if fetched.is_empty() {
-                print_warning("Could not fetch models — using static list.");
-                let mut fallback: Vec<&str> = models_for_provider.to_vec();
-                fallback.push("Custom (enter model name manually)");
-                let sub = prompt_fuzzy_select(
-                    "Select a model",
-                    &fallback.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                    0,
-                )?;
-                config.agent.model = if sub == fallback.len() - 1 {
-                    prompt_text("Enter model name", &config.agent.model)?
-                } else {
-                    fallback[sub].to_string()
-                };
-            } else {
-                print_success(&format!(
-                    "Loaded {} models for {}",
-                    fetched.len(),
-                    provider_name
-                ));
-                let mut live = fetched.clone();
-                live.push("Custom (enter model name manually)".to_string());
-                let sub = prompt_fuzzy_select("Select a model", &live, 0)?;
-                config.agent.model = if sub == live.len() - 1 {
-                    prompt_text("Enter model name", &config.agent.model)?
-                } else {
-                    live[sub].clone()
-                };
-            }
-        } else if model_sel == model_display.len() - 1 {
-            // Custom
-            let custom = prompt_text("Enter model name", &config.agent.model)?;
-            config.agent.model = custom;
+            .unwrap_or(0);
+        let model_sel = prompt_fuzzy_select("Select a model", &display, default_idx)?;
+        config.agent.model = if model_sel == models.len() {
+            prompt_text("Enter model name", &config.agent.model)?
         } else {
-            config.agent.model = model_display[model_sel].clone();
-        }
+            models[model_sel].clone()
+        };
     }
 
     print_success(&format!(

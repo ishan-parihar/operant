@@ -120,6 +120,29 @@ impl App {
         }
     }
 
+    /// Apply a connected provider's default model once its live list resolves. A
+    /// dropped sender means the catalog was empty: say so, the model stays as it was.
+    pub(super) fn drain_default_model(&mut self) -> bool {
+        let Some(ref mut rx) = self.default_model_rx else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(model) => {
+                self.default_model_rx = None;
+                self.pending_model = Some(model);
+                true
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.default_model_rx = None;
+                self.set_status_notice(
+                    "No model list for this provider. Choose one with /model.".to_string(),
+                );
+                true
+            }
+        }
+    }
+
     /// 2. Drain background model-fetch results into the model picker.
     pub(super) fn drain_model_fetch(&mut self) -> bool {
         let Some(ref mut rx) = self.model_fetch_rx else {

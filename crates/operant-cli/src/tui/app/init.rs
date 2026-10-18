@@ -52,16 +52,8 @@ impl App {
             let raw = config.agent.model.clone();
             if raw.ends_with("/default") {
                 let provider = raw.strip_suffix("/default").unwrap_or(&raw);
-                let mut probe_reg = crate::tui::adapter_types::ModelRegistry::new();
-                let probe_cache = dirs::cache_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("operant")
-                    .join("models.json");
-                probe_reg.load_cache(&probe_cache);
                 let resolved =
-                    crate::tui::adapter_types::model_registry::default_model_for_provider(
-                        provider, &probe_reg,
-                    );
+                    crate::tui::adapter_types::model_registry::default_model_for_provider(provider);
                 if resolved != format!("{}/default", provider) {
                     config.agent.model = resolved.clone();
                     resolved
@@ -230,16 +222,7 @@ impl App {
                 crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
             free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
             device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState::new(),
-            model_registry: {
-                let mut reg = crate::tui::adapter_types::ModelRegistry::new();
-                // Try to load cached models.dev data from disk.
-                let cache_path = dirs::cache_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("operant")
-                    .join("models.json");
-                reg.load_cache(&cache_path);
-                reg
-            },
+            default_model_rx: None,
             model_picker_fetch_pending: false,
             session_list_pending: false,
             session_list_rx: None,

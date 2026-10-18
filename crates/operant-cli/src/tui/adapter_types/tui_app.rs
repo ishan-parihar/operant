@@ -247,7 +247,9 @@ impl TuiApp {
         // (iter-209: FileHistory + current_turn stub creation deleted.
         // The turn-diff feature never worked — /changes now uses git-diff.)
 
-        self.app.model_registry.load_models_dev().await;
+        // Warms the models.dev disk cache that the default model and the context
+        // window read. A failed fetch leaves the cache as it was.
+        let _ = operant_core::models_dev::fetch_models_dev(false).await;
         // Force a context-window-size refresh so /context shows real numbers
         // on the first frame instead of "0 / 0" (Bug #13 from iter-82 audit).
         // After the fetch: on a cold models.dev cache the window reads the
@@ -695,7 +697,9 @@ impl TuiApp {
 
         // Skip the network models.dev fetch on the deterministic mock path.
         if !is_mock {
-            self.app.model_registry.load_models_dev().await;
+            // Warms the models.dev disk cache that the default model and the context
+            // window read. A failed fetch leaves the cache as it was.
+            let _ = operant_core::models_dev::fetch_models_dev(false).await;
         }
         self.app.refresh_context_window_size();
 

@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-922 — no static model lists; the default model comes from the live catalog
+  (plan P2).** `ProviderDef` loses `models` and `default_model` (42 entries), and the
+  setup model step lists the provider's live catalog (models.dev when the endpoint has
+  none). Connecting resolves the default in the background (live rows, tool-capable
+  first, then the first row) and applies it through `pending_model`; a provider with
+  no list says so and keeps its model. The sync fallback (startup `/default`
+  placeholders) reads the models.dev disk cache only. `ModelRegistry` and its seeded
+  tables are gone, and `FREE_CATALOG` drops its `default_model`. Known gap: the
+  operant_app `provider_metadata` table still carries static `default_model` values
+  and was not touched; `models_dev_id` / `provider_to_models_dev` reconciliation is P3.
+
 - **iter-921 — one live model fetcher for every provider (plan P1).** The `/model`
   picker and `operant setup` both list models through `operant_core::model_catalog::resolve`:
   the provider's own `/models` in its wire family, then models.dev when that is empty,

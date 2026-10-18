@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::provider::{provider_from_url, wire_family};
-use operant_core::model_catalog::{CatalogSource, Request, WireFamily, resolve};
+use crate::tui::adapter_types::model_registry::qualify_model;
+use operant_core::model_catalog::{CatalogSource, Request, WireFamily, default_model, resolve};
 
 // (plan 05A) The endpoint's own model list through the runtime catalog: its
 // `/models` in the provider's wire family (OpenAI-style when the URL names no
@@ -44,14 +45,40 @@ async fn fetch_endpoint_models(
         .collect())
 }
 
-impl App {
-    fn display_default_model_for_provider(&self, provider_id: &str) -> String {
-        crate::tui::adapter_types::model_registry::default_model_for_provider(
-            provider_id,
-            &self.model_registry,
-        )
-    }
+/// The default model for `provider_id` at `base_url`: the first row of its live
+/// list (tool-capable first, per models.dev), qualified as `provider/model`. Sent
+/// through the receiver once the fetch resolves; it is dropped without a send when
+/// the catalog is empty.
+fn spawn_default_model(
+    provider_id: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+) -> tokio::sync::oneshot::Receiver<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let provider = provider_id.to_string();
+    let base_url = base_url.to_string();
+    let api_key = api_key.map(str::to_string);
+    tokio::spawn(async move {
+        let catalog = resolve(Request {
+            provider_name: &provider,
+            family: Some(wire_family(&provider).unwrap_or(WireFamily::OpenAiCompat)),
+            base_url: &base_url,
+            api_key: api_key.as_deref(),
+            configured: &[],
+        })
+        .await;
+        let agentic: std::collections::HashSet<String> =
+            operant_core::models_dev::cached_agentic_models(&provider)
+                .into_iter()
+                .collect();
+        if let Some(model) = default_model(&catalog, "", |id| agentic.contains(id)) {
+            let _ = tx.send(qualify_model(&provider, &model));
+        }
+    });
+    rx
+}
 
+impl App {
     // (plan 05B) open_model_picker_for_provider deleted with the legacy
     // overlay: the registry fallback now adapts its rows at the
     // model_fetch_rx boundary (see open_model_picker_inline), so the
@@ -196,14 +223,15 @@ impl App {
     fn retarget_endpoint(&mut self, provider_id: &str, base_url: String, api_key: Option<String>) {
         self.config.client.base_url = base_url.clone();
         self.config.client.api_key = api_key.clone();
-        // A catalog provider brings its own default model; a custom endpoint
-        // keeps the current one (the picker that opens next lists the
-        // endpoint's own models).
-        if let Some(def) = crate::provider::provider_by_name(provider_id)
-            && !def.default_model.is_empty()
-        {
-            self.pending_model = Some(def.default_model.to_string());
-            self.config.agent.model = def.default_model.to_string();
+        // The default model comes from the endpoint's live list, the same list the
+        // picker that opens next shows. Needs a runtime; a sync caller keeps the
+        // current model.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.default_model_rx = Some(spawn_default_model(
+                provider_id,
+                &base_url,
+                api_key.as_deref(),
+            ));
         }
         let persisted = operant_core::config::persist_config_key("client.base_url", &base_url)
             .and_then(|_| {
@@ -254,24 +282,17 @@ impl App {
         }
     }
 
-    /// Switch the active provider while clearing any explicit model override.
+    /// Switch the active provider. Its default model arrives later from the live
+    /// catalog (`spawn_default_model`), so the model name stays as it was until then.
     fn set_provider_default(&mut self, provider_id: String) {
-        self.active_provider = Some(provider_id.clone());
-
-        let model = self.display_default_model_for_provider(&provider_id);
-        if let Some(tracker) = Arc::get_mut(&mut self.cost_tracker) {
-            tracker.set_model(&model);
-        }
-        self.model_name = model;
+        self.active_provider = Some(provider_id);
         self.refresh_context_window_size();
         self.context_used_tokens = 0;
     }
 
     /// Update the context window size for the current model. The models.dev
     /// cache is the source (`limit.context`); the per-provider defaults are the
-    /// offline fallback. (`ModelRegistry::get` never carried a window — it
-    /// returned `ModelInfo::default()`, so every seeded model read 0 and hid the
-    /// context meter.)
+    /// offline fallback.
     pub fn refresh_context_window_size(&mut self) {
         let provider = self.active_provider.as_deref().unwrap_or("anthropic");
         let model_id = self
@@ -295,10 +316,8 @@ impl App {
     pub(super) fn resolve_stale_model(&mut self, model: &str) -> String {
         if model.ends_with("/default") {
             let provider = model.strip_suffix("/default").unwrap_or(model);
-            let resolved = crate::tui::adapter_types::model_registry::default_model_for_provider(
-                provider,
-                &self.model_registry,
-            );
+            let resolved =
+                crate::tui::adapter_types::model_registry::default_model_for_provider(provider);
             if resolved != format!("{}/default", provider) {
                 self.config.agent.model = resolved.clone();
                 return resolved;

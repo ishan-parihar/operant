@@ -5154,15 +5154,23 @@ fn connect_queues_a_live_endpoint_retarget() {
     );
     assert_eq!(app.config.client.base_url, "https://api.anthropic.com/v1");
     assert_eq!(app.config.client.api_key.as_deref(), Some("sk-ant-test"));
-    // The provider's default model rides pending_model so the AGENT switches.
-    assert_eq!(
-        app.pending_model.as_deref(),
-        Some(
-            crate::provider::provider_by_name("anthropic")
-                .unwrap()
-                .default_model
-        )
-    );
+    // The default model is resolved from the live catalog, which a sync test
+    // does not run; it arrives later through `default_model_rx`.
+    assert!(app.pending_model.is_none());
+}
+
+/// A default model resolved in the background reaches the agent through
+/// `pending_model`, the same channel the picker uses.
+#[test]
+fn a_resolved_default_model_is_applied_through_pending_model() {
+    let mut app = make_app();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.default_model_rx = Some(rx);
+    assert!(!app.drain_default_model(), "nothing sent yet");
+    tx.send("claude-x".to_string()).unwrap();
+    assert!(app.drain_default_model());
+    assert_eq!(app.pending_model.as_deref(), Some("claude-x"));
+    assert!(app.default_model_rx.is_none());
 }
 
 /// Pasted text belongs to the open text dialog, not the composer behind it —
