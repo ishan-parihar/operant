@@ -71,25 +71,25 @@ git push origin main
 git log origin/main -1 --oneline    # must print your new commit
 
 # 7. Build release binary and deploy to global executable (R&D protocol).
-#    BUILD FROM A CLEAN WORKTREE AT origin/main — NOT the shared tree.
-#    Under fleet conditions those are different artifacts: the shared tree
-#    carries peers' uncommitted WIP, so `cargo build --release` there bakes
-#    their in-flight refactor into the binary you then deploy and restart the
-#    daemon on. Measured 2026-10-06: a shared-tree build emitted warnings from
-#    untracked `tui/jcode_app/info_widget/` files and was NOT origin/main.
-df -h /                                    # a worktree target/ costs ~17G; storage-critical box
-git worktree add --detach ~/worktrees/deploy-<iter> origin/main
-( cd ~/worktrees/deploy-<iter> && git submodule update --init --recursive \
-    && scripts/build.sh --release )
+#    Build in the shared tree at the commit you just pushed. Release-test builds
+#    do not use a temporary worktree: a fresh one re-downloads and recompiles
+#    every dependency, which costs far more time than the isolation buys while
+#    no peer agent works in parallel (owner order 2026-10-19). The worktree step
+#    returns if peers resume (see Parallel-Agent rule 4).
+#    Confirm the tree is the pushed commit before building:
+git rev-parse --short HEAD origin/main   # the two shas must match
+git status --porcelain                   # only the derived Cargo.lock and untracked files the build never reads may appear
+df -h /                                  # check space before the release build
+scripts/build.sh --release
 # Deploy to BOTH install paths (2026-10-05 lesson): the user's PATH and the
 # gateway systemd unit resolve ~/.local/bin/operant; /usr/local/bin is the
 # convention target. A running daemon holds the old inode open — `cp` fails
 # with "Text file busy"; rename-over works: build to a temp name, then `mv`.
 # BOTH the cp AND the mv need sudo: a bare `cp ... /usr/local/bin/...` fails
 # EACCES before the `sudo mv` is ever reached.
-sudo cp ~/worktrees/deploy-<iter>/target/release/operant /usr/local/bin/operant.new \
+sudo cp target/release/operant /usr/local/bin/operant.new \
   && sudo mv /usr/local/bin/operant.new /usr/local/bin/operant
-cp ~/worktrees/deploy-<iter>/target/release/operant ~/.local/bin/operant.new \
+cp target/release/operant ~/.local/bin/operant.new \
   && mv ~/.local/bin/operant.new ~/.local/bin/operant
 operant --version   # confirm the deployed binary matches
 # PROVENANCE GATE — run this BEFORE restarting the daemon. A failed build
@@ -102,7 +102,6 @@ systemctl --user restart operant-gateway
 # and verify the RUNNING process actually executes the new binary:
 md5sum /proc/$(systemctl --user show -p MainPID --value operant-gateway)/exe
 # (it must equal the md5 of the deployed path, not merely "some binary exists")
-git worktree remove ~/worktrees/deploy-<iter>   # immediately after the artifact is out
 ```
 
 ### R&D Protocol — Deploy After Every Push
@@ -165,6 +164,11 @@ code — it is never destroying a peer's work that lives only in the shared
 tree. These rules are load-bearing; every one exists because a specific
 incident happened.
 
+> **Status (2026-10-19, owner order):** no peer agent works in parallel with
+> the operator agent right now. The temporary-worktree build step (§7, rule 4)
+> is deferred; release builds run in the shared tree. The rules below return
+> to full force when peers resume.
+
 1. **The iteration-label authority is `origin/main`, hand-computed.** Fetch,
    read the top label, compute `top+1` yourself (arithmetic in the message,
    never a pipeline that serves the top label back). Push, confirm, then
@@ -192,9 +196,11 @@ incident happened.
    `git diff --name-only <base> origin/main` ∩ `git status --porcelain`
    must be empty (a `Cargo.lock` intersection is fine — the lock is derived:
    `git checkout -- Cargo.lock`, never stash-merge it, the next build
-   regenerates it). Exception: a TEMPORARY worktree is allowed only for a
-   clean release build when a peer's dirty WIP blocks the bin compile —
-   `df -h` before/after, `git submodule update --init` at creation, and
+   regenerates it). Release-test builds no longer use a temporary worktree
+   (AGENTS §7): while no peer works in parallel, the shared tree builds
+   directly. If peers return and a peer's dirty WIP blocks the bin compile,
+   a TEMPORARY worktree is allowed again for that clean build — `df -h`
+   before/after, `git submodule update --init` at creation, and
    `git worktree remove` immediately after the artifact is out.
 5. **The shared `target/` is the fleet's single build cache — do not
    casually delete it.** Do NOT `rm -rf target/` (that destroys the
