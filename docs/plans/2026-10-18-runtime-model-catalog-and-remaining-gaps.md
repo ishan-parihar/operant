@@ -171,6 +171,12 @@ touches code), per AGENTS.md.
 one of the 42 providers (only the three wire families are mocked), and live verification
 of Anthropic and Google listing (no key here).
 
+**Status (iter-926):** the 42-provider gap is closed at the mapping level. `wire_family`
+now covers the eight OpenAI-compatible providers it missed, and the seven others are named
+in `NO_LISTING_ENDPOINT`. `every_provider_has_a_listing_request_or_is_named_as_having_none`
+checks every entry. Still open: mock HTTP tests for the non-core families beyond the three
+mocked, and live Anthropic and Google verification (no key here).
+
 ### P2 — delete the static catalog
 
 **Status (iter-922):** P2.1–P2.4 done. P2.5 done in iter-923. `provider_metadata`'s static

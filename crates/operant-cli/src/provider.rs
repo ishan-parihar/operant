@@ -509,20 +509,60 @@ pub const PROVIDERS: &[ProviderDef] = &[
 // ---------------------------------------------------------------------------
 
 /// Wire protocol of `name`'s own `/models` endpoint. `None` for providers whose
-/// model list comes only from models.dev (or from the configured models).
+/// model list comes only from models.dev (or from the configured models); those
+/// are listed in `NO_LISTING_ENDPOINT` so the coverage test can tell them apart.
 pub fn wire_family(name: &str) -> Option<WireFamily> {
     match name {
         "anthropic" => Some(WireFamily::Anthropic),
         "google" => Some(WireFamily::Google),
-        "openai" | "xai" | "mistral" | "groq" | "deepseek" | "together" | "openrouter"
-        | "nvidia" | "perplexity" | "cohere" | "huggingface" | "zai" | "kimi-coding"
-        | "stepfun" | "minimax" | "alibaba" | "xiaomi" | "opencode-zen" | "opencode-go"
-        | "kilocode" | "ollama" | "ollama-cloud" | "vercel" | "moonshot" | "tencent-tokenhub" => {
-            Some(WireFamily::OpenAiCompat)
-        }
+        "openai"
+        | "xai"
+        | "mistral"
+        | "groq"
+        | "deepseek"
+        | "together"
+        | "openrouter"
+        | "nvidia"
+        | "perplexity"
+        | "cohere"
+        | "huggingface"
+        | "zai"
+        | "kimi-coding"
+        | "kimi-coding-cn"
+        | "stepfun"
+        | "minimax"
+        | "minimax-cn"
+        | "alibaba"
+        | "alibaba-coding-plan"
+        | "xiaomi"
+        | "opencode-zen"
+        | "opencode-go"
+        | "kilocode"
+        | "ollama"
+        | "ollama-cloud"
+        | "lmstudio"
+        | "vercel"
+        | "moonshot"
+        | "tencent-tokenhub"
+        | "nous"
+        | "arcee"
+        | "gmi"
+        | "qwen-oauth" => Some(WireFamily::OpenAiCompat),
         _ => None,
     }
 }
+
+/// Providers with no `/models` listing this build can call: a URL template, an
+/// ACP or cloudcode transport, a ChatGPT backend, or a token exchange.
+pub const NO_LISTING_ENDPOINT: &[&str] = &[
+    "openai-codex",
+    "copilot",
+    "copilot-acp",
+    "google-gemini-cli",
+    "azure",
+    "azure-foundry",
+    "bedrock",
+];
 
 // ---------------------------------------------------------------------------
 // Lookup helpers
@@ -785,6 +825,36 @@ mod tests {
                 "Original provider '{}' is missing",
                 name
             );
+        }
+    }
+
+    /// Every provider either has a listing endpoint whose request carries its key
+    /// the way its wire family expects, or is named in `NO_LISTING_ENDPOINT`.
+    #[test]
+    fn every_provider_has_a_listing_request_or_is_named_as_having_none() {
+        use operant_core::model_catalog::listing_request;
+        for p in PROVIDERS {
+            match wire_family(p.name) {
+                Some(family) => {
+                    assert!(
+                        p.default_base_url.starts_with("http"),
+                        "{}: listing needs an http(s) base URL, got {:?}",
+                        p.name,
+                        p.default_base_url
+                    );
+                    let req = listing_request(family, p.default_base_url, Some("k"))
+                        .unwrap_or_else(|e| panic!("{}: {e}", p.name));
+                    assert!(req.url.ends_with("/models"), "{}: {}", p.name, req.url);
+                    let keyed = req.headers.iter().any(|(_, v)| v.contains('k'))
+                        || req.query.iter().any(|(_, v)| v == "k");
+                    assert!(keyed, "{}: the key is in neither header nor query", p.name);
+                }
+                None => assert!(
+                    NO_LISTING_ENDPOINT.contains(&p.name),
+                    "{} has no listing endpoint: add it to wire_family or to NO_LISTING_ENDPOINT",
+                    p.name
+                ),
+            }
         }
     }
 

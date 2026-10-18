@@ -109,6 +109,49 @@ pub fn default_model(
         .map(|r| r.id.clone())
 }
 
+/// One GET against a provider's models endpoint, as data so the wire shape can be
+/// checked without a network call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingRequest {
+    /// The URL without its query string; this is what error messages name.
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+    pub query: Vec<(&'static str, String)>,
+}
+
+/// The listing request for `family` at `base_url`. Errors only when the base URL
+/// cannot be parsed (Google and Ollama-style origins are derived from it).
+pub fn listing_request(
+    family: WireFamily,
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<ListingRequest, String> {
+    let base = base_url.trim_end_matches('/');
+    let key = api_key.unwrap_or_default();
+    Ok(match family {
+        WireFamily::OpenAiCompat => ListingRequest {
+            url: format!("{base}/models"),
+            headers: api_key
+                .map(|k| vec![("authorization", format!("Bearer {k}"))])
+                .unwrap_or_default(),
+            query: Vec::new(),
+        },
+        WireFamily::Anthropic => ListingRequest {
+            url: format!("{base}/models"),
+            headers: vec![
+                ("x-api-key", key.to_string()),
+                ("anthropic-version", "2023-06-01".to_string()),
+            ],
+            query: Vec::new(),
+        },
+        WireFamily::Google => ListingRequest {
+            url: format!("{}/v1beta/models", origin(base)?),
+            headers: Vec::new(),
+            query: vec![("key", key.to_string())],
+        },
+    })
+}
+
 /// Ask the provider's models endpoint for its model ids.
 ///
 /// The error string is shown to the user, so it names the endpoint without the
@@ -122,33 +165,15 @@ pub async fn fetch_live(
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
-    let base = base_url.trim_end_matches('/');
-
-    let (shown, request) = match family {
-        WireFamily::OpenAiCompat => {
-            let url = format!("{base}/models");
-            let mut req = client.get(&url);
-            if let Some(key) = api_key {
-                req = req.bearer_auth(key);
-            }
-            (url, req)
-        }
-        WireFamily::Anthropic => {
-            let url = format!("{base}/models");
-            let req = client
-                .get(&url)
-                .header("x-api-key", api_key.unwrap_or_default())
-                .header("anthropic-version", "2023-06-01");
-            (url, req)
-        }
-        WireFamily::Google => {
-            let url = format!("{}/v1beta/models", origin(base)?);
-            let req = client
-                .get(&url)
-                .query(&[("key", api_key.unwrap_or_default())]);
-            (url, req)
-        }
-    };
+    let listing = listing_request(family, base_url, api_key)?;
+    let mut request = client.get(&listing.url);
+    for (name, value) in &listing.headers {
+        request = request.header(*name, value);
+    }
+    if !listing.query.is_empty() {
+        request = request.query(&listing.query);
+    }
+    let shown = listing.url.as_str();
 
     let resp = request
         .send()
@@ -291,6 +316,43 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("/v1/models returned 401"), "{err}");
+    }
+
+    #[test]
+    fn listing_requests_put_the_key_where_each_family_expects_it() {
+        let bearer =
+            listing_request(WireFamily::OpenAiCompat, "https://h.example/v1/", Some("k")).unwrap();
+        assert_eq!(bearer.url, "https://h.example/v1/models");
+        assert_eq!(bearer.headers, [("authorization", "Bearer k".to_string())]);
+        assert!(bearer.query.is_empty());
+
+        let anthropic =
+            listing_request(WireFamily::Anthropic, "https://api.example/v1", Some("k")).unwrap();
+        assert_eq!(anthropic.url, "https://api.example/v1/models");
+        assert!(anthropic.headers.contains(&("x-api-key", "k".to_string())));
+        assert!(
+            anthropic
+                .headers
+                .contains(&("anthropic-version", "2023-06-01".to_string()))
+        );
+
+        let google = listing_request(
+            WireFamily::Google,
+            "https://g.example/v1beta/openai",
+            Some("k"),
+        )
+        .unwrap();
+        assert_eq!(google.url, "https://g.example/v1beta/models");
+        assert_eq!(google.query, [("key", "k".to_string())]);
+        assert!(google.headers.is_empty());
+    }
+
+    #[test]
+    fn keyless_openai_compatible_listing_sends_no_auth() {
+        let local =
+            listing_request(WireFamily::OpenAiCompat, "http://localhost:11434/v1", None).unwrap();
+        assert_eq!(local.url, "http://localhost:11434/v1/models");
+        assert!(local.headers.is_empty());
     }
 
     #[test]

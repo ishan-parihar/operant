@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-926 — every provider has a listing endpoint or is named as having none (plan P1).**
+  `wire_family` covered 24 of the 42 providers in `PROVIDERS`; `kimi-coding-cn`,
+  `minimax-cn`, `alibaba-coding-plan`, `lmstudio`, `nous`, `arcee`, `gmi`, and `qwen-oauth`
+  were absent and never listed live. They now map to `OpenAiCompat`. The seven providers
+  with no `/models` listing (`openai-codex`, `copilot`, `copilot-acp`, `google-gemini-cli`,
+  `azure`, `azure-foundry`, `bedrock`) are named in `NO_LISTING_ENDPOINT`. A test walks all
+  42 entries and checks each listing request's URL and key placement. The listing request is
+  built by `model_catalog::listing_request`, so the test exercises the same code the picker
+  and setup call.
+
 - **iter-925 — the last static default model is gone (plan P2).** The
   `provider_metadata` OpenAI-compatible profile table carried a `default_model` per
   entry that nothing read (the port-excision note says the static model tables are

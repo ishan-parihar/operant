@@ -20,3 +20,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-18T13:24** — iter-923 — one cost source (plan P3): insights prices read from the models.dev cache, static pricing table deleted; models_dev_id trait hook replaced by provider_to_models_dev; workspace clippy green (kernel.rs unused mut)
 - **2026-10-18T13:29** — iter-924 — gateway follows /connect and /model (plan P0.4): per-message operant.toml endpoint check retargets the gateway agent; baseline at handler construction
 - **2026-10-18T13:37** — iter-925 — provider_metadata default_model (dead static table) removed; closes the static-default-model sweep of plan P2
+- **2026-10-18T13:59** — iter-926 — every provider has a listing endpoint or is named as having none (plan P1): wire_family covers the 8 missing OpenAI-compatible providers; 7 no-listing providers named in NO_LISTING_ENDPOINT; test walks all 42 PROVIDERS entries
