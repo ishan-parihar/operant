@@ -551,7 +551,7 @@ async fn t12_missing_seam_contained() {
     // Rescue: adding the seam and mounting a dummy triggers rescan.
     // Direct seam addition is via &mut Harness, so we test via a new harness
     // that has the seam and mounting the same provider succeeds.
-    let mut h2 = harness_with(&log, &["tool"]);
+    let h2 = harness_with(&log, &["tool"]);
     let report = h2
         .mount(
             FakeProvider::new("lonely2", vec![Claim::tool("t")])

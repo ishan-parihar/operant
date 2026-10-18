@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-923 — one cost source and one models.dev mapping (plan P3, P2.5).** The
+  insights cost estimate read a literal pricing table dated 2025; it now reads the
+  models.dev prices in the disk cache (`cached_model_prices`), matching the bare model
+  id after any provider prefix. A model with no cached price costs $0.00, as before for
+  unknown models; with no cache at all, every estimate is $0.00 until models.dev is
+  fetched. The vendor trait's `models_dev_id` hook (OpenAI and Anthropic only) is gone:
+  `ProviderCatalog::models_dev_id_for` maps through `provider_to_models_dev`, so
+  `route_cost` now covers every mapped vendor. Also fixes an unused `mut` in
+  `operant-harness/tests/kernel.rs` that failed the workspace clippy gate.
+
 - **iter-922 — no static model lists; the default model comes from the live catalog
   (plan P2).** `ProviderDef` loses `models` and `default_model` (42 entries), and the
   setup model step lists the provider's live catalog (models.dev when the endpoint has

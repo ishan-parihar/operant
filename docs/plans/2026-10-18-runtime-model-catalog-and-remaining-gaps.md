@@ -170,7 +170,7 @@ of Anthropic and Google listing (no key here).
 
 ### P2 — delete the static catalog
 
-**Status (iter-922):** P2.1–P2.4 done. P2.5 deferred to P3. `provider_metadata`'s static
+**Status (iter-922):** P2.1–P2.4 done. P2.5 done in iter-923. `provider_metadata`'s static
 `default_model` table (operant_app) not yet removed.
 
 - **P2.1** Remove `models` and `default_model` from `ProviderDef`. Update the 42 entries.

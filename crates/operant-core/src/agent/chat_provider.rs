@@ -12,7 +12,6 @@
 //! impl ChatProvider for MyVendor {
 //!     fn vendor(&self) -> &str { "myvendor" }
 //!     fn model_prefixes(&self) -> &'static [&'static str] { &["my-model-"] }
-//!     fn models_dev_id(&self) -> Option<&'static str> { Some("myvendor") }
 //! }
 //! // …and in the builtin list:
 //! catalog.register(MyVendor);
@@ -40,12 +39,6 @@ pub trait ChatProvider: Send + Sync {
     fn model_prefixes(&self) -> &'static [&'static str] {
         &[]
     }
-
-    /// models.dev provider id, used for capability + pricing lookups.
-    /// `None` means the catalog has no pricing entry for this vendor.
-    fn models_dev_id(&self) -> Option<&'static str> {
-        None
-    }
 }
 
 /// The OpenAI wire-protocol family — also the path every OpenAI-compatible
@@ -61,9 +54,6 @@ impl ChatProvider for OpenAIVendor {
     }
     fn model_prefixes(&self) -> &'static [&'static str] {
         &["gpt-", "chatgpt-", "o1", "o3", "o4"]
-    }
-    fn models_dev_id(&self) -> Option<&'static str> {
-        Some("openai")
     }
 }
 
@@ -81,9 +71,6 @@ impl ChatProvider for AnthropicVendor {
     }
     fn model_prefixes(&self) -> &'static [&'static str] {
         &["claude-"]
-    }
-    fn models_dev_id(&self) -> Option<&'static str> {
-        Some("anthropic")
     }
 }
 
@@ -166,15 +153,20 @@ impl ProviderCatalog {
         best.map(|(_, v)| v)
     }
 
-    /// models.dev provider id for a vendor, for capability + pricing lookups.
+    /// models.dev provider id for a registered vendor, for capability + pricing
+    /// lookups. The one mapping is `models_dev::provider_to_models_dev`.
     pub fn models_dev_id_for(&self, vendor: &VendorId) -> Option<&'static str> {
         if vendor.is_unknown() {
             return None;
         }
-        self.providers
+        let registered = self
+            .providers
             .iter()
-            .find(|p| VendorId::new(p.vendor()) == *vendor)
-            .and_then(|p| p.models_dev_id())
+            .any(|p| VendorId::new(p.vendor()) == *vendor);
+        if !registered {
+            return None;
+        }
+        crate::models_dev::provider_to_models_dev(vendor.as_str())
     }
 
     pub fn len(&self) -> usize {
@@ -247,9 +239,6 @@ mod tests {
             fn model_prefixes(&self) -> &'static [&'static str] {
                 &["my-model-"]
             }
-            fn models_dev_id(&self) -> Option<&'static str> {
-                Some("myvendor")
-            }
         }
         let mut cat = ProviderCatalog::new();
         assert!(cat.is_empty());
@@ -263,10 +252,8 @@ mod tests {
             cat.infer_vendor("my-model-x").map(|v| v.to_string()),
             Some("myvendor".into())
         );
-        assert_eq!(
-            cat.models_dev_id_for(&VendorId::new("myvendor")),
-            Some("myvendor")
-        );
+        // Pricing needs an entry in `provider_to_models_dev`; registering alone does not add one.
+        assert_eq!(cat.models_dev_id_for(&VendorId::new("myvendor")), None);
     }
 
     #[test]

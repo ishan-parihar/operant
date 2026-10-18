@@ -314,6 +314,30 @@ pub async fn list_agentic_models(provider: &str) -> Vec<String> {
     agentic_ids(&models, provider)
 }
 
+/// Input and output price per million tokens, keyed by model id, for every cached
+/// models.dev row (the first provider listing an id wins). Reads the disk cache
+/// only; empty when there is none.
+pub fn cached_model_prices() -> std::collections::HashMap<String, (f64, f64)> {
+    let mut prices = std::collections::HashMap::new();
+    let Ok(content) = fs::read_to_string(cache_path()) else {
+        return prices;
+    };
+    let Ok(cache) = serde_json::from_str::<ModelsDevCache>(&content) else {
+        return prices;
+    };
+    for m in &cache.models {
+        let (Some(id), Some(input), Some(output)) = (
+            m.get("id").and_then(|v| v.as_str()),
+            m.get("cost_input").and_then(|v| v.as_f64()),
+            m.get("cost_output").and_then(|v| v.as_f64()),
+        ) else {
+            continue;
+        };
+        prices.entry(id.to_string()).or_insert((input, output));
+    }
+    prices
+}
+
 /// Agentic model ids for `provider` read from the on-disk cache only: no network,
 /// any age. Empty when there is no cache or it does not parse.
 pub fn cached_agentic_models(provider: &str) -> Vec<String> {

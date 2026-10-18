@@ -6,7 +6,7 @@
 //!
 //! Ported from `hermes-agent/agent/insights.py`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Datelike, Timelike};
 use rusqlite::params;
@@ -234,7 +234,11 @@ fn compute_overview(sessions: &[SessionRow]) -> OverviewStats {
     let total_input: i64 = sessions.iter().map(|s| s.input_tokens).sum();
     let total_output: i64 = sessions.iter().map(|s| s.output_tokens).sum();
     let total_tokens = total_input + total_output;
-    let total_cost: f64 = sessions.iter().map(estimate_session_cost).sum();
+    let prices = crate::models_dev::cached_model_prices();
+    let total_cost: f64 = sessions
+        .iter()
+        .map(|s| estimate_session_cost(s, &prices))
+        .sum();
 
     OverviewStats {
         total_sessions: n,
@@ -259,6 +263,7 @@ fn compute_overview(sessions: &[SessionRow]) -> OverviewStats {
 
 fn compute_model_breakdown(sessions: &[SessionRow]) -> Vec<ModelStats> {
     let mut map: BTreeMap<String, ModelStats> = BTreeMap::new();
+    let prices = crate::models_dev::cached_model_prices();
     for s in sessions {
         let model = s.model.clone().unwrap_or_else(|| "unknown".to_string());
         let entry = map.entry(model.clone()).or_insert_with(|| ModelStats {
@@ -275,7 +280,7 @@ fn compute_model_breakdown(sessions: &[SessionRow]) -> Vec<ModelStats> {
         entry.output_tokens += s.output_tokens as u64;
         entry.total_tokens += (s.input_tokens + s.output_tokens) as u64;
         entry.tool_calls += s.tool_call_count as usize;
-        entry.estimated_cost_usd += estimate_session_cost(s);
+        entry.estimated_cost_usd += estimate_session_cost(s, &prices);
     }
     let mut result: Vec<ModelStats> = map.into_values().collect();
     result.sort_by_key(|a| std::cmp::Reverse(a.total_tokens));
@@ -303,62 +308,20 @@ fn compute_platform_breakdown(sessions: &[SessionRow]) -> Vec<PlatformStats> {
     result
 }
 
-/// Estimate cost for a session using known model pricing.
-///
-/// Uses a static pricing map for common models (cost per million tokens).
-/// Falls back to $0.00 for unknown models. This matches hermes-agent's
-/// `has_known_pricing` / `estimate_usage_cost` pattern.
-fn estimate_session_cost(session: &SessionRow) -> f64 {
-    let model = match session.model.as_deref() {
-        Some(m) => m,
-        None => return 0.0,
+/// Estimate the cost of a session from the models.dev prices in the disk cache
+/// (`prices`, keyed by bare model id). $0.00 when the model has no listed price.
+fn estimate_session_cost(session: &SessionRow, prices: &HashMap<String, (f64, f64)>) -> f64 {
+    let Some(model) = session.model.as_deref() else {
+        return 0.0;
     };
-
-    // Static pricing map: (input_cost_per_million, output_cost_per_million)
-    // Sourced from models.dev and provider documentation as of 2025.
-    let pricing: Option<(f64, f64)> = match model {
-        // Anthropic Claude
-        m if m.contains("claude-3-opus") => Some((15.0, 75.0)),
-        m if m.contains("claude-3-sonnet") || m.contains("claude-3.5-sonnet") => Some((3.0, 15.0)),
-        m if m.contains("claude-3-haiku") || m.contains("claude-3.5-haiku") => Some((0.25, 1.25)),
-        m if m.contains("claude-4-opus") || m.contains("claude-opus-4") => Some((15.0, 75.0)),
-        m if m.contains("claude-4-sonnet") || m.contains("claude-sonnet-4") => Some((3.0, 15.0)),
-        // OpenAI GPT
-        m if m.contains("gpt-4o") && !m.contains("mini") => Some((2.5, 10.0)),
-        m if m.contains("gpt-4o-mini") => Some((0.15, 0.6)),
-        m if m.contains("gpt-4-turbo") => Some((10.0, 30.0)),
-        m if m.contains("gpt-4") => Some((30.0, 60.0)),
-        m if m.contains("gpt-3.5-turbo") => Some((0.5, 1.5)),
-        m if m.starts_with("o1-preview") => Some((15.0, 60.0)),
-        m if m.starts_with("o1-mini") => Some((3.0, 12.0)),
-        m if m.starts_with("o1") => Some((15.0, 60.0)),
-        m if m.starts_with("o3") && !m.contains("mini") => Some((10.0, 40.0)),
-        m if m.starts_with("o3-mini") => Some((1.1, 4.4)),
-        m if m.starts_with("o4-mini") => Some((1.1, 4.4)),
-        // Google Gemini
-        m if m.contains("gemini-1.5-pro") => Some((1.25, 5.0)),
-        m if m.contains("gemini-1.5-flash") => Some((0.075, 0.3)),
-        m if m.contains("gemini-2.0-flash") => Some((0.1, 0.4)),
-        m if m.contains("gemini-2.5-pro") => Some((1.25, 10.0)),
-        m if m.contains("gemini-2.5-flash") => Some((0.15, 0.6)),
-        // Meta Llama (via providers)
-        m if m.contains("llama-3.1-405b") => Some((3.0, 3.0)),
-        m if m.contains("llama-3.1-70b") => Some((0.59, 0.79)),
-        m if m.contains("llama-3.1-8b") => Some((0.05, 0.08)),
-        // Mistral
-        m if m.contains("mistral-large") => Some((2.0, 6.0)),
-        m if m.contains("mistral-small") => Some((0.1, 0.3)),
-        _ => None,
+    // Session models may carry a provider prefix (`openrouter/anthropic/…`).
+    let bare = model.rsplit('/').next().unwrap_or(model);
+    let Some(&(input_per_m, output_per_m)) = prices.get(model).or_else(|| prices.get(bare)) else {
+        return 0.0;
     };
-
-    match pricing {
-        Some((input_per_m, output_per_m)) => {
-            let input_cost = (session.input_tokens as f64) / 1_000_000.0 * input_per_m;
-            let output_cost = (session.output_tokens as f64) / 1_000_000.0 * output_per_m;
-            input_cost + output_cost
-        }
-        None => 0.0,
-    }
+    let input_cost = (session.input_tokens as f64) / 1_000_000.0 * input_per_m;
+    let output_cost = (session.output_tokens as f64) / 1_000_000.0 * output_per_m;
+    input_cost + output_cost
 }
 
 fn compute_tool_breakdown_from_db(
@@ -709,6 +672,24 @@ fn format_naive(dt: Option<chrono::NaiveDateTime>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_cost_uses_the_catalog_price_and_strips_a_provider_prefix() {
+        let session = SessionRow {
+            id: "s".into(),
+            model: Some("openrouter/claude-x".into()),
+            source: None,
+            started_at: None,
+            ended_at: None,
+            message_count: 0,
+            tool_call_count: 0,
+            input_tokens: 2_000_000,
+            output_tokens: 1_000_000,
+        };
+        let prices = HashMap::from([("claude-x".to_string(), (3.0, 15.0))]);
+        assert!((estimate_session_cost(&session, &prices) - 21.0).abs() < 1e-9);
+        assert_eq!(estimate_session_cost(&session, &HashMap::new()), 0.0);
+    }
 
     #[test]
     fn test_fmt_num() {
