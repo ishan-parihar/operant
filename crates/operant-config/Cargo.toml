@@ -46,7 +46,6 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 [features]
 default = ["schema-export"]
 schema-export = ["dep:schemars"]
-channel-nostr = []
 voice-wake = []
 
 [lints]

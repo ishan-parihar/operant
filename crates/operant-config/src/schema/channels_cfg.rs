@@ -283,12 +283,6 @@ pub struct ChannelsConfig {
     #[display_name = "Mochat"]
     #[description = "Mochat customer service"]
     pub mochat: Option<MochatConfig>,
-    #[cfg(feature = "channel-nostr")]
-    #[nested]
-    #[display_name = "Nostr"]
-    #[description = "Decentralized DMs (NIP-04)"]
-    /// Nostr channel configuration (decentralized DMs, NIP-04).
-    pub nostr: Option<NostrConfig>,
     /// ClawdTalk voice channel configuration.
     #[nested]
     #[display_name = "ClawdTalk"]
@@ -471,11 +465,6 @@ impl ChannelsConfig {
                 Box::new(ConfigWrapper::new(self.qq.as_ref())),
                 self.qq.is_some()
             ),
-            #[cfg(feature = "channel-nostr")]
-            (
-                Box::new(ConfigWrapper::new(self.nostr.as_ref())),
-                self.nostr.is_some(),
-            ),
             (
                 Box::new(ConfigWrapper::new(self.clawdtalk.as_ref())),
                 self.clawdtalk.is_some(),
@@ -540,8 +529,6 @@ impl Default for ChannelsConfig {
             qq: None,
             twitter: None,
             mochat: None,
-            #[cfg(feature = "channel-nostr")]
-            nostr: None,
             clawdtalk: None,
             reddit: None,
             bluesky: None,
@@ -2274,35 +2261,5 @@ impl ChannelConfig for VoiceWakeConfig {
     }
     fn desc() -> &'static str {
         "voice wake word detection"
-    }
-}
-
-/// Nostr channel configuration (NIP-04 + NIP-17 private messages)
-#[cfg(feature = "channel-nostr")]
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Configurable)]
-#[cfg_attr(feature = "schema-export", derive(schemars::JsonSchema))]
-#[prefix = "channels.nostr"]
-pub struct NostrConfig {
-    /// Whether this channel is active. Default: false.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Private key in hex or nsec bech32 format
-    #[secret]
-    pub private_key: String,
-    /// Relay URLs (wss://). Defaults to popular public relays if omitted.
-    #[serde(default = "default_nostr_relays")]
-    pub relays: Vec<String>,
-    /// Allowed sender public keys (hex or npub). Empty = deny all, "*" = allow all
-    #[serde(default)]
-    pub allowed_pubkeys: Vec<String>,
-}
-
-#[cfg(feature = "channel-nostr")]
-impl ChannelConfig for NostrConfig {
-    fn name() -> &'static str {
-        "Nostr"
-    }
-    fn desc() -> &'static str {
-        "Nostr DMs"
     }
 }

@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`channel-nostr` placeholder feature removed (iter-939).** No crate enabled it, so its gated
+  `NostrConfig`, impl, relays helper, and `channels.nostr` field were never compiled into a shipped build.
+  The README lists `voice-wake` as the only remaining empty feature flag.
 - **Memory factory removed (iter-938).** `create_memory`, `create_memory_with_storage_and_routes`,
   `create_memory_for_migration`, and `create_response_cache` had no caller outside `operant-memory`. The
   modules only they reached go too: `hygiene` (the purge pass), `audit` (`AuditedMemory`), and

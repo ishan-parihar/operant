@@ -2805,6 +2805,12 @@ once the creator is known.
 
 ### R40-25 — 7 channel adapters are compiled into every binary but have no dispatch arm anywhere (iter-451, measured)
 
+**Status (iter-939): superseded.** The `channel-*` features and `operant-channels` are no longer in the
+workspace, so the 23-feature and gateway-forwarding findings below describe a tree that no longer exists.
+The one feature left, `channel-nostr`, was an empty placeholder with no crate enabling it. Its gated
+`NostrConfig`, impl, relays helper, and field go (iter-939). The rest of this entry is the history of how
+that was measured.
+
 `operant-cli's` `default = ["agent-runtime", "gateway"]`, and `agent-runtime`
 enables **23** `channel-*` features. Of those, 9 are referenced from
 `operant-cli/src`. The remaining 14 looked dead — and **that first measurement

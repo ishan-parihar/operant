@@ -8,7 +8,7 @@ Holds the config schema (`src/schema/`, with the full `Config` type), secret sto
 
 ## Configuration
 
-- Cargo features: `default = ["schema-export"]`, which enables `schemars`. `channel-nostr` and `voice-wake` are empty feature flags.
+- Cargo features: `default = ["schema-export"]`, which enables `schemars`. `voice-wake` is an empty feature flag.
 - `DEFAULT_AGENTMEMORY_VERSION` (`src/lib.rs`) is the pinned `@agentmemory` package version. It is overridable with `[memory] agentmemory_version` or the `AGENTMEMORY_VERSION` environment variable.
 
 ## Extension points

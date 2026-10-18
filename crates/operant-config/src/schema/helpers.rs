@@ -1094,17 +1094,6 @@ pub(crate) fn default_voice_wake_max_capture_secs() -> u32 {
     30
 }
 
-#[cfg(feature = "channel-nostr")]
-/// Default public Nostr relay URLs used when the user omits `channels.nostr.relays`.
-pub fn default_nostr_relays() -> Vec<String> {
-    vec![
-        "wss://relay.damus.io".to_string(),
-        "wss://nos.lol".to_string(),
-        "wss://relay.primal.net".to_string(),
-        "wss://relay.snort.social".to_string(),
-    ]
-}
-
 pub(crate) fn default_notion_poll_interval() -> u64 {
     5
 }

@@ -627,8 +627,6 @@ async fn config_toml_roundtrip() {
             qq: None,
             twitter: None,
             mochat: None,
-            #[cfg(feature = "channel-nostr")]
-            nostr: None,
             clawdtalk: None,
             reddit: None,
             bluesky: None,
@@ -1831,8 +1829,6 @@ async fn channels_with_imessage_and_matrix() {
         qq: None,
         twitter: None,
         mochat: None,
-        #[cfg(feature = "channel-nostr")]
-        nostr: None,
         clawdtalk: None,
         reddit: None,
         bluesky: None,
@@ -2337,8 +2333,6 @@ async fn channels_with_whatsapp() {
         qq: None,
         twitter: None,
         mochat: None,
-        #[cfg(feature = "channel-nostr")]
-        nostr: None,
         clawdtalk: None,
         reddit: None,
         bluesky: None,
