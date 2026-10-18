@@ -80,6 +80,6 @@ copied from each page's first heading.
 - [BUGS.md](BUGS.md) — BUGS (superseded)
 - [TODO.md](TODO.md) — Operant TODO
 - [RUNBOOK.md](RUNBOOK.md) — Runbook — exact commands, environment traps
-- [RECORDS.md](RECORDS.md) — <!-- genome:zone records sha=6d994216bc7f -->
+- [RECORDS.md](RECORDS.md) — Records
 - [MAINTAINERS.md](MAINTAINERS.md) — Maintainers
 - [MEMORY.md](MEMORY.md) — § [id: distilled_1778849101_0_17011361790128351221, type: fact, importance: 90, tags: distilled,long_term, created_at: 1778849101, last_accessed: 1778849101]
