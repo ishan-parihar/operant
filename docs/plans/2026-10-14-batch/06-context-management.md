@@ -88,6 +88,14 @@ because it fixes defects.
     up to the previous turn's last message is byte-identical;
   - the ladder never produces a non-system message before the first system message.
 
+**Status (2026-10-18, checked against the code):** P0 is in place. Defect 1 (volatile
+block before history) and defect 2 (ladder insert at index 0) are fixed: the volatile
+block rides at the tail as a `<turn_context>` prefix on the latest user message
+(`agent/run.rs`, build_messages and the turn injection), and the ladder inserts after the
+system prefix. Telemetry is in `agent/clients/cache_monitor.rs`. Defect 3 is still open:
+`micro_compact` is opt-in (`OPERANT_MICRO_COMPACTION`) and fires at the 40% soft threshold
+without a bust permission, which is P1's job.
+
 ### P1: bust-permission scheduler (both engines)
 
 - Add `BustPermission` computed once per request in `build_messages`:

@@ -205,9 +205,11 @@ mocked, and live Anthropic and Google verification (no key here).
 - **P4.1** D-4 regression test: none planned. The cron agent passes `false`; the spawn is
   side-effecting with no seam to count schedulers. Revisit only if a second caller
   appears.
-- **P4.2** Batch-06 P1, `BustPermission` / `ContextExhausted` at 95%. Not started. The
-  largest unstarted correctness item. Needs its own plan before code. Source:
-  `docs/audit/2026-10-16-operant-audit/11-batch-redirection.md` (P1 row).
+- **P4.2** Batch-06 P1, `BustPermission` / `ContextExhausted` at 95%. Not started; the
+  plan already exists (`docs/plans/2026-10-14-batch/06-context-management.md`, P1), so no new
+  plan is needed. P0 is in place (checked iter-928). The largest unstarted correctness
+  item; plan 06 P1 is its spec. Source: `docs/audit/2026-10-16-operant-audit/11-batch-redirection.md`
+  (P1 row).
 - **P4.3** Batch-06 P3/P4 (historian, `ctx_reduce`), personal mode. Still in TODO.md
   Review.
 - **P4.4** Anthropic live turn (B6). Blocked until a key is available; the P1 picker
