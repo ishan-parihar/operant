@@ -967,7 +967,7 @@ per-number routing hints (inbound messages still arrive with `platform =
 "whatsapp"`), so it's cosmetic; flagged as the same dead-config pattern as
 R14-3/R14-4 for a future sweep of `with_*` setters vs callers.
 
-### R15-1 — the operant-channels crate (55K lines) is dead-wired (FLAGGED, major)
+### R15-1 — the operant-channels crate (55K lines) is dead-wired (RESOLVED — the crate was deleted in iter-892, `06aa4443`)
 
 `operant-channels/src/orchestrator/mod.rs::start_channels` — the 14K-line
 orchestrator with the full dispatch machinery (debouncer, per-sender
@@ -3905,7 +3905,7 @@ failed. That is a legal interleaving, not a defect in the budget.
 - **Verified**: lib gate 2016/0, 6 warm runs clean, and the assertion is now
   exact rather than a `>` threshold, so it has teeth a `>` never had.
 
-### R42-10 — Telegram bot tokens leaked via unredacted `reqwest::Error` Display (FIXED, UNDEPLOYED)
+### R42-10 — Telegram bot tokens leaked via unredacted `reqwest::Error` Display (FIXED, DEPLOYED with iter-926)
 
 `crates/operant-core/src/gateway/telegram.rs` logged two `reqwest::Error`
 values with `{}`. `reqwest::Error`'s `Display` embeds the full request URL, and
@@ -3939,6 +3939,11 @@ the bot had echoed it. This was found by reading the file after the redactor
 sweep, not by any test.
 
 ### R42-12 — DEPLOYMENT BLOCKED: another writer is mid-flight in `operant-harness`
+
+**Status (iter-928): RESOLVED.** The blocker cleared, `operant-harness` builds, and the release
+builds from iter-926 onward include R42-10 and R42-11 (both are ancestors of `be6d6f21`). The running
+gateway's executable matched the installed binary after the iter-926 and iter-927 restarts. The
+paragraphs below are the history at the time, not the current state.
 
 The redaction and content fixes (R42-10, R42-11) are written, compile-verified
 and gated in `operant-core` (clippy `-D warnings` 0, lib 2016/0), but **not
