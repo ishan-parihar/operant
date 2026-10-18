@@ -12,7 +12,6 @@
 - [Requirements](#requirements)
 - [Development](#development)
 - [License](#license)
-- [☕ Support & Sponsorship](#-support--sponsorship)
 
 
 [![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
