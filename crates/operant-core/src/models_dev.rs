@@ -148,10 +148,21 @@ async fn fetch_from_network_uncached()
         return Err(format!("models.dev returned {}", resp.status()));
     }
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let (models, providers) = normalize_catalog(&body);
+    let body = resp.bytes().await.map_err(|e| e.to_string())?;
+    parse_catalog(&body)
+}
+
+/// Parse a fetched models.dev body. Errors name the body's size, so a truncated
+/// or HTML response reads differently from a schema change in the status notice.
+fn parse_catalog(body: &[u8]) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>), String> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| format!("models.dev body ({} bytes) is not JSON: {e}", body.len()))?;
+    let (models, providers) = normalize_catalog(&value);
     if models.is_empty() {
-        return Err("models.dev catalog had no models".to_string());
+        return Err(format!(
+            "models.dev catalog had no models ({} bytes)",
+            body.len()
+        ));
     }
     Ok((models, providers))
 }
@@ -487,5 +498,14 @@ mod tests {
         let (mut models, _) = normalize_catalog(&nested_fixture());
         models.insert(0, serde_json::json!({"id": "orphan-without-provider"}));
         assert!(match_capabilities(&models, "anthropic", "claude-haiku-4-5").is_some());
+    }
+
+    #[test]
+    fn a_non_json_body_reports_its_size() {
+        let err = parse_catalog(b"<html>oops</html>").unwrap_err();
+        assert!(
+            err.contains("17 bytes") && err.contains("not JSON"),
+            "{err}"
+        );
     }
 }

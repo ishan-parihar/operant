@@ -249,7 +249,9 @@ impl TuiApp {
 
         // Warms the models.dev disk cache that the default model and the context
         // window read. A failed fetch leaves the cache as it was.
-        let _ = operant_core::models_dev::fetch_models_dev(false).await;
+        if let Err(e) = operant_core::models_dev::fetch_models_dev(false).await {
+            tracing::debug!("models.dev warm-up skipped: {e}");
+        }
         // Force a context-window-size refresh so /context shows real numbers
         // on the first frame instead of "0 / 0" (Bug #13 from iter-82 audit).
         // After the fetch: on a cold models.dev cache the window reads the
@@ -699,7 +701,9 @@ impl TuiApp {
         if !is_mock {
             // Warms the models.dev disk cache that the default model and the context
             // window read. A failed fetch leaves the cache as it was.
-            let _ = operant_core::models_dev::fetch_models_dev(false).await;
+            if let Err(e) = operant_core::models_dev::fetch_models_dev(false).await {
+                tracing::debug!("models.dev warm-up skipped: {e}");
+            }
         }
         self.app.refresh_context_window_size();
 

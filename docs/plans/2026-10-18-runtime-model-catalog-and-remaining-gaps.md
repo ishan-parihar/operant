@@ -143,6 +143,11 @@ touches code), per AGENTS.md.
 - **P0.1** Confirm the models.dev endpoint and shape live. Record a fixture under
   `crates/operant-core/tests/fixtures/`. Make `fetch_from_network_uncached` log the
   HTTP status and body length on failure, not silently return `Err` into a `let _`.
+  **Status (iter-928):** the body is read as bytes and a non-JSON or empty-catalog error
+  names its byte count (`parse_catalog`, test `a_non_json_body_reports_its_size`). The two
+  `let _` warm-up calls in `tui_app.rs` log at debug. Not done: a recorded fixture (the
+  existing models.dev tests already use rows from the real hermes cache), and the live
+  endpoint confirmation, which needs network access this machine lacks.
 - **P0.2** Rewrite `match_capabilities` and `get_model_capabilities` to read the nested
   schema (`limit.context`, `limit.output`, `tool_call`, `modalities.input`,
   `cost.input` / `cost.output` per million). Add the fixture test.
@@ -228,6 +233,16 @@ mocked, and live Anthropic and Google verification (no key here).
 - **P6.3** Dead config: R13-3 (`run_gateway` has no callers), R13-4
   (`[memory] audit_enabled` never applied), R13-5 (response cache is dead config). Each
   needs wire-or-delete.
+  **Status (iter-928 investigation):** R13-3 is gone (`run_gateway` no
+  longer exists in `crates/`). R13-4 and R13-5 are confirmed inert, and the wiring is not
+  local. `[memory] audit_enabled` and `response_cache_enabled` are read only by
+  `operant_memory::create_memory_with_storage_and_routes` (and `create_response_cache`,
+  `AuditedMemory`). No production caller of any `create_memory*` factory exists. Production
+  memory runs through `operant-cli` `load_memory_manager` (`main.rs:2289`). The OpenRouter
+  `response_cache` key (`operant-cli/src/config.rs:463`) has no reader. Owner decision
+  needed: route production memory through the factory and wire both flags (behavior change;
+  `AuditedMemory` also drops `purge_namespace`, `purge_session`, `reindex`, `export` when
+  wrapped), or delete the factory-only modules and their config keys.
 - **P6.4** R40-25: 14 of 23 channel features have no dispatch arm. Prune from default
   builds or wire.
 - **P6.5** Corpus drift: `command-palette`, `connect-dialog`, `context-viz`,

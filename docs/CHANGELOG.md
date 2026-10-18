@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-928 — models.dev failures say what they received (plan P0.1).** A failed
+  models.dev fetch reported only a serde error or "had no models", with no size, so a
+  truncated or HTML response looked like a schema change. The body is now parsed from
+  bytes by `parse_catalog`, and the error names the byte count. The two startup warm-up
+  fetches in the TUI logged nothing on failure; they now log at debug. Not changed: the
+  live endpoint is still unconfirmed (no network here).
+
 - **iter-927 — one lock for the process-global palette (plan P6.11).** The palette tests
   held two locks over one global. `theme_colors::tests::ACTIVE_LOCK` serialized the
   theme tests and the render test, and the vendored `STYLE_TEST_LOCK` serialized the
