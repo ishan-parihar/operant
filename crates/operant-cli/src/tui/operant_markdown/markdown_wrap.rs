@@ -2,7 +2,6 @@
 // License, Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; only
 // the upstream-crate import was re-rooted. See operant_markdown/mod.rs for scope.
 
-use crate::tui::vendor::style::color::rgb;
 use ratatui::prelude::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -546,16 +545,4 @@ pub fn progress_bar(progress: f32, width: usize) -> String {
     std::iter::repeat_n('█', filled)
         .chain(std::iter::repeat_n('░', empty))
         .collect()
-}
-
-pub fn progress_line(label: &str, progress: f32, width: usize) -> Line<'static> {
-    let bar = progress_bar(progress, width.saturating_sub(label.len() + 3));
-    let pct = (progress * 100.0) as u8;
-
-    Line::from(vec![
-        Span::styled(label.to_string(), Style::default().dim()),
-        Span::raw(" "),
-        Span::styled(bar, Style::default().fg(rgb(129, 199, 132))),
-        Span::styled(format!(" {}%", pct), Style::default().dim()),
-    ])
 }

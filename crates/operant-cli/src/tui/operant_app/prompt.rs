@@ -23,15 +23,6 @@ pub const SWARM_EFFORT: &str = "swarm";
 /// the agent knows to inject [`SWARM_DEEP_EFFORT_DIRECTIVE`].
 pub const SWARM_DEEP_EFFORT: &str = "swarm-deep";
 
-/// System-prompt directive injected when the active reasoning effort is
-/// [`SWARM_EFFORT`]. Instructs the agent to lean on the swarm tooling.
-pub const SWARM_EFFORT_DIRECTIVE: &str = "# Swarm Effort\n\nSwarm orchestration is enabled. Your root reasoning effort is configured independently from worker effort. For any non-trivial task, decompose the work and use the `swarm` tool to spawn and coordinate parallel agents (spawn workers with concrete prompts, assign tasks, and collect their reports) instead of doing everything yourself in one thread. Prefer parallelizing independent subtasks across swarm members, and use a coordinator/plan when the work has multiple stages. Only skip the swarm for trivial, single-step requests.";
-
-/// System-prompt directive injected when the active reasoning effort is
-/// [`SWARM_DEEP_EFFORT`]. Instructs the agent to run the comprehensive DAG-first
-/// task-graph workflow.
-pub const SWARM_DEEP_EFFORT_DIRECTIVE: &str = "# Deep Task Graph\n\nThe deep task-graph swarm workflow is enabled. Your root reasoning effort is configured independently from worker effort. Treat the task DAG as the primary object, not ad hoc agent chat. Workflow:\n\n1. Seed a graph with `swarm task_graph` using `mode: \"deep\"`: lay out nodes (kind explore|implement|verify|fix|synthesize) and `depends_on` edges instead of answering directly. (At this effort the server already defaults the plan to deep, but pass `mode: \"deep\"` explicitly anyway.) The engine auto-inserts a plan-wide root gate over your seed: the plan cannot finish until a final adversarial audit passes, and that audit can inject new top-level work.\n2. For any node that is too big, `swarm expand_node` to decompose it into a child sub-DAG (you become its planner/integrator). In deep mode a critique/verify gate is auto-inserted before a composite node can close. The graph is EXPECTED to outgrow its seed, often by several times: growth (expansions and gate-injected gaps) is the system working, not scope creep. plan_status reports seeded-vs-grown counts.\n3. Finish each node with `swarm complete_node` and a typed artifact: `findings`, `evidence` (file:line / commit refs), `validation`, `open_questions`, a required `confidence` (low|medium|high; report low honestly, it routes follow-up work to shore up that scope), and an honest `what_i_did_not_check`. Downstream nodes are hydrated with these artifacts automatically. There is no other way to close a deep node: a turn ending without expand_node/complete_node re-queues the node to a fresh worker and fails it on repeat.\n4. When a critique/verify gate finds gaps or failures, use `swarm inject_gap` to add new nodes; the parent cannot close until they drain. A passing gate artifact must account for EVERY node it audited by id (the server rejects rubber stamps), and cannot pass over a low-confidence sibling without addressing it explicitly, so treat low-confidence siblings as priority probe targets.\n5. Use `swarm run_plan` to drive the graph to completion. It returns immediately and drives the plan as a background task (progress card + wake on completion), so keep working or answer the user while it runs; check `swarm plan_status` or `bg` for progress. Deep mode fans out wide automatically (many workers run in parallel, bounded only by the swarm member cap), so prefer decomposing into MANY independent sibling nodes rather than a few serial ones: keep the ready set wide so run_plan can dispatch lots of agents at once. Only add `depends_on` edges for real data dependencies.\n\nComprehensiveness is structural: prefer decomposition + gates over a single thorough answer, so it is very unlikely any nook or cranny is missed.";
-
 /// Returns true when `effort` is either swarm sentinel (light or deep),
 /// case-insensitive. Providers resolve their configured root reasoning level.
 pub fn is_swarm_effort(effort: &str) -> bool {
@@ -118,56 +109,5 @@ impl ContextInfo {
     /// Rough estimate of tokens (chars / 4 is a common approximation)
     pub fn estimated_tokens(&self) -> usize {
         self.total_chars / 4
-    }
-
-    pub fn prompt_prefix_chars(&self) -> usize {
-        self.system_prompt_chars
-            + self.session_context_chars
-            + self.project_agents_md_chars
-            + self.global_agents_md_chars
-            + self.skills_chars
-            + self.selfdev_chars
-            + self.memory_chars
-            + self.prompt_overlay_chars
-            + self.preferred_tools_chars
-            + self.tool_defs_chars
-    }
-
-    pub fn prompt_prefix_tokens(&self) -> usize {
-        self.prompt_prefix_chars() / 4
-    }
-
-    pub fn tool_definition_tokens(&self) -> usize {
-        self.tool_defs_chars / 4
-    }
-
-    /// Get breakdown as (label, chars, icon) tuples for display
-    pub fn breakdown(&self) -> Vec<(&'static str, usize, &'static str)> {
-        let mut parts = vec![
-            ("sys", self.system_prompt_chars, "⚙"),
-            ("session", self.session_context_chars, "🌍"),
-        ];
-        if self.has_project_agents_md {
-            parts.push(("agents", self.project_agents_md_chars, "📋"));
-        }
-        if self.has_global_agents_md {
-            parts.push(("~agents", self.global_agents_md_chars, "📋"));
-        }
-        if self.skills_chars > 0 {
-            parts.push(("skills", self.skills_chars, "🔧"));
-        }
-        if self.selfdev_chars > 0 {
-            parts.push(("dev", self.selfdev_chars, "🛠"));
-        }
-        if self.memory_chars > 0 {
-            parts.push(("mem", self.memory_chars, "🧠"));
-        }
-        if self.prompt_overlay_chars > 0 {
-            parts.push(("overlay", self.prompt_overlay_chars, "🧩"));
-        }
-        if self.preferred_tools_chars > 0 {
-            parts.push(("tools", self.preferred_tools_chars, "🧰"));
-        }
-        parts
     }
 }

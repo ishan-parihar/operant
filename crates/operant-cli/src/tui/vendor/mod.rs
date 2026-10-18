@@ -41,6 +41,5 @@
 // at that point no `pub` item in `style` should be dead, so the suppressor and this comment go
 // away together. Tracked in docs/JCODE-VISUAL-LAYER-IMPLEMENTATION-PLAN.md §2 and
 // docs/PLAN-TUI-OVERHAUL.md §3, tasks 1.6 and 2.5.
-#![allow(dead_code, unused_imports)]
 
 pub mod style;

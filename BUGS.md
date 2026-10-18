@@ -30,6 +30,24 @@
 
 Open under this section: the context engine's `assemble` runs every turn, not gated by
 the bust permission; `/ctx-flush` (named in the plan) does not exist.
+## OPEN — TUI legacy purge residue (owner decisions, 2026-10-18)
+
+The dead-code purge of the `operant-cli` TUI tree kept the items below on purpose. Each one is
+reported dead by the compiler, and removing it would change behaviour or needs a design call.
+The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the warning gate stays green.
+
+- [ ] **Device-auth flow cannot finish.** `device_auth_dialog.rs` reports the variants `WaitingForCode`,
+  `ShowingCode`, `BrowserAuth`, `Success`, and `Error` as never constructed, and the fields `device_code`
+  and `interval` as never read. Wire the flow to produce those states, or delete the dead branches.
+- [ ] **OAuth token fields unused.** `adapter_types/auth.rs:16`: `StoredCredential::OAuthToken` fields
+  `refresh` and `expires` are never read. Wire token refresh and expiry, or drop the fields.
+- [ ] **Event and notification variants never built.** `notifications.rs:16` (`Success`),
+  `bridge_state.rs:19` (`Reconnecting`, `Failed`, `OutboundOnly`), `debug/event_bus.rs:28` (`Mouse`,
+  `Resize`, `Paste`, `OverlayOpened`, `OverlayClosed`), `mcp_view.rs:28` (`Error`), and
+  `dialogs/permission.rs:35` (`Bash`, `PowerShell`, `FileRead`, `FileWrite`).
+- [ ] **Legacy header kept.** `operant_ui/ui_header.rs` (1811 lines) is live: `operant_ui/mod.rs` draws
+  the header from it. It was named as legacy in the 2026-10-18 TUI purge request. Replacing it with a
+  jcode / oh-my-pi style header is a design decision for the owner.
 
 ## OPEN — Gateway turn concurrency (audit plan 06A — LOCKED iter-864, residual below)
 

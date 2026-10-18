@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hints, star/donate CTA epilogue gated by `--no-cta`, referencing
   `operant donate`); README badge band cleaned to the CI badge.
 
+### Removed
+
+- **TUI legacy purge — dead code removed from the `operant-cli` TUI tree (2026-10-18).**
+  684 items the compiler reported dead in both the production and the test build were
+  deleted, with the impl blocks, nested items, and trait-method overrides that depended
+  on them. The blanket and per-item `dead_code` suppressions were stripped so the compiler
+  report is visible again; `tui/mod.rs` keeps the module-level expectations from HEAD.
+  Nothing live changed: both builds compile with 0 errors, and
+  `cargo test -p operant-cli --bin operant` passes 1596 tests (7 ignored), the same count
+  as before. Kept on purpose: `operant_ui/ui_header.rs`, the live header renderer; replacing
+  it is an owner decision. The 60 `dead_code` warnings that remain (test-only
+  helpers and never-constructed variants/fields) are tracked in
+  `.ci/clippy-allowlist.txt` and in `BUGS.md`.
+
 ### Fixed
 
 - **iter-930 — settings.json survives upgrades and failed writes.** `Settings` had no

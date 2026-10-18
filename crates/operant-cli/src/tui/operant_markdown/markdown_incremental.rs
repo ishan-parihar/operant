@@ -51,19 +51,6 @@ impl IncrementalMarkdownRenderer {
         with_streaming_render_context(|| self.update_internal(full_text))
     }
 
-    pub fn debug_memory_profile(&self) -> serde_json::Value {
-        let rendered_lines_estimate_bytes = estimate_lines_bytes(&self.rendered_lines);
-        let rendered_text_bytes = self.rendered_text.capacity();
-        serde_json::json!({
-            "rendered_lines_count": self.rendered_lines.len(),
-            "rendered_lines_estimate_bytes": rendered_lines_estimate_bytes,
-            "rendered_text_bytes": rendered_text_bytes,
-            "last_checkpoint": self.last_checkpoint,
-            "lines_at_checkpoint": self.lines_at_checkpoint,
-            "total_estimate_bytes": rendered_lines_estimate_bytes + rendered_text_bytes,
-        })
-    }
-
     fn update_internal(&mut self, full_text: &str) -> Vec<Line<'static>> {
         // Fast path: text unchanged. Not taken while a deferred mermaid
         // placeholder is baked into the cached lines and the deferred render
@@ -229,25 +216,6 @@ impl IncrementalMarkdownRenderer {
             let prefix_lines =
                 render_markdown_with_width(&full_text[..new_checkpoint], self.max_width);
             self.lines_at_checkpoint = prefix_lines.len();
-        }
-    }
-
-    /// Reset the renderer state
-    pub fn reset(&mut self) {
-        self.rendered_lines.clear();
-        self.rendered_text.clear();
-        self.last_checkpoint = 0;
-        self.lines_at_checkpoint = 0;
-        self.checkpoint_needs_separator = false;
-        self.rendered_mermaid_pending = false;
-        self.rendered_mermaid_epoch = 0;
-    }
-
-    /// Update width constraint, resets if changed
-    pub fn set_width(&mut self, max_width: Option<usize>) {
-        if self.max_width != max_width {
-            self.max_width = max_width;
-            self.reset();
         }
     }
 }

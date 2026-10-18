@@ -48,40 +48,17 @@ use super::color_support::rgb;
 // call sites only ever ask `.is_some()`.
 #[allow(unused_imports)] // re-export: engine-side hooks consumed at W6
 pub use crate::tui::operant_app::mermaid_inline::{
-    InlineFitReadiness, TERMINAL_IMAGE_FALLBACK_NOTE, current_preferred_aspect_ratio_bucket,
-    get_cached_path, inline_fit_geometry, inline_fit_geometry_upscaled, inline_fit_readiness,
-    inline_image_dims, inline_image_id, inline_image_is_materialized, is_video_export_mode,
-    materialize_inline_image, materialize_inline_image_by_id, mermaid_inline_expand_epoch,
-    prewarm_inline_fit_state, rediscover_external_image, rediscover_inline_image,
-    register_inline_level_geometries, set_log_hooks, set_mermaid_inline_expand_level,
-    set_render_completed_hook, text_image_fallback_note_line, uses_text_image_fallback,
+    TERMINAL_IMAGE_FALLBACK_NOTE, current_preferred_aspect_ratio_bucket, inline_fit_geometry,
+    inline_fit_geometry_upscaled, inline_image_dims, inline_image_id, inline_image_is_materialized,
+    is_video_export_mode, mermaid_inline_expand_epoch, register_inline_level_geometries,
+    set_mermaid_inline_expand_level, text_image_fallback_note_line, uses_text_image_fallback,
 };
 
 const INLINE_IMAGE_MARKER_PREFIX: &str = "\x00IIMG:";
 const INLINE_IMAGE_MARKER_SUFFIX: &str = ":END";
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum RenderResult {
-    Image {
-        hash: u64,
-        path: std::path::PathBuf,
-        width: u32,
-        height: u32,
-    },
-    Error(String),
-}
-
 pub fn is_mermaid_lang(lang: &str) -> bool {
     lang.eq_ignore_ascii_case("mermaid") || lang.eq_ignore_ascii_case("mmd")
-}
-
-pub fn image_protocol_available() -> bool {
-    false
-}
-
-pub fn native_image_protocol_available() -> bool {
-    false
 }
 
 #[cfg(test)]
@@ -97,52 +74,6 @@ pub fn get_font_size() -> Option<(u16, u16)> {
 /// the epoch never advances.
 pub fn deferred_render_epoch() -> u64 {
     0
-}
-
-/// No-op: without the mermaid renderer there is no shared deferred epoch.
-pub fn notify_deferred_render_completed() {}
-
-pub fn render_mermaid_deferred_with_stream_scope(
-    _content: &str,
-    _terminal_width: Option<u16>,
-    _stream_sequence: u64,
-) -> Option<RenderResult> {
-    Some(RenderResult::Error(
-        "Mermaid rendering is disabled".to_string(),
-    ))
-}
-
-pub fn render_mermaid_deferred_with_registration(
-    _content: &str,
-    _terminal_width: Option<u16>,
-    _register_active: bool,
-) -> Option<RenderResult> {
-    Some(RenderResult::Error(
-        "Mermaid rendering is disabled".to_string(),
-    ))
-}
-
-pub fn render_mermaid_untracked(_content: &str, _terminal_width: Option<u16>) -> RenderResult {
-    RenderResult::Error("Mermaid rendering is disabled".to_string())
-}
-
-pub fn render_mermaid_sized(_content: &str, _terminal_width: Option<u16>) -> RenderResult {
-    RenderResult::Error("Mermaid rendering is disabled".to_string())
-}
-
-pub fn set_streaming_preview_diagram(
-    _hash: u64,
-    _width: u32,
-    _height: u32,
-    _label: Option<String>,
-) {
-}
-
-pub fn result_to_lines(result: RenderResult, _max_width: Option<usize>) -> Vec<Line<'static>> {
-    match result {
-        RenderResult::Image { .. } => Vec::new(),
-        RenderResult::Error(message) => vec![Line::from(message)],
-    }
 }
 
 fn first_content_span<'a>(line: &'a Line<'_>) -> Option<&'a str> {
@@ -199,13 +130,6 @@ pub fn register_external_image(_path: &std::path::Path, _width: u32, _height: u3
     0
 }
 
-pub fn install_operant_mermaid_hooks() {
-    // [port-excision] upstream (tui/mermaid.rs:45-:56) wired logging, the
-    // render-completed bus hook and the process-memory snapshot into the
-    // mermaid engine; the fallback has no engine hooks to install, and the
-    // MermaidRenderCompleted publish already happens at the ui_inline_image
-    // call sites.
-}
 // ---- engine-arm widget/runtime surface (signatures verbatim @ 0a9dc7805) ----
 
 /// Upstream lib.rs:71 `RenderProfile::from_preferred_aspect_ratio` buckets a
@@ -220,15 +144,6 @@ pub fn preferred_aspect_ratio_bucket(_ratio: Option<f32>) -> Option<u16> {
 pub fn with_preferred_aspect_ratio<R>(_ratio: Option<f32>, f: impl FnOnce() -> R) -> R {
     f()
 }
-
-/// Upstream lib.rs:1553 — clears the image/fitted-source/active-diagram state.
-/// All three are engine-owned; the fallback keeps no image state to clear.
-pub fn clear_image_state() {}
-
-/// Upstream mermaid_runtime.rs:423 — probes the terminal for an image protocol
-/// and starts the picker. There is no picker and `image_protocol_available()`
-/// is `false`, so there is nothing to probe.
-pub fn init_picker() {}
 
 /// Upstream mermaid_runtime.rs:473. Returns `None` because no picker exists
 /// (see the `ProtocolType` port-decision above).
@@ -247,10 +162,6 @@ pub fn set_video_export_mode(_enabled: bool) {}
 pub fn get_cached_png(_hash: u64) -> Option<(std::path::PathBuf, u32, u32)> {
     None
 }
-
-/// Upstream mermaid_cache_render.rs:601 — drops every cache entry derived from
-/// `content`. No render cache exists.
-pub fn evict_render_cache_for_content(_content: &str) {}
 
 /// Upstream mermaid_widget.rs:301 — draws the cached image scaled to fit.
 /// No cached image exists, so nothing is drawn and the caller's layout budget

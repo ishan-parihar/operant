@@ -96,7 +96,6 @@ impl Sink {
     /// The column as the guard test spells it, so the assertion reads like the
     /// table does.
     // Read by the paint-order guard test only.
-    #[allow(dead_code)]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Sink::Frame => "frame",
@@ -134,7 +133,6 @@ type PaintFn = fn(&mut Frame, &App, &mut FrameCtx);
 // `name` and `sink` are the row's identity and its sink column. The paint path
 // reads neither — they are carried for the paint-order guard test and for
 // debugging output — so the non-test build sees them as unread.
-#[allow(dead_code)]
 pub(crate) struct Entry {
     /// The surface's identity. Carried for the guard test and for debugging
     /// output; the paint path never reads it.

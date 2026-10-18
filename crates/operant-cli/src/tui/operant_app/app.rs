@@ -23,16 +23,9 @@ pub use crate::tui::operant_app::helpers;
 #[allow(unused_imports)] // re-export: consumer lands at the cutover (W4 pickers)
 use crate::tui::operant_app::message::ConnectionPhase;
 use crate::tui::operant_app::prompt::swarm_root_reasoning_effort;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub(crate) const COMMAND_SUGGESTION_VISIBLE_LIMIT: usize = 8;
-
-fn active_runtime_provider_key() -> Option<String> {
-    std::env::var("OPERANT_RUNTIME_PROVIDER")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-}
 
 /// Current processing status
 #[derive(Clone, Default, Debug)]
@@ -51,42 +44,6 @@ pub enum ProcessingStatus {
     WaitingForNetwork { listener: String },
     /// Executing a tool
     RunningTool(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RemoteStartupPhase {
-    StartingServer,
-    Connecting,
-    LoadingSession,
-    WaitingForReload,
-    Reconnecting { attempt: u32 },
-}
-
-impl RemoteStartupPhase {
-    pub(crate) fn header_label(&self) -> String {
-        match self {
-            Self::StartingServer => "starting server…".to_string(),
-            Self::Connecting => "connecting to server…".to_string(),
-            Self::LoadingSession => "loading session…".to_string(),
-            Self::WaitingForReload => "waiting for reload…".to_string(),
-            Self::Reconnecting { attempt } => format!("reconnecting ({attempt})…"),
-        }
-    }
-
-    pub(crate) fn header_label_with_elapsed(&self, elapsed: Duration) -> String {
-        let base = self.header_label();
-        if elapsed < Duration::from_secs(1) {
-            return base;
-        }
-
-        let elapsed_str = if elapsed.as_secs() < 60 {
-            format!("{}s", elapsed.as_secs())
-        } else {
-            format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
-        };
-
-        format!("{base} {elapsed_str}")
-    }
 }
 
 #[derive(Clone, Default)]
@@ -147,23 +104,6 @@ impl CopyBadgeUiState {
         self.expand_feedback_until
             .is_some_and(|expires_at| expires_at > now)
     }
-}
-
-/// Result from running the TUI
-#[derive(Debug, Default)]
-pub struct RunResult {
-    /// Session ID to reload (hot-reload, no rebuild)
-    pub reload_session: Option<String>,
-    /// Session ID to rebuild (full git pull + cargo build + tests)
-    pub rebuild_session: Option<String>,
-    /// Session ID to update (download from GitHub releases and reload)
-    pub update_session: Option<String>,
-    /// Session ID to restart (exec into current binary, no build)
-    pub restart_session: Option<String>,
-    /// Exit code to use (for canary wrapper communication)
-    pub exit_code: Option<i32>,
-    /// The session ID that was active (for resume hints on exit)
-    pub session_id: Option<String>,
 }
 
 pub(crate) fn effort_display_label(effort: &str) -> &str {

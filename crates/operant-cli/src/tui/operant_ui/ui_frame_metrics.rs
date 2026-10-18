@@ -128,71 +128,6 @@ pub(crate) struct FrameInputAttribution {
     pub model_picker_open: bool,
 }
 
-/// Milliseconds from reading a key event off the terminal to the frame carrying
-/// it being flushed, for the most recent keystrokes.
-///
-/// This is the number the user actually feels, and nothing measured it: existing
-/// stats cover render and flush cost *within* a draw, so a keystroke that waited
-/// a long time before any draw started looked perfectly fast. Kept as a small
-/// ring so a single unlucky frame cannot be mistaken for a trend.
-static KEY_TO_PAINT_MS: Mutex<Vec<f64>> = Mutex::new(Vec::new());
-
-/// When the pending keystroke was read, if a frame carrying it has not yet been
-/// flushed. Only the oldest unpainted keystroke is tracked: that is the one whose
-/// latency the user perceives, and it bounds the rest.
-static PENDING_KEY_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-
-/// Record that a key event was just read from the terminal.
-pub(crate) fn note_key_event_read() {
-    let mut slot = PENDING_KEY_AT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if slot.is_none() {
-        *slot = Some(std::time::Instant::now());
-    }
-}
-
-/// Record that a frame has been flushed, closing out any pending keystroke.
-pub(crate) fn note_frame_painted() {
-    let pending = {
-        let mut slot = PENDING_KEY_AT
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        slot.take()
-    };
-    if let Some(at) = pending {
-        let mut samples = KEY_TO_PAINT_MS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        samples.push(at.elapsed().as_secs_f64() * 1000.0);
-        const MAX_SAMPLES: usize = 64;
-        if samples.len() > MAX_SAMPLES {
-            let excess = samples.len() - MAX_SAMPLES;
-            samples.drain(0..excess);
-        }
-    }
-}
-
-/// Key-to-paint latency summary for `draw-stats`.
-pub(crate) fn key_to_paint_debug_json() -> serde_json::Value {
-    let samples = KEY_TO_PAINT_MS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    if samples.is_empty() {
-        return serde_json::Value::Null;
-    }
-    let mut sorted = samples.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let pick = |q: f64| sorted[((sorted.len() as f64 * q) as usize).min(sorted.len() - 1)];
-    serde_json::json!({
-        "samples": sorted.len(),
-        "p50_ms": pick(0.5),
-        "p95_ms": pick(0.95),
-        "max_ms": sorted[sorted.len() - 1],
-    })
-}
-
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct DrawCallAttribution {
     pub timestamp_ms: u64,
@@ -214,13 +149,6 @@ struct FrameResourceStart {
 fn frame_input_attribution_slot() -> &'static Mutex<FrameInputAttribution> {
     static SLOT: OnceLock<Mutex<FrameInputAttribution>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(FrameInputAttribution::default()))
-}
-
-pub(crate) fn set_frame_input_attribution(attribution: FrameInputAttribution) {
-    let mut guard = frame_input_attribution_slot()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *guard = attribution;
 }
 
 pub(crate) fn frame_input_attribution_snapshot() -> FrameInputAttribution {
@@ -1156,49 +1084,6 @@ pub(super) fn finalize_frame_metrics(
     }
 }
 
-pub(crate) fn debug_flicker_frame_history(limit: usize) -> serde_json::Value {
-    let history = flicker_frame_history()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let take_samples = limit.clamp(1, FLICKER_HISTORY_MAX_SAMPLES);
-    let samples: Vec<FlickerFrameSample> = history
-        .samples
-        .iter()
-        .rev()
-        .take(take_samples)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    let events: Vec<FlickerEvent> = history
-        .events
-        .iter()
-        .rev()
-        .take(limit.clamp(1, FLICKER_HISTORY_MAX_EVENTS))
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-
-    serde_json::json!({
-        "enabled": flicker_detection_enabled(),
-        "buffered_samples": history.samples.len(),
-        "returned_samples": samples.len(),
-        "buffered_events": history.events.len(),
-        "returned_events": events.len(),
-        "summary": {
-            "layout_toggle_events": events.iter().filter(|event| event.kind == "layout_toggle_same_state").count(),
-            "layout_oscillation_events": events.iter().filter(|event| event.kind == "layout_oscillation").count(),
-            "layout_feedback_oscillation_events": events.iter().filter(|event| event.kind == "layout_feedback_oscillation").count(),
-            "visible_hash_change_events": events.iter().filter(|event| event.kind == "visible_hash_changed_same_state").count(),
-        },
-        "events": events,
-        "samples": samples,
-    })
-}
-
 fn flicker_event_label(kind: &str) -> &str {
     match kind {
         "layout_toggle_same_state" => "layout toggle",
@@ -1250,21 +1135,6 @@ pub(crate) fn recent_flicker_ui_notice() -> Option<FlickerUiNotice> {
     Some(FlickerUiNotice { summary, hint })
 }
 
-pub(crate) fn recent_flicker_copy_target_for_key(key: char) -> Option<VisibleCopyTarget> {
-    if !key.eq_ignore_ascii_case(&FLICKER_NOTICE_COPY_KEY) {
-        return None;
-    }
-
-    let notice = recent_flicker_ui_notice()?;
-    Some(VisibleCopyTarget {
-        key: FLICKER_NOTICE_COPY_KEY,
-        kind_label: "flicker hint".to_string(),
-        copied_notice: "Copied flicker hint".to_string(),
-        content: notice.hint,
-        badge_rect: None,
-    })
-}
-
 pub(crate) fn record_slow_frame_sample(sample: SlowFrameSample) {
     let mut history = slow_frame_history()
         .lock()
@@ -1291,48 +1161,6 @@ pub(crate) fn record_slow_frame_sample(sample: SlowFrameSample) {
             ));
         }
     }
-}
-
-pub(crate) fn debug_slow_frame_history(limit: usize) -> serde_json::Value {
-    let history = slow_frame_history()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let take = limit.clamp(1, SLOW_FRAME_HISTORY_MAX_SAMPLES);
-    let samples: Vec<SlowFrameSample> = history
-        .samples
-        .iter()
-        .rev()
-        .take(take)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-
-    let max_total_ms = samples
-        .iter()
-        .map(|sample| sample.total_ms)
-        .fold(0.0, f64::max);
-    let max_prepare_ms = samples
-        .iter()
-        .map(|sample| sample.prepare_ms)
-        .fold(0.0, f64::max);
-    let max_draw_ms = samples
-        .iter()
-        .map(|sample| sample.draw_ms)
-        .fold(0.0, f64::max);
-
-    serde_json::json!({
-        "threshold_ms": slow_frame_threshold_ms(),
-        "buffered_samples": history.samples.len(),
-        "returned_samples": samples.len(),
-        "summary": {
-            "max_total_ms": max_total_ms,
-            "max_prepare_ms": max_prepare_ms,
-            "max_draw_ms": max_draw_ms,
-        },
-        "samples": samples,
-    })
 }
 
 #[cfg(test)]

@@ -19,8 +19,6 @@ pub const GIT_HASH: &str = "unknown";
 pub const GIT_DATE: &str = "unknown";
 pub const GIT_TAG: &str = "unknown";
 pub const SEMVER: &str = env!("CARGO_PKG_VERSION");
-// Operant's changelog is deliberately EMPTY (see CHANGELOG const below).
-pub const BASE_SEMVER: &str = env!("CARGO_PKG_VERSION");
 
 // [port-decision] CHANGELOG is deliberately EMPTY. Its only consumer,
 // operant_ui::ui_changelog::parse_changelog, has a hard format contract: jcode's
@@ -109,22 +107,7 @@ pub fn git_tag() -> &'static str {
         .unwrap_or(GIT_TAG)
 }
 
-/// Whether a runtime fast-release override is active.
-pub fn runtime_override_active() -> bool {
-    runtime_release_semver().is_some()
-}
-
-/// Whether this build is a tagged release (git tag present).
-pub fn is_tagged_release() -> bool {
-    !GIT_TAG.is_empty()
-}
-
 /// Runtime build semver, honoring a fast-release wrapper override.
 pub fn semver() -> &'static str {
     runtime_release_semver().unwrap_or(SEMVER)
-}
-
-/// Runtime base semver, honoring a fast-release wrapper override.
-pub fn base_semver() -> &'static str {
-    runtime_release_semver().unwrap_or(BASE_SEMVER)
 }

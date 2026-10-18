@@ -401,10 +401,8 @@ pub struct App {
     /// Optional session title shown in the status bar.
     pub session_title: Option<String>,
     /// Remote session URL (set when bridge connects; readable by commands).
-    #[allow(dead_code)] // Prepared for bridge connection UI
     pub remote_session_url: Option<String>,
     /// Bridge/gateway connection state for status bar badge.
-    #[allow(dead_code)] // Prepared for bridge status badge
     pub bridge_state: crate::tui::bridge_state::BridgeConnectionState,
     /// Live MCP manager snapshot source when available.
     /// (iter-208: stub mcp_manager field deleted — load_mcp_servers now reads
@@ -657,7 +655,6 @@ pub struct App {
         tokio::sync::mpsc::UnboundedReceiver<crate::tui::bridge_state::BridgeConnectionState>,
     >,
     /// Sender for bridge connection state updates (given to gateway handler).
-    #[allow(dead_code)] // Prepared for bridge connection handler
     pub bridge_state_tx:
         Option<tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>>,
 

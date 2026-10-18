@@ -25,19 +25,12 @@
 //! it still reports when either is wedged.
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
 
-/// Default time without a beat before the process is considered stalled.
-const DEFAULT_STALL_SECS: u64 = 90;
-/// Default interval between liveness heartbeats.
-const DEFAULT_HEARTBEAT_SECS: u64 = 300;
-/// How often the monitor thread wakes to evaluate stall state.
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Cap on threads included in a stall dump so one dump cannot flood the log.
 const MAX_THREADS_IN_DUMP: usize = 48;
 
-static STARTED: AtomicBool = AtomicBool::new(false);
 static LAST_BEAT_MS: AtomicU64 = AtomicU64::new(0);
 static BEAT_COUNT: AtomicU64 = AtomicU64::new(0);
 static PHASE: AtomicUsize = AtomicUsize::new(0);
@@ -45,13 +38,6 @@ static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 /// Number of in-flight units of work. A process that is simply waiting for
 /// user input is idle, not stalled, so stall reporting is gated on this.
 static BUSY: AtomicUsize = AtomicUsize::new(0);
-/// Free-form detail about the current operation (e.g. the running tool). Kept
-/// separate from the interned phase because it is dynamic and low-frequency.
-static DETAIL: OnceLock<std::sync::Mutex<String>> = OnceLock::new();
-
-fn detail_slot() -> &'static std::sync::Mutex<String> {
-    DETAIL.get_or_init(|| std::sync::Mutex::new(String::new()))
-}
 
 /// RAII guard marking a unit of work in flight. While any guard is alive the
 /// process is expected to make progress, so missing beats mean a real hang
@@ -84,21 +70,6 @@ pub fn is_busy() -> bool {
     BUSY.load(Ordering::SeqCst) > 0
 }
 
-/// Describe the operation currently in flight. Shown in stall dumps so a hang
-/// inside a specific tool or request is immediately identifiable.
-pub fn set_detail(detail: impl Into<String>) {
-    if let Ok(mut slot) = detail_slot().lock() {
-        *slot = detail.into();
-    }
-}
-
-fn current_detail() -> String {
-    detail_slot()
-        .lock()
-        .map(|slot| slot.clone())
-        .unwrap_or_default()
-}
-
 /// Phase labels are interned so [`beat`] stays allocation-free on hot paths.
 /// The set of labels is small, fixed, and compile-time known in practice.
 static PHASES: OnceLock<std::sync::Mutex<Vec<&'static str>>> = OnceLock::new();
@@ -113,13 +84,6 @@ fn process_start() -> Instant {
 
 fn now_ms() -> u64 {
     process_start().elapsed().as_millis() as u64
-}
-
-fn env_secs(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .unwrap_or(default)
 }
 
 /// Record that the given phase is making progress. Cheap enough for per-frame
@@ -224,123 +188,6 @@ fn read_trimmed(path: std::path::PathBuf) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-/// Start the watchdog monitor thread. Idempotent; extra calls are no-ops.
-///
-/// Disable entirely with `OPERANT_WATCHDOG=0`. Tune with
-/// `OPERANT_WATCHDOG_STALL_SECS` and `OPERANT_WATCHDOG_HEARTBEAT_SECS`.
-pub fn start() {
-    if std::env::var("OPERANT_WATCHDOG").is_ok_and(|value| value == "0" || value == "off") {
-        return;
-    }
-    if STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let _ = process_start();
-    beat("startup");
-
-    let stall = Duration::from_secs(env_secs("OPERANT_WATCHDOG_STALL_SECS", DEFAULT_STALL_SECS));
-    let heartbeat = Duration::from_secs(env_secs(
-        "OPERANT_WATCHDOG_HEARTBEAT_SECS",
-        DEFAULT_HEARTBEAT_SECS,
-    ));
-
-    std::thread::Builder::new()
-        .name("operant-watchdog".to_string())
-        .spawn(move || monitor_loop(stall, heartbeat))
-        .ok();
-}
-
-fn monitor_loop(stall: Duration, heartbeat: Duration) {
-    let mut last_heartbeat = Instant::now();
-    let mut stall_reported_at: Option<Duration> = None;
-    let mut next_stall_report = stall;
-
-    loop {
-        std::thread::sleep(POLL_INTERVAL);
-
-        let last_beat_ms = LAST_BEAT_MS.load(Ordering::Relaxed);
-        let since_beat = Duration::from_millis(now_ms().saturating_sub(last_beat_ms));
-        let resources = resource_snapshot();
-
-        // An idle client waiting for input is not stalled; only work that
-        // claimed to be in flight can hang.
-        if !is_busy() {
-            if stall_reported_at.take().is_some() {
-                next_stall_report = stall;
-            }
-            emit_heartbeat_if_due(&mut last_heartbeat, heartbeat, resources);
-            continue;
-        }
-
-        if since_beat >= next_stall_report {
-            let states = thread_states();
-            super::event_warn(
-                "watchdog.stall",
-                [
-                    ("phase", current_phase().to_string()),
-                    ("detail", current_detail()),
-                    ("stalled_secs", since_beat.as_secs().to_string()),
-                    ("beats", BEAT_COUNT.load(Ordering::Relaxed).to_string()),
-                    ("rss_mb", resources.rss_mb.to_string()),
-                    ("threads", resources.threads.to_string()),
-                    ("open_fds", resources.open_fds.to_string()),
-                    ("thread_states", states.join(" | ")),
-                ],
-            );
-            stall_reported_at = Some(since_beat);
-            // Back off so a long hang produces a few informative dumps rather
-            // than a log full of identical ones.
-            next_stall_report = since_beat.saturating_mul(2).max(stall);
-            continue;
-        }
-
-        if let Some(reported) = stall_reported_at
-            && since_beat < stall
-        {
-            super::event_info(
-                "watchdog.recovered",
-                [
-                    ("phase", current_phase().to_string()),
-                    ("stalled_secs", reported.as_secs().to_string()),
-                ],
-            );
-            stall_reported_at = None;
-            next_stall_report = stall;
-        }
-
-        emit_heartbeat_if_due(&mut last_heartbeat, heartbeat, resources);
-    }
-}
-
-/// The heartbeat runs whether or not work is in flight: a log that stops
-/// growing entirely is itself the signal that the process died or froze hard.
-fn emit_heartbeat_if_due(
-    last_heartbeat: &mut Instant,
-    heartbeat: Duration,
-    resources: ResourceSnapshot,
-) {
-    if heartbeat.is_zero() || last_heartbeat.elapsed() < heartbeat {
-        return;
-    }
-    *last_heartbeat = Instant::now();
-    super::event_info(
-        "watchdog.alive",
-        [
-            ("phase", current_phase().to_string()),
-            ("detail", current_detail()),
-            ("busy", is_busy().to_string()),
-            (
-                "uptime_secs",
-                process_start().elapsed().as_secs().to_string(),
-            ),
-            ("beats", BEAT_COUNT.load(Ordering::Relaxed).to_string()),
-            ("rss_mb", resources.rss_mb.to_string()),
-            ("threads", resources.threads.to_string()),
-            ("open_fds", resources.open_fds.to_string()),
-        ],
-    );
 }
 
 #[cfg(test)]

@@ -109,7 +109,6 @@ pub const MIN_MODAL_H: u16 = 6;
 /// The one dismissal hint. Four spellings of this fact exist today
 /// (`"Esc to cancel"` ×3, `"Esc close"`, `"Esc: close"`, `"Esc to close."`);
 /// they converge here.
-#[allow(dead_code)] // unread until the call sites adopt `ModalSpec::hint`
 pub const HINT_ESC: &str = "Esc to close";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,7 +319,6 @@ pub fn modal_search_line(
 /// nothing else.
 // No production reader yet — the call sites migrate in a later, golden-verified
 // step. Until then this is the only unused public API in the module.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModalSpec<'a> {
     /// Modal title, rendered bold in themed text on the header row.
@@ -371,7 +369,6 @@ impl Default for ModalSpec<'_> {
 /// serves both sinks with no `_buf` fork. [`modal_frame`] is the `Frame`
 /// adapter and is one expression wide; any logic added to it would fork the
 /// primitive.
-#[allow(dead_code)] // unwired until the call sites migrate; see `ModalSpec`
 pub fn modal_frame_buf(buf: &mut Buffer, area: Rect, spec: &ModalSpec<'_>) -> ModalLayout {
     let layout = modal_layout(
         area,
@@ -426,7 +423,6 @@ pub fn modal_frame_buf(buf: &mut Buffer, area: Rect, spec: &ModalSpec<'_>) -> Mo
 }
 
 /// `Frame` adapter over [`modal_frame_buf`]. One expression on purpose.
-#[allow(dead_code)] // unwired until the call sites migrate; see `ModalSpec`
 pub fn modal_frame(frame: &mut Frame, area: Rect, spec: &ModalSpec<'_>) -> ModalLayout {
     modal_frame_buf(frame.buffer_mut(), area, spec)
 }

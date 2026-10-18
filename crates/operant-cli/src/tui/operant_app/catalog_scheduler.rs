@@ -28,9 +28,3 @@ static CATALOG_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 pub fn bump_catalog_generation() {
     CATALOG_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
-
-/// The last catalog bump's generation — used by tui_fns.rs to key its model-name
-/// cache. Same upstream shape as bump_catalog_generation.
-pub fn last_catalog_refresh_generation() -> u64 {
-    CATALOG_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
-}

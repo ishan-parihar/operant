@@ -9,8 +9,6 @@
 // render_markdown* path here remains authoritative).
 // See operant_markdown parent wiring in tui/mod.rs for scope.
 
-#![cfg_attr(test, allow(dead_code))]
-
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::prelude::*;
 use serde::Serialize;
@@ -75,34 +73,6 @@ fn default_memory_snapshot() -> ProcessMemorySnapshot {
     ProcessMemorySnapshot::default()
 }
 
-pub fn set_config_snapshot_hook(hook: fn() -> MarkdownConfigSnapshot) {
-    if let Ok(mut current) = CONFIG_SNAPSHOT_HOOK.lock() {
-        *current = hook;
-    }
-}
-
-pub fn set_memory_snapshot_hook(hook: fn() -> ProcessMemorySnapshot) {
-    if let Ok(mut current) = MEMORY_SNAPSHOT_HOOK.lock() {
-        *current = hook;
-    }
-}
-
-// [port-excision] markdown_latex_image.rs skipped per brief (operant has its
-// own latex.rs; mdwright-latex dep does not exist here).
-// [port-decision] set_latex_log_hook signature restored from upstream
-// operant-tui-markdown/src/lib.rs:78: upstream forwards into latex_image
-// (operant-tui-markdown/src/markdown_latex_image.rs), which is excised, so the
-// hook is stored but never invoked; the stored-and-unused state mirrors the
-// config/memory snapshot hooks' upstream shape. Re-activate at latex-image
-// cutover. install_operant_markdown_hooks (operant_app/markdown.rs:88) calls it.
-static LATEX_LOG_HOOK: std::sync::Mutex<Option<fn(&str)>> = std::sync::Mutex::new(None);
-
-pub fn set_latex_log_hook(hook: fn(&str)) {
-    if let Ok(mut current) = LATEX_LOG_HOOK.lock() {
-        *current = Some(hook);
-    }
-}
-
 pub(crate) fn config_snapshot() -> MarkdownConfigSnapshot {
     CONFIG_SNAPSHOT_HOOK
         .lock()
@@ -126,9 +96,9 @@ mod wrap;
 pub(crate) use context::with_markdown_spacing_mode_override;
 #[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
 pub use context::{
-    center_code_blocks, get_diagram_mode_override, mermaid_rendering_enabled,
-    set_center_code_blocks, set_diagram_mode_override, with_center_code_blocks,
-    with_deferred_mermaid_render_context, with_diagram_mode_scope, with_mermaid_rendering_override,
+    center_code_blocks, mermaid_rendering_enabled, set_center_code_blocks,
+    set_diagram_mode_override, with_center_code_blocks, with_deferred_mermaid_render_context,
+    with_diagram_mode_scope, with_mermaid_rendering_override,
 };
 use context::{
     deferred_mermaid_render_context_enabled, effective_diagram_mode,
@@ -198,7 +168,7 @@ fn should_render_mermaid_block(lang: Option<&str>) -> bool {
         && mermaid::native_image_protocol_available()
 }
 #[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
-pub use render_support::{highlight_file_lines, highlight_line, render_table_with_width};
+pub use render_support::highlight_line;
 
 // Syntax highlighting resources (loaded once)
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
@@ -604,11 +574,6 @@ fn mermaid_sidebar_placeholder(text: &str) -> Line<'static> {
 /// must be re-rendered once the background render completes (the deferred
 /// render epoch advances).
 pub const MERMAID_PENDING_PLACEHOLDER_TEXT: &str = "↻ rendering mermaid diagram...";
-
-/// Placeholder emitted while a deferred LaTeX image render runs in the
-/// background. Shares the pending-detection prefix with the mermaid
-/// placeholder so the same cache-invalidation path covers both.
-pub const MATH_PENDING_PLACEHOLDER_TEXT: &str = "↻ rendering math...";
 
 /// Prefix used to recognize the pending placeholder even when a narrow width
 /// wraps its tail onto a following line.
@@ -1115,13 +1080,6 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
 pub(crate) mod text_preprocess;
 pub(crate) use text_preprocess::{escape_currency_dollars, preserve_line_oriented_softbreaks};
 
-pub fn debug_stats() -> MarkdownDebugStats {
-    if let Ok(state) = MARKDOWN_DEBUG.lock() {
-        return state.stats.clone();
-    }
-    MarkdownDebugStats::default()
-}
-
 pub fn debug_memory_profile() -> MarkdownMemoryProfile {
     let process = self::process_memory_snapshot();
     let mut profile = MarkdownMemoryProfile {
@@ -1151,12 +1109,6 @@ pub fn debug_memory_profile() -> MarkdownMemoryProfile {
     profile
 }
 
-pub fn reset_debug_stats() {
-    if let Ok(mut state) = MARKDOWN_DEBUG.lock() {
-        state.stats = MarkdownDebugStats::default();
-    }
-}
-
 fn estimate_lines_bytes(lines: &[Line<'static>]) -> usize {
     lines
         .iter()
@@ -1172,10 +1124,6 @@ fn estimate_lines_bytes(lines: &[Line<'static>]) -> usize {
         .sum()
 }
 
-pub fn debug_stats_json() -> Option<serde_json::Value> {
-    serde_json::to_value(debug_stats()).ok()
-}
-
 /// Render markdown with optional width constraint for tables
 pub fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     wrap::wrap_line(line, width, repeated_gutter_prefix)
@@ -1187,10 +1135,6 @@ pub fn wrap_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>>
 
 pub fn progress_bar(progress: f32, width: usize) -> String {
     wrap::progress_bar(progress, width)
-}
-
-pub fn progress_line(label: &str, progress: f32, width: usize) -> Line<'static> {
-    wrap::progress_line(label, progress, width)
 }
 
 #[cfg(test)]

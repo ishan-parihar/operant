@@ -18,19 +18,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 static EMOJI_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Set whether terminal-facing output may contain emoji.
-pub fn set_emoji_enabled(enabled: bool) {
-    EMOJI_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
 /// Return whether terminal-facing output may contain emoji.
 pub fn emoji_enabled() -> bool {
     EMOJI_ENABLED.load(Ordering::Relaxed)
-}
-
-/// Adapt terminal-facing text to the configured emoji preference.
-pub fn terminal_text(text: &str) -> Cow<'_, str> {
-    terminal_text_with_emoji(text, emoji_enabled())
 }
 
 /// Adapt terminal-facing text using an explicit emoji preference.

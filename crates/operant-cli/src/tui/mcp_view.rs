@@ -25,7 +25,6 @@ pub enum McpViewStatus {
     Connected,
     Connecting,
     Disconnected,
-    #[allow(dead_code)] // MCP connection error status
     Error,
 }
 

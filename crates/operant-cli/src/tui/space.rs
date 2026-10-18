@@ -14,19 +14,16 @@
 use ratatui::layout::Margin;
 
 /// No inset.
-#[allow(dead_code)] // unread until the call-site migration reaches for it
 pub const XXS: u16 = 0;
 /// The border inset, and a modal title's leading space.
 pub const XS: u16 = 1;
 /// A dialog's content gutter.
-#[allow(dead_code)] // unread until the call-site migration reaches for it
 pub const S: u16 = 2;
 /// A modal's margin from the screen edge.
 pub const M: u16 = 4;
 /// The floor for a modal's width.
 pub const L: u16 = 8;
 /// The ceiling step: room for a short list without scrolling.
-#[allow(dead_code)] // unread until the call-site migration reaches for it
 pub const XL: u16 = 16;
 
 /// Vertical-only inset. Horizontal stays 0.

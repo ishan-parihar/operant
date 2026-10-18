@@ -53,15 +53,6 @@ pub enum SessionPickerResumeAction {
     CurrentTerminal,
 }
 
-impl SessionPickerResumeAction {
-    pub fn alternate(self) -> Self {
-        match self {
-            Self::NewTerminal => Self::CurrentTerminal,
-            Self::CurrentTerminal => Self::NewTerminal,
-        }
-    }
-}
-
 /// Layout of the swarm status strip. Verbatim variants from
 /// crates/operant-config-types/src/lib.rs:756-:763 (doc comments elided;
 /// the `parse` fn at :765 is unported — no ported caller reads config text).
@@ -321,14 +312,6 @@ pub struct Config {
     pub features: FeaturesConfig,
     pub agents: AgentsConfig,
     pub keybindings: KeybindingsConfig,
-}
-
-impl Config {
-    /// Upstream `Config::invalidate_cache` (operant-base/src/config/config_file.rs:85)
-    /// marks the process-cached file config stale. Degraded arm of this shim:
-    /// the snapshot is a LazyLock constant with no file-backed cache, so this
-    /// is a deliberate no-op; re-visit when the cutover wires a real config.
-    pub fn invalidate_cache() {}
 }
 
 /// Process-wide reasoning-mode override. `None` until the TUI boots; set

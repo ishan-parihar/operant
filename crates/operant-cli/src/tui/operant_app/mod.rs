@@ -8,7 +8,6 @@
 // new symbol extends the same submodule rather than adding a new module.
 // The App struct itself and every App-bound fn deliberately never port — the
 // cutover adapts operant's own App state onto these types.
-#![cfg_attr(test, allow(dead_code))]
 
 pub mod ambient;
 pub mod app;

@@ -176,12 +176,6 @@ impl Role {
             Role::SelectionBg => (60, 60, 80),
         }
     }
-
-    /// Whether this role is used as a background. Backgrounds are graded on
-    /// different contrast criteria than foreground text.
-    pub const fn is_background(self) -> bool {
-        matches!(self, Role::UserBg | Role::SelectionBg)
-    }
 }
 
 /// A complete set of role colors.
@@ -291,11 +285,6 @@ pub fn parse_hex(text: &str) -> Option<(u8, u8, u8)> {
         6 => Some((byte(&hex[0..2])?, byte(&hex[2..4])?, byte(&hex[4..6])?)),
         _ => None,
     }
-}
-
-/// Format an RGB triple as `#rrggbb`.
-pub fn to_hex((r, g, b): (u8, u8, u8)) -> String {
-    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 static ACTIVE: RwLock<Option<Palette>> = RwLock::new(None);

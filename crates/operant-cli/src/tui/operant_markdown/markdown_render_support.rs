@@ -344,11 +344,6 @@ fn wrap_long_table_word(word: &str, width: usize) -> Vec<String> {
     chunks
 }
 
-/// Render a table with a specific max width constraint
-pub fn render_table_with_width(rows: &[Vec<String>], max_width: usize) -> Vec<Line<'static>> {
-    render_table_aligned(rows, Some(max_width), &[])
-}
-
 /// Highlight a code block with syntax highlighting (cached)
 /// This is the primary entry point for code highlighting - uses a cache
 /// to avoid re-highlighting the same code multiple times during streaming.
@@ -444,42 +439,6 @@ pub fn highlight_line(code: &str, ext: Option<&str>) -> Vec<Span<'static>> {
             vec![Span::raw(code.to_string())]
         }
     }
-}
-
-/// Highlight a full file and return spans for specific line numbers (1-indexed)
-/// Used for comparison logging with single-line approach
-pub fn highlight_file_lines(
-    content: &str,
-    ext: Option<&str>,
-    line_numbers: &[usize],
-) -> Vec<(usize, Vec<Span<'static>>)> {
-    let syntax = ext
-        .and_then(|e| SYNTAX_SET.find_syntax_by_extension(e))
-        .or_else(|| ext.and_then(|e| SYNTAX_SET.find_syntax_by_token(e)))
-        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
-
-    let theme = &THEME_SET.themes["base16-ocean.dark"];
-    let mut highlighter = HighlightLines::new(syntax, theme);
-
-    let mut results = Vec::new();
-    let lines: Vec<&str> = content.lines().collect();
-
-    for (i, line) in lines.iter().enumerate() {
-        let line_num = i + 1; // 1-indexed
-        if let Ok(ranges) = highlighter.highlight_line(line, &SYNTAX_SET)
-            && line_numbers.contains(&line_num)
-        {
-            let spans: Vec<Span<'static>> = ranges
-                .into_iter()
-                .map(|(style, text)| {
-                    Span::styled(text.to_string(), syntect_to_ratatui_style(style))
-                })
-                .collect();
-            results.push((line_num, spans));
-        }
-    }
-
-    results
 }
 
 /// Placeholder for code blocks that are not visible

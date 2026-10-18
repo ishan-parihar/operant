@@ -125,7 +125,7 @@ struct SidePanelRenderCacheState {
 mod mermaid_debug_support;
 pub use mermaid_debug_support::{
     SidePanelDebugStats, SidePanelLiveDebugSnapshot, SidePanelMermaidProbe,
-    SidePanelMermaidProbeRect, SidePanelVisibleMermaidDebug, debug_probe_side_panel_mermaid,
+    SidePanelMermaidProbeRect, SidePanelVisibleMermaidDebug,
 };
 use mermaid_debug_support::{build_side_panel_mermaid_probe_from_image, probe_rect};
 
@@ -152,119 +152,6 @@ struct RenderedSidePanelCache {
     left_margins: Vec<u16>,
     image_placements: Vec<SidePanelImagePlacement>,
     has_scrollable_images: bool,
-}
-
-fn estimate_lines_bytes(lines: &[Line<'static>]) -> usize {
-    lines
-        .iter()
-        .map(|line| {
-            std::mem::size_of::<Line<'static>>()
-                + line.spans.capacity() * std::mem::size_of::<Span<'static>>()
-                + line
-                    .spans
-                    .iter()
-                    .map(|span| span.content.len())
-                    .sum::<usize>()
-        })
-        .sum()
-}
-
-fn estimate_arc_string_vec_bytes(values: &std::sync::Arc<Vec<String>>) -> usize {
-    std::mem::size_of::<Vec<String>>()
-        + values.capacity() * std::mem::size_of::<String>()
-        + values.iter().map(|value| value.capacity()).sum::<usize>()
-}
-
-fn estimate_arc_usize_vec_bytes(values: &std::sync::Arc<Vec<usize>>) -> usize {
-    std::mem::size_of::<Vec<usize>>() + values.capacity() * std::mem::size_of::<usize>()
-}
-
-fn estimate_arc_wrapped_line_map_bytes(values: &std::sync::Arc<Vec<WrappedLineMap>>) -> usize {
-    std::mem::size_of::<Vec<WrappedLineMap>>()
-        + values.capacity() * std::mem::size_of::<WrappedLineMap>()
-}
-
-fn estimate_side_panel_rendered_cache_bytes(cache: &RenderedSidePanelCache) -> usize {
-    estimate_lines_bytes(&cache.lines)
-        + estimate_arc_string_vec_bytes(&cache.wrapped_plain_lines)
-        + estimate_arc_usize_vec_bytes(&cache.wrapped_copy_offsets)
-        + estimate_arc_string_vec_bytes(&cache.raw_plain_lines)
-        + estimate_arc_wrapped_line_map_bytes(&cache.wrapped_line_map)
-        + cache.left_margins.capacity() * std::mem::size_of::<u16>()
-        + cache.image_placements.capacity() * std::mem::size_of::<SidePanelImagePlacement>()
-}
-
-fn estimate_rendered_side_panel_markdown_bytes(value: &RenderedSidePanelMarkdown) -> usize {
-    estimate_lines_bytes(&value.rendered_markdown)
-        + value.placeholder_hashes.capacity() * std::mem::size_of::<Option<u64>>()
-        + value.has_following_content_after.capacity() * std::mem::size_of::<bool>()
-}
-
-fn estimate_side_panel_markdown_key_bytes(key: &SidePanelMarkdownKey) -> usize {
-    key.page_id.capacity()
-}
-
-fn estimate_side_panel_render_key_bytes(key: &SidePanelRenderKey) -> usize {
-    key.page_id.capacity()
-}
-
-pub(crate) fn debug_memory_profile() -> serde_json::Value {
-    let (markdown_cache_entries_count, markdown_cache_bytes, markdown_cache_key_bytes) =
-        with_side_panel_markdown_cache(|cache| {
-            let entry_bytes = cache
-                .entries
-                .values()
-                .map(estimate_rendered_side_panel_markdown_bytes)
-                .sum::<usize>();
-            let key_bytes = cache
-                .entries
-                .keys()
-                .map(estimate_side_panel_markdown_key_bytes)
-                .sum::<usize>()
-                + cache
-                    .order
-                    .iter()
-                    .map(estimate_side_panel_markdown_key_bytes)
-                    .sum::<usize>();
-            (cache.entries.len(), entry_bytes, key_bytes)
-        });
-
-    let (render_cache_entries_count, render_cache_bytes, render_cache_key_bytes) =
-        with_side_panel_render_cache(|cache| {
-            let entry_bytes = cache
-                .entries
-                .values()
-                .map(estimate_side_panel_rendered_cache_bytes)
-                .sum::<usize>();
-            let key_bytes = cache
-                .entries
-                .keys()
-                .map(estimate_side_panel_render_key_bytes)
-                .sum::<usize>()
-                + cache
-                    .order
-                    .iter()
-                    .map(estimate_side_panel_render_key_bytes)
-                    .sum::<usize>();
-            (cache.entries.len(), entry_bytes, key_bytes)
-        });
-
-    serde_json::json!({
-        "side_panel_markdown_cache": {
-            "entries_count": markdown_cache_entries_count,
-            "entries_bytes": markdown_cache_bytes,
-            "key_bytes": markdown_cache_key_bytes,
-        },
-        "side_panel_render_cache": {
-            "entries_count": render_cache_entries_count,
-            "entries_bytes": render_cache_bytes,
-            "key_bytes": render_cache_key_bytes,
-        },
-        "total_estimate_bytes": markdown_cache_bytes
-            + markdown_cache_key_bytes
-            + render_cache_bytes
-            + render_cache_key_bytes,
-    })
 }
 
 #[derive(Clone)]
@@ -373,20 +260,6 @@ fn side_panel_debug() -> &'static Mutex<SidePanelDebugState> {
     SIDE_PANEL_DEBUG.get_or_init(|| Mutex::new(SidePanelDebugState::default()))
 }
 
-fn with_side_panel_markdown_cache<R>(f: impl FnOnce(&SidePanelMarkdownCacheState) -> R) -> R {
-    #[cfg(test)]
-    {
-        return TEST_SIDE_PANEL_MARKDOWN_CACHE.with(|state| f(&state.borrow()));
-    }
-    #[cfg(not(test))]
-    {
-        let state = side_panel_markdown_cache()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        f(&state)
-    }
-}
-
 fn with_side_panel_markdown_cache_mut<R>(
     f: impl FnOnce(&mut SidePanelMarkdownCacheState) -> R,
 ) -> R {
@@ -400,20 +273,6 @@ fn with_side_panel_markdown_cache_mut<R>(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         f(&mut state)
-    }
-}
-
-fn with_side_panel_render_cache<R>(f: impl FnOnce(&SidePanelRenderCacheState) -> R) -> R {
-    #[cfg(test)]
-    {
-        return TEST_SIDE_PANEL_RENDER_CACHE.with(|state| f(&state.borrow()));
-    }
-    #[cfg(not(test))]
-    {
-        let state = side_panel_render_cache()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        f(&state)
     }
 }
 
@@ -431,20 +290,6 @@ fn with_side_panel_render_cache_mut<R>(f: impl FnOnce(&mut SidePanelRenderCacheS
     }
 }
 
-fn with_side_panel_debug<R>(f: impl FnOnce(&SidePanelDebugState) -> R) -> R {
-    #[cfg(test)]
-    {
-        return TEST_SIDE_PANEL_DEBUG.with(|state| f(&state.borrow()));
-    }
-    #[cfg(not(test))]
-    {
-        let state = side_panel_debug()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        f(&state)
-    }
-}
-
 fn with_side_panel_debug_mut<R>(f: impl FnOnce(&mut SidePanelDebugState) -> R) -> R {
     #[cfg(test)]
     {
@@ -459,32 +304,8 @@ fn with_side_panel_debug_mut<R>(f: impl FnOnce(&mut SidePanelDebugState) -> R) -
     }
 }
 
-pub(crate) fn side_panel_debug_stats() -> SidePanelDebugStats {
-    let mut stats = with_side_panel_debug(|state| state.stats.clone());
-    stats.markdown_cache_entries = with_side_panel_markdown_cache(|cache| cache.entries.len());
-    stats.render_cache_entries = with_side_panel_render_cache(|cache| cache.entries.len());
-    stats
-}
-
-pub(crate) fn side_panel_debug_json() -> Option<serde_json::Value> {
-    let stats = side_panel_debug_stats();
-    let live_snapshot = with_side_panel_debug(|state| state.live_snapshot.clone());
-    serde_json::to_value(serde_json::json!({
-        "stats": stats,
-        "live": live_snapshot,
-    }))
-    .ok()
-}
-
 pub(crate) fn clear_side_panel_debug_snapshot() {
     with_side_panel_debug_mut(|debug| {
-        debug.live_snapshot = None;
-    });
-}
-
-pub(crate) fn reset_side_panel_debug_stats() {
-    with_side_panel_debug_mut(|debug| {
-        debug.stats = SidePanelDebugStats::default();
         debug.live_snapshot = None;
     });
 }

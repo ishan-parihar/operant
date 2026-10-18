@@ -13,7 +13,6 @@
 // defeat the port, so the lint is silenced for this module only. The four
 // submodules inherit the level; the individual `pub use` re-exports below are
 // annotated separately so real unused imports elsewhere in the module still warn.
-#![allow(dead_code)]
 
 // operant-tui-style: the TUI design system's module root.
 //
@@ -33,14 +32,13 @@ pub mod theme;
 pub mod theme_mode;
 
 #[allow(unused_imports)]
-pub use color::{clear_buf, indexed_to_rgb, rgb};
+pub use color::{indexed_to_rgb, rgb};
 #[allow(unused_imports)]
 pub use palette::{ALL_ROLES, Palette, Role, palette, role_color, set_palette};
 #[allow(unused_imports)]
 pub use theme_mode::{
     ThemeMode, adapt_buffer, adapt_buffer_for_display, adapt_buffer_for_theme,
-    adapt_color_for_theme, adapt_foreground_for_display, adapt_foreground_for_theme,
-    is_light_theme, set_theme_mode, theme_mode,
+    adapt_color_for_theme, is_light_theme, set_theme_mode, theme_mode,
 };
 
 /// The active palette and theme mode are process-global. One lock serializes
@@ -48,23 +46,3 @@ pub use theme_mode::{
 /// theme-mode tests used to carry separate locks and could interleave).
 #[cfg(test)]
 pub(crate) static STYLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Restore the terminal, logging any failure instead of printing it.
-///
-/// `ratatui::restore()` reports failures with `eprintln!`. On a dead terminal
-/// (closed window, dropped SSH) the restore fails with EIO and stderr is
-/// equally dead, so that `eprintln!` itself panics inside
-/// `std::io::stdio::print_to`. The panic hook can then record a live session as
-/// crashed and clobber its snapshot.
-///
-/// Always prefer this over `ratatui::restore()` on cleanup and orphan-exit
-/// paths. See issue #599 (and #129, the same class via another path).
-pub fn restore_terminal_quietly() {
-    if let Err(error) = ratatui::try_restore() {
-        // `tracing` rather than `eprintln!`: operant-cli's subscriber writes to a
-        // log file, `io::sink`, or stderr depending on config, and is a no-op when
-        // no subscriber is installed. A direct stderr write could panic on the very
-        // dead terminal this function exists to tolerate.
-        tracing::warn!(%error, "failed to restore terminal");
-    }
-}

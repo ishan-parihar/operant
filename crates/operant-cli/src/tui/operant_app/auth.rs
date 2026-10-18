@@ -72,17 +72,6 @@ pub enum AuthState {
     NotConfigured,
 }
 
-impl AuthState {
-    /// Short, stable, log-friendly label for this credential state.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Available => "available",
-            Self::Expired => "expired",
-            Self::NotConfigured => "not_configured",
-        }
-    }
-}
-
 /// Cached low-level authentication snapshot for all supported providers.
 ///
 /// This is the probe/cache substrate. New CLI and UI surfaces should prefer
@@ -170,14 +159,6 @@ pub struct ResolvedProviderAuth {
     /// rather than chosen by the auto heuristic. Lets surfaces distinguish a
     /// deliberate "use OAuth" from "auto happened to pick OAuth".
     pub explicit: bool,
-}
-
-impl ResolvedProviderAuth {
-    /// True when both credential types are configured (the request still uses
-    /// exactly one, reported by [`Self::active`]).
-    pub fn has_both(&self) -> bool {
-        self.has_oauth && self.has_api_key
-    }
 }
 
 /// Resolve the credential a dual-auth provider (Anthropic / OpenAI) will use.

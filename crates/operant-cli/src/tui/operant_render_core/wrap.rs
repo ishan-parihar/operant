@@ -138,18 +138,6 @@ pub fn wrap_line<M: WidthMeasure>(
     out
 }
 
-/// Wrap many lines.
-pub fn wrap_lines<M: WidthMeasure>(
-    lines: &[StyledLine],
-    max_width: usize,
-    measure: &M,
-) -> Vec<StyledLine> {
-    lines
-        .iter()
-        .flat_map(|l| wrap_line(l, max_width, measure))
-        .collect()
-}
-
 fn push_token(cur: &mut Vec<StyledSpan>, src: &StyledSpan, text: &str) {
     // Merge into the previous span when it shares styling, to avoid span
     // fragmentation across token boundaries.

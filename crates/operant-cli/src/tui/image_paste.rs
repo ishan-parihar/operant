@@ -354,7 +354,6 @@ fn png_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
 }
 
 /// Read a file and base64-encode it for the Anthropic API.
-#[allow(dead_code)] // Base64 encoding for API uploads
 pub fn encode_image_base64(path: &PathBuf) -> Option<String> {
     let data = std::fs::read(path).ok()?;
     Some(base64::Engine::encode(

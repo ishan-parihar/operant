@@ -90,59 +90,6 @@ impl OpenAIUsageData {
                 .any(|window| window.usage_ratio >= 1.0)
     }
 
-    pub fn age_ms(&self) -> Option<u128> {
-        self.fetched_at.map(|t| t.elapsed().as_millis())
-    }
-
-    pub fn freshness_state(&self) -> &'static str {
-        if self.fetched_at.is_none() {
-            "unknown"
-        } else if self.is_stale() {
-            "stale"
-        } else {
-            "fresh"
-        }
-    }
-
-    pub fn exhausted(&self) -> bool {
-        if self.hard_limit_reached {
-            return true;
-        }
-
-        if !self.has_limits() {
-            return false;
-        }
-
-        let mut windows = [self.five_hour.as_ref(), self.seven_day.as_ref()]
-            .into_iter()
-            .flatten()
-            .peekable();
-        windows.peek().is_some() && windows.all(|window| window.usage_ratio >= 0.99)
-    }
-
-    pub fn diagnostic_fields(&self) -> String {
-        let fmt_ratio = |window: Option<&OpenAIUsageWindow>| {
-            window
-                .map(|w| format!("{:.1}%", w.usage_ratio * 100.0))
-                .unwrap_or_else(|| "unknown".to_string())
-        };
-
-        format!(
-            "freshness={} age_ms={} exhausted={} hard_limit_reached={} has_limits={} five_hour={} seven_day={} spark={} last_error={}",
-            self.freshness_state(),
-            self.age_ms()
-                .map(|age| age.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            self.exhausted(),
-            self.hard_limit_reached,
-            self.has_limits(),
-            fmt_ratio(self.five_hour.as_ref()),
-            fmt_ratio(self.seven_day.as_ref()),
-            fmt_ratio(self.spark.as_ref()),
-            self.last_error.as_deref().unwrap_or("none")
-        )
-    }
-
     pub fn is_stale(&self) -> bool {
         if usage_reset_passed([
             self.five_hour.as_ref().and_then(|w| w.resets_at.as_deref()),
@@ -172,10 +119,6 @@ impl OpenAIUsageData {
             .as_ref()
             .map(|e| e.contains("429") || e.contains("rate limit") || e.contains("Rate limited"))
             .unwrap_or(false)
-    }
-
-    pub fn has_limits(&self) -> bool {
-        self.five_hour.is_some() || self.seven_day.is_some() || self.spark.is_some()
     }
 }
 
@@ -225,14 +168,4 @@ pub struct UsageLimit {
     pub name: String,
     pub usage_percent: f32,
     pub resets_at: Option<String>,
-}
-
-/// Verbatim from crates/operant-usage-types/src/lib.rs:47.
-#[derive(Debug, Clone, Default)]
-pub struct ProviderUsageProgress {
-    pub results: Vec<ProviderUsage>,
-    pub completed: usize,
-    pub total: usize,
-    pub done: bool,
-    pub from_cache: bool,
 }

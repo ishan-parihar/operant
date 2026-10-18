@@ -34,10 +34,6 @@ pub struct HelpOverlay {
 }
 
 /// A single command entry shown in the help overlay.
-#[expect(
-    dead_code,
-    reason = "aliases/description are read only by the help filter in tests"
-)]
 #[derive(Debug, Clone)]
 pub struct HelpEntry {
     pub name: String,

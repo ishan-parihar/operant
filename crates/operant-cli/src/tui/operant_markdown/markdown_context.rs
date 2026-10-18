@@ -57,10 +57,6 @@ pub fn set_diagram_mode_override(mode: Option<DiagramDisplayMode>) {
     }
 }
 
-pub fn get_diagram_mode_override() -> Option<DiagramDisplayMode> {
-    DIAGRAM_MODE_OVERRIDE.lock().ok().and_then(|mode| *mode)
-}
-
 pub(super) fn effective_diagram_mode() -> DiagramDisplayMode {
     if let Some(scoped) = DIAGRAM_MODE_SCOPE.with(|ctx| ctx.get()) {
         return scoped;

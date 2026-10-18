@@ -47,10 +47,6 @@ pub enum SystemMessageStyle {
 pub struct SystemAnnotation {
     pub after_index: usize,
     pub text: String,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "annotation style is currently uniform")
-    )]
     pub style: SystemMessageStyle,
 }
 
@@ -83,79 +79,11 @@ pub enum ContextMenuItem {
     Fork,
 }
 
-/// Key context for determining which key bindings apply.
-/// Mirrors claurst's KeyContext for cleaner key routing.
-#[allow(dead_code)] // Prepared for key routing system
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyContext {
-    /// Normal prompt input mode
-    Prompt,
-    /// Vim normal mode in prompt
-    VimNormal,
-    /// Vim visual mode in prompt
-    VimVisual,
-    /// Vim visual line mode
-    VimVisualLine,
-    /// Vim visual block mode
-    VimVisualBlock,
-    /// Vim command mode
-    VimCommand,
-    /// Global context (always active)
-    Global,
-    /// Transcript/message pane
-    Transcript,
-    /// Diff viewer
-    DiffViewer,
-    /// Dialog overlay (any modal dialog)
-    Dialog,
-    /// Context menu open
-    ContextMenu,
-    /// Help overlay
-    Help,
-    /// Settings screen
-    Settings,
-    /// Model picker
-    ModelPicker,
-    /// Session browser
-    SessionBrowser,
-    /// Command palette
-    CommandPalette,
-    /// Global search
-    GlobalSearch,
-    /// History search overlay
-    HistorySearch,
-    /// MCP view
-    MCPView,
-    /// Agents menu
-    AgentsMenu,
-    /// Stats dialog
-    Stats,
-    /// Export dialog
-    Export,
-    /// Context visualization
-    ContextViz,
-    /// Session branching
-    SessionBranching,
-    /// Tasks overlay
-    Tasks,
-    /// Menu context (dialog pickers)
-    Menu,
-    /// Plugins hub
-    PluginsHub,
-    /// Skills view
-    SkillsView,
-    /// Journey view
-    JourneyView,
-    /// Hooks config menu
-    HooksConfig,
-}
-
 /// Dialog priority for key routing.
 /// Higher values = higher priority (handled first).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DialogPriority {
     /// No dialog active
-    #[allow(dead_code)] // Prepared for dialog priority routing
     None = 0,
     /// Context menu
     ContextMenu = 10,
@@ -268,7 +196,6 @@ pub enum TurnState {
     /// emits nothing between `run()` being called and the first Content
     /// event — so nothing assigns this today. Kept because the lifecycle is
     /// modelled in full and a provider-connect event will land in it.
-    #[expect(dead_code, reason = "no pre-first-byte event exists to drive it yet")]
     Connecting,
     /// The model is reasoning; no assistant text yet.
     Thinking,

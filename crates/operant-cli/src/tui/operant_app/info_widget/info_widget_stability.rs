@@ -584,19 +584,6 @@ fn abs_diff(a: u16, b: u16) -> u16 {
     a.abs_diff(b)
 }
 
-/// Map a captured widget-kind string back to a stable `&'static str` so live
-/// frame captures (which carry owned `String` kinds) can flow through
-/// [`analyze_frames`]. Unknown kinds collapse to `"other"`.
-pub fn intern_kind(kind: &str) -> &'static str {
-    use super::WidgetKind;
-    for k in WidgetKind::all_by_priority() {
-        if k.as_str() == kind {
-            return k.as_str();
-        }
-    }
-    "other"
-}
-
 #[cfg(test)]
 #[path = "info_widget_stability_tests.rs"]
 mod tests;

@@ -24,12 +24,6 @@ static BUILD_PROGRESS_CACHE: std::sync::Mutex<Option<(std::time::Instant, Option
 
 const BUILD_PROGRESS_TTL: std::time::Duration = std::time::Duration::from_millis(100);
 
-fn invalidate_build_progress_cache() {
-    if let Ok(mut guard) = BUILD_PROGRESS_CACHE.lock() {
-        *guard = None;
-    }
-}
-
 // [port-decision] dedup: upstream storage_helpers.rs defined these twice across
 // concatenated sources; kept the first (identical) copy.
 

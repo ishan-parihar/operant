@@ -96,23 +96,8 @@ impl StyledSpan {
         Self::new(text, StyleRole::Text)
     }
 
-    pub fn with_fill(mut self, fill: FillRole) -> Self {
-        self.fill = fill;
-        self
-    }
-
-    pub fn with_attrs(mut self, attrs: TextAttrs) -> Self {
-        self.attrs = attrs;
-        self
-    }
-
     pub fn bold(mut self) -> Self {
         self.attrs.bold = true;
-        self
-    }
-
-    pub fn italic(mut self) -> Self {
-        self.attrs.italic = true;
         self
     }
 }
@@ -136,10 +121,6 @@ pub struct StyledLine {
 }
 
 impl StyledLine {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     pub fn from_spans(spans: Vec<StyledSpan>) -> Self {
         Self {
             spans,
@@ -155,10 +136,6 @@ impl StyledLine {
     /// copy/extraction.
     pub fn plain_text(&self) -> String {
         self.spans.iter().map(|s| s.text.as_str()).collect()
-    }
-
-    pub fn is_blank(&self) -> bool {
-        self.spans.iter().all(|s| s.text.trim().is_empty())
     }
 }
 
@@ -249,13 +226,6 @@ impl Block {
         }
     }
 
-    /// This block, marked as sitting inside a list at `depth`.
-    #[must_use]
-    pub fn in_list(mut self, depth: usize) -> Self {
-        self.list_depth = depth;
-        self
-    }
-
     /// As [`Block::table`], with the delimiter row's per-column alignments.
     pub fn aligned_table(rows: Vec<Vec<String>>, alignments: Vec<Alignment>) -> Self {
         Self {
@@ -269,12 +239,4 @@ impl Block {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Document {
     pub blocks: Vec<Block>,
-}
-
-impl Document {
-    /// All lines across all blocks, in order. Convenient for line-oriented
-    /// front-ends that don't need block structure.
-    pub fn lines(&self) -> impl Iterator<Item = &StyledLine> {
-        self.blocks.iter().flat_map(|b| b.lines.iter())
-    }
 }

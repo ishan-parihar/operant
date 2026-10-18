@@ -22,8 +22,6 @@
 //! at the ~2.7k-subpixel scale of a typical idle area, unlike the deleted
 //! samplers' ~142k `cos`/`sin` per frame.
 
-#![cfg_attr(test, allow(dead_code))]
-
 /// Sweep speed of the radar beam head, radians per second.
 const BEAM_SPEED: f32 = 1.6;
 /// Afterglow: falloff of intensity behind the beam head, in radians.

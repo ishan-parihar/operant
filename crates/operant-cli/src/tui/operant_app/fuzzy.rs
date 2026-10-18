@@ -4,10 +4,6 @@
 // `crate::tui::operant_app::fuzzy_engine::`. See operant_app/mod.rs for scope.
 //! Shared typo-resistant fuzzy matching adapters for TUI slash commands.
 
-pub(crate) fn fuzzy_score(needle: &str, haystack: &str) -> Option<i32> {
-    crate::tui::operant_app::fuzzy_engine::command_fuzzy_score(needle, haystack)
-}
-
 pub(crate) fn fuzzy_match_positions(needle: &str, haystack: &str) -> Vec<usize> {
     crate::tui::operant_app::fuzzy_engine::command_fuzzy_match_positions(needle, haystack)
 }

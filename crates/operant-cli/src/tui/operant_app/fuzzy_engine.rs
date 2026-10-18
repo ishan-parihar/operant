@@ -660,11 +660,6 @@ pub fn command_fuzzy_match(needle: &str, haystack: &str) -> Option<FuzzyMatch> {
     fuzzy_match_full(needle, haystack, true, true, true)
 }
 
-/// Return only the slash-command fuzzy score.
-pub fn command_fuzzy_score(needle: &str, haystack: &str) -> Option<i32> {
-    fuzzy_score_only(needle, haystack, true, true, true)
-}
-
 /// Return matched positions for slash-command highlighting.
 pub fn command_fuzzy_match_positions(needle: &str, haystack: &str) -> Vec<usize> {
     command_fuzzy_match(needle, haystack)

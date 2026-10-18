@@ -234,23 +234,9 @@ pub struct FrameCaptureBuilder {
 }
 
 impl FrameCaptureBuilder {
-    pub fn new(width: u16, height: u16) -> Self {
-        Self {
-            terminal_size: (width, height),
-            ..Default::default()
-        }
-    }
-
     /// Record an anomaly detected during rendering
     pub fn anomaly(&mut self, msg: impl Into<String>) {
         self.anomalies.push(msg.into());
-    }
-
-    /// Check a condition and record anomaly if false
-    pub fn check(&mut self, condition: bool, msg: impl Into<String>) {
-        if !condition {
-            self.anomalies.push(msg.into());
-        }
     }
 
     /// Build the final frame capture

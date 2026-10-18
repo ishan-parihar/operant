@@ -107,10 +107,6 @@ pub struct ImageRenderConfig {
     /// Preserve aspect ratio when scaling.
     pub preserve_aspect: bool,
     /// Use Unicode half-block characters for higher density (Kitty only).
-    #[expect(
-        dead_code,
-        reason = "half-block rendering is unimplemented; kept for the config shape"
-    )]
     pub use_half_blocks: bool,
     /// Placeholder text when rendering is not supported.
     pub placeholder: String,
@@ -371,21 +367,6 @@ fn encode_sixel_png(_path: &PathBuf, _config: &ImageRenderConfig) -> Option<Stri
     // 3. Encode as Sixel (run-length encoding of color registers)
     // This is ~500 lines of code; recommend using img2sixel binary instead.
     None
-}
-
-/// Clear the current Kitty graphics cursor position (move past rendered image).
-#[expect(
-    dead_code,
-    reason = "the emit path never needs to re-home the cursor yet"
-)]
-pub fn kitty_clear_image() -> String {
-    "\x1b_Ga=d,d=1\x1b\\".to_string()
-}
-
-/// Check if the terminal supports any graphics protocol.
-#[allow(dead_code, reason = "only the detection-order test calls this today")]
-pub fn has_graphics_support() -> bool {
-    detect_graphics_protocol() != GraphicsProtocol::None
 }
 
 /// Serialises env-var-mutating tests: they run on parallel threads and share

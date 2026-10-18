@@ -1147,19 +1147,6 @@ fn header_prep_cache() -> &'static std::sync::Mutex<Option<HeaderPrepCacheState>
     CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-/// Drop the prepared-header cache so the next frame re-probes the disk-backed
-/// surfaces (auth inventory, skills, goal badge, update badges).
-///
-/// The TTL alone is sized for background drift. Actions taken *inside* the TUI
-/// that change those surfaces - completing `/login`, adding an account,
-/// reloading skills - must be reflected immediately rather than up to a full
-/// TTL later, so they call this directly.
-pub(crate) fn invalidate_header_prep_cache() {
-    if let Ok(mut cache) = header_prep_cache().lock() {
-        *cache = None;
-    }
-}
-
 /// Hash of the header inputs that are cheap to read every frame. Anything
 /// expensive (disk probes) is intentionally excluded and covered by the TTL.
 fn header_prep_signature(app: &dyn TuiState, width: u16) -> u64 {

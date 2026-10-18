@@ -57,19 +57,6 @@ impl DisplayMessage {
         }
     }
 
-    /// Create a display-only usage card. This is shown in the transcript UI but
-    /// is not part of provider/model context.
-    pub fn usage(content: impl Into<String>) -> Self {
-        Self {
-            role: "usage".to_string(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: Some("Usage".to_string()),
-            tool_data: None,
-        }
-    }
-
     /// Create a display-only overnight progress card. This is shown in the
     /// transcript UI but is not part of provider/model context.
     pub fn overnight(content: impl Into<String>) -> Self {
@@ -94,18 +81,6 @@ impl DisplayMessage {
             tool_calls: Vec::new(),
             duration_secs: None,
             title: Some("Todos".to_string()),
-            tool_data: None,
-        }
-    }
-
-    /// Create a memory injection message (bordered box display).
-    pub fn memory(title: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: "memory".to_string(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: Some(title.into()),
             tool_data: None,
         }
     }
@@ -146,18 +121,6 @@ impl DisplayMessage {
         }
     }
 
-    /// Create an assistant message with duration.
-    pub fn assistant_with_duration(content: impl Into<String>, duration_secs: f32) -> Self {
-        Self {
-            role: "assistant".to_string(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: Some(duration_secs),
-            title: None,
-            tool_data: None,
-        }
-    }
-
     /// Create a tool message.
     pub fn tool(content: impl Into<String>, tool_data: ToolCall) -> Self {
         Self {
@@ -175,33 +138,6 @@ impl DisplayMessage {
         Self {
             role: "tool".to_string(),
             content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: None,
-            tool_data: None,
-        }
-    }
-
-    /// Create a display-only metadata transcript message.
-    pub fn meta(content: impl Into<String>) -> Self {
-        Self {
-            role: "meta".to_string(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: None,
-            tool_data: None,
-        }
-    }
-
-    /// Create a display-only spacer used by the terminal-style clear (Ctrl+L):
-    /// renders as `rows` blank lines so the prior transcript sits just above
-    /// the viewport, exactly like a terminal's clear-with-scrollback. Not part
-    /// of provider/model context.
-    pub fn spacer(rows: usize) -> Self {
-        Self {
-            role: "spacer".to_string(),
-            content: rows.to_string(),
             tool_calls: Vec::new(),
             duration_secs: None,
             title: None,
@@ -235,28 +171,6 @@ impl DisplayMessage {
         }
     }
 
-    /// Create a tool message with title.
-    pub fn tool_with_title(
-        content: impl Into<String>,
-        tool_data: ToolCall,
-        title: impl Into<String>,
-    ) -> Self {
-        Self {
-            role: "tool".to_string(),
-            content: content.into(),
-            tool_calls: Vec::new(),
-            duration_secs: None,
-            title: Some(title.into()),
-            tool_data: Some(tool_data),
-        }
-    }
-
-    /// Add tool calls to message (builder pattern).
-    pub fn with_tool_calls(mut self, tool_calls: Vec<String>) -> Self {
-        self.tool_calls = tool_calls;
-        self
-    }
-
     /// Add title to message (builder pattern).
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
@@ -276,15 +190,6 @@ impl DisplayMessage {
         }
         hasher.finish()
     }
-}
-
-pub fn display_messages_from_rendered_messages(
-    messages: impl IntoIterator<Item = RenderedMessage>,
-) -> Vec<DisplayMessage> {
-    messages
-        .into_iter()
-        .map(DisplayMessage::from_rendered_message)
-        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
