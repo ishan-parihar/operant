@@ -81,7 +81,7 @@ use git::{
 #[allow(unused_imports)]
 pub(crate) use git::{edited_paths_from_tool_call, resolve_edited_path};
 #[allow(unused_imports)]
-pub use graph::{GraphEdge, GraphNode, build_graph_topology, graph_node_score};
+pub use graph::{GraphEdge, GraphNode, graph_node_score};
 pub(crate) use memory_utils::is_traceworthy_memory_event;
 use memory_utils::{memory_active_summary, memory_last_trace_summary, memory_state_detail};
 use model::{render_model_info, render_model_widget, runtime_has_data, runtime_height};
@@ -251,15 +251,6 @@ impl WidgetKind {
 pub enum Side {
     Left,
     Right,
-}
-
-impl Side {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Side::Left => "left",
-            Side::Right => "right",
-        }
-    }
 }
 
 pub(crate) fn is_overview_mergeable(kind: WidgetKind) -> bool {
@@ -644,16 +635,6 @@ impl DirtyFile {
     }
 }
 
-impl GitInfo {
-    pub fn is_interesting(&self) -> bool {
-        self.modified > 0
-            || self.staged > 0
-            || self.untracked > 0
-            || self.ahead > 0
-            || self.behind > 0
-    }
-}
-
 /// Ambient mode status data for the info widget
 #[derive(Debug, Clone)]
 pub struct AmbientWidgetData {
@@ -998,22 +979,6 @@ fn get_or_init_state() -> std::sync::MutexGuard<'static, Option<WidgetsState>> {
     guard
 }
 
-/// Toggle widget visibility (user preference)
-pub fn toggle_enabled() {
-    let mut guard = get_or_init_state();
-    if let Some(state) = guard.as_mut() {
-        state.enabled = !state.enabled;
-    }
-}
-
-/// Check if widget is enabled by user
-pub fn is_enabled() -> bool {
-    get_or_init_state()
-        .as_ref()
-        .map(|s| s.enabled)
-        .unwrap_or(true)
-}
-
 /// Intersect the dock-gating `reliable` margin profile with the settlement
 /// profile, so a *new* resident widget can only be placed next to transcript
 /// lines whose negative space has stopped changing (never the streaming tail or
@@ -1208,25 +1173,6 @@ pub(crate) fn calculate_widget_height(
 
     let total = content_height + border_height;
     total.min(max_height)
-}
-
-/// Legacy API for backwards compatibility - will be removed
-/// Calculate the widget layout based on available space
-/// Returns the Rect where the widget should be drawn, or None if it shouldn't show
-#[deprecated(note = "Use calculate_placements instead")]
-pub fn calculate_layout(
-    messages_area: Rect,
-    free_widths: &[u16],
-    data: &InfoWidgetData,
-) -> Option<Rect> {
-    let margins = Margins {
-        right_widths: free_widths.to_vec(),
-        left_widths: Vec::new(),
-        centered: false,
-        ..Default::default()
-    };
-    let placements = calculate_placements(messages_area, &margins, data);
-    placements.first().map(|p| p.rect)
 }
 
 /// Render all placed widgets
@@ -1928,25 +1874,6 @@ fn render_ambient_widget(data: &InfoWidgetData, inner: Rect) -> Framed {
     }
 
     framed
-}
-
-/// Legacy render function - kept for backwards compatibility
-/// Renders the first available widget at the given rect
-#[deprecated(note = "Use render_all instead")]
-pub fn render(frame: &mut Frame, rect: Rect, data: &InfoWidgetData) {
-    // Just render as the first available widget type
-    let available = data.available_widgets();
-    if available.is_empty() {
-        return;
-    }
-
-    // Create a temporary placement for the first widget
-    let placement = WidgetPlacement {
-        kind: available[0],
-        rect,
-        side: Side::Right,
-    };
-    render_single_widget(frame, &placement, data);
 }
 
 fn render_page(kind: InfoPageKind, data: &InfoWidgetData, inner: Rect) -> Vec<Line<'static>> {

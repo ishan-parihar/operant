@@ -13,9 +13,7 @@ pub enum StoredCredential {
     },
     OAuthToken {
         access: String,
-        #[allow(dead_code)] // Prepared for OAuth token refresh logic
         refresh: String,
-        #[allow(dead_code)] // Prepared for OAuth token expiry tracking
         expires: u64,
     },
 }

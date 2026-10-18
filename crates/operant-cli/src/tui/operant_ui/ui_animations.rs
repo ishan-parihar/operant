@@ -56,14 +56,6 @@ static IDLE_ANIMATION_PARTIAL_REPAINTS: std::sync::atomic::AtomicU64 =
 static IDLE_ANIMATION_FULL_REPAINTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-pub(crate) fn note_idle_animation_partial_repaint() {
-    IDLE_ANIMATION_PARTIAL_REPAINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-pub(crate) fn note_idle_animation_full_repaint() {
-    IDLE_ANIMATION_FULL_REPAINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// Tally of why the animation-only repaint was refused, for `draw-stats`.
 ///
 /// A tally rather than a "last reason" because the fast path is consulted many
@@ -73,15 +65,6 @@ pub(crate) fn note_idle_animation_full_repaint() {
 static IDLE_ANIMATION_FAST_PATH_BLOCKED: std::sync::Mutex<
     Option<std::collections::BTreeMap<&'static str, u64>>,
 > = std::sync::Mutex::new(None);
-
-pub(crate) fn note_idle_animation_fast_path_blocked(reason: &'static str) {
-    if let Ok(mut slot) = IDLE_ANIMATION_FAST_PATH_BLOCKED.lock() {
-        *slot
-            .get_or_insert_with(std::collections::BTreeMap::new)
-            .entry(reason)
-            .or_insert(0) += 1;
-    }
-}
 
 pub(crate) fn idle_animation_fast_path_blocked_reasons() -> serde_json::Value {
     match IDLE_ANIMATION_FAST_PATH_BLOCKED.lock() {
@@ -119,45 +102,6 @@ pub(crate) fn record_idle_animation_area(area: Option<Rect>) {
     #[cfg(not(test))]
     {
         LAST_IDLE_ANIMATION_AREA.store(pack_area(area), std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-pub(crate) fn last_idle_animation_area() -> Option<Rect> {
-    #[cfg(test)]
-    {
-        return TEST_LAST_IDLE_ANIMATION_AREA.with(|snapshot| *snapshot.borrow());
-    }
-    #[cfg(not(test))]
-    {
-        unpack_area(LAST_IDLE_ANIMATION_AREA.load(std::sync::atomic::Ordering::Relaxed))
-    }
-}
-
-/// Repaint just the idle-animation rows of an already-rendered frame buffer.
-///
-/// The surrounding cells were already theme/emoji adapted when the full frame
-/// was drawn, so adaptation is applied to the freshly written animation cells
-/// only: `adapt_buffer_for_theme` inverts colors on light terminals and is not
-/// idempotent, so re-running it over the reused buffer would flip everything
-/// back. The animation writes plain box/shade glyphs and a foreground color, so
-/// per-cell foreground adaptation is the complete equivalent here.
-pub(crate) fn render_idle_animation_into(buf: &mut Buffer, area: Rect, elapsed: f32) {
-    let area = area.intersection(*buf.area());
-    // A full frame clears the whole surface before drawing, so the animation
-    // blits over reset cells and leaves its blank cells styleless. Here the rows
-    // still hold the previous tick's glyphs and colors, so reset them first to
-    // reproduce that starting state exactly.
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            buf[(x, y)].reset();
-        }
-    }
-    render_idle_animation(buf, area, elapsed);
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            let cell = &mut buf[(x, y)];
-            cell.fg = crate::tui::vendor::style::adapt_foreground_for_display(cell.fg, cell.bg);
-        }
     }
 }
 

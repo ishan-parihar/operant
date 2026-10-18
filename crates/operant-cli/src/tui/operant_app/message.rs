@@ -21,96 +21,6 @@ pub use crate::tui::operant_model::vendor_types::ToolCall;
 // definition moved to operant_model::vendor_types (which carries the same derive);
 // deleted here since a `pub use` cannot take it.
 
-/// Tool definition advertised to model providers.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    /// Prompt-visible text sent to the model by provider adapters.
-    /// Approximate prompt cost: description.len() / 4. Use
-    /// ToolDefinition::description_token_estimate() when reviewing tool bloat.
-    pub description: String,
-    pub input_schema: serde_json::Value,
-    /// Provider-native deferred loading. A deferred definition is sent in the
-    /// request's tool catalog but stays out of the cached system-prompt prefix;
-    /// it becomes callable only once a [`ContentBlock::ToolReference`] for it
-    /// appears in the conversation. Adding or removing deferred definitions
-    /// therefore never invalidates the provider prompt cache. Providers without
-    /// native support drop deferred definitions and reference blocks.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub defer_loading: bool,
-}
-
-impl ToolDefinition {
-    /// Construct an eagerly loaded definition.
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        input_schema: serde_json::Value,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            description: description.into(),
-            input_schema,
-            defer_loading: false,
-        }
-    }
-
-    /// Mark this definition as deferred (see [`ToolDefinition::defer_loading`]).
-    pub fn deferred(mut self) -> Self {
-        self.defer_loading = true;
-        self
-    }
-
-    /// Eager definitions only: what enters the cached prompt prefix.
-    pub fn eager(defs: &[ToolDefinition]) -> Vec<ToolDefinition> {
-        defs.iter().filter(|d| !d.defer_loading).cloned().collect()
-    }
-
-    /// Serialized size of the full tool definition payload sent to providers.
-    pub fn prompt_chars(&self) -> usize {
-        serde_json::json!({
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
-        })
-        .to_string()
-        .len()
-    }
-
-    /// Approximate prompt-token cost of this tool's top-level description.
-    ///
-    /// This uses jcode's standard chars/4 heuristic, matching other token
-    /// budget estimates in the codebase.
-    pub fn description_token_estimate(&self) -> usize {
-        estimate_tokens(&self.description)
-    }
-
-    /// Approximate prompt-token cost of the full tool definition payload.
-    pub fn prompt_token_estimate(&self) -> usize {
-        estimate_tokens(
-            &serde_json::json!({
-                "name": self.name,
-                "description": self.description,
-                "input_schema": self.input_schema,
-            })
-            .to_string(),
-        )
-    }
-
-    pub fn aggregate_prompt_chars(defs: &[ToolDefinition]) -> usize {
-        defs.iter().map(Self::prompt_chars).sum()
-    }
-
-    pub fn aggregate_prompt_token_estimate(defs: &[ToolDefinition]) -> usize {
-        defs.iter().map(Self::prompt_token_estimate).sum()
-    }
-}
-
-fn estimate_tokens(s: &str) -> usize {
-    const APPROX_CHARS_PER_TOKEN: usize = 4;
-    s.len() / APPROX_CHARS_PER_TOKEN
-}
-
 /// Role in conversation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -239,23 +149,6 @@ impl Message {
         }
     }
 
-    pub fn user_with_images(text: &str, images: Vec<(String, String)>) -> Self {
-        let mut content: Vec<ContentBlock> = images
-            .into_iter()
-            .map(|(media_type, data)| ContentBlock::Image { media_type, data })
-            .collect();
-        content.push(ContentBlock::Text {
-            text: text.to_string(),
-            cache_control: None,
-        });
-        Self {
-            role: Role::User,
-            content,
-            timestamp: Some(chrono::Utc::now()),
-            tool_duration_ms: None,
-        }
-    }
-
     pub fn assistant_text(text: &str) -> Self {
         Self {
             role: Role::Assistant,
@@ -266,144 +159,6 @@ impl Message {
             timestamp: Some(chrono::Utc::now()),
             tool_duration_ms: None,
         }
-    }
-
-    pub fn tool_result(tool_use_id: &str, content: &str, is_error: bool) -> Self {
-        Self::tool_result_with_duration(tool_use_id, content, is_error, None)
-    }
-
-    pub fn tool_result_with_duration(
-        tool_use_id: &str,
-        content: &str,
-        is_error: bool,
-        tool_duration_ms: Option<u64>,
-    ) -> Self {
-        Self {
-            role: Role::User,
-            content: vec![ContentBlock::ToolResult {
-                tool_use_id: tool_use_id.to_string(),
-                content: content.to_string(),
-                is_error: if is_error { Some(true) } else { None },
-            }],
-            timestamp: Some(chrono::Utc::now()),
-            tool_duration_ms,
-        }
-    }
-
-    /// Format a timestamp deterministically in UTC for injection into model-visible content.
-    pub fn format_timestamp(ts: &chrono::DateTime<chrono::Utc>) -> String {
-        ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    }
-
-    pub fn format_duration(duration_ms: u64) -> String {
-        match duration_ms {
-            0..=999 => format!("{}ms", duration_ms),
-            1_000..=9_999 => format!("{:.1}s", duration_ms as f64 / 1000.0),
-            10_000..=59_999 => format!("{}s", duration_ms / 1000),
-            _ => {
-                let total_seconds = duration_ms / 1000;
-                let minutes = total_seconds / 60;
-                let seconds = total_seconds % 60;
-                if seconds == 0 {
-                    format!("{}m", minutes)
-                } else {
-                    format!("{}m {}s", minutes, seconds)
-                }
-            }
-        }
-    }
-
-    pub fn is_internal_system_reminder(&self) -> bool {
-        self.content
-            .iter()
-            .find_map(|block| match block {
-                ContentBlock::Text { text, .. } => Some(text.trim_start()),
-                _ => None,
-            })
-            .is_some_and(|text| text.starts_with("<system-reminder>"))
-    }
-
-    fn should_skip_timestamp_injection(&self) -> bool {
-        self.is_internal_system_reminder()
-    }
-
-    fn tool_result_tag(&self, ts: &chrono::DateTime<chrono::Utc>) -> String {
-        match self.tool_duration_ms {
-            Some(duration_ms) => {
-                let duration_ms_i64 = i64::try_from(duration_ms).unwrap_or(i64::MAX);
-                let start_ts = ts
-                    .checked_sub_signed(chrono::Duration::milliseconds(duration_ms_i64))
-                    .unwrap_or(*ts);
-                format!(
-                    "[tool timing: start={} finish={} duration={}]",
-                    Self::format_timestamp(&start_ts),
-                    Self::format_timestamp(ts),
-                    Self::format_duration(duration_ms)
-                )
-            }
-            None => format!("[{}]", Self::format_timestamp(ts)),
-        }
-    }
-
-    /// Return a copy of messages with timestamps injected into user-role text content.
-    /// Tool results get a stable UTC timing header prepended to content.
-    /// User text messages get a stable UTC timestamp prepended to the first text block.
-    pub fn with_timestamps(messages: &[Message]) -> Vec<Message> {
-        messages
-            .iter()
-            .map(|msg| {
-                let Some(ts) = msg.timestamp else {
-                    return msg.clone();
-                };
-                if msg.role != Role::User || msg.should_skip_timestamp_injection() {
-                    return msg.clone();
-                }
-                let text_tag = format!("[{}]", Self::format_timestamp(&ts));
-                let tool_result_tag = msg.tool_result_tag(&ts);
-                let mut msg = msg.clone();
-                let mut tagged = false;
-                for block in &mut msg.content {
-                    match block {
-                        ContentBlock::Text { text, .. } if !tagged => {
-                            *text = format!("{} {}", text_tag, text);
-                            tagged = true;
-                        }
-                        ContentBlock::ToolResult { content, .. } if !tagged => {
-                            *content = format!("{} {}", tool_result_tag, content);
-                            tagged = true;
-                        }
-                        _ => {}
-                    }
-                }
-                msg
-            })
-            .collect()
-    }
-}
-
-pub const TOOL_OUTPUT_MISSING_TEXT: &str =
-    "Tool output missing (session interrupted before tool execution completed)";
-
-const STABLE_HASH_SEED: u64 = 0xcbf29ce484222325;
-const STABLE_HASH_PRIME: u64 = 0x100000001b3;
-
-fn stable_hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hash = STABLE_HASH_SEED;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(STABLE_HASH_PRIME);
-    }
-    hash
-}
-
-pub fn extend_stable_hash(acc: u64, next: u64) -> u64 {
-    stable_hash_bytes(&[acc.to_le_bytes().as_slice(), next.to_le_bytes().as_slice()].concat())
-}
-
-pub fn stable_message_hash(message: &Message) -> u64 {
-    match serde_json::to_vec(message) {
-        Ok(bytes) => stable_hash_bytes(&bytes),
-        Err(_) => stable_hash_bytes(format!("{:?}", message).as_bytes()),
     }
 }
 
@@ -475,51 +230,6 @@ pub fn cache_relevant_message_hashes(messages: &[Message]) -> Vec<u64> {
         .collect()
 }
 
-pub fn ends_with_fresh_user_turn(messages: &[Message]) -> bool {
-    for msg in messages.iter().rev() {
-        if msg.role != Role::User {
-            return false;
-        }
-
-        if msg
-            .content
-            .iter()
-            .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
-        {
-            return false;
-        }
-
-        if msg.content.is_empty() {
-            return false;
-        }
-
-        let mut saw_user_text = false;
-        for block in &msg.content {
-            match block {
-                ContentBlock::Text { text, .. } => {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() && !trimmed.starts_with("<system-reminder>") {
-                        saw_user_text = true;
-                    }
-                }
-                _ => return false,
-            }
-        }
-
-        if saw_user_text {
-            return true;
-        }
-
-        if msg.is_internal_system_reminder() {
-            continue;
-        }
-
-        return false;
-    }
-
-    false
-}
-
 fn is_fresh_user_text_message(message: &Message) -> bool {
     if message.role != Role::User {
         return false;
@@ -573,34 +283,6 @@ pub fn messages_with_dynamic_system_context(
     out
 }
 
-/// Sanitize a tool ID so it matches the pattern `^[a-zA-Z0-9_-]+$`.
-///
-/// Different providers generate tool IDs in different formats. When switching
-/// from one provider to another mid-conversation, the historical tool IDs may
-/// contain characters that the new provider rejects (e.g., dots in Copilot IDs
-/// sent to Anthropic). This function replaces any invalid characters with
-/// underscores.
-pub fn sanitize_tool_id(id: &str) -> String {
-    if id.is_empty() {
-        return "unknown".to_string();
-    }
-    let sanitized: String = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if sanitized.is_empty() {
-        "unknown".to_string()
-    } else {
-        sanitized
-    }
-}
-
 impl ToolCall {
     /// Build the persisted [`ContentBlock::ToolUse`] for this call.
     ///
@@ -620,45 +302,6 @@ impl ToolCall {
         }
     }
 
-    pub fn normalize_input_to_object(input: serde_json::Value) -> serde_json::Value {
-        match input {
-            serde_json::Value::Object(_) => input,
-            _ => serde_json::Value::Object(serde_json::Map::new()),
-        }
-    }
-
-    pub fn input_as_object(input: &serde_json::Value) -> serde_json::Value {
-        Self::normalize_input_to_object(input.clone())
-    }
-
-    pub fn parse_streamed_input_to_object(input: &str) -> serde_json::Value {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return serde_json::Value::Object(serde_json::Map::new());
-        }
-
-        match serde_json::from_str::<serde_json::Value>(trimmed) {
-            Ok(value) => Self::normalize_input_to_object(value),
-            Err(_) => serde_json::Value::Null,
-        }
-    }
-
-    pub fn validation_error(&self) -> Option<String> {
-        if self.name.trim().is_empty() {
-            return Some("Invalid tool call: tool name must not be empty.".to_string());
-        }
-
-        if !self.input.is_object() {
-            return Some(format!(
-                "Invalid tool call for '{}': arguments must be a JSON object, got {}.",
-                self.name,
-                json_value_kind(&self.input)
-            ));
-        }
-
-        None
-    }
-
     pub fn intent_from_input(input: &serde_json::Value) -> Option<String> {
         input
             .get("intent")
@@ -667,36 +310,6 @@ impl ToolCall {
             .filter(|intent| !intent.is_empty())
             .map(ToString::to_string)
     }
-
-    pub fn refresh_intent_from_input(&mut self) {
-        self.intent = Self::intent_from_input(&self.input);
-    }
-}
-
-fn json_value_kind(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct InputShellResult {
-    pub command: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    pub output: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    pub duration_ms: u64,
-    #[serde(default)]
-    pub truncated: bool,
-    #[serde(default)]
-    pub failed_to_start: bool,
 }
 
 /// Connection phase for status bar transparency.
@@ -729,107 +342,6 @@ impl std::fmt::Display for ConnectionPhase {
             }
         }
     }
-}
-
-/// Streaming event from provider.
-#[derive(Debug, Clone)]
-pub enum StreamEvent {
-    /// Text content delta
-    TextDelta(String),
-    /// An assistant text message ended within a provider response.
-    TextDone,
-    /// Tool use started
-    ToolUseStart { id: String, name: String },
-    /// Tool input delta (JSON fragment)
-    ToolInputDelta(String),
-    /// Keyed JSON fragment, allowing parallel calls to stream independently.
-    ToolInputDeltaFor { id: String, delta: String },
-    /// Tool use complete
-    ToolUseEnd,
-    /// Completion of a specific parallel call.
-    ToolUseEndFor { id: String },
-    /// Gemini 3 thought signature for the most recent tool call. Emitted right
-    /// after the matching `ToolUseStart`/`ToolUseEnd` so the agent loop can
-    /// persist it on the `ToolUse` block and replay it on later turns.
-    ToolUseSignature(String),
-    /// Thought signature for a specific call, including interleaved calls.
-    ToolUseSignatureFor { id: String, signature: String },
-    /// Tool result from provider (provider already executed the tool)
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        is_error: bool,
-    },
-    /// Image generated by a provider-native image generation tool.
-    GeneratedImage {
-        id: String,
-        path: String,
-        metadata_path: Option<String>,
-        output_format: String,
-        revised_prompt: Option<String>,
-    },
-    /// Extended thinking started
-    ThinkingStart,
-    /// Extended thinking delta (reasoning content)
-    ThinkingDelta(String),
-    /// Provider signature for the current thinking block.
-    ThinkingSignatureDelta(String),
-    /// Native OpenAI Responses reasoning item for future-turn replay.
-    OpenAIReasoning {
-        id: String,
-        summary: Vec<String>,
-        encrypted_content: Option<String>,
-        status: Option<String>,
-    },
-    /// Extended thinking ended
-    ThinkingEnd,
-    /// Extended thinking completed with duration
-    ThinkingDone { duration_secs: f64 },
-    /// Message complete (may have stop reason)
-    MessageEnd { stop_reason: Option<String> },
-    /// A transient transport fault interrupted the stream and the provider is
-    /// about to retry the same request from the top. Consumers must discard
-    /// any partial output accumulated for the current attempt (text, tool
-    /// calls, reasoning) so the replayed stream renders cleanly instead of
-    /// duplicating. Safe for jcode HTTP providers because tools only execute
-    /// after the stream completes, so a partial attempt has no side effects.
-    RetryRollback { attempt: u32, max: u32 },
-    /// Token usage update
-    TokenUsage {
-        input_tokens: Option<u64>,
-        output_tokens: Option<u64>,
-        cache_read_input_tokens: Option<u64>,
-        cache_creation_input_tokens: Option<u64>,
-    },
-    /// Active transport/connection type for this stream
-    ConnectionType { connection: String },
-    /// Connection phase update (for status bar transparency)
-    ConnectionPhase { phase: ConnectionPhase },
-    /// Provider-supplied human-readable transport detail for the status line
-    StatusDetail { detail: String },
-    /// Error occurred
-    Error {
-        message: String,
-        /// Seconds until rate limit resets (if this is a rate limit error)
-        retry_after_secs: Option<u64>,
-    },
-    /// Provider session ID (for conversation resume)
-    SessionId(String),
-    /// Compaction occurred (context was summarized)
-    Compaction {
-        trigger: String,
-        pre_tokens: Option<u64>,
-        /// Provider-native compaction artifact, if one was emitted.
-        openai_encrypted_content: Option<String>,
-    },
-    /// Upstream provider info (e.g., which provider OpenRouter routed to)
-    UpstreamProvider { provider: String },
-    /// Native tool call from a provider bridge that needs execution by jcode
-    NativeToolCall {
-        request_id: String,
-        tool_name: String,
-        input: serde_json::Value,
-    },
 }
 
 #[cfg(test)]
@@ -1137,18 +649,6 @@ fn background_task_display_name<'a>(
         .filter(|name| !name.is_empty() && *name != tool_name)
 }
 
-fn background_task_header_label(tool_name: &str, display_name: Option<&str>) -> String {
-    if let Some(display_name) = background_task_display_name(tool_name, display_name) {
-        format!(
-            "`{}` (`{}`)",
-            sanitize_background_task_label(display_name),
-            sanitize_background_task_label(tool_name)
-        )
-    } else {
-        format!("`{}`", sanitize_background_task_label(tool_name))
-    }
-}
-
 pub fn background_task_display_label(tool_name: &str, display_name: Option<&str>) -> String {
     background_task_display_name(tool_name, display_name)
         .unwrap_or(tool_name)
@@ -1179,42 +679,6 @@ fn parse_background_task_header_label(label: &str) -> (String, Option<String>) {
     }
 
     (label.trim().to_string(), None)
-}
-
-fn strip_stream_prefix(line: &str) -> &str {
-    line.trim()
-        .strip_prefix("[stderr] ")
-        .or_else(|| line.trim().strip_prefix("[stdout] "))
-        .unwrap_or_else(|| line.trim())
-}
-
-fn background_task_failure_summary(preview: &str) -> Option<String> {
-    let normalized = strip_ansi_escape_sequences(preview)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n");
-    let mut fallback: Option<String> = None;
-
-    for raw_line in normalized.lines() {
-        let line = strip_stream_prefix(raw_line);
-        if line.is_empty() {
-            continue;
-        }
-        if line.contains("Compile terminated by signal")
-            || line.contains("Source tree drift detected")
-            || line.contains("source metadata")
-        {
-            return Some(line.to_string());
-        }
-        if fallback.is_none()
-            && (line.starts_with("error:")
-                || line.starts_with("Error:")
-                || line.starts_with("Failed:"))
-        {
-            fallback = Some(line.to_string());
-        }
-    }
-
-    fallback
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1393,14 +857,6 @@ fn compile_static_regex(pattern: &str) -> Option<Regex> {
             None
         }
     }
-}
-
-// [port-decision] leaf ports verbatim from operant-base/src/message/notifications.rs:
-// sanitize_background_task_label (:149), split_progress_source (:358),
-// strip_progress_bar_prefix (:368), parse_progress_percent (:378) — referenced
-// inside this file by the ported notification formatters.
-fn sanitize_background_task_label(text: &str) -> String {
-    text.replace('`', "'")
 }
 
 fn split_progress_source(detail: &str) -> (String, Option<String>) {

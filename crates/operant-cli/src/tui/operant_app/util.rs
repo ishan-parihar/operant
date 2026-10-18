@@ -22,19 +22,6 @@ pub fn estimate_tokens(s: &str) -> usize {
     s.len() / APPROX_CHARS_PER_TOKEN
 }
 
-/// Format a number with ASCII thousands separators.
-pub fn format_number(n: usize) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (idx, ch) in digits.chars().enumerate() {
-        if idx > 0 && (digits.len() - idx).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
 /// Format a token count in the compact style used by the TUI.
 pub fn format_approx_token_count(tokens: usize) -> String {
     match tokens {

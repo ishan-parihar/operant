@@ -37,9 +37,7 @@ use crate::tui::operant_app::config_shim::{
 use crate::tui::operant_app::info_widget::{AuthMethod, InfoWidgetData};
 use crate::tui::operant_app::prompt::ContextInfo;
 use crate::tui::operant_app::side_panel::SidePanelSnapshot;
-use crate::tui::operant_app::tui_fns::{
-    BackgroundTaskRow, CacheTtlInfo, ContextSnapshot, PromptHistorySearchView,
-};
+use crate::tui::operant_app::tui_fns::{BackgroundTaskRow, CacheTtlInfo, PromptHistorySearchView};
 use crate::tui::operant_app::tui_state::TuiState;
 use crate::tui::operant_model::DisplayMessage;
 use crate::tui::operant_model::vendor_types::ToolCall;
@@ -272,14 +270,6 @@ impl TuiState for App {
         // prepends no compacted history at render time; returns None — wire
         // with the compacted-history loader.
         None
-    }
-
-    fn copy_selection_edge_autoscroll_active(&self) -> bool {
-        // [port-decision] copy_selection_edge_autoscroll_active: operant's
-        // mouse wheel smoothing is a scroll accumulator
-        // (`scroll_accel`/`scroll_last_time`), not a drag-at-edge flag;
-        // returns false — wire when copy-selection edge autoscroll lands.
-        false
     }
 
     // ---- Provider ----
@@ -595,20 +585,6 @@ impl TuiState for App {
         )
     }
 
-    fn has_pending_mouse_scroll_animation(&self) -> bool {
-        // [port-decision] has_pending_mouse_scroll_animation: operant smooths
-        // wheel deltas in the same tick (`scroll_accel` is private and has no
-        // "lines still queued" flag); returns false — wire when the smoother
-        // exposes its queue depth.
-        false
-    }
-
-    fn dictation_key_label(&self) -> Option<String> {
-        // [port-decision] dictation_key_label: no built-in dictation surface
-        // exists after the voice-mode purge (iter-668); no label to show.
-        None
-    }
-
     fn animation_elapsed(&self) -> f32 {
         self.session_start.elapsed().as_secs_f32()
     }
@@ -700,15 +676,6 @@ impl TuiState for App {
         (self.context_window_size > 0).then_some(self.context_window_size as usize)
     }
 
-    fn context_snapshot(&self) -> ContextSnapshot {
-        let info = self.context_info();
-        ContextSnapshot {
-            info: (info.total_chars > 0).then_some(info),
-            revision: self.transcript_version.get(),
-            fresh: !self.is_streaming,
-        }
-    }
-
     fn client_update_available(&self) -> bool {
         // [port-decision] client_update_available: operant's update check
         // publishes a notification rather than a sticky flag on App; returns
@@ -750,12 +717,6 @@ impl TuiState for App {
     }
 
     // ---- Workspace ----
-
-    fn workspace_mode_enabled(&self) -> bool {
-        // [port-decision] workspace_mode_enabled: operant has no workspace map
-        // surface; returns false — wire when workspace mode is added.
-        false
-    }
 
     fn render_streaming_markdown(&self, width: usize) -> Vec<Line<'static>> {
         crate::tui::operant_app::markdown::render_markdown_with_width(
@@ -875,16 +836,6 @@ impl TuiState for App {
         status
     }
 
-    fn update_cost(&mut self) {
-        if let Some(tracker) = std::sync::Arc::get_mut(&mut self.cost_tracker) {
-            tracker.record_usage(
-                self.turn_input_tokens as u32,
-                self.turn_output_tokens as u32,
-            );
-            self.cost_usd = tracker.total_cost;
-        }
-    }
-
     // ---- Diagram pane ----
 
     fn diagram_mode(&self) -> DiagramDisplayMode {
@@ -905,10 +856,6 @@ impl TuiState for App {
 
     fn diagram_pane_ratio(&self) -> u8 {
         0
-    }
-
-    fn diagram_pane_ratio_user_adjusted(&self) -> bool {
-        false
     }
 
     fn diagram_pane_animating(&self) -> bool {

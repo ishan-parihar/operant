@@ -40,8 +40,8 @@
 use crate::tui::operant_app::app::ProcessingStatus;
 use crate::tui::operant_app::info_widget;
 use crate::tui::operant_app::tui_fns::{
-    BackgroundTaskRow, CacheTtlInfo, ContextSnapshot, InlineInteractiveState, InlineUiStateRef,
-    InlineViewState, PromptHistorySearchView, scheduled_notification_text, ssh_remote_host,
+    BackgroundTaskRow, CacheTtlInfo, InlineInteractiveState, InlineUiStateRef, InlineViewState,
+    PromptHistorySearchView, scheduled_notification_text, ssh_remote_host,
 };
 use crate::tui::operant_model::DisplayMessage;
 use crate::tui::operant_model::vendor_types::ToolCall;
@@ -190,14 +190,6 @@ pub trait TuiState {
     /// older messages are prepended above, instead of snapping to the new top.
     fn pending_history_anchor_lines_from_bottom(&self) -> Option<usize> {
         None
-    }
-    /// Whether a mouse drag-selection is currently held at the top/bottom edge of
-    /// a pane and should keep auto-scrolling on every tick (browser-style). When
-    /// true the redraw loop must stay responsive even if the transcript is
-    /// otherwise idle, since the terminal sends no further events while the mouse
-    /// is held still.
-    fn copy_selection_edge_autoscroll_active(&self) -> bool {
-        false
     }
 
     // ---- Provider ----
@@ -352,12 +344,6 @@ pub trait TuiState {
     }
     /// Whether a transient remote startup phase is active and should keep redraws responsive.
     fn remote_startup_phase_active(&self) -> bool;
-    /// Whether mouse-wheel smoothing has queued lines to animate.
-    fn has_pending_mouse_scroll_animation(&self) -> bool {
-        false
-    }
-    /// Optional configured keybinding label for external dictation.
-    fn dictation_key_label(&self) -> Option<String>;
     /// Time since app started (for startup animations)
     fn animation_elapsed(&self) -> f32;
     /// Time remaining until rate limit resets (if rate limited)
@@ -372,15 +358,6 @@ pub trait TuiState {
     fn has_stashed_input(&self) -> bool;
     /// Context info (what's loaded in context window - static + dynamic)
     fn context_info(&self) -> crate::tui::operant_app::prompt::ContextInfo;
-    /// Authoritative, freshness-tagged context snapshot used by widgets.
-    fn context_snapshot(&self) -> ContextSnapshot {
-        let info = self.context_info();
-        ContextSnapshot {
-            info: (info.total_chars > 0).then_some(info),
-            revision: 0,
-            fresh: true,
-        }
-    }
     /// Context window limit in tokens (if known)
     fn context_limit(&self) -> Option<usize>;
     /// Whether floating information widgets should be drawn for this state.
@@ -428,15 +405,6 @@ pub trait TuiState {
         false
     }
 
-    // ---- Workspace ----
-    /// Whether workspace mode is enabled for this client.
-    fn workspace_mode_enabled(&self) -> bool {
-        false
-    }
-    /// Animation tick used for lightweight workspace map animation.
-    fn workspace_animation_tick(&self) -> u64 {
-        0
-    }
     /// Render streaming text using incremental markdown renderer
     /// This is more efficient than re-rendering on every frame
     fn render_streaming_markdown(&self, width: usize) -> Vec<Line<'static>>;
@@ -444,8 +412,6 @@ pub trait TuiState {
     fn centered_mode(&self) -> bool;
     /// Authentication status for all supported providers
     fn auth_status(&self) -> crate::tui::operant_app::auth::AuthStatus;
-    /// Update cost calculation based on token usage (for API-key providers)
-    fn update_cost(&mut self);
     /// Diagram display mode (none/margin/pinned)
     // ---- Diagram pane ----
     fn diagram_mode(&self) -> crate::tui::operant_app::config_shim::DiagramDisplayMode;
@@ -457,8 +423,6 @@ pub trait TuiState {
     fn diagram_scroll(&self) -> (i32, i32);
     /// Diagram pane width ratio percentage
     fn diagram_pane_ratio(&self) -> u8;
-    /// Whether the user has manually resized the diagram/side pane width.
-    fn diagram_pane_ratio_user_adjusted(&self) -> bool;
     /// Whether the diagram pane ratio is currently animating
     fn diagram_pane_animating(&self) -> bool;
     /// Whether the pinned diagram pane is visible
@@ -504,10 +468,6 @@ pub trait TuiState {
     /// prepared-frame caches that embed anchored image geometry invalidate.
     fn expanded_images_version(&self) -> u64 {
         0
-    }
-    /// Remaining seconds before the pinned image side pane auto-hides.
-    fn pinned_images_auto_hide_remaining_secs(&self) -> Option<u64> {
-        None
     }
     /// Whether to show a native terminal scrollbar for the chat viewport
     fn chat_native_scrollbar(&self) -> bool;

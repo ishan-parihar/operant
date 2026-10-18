@@ -21,7 +21,6 @@ use std::sync::LazyLock;
 /// per-variant attributes would be more noise than signal, and blanket-
 /// allowing the module (as this file did before) hid genuinely dead code
 /// elsewhere in the registry.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyAction {
     // Navigation

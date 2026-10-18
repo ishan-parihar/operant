@@ -3,7 +3,6 @@
 use super::*;
 
 impl App {
-    #[allow(dead_code)] // Used in tests
     pub fn intercept_slash_command_with_args(&mut self, cmd: &str, args: &str) -> bool {
         self.intercept_slash_command_with_args_impl(cmd, args)
     }
@@ -14,7 +13,6 @@ impl App {
 
     /// Backwards-compatible wrapper that takes no args (treats args as empty).
     /// Kept so external callers (and the existing `?` shortcut path) still work.
-    #[allow(dead_code)] // Used in tests
     pub fn intercept_slash_command(&mut self, cmd: &str) -> bool {
         self.intercept_slash_command_with_args_impl(cmd, "")
     }

@@ -32,19 +32,15 @@ pub enum PermissionDialogKind {
     Generic,
     /// Bash command execution — optionally carries a suggested prefix for a
     /// 5th "allow prefix*" option.
-    #[allow(dead_code)] // Prepared for Bash-specific permission dialog
     Bash {
         command: String,
         suggested_prefix: Option<String>,
     },
     /// PowerShell command execution — rendered like Bash without prefix rules.
-    #[allow(dead_code)] // Prepared for PowerShell-specific permission dialog
     PowerShell { command: String },
     /// File read — three options: once / session / deny.
-    #[allow(dead_code)] // Prepared for file read permission dialog
     FileRead { path: String },
     /// File write — four options: once / session / project / deny.
-    #[allow(dead_code)] // Prepared for file write permission dialog
     FileWrite { path: String },
 }
 
@@ -66,7 +62,6 @@ pub struct PermissionOption {
 /// explanation, and a stable set of TS-compatible options.
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
-    #[allow(dead_code)] // Tool use ID for permission tracking
     pub tool_use_id: String,
     pub tool_name: String,
     /// Short summary line shown when present.
@@ -87,7 +82,6 @@ impl PermissionRequest {
     ///   `Y` — Yes, allow this session
     ///   `p` — Yes, always allow (persistent)
     ///   `n` — No, deny
-    #[allow(dead_code)] // Prepared for standard permission dialog
     pub fn standard(tool_use_id: String, tool_name: String, description: String) -> Self {
         Self {
             tool_use_id,
@@ -107,7 +101,6 @@ impl PermissionRequest {
     /// The `reason` string may contain a newline splitting the one-liner from
     /// the danger explanation — this constructor splits on the first `\n` and
     /// places each part in the right field.
-    #[allow(dead_code)] // Prepared for reason-based permission dialog
     pub fn from_reason(
         tool_use_id: String,
         tool_name: String,
@@ -130,7 +123,6 @@ impl PermissionRequest {
 
     /// Build a Bash-specific dialog, computing the options set based on whether
     /// a `suggested_prefix` is available (5 options) or not (4 options).
-    #[allow(dead_code)] // Prepared for Bash-specific permission dialog
     pub fn bash(
         tool_use_id: String,
         tool_name: String,
@@ -156,7 +148,6 @@ impl PermissionRequest {
         }
     }
 
-    #[allow(dead_code)] // Prepared for PowerShell-specific permission dialog
     pub fn powershell(
         tool_use_id: String,
         tool_name: String,
@@ -176,7 +167,6 @@ impl PermissionRequest {
     }
 
     /// Build a FileRead-specific dialog (3 options: once / session / deny).
-    #[allow(dead_code)] // Prepared for file read permission dialog
     pub fn file_read(tool_use_id: String, tool_name: String, reason: String, path: String) -> Self {
         let (description, danger_explanation) = if let Some(nl) = reason.find('\n') {
             (reason[..nl].to_string(), reason[nl + 1..].to_string())
@@ -200,7 +190,6 @@ impl PermissionRequest {
     }
 
     /// Build a FileWrite-specific dialog (4 options: once / session / project / deny).
-    #[allow(dead_code)] // Prepared for file write permission dialog
     pub fn file_write(
         tool_use_id: String,
         tool_name: String,
@@ -322,7 +311,6 @@ fn split_reason(reason: String) -> (String, String) {
     }
 }
 
-#[allow(dead_code)] // Command reason formatting helper
 fn command_reason_body(reason: String, command: &str) -> String {
     let (_, danger_explanation) = split_reason(reason.clone());
     let candidate = if danger_explanation.is_empty() {

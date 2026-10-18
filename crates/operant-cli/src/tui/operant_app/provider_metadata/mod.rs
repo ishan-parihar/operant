@@ -21,19 +21,6 @@ pub enum LoginProviderAuthKind {
     Local,
 }
 
-impl LoginProviderAuthKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::OAuth => "OAuth",
-            Self::ApiKey => "API key",
-            Self::DeviceCode => "device code",
-            Self::Cli => "CLI",
-            Self::Hybrid => "API key / CLI",
-            Self::Local => "local endpoint",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoginProviderTarget {
     AutoImport,
@@ -72,15 +59,6 @@ pub enum LoginProviderAuthStateKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LoginProviderSurface {
-    CliLogin,
-    TuiLogin,
-    ServerBootstrap,
-    AutoInit,
-    AuthStatus,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LoginProviderSurfaceOrder {
     pub cli_login: Option<u8>,
     pub tui_login: Option<u8>,
@@ -103,16 +81,6 @@ impl LoginProviderSurfaceOrder {
             server_bootstrap,
             auto_init,
             auth_status,
-        }
-    }
-
-    pub const fn for_surface(self, surface: LoginProviderSurface) -> Option<u8> {
-        match surface {
-            LoginProviderSurface::CliLogin => self.cli_login,
-            LoginProviderSurface::TuiLogin => self.tui_login,
-            LoginProviderSurface::ServerBootstrap => self.server_bootstrap,
-            LoginProviderSurface::AutoInit => self.auto_init,
-            LoginProviderSurface::AuthStatus => self.auth_status,
         }
     }
 }
@@ -142,17 +110,6 @@ pub struct OpenAiCompatibleProfile {
     pub requires_api_key: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedOpenAiCompatibleProfile {
-    pub id: String,
-    pub display_name: String,
-    pub api_base: String,
-    pub api_key_env: String,
-    pub env_file: String,
-    pub setup_url: String,
-    pub requires_api_key: bool,
-}
-
 mod catalog;
 use catalog::{LOGIN_PROVIDERS, OPENAI_COMPAT_PROFILES};
 
@@ -169,24 +126,6 @@ pub fn resolve_login_provider(input: &str) -> Option<LoginProviderDescriptor> {
     login_providers().iter().copied().find(|provider| {
         provider.id == normalized || provider.aliases.iter().any(|alias| *alias == normalized)
     })
-}
-
-/// Resolve a login provider by id, alias, or display name.
-///
-/// Login completion events carry the human-readable provider label (e.g.
-/// "Anthropic API") rather than the canonical id/alias, so the stricter
-/// [`resolve_login_provider`] (id/alias only) misses them. Auth-change routing
-/// needs to map those labels back to a provider id; matching the display name
-/// here keeps the post-login model refresh attributed to the correct provider.
-pub fn resolve_login_provider_loose(input: &str) -> Option<LoginProviderDescriptor> {
-    if let Some(provider) = resolve_login_provider(input) {
-        return Some(provider);
-    }
-    let normalized = normalize_provider_input(input)?;
-    login_providers()
-        .iter()
-        .copied()
-        .find(|provider| provider.display_name.to_ascii_lowercase() == normalized)
 }
 
 fn normalize_provider_input(input: &str) -> Option<String> {

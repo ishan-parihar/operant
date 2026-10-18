@@ -32,48 +32,12 @@ pub fn inline_image_id(media_type: &str, data_b64: &str) -> u64 {
     std::hash::Hasher::finish(&hasher)
 }
 
-/// Materialize an inline image payload. Degraded (no registry yet): `None`.
-#[must_use]
-pub fn materialize_inline_image(_media_type: &str, _data_b64: &str) -> Option<(u64, u32, u32)> {
-    None
-}
-
 /// Cheap presence probe: is this inline image already registered in the
 /// in-memory render cache? Used by the per-frame draw path so steady-state
 /// scrolling never touches the multi-megabyte payload.
 #[must_use]
 pub fn inline_image_is_materialized(_id: u64) -> bool {
     false
-}
-
-/// [`materialize_inline_image`] for callers that already know the stable
-/// content id, skipping the full-payload hash.
-#[must_use]
-pub fn materialize_inline_image_by_id(
-    _id: u64,
-    _media_type: &str,
-    _data_b64: &str,
-) -> Option<(u64, u32, u32)> {
-    None
-}
-
-/// Re-materialize an inline image whose registry entry was dropped.
-#[must_use]
-pub fn rediscover_inline_image(_id: u64) -> Option<(u64, u32, u32)> {
-    None
-}
-
-/// Re-materialize an image known to be on the filesystem but no longer
-/// referable by the registry (mermaid_runtime.rs:635).
-#[must_use]
-pub fn rediscover_external_image(_hash: u64) -> Option<(u64, u32, u32)> {
-    None
-}
-
-/// The engine's cached-path lookup (mermaid_cache_render.rs:724).
-#[must_use]
-pub fn get_cached_path(_hash: u64) -> Option<std::path::PathBuf> {
-    None
 }
 
 // ---- inline-fit geometry (verbatim, mermaid_content.rs:177-243) ----
@@ -151,36 +115,6 @@ fn inline_fit_geometry_impl(
 
 // ---- fit readiness (verbatim enum + engine's no-picker arm) ----
 
-// Verbatim from mermaid_viewport.rs:873-883 (incl. the doc line above the enum).
-/// Readiness of the stable-fit path for an inline image at a given placeholder
-/// geometry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InlineFitReadiness {
-    /// Protocol state (Kitty) or a pre-scaled decoded source (other protocols)
-    /// already exists for this geometry.
-    Ready,
-    /// The scaled state is missing. Building it on the UI thread costs tens of
-    /// milliseconds for a large screenshot, so callers should prewarm it
-    /// off-thread via [`prewarm_inline_fit_state`].
-    NeedsPrewarm,
-    /// The stable-fit fast path does not apply (no picker or video export).
-    Unsupported,
-}
-
-/// Check whether stable-fit state for `hash` is ready at the
-/// `(target_cols, target_rows)` placeholder geometry. Degraded: with no image
-/// picker installed, verbatim from the engine's own no-picker path
-/// (`None => return InlineFitReadiness::Unsupported`).
-#[must_use]
-pub fn inline_fit_readiness(
-    _hash: u64,
-    _target_cols: u16,
-    _target_rows: u16,
-    _draw_border: bool,
-) -> InlineFitReadiness {
-    InlineFitReadiness::Unsupported
-}
-
 // ---- degrade: no-picker/no-materialization variants. EXCLUDED at batch-3:
 // render_image_widget / render_image_widget_fit / render_image_widget_fit_stable /
 // is_video_export_mode — jcode engine draw path. The ported ui_viewport.rs
@@ -211,17 +145,6 @@ pub fn inline_image_dims(_media_type: &str, _data_b64: &str) -> Option<(u64, u32
 /// protocol picker yet, and the text-image fallback flag exists only alongside
 /// it — false).
 pub fn uses_text_image_fallback() -> bool {
-    false
-}
-
-/// Upstream mermaid_viewport.rs:940-946 (signature verbatim; degraded: no picker
-/// means nothing to prewarm into — false).
-pub fn prewarm_inline_fit_state(
-    _hash: u64,
-    _target_cols: u16,
-    _target_rows: u16,
-    _draw_border: bool,
-) -> bool {
     false
 }
 
@@ -261,15 +184,6 @@ pub fn set_mermaid_inline_expand_level(_hash: u64, _expand_level: u64) {}
 pub fn current_preferred_aspect_ratio_bucket() -> Option<u16> {
     None
 }
-
-/// Set a global hook that runs at end of render (in the engine, for logging).
-/// No-op here.
-#[inline]
-pub fn set_render_completed_hook(_hook: fn()) {}
-
-/// Set a log hook used for warnings from the render fallback path. No-op.
-#[inline]
-pub fn set_log_hooks(_open_error: fn(&std::path::Path), _timing: fn(&str)) {}
 
 /// Verbatim from mermaid_content.rs:73-75: the one central note every
 /// text-image fallback (raster, Mermaid, LaTeX) shows when the terminal can't

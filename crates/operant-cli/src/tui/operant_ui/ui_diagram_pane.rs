@@ -414,32 +414,6 @@ fn build_pinned_diagram_live_snapshot_with_font(
     }
 }
 
-pub fn debug_probe_pinned_diagram(
-    diagram: &info_widget::DiagramInfo,
-    area: Rect,
-    inner: Rect,
-    focused: bool,
-    scroll_x: i32,
-    scroll_y: i32,
-    zoom_percent: u8,
-) -> PinnedDiagramLiveDebugSnapshot {
-    build_pinned_diagram_live_snapshot(
-        diagram,
-        PinnedDiagramSnapshotLayout {
-            area,
-            inner,
-            index: 0,
-            total: 1,
-        },
-        PinnedDiagramSnapshotView {
-            focused,
-            scroll_x,
-            scroll_y,
-            zoom_percent,
-        },
-    )
-}
-
 #[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
@@ -477,20 +451,8 @@ thread_local! {
     static PINNED_DIAGRAM_DEBUG_STATE: RefCell<PinnedDiagramDebugState> = RefCell::new(PinnedDiagramDebugState::default());
 }
 
-fn with_pinned_diagram_debug<R>(f: impl FnOnce(&PinnedDiagramDebugState) -> R) -> R {
-    PINNED_DIAGRAM_DEBUG_STATE.with(|state| f(&state.borrow()))
-}
-
 fn with_pinned_diagram_debug_mut<R>(f: impl FnOnce(&mut PinnedDiagramDebugState) -> R) -> R {
     PINNED_DIAGRAM_DEBUG_STATE.with(|state| f(&mut state.borrow_mut()))
-}
-
-pub(crate) fn pinned_diagram_debug_json() -> Option<serde_json::Value> {
-    let live_snapshot = with_pinned_diagram_debug(|state| state.live_snapshot.clone());
-    serde_json::to_value(serde_json::json!({
-        "live": live_snapshot,
-    }))
-    .ok()
 }
 
 pub(crate) fn clear_pinned_diagram_debug_snapshot() {

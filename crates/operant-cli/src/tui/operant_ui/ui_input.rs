@@ -436,10 +436,6 @@ pub(crate) fn input_prompt_len(app: &dyn TuiState, next_prompt: usize) -> usize 
     next_prompt.to_string().chars().count() + prompt_char.chars().count()
 }
 
-pub(crate) fn next_input_prompt_number(app: &dyn TuiState) -> usize {
-    app.display_user_message_count() + 1
-}
-
 pub(super) fn wrapped_input_line_count(
     app: &dyn TuiState,
     area_width: u16,
@@ -2850,106 +2846,6 @@ fn cursor_col_for_segment(segment: &WrappedInputSegment, cursor_char_pos: usize)
         .sum()
 }
 
-fn char_offset_for_clicked_column(text: &str, target_col: usize, display_width: usize) -> usize {
-    use unicode_width::UnicodeWidthChar;
-
-    if target_col >= display_width {
-        return text.chars().count();
-    }
-
-    let mut display_col = 0;
-    let mut chars_before = 0;
-    for c in text.chars() {
-        let cw = c.width().unwrap_or(0);
-        if cw == 0 {
-            chars_before += 1;
-            continue;
-        }
-        if target_col < display_col + cw {
-            if (target_col - display_col).saturating_mul(2) >= cw {
-                chars_before += 1;
-            }
-            return chars_before;
-        }
-        display_col += cw;
-        chars_before += 1;
-    }
-
-    chars_before
-}
-
-pub(crate) fn input_cursor_pos_from_screen(
-    app: &dyn TuiState,
-    area: Rect,
-    next_prompt: usize,
-    column: u16,
-    row: u16,
-) -> Option<usize> {
-    if !layout_utils::point_in_rect(column, row, area) {
-        return None;
-    }
-
-    let input_text = app.input();
-    let reserved_width = send_mode_reserved_width(app);
-    let prompt_len = input_prompt_len(app, next_prompt);
-    let line_width = (area.width as usize).saturating_sub(prompt_len + reserved_width);
-    if line_width == 0 {
-        return Some(app.cursor_pos().min(input_text.len()));
-    }
-
-    let wrapped_lines = wrap_input_segments(input_text, line_width);
-    let hint_lines = input_hint_line_height(app) as usize;
-    let visible_height = area.height as usize;
-    let total_input_lines = wrapped_lines.len().max(1);
-
-    let scroll_offset = if total_input_lines + hint_lines <= visible_height {
-        0
-    } else {
-        let available_for_input = visible_height.saturating_sub(hint_lines);
-        let cursor_char_pos =
-            crate::tui::operant_app::core::byte_offset_to_char_index(input_text, app.cursor_pos());
-        let cursor_line = wrapped_lines
-            .iter()
-            .position(|segment| {
-                cursor_char_pos >= segment.start_char && cursor_char_pos <= segment.end_char
-            })
-            .unwrap_or_else(|| wrapped_lines.len().saturating_sub(1));
-        if cursor_line < available_for_input {
-            0
-        } else {
-            cursor_line.saturating_sub(available_for_input.saturating_sub(1))
-        }
-    };
-
-    let screen_line = row.saturating_sub(area.y) as usize;
-    if screen_line < hint_lines {
-        return None;
-    }
-
-    let max_visible_input_lines = visible_height.saturating_sub(hint_lines).max(1);
-    let input_screen_line = screen_line.saturating_sub(hint_lines);
-    let line_index = (scroll_offset
-        + input_screen_line.min(max_visible_input_lines.saturating_sub(1)))
-    .min(wrapped_lines.len().saturating_sub(1));
-    let segment = &wrapped_lines[line_index];
-
-    let actual_line_width = prompt_len + segment.display_width;
-    let text_start_x = if app.centered_mode() {
-        let center_offset = (area.width as usize).saturating_sub(actual_line_width) / 2;
-        area.x as usize + center_offset + prompt_len
-    } else {
-        area.x as usize + prompt_len
-    };
-    let target_col = column.saturating_sub(text_start_x as u16) as usize;
-    let char_offset =
-        char_offset_for_clicked_column(&segment.text, target_col, segment.display_width);
-    let char_index = segment.start_char + char_offset;
-
-    Some(crate::tui::operant_app::core::char_index_to_byte_offset(
-        input_text, char_index,
-    ))
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "every argument is an independent layout input"
@@ -3064,20 +2960,6 @@ enum QueuedMsgType {
     Pending,
     Interleave,
     Queued,
-}
-
-/// The usable text width of one composer row, i.e. the width used by
-/// `wrap_input_segments` when the composer is rendered into `area_width`.
-/// Returns `None` when there is no room for text.
-pub(crate) fn composer_line_width(
-    app: &dyn TuiState,
-    area_width: u16,
-    next_prompt: usize,
-) -> Option<usize> {
-    let prompt_len = input_prompt_len(app, next_prompt);
-    let reserved = send_mode_reserved_width(app);
-    let width = (area_width as usize).saturating_sub(prompt_len + reserved);
-    (width > 0).then_some(width)
 }
 
 /// Move the cursor one *visual* (wrapped) row up (`delta = -1`) or down

@@ -33,7 +33,6 @@ pub enum VimMode {
 }
 
 impl VimMode {
-    #[allow(dead_code)] // Vim mode label display
     pub fn label(&self) -> &'static str {
         match self {
             Self::Insert => "INSERT",

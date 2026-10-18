@@ -10,7 +10,6 @@
 // App state gets adapted onto the jcode renderer inputs; every excised item
 // is named in the `[port-excision]` deferred block below (nothing dropped
 // silently).
-#![cfg_attr(test, allow(dead_code))]
 // The parent skeleton's re-export surface: upstream ui.rs imports exist FOR
 // the child renderers + frame draw path; until the cutover wires them, the
 // imports are unused by construction. Pruned/audited at the cutover + W7
@@ -40,9 +39,7 @@ mod animations;
 #[allow(unused_imports)] // vendored-verbatim / re-export for cutover consumers
 pub(crate) use animations::{
     disabled_animation_names, idle_animation_debug_json, idle_animation_reserved_height,
-    last_idle_animation_area, note_idle_animation_fast_path_blocked,
-    note_idle_animation_full_repaint, note_idle_animation_partial_repaint,
-    record_idle_animation_area, render_idle_animation_into,
+    record_idle_animation_area,
 };
 #[path = "ui_box.rs"]
 mod box_utils;
@@ -122,21 +119,16 @@ use frame_metrics::{
 };
 pub(crate) use frame_metrics::{
     DrawCallAttribution, FrameInputAttribution, frame_input_attribution_snapshot,
-    key_to_paint_debug_json, note_frame_painted, note_key_event_read, record_draw_call_attribution,
-    set_frame_input_attribution, wall_clock_ms,
+    record_draw_call_attribution, wall_clock_ms,
 };
-pub(crate) use frame_metrics::{
-    debug_draw_call_history, debug_flicker_frame_history, debug_slow_frame_history,
-    recent_flicker_copy_target_for_key, recent_flicker_ui_notice,
-};
+pub(crate) use frame_metrics::{debug_draw_call_history, recent_flicker_ui_notice};
 // [port-source] ui.rs:107-120 — diagram_pane child FLIPPED live at the cutover:
 // ui_diagram_pane.rs is on disk (33KB); every symbol below was verified present in it
 // before the flip (draw_pinned_diagram :783, estimate_*_pane_height/width :661/:674,
 // pinned_diagram_preferred_aspect_ratio :260, the two debug-probe entry points, and
 // the cfg(test) helpers :444/:502/:636/:698/:732).
-pub use diagram_pane::{
-    PinnedDiagramLiveDebugSnapshot, PinnedDiagramProbeRect, debug_probe_pinned_diagram,
-};
+pub(crate) use diagram_pane::reset_pinned_diagram_debug_snapshot;
+pub use diagram_pane::{PinnedDiagramLiveDebugSnapshot, PinnedDiagramProbeRect};
 #[cfg(test)]
 use diagram_pane::{
     debug_probe_pinned_diagram_with_font, div_ceil_u32,
@@ -147,7 +139,6 @@ use diagram_pane::{
     draw_pinned_diagram, estimate_pinned_diagram_pane_height, estimate_pinned_diagram_pane_width,
     pinned_diagram_preferred_aspect_ratio,
 };
-pub(crate) use diagram_pane::{pinned_diagram_debug_json, reset_pinned_diagram_debug_snapshot};
 // [port-source] ui.rs:143 — see the output_style [port-decision] in the excision block:
 // the child file lives at operant_app/output_style.rs, so this is a re-rooted re-export.
 pub(crate) use crate::tui::operant_app::output_style::adapt_buffer_for_emoji_preference;
@@ -158,7 +149,7 @@ pub(crate) use crate::tui::operant_app::output_style::adapt_buffer_for_emoji_pre
 // the flip; draw_side_panel_markdown is `pub(super)` at ui_pinned.rs:526.
 pub(crate) use header::capitalize;
 use inline_ui::{draw_inline_ui, inline_ui_height};
-pub(crate) use memory_estimates::{debug_memory_profile, debug_side_panel_memory_profile};
+
 use memory_estimates::{estimate_prepared_chat_frame_bytes, estimate_prepared_messages_bytes};
 #[cfg(test)]
 use memory_ui::{
@@ -168,18 +159,14 @@ use memory_ui::{group_into_tiles, render_memory_tiles, split_by_display_width};
 use messages::get_cached_message_lines;
 #[cfg_attr(test, allow(unused_imports))]
 pub(crate) use messages::{
-    SWARM_AGENT_SNAPSHOT_TITLE, compact_swarm_await_summary, encode_swarm_agent_snapshot,
-    render_assistant_message, render_background_task_message, render_reasoning_message,
-    render_swarm_message, render_system_message, render_tool_message, render_usage_message,
+    SWARM_AGENT_SNAPSHOT_TITLE, compact_swarm_await_summary, render_assistant_message,
+    render_background_task_message, render_reasoning_message, render_swarm_message,
+    render_system_message, render_tool_message, render_usage_message,
 };
 use pinned_ui::draw_side_panel_markdown;
-pub use pinned_ui::{
-    SidePanelDebugStats, SidePanelMermaidProbe, SidePanelMermaidProbeRect,
-    debug_probe_side_panel_mermaid,
-};
+pub use pinned_ui::{SidePanelDebugStats, SidePanelMermaidProbe, SidePanelMermaidProbeRect};
 pub(crate) use pinned_ui::{
     clear_side_panel_debug_snapshot, clear_side_panel_render_caches, prewarm_focused_side_panel,
-    reset_side_panel_debug_stats, side_panel_debug_json, side_panel_debug_stats,
 };
 #[cfg(test)]
 use viewport::compute_visible_margins;
@@ -434,29 +421,6 @@ fn last_chat_scrollbar_visible() -> bool {
     #[cfg(not(test))]
     {
         LAST_CHAT_SCROLLBAR_VISIBLE.load(Ordering::Relaxed) != 0
-    }
-}
-
-/// Get the total line count from the pinned diff/content pane (set during render).
-pub fn pinned_pane_total_lines() -> usize {
-    #[cfg(test)]
-    {
-        return TEST_PINNED_PANE_TOTAL_LINES.with(Cell::get);
-    }
-    #[cfg(not(test))]
-    {
-        PINNED_PANE_TOTAL_LINES.load(Ordering::Relaxed)
-    }
-}
-
-pub fn last_diff_pane_effective_scroll() -> usize {
-    #[cfg(test)]
-    {
-        return TEST_LAST_DIFF_PANE_EFFECTIVE_SCROLL.with(Cell::get);
-    }
-    #[cfg(not(test))]
-    {
-        LAST_DIFF_PANE_EFFECTIVE_SCROLL.load(Ordering::Relaxed)
     }
 }
 
@@ -829,24 +793,6 @@ static BODY_CACHE: OnceLock<Mutex<BodyCacheState>> = OnceLock::new();
 
 fn body_cache() -> &'static Mutex<BodyCacheState> {
     BODY_CACHE.get_or_init(|| Mutex::new(BodyCacheState::default()))
-}
-
-/// Drop every memoized transcript body / prepared frame.
-///
-/// Operant's render loop owns two async raster producers (mermaid + latex) that
-/// land a PNG some frames after the transcript showed a placeholder; the
-/// prepared caches then hold a stale "rendering…" row. Upstream jcode has no
-/// equivalent hook because it rasterises inline inside the draw.
-pub(crate) fn invalidate_prepared_caches() {
-    // Poison-tolerant on purpose: draw runs inside catch_unwind, so a panic
-    // while this lock is held is exactly how it gets poisoned — and silently
-    // skipping invalidation would leave stale "rendering…" rows forever.
-    *body_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = BodyCacheState::default();
-    *full_prep_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = FullPrepCacheState::default();
 }
 
 // The reader's content position from the last drawn frame, in content
@@ -1258,22 +1204,6 @@ fn update_prompt_entry_animation(
 // line_display_width + clamp_display_col (from ui/display_width.rs).
 // Per-block source lines cited in [port-source] comments.
 
-// [port-source] ui.rs:307-320
-/// Maximum scroll offset of the side pane on the most recent render frame
-/// (total content lines minus the visible viewport height). Scroll handlers
-/// clamp against this so stored offsets cannot accumulate invisible
-/// "phantom" overscroll past the bottom of the content.
-pub fn last_diff_pane_max_scroll() -> usize {
-    #[cfg(test)]
-    {
-        return TEST_LAST_DIFF_PANE_MAX_SCROLL.with(Cell::get);
-    }
-    #[cfg(not(test))]
-    {
-        LAST_DIFF_PANE_MAX_SCROLL.load(Ordering::Relaxed)
-    }
-}
-
 // [port-source] ui.rs:334-344
 pub(crate) fn set_pinned_pane_total_lines(value: usize) {
     #[cfg(test)]
@@ -1324,20 +1254,6 @@ pub fn last_total_wrapped_lines() -> usize {
     #[cfg(not(test))]
     {
         LAST_TOTAL_WRAPPED_LINES.load(Ordering::Relaxed)
-    }
-}
-
-// [port-source] ui.rs:395-406
-/// Height (rows) of the chat messages viewport on the most recent frame.
-/// Returns 0 if no frame has been rendered yet.
-pub(crate) fn last_chat_viewport_height() -> usize {
-    #[cfg(test)]
-    {
-        return TEST_LAST_CHAT_VIEWPORT_HEIGHT.with(Cell::get);
-    }
-    #[cfg(not(test))]
-    {
-        LAST_CHAT_VIEWPORT_HEIGHT.load(Ordering::Relaxed)
     }
 }
 
@@ -1503,22 +1419,6 @@ pub(crate) fn set_visible_expand_edit_badge_rect(rect: Option<Rect>) {
     }
 }
 
-// [port-source] ui.rs:608-621
-pub(crate) fn visible_expand_edit_badge_at(column: u16, row: u16) -> bool {
-    #[cfg(test)]
-    let rect = TEST_VISIBLE_EXPAND_EDIT_BADGE_RECT.with(Cell::get);
-    #[cfg(not(test))]
-    let rect = *visible_expand_edit_badge_rect_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    rect.is_some_and(|rect| {
-        column >= rect.x
-            && column < rect.x.saturating_add(rect.width)
-            && row >= rect.y
-            && row < rect.y.saturating_add(rect.height)
-    })
-}
-
 // [port-source] ui.rs:623-644
 pub(crate) fn set_visible_expand_edit_badge(visible: bool, line: Option<usize>) {
     #[cfg(test)]
@@ -1543,38 +1443,6 @@ pub(crate) fn set_visible_expand_edit_badge(visible: bool, line: Option<usize>) 
     }
 }
 
-// [port-source] ui.rs:646-659
-pub(crate) fn visible_expand_edit_badge() -> bool {
-    #[cfg(test)]
-    {
-        return TEST_VISIBLE_EXPAND_EDIT_BADGE.with(Cell::get);
-    }
-    #[cfg(not(test))]
-    {
-        let state = match visible_expand_edit_badge_state().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *state
-    }
-}
-
-// [port-source] ui.rs:661-674
-pub(crate) fn visible_expand_edit_badge_line() -> Option<usize> {
-    #[cfg(test)]
-    {
-        return TEST_VISIBLE_EXPAND_EDIT_BADGE_LINE.with(Cell::get);
-    }
-    #[cfg(not(test))]
-    {
-        let state = match visible_expand_edit_badge_line_state().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *state
-    }
-}
-
 // [port-source] ui.rs:676-692
 fn set_visible_copy_targets(targets: Vec<VisibleCopyTarget>) {
     #[cfg(test)]
@@ -1591,55 +1459,6 @@ fn set_visible_copy_targets(targets: Vec<VisibleCopyTarget>) {
             Err(poisoned) => poisoned.into_inner(),
         };
         *state = targets;
-    }
-}
-
-// [port-source] ui.rs:694-716
-pub(crate) fn visible_copy_target_for_key(key: char) -> Option<VisibleCopyTarget> {
-    #[cfg(test)]
-    {
-        TEST_VISIBLE_COPY_TARGETS.with(|state| {
-            state
-                .borrow()
-                .iter()
-                .find(|target| target.key.eq_ignore_ascii_case(&key))
-                .cloned()
-        })
-    }
-    #[cfg(not(test))]
-    {
-        let state = match visible_copy_targets_state().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        state
-            .iter()
-            .find(|target| target.key.eq_ignore_ascii_case(&key))
-            .cloned()
-    }
-}
-
-// [port-source] ui.rs:718-739
-pub(crate) fn visible_copy_target_at(column: u16, row: u16) -> Option<VisibleCopyTarget> {
-    let contains = |target: &&VisibleCopyTarget| {
-        target.badge_rect.is_some_and(|rect| {
-            column >= rect.x
-                && column < rect.x.saturating_add(rect.width)
-                && row >= rect.y
-                && row < rect.y.saturating_add(rect.height)
-        })
-    };
-    #[cfg(test)]
-    {
-        TEST_VISIBLE_COPY_TARGETS.with(|state| state.borrow().iter().find(contains).cloned())
-    }
-    #[cfg(not(test))]
-    {
-        let state = match visible_copy_targets_state().lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        state.iter().find(contains).cloned()
     }
 }
 
@@ -1665,20 +1484,6 @@ pub(crate) fn record_status_area(area: Rect) {
         if let Ok(mut snapshot) = last_status_area_state().lock() {
             *snapshot = Some(area);
         }
-    }
-}
-
-pub(crate) fn last_status_area() -> Option<Rect> {
-    #[cfg(test)]
-    {
-        return TEST_LAST_STATUS_AREA.with(|snapshot| *snapshot.borrow());
-    }
-    #[cfg(not(test))]
-    {
-        last_status_area_state()
-            .lock()
-            .ok()
-            .and_then(|snapshot| *snapshot)
     }
 }
 
@@ -1741,20 +1546,6 @@ pub fn record_layout_snapshot(
     }
 }
 
-pub fn last_layout_snapshot() -> Option<LayoutSnapshot> {
-    #[cfg(test)]
-    {
-        return TEST_LAST_LAYOUT.with(|snapshot| *snapshot.borrow());
-    }
-    #[cfg(not(test))]
-    {
-        last_layout_state()
-            .lock()
-            .ok()
-            .and_then(|snapshot| *snapshot)
-    }
-}
-
 /// Record the prepared transcript frame the renderer just drew.
 pub(crate) fn set_last_chat_frame(frame: Arc<PreparedChatFrame>) {
     #[cfg(test)]
@@ -1772,7 +1563,6 @@ pub(crate) fn set_last_chat_frame(frame: Arc<PreparedChatFrame>) {
 
 /// The prepared transcript frame the renderer last drew, if any.
 // First production consumer lands in epic #1411 phase 4/5a.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn last_chat_frame() -> Option<Arc<PreparedChatFrame>> {
     #[cfg(test)]
     {
@@ -1920,16 +1710,6 @@ struct CopyViewportSnapshot {
 }
 
 impl CopyViewportSnapshot {
-    fn wrapped_plain_line_count(&self) -> usize {
-        match &self.data {
-            CopyViewportData::Dense {
-                wrapped_plain_lines,
-                ..
-            } => wrapped_plain_lines.len(),
-            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_plain_line_count(),
-        }
-    }
-
     fn wrapped_plain_line(&self, abs_line: usize) -> Option<&str> {
         match &self.data {
             CopyViewportData::Dense {
@@ -1948,52 +1728,6 @@ impl CopyViewportSnapshot {
             } => wrapped_copy_offsets.get(abs_line).copied(),
             CopyViewportData::ChatFrame { prepared } => prepared.wrapped_copy_offset(abs_line),
         }
-    }
-
-    fn raw_plain_line(&self, raw_line: usize) -> Option<&str> {
-        match &self.data {
-            CopyViewportData::Dense {
-                raw_plain_lines, ..
-            } => raw_plain_lines.get(raw_line).map(String::as_str),
-            CopyViewportData::ChatFrame { prepared } => prepared.raw_plain_line(raw_line),
-        }
-    }
-
-    fn raw_plain_line_count(&self) -> usize {
-        match &self.data {
-            CopyViewportData::Dense {
-                raw_plain_lines, ..
-            } => raw_plain_lines.len(),
-            CopyViewportData::ChatFrame { prepared } => prepared.total_raw_lines,
-        }
-    }
-
-    fn wrapped_line_map(&self, abs_line: usize) -> Option<WrappedLineMap> {
-        match &self.data {
-            CopyViewportData::Dense {
-                wrapped_line_map, ..
-            } => wrapped_line_map.get(abs_line).copied(),
-            CopyViewportData::ChatFrame { prepared } => prepared.wrapped_line_map(abs_line),
-        }
-    }
-
-    /// If `abs_line` is the label line of a visible inline-image region, return
-    /// that image's id. The label line sits exactly one wrapped line above the
-    /// region's first placeholder line (see `anchored_image_lines`), so we map a
-    /// click on the label row back to the image it annotates.
-    fn inline_image_id_for_label_line(&self, abs_line: usize) -> Option<u64> {
-        let prepared = match &self.data {
-            CopyViewportData::ChatFrame { prepared } => prepared,
-            CopyViewportData::Dense { .. } => return None,
-        };
-        prepared
-            .image_regions
-            .iter()
-            .find(|region| {
-                region.render == crate::tui::operant_model::ImageRegionRender::Fit
-                    && region.abs_line_idx == abs_line + 1
-            })
-            .map(|region| region.hash)
     }
 }
 
@@ -2074,39 +1808,6 @@ use self::profile::{profile_enabled, record_profile};
 // ui/display_width.rs module (upstream's home — the earlier inlined splice is
 // superseded by the whole-file module port; tests reach them via the
 // mod.rs re-export).
-
-// [port-source] ui.rs:1740-1742 + ui/copy_selection.rs:7-37 (inlined: single-file splice)
-fn copy_point_from_snapshot(
-    snapshot: &CopyViewportSnapshot,
-    column: u16,
-    row: u16,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    let area = snapshot.content_area;
-    if row < area.y
-        || row >= area.y.saturating_add(area.height)
-        || column < area.x
-        || column >= area.x.saturating_add(area.width)
-    {
-        return None;
-    }
-
-    let rel_row = row.saturating_sub(area.y) as usize;
-    let abs_line = snapshot.scroll.saturating_add(rel_row);
-    if abs_line >= snapshot.visible_end || abs_line >= snapshot.wrapped_plain_line_count() {
-        return None;
-    }
-
-    let left_margin = snapshot.left_margins.get(rel_row).copied().unwrap_or(0);
-    let content_x = area.x.saturating_add(left_margin);
-    let rel_col = column.saturating_sub(content_x) as usize;
-    let text = snapshot.wrapped_plain_line(abs_line)?;
-    let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
-    Some(crate::tui::operant_ui::copy_selection::CopySelectionPoint {
-        pane: snapshot.pane,
-        abs_line,
-        column: clamp_display_col(text, rel_col).max(copy_start),
-    })
-}
 
 // [port-source] ui.rs:1747-1784
 #[cfg(not(test))]
@@ -2349,22 +2050,6 @@ pub(crate) fn line_left_margins_for_area(lines: &[Line<'static>], area_width: u1
         .collect()
 }
 
-// [port-source] ui.rs:1973-1986
-pub(crate) fn record_side_pane_snapshot(
-    wrapped_lines: &[Line<'static>],
-    scroll: usize,
-    visible_end: usize,
-    content_area: Rect,
-) {
-    record_pane_snapshot_from_lines(
-        crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane,
-        wrapped_lines,
-        scroll,
-        visible_end,
-        content_area,
-    );
-}
-
 // [port-source] ui.rs:1988-2006
 /// Record a copy-selection snapshot for the chat pane from already-wrapped
 /// display lines. Used by full-screen overlays (e.g. `/changelog`) that replace
@@ -2450,55 +2135,6 @@ fn record_pane_snapshot_from_lines(
     );
 }
 
-// [port-source] ui.rs:2070-2116
-pub(crate) fn copy_point_from_screen(
-    column: u16,
-    row: u16,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    #[cfg(test)]
-    {
-        TEST_COPY_VIEWPORT.with(|snapshots| {
-            let snapshots = snapshots.borrow().clone();
-            snapshots
-                .chat
-                .as_ref()
-                .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
-                .or_else(|| {
-                    snapshots
-                        .side
-                        .as_ref()
-                        .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
-                })
-                .or_else(|| {
-                    snapshots
-                        .input
-                        .as_ref()
-                        .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
-                })
-        })
-    }
-    #[cfg(not(test))]
-    {
-        let snapshots = copy_viewport_state().lock().ok()?.clone();
-        snapshots
-            .chat
-            .as_ref()
-            .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
-            .or_else(|| {
-                snapshots
-                    .side
-                    .as_ref()
-                    .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
-            })
-            .or_else(|| {
-                snapshots
-                    .input
-                    .as_ref()
-                    .and_then(|snapshot| copy_point_from_snapshot(snapshot, column, row))
-            })
-    }
-}
-
 // [port-source] ui.rs:2123-2148
 fn edge_autoscroll_zone_rows(height: u16) -> u16 {
     (height / 4).clamp(1, 3)
@@ -2527,58 +2163,6 @@ mod edge_autoscroll_zone_tests {
     }
 }
 
-// [port-source] ui.rs:2150-2196
-pub(crate) fn copy_pane_vertical_edge_point(
-    pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
-    column: u16,
-    row: u16,
-) -> Option<(
-    crate::tui::operant_ui::copy_selection::CopySelectionPoint,
-    bool,
-)> {
-    // The prompt composer cannot be wheel-scrolled, so it has no browser-style
-    // edge auto-scroll. Drags past its edge clamp via `copy_pane_drag_point`.
-    if pane == crate::tui::operant_ui::copy_selection::CopySelectionPane::Input {
-        return None;
-    }
-    let snapshot = copy_snapshot_for_pane(pane)?;
-    let area = snapshot.content_area;
-    if area.width == 0 || area.height == 0 {
-        return None;
-    }
-
-    // Browser-style edge auto-scroll: terminals clamp the mouse to the visible
-    // viewport, so a drag that "leaves" the top/bottom of the pane is reported on
-    // the boundary row itself. We additionally treat a small band near each edge
-    // as a hot zone, so dragging *near* (not just exactly onto) the top/bottom
-    // keeps pulling in more transcript, just like dragging a selection toward the
-    // edge of a browser window. The horizontal position is clamped into the pane
-    // so the selection extends no matter where along the edge the cursor sits.
-    let last_row = area.y.saturating_add(area.height).saturating_sub(1);
-    let zone = edge_autoscroll_zone_rows(area.height);
-    let top_trigger = area.y.saturating_add(zone);
-    let bottom_trigger = last_row.saturating_sub(zone);
-    // Only engage the hot zone when there is actually more transcript to pull in
-    // that direction. Otherwise dragging into the bottom band while the view is
-    // already pinned to the end (the common case) would snap the selection to the
-    // last visible line and fight precise highlighting of the bottom rows. When
-    // there is nothing to scroll, fall through (`None`) so the caller extends the
-    // selection to the exact cell under the cursor instead.
-    let can_scroll_up = snapshot.scroll > 0;
-    let can_scroll_down = snapshot.visible_end < snapshot.wrapped_plain_line_count();
-    let (edge_row, upward) = if row <= top_trigger && can_scroll_up {
-        (area.y, true)
-    } else if row >= bottom_trigger && can_scroll_down {
-        (last_row, false)
-    } else {
-        return None;
-    };
-
-    let clamped_col = column.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
-
-    copy_point_from_snapshot(&snapshot, clamped_col, edge_row).map(|point| (point, upward))
-}
-
 // [port-source] ui.rs:2308-2316
 fn copy_pane_line_text(
     pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
@@ -2596,68 +2180,6 @@ pub(crate) fn copy_viewport_line_text(abs_line: usize) -> Option<String> {
     )
 }
 
-// [port-source] ui.rs:2291-2299
-pub(crate) fn copy_viewport_point_from_screen(
-    column: u16,
-    row: u16,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    let point = copy_point_from_screen(column, row)?;
-    (point.pane == crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat).then_some(point)
-}
-
-// [port-source] ui.rs:2300-2306
-#[cfg(test)]
-pub(crate) fn side_pane_point_from_screen(
-    column: u16,
-    row: u16,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    let point = copy_point_from_screen(column, row)?;
-    (point.pane == crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane)
-        .then_some(point)
-}
-
-// [port-source] ui.rs:2318-2321
-pub(crate) fn side_pane_line_text(abs_line: usize) -> Option<String> {
-    copy_pane_line_text(
-        crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane,
-        abs_line,
-    )
-}
-
-// [port-source] ui.rs:2322-2325
-pub(crate) fn input_pane_line_text(abs_line: usize) -> Option<String> {
-    copy_pane_line_text(
-        crate::tui::operant_ui::copy_selection::CopySelectionPane::Input,
-        abs_line,
-    )
-}
-
-// [port-source] ui.rs:2326-2341
-fn copy_pane_line_count(
-    pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
-) -> Option<usize> {
-    Some(copy_snapshot_for_pane(pane)?.wrapped_plain_line_count())
-}
-
-pub(crate) fn copy_viewport_line_count() -> Option<usize> {
-    copy_pane_line_count(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)
-}
-
-pub(crate) fn side_pane_line_count() -> Option<usize> {
-    copy_pane_line_count(crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane)
-}
-
-pub(crate) fn input_pane_line_count() -> Option<usize> {
-    copy_pane_line_count(crate::tui::operant_ui::copy_selection::CopySelectionPane::Input)
-}
-
-// [port-source] ui.rs:2342-2347
-pub(crate) fn copy_viewport_visible_range() -> Option<(usize, usize)> {
-    let snapshot =
-        copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)?;
-    Some((snapshot.scroll, snapshot.visible_end))
-}
-
 // [port-source] ui.rs:2348-2351
 #[cfg(test)]
 pub(crate) fn side_pane_visible_range() -> Option<(usize, usize)> {
@@ -2665,23 +2187,6 @@ pub(crate) fn side_pane_visible_range() -> Option<(usize, usize)> {
         crate::tui::operant_ui::copy_selection::CopySelectionPane::SidePane,
     )?;
     Some((snapshot.scroll, snapshot.visible_end))
-}
-
-// [port-source] ui.rs:2353-2367
-pub(crate) fn copy_pane_first_visible_point(
-    pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    let snapshot = copy_snapshot_for_pane(pane)?;
-    if snapshot.scroll >= snapshot.visible_end
-        || snapshot.scroll >= snapshot.wrapped_plain_line_count()
-    {
-        return None;
-    }
-    Some(crate::tui::operant_ui::copy_selection::CopySelectionPoint {
-        pane,
-        abs_line: snapshot.scroll,
-        column: 0,
-    })
 }
 
 /// Copy text of one chat content line between two SCREEN columns
@@ -2728,243 +2233,6 @@ pub(crate) fn chat_text_col(abs_line: usize, screen_col: u16) -> Option<usize> {
         text,
         screen_col.saturating_sub(origin) as usize,
     ))
-}
-
-/// Wrapped-line count of the last drawn chat frame's copy snapshot.
-pub(crate) fn chat_copy_line_count() -> usize {
-    copy_snapshot_for_pane(crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat)
-        .map_or(0, |snapshot| snapshot.wrapped_plain_line_count())
-}
-
-// [port-source] ui.rs:2369-2436
-pub(crate) fn copy_selection_text(
-    range: crate::tui::operant_ui::copy_selection::CopySelectionRange,
-) -> Option<String> {
-    if range.start.pane != range.end.pane {
-        return None;
-    }
-    let snapshot = copy_snapshot_for_pane(range.start.pane)?;
-    let (start, end) =
-        if (range.start.abs_line, range.start.column) <= (range.end.abs_line, range.end.column) {
-            (range.start, range.end)
-        } else {
-            (range.end, range.start)
-        };
-
-    if start.abs_line >= snapshot.wrapped_plain_line_count()
-        || end.abs_line >= snapshot.wrapped_plain_line_count()
-    {
-        return None;
-    }
-
-    // [port-decision] copy_selection_text_from_raw_lines: no operant equivalent —
-    //   the math-target raw-line fast path (upstream ui/ui/copy_selection.rs:45,
-    //   which prefers the pre-wrap source lines when a selection lines up with
-    //   them) is not ported, so the general per-wrapped-line path below is the
-    //   only path — wire at operant_ui/ui/copy_selection.rs.
-
-    let selected_lines = end
-        .abs_line
-        .saturating_sub(start.abs_line)
-        .saturating_add(1);
-    let mut out = String::new();
-    for abs_line in start.abs_line..=end.abs_line {
-        if abs_line > start.abs_line {
-            out.push('\n');
-        }
-        let text = snapshot.wrapped_plain_line(abs_line)?;
-        if abs_line != start.abs_line && abs_line != end.abs_line {
-            let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
-            if copy_start == 0 {
-                if abs_line == start.abs_line + 1 {
-                    out.reserve(text.len().saturating_mul(selected_lines.min(8)));
-                }
-                out.push_str(text);
-                continue;
-            }
-        }
-        let line_width = line_display_width(text);
-        let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
-        let start_col = if abs_line == start.abs_line {
-            clamp_display_col(text, start.column).max(copy_start)
-        } else {
-            copy_start
-        };
-        let end_col = if abs_line == end.abs_line {
-            clamp_display_col(text, end.column).max(copy_start)
-        } else {
-            line_width
-        };
-
-        if end_col < start_col {
-            continue;
-        }
-
-        let slice = display_col_slice(text, start_col, end_col);
-        if abs_line == start.abs_line {
-            out.reserve(slice.len().saturating_mul(selected_lines.min(8)));
-        }
-        out.push_str(slice);
-    }
-
-    Some(out)
-}
-
-/// Compute `(char_count, line_count)` for the current copy selection without
-/// allocating the full joined selection string. Mirrors `copy_selection_text`
-/// so the status line "N chars · M lines" matches what would be copied, but is
-/// allocation-free so it can run cheaply on every render frame / drag move.
-// [port-source] ui.rs:2442-2502
-pub(crate) fn copy_selection_metrics(
-    range: crate::tui::operant_ui::copy_selection::CopySelectionRange,
-) -> Option<(usize, usize)> {
-    if range.start.pane != range.end.pane {
-        return None;
-    }
-    let snapshot = copy_snapshot_for_pane(range.start.pane)?;
-    let (start, end) =
-        if (range.start.abs_line, range.start.column) <= (range.end.abs_line, range.end.column) {
-            (range.start, range.end)
-        } else {
-            (range.end, range.start)
-        };
-
-    if start.abs_line >= snapshot.wrapped_plain_line_count()
-        || end.abs_line >= snapshot.wrapped_plain_line_count()
-    {
-        return None;
-    }
-
-    // [port-decision] copy_selection_metrics_from_raw_lines: no operant
-    //   equivalent — same un-ported math-target fast path as in
-    //   `copy_selection_text` (ui/ui/copy_selection.rs:187) — wire at
-    //   operant_ui/ui/copy_selection.rs.
-
-    let mut chars = 0usize;
-    let mut lines = 0usize;
-    for abs_line in start.abs_line..=end.abs_line {
-        if abs_line > start.abs_line {
-            chars += 1; // joining '\n'
-        }
-        lines += 1;
-        let text = snapshot.wrapped_plain_line(abs_line)?;
-        if abs_line != start.abs_line && abs_line != end.abs_line {
-            let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
-            if copy_start == 0 {
-                chars += text.chars().count();
-                continue;
-            }
-        }
-        let line_width = line_display_width(text);
-        let copy_start = snapshot.wrapped_copy_offset(abs_line).unwrap_or(0);
-        let start_col = if abs_line == start.abs_line {
-            clamp_display_col(text, start.column).max(copy_start)
-        } else {
-            copy_start
-        };
-        let end_col = if abs_line == end.abs_line {
-            clamp_display_col(text, end.column).max(copy_start)
-        } else {
-            line_width
-        };
-        if end_col < start_col {
-            continue;
-        }
-        chars += display_col_slice(text, start_col, end_col).chars().count();
-    }
-
-    Some((chars, lines.max(1)))
-}
-
-// [port-source] ui.rs:2209-2267
-/// Terminals report a drag that "leaves" the pane on the boundary row, but a
-/// drag *into the empty space below the last content line* (common with short
-/// transcripts that leave blank rows underneath) lands on a row that maps to no
-/// line at all, so `copy_point_from_screen` returns `None`. Native terminal and
-/// browser selection treat that as "select through the end of the last line".
-/// This mirrors that: dragging below the last visible line snaps to the end of
-/// that line, and dragging above the first visible line snaps to its start, so
-/// the boundary line is fully covered even when there is nothing more to scroll.
-pub(crate) fn copy_pane_drag_point(
-    pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
-    column: u16,
-    row: u16,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    let snapshot = copy_snapshot_for_pane(pane)?;
-    let area = snapshot.content_area;
-    if area.width == 0 || area.height == 0 {
-        return None;
-    }
-
-    // A direct hit on a real line wins: precise per-cell selection.
-    if let Some(point) = copy_point_from_snapshot(&snapshot, column, row) {
-        return Some(point);
-    }
-
-    let line_count = snapshot.wrapped_plain_line_count();
-    if line_count == 0 {
-        return None;
-    }
-    let last_line = line_count.saturating_sub(1);
-    let last_visible_line = snapshot.visible_end.saturating_sub(1).min(last_line);
-    let first_visible_line = snapshot.scroll.min(last_line);
-
-    let last_row = area.y.saturating_add(area.height).saturating_sub(1);
-    let clamped_col = column.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
-
-    // Below the visible content: snap to the end of the last visible line.
-    if row >= last_row {
-        let text = snapshot.wrapped_plain_line(last_visible_line).unwrap_or("");
-        return Some(crate::tui::operant_ui::copy_selection::CopySelectionPoint {
-            pane,
-            abs_line: last_visible_line,
-            column: line_display_width(text),
-        });
-    }
-
-    // Above the visible content: snap to the start of the first visible line.
-    if row <= area.y {
-        return Some(crate::tui::operant_ui::copy_selection::CopySelectionPoint {
-            pane,
-            abs_line: first_visible_line,
-            column: snapshot
-                .wrapped_copy_offset(first_visible_line)
-                .unwrap_or(0),
-        });
-    }
-
-    // Interior row that maps to no line (e.g. a blank gap row between/after
-    // content within the visible band): fall back to the boundary-clamped point.
-    copy_point_from_snapshot(&snapshot, clamped_col, row.clamp(area.y, last_row)).or(Some(
-        crate::tui::operant_ui::copy_selection::CopySelectionPoint {
-            pane,
-            abs_line: last_visible_line,
-            column: line_display_width(
-                snapshot.wrapped_plain_line(last_visible_line).unwrap_or(""),
-            ),
-        },
-    ))
-}
-
-// [port-source] ui.rs:2273-2289
-/// Edge point for tick-driven continuous auto-scroll, where there is no live
-/// mouse position. Uses the top/bottom boundary row of the pane and its left
-/// content column so the selection keeps extending to the freshly revealed line.
-pub(crate) fn copy_pane_autoscroll_edge_point(
-    pane: crate::tui::operant_ui::copy_selection::CopySelectionPane,
-    upward: bool,
-) -> Option<crate::tui::operant_ui::copy_selection::CopySelectionPoint> {
-    let snapshot = copy_snapshot_for_pane(pane)?;
-    let area = snapshot.content_area;
-    if area.width == 0 || area.height == 0 {
-        return None;
-    }
-    let edge_row = if upward {
-        area.y
-    } else {
-        area.y.saturating_add(area.height).saturating_sub(1)
-    };
-    copy_point_from_snapshot(&snapshot, area.x, edge_row)
 }
 
 // [port-source] ui.rs:3626-3709
@@ -3053,110 +2321,6 @@ pub(crate) fn render_native_scrollbar(
     }
 
     frame.render_widget(Paragraph::new(lines), area);
-}
-// [port-source] ui.rs:2504-2513
-pub(crate) fn link_target_from_screen(column: u16, row: u16) -> Option<String> {
-    let point = copy_point_from_screen(column, row)?;
-    // Clicking a URL you are still composing should reposition the caret, not
-    // open the link; only transcript/side-pane links are click-to-open.
-    if point.pane == crate::tui::operant_ui::copy_selection::CopySelectionPane::Input {
-        return None;
-    }
-    // [port-decision] link_target_from_snapshot: no operant equivalent — the
-    // OSC-8 link extraction (upstream ui/ui/copy_selection.rs:239 via
-    // ui/url.rs's `link_target_for_display_column` + markdown-link regex) is not
-    // ported, so a screen click resolves to no link target and click-to-open
-    // links are inert — wire at operant_ui/ui/copy_selection.rs + ui/url.rs.
-    let _ = copy_snapshot_for_pane(point.pane)?;
-    None
-}
-
-// [port-source] ui.rs:2519-2523
-/// If a screen click landed on an inline-image label line, return the image
-/// id so the caller can cycle that image's size. The label line is short and
-/// single purpose (there is no visible expand badge anymore), so the whole
-/// line acts as the click target alongside the image body itself.
-pub(crate) fn inline_image_expand_target_from_screen(column: u16, row: u16) -> Option<u64> {
-    let point = copy_point_from_screen(column, row)?;
-    let snapshot = copy_snapshot_for_pane(point.pane)?;
-    snapshot.inline_image_id_for_label_line(point.abs_line)
-}
-
-// [port-source] ui.rs:2529-2556
-/// If a screen click landed on a collapsed/expanded swarm notification's
-/// `▸ expand` / `▾ collapse` badge, return the transcript message index so the
-/// caller can toggle that notification. Only clicks on the trailing badge
-/// token count, so the tldr text itself stays selectable.
-pub(crate) fn swarm_expand_target_from_screen(column: u16, row: u16) -> Option<usize> {
-    let point = copy_point_from_screen(column, row)?;
-    if point.pane != crate::tui::operant_ui::copy_selection::CopySelectionPane::Chat {
-        return None;
-    }
-    let snapshot = copy_snapshot_for_pane(point.pane)?;
-    let prepared = match &snapshot.data {
-        CopyViewportData::ChatFrame { prepared } => prepared.clone(),
-        CopyViewportData::Dense { .. } => return None,
-    };
-    let text = snapshot.wrapped_plain_line(point.abs_line)?;
-    let trimmed = text.trim_end();
-    let badge_start = [
-        messages::SWARM_EXPAND_BADGE,
-        messages::SWARM_COLLAPSE_BADGE,
-        messages::SWARM_DIFF_EXPAND_BADGE,
-        messages::SWARM_DIFF_COLLAPSE_BADGE,
-    ]
-    .iter()
-    .find_map(|badge| {
-        let prefix = trimmed.strip_suffix(badge)?;
-        Some(line_display_width(prefix))
-    })?;
-    if point.column < badge_start {
-        return None;
-    }
-    prepared.message_index_at_line(point.abs_line)
-}
-
-// [port-source] ui.rs:2566-2600
-/// If a screen click landed on the rendered body of an inline image (its
-/// placeholder rows), return the image id so the caller can cycle that image's
-/// size. Together with the label-line hit-test this makes the whole picture
-/// clickable.
-/// The hit-region is bounded by the image's rendered width (`region.width`,
-/// which includes the 2-cell left border), shifted right when `centered` mode
-/// horizontally centers the drawn pixels, so clicks in empty space beside a
-/// narrow image stay inert.
-pub(crate) fn inline_image_body_target_from_screen(
-    column: u16,
-    row: u16,
-    centered: bool,
-) -> Option<u64> {
-    let point = copy_point_from_screen(column, row)?;
-    let snapshot = copy_snapshot_for_pane(point.pane)?;
-    let prepared = match &snapshot.data {
-        CopyViewportData::ChatFrame { prepared } => prepared,
-        CopyViewportData::Dense { .. } => return None,
-    };
-    let region = prepared.image_regions.iter().find(|region| {
-        region.render == crate::tui::operant_model::ImageRegionRender::Fit
-            && point.abs_line >= region.abs_line_idx
-            && point.abs_line < region.end_line
-    })?;
-    let area = snapshot.content_area;
-    let rel_col = column.saturating_sub(area.x);
-    // `width == 0` means unknown; treat the rows as fully occupied then.
-    let width = if region.width == 0 {
-        area.width
-    } else {
-        region.width.min(area.width)
-    };
-    // Centered mode draws the border at the left edge but centers the image
-    // pixels; the right edge shifts inward by the leftover space.
-    let right_edge = if centered && width < area.width {
-        (width + (area.width - width) / 2).min(area.width)
-    } else {
-        width
-    };
-    (rel_col < right_edge).then_some(region.hash)
 }
 
 // [port-source] ui.rs:2606-2657

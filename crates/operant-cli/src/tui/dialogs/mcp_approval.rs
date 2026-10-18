@@ -89,7 +89,6 @@ impl McpApprovalDialogState {
     }
 
     /// Populate and show the dialog.
-    #[allow(dead_code)] // MCP approval dialog setup
     pub fn show(
         &mut self,
         server_name: &str,

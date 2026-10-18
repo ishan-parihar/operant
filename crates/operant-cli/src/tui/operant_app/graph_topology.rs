@@ -37,20 +37,3 @@ pub fn graph_node_score(node: &GraphNode) -> f32 {
     let active_bias = if node.is_active { 1.0 } else { 0.0 };
     node.degree as f32 + memory_bias + active_bias + node.confidence * 2.0
 }
-
-/// [port-decision] upstream `build_graph_topology` (:63) walks
-/// `operant_memory_types::MemoryGraph` (`graph.memories` / `graph.tags` /
-/// `graph.clusters` / `graph.edges`, with `MemoryEntry::effective_confidence`
-/// and `EdgeKind`) to produce the node/edge vectors. None of that memory-graph
-/// type is ported into operant (no `MemoryGraph`/`EdgeKind` anywhere under
-/// `crates/`), and no ported call site invokes this function — it is reached
-/// only through the `info_widget` re-export at info_widget/mod.rs:80. Its body
-/// is therefore not ported; the signature is kept so the re-export stays
-/// whole. Re-activate at W-memory when the memory-graph types land: port
-/// `truncate_chars` (:27), `truncate_smart` (:33), `collect_memory_nodes`
-/// (:92), `collect_tag_nodes` (:114), `collect_cluster_nodes` (:140),
-/// `collect_edges` (:180), `bound_topology_size` (:236) and `edge_kind_name`
-/// (:281) verbatim alongside them.
-pub fn build_graph_topology() -> (Vec<GraphNode>, Vec<GraphEdge>) {
-    (Vec::new(), Vec::new())
-}

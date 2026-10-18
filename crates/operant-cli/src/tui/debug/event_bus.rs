@@ -25,20 +25,17 @@ pub enum TuiEvent {
         modifiers: u8,
         at: f64,
     },
-    #[allow(dead_code)] // Prepared for mouse event tracking
     Mouse {
         x: u16,
         y: u16,
         action: String,
         at: f64,
     },
-    #[allow(dead_code)] // Prepared for resize event tracking
     Resize {
         width: u16,
         height: u16,
         at: f64,
     },
-    #[allow(dead_code)] // Prepared for paste event tracking
     Paste {
         len: usize,
         at: f64,
@@ -79,12 +76,10 @@ pub enum TuiEvent {
         args_preview: String,
         at: f64,
     },
-    #[allow(dead_code)] // Prepared for overlay lifecycle tracking
     OverlayOpened {
         name: String,
         at: f64,
     },
-    #[allow(dead_code)] // Prepared for overlay lifecycle tracking
     OverlayClosed {
         name: String,
         at: f64,
@@ -248,12 +243,10 @@ impl TuiEventBus {
     }
 
     /// Total events currently in the ring.
-    #[allow(dead_code)] // Prepared for debug overlay stats
     pub fn len(&self) -> usize {
         self.ring.lock().map(|g| g.len()).unwrap_or(0)
     }
 
-    #[allow(dead_code)] // Prepared for debug overlay stats
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

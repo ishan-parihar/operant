@@ -27,17 +27,6 @@ pub fn alt_chord(keys: &str) -> String {
     format!("{}+{}", alt_label(), keys)
 }
 
-/// Build a lowercase Alt chord label for compact inline hints, e.g. `alt+n`
-/// or `⌥+n`.
-pub fn alt_chord_lower(keys: &str) -> String {
-    let label = alt_label();
-    if label == MACOS_OPTION_SYMBOL {
-        format!("{label}+{keys}")
-    } else {
-        format!("{}+{keys}", label.to_ascii_lowercase())
-    }
-}
-
 // [port-decision] batch-4: the two toggle-key labels the ported renderers
 // call un-gated (ui_pinned.rs:588, ui_diagram_pane.rs:834). Bodies from
 // crates/operant-tui/src/tui/keybind.rs:450-:458, re-rooted: upstream's

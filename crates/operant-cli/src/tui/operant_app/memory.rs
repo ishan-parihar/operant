@@ -210,16 +210,8 @@ pub struct MemoryEvent {
 /// Global memory activity state - updated by sidecar, read by info widget
 static MEMORY_ACTIVITY: Mutex<Option<MemoryActivity>> = Mutex::new(None);
 
-/// Maximum number of recent events to keep
-const MAX_RECENT_EVENTS: usize = 10;
-
 /// Staleness timeout: auto-reset to Idle if state has been non-Idle for this long
 const STALENESS_TIMEOUT_SECS: u64 = 10;
-
-/// Get current memory activity state
-pub fn get_activity() -> Option<MemoryActivity> {
-    MEMORY_ACTIVITY.lock().ok().and_then(|guard| guard.clone())
-}
 
 // [port-decision] dedup: memory/activity.rs defined STALENESS_TIMEOUT_SECS and
 // get_activity twice across concatenated sources; kept the first (identical) copies.

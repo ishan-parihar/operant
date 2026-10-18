@@ -1,10 +1,6 @@
 // adapter_types/free_catalog.rs — Free AI provider catalog.
 
 #[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "catalog data: note is kept for the free-mode dialog"
-)]
 pub struct FreeUpstream {
     pub id: &'static str,
     pub title: &'static str,

@@ -352,14 +352,6 @@ fn parse_tool_input(input_json: &str) -> Value {
     serde_json::from_str(input_json).unwrap_or(Value::Null)
 }
 
-/// One operant `Message` may carry several content blocks, and one block maps
-/// to at most one row, so a message expands to a run of rows. Consecutive
-/// `Text` blocks join into a single row in the message's own role; every
-/// other block flushes that accumulator and emits its own row.
-fn expand_message(message: &Message, show_thinking: bool) -> Vec<DisplayMessage> {
-    expand_message_with_mode(message, show_thinking, false)
-}
-
 /// `expand_message` with the (plan 07 step 4) past-turn collapse flag: a
 /// `Thinking` block of an earlier turn in `Current` mode folds to the
 /// single `▸ thought (N lines)` summary row instead of every line.

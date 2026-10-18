@@ -24,7 +24,6 @@
 // In test builds only, silence dead_code inside this tree; the non-test build
 // is governed by the `expect` on the `pub mod operant_model;` declaration in
 // `tui/mod.rs`, which must keep firing loudly until W3 wires the renderers in.
-#![cfg_attr(test, allow(dead_code))]
 
 pub mod adapter;
 mod anchor;
@@ -57,9 +56,9 @@ pub use cache::{
 };
 #[allow(unused_imports)]
 pub use message::{
-    DisplayMessage, TranscriptPreviewLabels, display_messages_from_rendered_messages,
-    latest_user_transcript_preview, normalize_transcript_preview_text, transcript_preview_line,
-    transcript_preview_lines, truncate_transcript_preview,
+    DisplayMessage, TranscriptPreviewLabels, latest_user_transcript_preview,
+    normalize_transcript_preview_text, transcript_preview_line, transcript_preview_lines,
+    truncate_transcript_preview,
 };
 #[allow(unused_imports)]
 pub use prepared::{
@@ -72,8 +71,6 @@ pub use tool_display::{
     resolve_display_tool_name, tool_output_looks_failed, truncate_middle_display,
 };
 #[allow(unused_imports)]
-pub use vendor_types::{
-    DiagramDisplayMode, DiffDisplayMode, RenderedMessage, ResponseStats, ToolCall,
-};
+pub use vendor_types::{DiffDisplayMode, RenderedMessage, ResponseStats, ToolCall};
 #[allow(unused_imports)]
 pub use wrapped_line_map::WrappedLineMap;

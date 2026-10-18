@@ -260,10 +260,6 @@ impl PreparedChatFrame {
         self.total_wrapped_lines
     }
 
-    pub fn wrapped_plain_line_count(&self) -> usize {
-        self.total_wrapped_lines
-    }
-
     pub fn visible_intersects_section(
         &self,
         kind: PreparedSectionKind,
@@ -368,9 +364,5 @@ impl PreparedChatFrame {
             lines.extend_from_slice(&section.prepared.wrapped_lines[local_start..local_end]);
         }
         lines
-    }
-
-    pub fn materialize_all_lines(&self) -> Vec<Line<'static>> {
-        self.materialize_line_slice(0, self.total_wrapped_lines)
     }
 }

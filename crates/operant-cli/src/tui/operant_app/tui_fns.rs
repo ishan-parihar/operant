@@ -67,13 +67,6 @@ pub struct BackgroundTaskRow {
     pub completed_at: Option<std::time::Instant>,
 }
 
-#[derive(Clone)]
-pub struct ContextSnapshot {
-    pub info: Option<crate::tui::operant_app::prompt::ContextInfo>,
-    pub revision: u64,
-    pub fresh: bool,
-}
-
 pub(crate) fn scheduled_notification_text(
     info: Option<&crate::tui::operant_app::info_widget::AmbientWidgetData>,
 ) -> Option<String> {
@@ -193,15 +186,6 @@ pub(crate) struct KvCacheProblem {
     pub affected_tokens: Option<u64>,
 }
 
-impl KvCacheProblem {
-    pub(crate) fn log_reason(self) -> &'static str {
-        match self.kind {
-            KvCacheProblemKind::UnexpectedCacheCreation => "unexpected_cache_creation",
-            KvCacheProblemKind::ExpectedCacheReadMissing => "expected_cache_read_missing",
-        }
-    }
-}
-
 fn normalized_provider_matches(provider: &str, needle: &str) -> bool {
     provider.trim().to_ascii_lowercase().contains(needle)
 }
@@ -317,25 +301,6 @@ pub struct InlineViewState {
     pub lines: Vec<String>,
 }
 
-impl InlineViewState {
-    pub fn debug_memory_profile(&self) -> serde_json::Value {
-        let title_bytes = self.title.capacity();
-        let status_bytes = self
-            .status
-            .as_ref()
-            .map(|value| value.capacity())
-            .unwrap_or(0);
-        let lines_bytes: usize = self.lines.iter().map(|value| value.capacity()).sum();
-        serde_json::json!({
-            "lines_count": self.lines.len(),
-            "title_bytes": title_bytes,
-            "status_bytes": status_bytes,
-            "lines_bytes": lines_bytes,
-            "total_estimate_bytes": title_bytes + status_bytes + lines_bytes,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum InlineUiStateRef<'a> {
     View(&'a InlineViewState),
@@ -389,70 +354,6 @@ impl PickerKind {
                 shows_default_shortcut_hint: false,
                 preview_activation_column: 2,
             },
-        }
-    }
-
-    pub fn uses_compact_navigation(&self) -> bool {
-        self.schema().layout == InlineInteractiveLayout::Compact
-    }
-
-    pub fn filter_text(&self, entry: &PickerEntry) -> String {
-        match self {
-            Self::Account => {
-                let provider = entry
-                    .active_option()
-                    .map(|option| option.provider.as_str())
-                    .unwrap_or("");
-                let state = entry.account_state_label().unwrap_or("");
-                format!("{} {} {}", entry.name, provider, state)
-            }
-            Self::Login => {
-                let auth_kind = entry
-                    .active_option()
-                    .map(|option| option.provider.as_str())
-                    .unwrap_or("");
-                let state = entry
-                    .active_option()
-                    .map(|option| option.api_method.as_str())
-                    .unwrap_or("");
-                let detail = entry
-                    .active_option()
-                    .map(|option| option.detail.as_str())
-                    .unwrap_or("");
-                format!("{} {} {} {}", entry.name, auth_kind, state, detail)
-            }
-            Self::Usage => {
-                let status = entry
-                    .active_option()
-                    .map(|option| option.provider.as_str())
-                    .unwrap_or("");
-                let window = entry
-                    .active_option()
-                    .map(|option| option.api_method.as_str())
-                    .unwrap_or("");
-                let detail = entry
-                    .active_option()
-                    .map(|option| option.detail.as_str())
-                    .unwrap_or("");
-                format!("{} {} {} {}", entry.name, status, window, detail)
-            }
-            Self::Model => {
-                let route = entry.active_option();
-                let provider = route.map(|option| option.provider.as_str()).unwrap_or("");
-                let method = route.map(|option| option.api_method.as_str()).unwrap_or("");
-                let detail = route.map(|option| option.detail.as_str()).unwrap_or("");
-                // Include the pretty name so a query like "opus 4.8" matches
-                // the row even though the underlying id is `claude-opus-4-8`.
-                let pretty =
-                    crate::tui::operant_app::helpers::model_names::pretty_known_model_family(
-                        &entry.name,
-                    )
-                    .unwrap_or_default();
-                format!(
-                    "{} {} {} {} {}",
-                    entry.name, pretty, provider, method, detail
-                )
-            }
         }
     }
 }
@@ -522,72 +423,6 @@ pub struct InlineInteractiveState {
     pub preview: bool,
 }
 
-impl InlineInteractiveState {
-    pub fn debug_memory_profile(&self) -> serde_json::Value {
-        let entries_bytes: usize = self.entries.iter().map(estimate_picker_entry_bytes).sum();
-        let filtered_bytes = self.filtered.capacity() * std::mem::size_of::<usize>();
-        let filter_bytes = self.filter.capacity();
-        serde_json::json!({
-            "entries_count": self.entries.len(),
-            "filtered_count": self.filtered.len(),
-            "entries_bytes": entries_bytes,
-            "filtered_bytes": filtered_bytes,
-            "filter_bytes": filter_bytes,
-            "total_estimate_bytes": entries_bytes + filtered_bytes + filter_bytes,
-        })
-    }
-}
-
-fn estimate_picker_action_bytes(action: &PickerAction) -> usize {
-    match action {
-        PickerAction::Model
-        | PickerAction::RemoteLogin { .. }
-        | PickerAction::RemoteImportDecision { .. }
-        | PickerAction::AgentTarget(_)
-        | PickerAction::AgentModelChoice { .. }
-        | PickerAction::SubagentModelChoice { .. }
-        | PickerAction::LogoutAll => 0,
-        PickerAction::Account(AccountPickerAction::Switch { provider_id, label }) => {
-            provider_id.capacity() + label.capacity()
-        }
-        PickerAction::Account(AccountPickerAction::Add { provider_id }) => provider_id.capacity(),
-        PickerAction::Account(AccountPickerAction::Replace { provider_id, label }) => {
-            provider_id.capacity() + label.capacity()
-        }
-        PickerAction::Account(AccountPickerAction::OpenCenter { provider_filter }) => {
-            provider_filter
-                .as_ref()
-                .map(|value| value.capacity())
-                .unwrap_or(0)
-        } // [port-excision] Login/Logout arm — variants excised above.
-          // [port-excision] Usage arm — variant excised above.
-    }
-}
-
-fn estimate_picker_option_bytes(option: &PickerOption) -> usize {
-    option.provider.capacity() + option.api_method.capacity() + option.detail.capacity()
-}
-
-fn estimate_picker_entry_bytes(entry: &PickerEntry) -> usize {
-    entry.name.capacity()
-        + entry
-            .options
-            .iter()
-            .map(estimate_picker_option_bytes)
-            .sum::<usize>()
-        + estimate_picker_action_bytes(&entry.action)
-        + entry
-            .created_date
-            .as_ref()
-            .map(|value| value.capacity())
-            .unwrap_or(0)
-        + entry
-            .effort
-            .as_ref()
-            .map(|value| value.capacity())
-            .unwrap_or(0)
-}
-
 /// A reusable picker entry with one or more available actions/options.
 #[derive(Debug, Clone)]
 pub struct PickerEntry {
@@ -610,10 +445,6 @@ pub struct PickerEntry {
 impl PickerEntry {
     pub fn active_option(&self) -> Option<&PickerOption> {
         self.options.get(self.selected_option)
-    }
-
-    pub fn active_option_mut(&mut self) -> Option<&mut PickerOption> {
-        self.options.get_mut(self.selected_option)
     }
 
     pub fn option_count(&self) -> usize {
@@ -744,20 +575,6 @@ impl InlineInteractiveState {
         }
     }
 
-    pub fn selected_entry_index(&self) -> Option<usize> {
-        self.filtered.get(self.selected).copied()
-    }
-
-    pub fn selected_entry(&self) -> Option<&PickerEntry> {
-        self.selected_entry_index()
-            .and_then(|index| self.entries.get(index))
-    }
-
-    pub fn selected_entry_mut(&mut self) -> Option<&mut PickerEntry> {
-        self.selected_entry_index()
-            .and_then(|index| self.entries.get_mut(index))
-    }
-
     pub fn is_agent_target_picker(&self) -> bool {
         self.kind == PickerKind::Model
             && !self.entries.is_empty()
@@ -777,17 +594,6 @@ impl InlineInteractiveState {
 
     pub fn active_submit_hint(&self) -> &'static str {
         self.schema().active_submit_hint
-    }
-
-    pub fn preview_activation_column(&self) -> usize {
-        self.schema().preview_activation_column
-    }
-
-    pub fn max_navigable_column(&self) -> usize {
-        match self.schema().layout {
-            InlineInteractiveLayout::Compact => 0,
-            InlineInteractiveLayout::ThreeColumn => 2,
-        }
     }
 
     pub fn header_layout(&self, preview: bool) -> ([&'static str; 3], [usize; 3]) {
@@ -814,26 +620,6 @@ impl InlineInteractiveState {
                 ],
                 [0, 1, 2],
             )
-        }
-    }
-
-    pub fn filter_text(&self, entry: &PickerEntry) -> String {
-        if self.is_agent_target_picker() {
-            let model = entry
-                .active_option()
-                .map(|option| option.provider.as_str())
-                .unwrap_or("");
-            let config = entry
-                .active_option()
-                .map(|option| option.api_method.as_str())
-                .unwrap_or("");
-            let detail = entry
-                .active_option()
-                .map(|option| option.detail.as_str())
-                .unwrap_or("");
-            format!("{} {} {} {}", entry.name, model, config, detail)
-        } else {
-            self.kind.filter_text(entry)
         }
     }
 

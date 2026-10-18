@@ -177,15 +177,6 @@ pub(crate) fn readable_light_foreground(color: Color, background: Color) -> Colo
     result
 }
 
-/// Foreground counterpart to the generic color flip, for partial repaint paths.
-pub fn adapt_foreground_for_theme(color: Color, background: Color) -> Color {
-    if is_light_theme() {
-        readable_light_foreground(adapt_color_for_light(color), background)
-    } else {
-        color
-    }
-}
-
 /// Hue/saturation-preserving lightness inversion, quantized through the
 /// capability-aware `rgb()` so 256-color terminals stay palette-bounded.
 fn flip_luminance(r: u8, g: u8, b: u8) -> Color {
@@ -258,16 +249,6 @@ pub fn adapt_buffer_for_theme(buf: &mut Buffer) {
 pub fn adapt_buffer_for_display(buf: &mut Buffer) {
     let palette = super::palette::configured_palette();
     adapt_buffer_impl(buf, theme_mode(), palette.as_ref());
-}
-
-/// The same ordering for a foreground patched outside a full-frame redraw.
-pub fn adapt_foreground_for_display(color: Color, background: Color) -> Color {
-    if let Some(palette) = super::palette::configured_palette()
-        && let Some(chosen) = super::palette::configured_native_color(&palette, color)
-    {
-        return chosen;
-    }
-    adapt_foreground_for_theme(color, background)
 }
 
 /// Explicit-mode variant of [`adapt_buffer_for_theme`]. Useful for tests and

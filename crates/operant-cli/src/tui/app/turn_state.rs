@@ -48,7 +48,6 @@ impl App {
             .unwrap_or_else(|| if self.plan_mode { "plan" } else { "build" }.to_string())
     }
 
-    #[allow(dead_code)] // Prepared for turn metadata tracking
     pub(crate) fn begin_user_turn_snapshot(&mut self) {
         self.turn_metadata.push(TurnMetadata {
             model_name: Some(self.model_name.clone()),

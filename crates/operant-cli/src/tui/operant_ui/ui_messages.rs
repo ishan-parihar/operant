@@ -3011,12 +3011,6 @@ pub(crate) fn compact_swarm_await_summary(message: &str) -> String {
     }
 }
 
-pub(crate) fn encode_swarm_agent_snapshot(
-    member: &crate::tui::operant_app::protocol::SwarmMemberStatus,
-) -> Option<String> {
-    serde_json::to_string(member).ok()
-}
-
 struct CompactSwarmNotification<'a> {
     sender: &'a str,
     marker: String,

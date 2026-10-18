@@ -68,14 +68,6 @@ pub fn warning_color() -> Color {
 pub fn error_color() -> Color {
     super::palette::role_color(super::palette::Role::Error)
 }
-/// Informational accent.
-pub fn info_color() -> Color {
-    super::palette::role_color(super::palette::Role::Info)
-}
-/// Borders and rules.
-pub fn border_color() -> Color {
-    super::palette::role_color(super::palette::Role::Border)
-}
 /// Selected-row background.
 pub fn selection_bg_color() -> Color {
     super::palette::role_color(super::palette::Role::SelectionBg)
@@ -85,14 +77,6 @@ pub fn selection_bg_color() -> Color {
 // spinner-only renderer patches one status cell between full TUI redraws. This
 // sequence should read as a circular spin, not a grow/recede pulse.
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// Frame rate for slow, full-line "liveness" indicators that can only be
-/// repainted by a full TUI redraw (e.g. the running-tool progress bar) when
-/// decorative animations are disabled (Minimal tier, SSH, WSL, etc.). These
-/// ride the ~1 Hz passive-liveness redraw, so advancing them faster would just
-/// skip frames. Keep this slow so they read as alive without forcing more
-/// expensive full-frame redraws.
-pub const LIVENESS_INDICATOR_FPS: f32 = 1.5;
 
 /// Frame rate for the low-cost single-cell circular spinner when decorative
 /// animations are disabled. Unlike the full-line indicators above, this spinner
@@ -226,23 +210,6 @@ pub fn prompt_entry_shimmer_color(base: Color, pos: f32, t: f32) -> Color {
     let pulse = (1.0 - t).powf(0.55);
     let highlight = rgb(255, 248, 210);
     blend_color(base, highlight, shimmer * pulse * 0.7)
-}
-
-/// Generate an animated color that pulses between two colors
-pub fn animated_tool_color(elapsed: f32, enable_decorative_animations: bool) -> Color {
-    if !enable_decorative_animations {
-        return tool_color();
-    }
-
-    // Cycle period of ~1.5 seconds
-    let t = (elapsed * 2.0).sin() * 0.5 + 0.5; // 0.0 to 1.0
-
-    // Interpolate between cyan and purple
-    let r = (80.0 + t * 106.0) as u8; // 80 -> 186
-    let g = (200.0 - t * 61.0) as u8; // 200 -> 139
-    let b = (220.0 + t * 35.0) as u8; // 220 -> 255
-
-    rgb(r, g, b)
 }
 
 #[cfg(test)]

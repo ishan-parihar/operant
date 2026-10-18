@@ -72,28 +72,6 @@ impl DualAuthProvider {
             _ => None,
         }
     }
-
-    /// The execution slot this credential decision routes through.
-    pub const fn active_provider(self) -> ActiveProvider {
-        match self {
-            Self::Anthropic => ActiveProvider::Claude,
-            Self::OpenAI => ActiveProvider::OpenAI,
-        }
-    }
-
-    /// Model prefix that routes to this provider *without* pinning a
-    /// credential, leaving the runtime in automatic mode (prefer OAuth, fall
-    /// back to an API key). This is the counterpart to
-    /// [`AuthRoute::model_prefix`], which always pins one credential.
-    ///
-    /// `AuthRoute::parse_explicit_credential_prefix` treats exactly these
-    /// prefixes as non-pinning, so the two stay in lockstep.
-    pub const fn bare_model_prefix(self) -> &'static str {
-        match self {
-            Self::Anthropic => "claude",
-            Self::OpenAI => "openai",
-        }
-    }
 }
 
 /// Which credential a dual-auth provider will actually use for a request.
@@ -106,11 +84,6 @@ pub enum AuthMode {
 }
 
 impl AuthMode {
-    /// True when requests bill against a subscription rather than a metered key.
-    pub const fn is_subscription(self) -> bool {
-        matches!(self, Self::Oauth)
-    }
-
     /// Map to the wire-level [`ResolvedCredential`] billing identity.
     pub const fn resolved_credential(self) -> ResolvedCredential {
         match self {
@@ -179,94 +152,6 @@ impl AuthRoute {
             "openai-api" | "openai-api-key" | "openai-key" | "openai-apikey"
             | "openai-platform" | "platform-openai" => Some(Self::openai(AuthMode::ApiKey)),
             _ => None,
-        }
-    }
-
-    /// The execution slot this route runs through.
-    pub const fn active_provider(self) -> ActiveProvider {
-        self.provider.active_provider()
-    }
-
-    /// The wire-level billing identity for this route.
-    pub const fn resolved_credential(self) -> ResolvedCredential {
-        self.mode.resolved_credential()
-    }
-
-    /// Parse a *model prefix* that explicitly pins a dual-auth credential.
-    ///
-    /// This differs from [`AuthRoute::parse`] in the bare-provider cases: in the
-    /// model-prefix vocabulary `claude:` / `anthropic:` / `openai:` mean "route
-    /// to this provider but keep the current credential (auto)", so they do NOT
-    /// pin a credential and return `None` here. Only the explicit credential
-    /// prefixes (`claude-oauth:`, `claude-api:`, `openai-oauth:`, `openai-api:`,
-    /// and their stable-id spellings) pin one.
-    ///
-    /// A single trailing `:` is tolerated so callers can pass the raw prefix.
-    pub fn parse_explicit_credential_prefix(prefix: &str) -> Option<Self> {
-        let token = prefix.trim().strip_suffix(':').unwrap_or(prefix.trim());
-        match token.trim().to_ascii_lowercase().as_str() {
-            // Bare provider aliases do not pin a credential in this vocabulary.
-            "claude" | "anthropic" | "openai" => None,
-            other => Self::parse(other),
-        }
-    }
-
-    /// Canonical `OPERANT_RUNTIME_PROVIDER` value that pins this route.
-    pub const fn runtime_provider_key(self) -> &'static str {
-        match (self.provider, self.mode) {
-            (DualAuthProvider::Anthropic, AuthMode::Oauth) => "claude",
-            (DualAuthProvider::Anthropic, AuthMode::ApiKey) => "claude-api",
-            (DualAuthProvider::OpenAI, AuthMode::Oauth) => "openai",
-            (DualAuthProvider::OpenAI, AuthMode::ApiKey) => "openai-api",
-        }
-    }
-
-    /// Canonical route `api_method` / [`crate::RuntimeKey`] stable-id.
-    pub const fn route_api_method(self) -> &'static str {
-        match (self.provider, self.mode) {
-            (DualAuthProvider::Anthropic, AuthMode::Oauth) => "claude-oauth",
-            (DualAuthProvider::Anthropic, AuthMode::ApiKey) => "anthropic-api-key",
-            (DualAuthProvider::OpenAI, AuthMode::Oauth) => "openai-oauth",
-            (DualAuthProvider::OpenAI, AuthMode::ApiKey) => "openai-api-key",
-        }
-    }
-
-    /// Canonical model-switch prefix (without the trailing colon).
-    pub const fn model_prefix(self) -> &'static str {
-        match (self.provider, self.mode) {
-            (DualAuthProvider::Anthropic, AuthMode::Oauth) => "claude-oauth",
-            (DualAuthProvider::Anthropic, AuthMode::ApiKey) => "claude-api",
-            (DualAuthProvider::OpenAI, AuthMode::Oauth) => "openai-oauth",
-            (DualAuthProvider::OpenAI, AuthMode::ApiKey) => "openai-api",
-        }
-    }
-
-    /// Canonical session `provider_key` (the folded, route-free form).
-    ///
-    /// Unlike [`Self::runtime_provider_key`], the OAuth variants spell
-    /// themselves out (`claude-oauth` / `openai-oauth`) instead of reusing the
-    /// bare provider name. A session's `provider_key` is also written by
-    /// `derive_session_provider_key` for sessions in *automatic* credential
-    /// mode, where it is the bare name. Sharing one spelling made a deliberate
-    /// OAuth pin indistinguishable from "auto" on restore, so restore promoted
-    /// every Anthropic session to a hard OAuth pin and disabled the runtime's
-    /// API-key fallback.
-    pub const fn session_provider_key(self) -> &'static str {
-        match (self.provider, self.mode) {
-            (DualAuthProvider::Anthropic, AuthMode::Oauth) => "claude-oauth",
-            (DualAuthProvider::Anthropic, AuthMode::ApiKey) => "claude-api",
-            (DualAuthProvider::OpenAI, AuthMode::Oauth) => "openai-oauth",
-            (DualAuthProvider::OpenAI, AuthMode::ApiKey) => "openai-api",
-        }
-    }
-
-    /// Canonical CLI `--provider` argument value.
-    pub const fn cli_provider_arg(self) -> &'static str {
-        match (self.provider, self.mode) {
-            (DualAuthProvider::Anthropic, AuthMode::Oauth) => "claude",
-            (DualAuthProvider::Anthropic, AuthMode::ApiKey) => "anthropic-api",
-            (DualAuthProvider::OpenAI, AuthMode::Oauth) => "openai",
-            (DualAuthProvider::OpenAI, AuthMode::ApiKey) => "openai-api",
         }
     }
 }
@@ -342,46 +227,8 @@ impl ModelRouteApiMethod {
         }
     }
 
-    pub fn profile_id(&self) -> Option<&str> {
-        match self {
-            Self::OpenAiCompatible {
-                profile_id: Some(profile_id),
-            } => Some(profile_id.as_str()),
-            _ => None,
-        }
-    }
-
-    pub fn is_openai_compatible(&self) -> bool {
-        matches!(self, Self::OpenAiCompatible { .. })
-    }
-
     pub fn is_openrouter(&self) -> bool {
         matches!(self, Self::OpenRouter)
-    }
-
-    pub fn is_copilot(&self) -> bool {
-        matches!(self, Self::Copilot)
-    }
-
-    pub fn is_cursor(&self) -> bool {
-        matches!(self, Self::Cursor)
-    }
-
-    pub fn is_bedrock(&self) -> bool {
-        matches!(self, Self::Bedrock)
-    }
-
-    pub fn matches_openai_compatible_profile(&self, provider_id: &str) -> bool {
-        self.profile_id()
-            .is_some_and(|profile_id| profile_id.eq_ignore_ascii_case(provider_id))
-    }
-
-    pub fn is_anthropic_credential_route(&self) -> bool {
-        matches!(self, Self::ClaudeOAuth | Self::AnthropicApiKey)
-    }
-
-    pub fn is_openai_credential_route(&self) -> bool {
-        matches!(self, Self::OpenAIOAuth | Self::OpenAIApiKey)
     }
 
     pub fn display_label(&self) -> String {
@@ -410,12 +257,6 @@ impl ModelRouteApiMethod {
 
 /// Default context window size when model-specific data isn't known.
 pub const DEFAULT_CONTEXT_LIMIT: usize = 200_000;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelCapabilities {
-    pub provider: Option<String>,
-    pub context_window: Option<usize>,
-}
 
 // --- model_names.rs ---------------------------------------------------------------
 
@@ -767,273 +608,6 @@ fn title_case_word(word: &str) -> String {
     }
 }
 
-/// Brand spellings that plain title-casing gets wrong (`Deepseek`, `Glm`).
-const BRAND_TOKENS: [(&str, &str); 24] = [
-    ("gpt", "GPT"),
-    ("oss", "OSS"),
-    ("glm", "GLM"),
-    ("deepseek", "DeepSeek"),
-    ("minimax", "MiniMax"),
-    ("openai", "OpenAI"),
-    ("xai", "xAI"),
-    ("tts", "TTS"),
-    ("stt", "STT"),
-    ("api", "API"),
-    ("vl", "VL"),
-    ("ocr", "OCR"),
-    ("id", "ID"),
-    ("it", "IT"),
-    ("moe", "MoE"),
-    ("fp8", "FP8"),
-    ("fp4", "FP4"),
-    ("nvfp4", "NVFP4"),
-    ("awq", "AWQ"),
-    ("gguf", "GGUF"),
-    ("hd", "HD"),
-    ("r1", "R1"),
-    ("ai", "AI"),
-    ("lfm", "LFM"),
-];
-
-/// OpenRouter-style `:variant` suffixes rendered as a parenthetical.
-const PICKER_VARIANT_TAGS: [&str; 9] = [
-    "free", "batch", "thinking", "beta", "nitro", "floor", "online", "exacto", "extended",
-];
-
-/// Families whose official names hyphenate the family to its version
-/// (`GPT-5.5`, `GLM-5.1`, `GPT-OSS`).
-const HYPHENATED_FAMILIES: [&str; 2] = ["GPT", "GLM"];
-
-/// Render any model id as a readable picker title.
-///
-/// Unlike [`pretty_known_model_family`], this never returns the raw id for
-/// unfamiliar shapes. It is meant for surfaces that also show the exact id
-// [port-decision] leaf port: `explicit_model_provider_prefix` verbatim from
-// operant-provider-core/src/selection.rs:165-199 — the routing-prefix splitter
-// `pretty_picker_model_name` reaches. ActiveProvider is the local :17 enum.
-pub fn explicit_model_provider_prefix(model: &str) -> Option<(ActiveProvider, &'static str, &str)> {
-    if let Some(rest) = model.strip_prefix("claude-api:") {
-        Some((ActiveProvider::Claude, "claude-api:", rest))
-    } else if let Some(rest) = model.strip_prefix("claude-oauth:") {
-        Some((ActiveProvider::Claude, "claude-oauth:", rest))
-    } else if let Some(rest) = model.strip_prefix("anthropic-api:") {
-        // The dual-auth API-key key for Anthropic. It must route through the
-        // native Messages runtime, not the same-named OpenAI-compatible
-        // catalog profile, which drops reasoning effort and prompt caching.
-        Some((ActiveProvider::Claude, "anthropic-api:", rest))
-    } else if let Some(rest) = model.strip_prefix("claude:") {
-        Some((ActiveProvider::Claude, "claude:", rest))
-    } else if let Some(rest) = model.strip_prefix("anthropic:") {
-        Some((ActiveProvider::Claude, "anthropic:", rest))
-    } else if let Some(rest) = model.strip_prefix("openai-api:") {
-        Some((ActiveProvider::OpenAI, "openai-api:", rest))
-    } else if let Some(rest) = model.strip_prefix("openai-oauth:") {
-        Some((ActiveProvider::OpenAI, "openai-oauth:", rest))
-    } else if let Some(rest) = model.strip_prefix("openai:") {
-        Some((ActiveProvider::OpenAI, "openai:", rest))
-    } else if let Some(rest) = model.strip_prefix("copilot:") {
-        Some((ActiveProvider::Copilot, "copilot:", rest))
-    } else if let Some(rest) = model.strip_prefix("antigravity:") {
-        Some((ActiveProvider::Antigravity, "antigravity:", rest))
-    } else if let Some(rest) = model.strip_prefix("gemini:") {
-        Some((ActiveProvider::Gemini, "gemini:", rest))
-    } else if let Some(rest) = model.strip_prefix("cursor:") {
-        Some((ActiveProvider::Cursor, "cursor:", rest))
-    } else if let Some(rest) = model.strip_prefix("bedrock:") {
-        Some((ActiveProvider::Bedrock, "bedrock:", rest))
-    } else if let Some(rest) = model.strip_prefix("openrouter:") {
-        Some((ActiveProvider::OpenRouter, "openrouter:", rest))
-    } else {
-        None
-    }
-}
-
-/// nearby (such as the `/model` picker's detail line), so a friendlier title
-/// cannot hide which route will actually run.
-///
-/// Examples:
-///   `openai-api:gpt-5.5`               -> `GPT-5.5`
-///   `anthropic/claude-opus-4.6`        -> `Claude Opus 4.6`
-///   `deepseek/deepseek-v4-pro`         -> `DeepSeek V4 Pro`
-///   `Llama-3.3-70B-Instruct`           -> `Llama 3.3 70B Instruct`
-///   `moonshotai/kimi-k2.5:free`        -> `Kimi K2.5 (free)`
-///   `gpt-oss-120b`                     -> `GPT-OSS 120B`
-///   `o3-mini`                          -> `o3 Mini`
-pub fn pretty_picker_model_name(model: &str) -> String {
-    let trimmed = model.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    // Routing prefixes (`openai-api:`) and vendor namespaces (`anthropic/`)
-    // are shown by the picker's group header, not the title.
-    let bare = explicit_model_provider_prefix(trimmed).map_or(trimmed, |(_, _, bare)| bare);
-    if bare.starts_with("arn:") {
-        return bare.to_string();
-    }
-    if let Some(pretty) = pretty_known_model_family(bare) {
-        return pretty;
-    }
-    let mut bare = bare.rsplit('/').next().unwrap_or(bare);
-    // Profile or provider namespaces (`comtegra:glm-51`, `google:gemini-x`)
-    // are purely alphabetic heads. The picker's group header names them.
-    while let Some((head, rest)) = bare.split_once(':') {
-        if head.is_empty() || rest.is_empty() || !head.chars().all(|c| c.is_ascii_alphabetic()) {
-            break;
-        }
-        if PICKER_VARIANT_TAGS.contains(&rest.to_ascii_lowercase().as_str()) {
-            break;
-        }
-        bare = rest;
-    }
-    // A known `:tag` (`:free`, `:thinking`) is a variant marker. Anything else
-    // with a colon (Bedrock `-v1:0`) stays exact.
-    let (bare, tag) = match bare.split_once(':') {
-        Some((head, tag))
-            if !head.is_empty()
-                && PICKER_VARIANT_TAGS.contains(&tag.to_ascii_lowercase().as_str()) =>
-        {
-            (head, Some(tag.to_ascii_lowercase()))
-        }
-        Some(_) => return bare.to_string(),
-        None => (bare, None),
-    };
-    if let Some(pretty) = pretty_known_model_family(bare) {
-        return append_markers(pretty, tag.into_iter().collect());
-    }
-    // Bedrock-style `vendor.model` namespaces: drop a purely alphabetic vendor
-    // segment that ends before the first dash (`google.gemma-3-27b-it`).
-    let bare = match bare.split_once('.') {
-        Some((vendor, rest))
-            if !rest.is_empty()
-                && vendor.chars().all(|c| c.is_ascii_alphabetic())
-                && !bare[..vendor.len()].contains('-')
-                && !rest.starts_with(|c: char| c.is_ascii_digit()) =>
-        {
-            rest
-        }
-        _ => bare,
-    };
-    if let Some(pretty) = pretty_known_model_family(bare) {
-        return append_markers(pretty, tag.into_iter().collect());
-    }
-    let (core, bracket) = split_bracket_suffix(bare);
-    let (core, date) = split_snapshot_date(core);
-    let parts: Vec<&str> = core
-        .split(['-', '_', ' '])
-        .filter(|p| !p.is_empty())
-        .collect();
-    let mut words: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < parts.len() {
-        let part = parts[i];
-        // `3-1` reads as version `3.1`, as Claude and Llama slugs intend.
-        if part.len() <= 2
-            && part.chars().all(|c| c.is_ascii_digit())
-            && i + 1 < parts.len()
-            && parts[i + 1].len() <= 2
-            && parts[i + 1].chars().all(|c| c.is_ascii_digit())
-        {
-            words.push(format!("{part}.{}", parts[i + 1]));
-            i += 2;
-            continue;
-        }
-        let word = pretty_picker_token(part);
-        match words.last_mut() {
-            Some(previous)
-                if HYPHENATED_FAMILIES.contains(&previous.as_str())
-                    && (word.starts_with(|c: char| c.is_ascii_digit()) || word == "OSS") =>
-            {
-                previous.push('-');
-                previous.push_str(&word);
-            }
-            _ => words.push(word),
-        }
-        i += 1;
-    }
-    if words.is_empty() {
-        return bare.to_string();
-    }
-    let markers = date.into_iter().chain(bracket).chain(tag).collect();
-    append_markers(words.join(" "), markers)
-}
-
-fn append_markers(base: String, markers: Vec<String>) -> String {
-    if markers.is_empty() {
-        return base;
-    }
-    match base.strip_suffix(')') {
-        Some(head) if head.contains(" (") => format!("{head}, {})", markers.join(", ")),
-        _ => format!("{base} ({})", markers.join(", ")),
-    }
-}
-
-#[expect(
-    clippy::unwrap_used,
-    reason = "invariant guaranteed by surrounding validation"
-)]
-/// Case one model-id token for a picker title.
-fn pretty_picker_token(token: &str) -> String {
-    let lower = token.to_ascii_lowercase();
-    if let Some((_, brand)) = BRAND_TOKENS.iter().find(|(raw, _)| *raw == lower) {
-        return (*brand).to_string();
-    }
-    let bytes = lower.as_bytes();
-    let digits_then = |suffix: &[u8]| {
-        bytes.len() > 1
-            && suffix.contains(&bytes[bytes.len() - 1])
-            && lower[..lower.len() - 1]
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '.' || c == 'x')
-            && lower.starts_with(|c: char| c.is_ascii_digit())
-    };
-    // Parameter and context sizes: `70b` -> `70B`, `8x7b` -> `8x7B`, `200k`.
-    if digits_then(b"bmkt") {
-        let (head, unit) = lower.split_at(lower.len() - 1);
-        return format!("{head}{}", unit.to_ascii_uppercase());
-    }
-    // Active-parameter counts: `a35b` -> `A35B`.
-    if bytes.len() > 2
-        && bytes[0] == b'a'
-        && bytes[bytes.len() - 1] == b'b'
-        && lower[1..lower.len() - 1]
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.')
-    {
-        return lower.to_ascii_uppercase();
-    }
-    // OpenAI reasoning families stay lowercase: `o3`, `o4`.
-    if bytes[0] == b'o' && lower[1..].chars().all(|c| c.is_ascii_digit()) && bytes.len() > 1 {
-        return lower;
-    }
-    // Single-letter generations: `k2.5` -> `K2.5`, `v4` -> `V4`, `m2` -> `M2`.
-    if bytes.len() > 1
-        && bytes[0].is_ascii_alphabetic()
-        && lower[1..].chars().all(|c| c.is_ascii_digit() || c == '.')
-    {
-        return lower.to_ascii_uppercase();
-    }
-    // Mixed tokens: keep digits, capitalize a leading word (`qwen3` -> `Qwen3`).
-    if token.chars().any(|c| c.is_ascii_digit()) {
-        if token.starts_with(|c: char| c.is_ascii_lowercase()) {
-            let letters: String = token
-                .chars()
-                .take_while(|c| c.is_ascii_alphabetic())
-                .collect();
-            if letters.len() > 1 {
-                let mut chars = token.chars();
-                let first = chars.next().unwrap().to_ascii_uppercase();
-                return format!("{first}{}", chars.as_str());
-            }
-        }
-        return token.to_string();
-    }
-    // Preserve deliberate mixed case (`MiniMax`), title-case plain words.
-    if token.chars().any(|c| c.is_ascii_uppercase()) {
-        return token.to_string();
-    }
-    title_case_word(token)
-}
-
 // --- selection.rs additions (referenced by ui_header.rs) ---------------------------
 
 pub fn parse_provider_hint(value: &str) -> Option<ActiveProvider> {
@@ -1047,19 +621,6 @@ pub fn parse_provider_hint(value: &str) -> Option<ActiveProvider> {
         "bedrock" | "aws-bedrock" | "aws_bedrock" => Some(ActiveProvider::Bedrock),
         "openrouter" => Some(ActiveProvider::OpenRouter),
         _ => None,
-    }
-}
-
-pub fn provider_label(provider: ActiveProvider) -> &'static str {
-    match provider {
-        ActiveProvider::Claude => "Anthropic",
-        ActiveProvider::OpenAI => "OpenAI",
-        ActiveProvider::Copilot => "GitHub Copilot",
-        ActiveProvider::Antigravity => "Antigravity",
-        ActiveProvider::Gemini => "Gemini",
-        ActiveProvider::Cursor => "Cursor",
-        ActiveProvider::Bedrock => "AWS Bedrock",
-        ActiveProvider::OpenRouter => "OpenRouter",
     }
 }
 

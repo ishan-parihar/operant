@@ -13,7 +13,6 @@
 // upstream consumers of these; the allow keeps the verbatim imports silent
 // until the swarm_tiles surface returns.
 #[allow(unused_imports)]
-use crate::tui::operant_app::keybind::alt_chord_lower;
 use crate::tui::operant_app::protocol::SwarmMemberStatus;
 // [port-decision] import list trimmed at batch-4: the SwarmTile-bound strip
 // renderers (render_gallery, render_swarm_dock, render_swarm_live_card,
@@ -524,7 +523,6 @@ fn clamp_line_to_width(line: &mut Line<'static>, width: usize) {
 // [port-decision] gallery-grid adapter gated: delegates to the excised
 // swarm_tiles render_gallery (iter-591); zero live consumers. Re-activate
 // at W7 when the strip surface ports.
-#[allow(dead_code)]
 pub(crate) fn render_swarm_gallery_lines(
     members: &[SwarmMemberStatus],
     width: usize,
@@ -542,7 +540,6 @@ pub(crate) fn render_swarm_gallery_lines(
 // [port-decision] panel adapter gated: delegates to the excised
 // swarm_tiles render_swarm_panel (iter-591); zero live consumers.
 // Re-activate at W7 when the strip surface ports.
-#[allow(dead_code)]
 pub(crate) fn render_swarm_panel_lines(
     members: &[SwarmMemberStatus],
     selected: usize,
@@ -652,10 +649,6 @@ pub(crate) fn render_swarm_strip_lines_verbatim(
     }
 }
 
-/// Row cap for the vertical strip: agents beyond this collapse into a
-/// `+N more` line (the cap includes that overflow row).
-const SWARM_STRIP_VERTICAL_MAX_ROWS: usize = 4;
-
 /// Render the swarm dock widget body: a narrow vertical agent list for the
 /// info-widget margins. `plan` is the coordinator's swarm plan progress
 /// (completed, total), shown in the header when present.
@@ -664,7 +657,6 @@ const SWARM_STRIP_VERTICAL_MAX_ROWS: usize = 4;
 // render_swarm_dock (iter-591); the live info-widget dock is served by
 // info_widget_swarm_background::render_swarm_dock. Re-activate at W7 when
 // the strip surface ports.
-#[allow(dead_code)]
 pub(crate) fn render_swarm_dock_lines(
     members: &[SwarmMemberStatus],
     selected: usize,
@@ -686,21 +678,6 @@ pub(crate) fn render_swarm_dock_lines(
         width,
         max_height,
     )
-}
-
-/// Session ids of `members` in the same order the panel/gallery displays them
-/// (coordinator first, then worktree manager, then by session id). Lets the TUI
-/// map a selected panel index back to a concrete session for pop-out.
-///
-/// Delegates to the renderer's [`display_order`] on the exact same
-/// [`GalleryMember`] conversion used for rendering, so the pop-out index can
-/// never drift from what is on screen.
-#[allow(dead_code)] // pending W7 wiring (pop-out panel)
-pub(crate) fn members_display_order(members: &[SwarmMemberStatus]) -> Vec<String> {
-    display_order(&members_to_gallery(members))
-        .into_iter()
-        .map(|i| members[i].session_id.clone())
-        .collect()
 }
 
 #[cfg(test)]

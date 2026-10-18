@@ -13,46 +13,14 @@ pub mod watchdog;
 use chrono::Local;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 static LOGGER: Mutex<Option<Logger>> = Mutex::new(None);
-static CLEANUP_STARTED: AtomicBool = AtomicBool::new(false);
 static TASK_LOG_CONTEXTS: OnceLock<Mutex<HashMap<String, LogContext>>> = OnceLock::new();
-static RATE_LIMITS: OnceLock<Mutex<HashMap<String, RateLimitState>>> = OnceLock::new();
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogLevel {
-    Info,
-    Warn,
-    Error,
-    Debug,
-}
-
-impl LogLevel {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Info => "INFO",
-            Self::Warn => "WARN",
-            Self::Error => "ERROR",
-            Self::Debug => "DEBUG",
-        }
-    }
-
-    fn is_enabled(self) -> bool {
-        !matches!(self, Self::Debug) || std::env::var("OPERANT_TRACE").is_ok()
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RateLimitState {
-    last_emit: Instant,
-    suppressed: u64,
-}
 
 /// Thread-local logging context
 #[derive(Default, Clone)]
@@ -65,48 +33,6 @@ pub struct LogContext {
 
 thread_local! {
     static LOG_CONTEXT: RefCell<LogContext> = RefCell::new(LogContext::default());
-}
-
-/// Update just the session in the current context
-pub fn set_session(session: &str) {
-    if with_task_context_mut(|ctx| {
-        ctx.session = Some(session.to_string());
-    }) {
-        return;
-    }
-
-    LOG_CONTEXT.with(|c| {
-        c.borrow_mut().session = Some(session.to_string());
-    });
-}
-
-/// Update just the server in the current context
-pub fn set_server(server: &str) {
-    if with_task_context_mut(|ctx| {
-        ctx.server = Some(server.to_string());
-    }) {
-        return;
-    }
-
-    LOG_CONTEXT.with(|c| {
-        c.borrow_mut().server = Some(server.to_string());
-    });
-}
-
-/// Update provider and model in the current context
-pub fn set_provider_info(provider: &str, model: &str) {
-    if with_task_context_mut(|ctx| {
-        ctx.provider = Some(provider.to_string());
-        ctx.model = Some(model.to_string());
-    }) {
-        return;
-    }
-
-    LOG_CONTEXT.with(|c| {
-        let mut ctx = c.borrow_mut();
-        ctx.provider = Some(provider.to_string());
-        ctx.model = Some(model.to_string());
-    });
 }
 
 /// Get the current context as a prefix string
@@ -122,32 +48,11 @@ fn current_task_id() -> Option<String> {
     tokio::task::try_id().map(|id| id.to_string())
 }
 
-fn with_task_context_mut(update: impl FnOnce(&mut LogContext)) -> bool {
-    let Some(task_id) = current_task_id() else {
-        return false;
-    };
-
-    let store = TASK_LOG_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut contexts) = store.lock() {
-        let ctx = contexts.entry(task_id).or_default();
-        update(ctx);
-        true
-    } else {
-        false
-    }
-}
-
 fn task_context_snapshot() -> Option<LogContext> {
     let task_id = current_task_id()?;
     let store = TASK_LOG_CONTEXTS.get()?;
     let contexts = store.lock().ok()?;
     contexts.get(&task_id).cloned()
-}
-
-/// Snapshot the current logging context for diagnostics that need stable,
-/// session-scoped in-memory keys in addition to the rendered log prefix.
-pub fn current_context_snapshot() -> LogContext {
-    task_context_snapshot().unwrap_or_else(|| LOG_CONTEXT.with(|c| c.borrow().clone()))
 }
 
 fn context_prefix_for(ctx: &LogContext) -> String {
@@ -190,23 +95,6 @@ fn log_dir() -> Option<PathBuf> {
 }
 
 impl Logger {
-    fn new() -> Option<Self> {
-        let log_dir = log_dir()?;
-        crate::tui::operant_app::storage::ensure_dir(&log_dir).ok()?;
-
-        // Use date-based log file
-        let date = Local::now().format("%Y-%m-%d");
-        let path = log_dir.join(format!("operant-{}.log", date));
-
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok()?;
-
-        Some(Self { file })
-    }
-
     // (plan 01, S1b) the only permitted direct-stderr site: the logger
     // itself just failed, so tracing is dead here and a mid-frame
     // corruption is the lesser evil against losing the failure signal.
@@ -225,32 +113,6 @@ impl Logger {
         if let Err(err) = self.file.flush() {
             eprintln!("operant logger flush failed: {err}");
         }
-    }
-}
-
-/// Initialize the logger (call once at startup)
-pub fn init() {
-    let mut guard = match LOGGER.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if guard.is_none() {
-        *guard = Logger::new();
-    }
-    drop(guard);
-
-    // Prune stale daily log files once per process, off the startup path so
-    // disk I/O never blocks launch. cleanup_old_logs is scoped to our own
-    // `operant-*.log` files, so it is safe to run unconditionally.
-    // Detect silent hangs in long sessions: without this a freeze leaves the
-    // log simply stopping, with no phase or thread-state evidence.
-    watchdog::start();
-
-    if !CLEANUP_STARTED.swap(true, Ordering::SeqCst) {
-        std::thread::Builder::new()
-            .name("operant-log-cleanup".to_string())
-            .spawn(cleanup_old_logs)
-            .ok();
     }
 }
 
@@ -290,147 +152,6 @@ pub fn warn(message: &str) {
         if let Some(logger) = guard.as_mut() {
             logger.write("WARN", message);
         }
-    }
-}
-
-/// Truncate a value for inclusion in a log line, appending an ellipsis marker
-/// with the original length when cut. Char-boundary safe. Use this for
-/// payload-bearing values (event debug dumps, request bodies) so a routine
-/// warning cannot flood the log with a multi-kilobyte line.
-pub fn truncate_for_log(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-    let truncated: String = value.chars().take(max_chars).collect();
-    format!("{}… [{} chars total]", truncated, value.chars().count())
-}
-
-/// Log a debug message (only if OPERANT_TRACE is set)
-#[expect(
-    clippy::collapsible_if,
-    reason = "Debug logging keeps env gating and logger access explicit"
-)]
-pub fn debug(message: &str) {
-    if std::env::var("OPERANT_TRACE").is_ok() {
-        if let Ok(mut guard) = LOGGER.lock() {
-            if let Some(logger) = guard.as_mut() {
-                logger.write("DEBUG", message);
-            }
-        }
-    }
-}
-
-pub fn event_info<K, V, I>(event_name: &str, fields: I)
-where
-    K: AsRef<str>,
-    V: ToString,
-    I: IntoIterator<Item = (K, V)>,
-{
-    event(LogLevel::Info, event_name, fields);
-}
-
-pub fn event_warn<K, V, I>(event_name: &str, fields: I)
-where
-    K: AsRef<str>,
-    V: ToString,
-    I: IntoIterator<Item = (K, V)>,
-{
-    event(LogLevel::Warn, event_name, fields);
-}
-
-pub fn event_error<K, V, I>(event_name: &str, fields: I)
-where
-    K: AsRef<str>,
-    V: ToString,
-    I: IntoIterator<Item = (K, V)>,
-{
-    event(LogLevel::Error, event_name, fields);
-}
-
-pub fn event_debug<K, V, I>(event_name: &str, fields: I)
-where
-    K: AsRef<str>,
-    V: ToString,
-    I: IntoIterator<Item = (K, V)>,
-{
-    event(LogLevel::Debug, event_name, fields);
-}
-
-pub fn event<K, V, I>(level: LogLevel, event: &str, fields: I)
-where
-    K: AsRef<str>,
-    V: ToString,
-    I: IntoIterator<Item = (K, V)>,
-{
-    if !level.is_enabled() {
-        return;
-    }
-    write_level(level, &format_structured_event(event, fields));
-}
-
-pub fn event_rate_limited<K, V, I>(
-    level: LogLevel,
-    rate_key: &str,
-    min_interval: Duration,
-    event: &str,
-    fields: I,
-) where
-    K: AsRef<str>,
-    V: ToString,
-    I: IntoIterator<Item = (K, V)>,
-{
-    if !level.is_enabled() {
-        return;
-    }
-
-    let now = Instant::now();
-    let store = RATE_LIMITS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut suppressed = 0;
-    let should_emit = match store.lock() {
-        Ok(mut guard) => match guard.get_mut(rate_key) {
-            Some(state) if now.duration_since(state.last_emit) < min_interval => {
-                state.suppressed = state.suppressed.saturating_add(1);
-                false
-            }
-            Some(state) => {
-                suppressed = state.suppressed;
-                state.suppressed = 0;
-                state.last_emit = now;
-                true
-            }
-            None => {
-                guard.insert(
-                    rate_key.to_string(),
-                    RateLimitState {
-                        last_emit: now,
-                        suppressed: 0,
-                    },
-                );
-                true
-            }
-        },
-        Err(_) => true,
-    };
-
-    if !should_emit {
-        return;
-    }
-
-    let mut fields: Vec<(String, String)> = fields
-        .into_iter()
-        .map(|(key, value)| (key.as_ref().to_string(), value.to_string()))
-        .collect();
-    if suppressed > 0 {
-        fields.push(("suppressed".to_string(), suppressed.to_string()));
-    }
-    write_level(level, &format_structured_event(event, fields));
-}
-
-fn write_level(level: LogLevel, message: &str) {
-    if let Ok(mut guard) = LOGGER.lock()
-        && let Some(logger) = guard.as_mut()
-    {
-        logger.write(level.as_str(), message);
     }
 }
 
@@ -505,88 +226,11 @@ fn format_log_field_value(value: &str) -> String {
     }
 }
 
-/// Log a structured auth event with conservative redaction.
-///
-/// Callers should pass only non-secret metadata. This function still redacts any
-/// field whose key looks credential-like so accidental tokens/keys do not land in
-/// logs.
-pub fn auth_event(event: &str, provider: &str, fields: &[(&str, &str)]) {
-    let mut parts = vec![
-        format!("event={}", sanitize_log_value(event)),
-        format!("provider={}", sanitize_log_value(provider)),
-    ];
-    for (key, value) in fields {
-        parts.push(format!(
-            "{}={}",
-            sanitize_log_value(key),
-            redact_auth_field(key, value)
-        ));
-    }
-    let msg = format!("AUTH {}", parts.join(" "));
-    if let Ok(mut guard) = LOGGER.lock()
-        && let Some(logger) = guard.as_mut()
-    {
-        logger.write("AUTH", &msg);
-    }
-}
-
-/// Log a tool call
-#[expect(
-    clippy::collapsible_if,
-    reason = "Logger lock + optional logger branching is intentionally straightforward"
-)]
-pub fn tool_call(name: &str, input: &str, output: &str) {
-    let msg = format!(
-        "TOOL[{}] input={} output={}",
-        name,
-        truncate(input, 200),
-        truncate(output, 500)
-    );
-    if let Ok(mut guard) = LOGGER.lock() {
-        if let Some(logger) = guard.as_mut() {
-            logger.write("TOOL", &msg);
-        }
-    }
-}
-
-/// Log a crash/panic for auto-debug
-#[expect(
-    clippy::collapsible_if,
-    reason = "Logger lock + optional logger branching is intentionally straightforward"
-)]
-pub fn crash(error: &str, context: &str) {
-    let msg = format!("CRASH: {} | Context: {}", error, context);
-    if let Ok(mut guard) = LOGGER.lock() {
-        if let Some(logger) = guard.as_mut() {
-            logger.write("CRASH", &msg);
-        }
-    }
-}
-
-/// Get the session ID from the current logging context (thread-local or task-local).
-pub fn current_session() -> Option<String> {
-    if let Some(ctx) = task_context_snapshot() {
-        return ctx.session;
-    }
-    LOG_CONTEXT.with(|c| c.borrow().session.clone())
-}
-
 /// Get path to today's log file
 pub fn log_path() -> Option<PathBuf> {
     let log_dir = log_dir()?;
     let date = Local::now().format("%Y-%m-%d");
     Some(log_dir.join(format!("operant-{}.log", date)))
-}
-
-/// Remove daily `operant-*.log` / `operant-desktop-*.log` files older than 7 days.
-///
-/// Scoped deliberately to the date-stamped log files this logger produces. The
-/// log directory also holds non-log data (e.g. `memory/`, `memory-events-*.jsonl`)
-/// that must NOT be touched here, so we never blanket-delete by mtime.
-pub fn cleanup_old_logs() {
-    if let Some(log_dir) = log_dir() {
-        cleanup_old_logs_in(&log_dir, Local::now());
-    }
 }
 
 /// Core of [`cleanup_old_logs`], parameterized on the directory and "now" so it

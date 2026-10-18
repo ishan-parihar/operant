@@ -30,24 +30,16 @@ pub enum DeviceAuthStatus {
     /// Dialog is idle / not started.
     Idle,
     /// Requesting the device code from the authorization server.
-    #[expect(
-        dead_code,
-        reason = "no opener since H-9 (iter-905); the scaffold is retained until the overlay-flag goldens are re-proven"
-    )]
     WaitingForCode,
     /// User code is displayed; waiting for the user to authorize in-browser.
-    #[allow(dead_code)] // Prepared for device auth state machine
     ShowingCode,
     /// Actively polling the token endpoint.
     Polling,
     /// Browser-based auth (Anthropic OAuth) — browser was opened.
-    #[allow(dead_code)] // Prepared for browser-based auth flow
     BrowserAuth,
     /// Successfully obtained a token.
-    #[allow(dead_code)] // Prepared for auth success state
     Success(String),
     /// An error occurred.
-    #[allow(dead_code)] // Prepared for auth error state
     Error(String),
 }
 
@@ -63,7 +55,6 @@ pub struct DeviceAuthDialogState {
     pub user_code: String,
     pub verification_uri: String,
     pub device_code: String,
-    #[allow(dead_code)] // Polling interval for device auth
     pub interval: u64,
     /// OAuth URL for browser-based flows (Codex). Shown in the dialog so the
     /// user can copy-paste it when automatic browser launch fails.
@@ -91,74 +82,11 @@ impl DeviceAuthDialogState {
         self.status = DeviceAuthStatus::Idle;
         self.auth_url.clear();
     }
-
-    /// Switch to BrowserAuth status and store the URL so the dialog can
-    /// display it as a copy-paste fallback.
-    #[allow(dead_code)] // Prepared for browser-based auth flow
-    pub fn set_browser_url(&mut self, url: String) {
-        self.auth_url = url;
-        self.status = DeviceAuthStatus::BrowserAuth;
-    }
-
-    /// Set the device code information received from the authorization server.
-    #[allow(dead_code)] // Prepared for device auth state machine
-    pub fn set_code(
-        &mut self,
-        user_code: String,
-        verification_uri: String,
-        device_code: String,
-        interval: u64,
-    ) {
-        self.user_code = user_code;
-        self.verification_uri = verification_uri;
-        self.device_code = device_code;
-        self.interval = interval;
-        self.status = DeviceAuthStatus::ShowingCode;
-    }
-
-    /// Transition to the polling state (code has been shown, now waiting for
-    /// the user to complete authorization).
-    #[allow(dead_code)] // Prepared for device auth polling
-    pub fn set_polling(&mut self) {
-        self.status = DeviceAuthStatus::Polling;
-    }
-
-    /// Mark the flow as successful with the obtained token.
-    #[allow(dead_code)] // Prepared for auth success state
-    pub fn set_success(&mut self, token: String) {
-        self.status = DeviceAuthStatus::Success(token);
-    }
-
-    /// Mark the flow as failed.
-    #[allow(dead_code)] // Prepared for auth error state
-    pub fn set_error(&mut self, msg: String) {
-        self.status = DeviceAuthStatus::Error(msg);
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Events sent from the background task to the main loop
 // ---------------------------------------------------------------------------
-
-/// Messages sent from the background device-code / OAuth task back to the
-/// main event loop so it can update the dialog state.
-#[allow(dead_code)] // Device auth event types
-pub enum DeviceAuthEvent {
-    /// Device code received — show the user code and verification URI.
-    GotCode {
-        user_code: String,
-        verification_uri: String,
-        device_code: String,
-        interval: u64,
-    },
-    /// Browser-based OAuth URL is ready — display it so the user can open it
-    /// manually if the automatic browser launch failed.
-    GotBrowserUrl { url: String },
-    /// Access token obtained — auth succeeded.
-    TokenReceived(String),
-    /// Something went wrong.
-    Error(String),
-}
 
 // ---------------------------------------------------------------------------
 // Rendering

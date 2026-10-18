@@ -27,8 +27,6 @@
 //! (`operant-tui-markdown`); that renderer remains authoritative until this core
 //! reaches parity, after which front-ends migrate onto it.
 
-#![cfg_attr(test, allow(dead_code))]
-
 pub mod markdown;
 pub mod math;
 pub mod model;
@@ -52,7 +50,7 @@ pub use reasoning::{
     reasoning_summary_line_markup,
 };
 #[allow(unused_imports)] // re-export/import for the W3/W5 consumers (lands next wave)
-pub use wrap::{ColumnWidth, WidthMeasure, wrap_line, wrap_lines};
+pub use wrap::{ColumnWidth, WidthMeasure, wrap_line};
 
 #[cfg(test)]
 mod tests;

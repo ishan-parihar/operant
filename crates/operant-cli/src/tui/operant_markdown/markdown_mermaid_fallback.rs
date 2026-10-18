@@ -8,7 +8,6 @@ use ratatui::prelude::*;
 const INLINE_IMAGE_MARKER_PREFIX: &str = "\x00IIMG:";
 const INLINE_IMAGE_MARKER_SUFFIX: &str = ":END";
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum RenderResult {
     Image {
@@ -24,10 +23,6 @@ pub fn is_mermaid_lang(lang: &str) -> bool {
     lang.eq_ignore_ascii_case("mermaid") || lang.eq_ignore_ascii_case("mmd")
 }
 
-pub fn image_protocol_available() -> bool {
-    false
-}
-
 pub fn native_image_protocol_available() -> bool {
     false
 }
@@ -37,18 +32,11 @@ pub fn with_image_protocol_override<T>(_enabled: Option<bool>, f: impl FnOnce() 
     f()
 }
 
-pub fn get_font_size() -> Option<(u16, u16)> {
-    None
-}
-
 /// Monotonic deferred-render epoch. The fallback renderer never defers, so
 /// the epoch never advances.
 pub fn deferred_render_epoch() -> u64 {
     0
 }
-
-/// No-op: without the mermaid renderer there is no shared deferred epoch.
-pub fn notify_deferred_render_completed() {}
 
 pub fn render_mermaid_deferred_with_stream_scope(
     _content: &str,
@@ -120,8 +108,4 @@ pub fn parse_inline_image_placeholder(line: &Line<'_>) -> Option<(u64, u16, u16)
     let rows = u16::from_str_radix(parts.next()?, 16).ok()?;
     let cols = u16::from_str_radix(parts.next()?, 16).ok()?;
     (parts.next().is_none()).then_some((hash, rows, cols))
-}
-
-pub fn register_external_image(_path: &std::path::Path, _width: u32, _height: u32) -> u64 {
-    0
 }

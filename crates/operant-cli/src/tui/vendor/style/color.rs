@@ -19,17 +19,6 @@
 
 use ratatui::style::Color;
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-
-pub fn clear_buf(area: Rect, buf: &mut Buffer) {
-    for x in area.left()..area.right() {
-        for y in area.top()..area.bottom() {
-            buf[(x, y)].reset();
-        }
-    }
-}
-
 /// Build a renderable color from an RGB literal.
 ///
 /// One palette, no depth negotiation: the returned color is always the

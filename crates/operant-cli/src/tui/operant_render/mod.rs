@@ -2,7 +2,6 @@
 // Copyright (c) 2025 Jeremy Huang. Ported verbatim @ 0a9dc7805; no imports
 // needed re-rooting (ratatui/unicode-width only); swarm/memory module
 // declarations excised as out of port scope.
-#![cfg_attr(test, allow(dead_code))]
 
 pub mod chrome;
 pub mod layout;

@@ -29,10 +29,6 @@ impl PerformanceTier {
         }
     }
 
-    pub fn animations_enabled(self) -> bool {
-        !matches!(self, Self::Minimal)
-    }
-
     pub fn idle_animation_enabled(self) -> bool {
         matches!(self, Self::Full)
     }
@@ -68,23 +64,6 @@ pub struct SystemProfile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyntheticSystemProfile {
-    Native,
-    Wsl,
-    WslWindowsTerminal,
-}
-
-impl SyntheticSystemProfile {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::Wsl => "wsl",
-            Self::WslWindowsTerminal => "wsl-windows-terminal",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TuiPerfPolicy {
     pub tier: PerformanceTier,
     pub redraw_fps: u32,
@@ -98,20 +77,6 @@ pub struct TuiPerfPolicy {
 }
 
 impl SystemProfile {
-    pub fn load_ratio(&self) -> Option<f64> {
-        match (self.load_avg_1m, self.cpu_count) {
-            (Some(load), Some(cpus)) if cpus > 0 => Some(load / cpus as f64),
-            _ => None,
-        }
-    }
-
-    pub fn memory_pressure(&self) -> Option<f64> {
-        match (self.available_memory_mb, self.total_memory_mb) {
-            (Some(avail), Some(total)) if total > 0 => Some(1.0 - (avail as f64 / total as f64)),
-            _ => None,
-        }
-    }
-
     pub fn is_windows_terminal(&self) -> bool {
         self.terminal == "windows-terminal"
     }
@@ -132,71 +97,6 @@ static PROFILE: OnceLock<SystemProfile> = OnceLock::new();
 
 pub fn profile() -> &'static SystemProfile {
     PROFILE.get_or_init(detect)
-}
-
-/// Pin the process-global system profile to the synthetic Full-tier profile.
-///
-/// Test harnesses call this so rendered output (perf badge, animation policy,
-/// idle status facts) does not depend on the host's load average or free
-/// memory at the moment the test process first touched `profile()`. First
-/// initialization wins: calling this after `profile()` has already run is a
-/// no-op, and production code paths never call it.
-pub fn pin_full_profile_for_tests() {
-    let _ = PROFILE.set(synthetic_profile(SyntheticSystemProfile::Native));
-}
-
-pub fn synthetic_profile(kind: SyntheticSystemProfile) -> SystemProfile {
-    match kind {
-        SyntheticSystemProfile::Native => SystemProfile {
-            load_avg_1m: Some(0.2),
-            cpu_count: Some(8),
-            available_memory_mb: Some(8192),
-            total_memory_mb: Some(16384),
-            is_ssh: false,
-            is_wsl: false,
-            terminal: "kitty".to_string(),
-            tier: PerformanceTier::Full,
-            fragile_glyph_cache: false,
-        },
-        SyntheticSystemProfile::Wsl => SystemProfile {
-            load_avg_1m: Some(0.4),
-            cpu_count: Some(8),
-            available_memory_mb: Some(8192),
-            total_memory_mb: Some(16384),
-            is_ssh: false,
-            is_wsl: true,
-            terminal: "wezterm".to_string(),
-            tier: compute_tier(
-                Some(0.4),
-                Some(8),
-                Some(8192),
-                Some(16384),
-                false,
-                true,
-                "wezterm",
-            ),
-            fragile_glyph_cache: false,
-        },
-        SyntheticSystemProfile::WslWindowsTerminal => SystemProfile {
-            load_avg_1m: Some(0.4),
-            cpu_count: Some(8),
-            available_memory_mb: Some(8192),
-            total_memory_mb: Some(16384),
-            is_ssh: false,
-            is_wsl: true,
-            terminal: "windows-terminal".to_string(),
-            tier: compute_tier(
-                Some(0.4),
-                Some(8),
-                Some(8192),
-                Some(16384),
-                false,
-                true,
-                "windows-terminal",
-            ),
-            fragile_glyph_cache: false,
-        },
-    }
 }
 
 pub fn tui_policy() -> TuiPerfPolicy {
@@ -280,32 +180,6 @@ pub fn tui_policy_for(
         simplified_model_picker,
         linked_side_panel_refresh_interval,
     }
-}
-
-pub fn init_background() {
-    std::thread::spawn(|| {
-        let p = PROFILE.get_or_init(detect);
-        crate::tui::operant_app::logging::info(&format!(
-            "perf: tier={} terminal={} ssh={} wsl={} glyph_safe={} load={} cpus={} mem_avail={}MB mem_total={}MB",
-            p.tier,
-            p.terminal,
-            p.is_ssh,
-            p.is_wsl,
-            p.fragile_glyph_cache,
-            p.load_avg_1m
-                .map(|v| format!("{:.1}", v))
-                .unwrap_or_else(|| "?".into()),
-            p.cpu_count
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".into()),
-            p.available_memory_mb
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".into()),
-            p.total_memory_mb
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "?".into()),
-        ));
-    });
 }
 
 fn detect() -> SystemProfile {

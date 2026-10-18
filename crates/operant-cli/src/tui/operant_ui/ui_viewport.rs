@@ -1609,10 +1609,6 @@ pub(crate) fn set_pinned_todo_more_area_for_test(area: Option<Rect>) {
     set_pinned_todo_more_area(area);
 }
 
-pub(crate) fn pinned_todo_more_area() -> Option<Rect> {
-    PINNED_TODO_MORE_AREA.lock().ok().and_then(|area| *area)
-}
-
 fn compute_prompt_preview_line_count(
     wrapped_user_prompt_starts: &[usize],
     user_prompt_texts: &[String],

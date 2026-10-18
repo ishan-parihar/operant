@@ -26,14 +26,6 @@ impl KeyBindingRegistry {
         }
     }
 
-    /// Add multiple bindings
-    #[allow(dead_code)] // Batched-registration API; no production caller yet
-    pub fn add_many(&mut self, bindings: Vec<KeyBinding>) {
-        for b in bindings {
-            self.add(b);
-        }
-    }
-
     /// Find binding for a key event in a given context
     pub fn find(&self, event: &KeyEvent, context: BindingContext) -> Option<&KeyBinding> {
         // Check context-specific bindings first
@@ -53,7 +45,6 @@ impl KeyBindingRegistry {
     }
 
     /// Find binding for a key event, trying multiple contexts in priority order
-    #[allow(dead_code)] // Multi-context dispatch lands with the dispatch migration
     pub fn find_with_fallback(
         &self,
         event: &KeyEvent,
@@ -73,7 +64,6 @@ impl KeyBindingRegistry {
     }
 
     /// Get all bindings for a context (for help display)
-    #[allow(dead_code)] // Superseded by `catalogue`, which lists each binding once
     pub fn get_bindings(&self, context: BindingContext) -> Vec<&KeyBinding> {
         let mut result = Vec::new();
         if let Some(ctx_bindings) = self.bindings.get(&context) {
@@ -84,7 +74,6 @@ impl KeyBindingRegistry {
     }
 
     /// Remove a binding
-    #[allow(dead_code)] // Custom-binding API; no production caller yet
     pub fn remove(
         &mut self,
         key: KeyCode,
