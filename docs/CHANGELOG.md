@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-925 — the last static default model is gone (plan P2).** The
+  `provider_metadata` OpenAI-compatible profile table carried a `default_model` per
+  entry that nothing read (the port-excision note says the static model tables are
+  unreferenced). Removed from `OpenAiCompatibleProfile` and `ResolvedOpenAiCompatibleProfile`
+  and from all entries. No runtime behavior changed.
+
 - **iter-924 — the gateway follows `/connect` and `/model` (plan P0.4).** The gateway
   is a separate process from the TUI, and it kept the endpoint it started with until a
   restart. Each message now compares `[client]` and `[agent] model` in the loaded

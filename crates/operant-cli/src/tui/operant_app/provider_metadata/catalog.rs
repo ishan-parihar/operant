@@ -15,7 +15,6 @@ pub const OPENCODE_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "OPENCODE_API_KEY",
     env_file: "opencode.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("minimax-m2.7"),
     requires_api_key: true,
 };
 
@@ -26,7 +25,6 @@ pub const OPENCODE_GO_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile
     api_key_env: "OPENCODE_GO_API_KEY",
     env_file: "opencode-go.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("kimi-k2.5"),
     requires_api_key: true,
 };
 
@@ -37,7 +35,6 @@ pub const ZAI_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "ZHIPU_API_KEY",
     env_file: "zai.env",
     setup_url: "https://docs.z.ai/devpack/quick-start",
-    default_model: Some("glm-4.5"),
     requires_api_key: true,
 };
 
@@ -48,7 +45,6 @@ pub const KIMI_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "KIMI_API_KEY",
     env_file: "kimi.env",
     setup_url: "https://www.kimi.com/coding/docs/en/more/third-party-agents.html",
-    default_model: Some("kimi-for-coding"),
     requires_api_key: true,
 };
 
@@ -59,7 +55,6 @@ pub const AI302_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "302AI_API_KEY",
     env_file: "302ai.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("qwen3-235b-a22b-instruct-2507"),
     requires_api_key: true,
 };
 
@@ -70,7 +65,6 @@ pub const BASETEN_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "BASETEN_API_KEY",
     env_file: "baseten.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("zai-org/GLM-4.7"),
     requires_api_key: true,
 };
 
@@ -81,7 +75,6 @@ pub const CONIFER_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "CONIFER_API_KEY",
     env_file: "conifer.env",
     setup_url: "https://www.conifer.build/docs/api/",
-    default_model: None,
     requires_api_key: true,
 };
 
@@ -92,15 +85,14 @@ pub const CORTECS_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "CORTECS_API_KEY",
     env_file: "cortecs.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("kimi-k2.5"),
     requires_api_key: true,
 };
 
 // OpenRouter also has a dedicated provider implementation elsewhere, but it
 // speaks the standard OpenAI-compatible /api/v1 endpoint, so it can be driven
 // by `provider-doctor` / `provider-test-coverage` like any other
-// OpenAI-compatible provider. `default_model` is None so the doctor selects the
-// live catalog's first model unless `--model` is passed.
+// OpenAI-compatible provider. The doctor selects the live catalog's first model
+// unless `--model` is passed.
 pub const OPENROUTER_OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     id: "openrouter",
     display_name: "OpenRouter",
@@ -108,7 +100,6 @@ pub const OPENROUTER_OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiComp
     api_key_env: "OPENROUTER_API_KEY",
     env_file: "openrouter.env",
     setup_url: "https://openrouter.ai/keys",
-    default_model: None,
     requires_api_key: true,
 };
 
@@ -119,7 +110,6 @@ pub const ORCAROUTER_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile 
     api_key_env: "ORCAROUTER_API_KEY",
     env_file: "orcarouter.env",
     setup_url: "https://www.orcarouter.ai",
-    default_model: None,
     requires_api_key: true,
 };
 
@@ -129,8 +119,8 @@ pub const ORCAROUTER_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile 
 // alias the native login-provider ids (`anthropic-api`, `openai-api`); auth
 // activation deliberately routes them through the native runtime, while the
 // live HTTP probes hit these hosts (Anthropic needs `x-api-key` +
-// `anthropic-version`, handled in the probe layer). `default_model` is None so
-// the doctor selects from the live catalog unless `--model` is passed.
+// `anthropic-version`, handled in the probe layer). The doctor selects from the
+// live catalog unless `--model` is passed.
 pub const ANTHROPIC_OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     id: "anthropic-api",
     display_name: "Anthropic API",
@@ -138,7 +128,6 @@ pub const ANTHROPIC_OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiCompa
     api_key_env: "ANTHROPIC_API_KEY",
     env_file: "anthropic.env",
     setup_url: "https://docs.anthropic.com/en/api/openai-sdk",
-    default_model: None,
     requires_api_key: true,
 };
 
@@ -149,7 +138,6 @@ pub const OPENAI_NATIVE_OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiC
     api_key_env: "OPENAI_API_KEY",
     env_file: "openai.env",
     setup_url: "https://platform.openai.com/api-keys",
-    default_model: None,
     requires_api_key: true,
 };
 
@@ -163,7 +151,6 @@ pub const GEMINI_OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatib
     api_key_env: "GEMINI_API_KEY",
     env_file: "gemini.env",
     setup_url: "https://ai.google.dev/gemini-api/docs/openai",
-    default_model: Some("gemini-2.5-flash"),
     requires_api_key: true,
 };
 
@@ -174,7 +161,6 @@ pub const DEEPSEEK_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "DEEPSEEK_API_KEY",
     env_file: "deepseek.env",
     setup_url: "https://api-docs.deepseek.com/",
-    default_model: Some("deepseek-v4-flash"),
     requires_api_key: true,
 };
 
@@ -185,7 +171,6 @@ pub const COMTEGRA_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "COMTEGRA_API_KEY",
     env_file: "comtegra.env",
     setup_url: "https://docs.cgc.comtegra.cloud/llm-api",
-    default_model: Some("glm-51-nvfp4"),
     requires_api_key: true,
 };
 
@@ -196,7 +181,6 @@ pub const FPT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "FPT_API_KEY",
     env_file: "fpt.env",
     setup_url: "https://ai-docs.fptcloud.com/api-reference/ai-marketplace/api-reference/api-integration-large-language-model-md",
-    default_model: Some("GLM-5.1"),
     requires_api_key: true,
 };
 
@@ -207,7 +191,6 @@ pub const FIRMWARE_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "FIRMWARE_API_KEY",
     env_file: "firmware.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("kimi-k2.5"),
     requires_api_key: true,
 };
 
@@ -218,7 +201,6 @@ pub const HUGGING_FACE_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfil
     api_key_env: "HF_TOKEN",
     env_file: "huggingface.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("zai-org/GLM-4.7"),
     requires_api_key: true,
 };
 
@@ -229,7 +211,6 @@ pub const MOONSHOT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "MOONSHOT_API_KEY",
     env_file: "moonshotai.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("kimi-k2.5"),
     requires_api_key: true,
 };
 
@@ -240,7 +221,6 @@ pub const NEBIUS_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "NEBIUS_API_KEY",
     env_file: "nebius.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("openai/gpt-oss-120b"),
     requires_api_key: true,
 };
 
@@ -251,7 +231,6 @@ pub const SCALEWAY_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "SCALEWAY_API_KEY",
     env_file: "scaleway.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("qwen3-coder-30b-a3b-instruct"),
     requires_api_key: true,
 };
 
@@ -262,7 +241,6 @@ pub const STACKIT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "STACKIT_API_KEY",
     env_file: "stackit.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: Some("openai/gpt-oss-120b"),
     requires_api_key: true,
 };
 
@@ -273,7 +251,6 @@ pub const GROQ_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "GROQ_API_KEY",
     env_file: "groq.env",
     setup_url: "https://console.groq.com/docs/openai",
-    default_model: Some("llama-3.1-8b-instant"),
     requires_api_key: true,
 };
 
@@ -284,7 +261,6 @@ pub const MISTRAL_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "MISTRAL_API_KEY",
     env_file: "mistral.env",
     setup_url: "https://docs.mistral.ai/getting-started/models/",
-    default_model: Some("devstral-medium-2507"),
     requires_api_key: true,
 };
 
@@ -295,7 +271,6 @@ pub const PERPLEXITY_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile 
     api_key_env: "PERPLEXITY_API_KEY",
     env_file: "perplexity.env",
     setup_url: "https://docs.perplexity.ai/docs/agent-api/openai-compatibility",
-    default_model: Some("sonar"),
     requires_api_key: true,
 };
 
@@ -306,7 +281,6 @@ pub const TOGETHER_AI_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile
     api_key_env: "TOGETHER_API_KEY",
     env_file: "togetherai.env",
     setup_url: "https://docs.together.ai/docs/openai-api-compatibility",
-    default_model: Some("moonshotai/Kimi-K2-Instruct"),
     requires_api_key: true,
 };
 
@@ -317,7 +291,6 @@ pub const DEEPINFRA_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "DEEPINFRA_API_KEY",
     env_file: "deepinfra.env",
     setup_url: "https://deepinfra.com/docs/api-reference",
-    default_model: Some("moonshotai/Kimi-K2-Instruct"),
     requires_api_key: true,
 };
 
@@ -328,7 +301,6 @@ pub const FIREWORKS_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "FIREWORKS_API_KEY",
     env_file: "fireworks.env",
     setup_url: "https://docs.fireworks.ai/tools-sdks/openai-compatibility",
-    default_model: Some("accounts/fireworks/routers/kimi-k2p5-turbo"),
     requires_api_key: true,
 };
 
@@ -339,7 +311,6 @@ pub const NOVITA_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "NOVITA_API_KEY",
     env_file: "novita.env",
     setup_url: "https://novita.ai/settings/key-management",
-    default_model: Some("zai-org/glm-5.3"),
     requires_api_key: true,
 };
 
@@ -350,7 +321,6 @@ pub const MINIMAX_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "MINIMAX_API_KEY",
     env_file: "minimax.env",
     setup_url: "https://platform.minimax.io/docs/guides/text-generation",
-    default_model: Some("MiniMax-M2.7"),
     requires_api_key: true,
 };
 
@@ -361,7 +331,6 @@ pub const XAI_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "XAI_API_KEY",
     env_file: "xai.env",
     setup_url: "https://docs.x.ai/developers/quickstart",
-    default_model: Some("grok-code-fast-1"),
     requires_api_key: true,
 };
 
@@ -372,7 +341,6 @@ pub const LMSTUDIO_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "LMSTUDIO_API_KEY",
     env_file: "lmstudio.env",
     setup_url: "https://lmstudio.ai/docs/app/api/endpoints/openai",
-    default_model: None,
     requires_api_key: false,
 };
 
@@ -383,7 +351,6 @@ pub const OLLAMA_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "OLLAMA_API_KEY",
     env_file: "ollama.env",
     setup_url: "https://docs.ollama.com/api/openai-compatibility",
-    default_model: None,
     requires_api_key: false,
 };
 
@@ -398,7 +365,6 @@ pub const CHUTES_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     // static default here: post-login activation should select from the live
     // `/models` catalog instead of advertising a stale model that may 404 at
     // chat/completions time.
-    default_model: None,
     requires_api_key: true,
 };
 
@@ -409,7 +375,6 @@ pub const CEREBRAS_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "CEREBRAS_API_KEY",
     env_file: "cerebras.env",
     setup_url: "https://inference-docs.cerebras.ai/introduction",
-    default_model: Some("gpt-oss-120b"),
     requires_api_key: true,
 };
 
@@ -422,7 +387,6 @@ pub const BELVEDIR_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     setup_url: "https://docs.belvedir.ai/quickstart",
     // Belvedir documents `auto` as the project router. Its inference base does
     // not expose the conventional OpenAI-compatible `/models` endpoint.
-    default_model: Some("auto"),
     requires_api_key: true,
 };
 
@@ -433,7 +397,6 @@ pub const ALIBABA_CODING_PLAN_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibl
     api_key_env: "BAILIAN_CODING_PLAN_API_KEY",
     env_file: "alibaba-coding-plan.env",
     setup_url: "https://www.alibabacloud.com/help/en/model-studio/coding-plan-quickstart",
-    default_model: Some("qwen3-coder-plus"),
     requires_api_key: true,
 };
 
@@ -444,7 +407,6 @@ pub const NVIDIA_NIM_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile 
     api_key_env: "NVIDIA_API_KEY",
     env_file: "nvidia-nim.env",
     setup_url: "https://build.nvidia.com/explore/discover",
-    default_model: Some("nvidia/llama-3.1-nemotron-ultra-253b-v1"),
     requires_api_key: true,
 };
 
@@ -455,7 +417,6 @@ pub const XIAOMI_MIMO_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile
     api_key_env: "XIAOMI_MIMO_API_KEY",
     env_file: "xiaomi-mimo.env",
     setup_url: "https://platform.xiaomimimo.com",
-    default_model: Some("mimo-v2.5"),
     requires_api_key: true,
 };
 
@@ -466,7 +427,6 @@ pub const META_MUSE_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "META_MUSE_API_KEY",
     env_file: "meta-muse.env",
     setup_url: "https://dev.meta.ai/",
-    default_model: Some("muse-spark-1.2"),
     requires_api_key: true,
 };
 
@@ -479,14 +439,13 @@ pub const CELERIS_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "CELERIS_API_KEY",
     env_file: "celeris.env",
     setup_url: "https://docs.celeris.ai/",
-    default_model: Some("celeris-1"),
     requires_api_key: true,
 };
 
 // Yolo-Auto is an OpenAI-compatible gateway. Its `/v1/models` listing is
 // authenticated, so the full catalog is discovered with the account key after
-// login; `default_model` keeps the documented `yolo` alias selected until that
-// refresh lands, and `yolo-small` is the other documented alias.
+// login. Until that refresh lands, `yolo` and `yolo-small` are the documented
+// aliases.
 pub const YOLO_AUTO_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     id: "yolo-auto",
     display_name: "Yolo-Auto",
@@ -494,7 +453,6 @@ pub const YOLO_AUTO_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfile {
     api_key_env: "YOLO_AUTO_API_KEY",
     env_file: "yolo-auto.env",
     setup_url: "https://yolo-auto.com/docs",
-    default_model: Some("yolo"),
     requires_api_key: true,
 };
 
@@ -505,7 +463,6 @@ pub const OPENAI_COMPAT_PROFILE: OpenAiCompatibleProfile = OpenAiCompatibleProfi
     api_key_env: "OPENAI_COMPAT_API_KEY",
     env_file: "openai-compatible.env",
     setup_url: "https://github.com/1jehuang/jcode#openai-compatible-providers",
-    default_model: None,
     requires_api_key: true,
 };
 

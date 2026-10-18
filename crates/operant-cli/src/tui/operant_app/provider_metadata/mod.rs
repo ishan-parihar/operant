@@ -139,7 +139,6 @@ pub struct OpenAiCompatibleProfile {
     pub api_key_env: &'static str,
     pub env_file: &'static str,
     pub setup_url: &'static str,
-    pub default_model: Option<&'static str>,
     pub requires_api_key: bool,
 }
 
@@ -151,7 +150,6 @@ pub struct ResolvedOpenAiCompatibleProfile {
     pub api_key_env: String,
     pub env_file: String,
     pub setup_url: String,
-    pub default_model: Option<String>,
     pub requires_api_key: bool,
 }
 
