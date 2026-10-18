@@ -776,6 +776,50 @@ fn turn_end_content(
     }
 }
 
+/// The endpoint and model as `operant.toml` holds them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigEndpoint {
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+}
+
+/// The file's endpoint as of the last check. The gateway is a separate process
+/// from the TUI, so `/connect` and `/model` reach it only through the file.
+static CONFIG_ENDPOINT: std::sync::Mutex<Option<ConfigEndpoint>> = std::sync::Mutex::new(None);
+
+/// The endpoint in the config file this process loaded. `None` when there is no
+/// file or it does not parse; the caller then keeps what it has.
+fn config_endpoint_on_disk() -> Option<ConfigEndpoint> {
+    let path = operant_core::config::loaded_config_path()?;
+    let config = operant_core::config::parse_config_file(&path).ok()?;
+    Some(ConfigEndpoint {
+        base_url: config.client.base_url,
+        api_key: config.client.api_key,
+        model: config.agent.model,
+    })
+}
+
+/// Record `now` as the last-seen endpoint. Returns it only when a previous
+/// observation exists and differs, so the first observation is a baseline.
+fn endpoint_changed_since(
+    last: &mut Option<ConfigEndpoint>,
+    now: ConfigEndpoint,
+) -> Option<ConfigEndpoint> {
+    let changed = last.as_ref().is_some_and(|prev| *prev != now);
+    *last = Some(now.clone());
+    changed.then_some(now)
+}
+
+/// (P0.4) The endpoint the file gained since the last check, if any. The baseline
+/// is taken when the handler is built, so an env override is not replaced until
+/// the file itself changes.
+fn endpoint_changed_on_disk() -> Option<ConfigEndpoint> {
+    let now = config_endpoint_on_disk()?;
+    let mut last = CONFIG_ENDPOINT.lock().ok()?;
+    endpoint_changed_since(&mut last, now)
+}
+
 /// Message handler that processes incoming gateway messages through the Operant agent.
 ///
 /// Long-term memory is handled by the agent itself: `OperantAgent` now
@@ -1130,6 +1174,18 @@ impl MessageHandler for GatewayMessageHandler {
         };
 
         let user_content = message.content.clone();
+
+        // (P0.4) Apply a `/connect` or `/model` made in the TUI since the last turn.
+        if let Some(endpoint) = endpoint_changed_on_disk() {
+            tracing::info!(
+                base_url = %endpoint.base_url,
+                model = %endpoint.model,
+                "operant.toml endpoint changed; retargeting the gateway agent"
+            );
+            self.agent
+                .set_endpoint(&endpoint.base_url, endpoint.api_key.as_deref());
+            self.agent.set_model(endpoint.model);
+        }
 
         // Read session metadata and apply overrides before running the agent.
         // (Bug #3 from iter-98 audit — 15 slash commands wrote to metadata
@@ -2267,6 +2323,9 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     // Notify TUI that gateway is connecting
     let _ = bridge_state_tx.send(crate::tui::bridge_state::BridgeConnectionState::Connecting);
+
+    // Baseline for the per-turn endpoint check; nothing to apply yet.
+    endpoint_changed_on_disk();
 
     let handler = Arc::new(GatewayMessageHandler {
         agent,
@@ -4625,6 +4684,32 @@ fn enrich_document(raw: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn endpoint_edit_is_reported_once_after_the_baseline() {
+        let endpoint = |url: &str| ConfigEndpoint {
+            base_url: url.into(),
+            api_key: None,
+            model: "m".into(),
+        };
+        let mut last = None;
+        assert_eq!(
+            endpoint_changed_since(&mut last, endpoint("http://a")),
+            None
+        );
+        assert_eq!(
+            endpoint_changed_since(&mut last, endpoint("http://a")),
+            None
+        );
+        assert_eq!(
+            endpoint_changed_since(&mut last, endpoint("http://b")),
+            Some(endpoint("http://b"))
+        );
+        assert_eq!(
+            endpoint_changed_since(&mut last, endpoint("http://b")),
+            None
+        );
+    }
+
     use super::*;
     use operant_core::config::GatewaySettings;
 

@@ -18,3 +18,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-18T12:57** — iter-921 — one live model fetcher (plan P1): picker and setup list through model_catalog::resolve; Anthropic x-api-key and Google key-query wire paths; legacy ProviderProfile layer and second fetcher deleted
 - **2026-10-18T13:12** — iter-922 — no static model lists (plan P2): ProviderDef models/default_model removed; live catalog drives setup and connect default; ModelRegistry deleted
 - **2026-10-18T13:24** — iter-923 — one cost source (plan P3): insights prices read from the models.dev cache, static pricing table deleted; models_dev_id trait hook replaced by provider_to_models_dev; workspace clippy green (kernel.rs unused mut)
+- **2026-10-18T13:29** — iter-924 — gateway follows /connect and /model (plan P0.4): per-message operant.toml endpoint check retargets the gateway agent; baseline at handler construction

@@ -150,6 +150,9 @@ touches code), per AGENTS.md.
 - **P0.4** Gateway retarget: call `set_endpoint` on the gateway agent when the config's
   `client.base_url` changes, or print a restart-required notice. (B4)
 
+  **Status (iter-924):** done by reading `operant.toml` per message (`endpoint_changed_on_disk`),
+  not by an in-process signal: the TUI and the gateway are separate processes.
+
 ### P1 — one live catalog fetcher
 
 - **P1.1** Create `operant-core/src/model_catalog.rs` with the adapter enum and

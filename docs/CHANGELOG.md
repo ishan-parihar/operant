@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-924 — the gateway follows `/connect` and `/model` (plan P0.4).** The gateway
+  is a separate process from the TUI, and it kept the endpoint it started with until a
+  restart. Each message now compares `[client]` and `[agent] model` in the loaded
+  `operant.toml` with the last value seen and retargets its agent (`set_endpoint`,
+  `set_model`) when the file changed. The baseline is taken when the handler is built,
+  so an environment override stays in place until the file itself is edited. A file
+  that fails to parse is skipped for that message.
+
 - **iter-923 — one cost source and one models.dev mapping (plan P3, P2.5).** The
   insights cost estimate read a literal pricing table dated 2025; it now reads the
   models.dev prices in the disk cache (`cached_model_prices`), matching the bare model
