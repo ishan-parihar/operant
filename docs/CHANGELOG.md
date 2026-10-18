@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-935 — `[memory] audit_enabled` and `response_cache_enabled` no longer stop the config from loading.**
+  The memory-factory module docs told users to write these keys, but the live `[memory]` table
+  rejected them as unknown fields, so the binary exited with `Invalid TOML … unknown field`. They are
+  now accepted as retired keys and print one warning each. Neither feature runs in the live memory
+  path, so the keys do nothing.
+- **iter-935 — test runs no longer touch the real emergency stop.** The `pause_gate` tests engaged
+  and cleared the operator's `~/.operant/data/ESTOP`, so `cargo test` could resume an agent a person
+  had paused, and the two tests raced on the one file. They now run against a temp estop root
+  (`estop::scoped_root_for_tests`), one at a time.
 - **iter-934 — a guardrail-refused repeat no longer renders as a completed call.** The
   identical-call guardrail's skip result showed `✓ <tool>`, which said the read ran. The row
   now shows `⊘ skipped — repeated call not run`, and the header draws `⊘` for any `⊘`-prefixed

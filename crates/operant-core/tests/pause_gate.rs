@@ -14,11 +14,11 @@
 //! 2. disengage mid-hold → the turn proceeds and completes normally;
 //! 3. unengaged → zero extra latency (the gate is one stat when clear).
 //!
-//! The estop used is the REAL global one (no root override exists on the
-//! gate path — that is the point of the contract): engage before spawn,
-//! assert the hold, disengage, and unconditionally disengage in a guard
-//! so a failing test can never leave a paused sentinel behind for the
-//! rest of the suite.
+//! Each test points the gate at its own temp estop root
+//! (`estop::scoped_root_for_tests`) and the two run one at a time. Before
+//! that seam the tests used the operator's real `~/.operant` sentinel: a
+//! test run could clear a stop a person had set, and the two tests raced
+//! on the one file.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -86,20 +86,17 @@ fn test_agent(client: OneShotClient) -> OperantAgent {
     )
 }
 
-/// Guard: whatever happens inside the test body, the sentinel is cleared —
-/// a leftover engaged estop would silently pause every later test's turns.
-struct DisengageGuard;
-impl Drop for DisengageGuard {
-    fn drop(&mut self) {
-        let _ = operant_core::estop::disengage();
-    }
-}
+/// Both tests move the one stop, and the gate polls it from every task, so they
+/// hold this lock for their whole body.
+static ESTOP_SCOPE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Engaged estop holds the turn BEFORE the first model call; disengaging
 /// releases it and the turn completes with the scripted reply.
 #[tokio::test(flavor = "multi_thread")]
 async fn pause_gate_holds_then_releases() {
-    let _guard = DisengageGuard;
+    let _scope = ESTOP_SCOPE.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let _root = operant_core::estop::scoped_root_for_tests(root.path());
     operant_core::estop::disengage().unwrap();
     operant_core::estop::engage(Some("pause-gate test")).unwrap();
     let called_at = Arc::new(Mutex::new(None));
@@ -137,7 +134,9 @@ async fn pause_gate_holds_then_releases() {
 /// Unengaged: the gate costs one stat — the model is reached immediately.
 #[tokio::test(flavor = "multi_thread")]
 async fn pause_gate_clear_costs_nothing() {
-    let _guard = DisengageGuard;
+    let _scope = ESTOP_SCOPE.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let _root = operant_core::estop::scoped_root_for_tests(root.path());
     operant_core::estop::disengage().unwrap();
     let called_at = Arc::new(Mutex::new(None));
     let agent = test_agent(OneShotClient {

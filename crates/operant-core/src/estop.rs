@@ -24,10 +24,41 @@ use crate::error::Error;
 use crate::platform;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Sentinel file name inside the operant data directory.
 pub const SENTINEL_NAME: &str = "ESTOP";
+
+/// Test seam. While set, the gate and the `engage` / `disengage` entry points use
+/// this root instead of the operator's data directory, so a test run never reads
+/// or clears a real emergency stop. Set only through [`scoped_root_for_tests`].
+static ROOT_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Points the global stop at `root` until the returned guard drops. Tests only.
+#[doc(hidden)]
+pub fn scoped_root_for_tests(root: &Path) -> ScopedRoot {
+    *ROOT_OVERRIDE.write().unwrap_or_else(|e| e.into_inner()) = Some(root.to_path_buf());
+    ScopedRoot
+}
+
+/// Clears the root override when dropped.
+#[doc(hidden)]
+pub struct ScopedRoot;
+
+impl Drop for ScopedRoot {
+    fn drop(&mut self) {
+        *ROOT_OVERRIDE.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+fn active_root() -> PathBuf {
+    ROOT_OVERRIDE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(platform::operant_data_dir)
+}
 
 /// Parsed state of the emergency stop sentinel.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -42,7 +73,7 @@ pub struct EstopState {
 
 /// Path of the ESTOP sentinel under the active operant data directory.
 pub fn sentinel_path() -> PathBuf {
-    sentinel_path_in(&platform::operant_data_dir())
+    sentinel_path_in(&active_root())
 }
 
 /// Path of the ESTOP sentinel under an explicit root (used by tests).
@@ -52,7 +83,7 @@ pub fn sentinel_path_in(root: &Path) -> PathBuf {
 
 /// Cheap check (one stat): is the global emergency stop engaged?
 pub fn is_engaged() -> bool {
-    is_engaged_in(&platform::operant_data_dir())
+    is_engaged_in(&active_root())
 }
 
 /// Cheap check (one stat) under an explicit root.
@@ -62,7 +93,7 @@ pub fn is_engaged_in(root: &Path) -> bool {
 
 /// Engage the emergency stop. Writes optional JSON `{reason, engaged_at}`.
 pub fn engage(reason: Option<&str>) -> Result<(), Error> {
-    engage_in(&platform::operant_data_dir(), reason)
+    engage_in(&active_root(), reason)
 }
 
 /// Engage under an explicit root (used by tests).
@@ -83,7 +114,7 @@ pub fn engage_in(root: &Path, reason: Option<&str>) -> Result<(), Error> {
 
 /// Disengage (remove the sentinel). No-op when not engaged.
 pub fn disengage() -> Result<(), Error> {
-    disengage_in(&platform::operant_data_dir())
+    disengage_in(&active_root())
 }
 
 /// Disengage under an explicit root (used by tests).
@@ -99,7 +130,7 @@ pub fn disengage_in(root: &Path) -> Result<(), Error> {
 ///
 /// A corrupt or empty file still reports `engaged: true` (fail safe).
 pub fn state() -> EstopState {
-    state_in(&platform::operant_data_dir())
+    state_in(&active_root())
 }
 
 /// Read the current state under an explicit root.

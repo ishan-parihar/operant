@@ -57,6 +57,18 @@ the bust permission; `/ctx-flush` (named in the plan) does not exist.
   `operant_model::adapter::tests::guardrail_skip_is_not_shown_as_a_completed_call` and
   `operant_ui::messages::tests::render_tool_message_marks_a_skipped_call_as_neither_success_nor_failure`.
 
+## CLOSED — Test runs touched the operator's real emergency stop (iter-935)
+
+- [x] **`tests/pause_gate.rs` engaged and cleared the real `~/.operant/data/ESTOP`.** The test
+  engaged the stop, and its `disengage()` (called at the start of the clear test, and by a drop
+  guard) removed any stop a person had set. Running `cargo test` could therefore resume an agent
+  that had been paused. The two tests also shared that one file while running in parallel, so the
+  suite failed intermittently (`the model must not be reached while the estop is engaged`, seen on
+  the iter-935 workspace run). Fixed with `estop::scoped_root_for_tests`, a test-only seam that points
+  the gate, `engage`, `disengage`, and `state` at a temp root; the two tests take a tokio mutex and
+  run one at a time. Verified: three consecutive runs of the file pass, and `~/.operant/data/ESTOP` is
+  never created.
+
 ## OPEN — TUI legacy purge residue (owner decisions, 2026-10-18)
 
 The dead-code purge of the `operant-cli` TUI tree kept the items below on purpose. Each one is
@@ -75,6 +87,36 @@ The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the wa
 - [ ] **Legacy header kept.** `operant_ui/ui_header.rs` (1811 lines) is live: `operant_ui/mod.rs` draws
   the header from it. It was named as legacy in the 2026-10-18 TUI purge request. Replacing it with a
   jcode / oh-my-pi style header is a design decision for the owner.
+- [ ] **`commands.rs` dead layer (P6.8, 17 attributes).** Its `#[allow(dead_code)]` attributes hide
+  the following. Removing the attributes alone makes the compiler report all of them, so the gate goes
+  red. Removal means these items, their 650 lines of tests in `commands.rs`, and the `Error` and
+  other dead arms that `adapter_types/tui_app.rs` matches on: `CommandCategory` (enum and impls);
+  every `CommandResult` variant except `Message`; `CommandResult::{error, toggle, cycle, is_*}`;
+  `CommandDef::{category, help, with_help}` (set in `COMMAND_REGISTRY`); `CommandRegistry::{len,
+  is_empty, commands_by_category, format_help, all_commands, slash_completions}`; `resolve_command`;
+  `leak_str`; `load_skill_commands_from_disk`; `CACHED_SKILL_COMMANDS`, `CACHED_TUI_COMMANDS`;
+  `skill_slash_commands`, `tui_slash_commands`, `tui_commands_by_category`, `format_help_text`,
+  `commands_by_category`. Live symbols: `CommandContext`, `CommandHandler`, `CommandResult::Message`,
+  `CommandRegistry`, `tui_category`, `COMMAND_REGISTRY`.
+- [x] **`[memory] audit_enabled` / `response_cache_enabled` crashed config load (FIXED iter-935).**
+  The live `[memory]` table parses into `MemorySettings` (`operant-core/src/config.rs`), which is
+  `deny_unknown_fields` and had no such fields. A file carrying either key failed with
+  `Invalid TOML … unknown field audit_enabled` and exit 1 (reproduced on the iter-934 binary). The
+  module docs in `operant-memory/src/audit.rs` and `response_cache.rs` told users to write those keys.
+  Fixed by accepting them as retired fields that warn once, the same pattern as `agentmemory_*`.
+  Regression: `config::tests::retired_memory_factory_keys_load_and_warn`.
+- [ ] **Memory factory is unreachable (R13-4 / R13-5, deletion still open).** `create_memory`,
+  `create_memory_with_storage_and_routes`, `create_memory_for_migration`, and `create_response_cache` in
+  `operant-memory/src/lib.rs` have no caller outside that file, and the compiler cannot report them
+  because they are `pub`. Through them the `hygiene`, `audit` (`AuditedMemory`), and `response_cache`
+  modules are reachable only from the factory. The factory reads the platform `MemoryConfig`
+  (`operant-config/src/schema/platform_cfg.rs`), a different struct from the TOML-facing
+  `MemorySettings`. Production memory is built by `load_memory_manager` (`operant-cli/src/main.rs`).
+  Decision: delete the factory-only modules rather than route production through the factory, because
+  hygiene archives and purges memory files on a schedule, and wiring that by default would start
+  destroying data without an opt-in. Ceiling: other factory-era keys (`response_cache_ttl_minutes`,
+  `audit_retention_days`, and the rest of that struct) still fail the load if a user wrote them. They
+  were never in user-facing docs, but the same fix is needed if any turn up.
 
 ## OPEN — Gateway turn concurrency (audit plan 06A — LOCKED iter-864, residual below)
 
@@ -224,7 +266,7 @@ today, independent of the gate repair.
   `#![deny(clippy::print_stdout, print_stderr)]` on the tui module, with
   `#[allow]` only on the logger's own failure path.
 
-## OPEN — Live data loss on mainline (2026-10-03)
+## OPEN — Live data loss on mainline (2026-10-03) — only D-5b and D-6 remain, both accepted
 
 ### D-1 — A cron agent job destroys a gateway user's live conversation (FIXED iter-570/571 — headers below left as the original audit; see the correction note)
 
@@ -661,7 +703,7 @@ still has zero callers.
   `on_session_end` blindly is what leaked one org's turns under another org's
   boundary pre-fix.
 
-## OPEN — Unowned debt on mainline (2026-10-03)
+## CLOSED — Unowned debt on mainline (2026-10-03) — K-1 to K-4 resolved; K-2 not reproducing, re-open if it recurs
 
 ### K-1 — `tools::kernel` roundtrip tests fail on `origin/main` (CLOSED 2026-10-17 — 8/8 green in the main tree; see AGENTS.md rule 6 on worktrees lacking the sidecar venv)
 

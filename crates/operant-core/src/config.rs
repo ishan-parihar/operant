@@ -1525,6 +1525,11 @@ pub struct MemorySettings {
     pub agentmemory_auto_spawn: Option<bool>,
     /// (retired, plan 08) npm version pin — accepted, ignored.
     pub agentmemory_version: Option<String>,
+    /// (retired, memory-factory era) `[memory] audit_enabled` — accepted, ignored.
+    /// Without this field, `deny_unknown_fields` failed the whole config load.
+    pub audit_enabled: Option<bool>,
+    /// (retired, memory-factory era) `[memory] response_cache_enabled` — accepted, ignored.
+    pub response_cache_enabled: Option<bool>,
 }
 
 impl MemorySettings {
@@ -1563,6 +1568,18 @@ impl MemorySettings {
                     .to_string(),
             );
         }
+        if self.audit_enabled.is_some() {
+            out.push(
+                "warning: [memory] audit_enabled is removed — audit logging is not wired into the live memory path. Remove the key from operant.toml."
+                    .to_string(),
+            );
+        }
+        if self.response_cache_enabled.is_some() {
+            out.push(
+                "warning: [memory] response_cache_enabled is removed — the response cache is not wired into the live memory path. Remove the key from operant.toml."
+                    .to_string(),
+            );
+        }
         out
     }
 }
@@ -1576,6 +1593,8 @@ impl Default for MemorySettings {
             agentmemory_secret: None,
             agentmemory_auto_spawn: None,
             agentmemory_version: None,
+            audit_enabled: None,
+            response_cache_enabled: None,
         }
     }
 }
@@ -3114,8 +3133,24 @@ wonderful_unknown_key = 42
             agentmemory_secret: None,
             agentmemory_auto_spawn: Some(true),
             agentmemory_version: None,
+            audit_enabled: None,
+            response_cache_enabled: None,
         };
         assert_eq!(loud.legacy_warnings().len(), 2);
+    }
+
+    /// The keys the factory-era module docs told users to write. They were never
+    /// fields of this struct, so `deny_unknown_fields` failed the whole config load
+    /// (`Invalid TOML … unknown field audit_enabled`). They now load and warn once.
+    #[test]
+    fn retired_memory_factory_keys_load_and_warn() {
+        let parsed: MemorySettings =
+            toml::from_str("audit_enabled = true\nresponse_cache_enabled = false")
+                .expect("retired keys must not fail the config load");
+        let warnings = parsed.legacy_warnings();
+        assert_eq!(warnings.len(), 2, "got: {warnings:?}");
+        assert!(warnings[0].contains("audit_enabled"));
+        assert!(warnings[1].contains("response_cache_enabled"));
     }
 
     #[test]
