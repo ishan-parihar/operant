@@ -44,15 +44,12 @@ pub struct CliConfig {
     pub checkpoints: CheckpointsConfig,
     pub compression: CompressionConfig,
     pub prompt_caching: PromptCachingConfig,
-    pub openrouter: OpenRouterConfig,
     pub bedrock: BedrockConfig,
     pub auxiliary: AuxiliaryConfig,
     pub display: DisplayConfig,
     pub dashboard: DashboardConfig,
-    pub privacy: PrivacyConfig,
     pub tts: TtsConfig,
     pub stt: SttConfigV2,
-    pub voice: VoiceConfig,
     pub memory: MemoryConfigV2,
     pub delegation: DelegationConfig,
     pub goals: GoalsConfig,
@@ -60,16 +57,12 @@ pub struct CliConfig {
     pub curator: CuratorConfig,
     pub approvals: ApprovalsConfig,
     pub security: SecurityConfig,
-    pub cron: CronConfigV2,
-    pub kanban: KanbanConfig,
     pub code_execution: CodeExecutionConfigV2,
     #[serde(alias = "prime_kernel")]
     pub kernel: KernelConfigV2,
     pub logging: LoggingConfigV2,
     pub model_catalog: ModelCatalogConfig,
     pub sessions: SessionsConfig,
-    pub updates: UpdatesConfig,
-    pub network: NetworkConfig,
     pub tools: ToolsConfigV2,
     pub gateways: GatewaysConfig,
     pub environments: EnvironmentsConfig,
@@ -106,15 +99,12 @@ impl Default for CliConfig {
             checkpoints: CheckpointsConfig::default(),
             compression: CompressionConfig::default(),
             prompt_caching: PromptCachingConfig::default(),
-            openrouter: OpenRouterConfig::default(),
             bedrock: BedrockConfig::default(),
             auxiliary: AuxiliaryConfig::default(),
             display: DisplayConfig::default(),
             dashboard: DashboardConfig::default(),
-            privacy: PrivacyConfig::default(),
             tts: TtsConfig::default(),
             stt: SttConfigV2::default(),
-            voice: VoiceConfig::default(),
             memory: MemoryConfigV2::default(),
             delegation: DelegationConfig::default(),
             goals: GoalsConfig::default(),
@@ -122,15 +112,11 @@ impl Default for CliConfig {
             curator: CuratorConfig::default(),
             approvals: ApprovalsConfig::default(),
             security: SecurityConfig::default(),
-            cron: CronConfigV2::default(),
-            kanban: KanbanConfig::default(),
             code_execution: CodeExecutionConfigV2::default(),
             kernel: KernelConfigV2::default(),
             logging: LoggingConfigV2::default(),
             model_catalog: ModelCatalogConfig::default(),
             sessions: SessionsConfig::default(),
-            updates: UpdatesConfig::default(),
-            network: NetworkConfig::default(),
             tools: ToolsConfigV2::default(),
             gateways: GatewaysConfig::default(),
             environments: EnvironmentsConfig::default(),
@@ -153,10 +139,6 @@ pub struct OperantConfig {
     pub name: Option<String>,
     pub workspace: Option<PathBuf>,
     pub data_dir: Option<PathBuf>,
-    pub session_dir: Option<PathBuf>,
-    pub assistant_prelude: Option<String>,
-    pub auto_summarize: Option<bool>,
-    pub auto_distill: Option<bool>,
     pub locale: Option<String>,
     pub timezone: Option<String>,
     pub skills_dir: Option<PathBuf>,
@@ -169,10 +151,6 @@ impl Default for OperantConfig {
             name: Some("operant-rs".to_string()),
             workspace: None,
             data_dir: None,
-            session_dir: None,
-            assistant_prelude: None,
-            auto_summarize: Some(true),
-            auto_distill: Some(false),
             locale: Some("en".to_string()),
             timezone: Some(String::new()),
             skills_dir: None,
@@ -187,7 +165,6 @@ pub struct ApiConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
-    pub api_type: Option<String>,
     pub api_version: Option<String>,
     pub models: Vec<ModelConfig>,
     pub default_model: Option<String>,
@@ -205,7 +182,6 @@ impl Default for ApiConfig {
             provider: None,
             base_url: None,
             api_key: None,
-            api_type: Some("chat_completions".to_string()),
             api_version: None,
             models: Vec::new(),
             default_model: None,
@@ -230,9 +206,6 @@ pub struct ModelConfig {
     pub supports_streaming: Option<bool>,
     pub supports_vision: Option<bool>,
     pub supports_tools: Option<bool>,
-    pub supports_system_prompt: Option<bool>,
-    pub input_price_per_1k: Option<f64>,
-    pub output_price_per_1k: Option<f64>,
 }
 
 impl Default for ModelConfig {
@@ -246,9 +219,6 @@ impl Default for ModelConfig {
             supports_streaming: Some(true),
             supports_vision: Some(false),
             supports_tools: Some(true),
-            supports_system_prompt: Some(true),
-            input_price_per_1k: None,
-            output_price_per_1k: None,
         }
     }
 }
@@ -257,15 +227,8 @@ impl Default for ModelConfig {
 #[serde(default)]
 pub struct AgentConfigV2 {
     pub max_turns: Option<u32>,
-    pub gateway_timeout: Option<u64>,
-    pub restart_drain_timeout: Option<u64>,
     pub api_max_retries: Option<u32>,
     pub service_tier: Option<String>,
-    pub tool_use_enforcement: Option<String>,
-    pub gateway_timeout_warning: Option<u64>,
-    pub gateway_notify_interval: Option<u64>,
-    pub gateway_auto_continue_freshness: Option<u64>,
-    pub image_input_mode: Option<String>,
     pub disabled_toolsets: Vec<String>,
 }
 
@@ -273,15 +236,8 @@ impl Default for AgentConfigV2 {
     fn default() -> Self {
         Self {
             max_turns: Some(90),
-            gateway_timeout: Some(1800),
-            restart_drain_timeout: Some(180),
             api_max_retries: Some(3),
             service_tier: Some(String::new()),
-            tool_use_enforcement: Some("auto".to_string()),
-            gateway_timeout_warning: Some(900),
-            gateway_notify_interval: Some(180),
-            gateway_auto_continue_freshness: Some(3600),
-            image_input_mode: Some("auto".to_string()),
             disabled_toolsets: Vec::new(),
         }
     }
@@ -291,56 +247,18 @@ impl Default for AgentConfigV2 {
 #[serde(default)]
 pub struct TerminalConfig {
     pub backend: Option<String>,
-    pub modal_mode: Option<String>,
     pub cwd: Option<String>,
     pub timeout: Option<u64>,
     pub env_passthrough: Vec<String>,
-    pub shell_init_files: Vec<String>,
-    pub auto_source_bashrc: Option<bool>,
-    pub docker_image: Option<String>,
-    pub docker_forward_env: Vec<String>,
-    pub docker_env: HashMap<String, String>,
-    pub docker_volumes: Vec<String>,
-    pub docker_mount_cwd_to_workspace: Option<bool>,
-    pub docker_run_as_host_user: Option<bool>,
-    pub singularity_image: Option<String>,
-    pub modal_image: Option<String>,
-    pub daytona_image: Option<String>,
-    pub vercel_runtime: Option<String>,
-    pub container_cpu: Option<u32>,
-    pub container_memory: Option<u32>,
-    pub container_disk: Option<u32>,
-    pub container_persistent: Option<bool>,
-    pub persistent_shell: Option<bool>,
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             backend: Some("local".to_string()),
-            modal_mode: Some("auto".to_string()),
             cwd: Some(".".to_string()),
             timeout: Some(180),
             env_passthrough: Vec::new(),
-            shell_init_files: Vec::new(),
-            auto_source_bashrc: Some(true),
-            docker_image: Some("nikolaik/python-nodejs:python3.11-nodejs20".to_string()),
-            docker_forward_env: Vec::new(),
-            docker_env: HashMap::new(),
-            docker_volumes: Vec::new(),
-            docker_mount_cwd_to_workspace: Some(false),
-            docker_run_as_host_user: Some(false),
-            singularity_image: Some(
-                "docker://nikolaik/python-nodejs:python3.11-nodejs20".to_string(),
-            ),
-            modal_image: Some("nikolaik/python-nodejs:python3.11-nodejs20".to_string()),
-            daytona_image: Some("nikolaik/python-nodejs:python3.11-nodejs20".to_string()),
-            vercel_runtime: Some("node24".to_string()),
-            container_cpu: Some(1),
-            container_memory: Some(5120),
-            container_disk: Some(51200),
-            container_persistent: Some(true),
-            persistent_shell: Some(true),
         }
     }
 }
@@ -349,16 +267,12 @@ impl Default for TerminalConfig {
 #[serde(default)]
 pub struct WebConfigV2 {
     pub backend: Option<String>,
-    pub search_backend: Option<String>,
-    pub extract_backend: Option<String>,
 }
 
 impl Default for WebConfigV2 {
     fn default() -> Self {
         Self {
             backend: Some(String::new()),
-            search_backend: Some(String::new()),
-            extract_backend: Some(String::new()),
         }
     }
 }
@@ -366,29 +280,17 @@ impl Default for WebConfigV2 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrowserConfig {
-    pub inactivity_timeout: Option<u64>,
     pub command_timeout: Option<u64>,
-    pub record_sessions: Option<bool>,
-    pub allow_private_urls: Option<bool>,
     pub engine: Option<String>,
-    pub auto_local_for_private_urls: Option<bool>,
     pub cdp_url: Option<String>,
-    pub dialog_policy: Option<String>,
-    pub dialog_timeout_s: Option<u64>,
 }
 
 impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
-            inactivity_timeout: Some(120),
             command_timeout: Some(30),
-            record_sessions: Some(false),
-            allow_private_urls: Some(false),
             engine: Some("auto".to_string()),
-            auto_local_for_private_urls: Some(true),
             cdp_url: Some(String::new()),
-            dialog_policy: Some("must_respond".to_string()),
-            dialog_timeout_s: Some(300),
         }
     }
 }
@@ -398,12 +300,7 @@ impl Default for BrowserConfig {
 pub struct CheckpointsConfig {
     pub enabled: Option<bool>,
     pub max_snapshots: Option<u32>,
-    pub max_total_size_mb: Option<u32>,
-    pub max_file_size_mb: Option<u32>,
-    pub auto_prune: Option<bool>,
     pub retention_days: Option<u32>,
-    pub delete_orphans: Option<bool>,
-    pub min_interval_hours: Option<u32>,
 }
 
 impl Default for CheckpointsConfig {
@@ -411,12 +308,7 @@ impl Default for CheckpointsConfig {
         Self {
             enabled: Some(false),
             max_snapshots: Some(20),
-            max_total_size_mb: Some(500),
-            max_file_size_mb: Some(10),
-            auto_prune: Some(true),
             retention_days: Some(7),
-            delete_orphans: Some(true),
-            min_interval_hours: Some(24),
         }
     }
 }
@@ -426,9 +318,7 @@ impl Default for CheckpointsConfig {
 pub struct CompressionConfig {
     pub enabled: Option<bool>,
     pub threshold: Option<f64>,
-    pub target_ratio: Option<f64>,
     pub protect_last_n: Option<u32>,
-    pub hygiene_hard_message_limit: Option<u32>,
 }
 
 impl Default for CompressionConfig {
@@ -436,9 +326,7 @@ impl Default for CompressionConfig {
         Self {
             enabled: Some(true),
             threshold: Some(0.50),
-            target_ratio: Some(0.20),
             protect_last_n: Some(20),
-            hygiene_hard_message_limit: Some(400),
         }
     }
 }
@@ -453,24 +341,6 @@ impl Default for PromptCachingConfig {
     fn default() -> Self {
         Self {
             cache_ttl: Some("5m".to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct OpenRouterConfig {
-    pub response_cache: Option<bool>,
-    pub response_cache_ttl: Option<u64>,
-    pub min_coding_score: Option<f64>,
-}
-
-impl Default for OpenRouterConfig {
-    fn default() -> Self {
-        Self {
-            response_cache: Some(true),
-            response_cache_ttl: Some(300),
-            min_coding_score: Some(0.65),
         }
     }
 }
@@ -498,7 +368,6 @@ impl Default for BedrockConfig {
 pub struct BedrockDiscoveryConfig {
     pub enabled: Option<bool>,
     pub provider_filter: Vec<String>,
-    pub refresh_interval: Option<u64>,
 }
 
 impl Default for BedrockDiscoveryConfig {
@@ -506,7 +375,6 @@ impl Default for BedrockDiscoveryConfig {
         Self {
             enabled: Some(true),
             provider_filter: Vec::new(),
-            refresh_interval: Some(3600),
         }
     }
 }
@@ -514,18 +382,12 @@ impl Default for BedrockDiscoveryConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BedrockGuardrailConfig {
-    pub guardrail_identifier: Option<String>,
-    pub guardrail_version: Option<String>,
-    pub stream_processing_mode: Option<String>,
     pub trace: Option<String>,
 }
 
 impl Default for BedrockGuardrailConfig {
     fn default() -> Self {
         Self {
-            guardrail_identifier: Some(String::new()),
-            guardrail_version: Some(String::new()),
-            stream_processing_mode: Some("async".to_string()),
             trace: Some("disabled".to_string()),
         }
     }
@@ -541,7 +403,6 @@ pub struct AuxTaskConfig {
     pub timeout: Option<u64>,
     pub extra_body: HashMap<String, Value>,
     pub max_concurrency: Option<u32>,
-    pub download_timeout: Option<u64>,
 }
 
 impl Default for AuxTaskConfig {
@@ -554,7 +415,6 @@ impl Default for AuxTaskConfig {
             timeout: Some(30),
             extra_body: HashMap::new(),
             max_concurrency: None,
-            download_timeout: None,
         }
     }
 }
@@ -566,11 +426,8 @@ pub struct AuxiliaryConfig {
     pub web_extract: AuxTaskConfig,
     pub compression: AuxTaskConfig,
     pub session_search: AuxTaskConfig,
-    pub skills_hub: AuxTaskConfig,
     pub approval: AuxTaskConfig,
     pub mcp: AuxTaskConfig,
-    pub title_generation: AuxTaskConfig,
-    pub triage_specifier: AuxTaskConfig,
     pub curator: AuxTaskConfig,
 }
 
@@ -579,7 +436,6 @@ impl Default for AuxiliaryConfig {
         Self {
             vision: AuxTaskConfig {
                 timeout: Some(120),
-                download_timeout: Some(30),
                 ..Default::default()
             },
             web_extract: AuxTaskConfig {
@@ -595,24 +451,12 @@ impl Default for AuxiliaryConfig {
                 max_concurrency: Some(3),
                 ..Default::default()
             },
-            skills_hub: AuxTaskConfig {
-                timeout: Some(30),
-                ..Default::default()
-            },
             approval: AuxTaskConfig {
                 timeout: Some(30),
                 ..Default::default()
             },
             mcp: AuxTaskConfig {
                 timeout: Some(30),
-                ..Default::default()
-            },
-            title_generation: AuxTaskConfig {
-                timeout: Some(30),
-                ..Default::default()
-            },
-            triage_specifier: AuxTaskConfig {
-                timeout: Some(120),
                 ..Default::default()
             },
             curator: AuxTaskConfig {
@@ -628,28 +472,12 @@ impl Default for AuxiliaryConfig {
 pub struct DisplayConfig {
     pub compact: Option<bool>,
     pub personality: Option<String>,
-    pub resume_display: Option<String>,
-    pub busy_input_mode: Option<String>,
-    pub tui_auto_resume_recent: Option<bool>,
-    pub bell_on_complete: Option<bool>,
     pub show_reasoning: Option<bool>,
     pub streaming: Option<bool>,
-    pub final_response_markdown: Option<String>,
-    pub persistent_output: Option<bool>,
-    pub persistent_output_max_lines: Option<u32>,
-    pub inline_diffs: Option<bool>,
-    pub show_cost: Option<bool>,
     pub skin: Option<String>,
     pub language: Option<String>,
-    pub tui_status_indicator: Option<String>,
-    pub user_message_preview: UserMessagePreviewConfig,
-    pub interim_assistant_messages: Option<bool>,
     pub tool_progress_command: Option<bool>,
-    pub tool_preview_length: Option<u32>,
-    pub ephemeral_system_ttl: Option<u64>,
     pub platforms: HashMap<String, HashMap<String, Value>>,
-    pub runtime_footer: RuntimeFooterConfig,
-    pub copy_shortcut: Option<String>,
 }
 
 impl Default for DisplayConfig {
@@ -657,10 +485,6 @@ impl Default for DisplayConfig {
         Self {
             compact: Some(false),
             personality: Some("kawaii".to_string()),
-            resume_display: Some("full".to_string()),
-            busy_input_mode: Some("interrupt".to_string()),
-            tui_auto_resume_recent: Some(false),
-            bell_on_complete: Some(false),
             // Unset by default (jcode parity: reasoning display defaults ON
             // upstream). Some(false) here used to override the core default
             // `true` at layering, silently hiding every reasoning trace in
@@ -668,58 +492,10 @@ impl Default for DisplayConfig {
             // means the core agent.show_reasoning (true) decides.
             show_reasoning: None,
             streaming: Some(false),
-            final_response_markdown: Some("strip".to_string()),
-            persistent_output: Some(true),
-            persistent_output_max_lines: Some(200),
-            inline_diffs: Some(true),
-            show_cost: Some(false),
             skin: Some("default".to_string()),
             language: Some("en".to_string()),
-            tui_status_indicator: Some("kaomoji".to_string()),
-            user_message_preview: UserMessagePreviewConfig::default(),
-            interim_assistant_messages: Some(true),
             tool_progress_command: Some(false),
-            tool_preview_length: Some(0),
-            ephemeral_system_ttl: Some(0),
             platforms: HashMap::new(),
-            runtime_footer: RuntimeFooterConfig::default(),
-            copy_shortcut: Some("auto".to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct UserMessagePreviewConfig {
-    pub first_lines: Option<u32>,
-    pub last_lines: Option<u32>,
-}
-
-impl Default for UserMessagePreviewConfig {
-    fn default() -> Self {
-        Self {
-            first_lines: Some(2),
-            last_lines: Some(2),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RuntimeFooterConfig {
-    pub enabled: Option<bool>,
-    pub fields: Vec<String>,
-}
-
-impl Default for RuntimeFooterConfig {
-    fn default() -> Self {
-        Self {
-            enabled: Some(false),
-            fields: vec![
-                "model".to_string(),
-                "context_pct".to_string(),
-                "cwd".to_string(),
-            ],
         }
     }
 }
@@ -740,20 +516,6 @@ impl Default for DashboardConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct PrivacyConfig {
-    pub redact_pii: Option<bool>,
-}
-
-impl Default for PrivacyConfig {
-    fn default() -> Self {
-        Self {
-            redact_pii: Some(false),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 #[derive(Default)]
 pub struct TtsProviderConfig {
     pub voice: Option<String>,
@@ -761,10 +523,6 @@ pub struct TtsProviderConfig {
     pub model_id: Option<String>,
     pub voice_id: Option<String>,
     pub language: Option<String>,
-    pub sample_rate: Option<u32>,
-    pub bit_rate: Option<u32>,
-    pub ref_audio: Option<String>,
-    pub ref_text: Option<String>,
     pub device: Option<String>,
 }
 
@@ -779,7 +537,6 @@ pub struct TtsConfig {
     pub mistral: TtsProviderConfig,
     pub neutts: TtsProviderConfig,
     pub piper: TtsProviderConfig,
-    pub max_text_length: Option<u32>,
 }
 
 impl Default for TtsConfig {
@@ -801,8 +558,6 @@ impl Default for TtsConfig {
         let xai = TtsProviderConfig {
             voice_id: Some("eve".to_string()),
             language: Some("en".to_string()),
-            sample_rate: Some(24000),
-            bit_rate: Some(128000),
             ..Default::default()
         };
         let mistral = TtsProviderConfig {
@@ -811,8 +566,6 @@ impl Default for TtsConfig {
             ..Default::default()
         };
         let neutts = TtsProviderConfig {
-            ref_audio: Some(String::new()),
-            ref_text: Some(String::new()),
             model: Some("neuphonic/neutts-air-q4-gguf".to_string()),
             device: Some("cpu".to_string()),
             ..Default::default()
@@ -831,7 +584,6 @@ impl Default for TtsConfig {
             mistral,
             neutts,
             piper,
-            max_text_length: None,
         }
     }
 }
@@ -882,45 +634,13 @@ impl Default for SttConfigV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct VoiceConfig {
-    pub record_key: Option<String>,
-    pub max_recording_seconds: Option<u32>,
-    pub auto_tts: Option<bool>,
-    pub beep_enabled: Option<bool>,
-    pub silence_threshold: Option<u32>,
-    pub silence_duration: Option<f64>,
-}
-
-impl Default for VoiceConfig {
-    fn default() -> Self {
-        Self {
-            record_key: Some("ctrl+b".to_string()),
-            max_recording_seconds: Some(120),
-            auto_tts: Some(false),
-            beep_enabled: Some(true),
-            silence_threshold: Some(200),
-            silence_duration: Some(3.0),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct MemoryConfigV2 {
-    pub memory_enabled: Option<bool>,
-    pub user_profile_enabled: Option<bool>,
-    pub memory_char_limit: Option<u32>,
-    pub user_char_limit: Option<u32>,
     pub provider: Option<String>,
 }
 
 impl Default for MemoryConfigV2 {
     fn default() -> Self {
         Self {
-            memory_enabled: Some(true),
-            user_profile_enabled: Some(true),
-            memory_char_limit: Some(2200),
-            user_char_limit: Some(1375),
             provider: Some(String::new()),
         }
     }
@@ -933,14 +653,11 @@ pub struct DelegationConfig {
     pub provider: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
-    pub inherit_mcp_toolsets: Option<bool>,
     pub max_iterations: Option<u32>,
-    pub child_timeout_seconds: Option<u64>,
     pub reasoning_effort: Option<String>,
     pub max_concurrent_children: Option<u32>,
     pub max_spawn_depth: Option<u32>,
     pub orchestrator_enabled: Option<bool>,
-    pub subagent_auto_approve: Option<bool>,
 }
 
 impl Default for DelegationConfig {
@@ -950,14 +667,11 @@ impl Default for DelegationConfig {
             provider: Some(String::new()),
             base_url: Some(String::new()),
             api_key: Some(String::new()),
-            inherit_mcp_toolsets: Some(true),
             max_iterations: Some(90),
-            child_timeout_seconds: Some(600),
             reasoning_effort: Some(String::new()),
             max_concurrent_children: Some(3),
             max_spawn_depth: Some(2),
             orchestrator_enabled: Some(true),
-            subagent_auto_approve: Some(false),
         }
     }
 }
@@ -979,21 +693,17 @@ impl Default for GoalsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillsConfigV2 {
-    pub external_dirs: Vec<PathBuf>,
     pub template_vars: Option<bool>,
     pub inline_shell: Option<bool>,
     pub inline_shell_timeout: Option<u64>,
-    pub guard_agent_created: Option<bool>,
 }
 
 impl Default for SkillsConfigV2 {
     fn default() -> Self {
         Self {
-            external_dirs: Vec::new(),
             template_vars: Some(true),
             inline_shell: Some(false),
             inline_shell_timeout: Some(10),
-            guard_agent_created: Some(false),
         }
     }
 }
@@ -1003,7 +713,6 @@ impl Default for SkillsConfigV2 {
 pub struct CuratorConfig {
     pub enabled: Option<bool>,
     pub interval_hours: Option<u64>,
-    pub min_idle_hours: Option<u64>,
     pub stale_after_days: Option<u64>,
     pub archive_after_days: Option<u64>,
     pub backup: CuratorBackupConfig,
@@ -1014,7 +723,6 @@ impl Default for CuratorConfig {
         Self {
             enabled: Some(true),
             interval_hours: Some(168), // 24 * 7
-            min_idle_hours: Some(2),
             stale_after_days: Some(30),
             archive_after_days: Some(90),
             backup: CuratorBackupConfig::default(),
@@ -1043,8 +751,6 @@ impl Default for CuratorBackupConfig {
 pub struct ApprovalsConfig {
     pub mode: Option<String>,
     pub timeout: Option<u64>,
-    pub cron_mode: Option<String>,
-    pub mcp_reload_confirm: Option<bool>,
 }
 
 impl Default for ApprovalsConfig {
@@ -1052,8 +758,6 @@ impl Default for ApprovalsConfig {
         Self {
             mode: Some("manual".to_string()),
             timeout: Some(60),
-            cron_mode: Some("deny".to_string()),
-            mcp_reload_confirm: Some(true),
         }
     }
 }
@@ -1061,7 +765,6 @@ impl Default for ApprovalsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecurityConfig {
-    pub allow_private_urls: Option<bool>,
     pub redact_secrets: Option<bool>,
     // NOTE: `tirith_*` keys used to live here. They were removed with no
     // replacement: no tirith module ever existed in the tree (only a doc
@@ -1069,71 +772,14 @@ pub struct SecurityConfig {
     // (fail-open), and never read. This struct has `#[serde(default)]` and
     // no `deny_unknown_fields`, so existing configs carrying `tirith_*`
     // keys still parse — the keys are simply ignored, as they always were.
-    pub website_blocklist: WebsiteBlocklistConfig,
     pub command_allowlist: Vec<String>,
-    pub quick_commands: HashMap<String, String>,
 }
 
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
-            allow_private_urls: Some(false),
             redact_secrets: Some(true),
-            website_blocklist: WebsiteBlocklistConfig::default(),
             command_allowlist: Vec::new(),
-            quick_commands: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WebsiteBlocklistConfig {
-    pub enabled: Option<bool>,
-    pub domains: Vec<String>,
-    pub shared_files: Vec<PathBuf>,
-}
-
-impl Default for WebsiteBlocklistConfig {
-    fn default() -> Self {
-        Self {
-            enabled: Some(false),
-            domains: Vec::new(),
-            shared_files: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CronConfigV2 {
-    pub wrap_response: Option<bool>,
-    pub max_parallel_jobs: Option<u32>,
-}
-
-impl Default for CronConfigV2 {
-    fn default() -> Self {
-        Self {
-            wrap_response: Some(true),
-            max_parallel_jobs: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct KanbanConfig {
-    pub dispatch_in_gateway: Option<bool>,
-    pub dispatch_interval_seconds: Option<u64>,
-    pub failure_limit: Option<u32>,
-}
-
-impl Default for KanbanConfig {
-    fn default() -> Self {
-        Self {
-            dispatch_in_gateway: Some(true),
-            dispatch_interval_seconds: Some(60),
-            failure_limit: Some(2),
         }
     }
 }
@@ -1166,10 +812,6 @@ pub struct KernelConfigV2 {
     pub request_timeout_secs: Option<u64>,
     pub max_output_bytes: Option<usize>,
     pub route_python_to_kernel: Option<bool>,
-    pub tool_bridge_enabled: Option<bool>,
-    pub tool_bridge_allowlist: Option<Vec<String>>,
-    pub tool_bridge_max_calls_per_exec: Option<usize>,
-    pub tool_bridge_per_call_timeout_secs: Option<u64>,
     pub session_gc_ttl_hours: Option<u64>,
 }
 
@@ -1184,10 +826,6 @@ impl Default for KernelConfigV2 {
             request_timeout_secs: Some(120),
             max_output_bytes: Some(200_000),
             route_python_to_kernel: Some(false),
-            tool_bridge_enabled: Some(false),
-            tool_bridge_allowlist: None,
-            tool_bridge_max_calls_per_exec: Some(64),
-            tool_bridge_per_call_timeout_secs: Some(60),
             session_gc_ttl_hours: Some(168),
         }
     }
@@ -1197,16 +835,12 @@ impl Default for KernelConfigV2 {
 #[serde(default)]
 pub struct LoggingConfigV2 {
     pub level: Option<String>,
-    pub max_size_mb: Option<u32>,
-    pub backup_count: Option<u32>,
 }
 
 impl Default for LoggingConfigV2 {
     fn default() -> Self {
         Self {
             level: Some("INFO".to_string()),
-            max_size_mb: Some(5),
-            backup_count: Some(3),
         }
     }
 }
@@ -1236,49 +870,13 @@ impl Default for ModelCatalogConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SessionsConfig {
-    pub auto_prune: Option<bool>,
     pub retention_days: Option<u32>,
-    pub vacuum_after_prune: Option<bool>,
-    pub min_interval_hours: Option<u32>,
 }
 
 impl Default for SessionsConfig {
     fn default() -> Self {
         Self {
-            auto_prune: Some(false),
             retention_days: Some(90),
-            vacuum_after_prune: Some(true),
-            min_interval_hours: Some(24),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct UpdatesConfig {
-    pub pre_update_backup: Option<bool>,
-    pub backup_keep: Option<u32>,
-}
-
-impl Default for UpdatesConfig {
-    fn default() -> Self {
-        Self {
-            pre_update_backup: Some(false),
-            backup_keep: Some(5),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct NetworkConfig {
-    pub force_ipv4: Option<bool>,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            force_ipv4: Some(false),
         }
     }
 }
@@ -1288,7 +886,6 @@ impl Default for NetworkConfig {
 pub struct ToolOutputLimitsConfig {
     pub max_bytes: Option<u32>,
     pub max_lines: Option<u32>,
-    pub max_line_length: Option<u32>,
 }
 
 impl Default for ToolOutputLimitsConfig {
@@ -1296,63 +893,14 @@ impl Default for ToolOutputLimitsConfig {
         Self {
             max_bytes: Some(50_000),
             max_lines: Some(2000),
-            max_line_length: Some(2000),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ToolLoopGuardrailsConfig {
-    pub warnings_enabled: Option<bool>,
-    pub hard_stop_enabled: Option<bool>,
-    pub warn_after: ToolLoopThresholds,
-    pub hard_stop_after: ToolLoopThresholds,
-}
-
-impl Default for ToolLoopGuardrailsConfig {
-    fn default() -> Self {
-        Self {
-            warnings_enabled: Some(true),
-            hard_stop_enabled: Some(false),
-            warn_after: ToolLoopThresholds {
-                exact_failure: Some(2),
-                same_tool_failure: Some(3),
-                idempotent_no_progress: Some(2),
-            },
-            hard_stop_after: ToolLoopThresholds {
-                exact_failure: Some(5),
-                same_tool_failure: Some(8),
-                idempotent_no_progress: Some(5),
-            },
         }
     }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ToolLoopThresholds {
-    pub exact_failure: Option<u32>,
-    pub same_tool_failure: Option<u32>,
-    pub idempotent_no_progress: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct ToolsConfigV2 {
     pub tool_output: ToolOutputLimitsConfig,
-    pub tool_loop_guardrails: ToolLoopGuardrailsConfig,
-    pub file_read_max_chars: Option<u32>,
-}
-
-impl Default for ToolsConfigV2 {
-    fn default() -> Self {
-        Self {
-            tool_output: ToolOutputLimitsConfig::default(),
-            tool_loop_guardrails: ToolLoopGuardrailsConfig::default(),
-            file_read_max_chars: Some(100_000),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1374,8 +922,6 @@ pub struct GatewayPlatformConfig {
     pub enabled: Option<bool>,
     pub token: Option<String>,
     pub allowed_users: Option<String>,
-    pub allowed_chats: Option<String>,
-    pub channel_prompts: HashMap<String, String>,
     pub reactions: Option<bool>,
     pub proxy: Option<String>,
 }
@@ -1386,8 +932,6 @@ impl Default for GatewayPlatformConfig {
             enabled: Some(false),
             token: None,
             allowed_users: None,
-            allowed_chats: None,
-            channel_prompts: HashMap::new(),
             reactions: Some(false),
             proxy: None,
         }
@@ -1399,15 +943,8 @@ impl Default for GatewayPlatformConfig {
 pub struct DiscordGatewayConfig {
     pub enabled: Option<bool>,
     pub token: Option<String>,
-    pub require_mention: Option<bool>,
-    pub free_response_channels: Option<String>,
-    pub allowed_channels: Option<String>,
     pub allowed_users: Option<String>,
-    pub auto_thread: Option<bool>,
     pub reactions: Option<bool>,
-    pub channel_prompts: HashMap<String, String>,
-    pub dm_role_auth_guild: Option<String>,
-    pub server_actions: Option<String>,
 }
 
 impl Default for DiscordGatewayConfig {
@@ -1415,15 +952,8 @@ impl Default for DiscordGatewayConfig {
         Self {
             enabled: Some(false),
             token: None,
-            require_mention: Some(true),
-            free_response_channels: Some(String::new()),
-            allowed_channels: Some(String::new()),
             allowed_users: None,
-            auto_thread: Some(true),
             reactions: Some(true),
-            channel_prompts: HashMap::new(),
-            dm_role_auth_guild: Some(String::new()),
-            server_actions: Some(String::new()),
         }
     }
 }
@@ -1434,10 +964,6 @@ pub struct SlackGatewayConfig {
     pub enabled: Option<bool>,
     pub bot_token: Option<String>,
     pub app_token: Option<String>,
-    pub require_mention: Option<bool>,
-    pub free_response_channels: Option<String>,
-    pub allowed_channels: Option<String>,
-    pub channel_prompts: HashMap<String, String>,
 }
 
 impl Default for SlackGatewayConfig {
@@ -1446,10 +972,6 @@ impl Default for SlackGatewayConfig {
             enabled: Some(false),
             bot_token: None,
             app_token: None,
-            require_mention: Some(true),
-            free_response_channels: Some(String::new()),
-            allowed_channels: Some(String::new()),
-            channel_prompts: HashMap::new(),
         }
     }
 }
@@ -1460,11 +982,7 @@ pub struct MattermostGatewayConfig {
     pub enabled: Option<bool>,
     pub url: Option<String>,
     pub token: Option<String>,
-    pub require_mention: Option<bool>,
-    pub free_response_channels: Option<String>,
-    pub allowed_channels: Option<String>,
     pub allowed_users: Option<String>,
-    pub channel_prompts: HashMap<String, String>,
 }
 
 impl Default for MattermostGatewayConfig {
@@ -1473,11 +991,7 @@ impl Default for MattermostGatewayConfig {
             enabled: Some(false),
             url: None,
             token: None,
-            require_mention: Some(true),
-            free_response_channels: Some(String::new()),
-            allowed_channels: Some(String::new()),
             allowed_users: None,
-            channel_prompts: HashMap::new(),
         }
     }
 }
@@ -1492,13 +1006,8 @@ pub struct MatrixGatewayConfig {
     pub password: Option<String>,
     pub encryption: Option<bool>,
     pub device_id: Option<String>,
-    pub recovery_key: Option<String>,
-    pub require_mention: Option<bool>,
-    pub free_response_rooms: Option<String>,
     pub allowed_rooms: Option<String>,
     pub allowed_users: Option<String>,
-    pub auto_thread: Option<bool>,
-    pub dm_auto_thread: Option<bool>,
 }
 
 impl Default for MatrixGatewayConfig {
@@ -1511,13 +1020,8 @@ impl Default for MatrixGatewayConfig {
             password: None,
             encryption: Some(false),
             device_id: None,
-            recovery_key: None,
-            require_mention: Some(true),
-            free_response_rooms: Some(String::new()),
             allowed_rooms: Some(String::new()),
             allowed_users: None,
-            auto_thread: Some(true),
-            dm_auto_thread: Some(false),
         }
     }
 }
@@ -1535,7 +1039,6 @@ pub struct EnvironmentsConfig {
 pub struct DockerEnvConfig {
     pub image: Option<String>,
     pub network: Option<String>,
-    pub extra_hosts: Vec<String>,
     pub volumes: Vec<String>,
     pub working_dir: Option<String>,
     pub env: HashMap<String, String>,
@@ -1572,22 +1075,11 @@ impl Default for ContextConfigV2 {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HooksConfig {
     pub scripts: HashMap<String, Vec<HookScriptConfig>>,
-    pub auto_accept: Option<bool>,
     pub personalities: HashMap<String, Value>,
-}
-
-impl Default for HooksConfig {
-    fn default() -> Self {
-        Self {
-            scripts: HashMap::new(),
-            auto_accept: Some(false),
-            personalities: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

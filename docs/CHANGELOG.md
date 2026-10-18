@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Never-read CLI config fields removed (iter-943).** `crates/operant-cli/src/config.rs` drops 167
+  field definitions that no code read (398 → 231), with their defaults, and 12 structs with no remaining use.
+  `CliConfig` never reads a file and `operant.toml` rejects these sections, so no setting depended on them.
+  Nothing changes at runtime.
 - **`glm.rs` removed (iter-942).** The file was not compiled (no `mod` declaration, no caller), and
   its comment in `lib.rs` is gone with it. It remains in git history.
 - **Dead TUI items removed (iter-941).** Functions, constants, and types that the all-features gate flagged as
