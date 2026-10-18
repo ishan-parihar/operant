@@ -30,7 +30,7 @@ pub enum CronSubcommand {
         repeat: Option<i32>,
         /// Wave 5 (ORGANISM-ARCHITECTURE §4): the seat mode the automaton's
         /// policy row is created under. Defaults to
-        /// `[genome].unrestricted_default` when absent — the documented
+        /// `[bylaws].unrestricted_default` when absent — the documented
         /// ungoverned posture. One of: yolo | standard | scoped | lockdown.
         #[arg(long)]
         seat_mode: Option<String>,
@@ -344,7 +344,7 @@ fn provision_cron_seat(
     let employee_id = operant_core::org::worklog::derive_employee_id(&job.id);
     let mode_raw = seat_mode
         .map(|m| m.to_string())
-        .unwrap_or_else(|| config.genome.unrestricted_default.clone());
+        .unwrap_or_else(|| config.bylaws.unrestricted_default.clone());
     let mode = std::str::FromStr::from_str(&mode_raw)
         .map_err(|e| anyhow::anyhow!("invalid --seat-mode '{mode_raw}': {e}"))?;
     // the org-sibling rule: the policy store lives in operant_kanban.db

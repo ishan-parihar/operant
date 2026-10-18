@@ -3,7 +3,7 @@
 //! `operant budget` is the operator write surface for the per-seat budget
 //! overrides (`seat_budgets`, Wave 4 / ORGANISM-ARCHITECTURE §5). The
 //! enforcement machinery (turn-boundary hard-refuse / soft-inject over
-//! `[genome].budget` + per-seat rows) shipped before any operator could
+//! `[bylaws].budget` + per-seat rows) shipped before any operator could
 //! write a row — this is the missing provisioning path.
 //!
 //! Namespace note: this module lives under `operant org budget` (the
@@ -20,7 +20,7 @@ use operant_core::org::seat_budgets::{SeatBudget, SeatBudgetDb};
 #[derive(Debug, Clone, Subcommand)]
 pub enum BudgetSubcommand {
     /// Set (or replace) a seat's budget override. Fields left unset inherit
-    /// `[genome].budget` — precedence is per-field. A cap of 0 is the
+    /// `[bylaws].budget` — precedence is per-field. A cap of 0 is the
     /// documented release valve ("this seat runs free even though the org
     /// default caps"), not an error.
     Set {
@@ -41,7 +41,7 @@ pub enum BudgetSubcommand {
     },
     /// List every seat's budget override
     List,
-    /// Remove a seat's override (the seat inherits the [genome] default)
+    /// Remove a seat's override (the seat inherits the [bylaws] default)
     Clear {
         /// Employee/seat id
         seat: String,
@@ -98,7 +98,7 @@ fn cmd_budget_set(
         cap,
         mode,
     })?;
-    println!("Budget override set for '{seat}' (cap {cap}; unset fields inherit [genome].budget).");
+    println!("Budget override set for '{seat}' (cap {cap}; unset fields inherit [bylaws].budget).");
     Ok(())
 }
 
@@ -108,7 +108,7 @@ fn cmd_budget_list(config: &AppConfig) -> Result<()> {
         .context("Failed to list seat budgets")?;
     if rows.is_empty() {
         println!(
-            "No budget overrides — every seat runs under [genome].budget (default: ungoverned)."
+            "No budget overrides — every seat runs under [bylaws].budget (default: ungoverned)."
         );
         return Ok(());
     }
@@ -134,7 +134,7 @@ fn cmd_budget_clear(config: &AppConfig, seat: &str) -> Result<()> {
     let existed = db.get(seat)?.is_some();
     db.delete(seat)?;
     if existed {
-        println!("Budget override cleared for '{seat}' (inherits [genome].budget).");
+        println!("Budget override cleared for '{seat}' (inherits [bylaws].budget).");
     } else {
         println!("No budget override existed for '{seat}'.");
     }

@@ -621,7 +621,7 @@ impl OperantAgent {
     }
 
     /// Wave 2 (ORGANISM-ARCHITECTURE §2): the cast employee this agent
-    /// executes as. The genome consult resolves through this FIRST — the
+    /// executes as. The bylaws consult resolves through this FIRST — the
     /// seat a chat session runs under is its bound employee's id, not the
     /// `gw_<hash>` conversation id. `None` keeps today's behavior (consult
     /// on the session id, which is what cron runs already key on).
@@ -636,12 +636,12 @@ impl OperantAgent {
             .clone()
     }
 
-    /// Assign the employee this agent executes as (the genome seat). Set by
+    /// Assign the employee this agent executes as (the bylaws seat). Set by
     /// the gateway turn from the session's employee binding; mirrors
     /// [`Self::set_session_id`] through `Arc<OperantAgent>`.
     pub fn set_seat_id(&self, seat_id: impl Into<String>) {
         let new_id = seat_id.into();
-        tracing::debug!(seat_id = %new_id, "Agent genome seat set at runtime");
+        tracing::debug!(seat_id = %new_id, "Agent bylaws seat set at runtime");
         if let Ok(mut guard) = self.seat_id.write() {
             *guard = Some(new_id);
         }

@@ -451,7 +451,7 @@ pub struct OperantAgent {
     sessions: Arc<crate::session::SessionStore>,
     event_tx: Option<mpsc::Sender<AgentEvent>>,
     permission_tx: Option<mpsc::Sender<ToolPermissionRequest>>,
-    /// P1/P2 seat authority (permission-genome wave-2 slices E + F2). When
+    /// P1/P2 seat authority (permission-bylaws wave-2 slices E + F2). When
     /// `Some` AND the agent has a session id (the employee id), the
     /// tool-execution guard in `agent/stream.rs` consults
     /// [`crate::org::seat_authority::SeatAuthority::consult`] before the
@@ -558,7 +558,7 @@ pub struct OperantAgent {
     /// it, exactly like [`Self::set_model`] retargets the model.
     session_id: Arc<std::sync::RwLock<Option<String>>>,
     /// Wave 2 (ORGANISM-ARCHITECTURE §2): the cast employee this agent
-    /// executes as — THE seat the genome consults. `None` = no gateway
+    /// executes as — THE seat the bylaws consults. `None` = no gateway
     /// employee binding (cron runs derive their employee id as the session
     /// id already; local runs stay session-keyed, byte-identical).
     seat_id: Arc<std::sync::RwLock<Option<String>>>,
@@ -736,7 +736,7 @@ pub struct ToolPermissionRequest {
     /// nothing is minted or resolved, byte-identical to mainline.
     pub seat_escalation: Option<crate::org::seat_authority::SeatEscalation>,
     /// D-2: this request came from an UNATTENDED agent (cron). The
-    /// receiver consults `[genome].unattended_posture` with it when no
+    /// receiver consults `[bylaws].unattended_posture` with it when no
     /// interactive approver can answer; attended requests ignore it and
     /// keep today's behavior byte-identical.
     pub unattended: bool,

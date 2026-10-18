@@ -5,7 +5,7 @@
 //! `GET /api/doctor`; `operant-cli::cmd_doctor` ran on [`AppConfig`] and
 //! served `operant doctor`. Same intent, duplicated logic, drifting check
 //! lists. This module is the surviving engine: the checks run on
-//! [`AppConfig`] (the config type the genome and gateway read),
+//! [`AppConfig`] (the config type the bylaws and gateway read),
 //! `operant doctor` renders them via [`render_text`] alongside its
 //! install-level sections, and the gateway serializes the same
 //! [`diagnose`] results at its boundary.
@@ -88,7 +88,7 @@ pub fn diagnose(config: &AppConfig) -> Vec<CheckResult> {
     items
 }
 
-// ── Genome / organism health (Wave 5, ORGANISM-ARCHITECTURE §4) ─────
+// ── Bylaws / organism health (Wave 5, ORGANISM-ARCHITECTURE §4) ─────
 
 /// Plain-text render used by `operant doctor`'s Diagnostics section.
 ///
@@ -756,16 +756,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn genome_category_is_gone_with_the_organism() {
-        // G+1: the genome checks retired (Holon owns the organization's
+    fn bylaws_category_is_gone_with_the_organism() {
+        // G+1: the bylaws checks retired (Holon owns the organization's
         // health); the doctor's categories are exactly the kept set.
         let tmp = tempfile::TempDir::new().unwrap();
         // SAFETY: serial test, single-threaded runner.
         unsafe { std::env::set_var("HERMES_HOME", tmp.path()) };
         let results = diagnose(&fixture_config());
         assert!(
-            !results.iter().any(|r| r.category == "genome"),
-            "genome category must be gone: {results:?}"
+            !results.iter().any(|r| r.category == "bylaws"),
+            "bylaws category must be gone: {results:?}"
         );
         // SAFETY: same serial-test rationale.
         unsafe { std::env::remove_var("HERMES_HOME") };

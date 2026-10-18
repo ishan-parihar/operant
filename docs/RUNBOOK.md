@@ -41,4 +41,4 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | regenerate state | `./scripts/genome handoff --write` |
 
 Role→path map: `kb.toml`. Routing table (which doc answers what): AGENTS.md
-"Documentation Genome (genome)".
+"Documentation Bylaws (bylaws)".

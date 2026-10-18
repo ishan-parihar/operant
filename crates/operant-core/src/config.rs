@@ -73,12 +73,12 @@ pub struct AppConfig {
     /// restarts.
     #[serde(default)]
     pub command_allowlist: Vec<String>,
-    /// Permission-genome knobs (`[genome]`, wave-2 slice F2). `grant_ttl_days`
+    /// Permission-bylaws knobs (`[bylaws]`, wave-2 slice F2). `grant_ttl_days`
     /// is LIVE: the TTL an approval mints for a non-CEO approver
     /// (`SeatApprover`). The other two are declared surface for the named
-    /// later slices — see `GenomeSettings` for exactly which.
+    /// later slices — see `BylawsSettings` for exactly which.
     #[serde(default)]
-    pub genome: GenomeSettings,
+    pub bylaws: BylawsSettings,
     /// DM/feed context injection (`[context_injection]`, gap 5 phase 1).
     #[serde(default)]
     pub context_injection: ContextInjectionSettings,
@@ -126,7 +126,7 @@ impl Default for AppConfig {
             terminal_backend: TerminalBackend::Local,
             checkpoints: CheckpointsSettings::default(),
             harness: HarnessSettings::default(),
-            genome: GenomeSettings::default(),
+            bylaws: BylawsSettings::default(),
             context_injection: ContextInjectionSettings::default(),
             socialization: SocializationSettings::default(),
             observability: operant_config::schema::ObservabilityConfig::default(),
@@ -142,7 +142,7 @@ impl Default for AppConfig {
     }
 }
 
-/// `[genome]` — the permission-genome knobs (wave-2 slice F2,
+/// `[bylaws]` — the permission-bylaws knobs (wave-2 slice F2,
 /// `docs/PERMISSION-SCOPING-PLAN.md` §5 P2 + §11's owner defaults).
 ///
 /// All knobs are live — the repo's `lifeos` rule forbids keys that
@@ -170,7 +170,7 @@ impl Default for AppConfig {
 ///   the owner ruled it into.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct GenomeSettings {
+pub struct BylawsSettings {
     /// Default seat mode for operator-seated policy rows that do not name
     /// one (P3 consumer; see the struct docs).
     pub unrestricted_default: String,
@@ -192,7 +192,7 @@ pub struct GenomeSettings {
     /// Wave 4 (ORGANISM-ARCHITECTURE §5): the ORG-WIDE default budget a
     /// seat runs under when no `seat_budgets` row overrides it. `cap = 0`
     /// (the default) = ungoverned — no budget is consulted at all, which
-    /// is the genome's rule-2 posture (byte-identical legacy). Per-employee
+    /// is the bylaws's rule-2 posture (byte-identical legacy). Per-employee
     /// overrides live in the `seat_budgets` table (data, not config) so
     /// hrmaster can fine-tune one seat without a config edit + restart.
     pub budget: BudgetSettings,
@@ -381,7 +381,7 @@ impl Default for HolonSettings {
     }
 }
 
-/// `[genome].budget` — Wave 4. Basis is `tokens` or `usd` (metering has
+/// `[bylaws].budget` — Wave 4. Basis is `tokens` or `usd` (metering has
 /// both; tokens is model-agnostic, USD maps 1:1 to paid-model invoices).
 /// Window is `daily` | `weekly` | `monthly`, UTC boundaries. Mode `hard`
 /// refuses the turn at the cap (with a clear notice); `soft` warns and
@@ -413,7 +413,7 @@ impl Default for BudgetSettings {
     }
 }
 
-impl Default for GenomeSettings {
+impl Default for BylawsSettings {
     fn default() -> Self {
         Self {
             unrestricted_default: "yolo".to_string(),
@@ -2586,13 +2586,13 @@ mod tests {
         );
         assert!(!text.contains("big-stack"), "the old value is replaced");
         // No defaults resurrected: the file holds ONLY what it held plus the
-        // leaf (the old whole-file writer emitted [pk], [genome.budget], …).
+        // leaf (the old whole-file writer emitted [pk], [bylaws.budget], …).
         assert!(
             !text.contains("[pk]"),
             "retired default sections must not appear"
         );
         assert!(
-            !text.contains("[genome"),
+            !text.contains("[bylaws"),
             "retired default sections must not appear"
         );
         // And it re-loads.
@@ -2637,12 +2637,12 @@ mod tests {
         let loaded = load_app_config(Some(&path)).expect("load fixture");
         install_runtime_config(loaded.config);
 
-        // New nested leaf (a valid schema path): genome.budget.cap is a
-        // real f64 field, and the [genome.budget] table is absent from the
+        // New nested leaf (a valid schema path): bylaws.budget.cap is a
+        // real f64 field, and the [bylaws.budget] table is absent from the
         // fixture — the walk must CREATE it.
-        persist_config_key("genome.budget.cap", "2.5").expect("persist float");
+        persist_config_key("bylaws.budget.cap", "2.5").expect("persist float");
         let reloaded = parse_config_file(&path).expect("reload");
-        assert_eq!(reloaded.genome.budget.cap, 2.5);
+        assert_eq!(reloaded.bylaws.budget.cap, 2.5);
 
         // Boolean coercion on a real key.
         persist_config_key("tui.terminal_scroll_mode", "true").expect("persist bool");
@@ -2939,7 +2939,7 @@ wonderful_unknown_key = 42
         );
     }
 
-    /// The `[genome]` block (wave-2 slice F2) maps onto the real fields —
+    /// The `[bylaws]` block (wave-2 slice F2) maps onto the real fields —
     /// pinned with NON-default values so the test fails if the keys stop
     /// binding (a commented-out block parses as defaults and would pass
     /// vacuously, which is exactly what the values below rule out).
@@ -2990,21 +2990,21 @@ wonderful_unknown_key = 42
     }
 
     #[test]
-    fn genome_block_parses_into_fields() {
-        let raw = "[genome]\nunrestricted_default = \"standard\"\nunattended_posture = \"lockdown\"\ngrant_ttl_days = 3\n";
-        let config = parse_config_str(raw, Path::new("memory://genome-probe")).unwrap();
-        assert_eq!(config.genome.unrestricted_default, "standard");
-        assert_eq!(config.genome.unattended_posture, "lockdown");
-        assert_eq!(config.genome.grant_ttl_days, 3);
-        // A removed [genome] key MUST fail loudly (deny_unknown_fields):
+    fn bylaws_block_parses_into_fields() {
+        let raw = "[bylaws]\nunrestricted_default = \"standard\"\nunattended_posture = \"lockdown\"\ngrant_ttl_days = 3\n";
+        let config = parse_config_str(raw, Path::new("memory://bylaws-probe")).unwrap();
+        assert_eq!(config.bylaws.unrestricted_default, "standard");
+        assert_eq!(config.bylaws.unattended_posture, "lockdown");
+        assert_eq!(config.bylaws.grant_ttl_days, 3);
+        // A removed [bylaws] key MUST fail loudly (deny_unknown_fields):
         // a typo'd security knob silently falling back to defaults is the
         // worse failure mode, so the schema stays strict and removal is a
         // documented break.
-        let stale = "[genome]\nqueued_cron_jobs_resolve_grants = true\n";
-        let err = parse_config_str(stale, Path::new("memory://genome-stale"));
+        let stale = "[bylaws]\nqueued_cron_jobs_resolve_grants = true\n";
+        let err = parse_config_str(stale, Path::new("memory://bylaws-stale"));
         assert!(
             err.is_err(),
-            "removed genome key must hard-fail config load"
+            "removed bylaws key must hard-fail config load"
         );
         // And the shipped example carries the live default TTL of 7 days,
         // uncommented, where the gateway reads it.

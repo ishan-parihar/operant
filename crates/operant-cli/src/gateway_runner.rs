@@ -68,7 +68,7 @@ type TurnUsageMap = Arc<Mutex<HashMap<ThreadKey, TurnUsage>>>;
 
 /// D-2 (owner ruling 2026-10-08): the verdict for an UNGOVERNED unattended
 /// permission request that has no interactive approver to answer it, under
-/// `[genome].unattended_posture`. This knob, and only this knob, manages the
+/// `[bylaws].unattended_posture`. This knob, and only this knob, manages the
 /// unattended posture — governed seats never reach it (their policy row
 /// already clamps unattended runs in `agent/stream.rs`, F2).
 ///
@@ -76,7 +76,7 @@ type TurnUsageMap = Arc<Mutex<HashMap<ThreadKey, TurnUsage>>>;
 /// or `Some(reason)` to deny with the reason. A typo'd spelling FAILS
 /// CLOSED — the same read-error discipline as `seat_policies`: a typo'd
 /// `lockdonw` silently re-opening unattended dangerous tools would be the
-/// exact widening the genome exists to prevent.
+/// exact widening the bylaws exists to prevent.
 fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
     use operant_core::org::seat_policy::SeatMode;
     use std::str::FromStr;
@@ -84,7 +84,7 @@ fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
         Ok(SeatMode::Yolo) => None,
         Ok(mode) => Some(format!(
             "Permission denied by unattended posture: \
-             [genome].unattended_posture is `{}` and no interactive \
+             [bylaws].unattended_posture is `{}` and no interactive \
              approver is attached to this run. Give the seat a governed \
              policy (`operant cron create --seat-mode` or /grant) so its \
              approver can mint a grant between runs, or set the posture \
@@ -93,7 +93,7 @@ fn unattended_no_channel_verdict(posture_raw: &str) -> Option<String> {
         )),
         Err(e) => Some(format!(
             "Permission denied (fail-closed): the unattended posture is \
-             unreadable — {}. Fix [genome].unattended_posture; `yolo` \
+             unreadable — {}. Fix [bylaws].unattended_posture; `yolo` \
              restores auto-approval",
             e
         )),
@@ -140,7 +140,7 @@ mod unattended_posture_tests {
 /// iter-632: drain one turn's accumulated usage into the session store's
 /// metering accumulator (`gateway_sessions.total_tokens` /
 /// `estimated_cost_usd` — the columns Wave 4's budget rollup sums).
-/// Fail-open on telemetry (genome invariant): a metering write must never
+/// Fail-open on telemetry (bylaws invariant): a metering write must never
 /// fail a turn, so the store error is swallowed and logged by the caller.
 async fn drain_turn_usage_into_store(
     store: &operant_core::gateway_session::PersistentSessionStore,
@@ -403,7 +403,7 @@ pub static SEAT_POLICY_DBS: OnceLock<
 /// Wave 4 (ORGANISM-ARCHITECTURE §5): the per-seat budget override store.
 /// Same shape as the other org-store globals — the turn prologue resolves
 /// a seat's effective budget through it (per-field precedence over
-/// `[genome].budget`) without a handle back into `start_gateway`'s locals.
+/// `[bylaws].budget`) without a handle back into `start_gateway`'s locals.
 pub static SEAT_BUDGET_DBS: OnceLock<
     std::sync::Mutex<Option<Arc<operant_core::org::seat_budgets::SeatBudgetDb>>>,
 > = OnceLock::new();
@@ -457,7 +457,7 @@ fn resolve_background_target(
 }
 
 /// Derive the gateway agent's stable session id (and therefore the chat's
-/// SEAT under the genome) from a routing key. Extracted from the turn
+/// SEAT under the bylaws) from a routing key. Extracted from the turn
 /// dispatcher so `/permissions` computes the SAME seat the running agent
 /// actually consults — a third copy of this derivation is exactly the
 /// class of drift the `/stop` command's comment warns about.
@@ -855,12 +855,12 @@ struct GatewayMessageHandler {
     /// receiver (`AgentEvent::Usage`/`Cost`) and drained at turn end.
     turn_usage: TurnUsageMap,
     /// Wave 3 (ORGANISM-ARCHITECTURE §3): the continuation-summary TTL
-    /// (`[genome].session_summary_ttl_minutes`, captured at gateway start
+    /// (`[bylaws].session_summary_ttl_minutes`, captured at gateway start
     /// — the handler has no config handle of its own and the value is not
     /// hot-reloadable).
     summary_ttl_minutes: i64,
     /// Wave 4 (ORGANISM-ARCHITECTURE §5): the org-wide default budget
-    /// (`[genome].budget`, captured at gateway start for the same reason).
+    /// (`[bylaws].budget`, captured at gateway start for the same reason).
     /// Per-seat overrides resolve through the SEAT_BUDGET_DBS global at
     /// turn time.
     default_budget: operant_core::config::BudgetSettings,
@@ -1214,7 +1214,7 @@ impl MessageHandler for GatewayMessageHandler {
         }
 
         // Wave 2 (ORGANISM-ARCHITECTURE §2): apply the session's employee
-        // binding — the genome SEAT this turn runs under, and the charter
+        // binding — the bylaws SEAT this turn runs under, and the charter
         // the frozen prefix carries. The binding lives on the PERSISTENT
         // session store (survives restarts); the in-memory SessionStore is
         // metadata-only and holds no employee state. The persistent store
@@ -1332,7 +1332,7 @@ impl MessageHandler for GatewayMessageHandler {
 
         // Wave 4 (ORGANISM-ARCHITECTURE §5): the budget gate + the
         // remaining-budget injection. Resolution: per-seat override row
-        // (per-field precedence) over `[genome].budget`; cap <= 0 =
+        // (per-field precedence) over `[bylaws].budget`; cap <= 0 =
         // ungoverned, nothing is computed or injected. Metering READS the
         // existing per-session accumulator rolled up per employee over the
         // window — no second counter. Enforcement is TURN-BOUNDARY v1: a
@@ -2129,8 +2129,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // already-attached memory tools read, and cron getting a second
     // provider instance over the same store.
     let memory = crate::load_repo_memory_manager().await?;
-    // P1/P2 seat authority (permission-genome wave-2 slices E + F2): the
-    // genome's three stores over the shared org app db (the same
+    // P1/P2 seat authority (permission-bylaws wave-2 slices E + F2): the
+    // bylaws's three stores over the shared org app db (the same
     // `database.db` derivation the PersistentSessionStore above uses; the
     // `seat_policies`, `authority_grants` and `pending_requests` tables are
     // created idempotently inside it), threaded into BOTH agent builds
@@ -2140,7 +2140,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // (today's behavior), so wiring the authority alone changes nothing
     // until a policy row is written. `?` (not a soft skip): a store that
     // fails to open must fail loudly — silently running ungoverned is the
-    // widening the genome exists to make impossible.
+    // widening the bylaws exists to make impossible.
     //
     // G+1 (docs/agentic-os/, owner order 2026-10-15): the org layer's
     // retired stores are gone — the grant ledger, the escalation queue,
@@ -2353,8 +2353,8 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
         turn_usage: turn_usage.clone(),
-        summary_ttl_minutes: app_config.genome.session_summary_ttl_minutes,
-        default_budget: app_config.genome.budget.clone(),
+        summary_ttl_minutes: app_config.bylaws.session_summary_ttl_minutes,
+        default_budget: app_config.bylaws.budget.clone(),
         // iter-683: same injector the scheduler holds — one settings
         // surface for both seams. Fail-open: an injector that cannot open
         // leaves turns byte-identical.
@@ -3190,7 +3190,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     let current_channel_for_perm = current_channel.clone();
     // D-2 (owner ruling 2026-10-08): the unattended posture, captured at
     // start — the receiver consults it when nobody can answer a prompt.
-    let unattended_posture_for_perm = app_config.genome.unattended_posture.clone();
+    let unattended_posture_for_perm = app_config.bylaws.unattended_posture.clone();
     let pending_permissions: Arc<
         Mutex<HashMap<String, operant_core::agent::ToolPermissionRequest>>,
     > = Arc::new(Mutex::new(HashMap::new()));
@@ -3340,7 +3340,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                 }
                 // D-2 (owner ruling 2026-10-08): an UNGOVERNED unattended
                 // request with nobody to answer it consults
-                // `[genome].unattended_posture` — the governance knob that,
+                // `[bylaws].unattended_posture` — the governance knob that,
                 // per the ruling, solely manages the unattended posture.
                 // `yolo` (the shipped default) keeps the auto-approve below
                 // byte-identical; any other spelling denies with the
@@ -4330,7 +4330,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         // iter-678 (gap 1): mount the cron budget envelope — the usage meter
         // (fed by the cron agent's own event channel), the session store the
         // rollup reads, and the seat-budget resolution (overrides +
-        // [genome].budget default). All dark-mergeable: cap 0 = ungoverned
+        // [bylaws].budget default). All dark-mergeable: cap 0 = ungoverned
         // keeps every run byte-identical until an operator sets a cap.
         // iter-679 (gap 5, phase 1): the DM/feed context injector over the
         // app db (worklog reads + the context_watermarks cursors).
@@ -4354,7 +4354,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             .with_usage_meter(cron_usage_meter.clone())
             .with_budgets(
                 Arc::clone(&seat_budget_store),
-                app_config.genome.budget.clone(),
+                app_config.bylaws.budget.clone(),
             );
         if let Some(injector) = context_injector {
             scheduler = scheduler.with_context_injection(injector);

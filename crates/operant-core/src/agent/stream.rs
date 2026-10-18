@@ -1076,7 +1076,7 @@ impl OperantAgent {
                 }
             }
 
-            // ── P1/P2 seat policy (permission-genome slices E + F2) ──────
+            // ── P1/P2 seat policy (permission-bylaws slices E + F2) ──────
             // With a seat authority attached AND a session id (the employee
             // id), `decide()` owns the verdict for this seat: `Run` skips the
             // prompt outright (a yolo mode or a seat allow entry), `Escalate`
@@ -1090,7 +1090,7 @@ impl OperantAgent {
             //
             // The consult is hoisted ABOVE the permission-channel block so
             // unattended agents (which may still carry a channel nobody
-            // drains — see `with_unattended`) consult the genome too.
+            // drains — see `with_unattended`) consult the bylaws too.
             //
             // `blocked` is `false` because the smart approval gate above
             // already denied blocked tools — the hardline floor fires before

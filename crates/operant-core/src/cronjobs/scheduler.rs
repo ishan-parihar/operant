@@ -70,10 +70,10 @@ pub struct CronScheduler {
     /// (`employee_window_usage`). `None` = no drain (dark-mergeable).
     usage_store: Option<Arc<crate::gateway_session::PersistentSessionStore>>,
     /// iter-678 (gap 1, consult): per-seat budget overrides. `None` = no
-    /// seat is budget-governed on the cron path (the default; `[genome].budget`
+    /// seat is budget-governed on the cron path (the default; `[bylaws].budget`
     /// cap 0 = ungoverned keeps everything dark-mergeable).
     seat_budgets: Option<Arc<crate::org::seat_budgets::SeatBudgetDb>>,
-    /// iter-678: the org-wide budget default (`[genome].budget`), resolved
+    /// iter-678: the org-wide budget default (`[bylaws].budget`), resolved
     /// per seat via `resolve_budget` when `seat_budgets` is mounted.
     default_budget: crate::config::BudgetSettings,
     /// iter-679 (gap 5, phase 1): the DM/feed context injector. `None` =
@@ -421,7 +421,7 @@ impl CronScheduler {
     /// iter-678: the effective budget + window usage for a seat, when the
     /// budget stores are mounted. `None` = ungoverned (no budget consulted
     /// at all) — the dark-mergeable default. Store errors degrade to
-    /// ungoverned (fail-open, the genome invariant: metering must never
+    /// ungoverned (fail-open, the bylaws invariant: metering must never
     /// refuse a run because the meter could not be read).
     fn seat_budget_state(
         &self,
@@ -538,7 +538,7 @@ impl CronScheduler {
     /// `employee_window_usage` (the rollup the envelope consult reads)
     /// sums. Runs are serial in the tick loop, so the delta between the
     /// pre-run snapshot and the post-run read is this run's usage alone.
-    /// Fail-open (genome invariant): a metering write never fails a run.
+    /// Fail-open (bylaws invariant): a metering write never fails a run.
     fn drain_run_usage(
         &self,
         source_id: &str,

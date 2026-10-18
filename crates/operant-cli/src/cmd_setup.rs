@@ -1438,13 +1438,13 @@ async fn step_governance(config: &mut AppConfig) -> Result<()> {
     let modes = ["yolo", "standard", "scoped", "lockdown"];
     let current = modes
         .iter()
-        .position(|m| *m == config.genome.unrestricted_default)
+        .position(|m| *m == config.bylaws.unrestricted_default)
         .unwrap_or(0);
     let sel = prompt_select("Default seat policy for new seats", &modes, current)?;
-    config.genome.unrestricted_default = modes[sel].to_string();
+    config.bylaws.unrestricted_default = modes[sel].to_string();
     println!();
 
-    let budget = &mut config.genome.budget;
+    let budget = &mut config.bylaws.budget;
     let cap_str = prompt_text(
         &format!(
             "Autonomous-seat budget cap per {} (0 = ungoverned, the default)",
@@ -1486,14 +1486,14 @@ async fn step_governance(config: &mut AppConfig) -> Result<()> {
     println!();
     print_info(&format!(
         "Governance set: seat policy '{}'{}.",
-        config.genome.unrestricted_default,
-        if config.genome.budget.cap > 0.0 {
+        config.bylaws.unrestricted_default,
+        if config.bylaws.budget.cap > 0.0 {
             format!(
                 ", budget {} {} per {} ({})",
-                config.genome.budget.cap,
-                config.genome.budget.basis,
-                config.genome.budget.window,
-                config.genome.budget.mode
+                config.bylaws.budget.cap,
+                config.bylaws.budget.basis,
+                config.bylaws.budget.window,
+                config.bylaws.budget.mode
             )
         } else {
             ", no budget (ungoverned)".to_string()

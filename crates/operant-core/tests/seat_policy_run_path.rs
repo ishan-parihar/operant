@@ -1,4 +1,4 @@
-//! Real-path tests for P1 enforcement (permission-genome wave-2 slice E):
+//! Real-path tests for P1 enforcement (permission-bylaws wave-2 slice E):
 //! the seat-policy `decide()` precedence engine is LIVE on the agent run
 //! path.
 //!
@@ -13,7 +13,7 @@
 //! The two stub tools matter: the guard only classifies by NAME, so a stub
 //! named `bash` sits on the hardcoded dangerous list without running a
 //! shell, and `seat_probe` is a safe name no list mentions — which is what
-//! makes the lockdown escalation below prove the policy genome bites
+//! makes the lockdown escalation below prove the policy bylaws bites
 //! beyond today's dangerous list (ungoverned, `seat_probe` runs silent).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]

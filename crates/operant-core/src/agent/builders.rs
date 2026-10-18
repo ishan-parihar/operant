@@ -455,7 +455,7 @@ impl OperantAgent {
     }
 
     /// Attach the seat authority the tool-execution guard consults
-    /// (permission-genome P1/P2, slices E + F2): the policy source, the grant
+    /// (permission-bylaws P1/P2, slices E + F2): the policy source, the grant
     /// ledger, and the escalation queue in one handle. The employee id is
     /// the agent's current session id. `None` keeps the run path
     /// byte-identical: no decide() call at all.

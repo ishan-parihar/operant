@@ -2,10 +2,10 @@
 //! ORGANISM-ARCHITECTURE §5).
 //!
 //! One row per seat. Fields are `NULL`-able so an override can pin just one
-//! knob (say, the cap) and inherit the rest from `[genome].budget` —
+//! knob (say, the cap) and inherit the rest from `[bylaws].budget` —
 //! precedence is per-field, resolved by [`resolve_budget`]. `cap` is NOT
 //! nullable: an override row exists to cap, so a row with `cap = 0` means
-//! "explicitly ungoverned" (an intentional release valve — the genome's
+//! "explicitly ungoverned" (an intentional release valve — the bylaws's
 //! fail-open rule applies to budgets too, by the owner's "totally free or
 //! ungoverned" directive).
 //!
@@ -23,7 +23,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// The override row. `None` fields inherit `[genome].budget`.
+/// The override row. `None` fields inherit `[bylaws].budget`.
 #[derive(Debug, Clone, Default)]
 pub struct SeatBudget {
     pub employee_id: String,
@@ -39,7 +39,7 @@ impl SeatBudget {
     // even though the org default caps" — and a row that sets nothing
     // meaningful is a write nobody makes. Resolution is simple: row
     // present → its per-field values win (cap 0 = ungoverned); row absent
-    // → `[genome].budget`.
+    // → `[bylaws].budget`.
 }
 
 /// The resolved budget a seat actually runs under, after per-field
@@ -57,7 +57,7 @@ pub struct EffectiveBudget {
 
 /// Per-field precedence: the seat row's set fields override the org-wide
 /// config defaults. Ungoverned when the resolved `cap <= 0` — that is the
-/// default posture (genome rule 2: ungoverned is byte-identical legacy).
+/// default posture (bylaws rule 2: ungoverned is byte-identical legacy).
 pub fn resolve_budget(
     seat: Option<&SeatBudget>,
     global: &BudgetSettings,
@@ -199,7 +199,7 @@ impl SeatBudgetDb {
     }
 
     /// Remove a seat's override row entirely — the seat then inherits the
-    /// `[genome].budget` default. Deleting a nonexistent row is a no-op.
+    /// `[bylaws].budget` default. Deleting a nonexistent row is a no-op.
     pub fn delete(&self, employee_id: &str) -> Result<()> {
         let conn = self.lock()?;
         conn.execute(

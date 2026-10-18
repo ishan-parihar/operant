@@ -395,7 +395,7 @@ pub struct SessionEntry {
     pub last_resume_marked_at: Option<String>,
     /// The cast employee this session executes as (ORGANISM-ARCHITECTURE §2:
     /// a session borrows the employee's authority, budget and charter; the
-    /// seat under the genome IS this id). `None` only for pre-Wave-2 rows
+    /// seat under the bylaws IS this id). `None` only for pre-Wave-2 rows
     /// still unread since the migration — `load_from_db` and the schema
     /// migration backfill them to `premiere` (owner ruling: default
     /// conversations talk to the premiere).

@@ -171,7 +171,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         name: "session",
         // Wave 2 (ORGANISM-ARCHITECTURE §2): show or switch the cast
         // employee this conversation executes as. Binding is a
-        // conversation act, not an authority act — the genome still gates
+        // conversation act, not an authority act — the bylaws still gates
         // every tool consult under the bound employee's policy at run
         // time, so an operator cannot /session their way past a lockdown
         // row.
@@ -513,7 +513,7 @@ pub static COMMAND_REGISTRY: &[CommandDef] = &[
         args_hint: "",
         admin_only: true,
     },
-    // ── Org genome (P3) ─────────────────────────────────────────────────
+    // ── Org bylaws (P3) ─────────────────────────────────────────────────
     CommandDef {
         name: "permissions",
         description: "Show a seat's policy, standing grants and pending escalations",
@@ -2122,7 +2122,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             msg
         }
 
-        // ── Org genome (P3) ─────────────────────────────────────────────
+        // ── Org bylaws (P3) ─────────────────────────────────────────────
         "permissions" => {
             // `/permissions [seat]` — a seat's effective posture. No arg =
             // the invoking chat's own seat, derived EXACTLY as the turn
@@ -2150,7 +2150,7 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
             };
             let Some(_approver) = crate::gateway_runner::seat_approver() else {
                 return Some(
-                    "The genome is not wired in this process — start the gateway first.".into(),
+                    "The bylaws is not wired in this process — start the gateway first.".into(),
                 );
             };
             let mut msg = format!("**Seat `{target}`**\n");
@@ -2529,10 +2529,10 @@ mod tests {
     // every test in this family takes one lock and seeds fresh temp-dir
     // stores, mirroring `permissions_test_guard` in gateway_runner.rs.
 
-    static GENOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static BYLAWS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn genome_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        GENOME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    fn bylaws_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        BYLAWS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// `/permissions [seat]` shows the seat's policy posture. The grant
@@ -2541,7 +2541,7 @@ mod tests {
     /// reads stay operator-only.
     #[test]
     fn permissions_shows_posture_and_gates_other_seats() {
-        let _serialised = genome_test_guard();
+        let _serialised = bylaws_test_guard();
         let dir = tempfile::tempdir().expect("tempdir");
         let policies = std::sync::Arc::new(
             operant_core::org::seat_policy_db::SeatPolicyDb::init(

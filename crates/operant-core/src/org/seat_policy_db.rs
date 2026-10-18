@@ -15,7 +15,7 @@
 //! [`SeatMode: FromStr`](std::str::FromStr). A row carrying a spelling this
 //! build does not know is an **error on read**, not a silent fallback: a
 //! typo'd `lockdown` degrading to `standard` would silently re-open tools a
-//! seat was shut out of, which is the exact widening the genome exists to
+//! seat was shut out of, which is the exact widening the bylaws exists to
 //! make impossible.
 
 use crate::error::Error;

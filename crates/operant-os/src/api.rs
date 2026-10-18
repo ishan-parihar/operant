@@ -118,7 +118,7 @@ pub struct Trigger {
 }
 
 /// A capability unit as published by `api_units` (v4): a pooled service, a surface, or a
-/// department's own declared genome. `owner` names the department that keeps a surface true.
+/// department's own declared bylaws. `owner` names the department that keeps a surface true.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Unit {
     pub slug: String,
@@ -247,7 +247,7 @@ impl HolonApi {
         })
     }
 
-    /// Departments with their heads and genome profiles.
+    /// Departments with their heads and bylaws profiles.
     pub fn departments(&self) -> Result<Vec<Department>> {
         self.rows("api_departments", |r| {
             Ok(Department {

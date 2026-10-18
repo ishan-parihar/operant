@@ -57,7 +57,7 @@ pub struct DiscoveredPool {
 ///
 /// Symlinks are resolved before walking, because AD-060 pooled organs are
 /// symlinks into a foundation: routing through the symlink should land on
-/// the foundation that actually owns the genome, not on the graduate that
+/// the foundation that actually owns the bylaws, not on the graduate that
 /// borrowed it.
 pub fn route(path: &Path) -> Result<DiscoveredPool, HarnessError> {
     let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

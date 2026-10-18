@@ -227,7 +227,7 @@ provider = "sourcehound"      # the only browser engine; other names warn + are 
 [skills]
 autoload = true
 
-[genome]              # per-employee permission scoping (the org's genome)
+[bylaws]              # per-employee permission scoping (the org's bylaws)
 grant_ttl_days = 7    # HoD-approved escalation grants expire after a week
 ```
 

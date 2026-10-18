@@ -39,7 +39,7 @@ pub mod tools;
 /// schedule); the client reads both identically. A Holon database publishing a
 /// version outside this set is refused (the caller surfaces a doctor line and
 /// org mode stays off — a newer Holon must not be read through stale view shapes).
-/// v3 (the hardening wave) adds the guards/genome-era views without
+/// v3 (the hardening wave) adds the guards/bylaws-era views without
 /// changing any v1/v2 shape — the client reads all three identically.
 /// v4 (the capability-layer audit §2, iter-885) is accepted BEFORE the kernel
 /// publishes it: the C1/R-04 migration (surface units, `api_pool`, the

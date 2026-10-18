@@ -1,4 +1,4 @@
-//! P0 of `docs/PERMISSION-SCOPING-PLAN.md` §5: the per-seat policy genome.
+//! P0 of `docs/PERMISSION-SCOPING-PLAN.md` §5: the per-seat policy bylaws.
 //!
 //! One policy shape every employee agent inherits and every seat specialises:
 //! a [`SeatMode`] plus allow/deny patterns matched with the LCM glob matcher
