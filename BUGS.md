@@ -101,18 +101,15 @@ The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the wa
   module docs in `operant-memory/src/audit.rs` and `response_cache.rs` told users to write those keys.
   Fixed by accepting them as retired fields that warn once, the same pattern as `agentmemory_*`.
   Regression: `config::tests::retired_memory_factory_keys_load_and_warn`.
-- [ ] **Memory factory is unreachable (R13-4 / R13-5, deletion still open).** `create_memory`,
-  `create_memory_with_storage_and_routes`, `create_memory_for_migration`, and `create_response_cache` in
-  `operant-memory/src/lib.rs` have no caller outside that file, and the compiler cannot report them
-  because they are `pub`. Through them the `hygiene`, `audit` (`AuditedMemory`), and `response_cache`
-  modules are reachable only from the factory. The factory reads the platform `MemoryConfig`
-  (`operant-config/src/schema/platform_cfg.rs`), a different struct from the TOML-facing
-  `MemorySettings`. Production memory is built by `load_memory_manager` (`operant-cli/src/main.rs`).
-  Decision: delete the factory-only modules rather than route production through the factory, because
-  hygiene archives and purges memory files on a schedule, and wiring that by default would start
-  destroying data without an opt-in. Ceiling: other factory-era keys (`response_cache_ttl_minutes`,
-  `audit_retention_days`, and the rest of that struct) still fail the load if a user wrote them. They
-  were never in user-facing docs, but the same fix is needed if any turn up.
+- [x] **Memory factory is unreachable (R13-4 / R13-5) — FIXED iter-938.** `create_memory`,
+  `create_memory_with_storage_and_routes`, `create_memory_for_migration`, and `create_response_cache`
+  had no caller outside `operant-memory/src/lib.rs`. Decision: delete the factory and the modules only it
+  reached (`hygiene`, `audit` (`AuditedMemory`), `response_cache`), rather than route production through it.
+  Hygiene archives and purges memory files on a schedule, so wiring it in by default would start destroying
+  data without an opt-in. Production memory is still built by `load_memory_manager` (`operant-cli/src/main.rs`).
+  Ceiling: the platform `MemoryConfig` in `operant-config` keeps its factory-era fields (`hygiene_enabled`,
+  `response_cache_ttl_minutes`, `audit_retention_days`, and the rest of that struct). They are public schema
+  with no reader. A user's `[memory]` table that still carries those keys fails the load, as before.
 
 ## OPEN — Gateway turn concurrency (audit plan 06A — LOCKED iter-864, residual below)
 

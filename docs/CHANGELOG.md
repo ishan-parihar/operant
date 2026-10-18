@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Memory factory removed (iter-938).** `create_memory`, `create_memory_with_storage_and_routes`,
+  `create_memory_for_migration`, and `create_response_cache` had no caller outside `operant-memory`. The
+  modules only they reached go too: `hygiene` (the purge pass), `audit` (`AuditedMemory`), and
+  `response_cache`. The autosave-key helpers and the embedding-config resolver went with the factory, and
+  so did the 19 tests that covered them. Production memory is still built by `load_memory_manager`.
 - **`device_auth_dialog` scaffold removed (iter-937).** The dialog had no opener, so nothing could reach
   its states. Removed with its key handling, dialog priority, overlay entry, and corpus references
   (`excluded.json`, `schema.json`, `_validate.py`). The real OAuth device flow in
