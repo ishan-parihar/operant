@@ -83,3 +83,11 @@ copied from each page's first heading.
 - [RECORDS.md](RECORDS.md) — Records
 - [MAINTAINERS.md](MAINTAINERS.md) — Maintainers
 - [MEMORY.md](MEMORY.md) — § [id: distilled_1778849101_0_17011361790128351221, type: fact, importance: 90, tags: distilled,long_term, created_at: 1778849101, last_accessed: 1778849101]
+
+## Superpowers plans and specs (docs/superpowers/)
+
+- [superpowers/plans/2026-05-13-setup-wizard-port.md](superpowers/plans/2026-05-13-setup-wizard-port.md) — Hermes Setup Wizard Port — Phase A/B/C/D Implementation Plan
+- [superpowers/plans/2026-07-11-tui-debugging-and-refactor-plan.md](superpowers/plans/2026-07-11-tui-debugging-and-refactor-plan.md) — TUI Debugging Infrastructure and Refactor Implementation Plan
+- [superpowers/plans/VERIFICATION_PLAN.md](superpowers/plans/VERIFICATION_PLAN.md) — CLI Parity Upgrade — Verification Plan
+- [superpowers/specs/2026-07-10-tui-debugging-and-unification-design.md](superpowers/specs/2026-07-10-tui-debugging-and-unification-design.md) — TUI Configuration Unification and Debugging Simulator Spec
+- [superpowers/specs/2026-07-11-tui-debugging-and-refactor-design.md](superpowers/specs/2026-07-11-tui-debugging-and-refactor-design.md) — Design Spec: TUI Debugging Infrastructure and Refactor Plan

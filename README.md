@@ -310,6 +310,8 @@ Architecture, porting notes, and parity decisions live in [`AGENTS.md`](AGENTS.m
 
 MIT **or** Apache-2.0 — see [LICENSE-MIT](LICENSE-MIT) or [LICENSE-APACHE](LICENSE-APACHE).
 
+Contributing: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) · Security: [docs/SECURITY.md](docs/SECURITY.md) · Conduct: [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md) · Attribution: [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md)
+
 ---
 
 ## ☕ Support & Sponsorship
