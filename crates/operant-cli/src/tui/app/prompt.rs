@@ -207,7 +207,6 @@ impl App {
             || self.key_input_dialog.visible
             || self.custom_provider_dialog.visible
             || self.free_mode_dialog.visible
-            || self.device_auth_dialog.visible
             || self.ask_user_dialog.visible
     }
 

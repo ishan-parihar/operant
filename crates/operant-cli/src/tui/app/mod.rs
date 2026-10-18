@@ -556,8 +556,6 @@ pub struct App {
     pub custom_provider_dialog: crate::tui::custom_provider_dialog::CustomProviderDialogState,
     /// "Free" composite-provider setup dialog (warning + 2 API keys).
     pub free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState,
-    /// Device code / browser auth dialog (GitHub Copilot device flow, Anthropic OAuth).
-    pub device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState,
     /// When `true`, the main event loop should spawn an async task to fetch
     /// the model list from the current provider's `list_models()` API.
     pub model_picker_fetch_pending: bool,

@@ -178,52 +178,6 @@ impl App {
             return false;
         }
 
-        // Device code / browser auth dialog (GitHub Copilot, Anthropic OAuth)
-        if self.device_auth_dialog.visible {
-            match key.code {
-                KeyCode::Esc => {
-                    self.device_auth_dialog.close();
-                }
-                _ if matches!(
-                    self.device_auth_dialog.status,
-                    crate::tui::device_auth_dialog::DeviceAuthStatus::Success(_)
-                ) =>
-                {
-                    // Any key after success -> store credential and close
-                    if let crate::tui::device_auth_dialog::DeviceAuthStatus::Success(ref token) =
-                        self.device_auth_dialog.status
-                    {
-                        let provider_id = self.device_auth_dialog.provider_id.clone();
-                        let provider_name = self.device_auth_dialog.provider_name.clone();
-                        let token = token.clone();
-                        let credential = if provider_id == "github-copilot" {
-                            crate::tui::adapter_types::StoredCredential::OAuthToken {
-                                access: token.clone(),
-                                refresh: token,
-                                expires: 0,
-                            }
-                        } else {
-                            crate::tui::adapter_types::StoredCredential::ApiKey { key: token }
-                        };
-                        self.auth_store.set(&provider_id, credential);
-                        self.device_auth_dialog.close();
-                        self.activate_provider(provider_id, provider_name, "Connected to", None);
-                        return false;
-                    }
-                }
-                _ if matches!(
-                    self.device_auth_dialog.status,
-                    crate::tui::device_auth_dialog::DeviceAuthStatus::Error(_)
-                ) =>
-                {
-                    // Any key after error -> close
-                    self.device_auth_dialog.close();
-                }
-                _ => {} // Ignore other keys while waiting
-            }
-            return false;
-        }
-
         // API key input dialog (opened from /connect for key-based providers)
         // Ask-user question dialog (AskUserQuestion tool)
         if self.ask_user_dialog.visible {

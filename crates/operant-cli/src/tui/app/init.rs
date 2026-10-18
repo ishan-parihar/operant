@@ -221,7 +221,6 @@ impl App {
             custom_provider_dialog:
                 crate::tui::custom_provider_dialog::CustomProviderDialogState::new(),
             free_mode_dialog: crate::tui::free_mode_dialog::FreeModeDialogState::new(),
-            device_auth_dialog: crate::tui::device_auth_dialog::DeviceAuthDialogState::new(),
             default_model_rx: None,
             model_picker_fetch_pending: false,
             session_list_pending: false,

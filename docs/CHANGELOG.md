@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`device_auth_dialog` scaffold removed (iter-937).** The dialog had no opener, so nothing could reach
+  its states. Removed with its key handling, dialog priority, overlay entry, and corpus references
+  (`excluded.json`, `schema.json`, `_validate.py`). The real OAuth device flow in
+  `operant-core/src/oauth/device.rs` is unchanged.
 - **`commands.rs` dead command layer removed (iter-936).** The 17 `#[allow(dead_code)]` attributes
   that hid it are gone, and the items they covered are deleted: `CommandCategory`, every
   `CommandResult` variant no caller constructs (only `Message` and `ShellCommand` remain), the

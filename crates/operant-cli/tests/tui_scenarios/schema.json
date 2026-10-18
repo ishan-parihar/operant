@@ -315,7 +315,6 @@
       "key_input_dialog",
       "custom_provider_dialog",
       "free_mode_dialog",
-      "device_auth_dialog",
       "connect_dialog",
       "import_config_picker",
       "import_config_dialog",

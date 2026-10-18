@@ -40,7 +40,7 @@ OVERLAYS = {
     "journey_view", "hooks_config_menu", "voice_mode_notice", "inline_interactive",
     "session_browser", "session_branching", "export_dialog", "context_viz",
     "mcp_approval", "bypass_permissions_dialog", "key_input_dialog",
-    "custom_provider_dialog", "free_mode_dialog", "device_auth_dialog",
+    "custom_provider_dialog", "free_mode_dialog",
     "connect_dialog", "import_config_picker", "import_config_dialog",
     "command_palette", "ask_user_dialog", "permission_request"}
 
@@ -81,7 +81,6 @@ SURFACES = [
     ("key input dialog", "key_input_dialog.rs::render_key_input_dialog", "key-input-dialog"),
     ("custom provider dialog", "custom_provider_dialog.rs::render_custom_provider_dialog", "custom-provider-dialog"),
     ("free mode dialog", "free_mode_dialog.rs::render_free_mode_dialog", "free-mode-dialog"),
-    ("device auth dialog", "device_auth_dialog.rs::render_device_auth_dialog", "device-auth-dialog"),
     ("command palette", "dialog_select.rs::render_dialog_select", "command-palette"),
     ("model picker", "model_picker.rs::render_model_picker", "model-picker"),
     ("session browser", "session_browser.rs::render_session_browser", "session-browser"),

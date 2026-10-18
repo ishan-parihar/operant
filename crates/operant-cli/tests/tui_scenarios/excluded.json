@@ -16,14 +16,6 @@
       "style_baseline": "mcp-approval-dialog.style.txt",
       "reason": "Same product gap as mcp-approval, which is the state-level alias of it. Kept as a separate entry so the 1:1 surface-to-scenario mapping in _validate.py's SURFACES ledger stays complete: render_app has its own `if app.mcp_approval.visible` branch and this is that branch.",
       "unblock_when": "Same as mcp-approval."
-    },
-    {
-      "name": "device-auth-dialog",
-      "surface": "crates/operant-cli/src/tui/device_auth_dialog.rs::render_device_auth_dialog",
-      "baseline": "device-auth-dialog.txt",
-      "style_baseline": "device-auth-dialog.style.txt",
-      "reason": "PRODUCT GAP, not a harness gap: since H-9 (iter-905) removed the dead-end `openai-codex` / `github-copilot` connect arms, nothing opens the device-auth dialog. The overlay, its key handling and its dispatch-table row are retained scaffolding with no opener, so no real key sequence reaches it.",
-      "unblock_when": "A real device-code flow lands and opens the dialog; drive this scenario through that opener."
     }
   ]
 }

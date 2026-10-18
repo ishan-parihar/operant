@@ -27,7 +27,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 33] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 32] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -66,7 +66,6 @@ impl App {
                 self.custom_provider_dialog.visible,
             ),
             ("free_mode_dialog", self.free_mode_dialog.visible),
-            ("device_auth_dialog", self.device_auth_dialog.visible),
             ("connect_dialog", self.connect_dialog.visible),
             ("import_config_picker", self.import_config_picker.visible),
             ("import_config_dialog", self.import_config_dialog.visible),
@@ -1658,7 +1657,6 @@ impl App {
         self.key_input_dialog.close();
         self.custom_provider_dialog.close();
         self.free_mode_dialog.close();
-        self.device_auth_dialog.close();
         self.settings_screen.close();
         self.theme_screen.close();
     }

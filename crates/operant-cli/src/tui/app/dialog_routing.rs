@@ -16,9 +16,6 @@ impl App {
         if self.mcp_approval.visible {
             return Some(DialogPriority::McpApproval);
         }
-        if self.device_auth_dialog.visible {
-            return Some(DialogPriority::DeviceAuth);
-        }
         if self.ask_user_dialog.visible {
             return Some(DialogPriority::AskUser);
         }

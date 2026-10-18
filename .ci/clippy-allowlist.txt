@@ -8,7 +8,6 @@ operant|dead_code|crates/operant-cli/src/tui/app/mod.rs
 operant|dead_code|crates/operant-cli/src/tui/app/turn_state.rs
 operant|dead_code|crates/operant-cli/src/tui/bridge_state.rs
 operant|dead_code|crates/operant-cli/src/tui/debug/event_bus.rs
-operant|dead_code|crates/operant-cli/src/tui/device_auth_dialog.rs
 operant|dead_code|crates/operant-cli/src/tui/dialogs/mcp_approval.rs
 operant|dead_code|crates/operant-cli/src/tui/dialogs/permission.rs
 operant|dead_code|crates/operant-cli/src/tui/diff_viewer/state.rs

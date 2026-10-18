@@ -803,7 +803,7 @@ asked — the user has accepted them as documented gaps.
   memory_update_notification/overage_upsell/desktop_upsell_startup deleted
   (iter-58). The remaining 7 dialogs (ask_user/bypass_permissions/custom_provider/
   device_auth/free_mode/import_config/key_input) are alive via indirect `.open()`
-  calls from the connect_dialog handler.
+  calls from the connect_dialog handler. (`device_auth` was removed in iter-937: it had no opener.)
 - ✅ ~~Iteration budget grace call~~ — summarize instead of hard-stop (iter-57)
 - ✅ ~~WebhookAdapter stub~~ — real HTTP server with HMAC (iter-54)
 - ✅ ~~WhatsApp/Email/SMS adapters~~ — real implementations (iter-54)

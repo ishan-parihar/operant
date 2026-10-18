@@ -92,7 +92,6 @@ pub enum DialogPriority {
     /// MCP approval
     McpApproval = 30,
     /// Device auth (OAuth)
-    DeviceAuth = 40,
     /// Ask user dialog
     AskUser = 50,
     /// Key input dialog

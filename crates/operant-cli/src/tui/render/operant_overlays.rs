@@ -56,7 +56,6 @@ use crate::tui::ask_user_dialog::render_ask_user_dialog;
 use crate::tui::bypass_permissions_dialog::render_bypass_permissions_dialog;
 use crate::tui::context_viz::render_context_viz;
 use crate::tui::custom_provider_dialog::render_custom_provider_dialog;
-use crate::tui::device_auth_dialog::render_device_auth_dialog;
 use crate::tui::dialog_select::render_dialog_select;
 use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
 use crate::tui::diff_viewer::render_diff_dialog;
@@ -184,7 +183,6 @@ overlay_visible_guards!(
     is_visible_key_input_dialog => key_input_dialog,
     is_visible_custom_provider_dialog => custom_provider_dialog,
     is_visible_free_mode_dialog => free_mode_dialog,
-    is_visible_device_auth_dialog => device_auth_dialog,
     is_visible_command_palette => command_palette,
     is_visible_session_browser => session_browser,
     is_visible_session_branching => session_branching,
@@ -345,12 +343,6 @@ const OVERLAYS: &[Entry] = &[
         name: "free_mode_dialog",
         visible: is_visible_free_mode_dialog,
         paint: paint_free_mode_dialog,
-        sink: Sink::Frame,
-    },
-    Entry {
-        name: "device_auth_dialog",
-        visible: is_visible_device_auth_dialog,
-        paint: paint_device_auth_dialog,
         sink: Sink::Frame,
     },
     Entry {
@@ -550,10 +542,6 @@ fn paint_free_mode_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     crate::free_mode_dialog::render_free_mode_dialog(frame, &app.free_mode_dialog, ctx.size);
 }
 
-fn paint_device_auth_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_device_auth_dialog(frame, &app.device_auth_dialog, ctx.size);
-}
-
 fn paint_command_palette(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_dialog_select(frame, &app.command_palette, ctx.size);
 }
@@ -675,7 +663,6 @@ mod tests {
         ("key_input_dialog", Sink::Frame),
         ("custom_provider_dialog", Sink::Frame),
         ("free_mode_dialog", Sink::Frame),
-        ("device_auth_dialog", Sink::Frame),
         ("command_palette", Sink::Frame),
         ("session_browser", Sink::Buffer),
         ("session_branching", Sink::Buffer),

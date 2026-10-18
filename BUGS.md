@@ -75,9 +75,9 @@ The dead-code purge of the `operant-cli` TUI tree kept the items below on purpos
 reported dead by the compiler, and removing it would change behaviour or needs a design call.
 The 60 `dead_code` warnings are tracked in `.ci/clippy-allowlist.txt`, so the warning gate stays green.
 
-- [ ] **Device-auth flow cannot finish.** `device_auth_dialog.rs` reports the variants `WaitingForCode`,
-  `ShowingCode`, `BrowserAuth`, `Success`, and `Error` as never constructed, and the fields `device_code`
-  and `interval` as never read. Wire the flow to produce those states, or delete the dead branches.
+- [x] **Device-auth flow cannot finish — FIXED iter-937.** The dialog had no opener, so its states were
+  unreachable. The scaffold is deleted with its key handling, dialog priority, and overlay entries rather
+  than wired. The real OAuth device flow in `operant-core/src/oauth/device.rs` is unchanged.
 - [ ] **OAuth token fields unused.** `adapter_types/auth.rs:16`: `StoredCredential::OAuthToken` fields
   `refresh` and `expires` are never read. Wire token refresh and expiry, or drop the fields.
 - [ ] **Event and notification variants never built.** `notifications.rs:16` (`Success`),
@@ -228,9 +228,9 @@ today, independent of the gate repair.
   from its own tests; `/resume` uses the native `session_browser`. Deleted
   with its now-orphaned support modules (`operant_app::{session_picker_types,
   import, claude_live, catchup, onboarding_flow, registry}`): ~12.8k lines.
-- [ ] **`device_auth_dialog` scaffold has no opener** (H-9 residual). Removing
-  it changes the `overlays` flag list in ~every corpus golden, so it needs a
-  deliberate re-prove pass.
+- [x] **`device_auth_dialog` scaffold has no opener (H-9 residual) — FIXED iter-937.** Removed with its
+  overlay entry, key handling, dialog priority, and corpus references (`excluded.json`, `schema.json`,
+  `_validate.py`). No golden file carried the flag, so no golden was re-proved. `overlay_flags()` is 32 entries.
 - **Corpus note:** `_run.py verify` drifts on this machine for environmental
   reasons (offline `aft update` notice, `~/.operant/slash-usage.json` order in
   `typeahead-suggestions`); several scenarios also drift only when run in the

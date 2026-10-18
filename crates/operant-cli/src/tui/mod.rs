@@ -43,7 +43,6 @@ pub mod context_viz;
 )]
 pub mod copy_targets;
 pub mod custom_provider_dialog;
-pub mod device_auth_dialog;
 pub mod dialog_select;
 pub mod dialogs;
 pub mod diff_viewer;
