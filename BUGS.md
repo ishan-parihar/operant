@@ -466,7 +466,7 @@ watchdog (`main.rs:1265-1270`), a second `Database::init` pool
   half of this defect is invisible to the suite. A regression test that does not
   enable autoload cannot catch it.
 
-### D-4 — A second agent build starts a duplicate set of LCM maintenance workers (OPEN, P1)
+### D-4 — A second agent build starts a duplicate set of LCM maintenance workers (CLOSED 2026-10-18 — the cron agent passes `false` at `gateway_runner.rs:2230`; the TUI and `chat` builds are one-agent-per-process; the regression test was not added because the spawn is side-effecting and has no seam to count schedulers)
 
 `create_runtime_agent` calls `build_context_engine(config, true)`
 (`main.rs:1791`) — the `true` is `spawn_maintenance`

@@ -153,13 +153,12 @@ impl App {
                 self.model_picker_fetch_pending = false;
                 true
             }
-            Ok(Err(_)) => {
+            Ok(Err(reason)) => {
                 self.model_fetch_rx = None;
                 self.model_picker_fetch_pending = false;
-                self.set_status_notice(
-                    "Failed to fetch models from provider (rate limit or auth error). Using cached models."
-                        .to_string(),
-                );
+                self.set_status_notice(format!(
+                    "Could not list models ({reason}). Showing configured models only."
+                ));
                 true
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {

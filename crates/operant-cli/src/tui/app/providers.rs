@@ -9,7 +9,7 @@ use super::*;
 async fn fetch_endpoint_models(
     base_url: &str,
     api_key: Option<&str>,
-) -> Vec<crate::tui::operant_app::tui_fns::PickerEntry> {
+) -> Result<Vec<crate::tui::operant_app::tui_fns::PickerEntry>, String> {
     let url = format!("{base_url}/models");
     let mut req = reqwest::Client::new()
         .get(&url)
@@ -17,17 +17,17 @@ async fn fetch_endpoint_models(
     if let Some(key) = api_key {
         req = req.bearer_auth(key);
     }
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("GET {url} failed: {e}"))?;
     if !resp.status().is_success() {
-        return Vec::new();
+        return Err(format!("GET {url} returned {}", resp.status()));
     }
-    let parsed: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+    let parsed: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("GET {url} did not return JSON: {e}"))?;
     parsed
         .get("data")
         .and_then(|d| d.as_array())
@@ -37,7 +37,7 @@ async fn fetch_endpoint_models(
                 .map(|id| inline_model_row(id, &format!("from {base_url}"), ""))
                 .collect()
         })
-        .unwrap_or_default()
+        .ok_or_else(|| format!("GET {url} returned no `data` list"))
 }
 
 impl App {
@@ -112,14 +112,17 @@ impl App {
         if tokio::runtime::Handle::try_current().is_ok() {
             let rows_for_spawn = entries.clone();
             tokio::spawn(async move {
-                let fetched = fetch_endpoint_models(&base_url, api_key.as_deref()).await;
-                let mut rows = fetched;
-                for c in rows_for_spawn {
-                    if !rows.iter().any(|r| r.name == c.name) {
-                        rows.push(c);
-                    }
-                }
-                let _ = tx.send(Ok(rows)).await;
+                let fetched = fetch_endpoint_models(&base_url, api_key.as_deref())
+                    .await
+                    .map(|mut rows| {
+                        for c in rows_for_spawn {
+                            if !rows.iter().any(|r| r.name == c.name) {
+                                rows.push(c);
+                            }
+                        }
+                        rows
+                    });
+                let _ = tx.send(fetched).await;
             });
         }
 
@@ -495,8 +498,18 @@ mod fetch_tests {
     async fn endpoint_model_list_populates_picker_rows() {
         let base =
             mock_models_server(r#"{"data":[{"id":"free-stack"},{"id":"small-stack"}]}"#).await;
-        let rows = fetch_endpoint_models(&base, Some("k")).await;
+        let rows = fetch_endpoint_models(&base, Some("k")).await.unwrap();
         let names: Vec<_> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["free-stack", "small-stack"]);
+    }
+
+    /// A dead endpoint must surface as an error, not an empty list the picker
+    /// would show as "nothing to pick" with no explanation.
+    #[tokio::test]
+    async fn unreachable_endpoint_reports_why() {
+        let err = fetch_endpoint_models("http://127.0.0.1:1/v1", None)
+            .await
+            .unwrap_err();
+        assert!(err.contains("http://127.0.0.1:1/v1/models"), "{err}");
     }
 }

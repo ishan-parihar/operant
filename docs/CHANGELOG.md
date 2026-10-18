@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-916 — `/model` says why the endpoint's model list is missing.**
+  The picker fetch returned an empty list on every failure (connection
+  refused, HTTP error, non-JSON), so an unreachable endpoint looked like a
+  picker with only the configured rows and no explanation. The fetch now
+  returns the reason, and the status bar reports it: "Could not list models
+  (…). Showing configured models only." Also drops the duplicate
+  `claude-sonnet-4-20250514` from the Anthropic static list.
 - **iter-915 — provider/model selection and the agent loop, end to end.**
   Reproduced against a live proxy: `/connect` flipped the displayed provider
   but the agent kept calling the ORIGINAL `client.base_url`, so every
