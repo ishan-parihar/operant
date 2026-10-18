@@ -69,6 +69,28 @@ the bust permission; `/ctx-flush` (named in the plan) does not exist.
   run one at a time. Verified: three consecutive runs of the file pass, and `~/.operant/data/ESTOP` is
   never created.
 
+## OPEN — Red-team survey after iter-941 (2026-10-19)
+
+Each row is a finding from `docs/plans/2026-10-19-remaining-implementation-gaps-after-iter-941-red-team-survey.md`. The plan holds the evidence and the phase that closes each row. M = user-visible or safety-relevant; L = hygiene or drift.
+
+- [ ] **RT-1 (M) — 136 of 701 config fields are read nowhere.** Sampled 6 of 6 by hand, all dead: `show_cost`, `persistent_output`, `bell_on_complete`, `inline_diffs` (operant-cli `config.rs`), `title_generation`, `docker_image`. Phase 2.
+- [ ] **RT-2 (M) — unknown TOML keys are accepted silently** (operant-cli `config.rs:1070`, no `deny_unknown_fields`). A typo in a real key warns nowhere. Phase 1.4.
+- [ ] **RT-3 (M) — `[keybindings]` overrides are not loaded** (TODO.md Pending). The registry, `/keys`, and the conflict report exist. Phase 3.
+- [ ] **RT-4 (M) — a log-file open failure panics at startup** (`operant-cli/src/main.rs:580-581`). The enclosing `#[expect]` reason does not hold for a runtime open. By reading; not reproduced. Phase 1.1.
+- [ ] **RT-5 (M) — the `#[expect]` reason "invariant guaranteed by surrounding validation" appears 97 times, and the gate does not check the text.** Phase 4.1.
+- [ ] **RT-6 (M, latent) — `unsafe { std::env::set_var }` in production** (`operant-cli/src/config.rs:1869`, `operant-cli/src/cmd_auth.rs:274`). The `cmd_auth.rs` comment admits a long-lived-runtime hazard. Phase 1.2.
+- [ ] **RT-7 (L) — `crates/operant-providers/src/glm.rs` is an uncompiled orphan** (`lib.rs:29` says it is excluded). Phase 1.3.
+- [ ] **RT-8 (L) — stray untracked `xd:/` directory at the repo root** (`report_issue`, 2026-10-16, a todo-tool note). Phase 4.5.
+- [ ] **RT-9 (L) — tracked `Cargo.lock` is dirty in the shared tree** (memory-wire sync, six `windows-sys` lines). Phase 4.5.
+- [ ] **RT-10 (M) — `deny.toml` exists, and no workflow or script runs `cargo deny` or `cargo audit`.** Phase 4.2.
+- [ ] **RT-11 (M) — the corpus validator is red (21 errors) and not gated.** Phase 4.3.
+- [ ] **RT-12 (L) — seven `#[ignore]` attributes; six have no reason.** Phase 4.4.
+- [ ] **RT-13 (L) — `[display] show_reasoning` and `[agent] show_reasoning` both control reasoning display.** The gateway reads the agent key. Phase 5.1.
+- [ ] **RT-14 (L) — the hooks config menu still reads `settings.json` from `Settings::config_dir()`** (`tui/hooks_config_menu.rs:275`). TODO.md Pending. Phase 5.2.
+- [ ] **RT-15 (L) — `#[allow(unused_imports)]` appears 73 times where `#[expect]` is the practice.** Phase 4.6.
+- [ ] **RT-16 (L) — genome lint: 0 errors, 8 warnings (W010, no table of contents).** Phase 4.5.
+- [ ] **RT-17 (L) — the `github` remote is 13 commits behind `origin`** (R40-22, known). `origin` = `HEAD`.
+
 ## OPEN — TUI legacy purge residue (owner decisions, 2026-10-18)
 
 The dead-code purge of the `operant-cli` TUI tree kept the items below on purpose. Each one is
