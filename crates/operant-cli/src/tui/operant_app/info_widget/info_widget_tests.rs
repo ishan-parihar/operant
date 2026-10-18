@@ -1832,9 +1832,9 @@ fn compact_page_height_matches_for_cost_based_usage() {
 
 /// Visual gallery: draws every text widget through the real
 /// `render_single_widget` path. Run with
-/// `cargo test -p operant-tui --lib widget_gallery -- --ignored --nocapture`.
+/// `cargo test -p operant-cli --lib widget_gallery -- --ignored --nocapture`.
 #[test]
-#[ignore]
+#[ignore = "manual visual gallery; prints the rendered widgets, asserts nothing"]
 fn widget_gallery() {
     use super::{
         AmbientWidgetData, CompactionInfo, DirtyFile, GitInfo, Side, WidgetPlacement,
@@ -1939,7 +1939,7 @@ fn widget_gallery() {
             running_count: 5,
             running_tasks: vec![
                 "selfdev build".into(),
-                "cargo test -p operant-tui".into(),
+                "cargo test -p operant-cli".into(),
                 "train.py".into(),
                 "download weights".into(),
                 "lint".into(),

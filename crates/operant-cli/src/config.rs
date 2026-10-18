@@ -472,7 +472,6 @@ impl Default for AuxiliaryConfig {
 pub struct DisplayConfig {
     pub compact: Option<bool>,
     pub personality: Option<String>,
-    pub show_reasoning: Option<bool>,
     pub streaming: Option<bool>,
     pub skin: Option<String>,
     pub language: Option<String>,
@@ -485,12 +484,6 @@ impl Default for DisplayConfig {
         Self {
             compact: Some(false),
             personality: Some("kawaii".to_string()),
-            // Unset by default (jcode parity: reasoning display defaults ON
-            // upstream). Some(false) here used to override the core default
-            // `true` at layering, silently hiding every reasoning trace in
-            // the TUI — the frozen shim then forced Full regardless. Absent
-            // means the core agent.show_reasoning (true) decides.
-            show_reasoning: None,
             streaming: Some(false),
             skin: Some("default".to_string()),
             language: Some("en".to_string()),
@@ -1396,9 +1389,6 @@ impl CliConfig {
         }
         if let Some(window) = self.api.max_tokens {
             app.agent.context_window = window as usize;
-        }
-        if let Some(show_reasoning) = self.display.show_reasoning {
-            app.agent.show_reasoning = show_reasoning;
         }
 
         // Map logging

@@ -1,5 +1,48 @@
 # BUGS.md — Operant Audit Fixes
 
+## Index of items
+
+- [CLOSED — Settings persistence (iter-930)](#closed--settings-persistence-iter-930)
+- [CLOSED — Context management: bust permission (plan 06 P1, iter-929)](#closed--context-management-bust-permission-plan-06-p1-iter-929)
+- [CLOSED — Pending tool name printed three times (iter-933)](#closed--pending-tool-name-printed-three-times-iter-933)
+- [CLOSED — Guardrail-skipped tool calls render as success (iter-934)](#closed--guardrail-skipped-tool-calls-render-as-success-iter-934)
+- [CLOSED — Test runs touched the operator's real emergency stop (iter-935)](#closed--test-runs-touched-the-operators-real-emergency-stop-iter-935)
+- [OPEN — Red-team survey after iter-941 (2026-10-19)](#open--red-team-survey-after-iter-941-2026-10-19)
+- [OPEN — TUI legacy purge residue (owner decisions, 2026-10-18)](#open--tui-legacy-purge-residue-owner-decisions-2026-10-18)
+- [OPEN — Gateway turn concurrency (audit plan 06A — LOCKED iter-864, residual below)](#open--gateway-turn-concurrency-audit-plan-06a--locked-iter-864-residual-below)
+- [OPEN — Hidden regressions surfaced by the test-gate repair (2026-10-16, audit plan 02)](#open--hidden-regressions-surfaced-by-the-test-gate-repair-2026-10-16-audit-plan-02)
+- [OPEN — Found by the iter-910 dead-code purge (2026-10-18)](#open--found-by-the-iter-910-dead-code-purge-2026-10-18)
+- [OPEN — Duplicate tool rows mid-turn (2026-10-14 batch, plan 01)](#open--duplicate-tool-rows-mid-turn-2026-10-14-batch-plan-01)
+- [OPEN — Live data loss on mainline (2026-10-03) — only D-5b and D-6 remain, both accepted](#open--live-data-loss-on-mainline-2026-10-03--only-d-5b-and-d-6-remain-both-accepted)
+- [CLOSED — Unowned debt on mainline (2026-10-03) — K-1 to K-4 resolved; K-2 not reproducing, re-open if it recurs](#closed--unowned-debt-on-mainline-2026-10-03--k-1-to-k-4-resolved-k-2-not-reproducing-re-open-if-it-recurs)
+- [Wave 3 — Org session substrate (2026-10-01)](#wave-3--org-session-substrate-2026-10-01)
+- [Round 2 (2026-08-06)](#round-2-2026-08-06)
+- [Round 2 Follow-Up (2026-08-06)](#round-2-follow-up-2026-08-06)
+- [Round 4 (2026-08-06)](#round-4-2026-08-06)
+- [Round 3 (2026-08-06)](#round-3-2026-08-06)
+- [Round 4 (2026-08-06)](#round-4-2026-08-06-1)
+- [Known/Deferred](#knowndeferred)
+- [Round 5 (2026-08-08) — R5 memory-store split-brain (FIXED)](#round-5-2026-08-08--r5-memory-store-split-brain-fixed)
+- [Round 10 (2026-08-08)](#round-10-2026-08-08)
+- [Round 11 (2026-08-08)](#round-11-2026-08-08)
+- [Round 12 (2026-08-08)](#round-12-2026-08-08)
+- [Round 14 (2026-08-08) — deeper-scan audit (binary live-test + wiring)](#round-14-2026-08-08--deeper-scan-audit-binary-live-test--wiring)
+- [Round 21 (2026-08-08)](#round-21-2026-08-08)
+- [Round 22 (2026-08-08)](#round-22-2026-08-08)
+- [Round 23 (2026-08-08)](#round-23-2026-08-08)
+- [Round 24 (2026-08-08) — Gateway-path self-evolution missing (FIXED)](#round-24-2026-08-08--gateway-path-self-evolution-missing-fixed)
+- [Round 26 (2026-08-09) — Sub-agent delegation tool-filtering was dead code (FIXED)](#round-26-2026-08-09--sub-agent-delegation-tool-filtering-was-dead-code-fixed)
+- [Round 39 (2026-09-25) — deployment audit (harness-era)](#round-39-2026-09-25--deployment-audit-harness-era)
+- [Round 40 (2026-09-27) — production-readiness audit (supply-chain, secret-at-rest, mount-loop, R14-4 withdrawal)](#round-40-2026-09-27--production-readiness-audit-supply-chain-secret-at-rest-mount-loop-r14-4-withdrawal)
+- [R41 (2026-09-30) — Organism OS audit (see docs/ORGANISM-OS-UPGRADE-OUTLINE.md)](#r41-2026-09-30--organism-os-audit-see-docsorganism-os-upgrade-outlinemd)
+- [Round 42 (2026-09-30) — TWO gateway stacks, and two misattributions of mine](#round-42-2026-09-30--two-gateway-stacks-and-two-misattributions-of-mine)
+- [Round 43 (2026-09-30) — Wave 1 review: three defects the packet tests missed](#round-43-2026-09-30--wave-1-review-three-defects-the-packet-tests-missed)
+- [Round 44 (2026-10-03) — Agent-loop repair programme (docs/AGENT-LOOP-FIX-EXECUTION-PLAN.md)](#round-44-2026-10-03--agent-loop-repair-programme-docsagent-loop-fix-execution-planmd)
+- [Round 45 (2026-10-04) — Wave 1 latent detector defects (found by the W1.2 parity-harness leg's adversarial review)](#round-45-2026-10-04--wave-1-latent-detector-defects-found-by-the-w12-parity-harness-legs-adversarial-review)
+- [Round 46 (2026-10-05) — W1.8b: Loop C CLI/daemon consumers onto the reconciled facade](#round-46-2026-10-05--w18b-loop-c-clidaemon-consumers-onto-the-reconciled-facade)
+- [Skills referential integrity (2026-10-09, iters 735–737 window)](#skills-referential-integrity-2026-10-09-iters-735737-window)
+
+
 ## CLOSED — Settings persistence (iter-930)
 
 - [x] **SP-1 — settings.json was replaced with defaults after a failed load.** `Settings`
@@ -84,11 +127,11 @@ Each row is a finding from `docs/plans/2026-10-19-remaining-implementation-gaps-
 - [ ] **RT-9 (L) — tracked `Cargo.lock` is dirty in the shared tree** (memory-wire sync, six `windows-sys` lines). Phase 4.5.
 - [~] **RT-10 (M) — `deny.toml` exists, and no workflow or script runs `cargo deny` or `cargo audit`.** Phase 4.2. Iter-944: `cargo audit` run locally against the advisory database reported 21 vulnerabilities. The lock bump (`extism` 1.41.0, which brings `wasmtime` 49.0.3; `rustls` 0.23.46; `quinn-proto` 0.11.19; `h2` 0.4.20; `aws-lc-sys` 0.46) and `pdf-extract` 0.12 (`lopdf` 0.42.0) clear 18 of them. Still open: three `zip` advisories (RT-18). `cargo deny` is not installed here, and `cargo audit` is not gated in CI.
 - [ ] **RT-11 (M) — the corpus validator is red (21 errors) and not gated.** Phase 4.3.
-- [ ] **RT-12 (L) — seven `#[ignore]` attributes; six have no reason.** Phase 4.4.
-- [ ] **RT-13 (L) — `[display] show_reasoning` and `[agent] show_reasoning` both control reasoning display.** The gateway reads the agent key. Phase 5.1.
+- [x] **RT-12 (L) — seven `#[ignore]` attributes; six had no reason.** Phase 4.4. Fixed iter-947: each of the six manual probes now carries a reason (a report it prints with nothing asserted, or for `real_repo_changes_widget`, a need for a git checkout). Their run commands named `operant-tui`, which does not exist; they now name `operant-cli`. All six run and pass under `cargo test -p operant-cli -- --ignored <name>`.
+- [x] **RT-13 (L) — `[display] show_reasoning` and `[agent] show_reasoning` both controlled reasoning display.** Phase 5.1. Fixed iter-947: `[display] show_reasoning` is removed from the CLI config, along with its overlay in `operant-cli/src/config.rs`. The TUI bridge in `main` reads `[agent] show_reasoning`, the same key the gateway reads. A stale `[display]` key is ignored without a warning, because the bridge runs before logging starts; CHANGELOG names the move.
 - [ ] **RT-14 (L) — the hooks config menu reads `settings.json` from `Settings::config_dir()`, and no hook fires from it** (`tui/hooks_config_menu.rs:275`). TODO.md Pending. Phase 5.2. Survey, iter-944: the menu is read-only, and no operant component writes `settings.json` hooks. The `[hooks]` table (`CliConfig.hooks`, `HooksConfig.scripts`, `operant-cli/src/config.rs`) has no production reader, and `[hooks]` is not in `operant.example.toml` or the docs. A user who edits `settings.json` by hand sees the hooks listed, and none runs. Needed: an owner call between a hook runner that reads one store, or removing the menu and the `[hooks]` table. Removing the table alone is an RT-1 item (a field that is parsed and never read).
 - [ ] **RT-15 (L) — `#[allow(unused_imports)]` appears 73 times where `#[expect]` is the practice.** Phase 4.6.
-- [ ] **RT-16 (L) — genome lint: 0 errors, 8 warnings (W010, no table of contents).** Phase 4.5.
+- [~] **RT-16 (L) — genome lint: 0 errors, 8 warnings (W010, no table of contents).** Phase 4.5. Iter-947: W010 cleared in AGENTS.md, BUGS.md, README.md, and docs/CHANGELOG.md, each with an index of its H2 headings. Lint is now 0 errors and 4 warnings, all W008: README sections (License, Requirements, Configuration, How it works) answer topics that docs/CONTRIBUTING.md, docs/kernel.md, and the TUI design spec also answer. Clearing them means turning those README sections into links.
 - [ ] **RT-17 (L) — the `github` remote is 13 commits behind `origin`** (R40-22, known). `origin` = `HEAD`.
 - [ ] **RT-18 (M) — three `zip` advisories remain: RUSTSEC-2026-0367, -0368, -0369 (zip 2.4.2; fix needs ≥9.0.0).** The path is `zip` 2.4.2 ← `ndarray-npy` 0.9.1 ← `kokoro-tiny` 0.1.0 (its latest release) ← `operant-core`'s default features. The advisories cover `ZipArchive::extract` and `ZipStreamReader::extract`, which write archive entries to disk. `ndarray-npy` opens archives with `ZipArchive::new` and reads named entries in memory with `by_name`. No workspace crate calls zip's extract API (checked iter-944), so the advisory is not reached today. Clearing it needs a `kokoro-tiny` release that moves off `ndarray-npy` 0.9, or a decision to drop TTS from the default features. `deny.toml` keeps no ignore list by policy, so the advisory stays visible until then.
 

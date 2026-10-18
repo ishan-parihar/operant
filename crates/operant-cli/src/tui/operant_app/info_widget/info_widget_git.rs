@@ -568,9 +568,9 @@ mod tests {
 
     /// Real-repo probe: runs the production git gather against the working
     /// directory and renders the Changes widget. Run on demand with
-    /// `cargo test -p operant-tui -- --ignored real_repo_changes --nocapture`.
+    /// `cargo test -p operant-cli -- --ignored real_repo_changes --nocapture`.
     #[test]
-    #[ignore]
+    #[ignore = "manual probe of the live git repo; needs a checkout, so CI skips it"]
     fn real_repo_changes_widget() {
         let info = crate::tui::operant_app::helpers::git::gather_git_info_inner()
             .expect("inside a git repo");

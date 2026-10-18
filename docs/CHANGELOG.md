@@ -1,5 +1,17 @@
 # Changelog
 
+## Release index
+
+- [\[Unreleased\]](#unreleased)
+- [\[0.2.1\] - 2026-09-30](#021---2026-09-30)
+- [\[0.2.0\] - 2026-09-27](#020---2026-09-27)
+- [\[0.1.4\] - 2026-07-19](#014---2026-07-19)
+- [\[0.1.3\] - 2026-04-20](#013---2026-04-20)
+- [\[0.1.2\] - 2026-04-20](#012---2026-04-20)
+- [\[0.1.1\] - 2026-04-19](#011---2026-04-19)
+- [\[0.1.0\] - 2026-04-17](#010---2026-04-17)
+
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -74,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is an owner decision. The 60 `dead_code` warnings that remain (test-only
   helpers and never-constructed variants/fields) are tracked in
   `.ci/clippy-allowlist.txt` and in `BUGS.md`.
+
+- **iter-947 — `[display] show_reasoning` is removed; `[agent] show_reasoning` is the one key.** The CLI config had two keys for the TUI reasoning display, and `[display]` overrode `[agent]`, so the two could disagree. The TUI and the gateway now both read `[agent] show_reasoning`. A `[display] show_reasoning` key left in the CLI config is ignored. A user who set `[display] show_reasoning = false` should move that value to `[agent]`.
 
 ### Fixed
 

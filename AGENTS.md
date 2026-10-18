@@ -1,5 +1,25 @@
 # AGENTS.md
 
+## Sections in this file
+
+- [START HERE — Development Protocol](#start-here--development-protocol)
+- [Operant Project Context](#operant-project-context)
+- [Design Preferences (DO NOT CHANGE)](#design-preferences-do-not-change)
+- [Architecture Overview](#architecture-overview)
+- [Path Dependencies](#path-dependencies)
+- [Build Environment Setup](#build-environment-setup)
+- [Local Compilation Protocol (READ BEFORE CODING)](#local-compilation-protocol-read-before-coding)
+- [Rust Code Standards (baseline for every new/edited Rust in this repo)](#rust-code-standards-baseline-for-every-newedited-rust-in-this-repo)
+- [Known Gaps (from hermes-agent contrast audit)](#known-gaps-from-hermes-agent-contrast-audit)
+- [What IS Working (verified functional — iter-68 audit)](#what-is-working-verified-functional--iter-68-audit)
+- [Iteration History (recent)](#iteration-history-recent)
+- [MVP Deployment (Current Focus)](#mvp-deployment-current-focus)
+- [Behavioral Guidelines](#behavioral-guidelines)
+- [Recursive AI Development Mechanism](#recursive-ai-development-mechanism)
+- [TL;DR for New Agents](#tldr-for-new-agents)
+- [Documentation Genome (genome)](#documentation-genome-genome)
+
+
 > **READ THIS FILE FIRST.** Every agent (human or AI) working in this repository
 > must read this document top-to-bottom before making any change. It is the
 > single source of truth for how to work here.

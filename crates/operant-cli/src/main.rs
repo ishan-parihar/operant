@@ -2908,20 +2908,19 @@ async fn run(cli: Cli, cli_config: CliConfig) -> Result<()> {
     );
     let effective_rich_output = loaded.config.tui.rich_output && !is_gateway_daemon;
 
-    // Bridge [display] show_reasoning into the TUI display shim before any
-    // TUI launch: the shim's static snapshot never reads TOML, so the
-    // reasoning display mode rides the runtime override cell. true (and
-    // unset, via the shim default) = Current: the turn's trace stays where it
-    // streamed until the next prompt (jcode); false = Off. `/thinking-display
-    // full` keeps every trace.
+    // Bridge [agent] show_reasoning into the TUI display shim before any TUI
+    // launch: the shim's static snapshot never reads TOML, so the reasoning
+    // display mode rides the runtime override cell. true = Current: the turn's
+    // trace stays where it streamed until the next prompt (jcode); false = Off.
+    // `/thinking-display full` keeps every trace.
     {
         use crate::tui::operant_app::config_shim::{self, ReasoningDisplayMode};
-        let mode = match cli_config.display.show_reasoning {
-            Some(true) => Some(ReasoningDisplayMode::Current),
-            Some(false) => Some(ReasoningDisplayMode::Off),
-            None => None,
+        let mode = if loaded.config.agent.show_reasoning {
+            ReasoningDisplayMode::Current
+        } else {
+            ReasoningDisplayMode::Off
         };
-        config_shim::set_reasoning_display_override(mode);
+        config_shim::set_reasoning_display_override(Some(mode));
     }
 
     init_logging(

@@ -1,5 +1,20 @@
 # Operant
 
+## On this page
+
+- [Quick start](#quick-start)
+- [What it is](#what-it-is)
+- [How it works](#how-it-works)
+- [Features](#features)
+- [Skills](#skills)
+- [Configuration](#configuration)
+- [CLI reference](#cli-reference)
+- [Requirements](#requirements)
+- [Development](#development)
+- [License](#license)
+- [☕ Support & Sponsorship](#-support--sponsorship)
+
+
 [![CI](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml/badge.svg)](https://github.com/ishan-parihar/operant/actions/workflows/ci.yml)
 
 **Your terminal-native AI agent.** Persistent memory, 70+ JSON-schema tools, skills, MCP, and messaging channels — built in Rust, run from your shell, and fully under your control.
