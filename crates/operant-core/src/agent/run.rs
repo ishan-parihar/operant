@@ -7,6 +7,10 @@ use self::turn_finalizer::{
 };
 use self::turn_rules::{AssistantTurn, EmptyResponseCounter, is_degenerate_final_text};
 use crate::client::{Message, Role};
+use crate::context_management::{
+    BustFingerprint, BustPermission, CONTEXT_EXHAUSTED_PERCENT, bust_permission,
+    natural_bust_reason,
+};
 use crate::error::{Error, Result};
 use crate::observer::{Observer, ObserverEvent, ObserverMetric};
 use crate::turn_end_heuristics;
@@ -14,6 +18,11 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::*;
+
+/// Prompt-meta key for the context limit learned from an overflow (plan 06 P1).
+fn learned_limit_key(provider: &str, model: &str) -> String {
+    format!("context_limit:{provider}:{model}")
+}
 
 // ── Mid-flight seat budget (iter-633, Wave 4) ───────────────────────────
 
@@ -802,6 +811,11 @@ impl OperantAgent {
                         // sessions that exceed the context window.
                         let classified = FallbackModelClient::classify_error(&e);
                         self.emit_rate_limit_notice(&classified, &e).await;
+                        if classified.reason
+                            == crate::agent::error_classifier::FailoverReason::ContextOverflow
+                        {
+                            self.learn_context_limit(&messages);
+                        }
                         // ── Reasoning-effort rejection (plan 03) ──────────────
                         // The request was fine except the effort field:
                         // mark the model, tell the user once, and retry the
@@ -1056,6 +1070,11 @@ impl OperantAgent {
                         }
                         let classified = FallbackModelClient::classify_error(&e);
                         self.emit_rate_limit_notice(&classified, &e).await;
+                        if classified.reason
+                            == crate::agent::error_classifier::FailoverReason::ContextOverflow
+                        {
+                            self.learn_context_limit(&messages);
+                        }
                         if classified.should_compress && !retry_state.compress_attempted {
                             retry_state.compress_attempted = true;
                             warn!(reason = %classified.reason, "Context overflow detected — compressing and retrying");
@@ -2326,6 +2345,63 @@ impl OperantAgent {
         }
     }
 
+    /// The window this agent builds against: the configured one, lowered to
+    /// the limit a prior overflow taught us for this provider and model.
+    pub(crate) fn effective_context_window(&self) -> usize {
+        let key = learned_limit_key(self.client.provider_name(), &self.model());
+        self.database
+            .get_state_meta(&key)
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(self.config.context_window, |learned| {
+                learned.min(self.config.context_window)
+            })
+    }
+
+    /// Records that a request of this size overflowed the provider's window,
+    /// so later builds size against it. Keeps the smallest overflow seen.
+    pub(crate) fn learn_context_limit(&self, messages: &[Message]) {
+        let key = learned_limit_key(self.client.provider_name(), &self.model());
+        let tokens = crate::context_management::estimate_total_tokens(messages);
+        let learned = self
+            .database
+            .get_state_meta(&key)
+            .and_then(|v| v.parse::<usize>().ok())
+            .map_or(tokens, |prev| prev.min(tokens));
+        if let Err(e) = self.database.set_state_meta(&key, &learned.to_string()) {
+            warn!(error = %e, "Failed to persist learned context limit");
+        }
+    }
+
+    /// Plan 06 P1: the permission for the request about to be built. Computed
+    /// once per request. Records this request's fingerprint so the next one
+    /// can tell a free (natural) bust from a costly one.
+    fn compute_bust_permission(
+        &self,
+        system: &str,
+        estimated: usize,
+        window: usize,
+    ) -> BustPermission {
+        let now = BustFingerprint {
+            model: self.model(),
+            system: crate::agent::clients::cache_monitor::PrefixDigest::of(system, &[]),
+            at: std::time::Instant::now(),
+        };
+        let ttl = crate::config::runtime_config()
+            .client
+            .prompt_cache_ttl
+            .duration();
+        let natural = {
+            let mut state = self.bust_state.lock().unwrap_or_else(|e| e.into_inner());
+            let reason = natural_bust_reason(state.as_ref(), &now, ttl);
+            *state = Some(now);
+            reason
+        };
+        let explicit = self
+            .explicit_bust
+            .swap(false, std::sync::atomic::Ordering::AcqRel);
+        bust_permission(estimated, window, natural, explicit)
+    }
+
     /// Build messages including system prompt.
     ///
     /// Applies context management (decay + eviction) to fit within the
@@ -2439,6 +2515,24 @@ impl OperantAgent {
         // is charged against the budget explicitly.
         let turn_context_tokens = crate::context_management::estimate_tokens(&turn_context);
 
+        // ── Bust permission (plan 06 P1) ─────────────────────────────────
+        // Decided once for this request. Under `None` the rewrites below do
+        // not run (no micro-fold, no ladder, no eviction), so the request is
+        // the previous one plus the appended messages and the provider's
+        // prompt cache keeps hitting. The context-engine assemble is not
+        // gated: it is the lossless recall path and runs every turn.
+        let window = self.effective_context_window();
+        // `messages[0]` is the frozen prefix pushed above (moved into it).
+        let frozen_text = messages[0].content.as_str();
+        let request_tokens = {
+            let conv = self.conversation.read().await;
+            crate::context_management::estimate_total_tokens(&conv)
+        } + crate::context_management::estimate_tokens(frozen_text)
+            + turn_context_tokens;
+        let bust = self.compute_bust_permission(frozen_text, request_tokens, window);
+        let may_rewrite = bust != BustPermission::None;
+        debug!(?bust, request_tokens, window, "Bust permission decided");
+
         // ── Micro-compaction (opt-in via `OPERANT_MICRO_COMPACTION`) ─────
         // Continuous folding AHEAD of the batch preflight ladder: once the
         // stored conversation crosses the soft threshold (40% of the
@@ -2446,30 +2540,41 @@ impl OperantAgent {
         // head/tail folds into one marker message — small continuous bills
         // instead of the batch ladder's large ones. The fold mutates the
         // STORE, not this built list, so every subsequent build benefits.
+        // Runs only under a bust, and folds until under the soft threshold
+        // (or nothing folds), so a crossing is one rewrite, not one per turn.
         // Strictly below-prefix by construction: the PromptCacheGuard below
         // fires by design on any violation.
-        if self.micro_compaction {
+        if self.micro_compaction && may_rewrite {
             let estimated = {
                 let conv = self.conversation.read().await;
                 crate::context_management::estimate_total_tokens(&conv)
             };
-            let soft = self.config.context_window
-                * crate::context_management::MICRO_COMPACTION_THRESHOLD_PERCENT
-                / 100;
+            let soft = window * crate::context_management::MICRO_COMPACTION_THRESHOLD_PERCENT / 100;
             if estimated > soft {
                 self.bump_conv_epoch(); // (plan 05) non-append mutation
                 let mut conv = self.conversation.write().await;
-                if let Some(marker) = crate::context_management::micro_compact(
-                    &mut conv,
-                    crate::context_management::MICRO_COMPACTION_HEAD_KEEP,
-                    crate::context_management::MICRO_COMPACTION_TAIL_KEEP,
-                    crate::context_management::MICRO_COMPACTION_FOLD_MAX_CHARS,
-                ) {
+                let mut folds = 0usize;
+                while crate::context_management::estimate_total_tokens(&conv) > soft {
+                    let len = conv.len();
+                    if crate::context_management::micro_compact(
+                        &mut conv,
+                        crate::context_management::MICRO_COMPACTION_HEAD_KEEP,
+                        crate::context_management::MICRO_COMPACTION_TAIL_KEEP,
+                        crate::context_management::MICRO_COMPACTION_FOLD_MAX_CHARS,
+                    )
+                    .is_none()
+                        || conv.len() >= len
+                    {
+                        break;
+                    }
+                    folds += 1;
+                }
+                if folds > 0 {
                     info!(
-                        marker_chars = marker.chars().count(),
+                        folds,
                         estimated_before = estimated,
                         soft_threshold = soft,
-                        "Micro-compaction folded the oldest exchange below the soft threshold"
+                        "Micro-compaction folded the oldest exchanges below the soft threshold"
                     );
                 }
             }
@@ -2497,7 +2602,7 @@ impl OperantAgent {
         // Wrap-up rung: when the ladder compacted the context, append
         // final-call copy so the model lands the plane instead of
         // opening new work near the ceiling.
-        let budget = self.config.context_window;
+        let budget = window;
         let reserve = 4096; // tokens reserved for the model's response
         let effective_budget = budget
             .saturating_sub(reserve)
@@ -2507,7 +2612,7 @@ impl OperantAgent {
         let preflight_threshold = budget * PREFLIGHT_THRESHOLD_PERCENT as usize / 100;
         let mut ladder_fired = false;
         let mut frozen_prefix: Vec<Message> = Vec::new();
-        if estimated_tokens > preflight_threshold {
+        if may_rewrite && estimated_tokens > preflight_threshold {
             ladder_fired = true;
             // PromptCacheGuard (Wave-4): snapshot the frozen prefix before
             // any rung can touch it; verified after the evict rung below.
@@ -2612,10 +2717,24 @@ impl OperantAgent {
                     );
                 }
             }
-        } else {
+        } else if may_rewrite {
             // Standard eviction: remove oldest messages within tiers until
             // the total fits within the effective budget.
             messages = crate::context_management::evict_to_budget(messages, effective_budget);
+        }
+
+        // ── Context exhausted (plan 06 P1) ───────────────────────────────
+        // Every rung that may fold has run and the head + tail still sit at
+        // or above the hard line: fail typed rather than send a request the
+        // provider rejects with a 400. Uses the heuristic estimate, not the
+        // reported usage, which can predate the fold just above.
+        let final_tokens =
+            crate::context_management::estimate_total_tokens(&messages) + turn_context_tokens;
+        if final_tokens * 100 >= window * CONTEXT_EXHAUSTED_PERCENT {
+            return Err(Error::ContextExhausted {
+                tokens: final_tokens,
+                window,
+            });
         }
 
         // ── PromptCacheGuard (Wave-4): verify the frozen prefix survived ──

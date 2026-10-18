@@ -1473,14 +1473,32 @@ impl MessageHandler for GatewayMessageHandler {
         // iter-633: scope the turn inside its seat-budget envelope when one
         // is armed — the loop's iteration-boundary check reads the task-local.
         // Ungoverned turns (no envelope) take the byte-identical legacy call.
-        let run_result = match seat_envelope {
-            Some(envelope) => {
-                operant_core::agent::SEAT_BUDGET_ENVELOPE
-                    .scope(envelope, self.agent.run(query))
-                    .await
+        let run_turn = |q: String| async move {
+            match seat_envelope {
+                Some(envelope) => {
+                    operant_core::agent::SEAT_BUDGET_ENVELOPE
+                        .scope(envelope, self.agent.run(q))
+                        .await
+                }
+                None => self.agent.run(q).await,
             }
-            None => self.agent.run(query).await,
         };
+        let mut run_result = run_turn(query.clone()).await;
+        // Plan 06 P1: the context could not fit even after folding. Compact the
+        // stored history and retry the turn once. The user message is already
+        // stored, and `run` skips re-adding it, so the retry does not duplicate it.
+        if matches!(
+            run_result,
+            Err(operant_core::error::Error::ContextExhausted { .. })
+        ) {
+            let (before, after) = self.agent.compact_history_now().await;
+            tracing::warn!(
+                messages_before = before,
+                messages_after = after,
+                "Context exhausted — compacted the stored history and retrying the turn once"
+            );
+            run_result = run_turn(query).await;
+        }
         // Wave-4 metering wire (iter-632): drain the turn's accumulated
         // model usage into the session accumulator AFTER the turn (the
         // events fire during run()) but BEFORE the outcome arms, so error

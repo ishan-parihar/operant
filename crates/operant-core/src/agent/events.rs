@@ -289,6 +289,10 @@ impl OperantAgent {
     pub async fn compact_history_now(&self) -> (usize, usize) {
         use crate::context_management as cm;
         self.bump_conv_epoch(); // (plan 05) non-append mutation
+        // Plan 06 P1: the user asked for compaction, so the next request may
+        // rewrite history (`BustPermission::Explicit`).
+        self.explicit_bust
+            .store(true, std::sync::atomic::Ordering::Release);
         let (before, tokens_before, after, tokens_after) = {
             let mut conv = self.conversation.write().await;
             let before = conv.len();

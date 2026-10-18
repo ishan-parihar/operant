@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-929 — context bust permission (plan 06 P1).** Each request gets a
+  `BustPermission`, decided once in `build_messages`: `Natural` when the cache is
+  cold anyway (model or system prompt changed, or the last request is older than
+  `[client] prompt_cache_ttl`), `Force` at ≥85% of the window, `Explicit` after
+  `/compact`, otherwise `None`. Micro-compaction, the preflight ladder, and eviction
+  run only under a bust, so a request below the force line is the previous request
+  plus the appended messages. A forced pass folds to the 40% soft line, so a crossing
+  rewrites once. At ≥95% with nothing left to fold the turn fails with
+  `Error::ContextExhausted` instead of a provider 400; the gateway compacts and
+  retries once, and the TUI shows the message, which says to run `/compact`. An
+  overflow records the smallest overflowing size per provider and model in the
+  state table, and later builds size against it. Not changed: the context engine's
+  `assemble` still runs every turn; the `/ctx-flush` command named in the plan does
+  not exist.
+
 - **iter-902 — `operant donate` command + installer star/donate CTA**
   (owner-directed integration). New `Donate` command printing the repo,
   GitHub Sponsors, and Razorpay (UPI) links; `scripts/install.sh`
@@ -18,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `operant donate`); README badge band cleaned to the CI badge.
 
 ### Fixed
+
+- **iter-929 — micro-compaction and decay leave the request intact (plan 06 P1).**
+  Micro-compaction stalled after its first fold: the marker is a user message, the
+  next fold landed on it, and the lone-user guard refused it. It now moves past
+  markers. The decay rung truncated the current user request to about 2.2k
+  characters; the current turn, from the latest user message on, is never decayed.
 
 - **iter-928 — models.dev failures say what they received (plan P0.1).** A failed
   models.dev fetch reported only a serde error or "had no models", with no size, so a

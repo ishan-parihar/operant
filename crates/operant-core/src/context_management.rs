@@ -521,6 +521,79 @@ pub async fn semantic_compaction_cutoff(
 }
 
 // ---------------------------------------------------------------------------
+// Bust permission (plan 06 P1): the gate every history rewrite passes through
+// ---------------------------------------------------------------------------
+
+/// Share of the window at which a rewrite pass is forced: the request is too
+/// large to keep appending, so folding and the ladder may run.
+pub const FORCE_BUST_PERCENT: usize = 85;
+/// Share of the window at which a request that no rewrite could bring under
+/// the line fails with `Error::ContextExhausted` instead of a provider 400.
+pub const CONTEXT_EXHAUSTED_PERCENT: usize = 95;
+
+/// Whether this request may rewrite history. Under `None` the request is the
+/// previous request plus appended messages, so the provider's prompt cache
+/// keeps hitting. Computed once per request in `build_messages`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BustPermission {
+    None,
+    /// The cache is cold for a reason outside the rewrite's control (model
+    /// or system prompt changed, or idle past the TTL), so a rewrite costs no
+    /// extra cache miss.
+    Natural(&'static str),
+    /// The estimate is at or above `FORCE_BUST_PERCENT` of the window.
+    Force,
+    /// The user asked for compaction (`/compact`).
+    Explicit,
+}
+
+/// The previous request, for the natural-bust check.
+#[derive(Debug, Clone)]
+pub struct BustFingerprint {
+    pub model: String,
+    pub system: crate::agent::clients::cache_monitor::PrefixDigest,
+    pub at: std::time::Instant,
+}
+
+/// Why the cache is cold anyway, if it is: the model or system prompt changed
+/// since the previous request, or the previous request is older than the TTL.
+pub fn natural_bust_reason(
+    prev: Option<&BustFingerprint>,
+    now: &BustFingerprint,
+    ttl: std::time::Duration,
+) -> Option<&'static str> {
+    let prev = prev?;
+    if prev.model != now.model {
+        Some("model changed")
+    } else if prev.system != now.system {
+        Some("system prompt changed")
+    } else if now.at.duration_since(prev.at) > ttl {
+        Some("prompt cache idle past its TTL")
+    } else {
+        None
+    }
+}
+
+/// Pure decision behind [`BustPermission`]. `Explicit` wins, then `Force`,
+/// then `natural`.
+pub fn bust_permission(
+    estimated: usize,
+    window: usize,
+    natural: Option<&'static str>,
+    explicit: bool,
+) -> BustPermission {
+    if explicit {
+        BustPermission::Explicit
+    } else if estimated * 100 >= window * FORCE_BUST_PERCENT {
+        BustPermission::Force
+    } else if let Some(reason) = natural {
+        BustPermission::Natural(reason)
+    } else {
+        BustPermission::None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Micro-compaction (hermes micro-compaction parity; opt-in via
 // `OPERANT_MICRO_COMPACTION`, off by default)
 // ---------------------------------------------------------------------------
@@ -536,6 +609,9 @@ pub const MICRO_COMPACTION_HEAD_KEEP: usize = 4;
 pub const MICRO_COMPACTION_TAIL_KEEP: usize = 8;
 /// Character ceiling for the folded gist a marker message carries.
 pub const MICRO_COMPACTION_FOLD_MAX_CHARS: usize = 240;
+/// Opening of every marker message a fold writes. Lets a later fold recognise
+/// an already-folded exchange.
+const MICRO_MARKER_PREFIX: &str = "[compacted exchange — earlier conversation folded]";
 
 /// Pure env parse behind the opt-in — testable without touching the
 /// process environment (the agent reads it ONCE at construction).
@@ -578,8 +654,12 @@ pub fn micro_compact(
     if len <= head_keep || tail_start <= head_keep {
         return None;
     }
-    // The first foldable user message inside the unprotected middle.
-    let start = (head_keep..tail_start).find(|&i| messages[i].role == Role::User)?;
+    // The first foldable user message inside the unprotected middle. A marker
+    // is a user message too, but it is already a folded exchange: skipping it
+    // lets the next fold move past earlier ones instead of stalling on it.
+    let start = (head_keep..tail_start).find(|&i| {
+        messages[i].role == Role::User && !messages[i].content.starts_with(MICRO_MARKER_PREFIX)
+    })?;
     // The exchange ends at the next user message inside the middle window.
     let mut end = (start + 1..tail_start)
         .find(|&i| messages[i].role == Role::User)
@@ -625,7 +705,7 @@ pub fn micro_compact(
             format!("{} […] {}", &gist[..head_end], &gist[tail_start_b..])
         }
     };
-    let marker_text = format!("[compacted exchange — earlier conversation folded] {kept}");
+    let marker_text = format!("{MICRO_MARKER_PREFIX} {kept}");
     messages.splice(
         start..end,
         std::iter::once(Message::user(marker_text.clone())),
@@ -800,8 +880,9 @@ fn message_tier(msg: &Message) -> u8 {
 /// messages still contribute context (so the agent remembers what was
 /// discussed) but don't consume the full token budget.
 ///
-/// Only applies to non-system messages. System messages are always kept
-/// in full (they're the system prompt, memory, skills, etc.).
+/// Only applies to non-system messages before the current turn. System
+/// messages are always kept in full (they're the system prompt, memory,
+/// skills, etc.), and so is the current turn.
 pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Message> {
     use crate::client::Role;
 
@@ -809,6 +890,13 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
     if n <= 1 {
         return messages;
     }
+    // The current turn (the latest user message and everything after it) is
+    // never decayed: it is the request being answered, and truncating it
+    // drops the user's own words rather than old context.
+    let current_turn = messages
+        .iter()
+        .rposition(|m| m.role == Role::User)
+        .unwrap_or(n);
 
     messages
         .into_iter()
@@ -816,6 +904,9 @@ pub fn decay_render(messages: Vec<Message>, h50: usize, decay: f64) -> Vec<Messa
         .map(|(i, msg)| {
             // System messages (index 0) are never decayed.
             if i == 0 && msg.role == Role::System {
+                return msg;
+            }
+            if i >= current_turn {
                 return msg;
             }
 
@@ -1826,5 +1917,128 @@ mod tests {
         assert!(!parse_micro_compaction_env(Some("off")));
         assert!(parse_micro_compaction_env(Some("1")));
         assert!(parse_micro_compaction_env(Some(" TRUE ")));
+    }
+
+    #[test]
+    fn micro_compact_folds_past_an_earlier_marker() {
+        let mut msgs = vec![
+            make_msg(Role::User, "q0"),
+            make_msg(Role::Assistant, "a0"),
+            make_msg(Role::User, "q1"),
+            make_msg(Role::Assistant, "a1"),
+            make_msg(Role::User, "q2"),
+            make_msg(Role::Assistant, "a2"),
+            make_msg(Role::User, "q3"),
+            make_msg(Role::Assistant, "a3"),
+        ];
+        assert!(micro_compact(&mut msgs, 0, 1, 240).is_some());
+        assert!(
+            micro_compact(&mut msgs, 0, 1, 240).is_some(),
+            "the second fold must not stall on the first marker"
+        );
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m.content.starts_with(MICRO_MARKER_PREFIX))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn decay_render_keeps_the_current_turn_whole() {
+        let long = "x".repeat(40_000);
+        let msgs = vec![
+            make_msg(Role::System, "system"),
+            make_msg(Role::User, &long), // earlier turn: may decay
+            make_msg(Role::Assistant, "answer"),
+            make_msg(Role::User, &long), // current turn: whole
+        ];
+        let result = decay_render(msgs, 100, 30.0);
+        assert!(
+            result[1].content.len() < long.len(),
+            "the earlier turn decays"
+        );
+        assert_eq!(
+            result[3].content.len(),
+            long.len(),
+            "the current turn is never truncated"
+        );
+    }
+
+    #[test]
+    fn bust_permission_is_none_below_the_force_line_without_a_natural_reason() {
+        // 84% of a 10k window: one token under the force line.
+        assert_eq!(
+            bust_permission(8_400, 10_000, None, false),
+            BustPermission::None
+        );
+    }
+
+    #[test]
+    fn bust_permission_forces_at_the_force_line() {
+        assert_eq!(
+            bust_permission(8_500, 10_000, None, false),
+            BustPermission::Force
+        );
+        assert_eq!(
+            bust_permission(9_900, 10_000, None, false),
+            BustPermission::Force
+        );
+    }
+
+    #[test]
+    fn bust_permission_is_natural_when_the_cache_is_cold_anyway() {
+        assert_eq!(
+            bust_permission(1_000, 10_000, Some("model changed"), false),
+            BustPermission::Natural("model changed")
+        );
+    }
+
+    #[test]
+    fn bust_permission_explicit_wins_over_every_other_reason() {
+        assert_eq!(
+            bust_permission(9_900, 10_000, Some("model changed"), true),
+            BustPermission::Explicit
+        );
+        assert_eq!(
+            bust_permission(0, 10_000, None, true),
+            BustPermission::Explicit
+        );
+    }
+
+    #[test]
+    fn natural_bust_needs_a_previous_request_and_detects_each_cause() {
+        use crate::agent::clients::cache_monitor::PrefixDigest;
+        use std::time::{Duration, Instant};
+        let at = Instant::now();
+        let fp = |model: &str, system: &str, at: Instant| BustFingerprint {
+            model: model.to_string(),
+            system: PrefixDigest::of(system, &[]),
+            at,
+        };
+        let ttl = Duration::from_secs(300);
+        let prev = fp("m1", "sys", at);
+
+        assert_eq!(natural_bust_reason(None, &fp("m1", "sys", at), ttl), None);
+        assert_eq!(
+            natural_bust_reason(Some(&prev), &fp("m1", "sys", at), ttl),
+            None
+        );
+        assert_eq!(
+            natural_bust_reason(Some(&prev), &fp("m2", "sys", at), ttl),
+            Some("model changed")
+        );
+        assert_eq!(
+            natural_bust_reason(Some(&prev), &fp("m1", "sys2", at), ttl),
+            Some("system prompt changed")
+        );
+        assert_eq!(
+            natural_bust_reason(
+                Some(&prev),
+                &fp("m1", "sys", at + ttl + Duration::from_secs(1)),
+                ttl
+            ),
+            Some("prompt cache idle past its TTL")
+        );
     }
 }

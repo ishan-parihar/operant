@@ -25,6 +25,14 @@ pub enum CacheTtl {
 }
 
 impl CacheTtl {
+    /// How long a cache entry written under this TTL stays warm without a hit.
+    pub fn duration(self) -> std::time::Duration {
+        match self {
+            CacheTtl::FiveMinutes => std::time::Duration::from_secs(5 * 60),
+            CacheTtl::OneHour => std::time::Duration::from_secs(60 * 60),
+        }
+    }
+
     #[expect(dead_code, reason = "reserved for TTL introspection/debugging")]
     fn as_str(&self) -> &'static str {
         match self {

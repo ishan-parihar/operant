@@ -484,6 +484,12 @@ pub struct OperantAgent {
     /// of the batch preflight ladder. Unarmed = the conversation store is
     /// never mutated by compaction, byte-for-byte.
     micro_compaction: bool,
+    /// Plan 06 P1: the previous request's fingerprint, for the natural-bust
+    /// check. `None` until the first request is built.
+    bust_state: std::sync::Mutex<Option<crate::context_management::BustFingerprint>>,
+    /// Plan 06 P1: armed by `/compact`; the next `build_messages` takes it as
+    /// `BustPermission::Explicit`.
+    explicit_bust: std::sync::atomic::AtomicBool,
     /// Session-scoped approvals (hermes `approve_session`): tool names the
     /// user allowed for the rest of this agent instance's lifetime. Never
     /// persisted.
@@ -1822,16 +1828,29 @@ mod tests {
             Arc::new(db),
         )
         .with_micro_compaction(true);
-        let before = seed_exchanges(&agent, 32).await; // 64 messages, ~24k tokens > the 20k soft threshold, far below the 40k preflight
+        let before = seed_exchanges(&agent, 32).await; // 64 messages, ~24k tokens: over the 20k soft threshold, under the 85% force line
 
+        // Plan 06 P1: no bust below the force line, so the store is not folded.
+        let _ = agent.build_messages("mc-test-none").await.unwrap();
+        assert_eq!(
+            agent.conversation.read().await.len(),
+            before,
+            "no bust = no fold"
+        );
+
+        // An armed `/compact` permits the pass. It folds until under the 40%
+        // soft threshold (20k), not just one exchange.
+        agent
+            .explicit_bust
+            .store(true, std::sync::atomic::Ordering::Release);
         let _msgs = agent.build_messages("mc-test").await.unwrap();
 
         {
             let conv = agent.conversation.read().await;
-            assert_eq!(
-                conv.len(),
-                before - 1,
-                "one exchange (user+assistant, i.e. 2 messages... or more) folded to 1 marker"
+            assert!(conv.len() < before, "the explicit bust folded the store");
+            assert!(
+                crate::context_management::estimate_total_tokens(&conv) <= 20_000,
+                "folded below the 40% soft threshold"
             );
             assert!(
                 conv.iter()
@@ -1868,6 +1887,133 @@ mod tests {
         let _ = agent2.build_messages("mc-off").await.unwrap();
         let after2 = agent2.conversation.read().await.len();
         assert_eq!(after2, before2, "unarmed = the store is byte-for-byte");
+    }
+
+    /// Plan 06 P1: `prev` (minus its last user turn, which carries the
+    /// `<turn_context>` and then loses it) is a byte-identical prefix of `next`.
+    fn is_prefix_of_request(prev: &[Message], next: &[Message]) -> bool {
+        next.len() >= prev.len()
+            && prev[..prev.len() - 1]
+                .iter()
+                .zip(next)
+                .all(|(a, b)| a.role == b.role && a.content == b.content)
+    }
+
+    /// A fresh DB per agent: a learned limit persists in the DB, so a shared
+    /// file would leak state between runs. The returned dir keeps it alive.
+    fn bust_test_agent(window: usize) -> (OperantAgent, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Database::init(dir.path().join("bust.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig {
+                context_window: window,
+                ..AgentConfig::default()
+            },
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        )
+        .with_micro_compaction(true);
+        (agent, dir)
+    }
+
+    #[tokio::test]
+    async fn below_the_force_line_every_request_only_appends() {
+        let (agent, _dir) = bust_test_agent(200_000);
+        let mut previous: Option<Vec<Message>> = None;
+        for i in 0..200 {
+            agent
+                .add_message(Message::new(Role::User, format!("question {i}")))
+                .await;
+            let epoch = agent.conv_epoch.load(std::sync::atomic::Ordering::Acquire);
+            let built = agent.build_messages("bust-append-only").await.unwrap();
+            assert_eq!(
+                agent.conv_epoch.load(std::sync::atomic::Ordering::Acquire),
+                epoch,
+                "turn {i}: the store was rewritten below the force line"
+            );
+            if let Some(prev) = &previous {
+                assert!(
+                    is_prefix_of_request(prev, &built),
+                    "turn {i}: the previous request is not a prefix of this one"
+                );
+            }
+            previous = Some(built);
+            agent
+                .add_message(Message::new(
+                    Role::Assistant,
+                    format!("answer {i} {}", "y".repeat(400)),
+                ))
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn crossing_the_force_line_rewrites_once_then_appends_again() {
+        let (agent, _dir) = bust_test_agent(50_000);
+        let mut previous: Option<Vec<Message>> = None;
+        let mut rewrites = 0;
+        for i in 0..70 {
+            agent
+                .add_message(Message::new(Role::User, format!("question {i}")))
+                .await;
+            let epoch = agent.conv_epoch.load(std::sync::atomic::Ordering::Acquire);
+            let built = agent.build_messages("bust-crossing").await.unwrap();
+            if agent.conv_epoch.load(std::sync::atomic::Ordering::Acquire) != epoch {
+                rewrites += 1;
+            } else if let Some(prev) = &previous {
+                assert!(
+                    is_prefix_of_request(prev, &built),
+                    "turn {i}: an append-only turn changed the prefix"
+                );
+            }
+            previous = Some(built);
+            agent
+                .add_message(Message::new(
+                    Role::Assistant,
+                    format!("answer {i} {}", "y".repeat(3_000)),
+                ))
+                .await;
+        }
+        assert_eq!(
+            rewrites, 1,
+            "crossing the 85% force line rewrites exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tail_that_cannot_fit_fails_typed_instead_of_being_sent() {
+        let (agent, _dir) = bust_test_agent(10_000);
+        agent
+            .add_message(Message::new(Role::User, "x".repeat(40_000)))
+            .await;
+        let Err(err) = agent.build_messages("bust-exhausted").await else {
+            panic!("a protected tail over the hard line must fail typed");
+        };
+        assert!(
+            matches!(
+                err,
+                crate::error::Error::ContextExhausted { window: 10_000, .. }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overflow_lowers_the_window_and_keeps_the_smallest() {
+        let (agent, _dir) = bust_test_agent(10_000);
+        assert_eq!(agent.effective_context_window(), 10_000);
+
+        let overflowed = vec![Message::user("x".repeat(24_000))];
+        let tokens = crate::context_management::estimate_total_tokens(&overflowed);
+        agent.learn_context_limit(&overflowed);
+        assert_eq!(agent.effective_context_window(), tokens);
+
+        // A larger overflow later must not raise the learned limit.
+        agent.learn_context_limit(&[Message::user("x".repeat(40_000))]);
+        assert_eq!(agent.effective_context_window(), tokens);
     }
 
     #[serial]

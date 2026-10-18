@@ -1,5 +1,24 @@
 # BUGS.md — Operant Audit Fixes
 
+## CLOSED — Context management: bust permission (plan 06 P1, iter-929)
+
+- [x] **CM-1 — micro-compaction folded at 40% with no bust permission (plan 06 defect 3).**
+  Rewrites now run only under a `BustPermission` (`context_management::bust_permission`):
+  natural, force at ≥85%, or explicit after `/compact`.
+- [x] **CM-2 — micro-compaction stalled after its first fold.** The marker is a user
+  message; the next fold landed on it and refused the lone user. `micro_compact` now
+  skips markers when it chooses the next exchange.
+- [x] **CM-3 — the ladder's decay truncated the current user request.** The newest
+  message kept the highest importance, which capped it near 2.2k characters at the
+  default H50. The current turn is no longer decayed.
+- [x] **CM-4 — no typed failure when the protected head and tail do not fit.**
+  `Error::ContextExhausted` at ≥95%; the gateway compacts and retries once.
+- [x] **CM-5 — overflow limits were not remembered.** Smallest overflowing size per
+  provider and model is stored in the state table and used as the window.
+
+Open under this section: the context engine's `assemble` runs every turn, not gated by
+the bust permission; `/ctx-flush` (named in the plan) does not exist.
+
 ## OPEN — Gateway turn concurrency (audit plan 06A — LOCKED iter-864, residual below)
 
 The shared-agent race is fixed (one `turn_lock` per handler, held from the

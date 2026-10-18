@@ -231,6 +231,12 @@ pub enum Error {
     #[error("Context length exceeded")]
     ContextLengthExceeded,
 
+    /// Still at or above `CONTEXT_EXHAUSTED_PERCENT` of the window after every
+    /// rung that may fold ran: the protected head and tail alone do not fit.
+    /// Failing here beats sending a request the provider rejects with a 400.
+    #[error("Context exhausted: {tokens} of {window} tokens and nothing left to fold")]
+    ContextExhausted { tokens: usize, window: usize },
+
     // ========== Configuration Errors ==========
     #[error("Configuration error: {0}")]
     Config(String),
@@ -309,6 +315,11 @@ impl Error {
             }
             Error::ContextLengthExceeded => {
                 "The conversation has exceeded the maximum context length.".to_string()
+            }
+            Error::ContextExhausted { .. } => {
+                "The conversation no longer fits the context window and nothing can be folded. \
+                 Run /compact, then send the message again."
+                    .to_string()
             }
             _ => self.to_string(),
         }
