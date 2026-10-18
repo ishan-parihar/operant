@@ -7,16 +7,6 @@ pub struct ModelRegistry {
     models: std::collections::HashMap<String, Vec<ModelEntry>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct RegistryModelEntry {
-    pub info: ModelInfo,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ModelInfo {
-    pub context_window: u32,
-}
-
 impl ModelRegistry {
     pub fn new() -> Self {
         let mut models = std::collections::HashMap::new();
@@ -122,15 +112,6 @@ impl ModelRegistry {
                 entries.push(entry);
             }
         }
-    }
-
-    pub fn get(&self, provider: &str, model_id: &str) -> Option<RegistryModelEntry> {
-        self.list_by_provider(provider)
-            .into_iter()
-            .find(|m| m.id == model_id)
-            .map(|_| RegistryModelEntry {
-                info: ModelInfo::default(),
-            })
     }
 
     pub fn list_by_provider(&self, provider: &str) -> Vec<ModelEntry> {

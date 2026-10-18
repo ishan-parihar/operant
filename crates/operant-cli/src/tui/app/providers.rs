@@ -263,24 +263,26 @@ impl App {
         self.context_used_tokens = 0;
     }
 
-    /// Update the context window size from the model registry for the current model.
+    /// Update the context window size for the current model. The models.dev
+    /// cache is the source (`limit.context`); the per-provider defaults are the
+    /// offline fallback. (`ModelRegistry::get` never carried a window — it
+    /// returned `ModelInfo::default()`, so every seeded model read 0 and hid the
+    /// context meter.)
     pub fn refresh_context_window_size(&mut self) {
         let provider = self.active_provider.as_deref().unwrap_or("anthropic");
         let model_id = self
             .model_name
             .strip_prefix(&format!("{}/", provider))
             .unwrap_or(&self.model_name);
-        if let Some(entry) = self.model_registry.get(provider, model_id) {
-            self.context_window_size = entry.info.context_window as u64;
-        } else {
-            // Fallback: common defaults
-            self.context_window_size = match provider {
-                "anthropic" => 200_000,
-                "openai" => 128_000,
-                "google" => 1_048_576,
-                _ => 128_000,
-            };
-        }
+        self.context_window_size =
+            operant_core::models_dev::cached_capabilities(provider, model_id)
+                .and_then(|caps| caps.context_window)
+                .unwrap_or(match provider {
+                    "anthropic" => 200_000,
+                    "openai" => 128_000,
+                    "google" => 1_048_576,
+                    _ => 128_000,
+                });
     }
 
     /// Resolve a stale `provider/default` model name to the best actual model

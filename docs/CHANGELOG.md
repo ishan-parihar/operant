@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-917 — the context meter reads the model's real window from models.dev.**
+  The TUI looked the window up in `ModelRegistry::get`, which never carried a
+  window: every model in the static seed lists read 0 and the meter was hidden,
+  and every other model fell through to a fixed per-provider guess. It now reads
+  `limit.context` from the models.dev cache (`cached_capabilities`), with the
+  per-provider defaults only as the offline fallback. The now-unused registry
+  lookup and its `ModelInfo` / `RegistryModelEntry` types are removed.
 - **iter-916 — `/model` says why the endpoint's model list is missing.**
   The picker fetch returned an empty list on every failure (connection
   refused, HTTP error, non-JSON), so an unreachable endpoint looked like a
