@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-930 — settings.json survives upgrades and failed writes.** `Settings` had no
+  container-level `serde(default)`, so a settings file missing any field failed to load.
+  The next write from any of the twelve read-then-save sites then replaced the whole
+  file with defaults, which is what an upgrade that adds a field would trigger. Missing
+  fields now take their defaults. A file that exists but does not parse is copied to
+  `settings.json.bak` before a save overwrites it. Saves go through a temp file and a
+  rename, so a crash mid-write leaves the old file. The theme picker reports a failed
+  save in its status line ("not saved: …") instead of reporting success. Pre-existing
+  stale allowlist entry `kernel|unused_mut` pruned.
+
 - **iter-929 — micro-compaction and decay leave the request intact (plan 06 P1).**
   Micro-compaction stalled after its first fold: the marker is a user message, the
   next fold landed on it, and the lone-user guard refused it. It now moves past

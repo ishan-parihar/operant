@@ -397,12 +397,15 @@ impl App {
         // Persist to settings file
         let mut settings = Settings::load_sync().unwrap_or_default();
         settings.theme = theme;
-        let _ = settings.save_sync();
+        let saved = settings.save_sync();
         crate::tui::theme_colors::set_active_theme(theme_name);
         // (plan 07 §2) a theme change recolors every settled row — replay
         // re-emits history under the new palette.
         self.request_native_replay();
-        self.status_message = Some(format!("Theme set to: {}", theme_name));
+        self.status_message = Some(match saved {
+            Ok(()) => format!("Theme set to: {}", theme_name),
+            Err(e) => format!("Theme set to: {} (not saved: {})", theme_name, e),
+        });
     }
 }
 

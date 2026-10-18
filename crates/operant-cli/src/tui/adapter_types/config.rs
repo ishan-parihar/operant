@@ -77,6 +77,9 @@ pub struct ProviderEntry {
 // ---------- Settings ----------
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+// A settings.json written before a field existed must still load; without this
+// the load fails and the next write replaces the whole file with defaults.
+#[serde(default)]
 pub struct Settings {
     pub theme: Theme,
     pub permission_mode: PermissionMode,
@@ -103,19 +106,38 @@ pub struct Settings {
 
 impl Settings {
     pub fn save_sync(&self) -> anyhow::Result<()> {
-        let dir = Self::config_dir();
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("settings.json");
-        let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, json)?;
-        Ok(())
+        self.save_to(&Self::config_dir().join("settings.json"))
     }
     pub fn load_sync() -> anyhow::Result<Self> {
-        let path = Self::config_dir().join("settings.json");
+        Self::load_from(&Self::config_dir().join("settings.json"))
+    }
+    // Callers read with `unwrap_or_default()` and then write back, so an
+    // unparseable file would be replaced silently. Keep it as `.bak` first.
+    fn save_to(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        if path.exists() && Self::load_from(path).is_err() {
+            let backup = path.with_extension("json.bak");
+            tracing::warn!(
+                path = %path.display(),
+                backup = %backup.display(),
+                "settings.json did not parse; keeping it as .bak before overwriting"
+            );
+            std::fs::copy(path, &backup)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        // Write-then-rename: a crash mid-write leaves the old file, not a truncated one.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+    fn load_from(path: &std::path::Path) -> anyhow::Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let json = std::fs::read_to_string(&path)?;
+        let json = std::fs::read_to_string(path)?;
         let settings: Self = serde_json::from_str(&json)?;
         Ok(settings)
     }
@@ -129,4 +151,54 @@ pub fn resolve_api_key() -> Option<String> {
         .or_else(|_| std::env::var("OPENAI_API_KEY"))
         .ok()
         .filter(|k| !k.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_settings_file_written_before_a_field_existed_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"theme":"Dark"}"#).unwrap();
+
+        let loaded = Settings::load_from(&path).expect("a partial file loads");
+        assert_eq!(loaded.theme, Theme::Dark);
+        assert!(!loaded.vim_enabled, "a missing field takes its default");
+    }
+
+    #[test]
+    fn saving_over_an_unparseable_file_keeps_the_original_as_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{not json").unwrap();
+
+        let settings = Settings {
+            theme: Theme::Light,
+            ..Settings::default()
+        };
+        settings.save_to(&path).expect("save");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json.bak")).unwrap(),
+            "{not json",
+            "the unparseable original is preserved"
+        );
+        assert_eq!(Settings::load_from(&path).unwrap().theme, Theme::Light);
+    }
+
+    #[test]
+    fn saving_over_a_valid_file_writes_no_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        Settings::default().save_to(&path).unwrap();
+        Settings::default().save_to(&path).unwrap();
+
+        assert!(!dir.path().join("settings.json.bak").exists());
+        assert!(
+            !dir.path().join("settings.json.tmp").exists(),
+            "the rename consumes the temp file"
+        );
+    }
 }

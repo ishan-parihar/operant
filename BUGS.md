@@ -1,5 +1,17 @@
 # BUGS.md — Operant Audit Fixes
 
+## CLOSED — Settings persistence (iter-930)
+
+- [x] **SP-1 — settings.json was replaced with defaults after a failed load.** `Settings`
+  had no `serde(default)`, so a file missing any field failed to load; the next
+  read-then-save at twelve call sites wrote defaults over it.
+- [x] **SP-2 — an unparseable settings.json was overwritten without a copy.** `save_to`
+  now keeps it as `settings.json.bak` first.
+- [x] **SP-3 — settings writes were not atomic.** A crash mid-write could truncate the
+  file. Saves now write a temp file and rename it.
+- [x] **SP-4 — the theme picker reported success after a failed save.** The status line
+  now says "not saved".
+
 ## CLOSED — Context management: bust permission (plan 06 P1, iter-929)
 
 - [x] **CM-1 — micro-compaction folded at 40% with no bust permission (plan 06 defect 3).**
