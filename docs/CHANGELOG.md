@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-990 — the trajectory directory no longer grows without bound.** A trajectory is written per run, so a long-lived session accumulated one file per run, and a Holon run always records. The write path now keeps the newest 200 and prunes the oldest, the way the checkpoint store bounds its snapshots.
+
 - **iter-989 — `[client.rate_limit] max_retries = 0` no longer panics the process.** The attempt count was used raw in `for attempt in 1..=max_retries`, so a 0 made the range empty: the request was never made and the non-streaming retry loop hit an `unreachable!()`. In the gateway daemon that is a crash. A 0 now means "one attempt, no retry", which is what the setting means, and the loop's fall-through is an error rather than a panic.
 
 - **iter-986 — rotating a credential in `.env` now actually rotates the running agent's credential.** The gateway's per-turn `.env` reload wrote the new key into the process environment, and nothing read it back: the client captured its key when it was built and the credential pool seeded its keys at startup, so a rotated key reached nobody. The reload now reports the credential and the endpoint it found, and the gateway pushes them into the live client. A key rotated in the documented `~/.operant/.env` now takes effect on the next turn, without restarting the gateway daemon.

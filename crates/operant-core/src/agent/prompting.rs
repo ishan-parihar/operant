@@ -9,6 +9,65 @@ use tracing::{debug, info, warn};
 
 use super::*;
 
+/// How many trajectory files are kept.
+///
+/// A trajectory is written per RUN, and the file name is
+/// `<session_id>_<unix-timestamp>.json`, so a long-lived session that runs
+/// many times accumulates one file per run. Nothing pruned them: the only
+/// cleanup was `operant trajectory clear`, which is manual and deletes
+/// everything. On a machine that records every run (a Holon run always
+/// records — `is_holon_run()` forces it on), the directory grows without
+/// bound.
+///
+/// The cap follows the checkpoint store's precedent (`max_snapshots`, also
+/// 20): keep the newest N, drop the oldest. The count is a CONSTANT rather
+/// than a config key, because a trajectory is a diagnostic artefact and not
+/// a user-managed store — there is no workflow that needs the 500th one.
+const MAX_TRAJECTORIES_KEPT: usize = 200;
+
+/// Drop the oldest trajectory files so at most [`MAX_TRAJECTORIES_KEPT`]
+/// remain.
+///
+/// Best-effort: a file that cannot be read or removed is skipped, and the
+/// prune never fails the run that triggered it. A trajectory is a diagnostic
+/// artefact; losing the pruning of one is not worth failing a turn over.
+fn prune_old_trajectories(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        // The mtime orders the files. The name also carries the run's
+        // timestamp, but parsing it would mean trusting a format; the
+        // mtime is what the filesystem says and needs no parsing.
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        files.push((modified, path));
+    }
+    if files.len() <= MAX_TRAJECTORIES_KEPT {
+        return;
+    }
+    // Oldest first, so the tail is what survives.
+    files.sort_by_key(|(modified, _)| *modified);
+    let excess = files.len() - MAX_TRAJECTORIES_KEPT;
+    for (_, path) in files.into_iter().take(excess) {
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!(error = %e, path = ?path, "Failed to prune an old trajectory");
+        }
+    }
+}
+
 impl OperantAgent {
     pub(crate) fn load_context_file_prompt(&self) -> String {
         // R-07 (AUDIT-2026-10-16-capability-layer): in a Holon run the kernel's
@@ -150,6 +209,7 @@ impl OperantAgent {
                     warn!(error = %e, path = ?path, "Failed to write trajectory");
                 } else {
                     info!(path = %path.display(), "Trajectory saved");
+                    prune_old_trajectories(&trajectories_dir);
                 }
             }
             Err(e) => {
@@ -707,5 +767,86 @@ If nothing needs updating, say 'Nothing to save.' and stop.\n\n{}",
                 debug!(session_id = %session_id, "Background review daemon finished");
             }),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The trajectory directory must not grow without bound.
+    ///
+    /// A trajectory is written per run, and the file name carries the run's
+    /// timestamp, so a long-lived session accumulates one file per run. A
+    /// Holon run ALWAYS records (`is_holon_run()` forces it on), and
+    /// nothing pruned the directory: the only cleanup was the manual
+    /// `operant trajectory clear`, which deletes everything.
+    #[test]
+    fn the_oldest_trajectories_are_pruned() {
+        let dir = std::env::temp_dir().join(format!(
+            "operant_traj_prune_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Write more than the cap, with distinct mtimes so the order is
+        // unambiguous.
+        let total = MAX_TRAJECTORIES_KEPT + 5;
+        for i in 0..total {
+            let path = dir.join(format!("sess_{i}.json"));
+            std::fs::write(&path, b"{}").expect("write trajectory");
+            // Set the mtime explicitly: a filesystem with a coarse
+            // timestamp granularity would otherwise give several files the
+            // same mtime and make the order a tie.
+            let stamp =
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(i as u64);
+            filetime_set(&path, stamp);
+        }
+        // A file that is not a trajectory must survive the prune.
+        let other = dir.join("notes.txt");
+        std::fs::write(&other, b"keep me").expect("write other file");
+
+        prune_old_trajectories(&dir);
+
+        let remaining = std::fs::read_dir(&dir)
+            .expect("read the dir")
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+            .count();
+        assert_eq!(
+            remaining, MAX_TRAJECTORIES_KEPT,
+            "the directory must be capped, not merely trimmed"
+        );
+        assert!(
+            other.exists(),
+            "a file that is not a trajectory must not be pruned"
+        );
+        // The NEWEST survive: the file written last is still there.
+        assert!(
+            dir.join(format!("sess_{}.json", total - 1)).exists(),
+            "the newest trajectory must survive"
+        );
+        // The OLDEST are gone.
+        assert!(
+            !dir.join("sess_0.json").exists(),
+            "the oldest trajectory must be pruned"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Set a file's modification time, so the prune's order is unambiguous.
+    /// `FileTimes::set_modified` is an inherent method (stable 1.75+), so
+    /// this needs no dependency.
+    fn filetime_set(path: &std::path::Path, stamp: std::time::SystemTime) {
+        let ft = std::fs::FileTimes::new().set_modified(stamp);
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .map(|f| f.set_times(ft));
     }
 }
