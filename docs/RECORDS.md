@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=a07e6ba79189 -->
-**Decisions** (39)
+<!-- genome:zone records sha=dbe9d48b8640 -->
+**Decisions** (40)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -42,6 +42,7 @@
 | AD-037 | A rotated credential replaces the stored secret, and the two rotation operations are separate | Superseded by AD-038 | The gateway's per-turn .env reload wrote the new key into the process environment, where nothing read it back, so credential rotation did not work at all; the reload now reports the value and the gate |
 | AD-038 | A rotated credential replaces the stored secret, and the two rotation operations are separate | Active | The rotation did not reach the credential pool, which re-selects the startup-seeded key before every request, and the reload read a CWD-relative .env rather than the documented one; both are fixed, an |
 | AD-039 | PDF text extraction moves to lopdf 0.45, and the decompression bomb is bounded | Active | pdf-extract 0.12 pins lopdf 0.42, which reaches ttf-parser (RUSTSEC-2026-0192); pdf_read is ported to lopdf 0.45, which has no ttf-parser and bounds each page's decompressed content |
+| AD-040 | The dashboard's session token is only ever handed to a holder of that token | Active | The dashboard served its session token on an unauthenticated route, so the bearer auth was theatre; the token is now exchanged for an HttpOnly cookie and the Host header is validated |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

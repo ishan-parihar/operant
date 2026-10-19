@@ -19,9 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **iter-996 — the dashboard's session token is no longer served on an unauthenticated route.** The index page injected the token into its HTML and required no auth, so anyone who could reach the port could read the token and then call every "protected" API route with it. The index route now serves the token-bearing page only to a request that already holds the token (the CLI's browser launch exchanges it for an HttpOnly cookie), and a request with a foreign `Host` header is refused, which blocks DNS rebinding against the loopback-bound dashboard.
+
 ### Fixed
 
-- **iter-995 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
+- **iter-996 — `operant logs follow` keeps working across a log rotation.** The rotation replaces the live file with a new one, and the follower tracked a byte offset into the old file: it printed nothing until 32 MB of new output had accumulated, and then it seeked into a stale offset and printed half a line. The follower now tracks the file's identity as well as the offset.
 
 - **iter-993 — a panicking hook is now reported instead of swallowed silently.** The panic was always contained, but the warning that says so was unreachable, so a hook that panicked on every turn was invisible in the logs.
 
