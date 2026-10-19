@@ -36,4 +36,5 @@ AD-027 changes what is published. The status-file exclusion in `filter_status_ou
 ## Revisions
 
 - 2026-10-19: created
+- 2026-10-19: the integration test `success_tick_auto_commits_after_a_worktree_diff` (`crates/operant-cli/tests/autonomous_ticks.rs`) pinned the old `add --all` arguments and the old call order. It now expects the status read before the add and `add -- src/lib.rs`. The contract change is this record's decision; the test was not weakened.
 

@@ -458,6 +458,9 @@ mod autonomous {
                     "read git head",
                     "read git status",
                     "run validation",
+                    // AD-027: the publish reads the status again, then stages only the
+                    // paths this tick made dirty.
+                    "read git status",
                     "git add",
                     "git commit",
                     "read git branch",
@@ -471,7 +474,7 @@ mod autonomous {
             );
             assert_eq!(
                 *fakes.add_args.lock().unwrap(),
-                vec!["add", "--all", ".", ":(exclude)autonomous-status.toml"]
+                vec!["add", "--", "src/lib.rs"]
             );
             assert_eq!(
                 *fakes.push_args.lock().unwrap(),
