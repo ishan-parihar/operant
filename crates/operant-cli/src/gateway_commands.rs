@@ -744,6 +744,38 @@ fn unknown_org_employee(config: &AppConfig, requested: &str) -> Option<String> {
     }
 }
 
+/// GW-5/GW-6: keep this chat's conversation id on its session row, so a
+/// restart keeps the choice. Turns read the row when no in-memory pin is set.
+fn persist_conversation(ctx: &CommandContext<'_>, conversation: &str) -> Option<()> {
+    let store = ctx.gateway?.get_persistent_sessions()?;
+    let entry = store.entry_for_source(ctx.platform, ctx.user_id, ctx.channel_id)?;
+    store
+        .set_conversation_id(&entry.session_key, conversation)
+        .ok()
+}
+
+/// GW-5/GW-6: start a fresh conversation for this chat. The next turn runs on a
+/// new transcript id. The old transcript stays stored under its id, so
+/// `/resume` can still reach it.
+fn start_fresh_conversation(ctx: &CommandContext<'_>) -> Option<String> {
+    let conversation =
+        operant_core::gateway_session::PersistentSessionStore::fresh_conversation_id();
+    persist_conversation(ctx, &conversation)?;
+    if let Some(pins) = &ctx.session_pins {
+        pins.set(ctx.session_key, &conversation);
+    }
+    Some(conversation)
+}
+
+/// GW-9: the `/session` seat line. An unbound chat has no seat, so it is never
+/// reported as the premiere (G+1: an unbound session is ungoverned).
+fn session_seat_line(employee_id: Option<&str>) -> String {
+    match employee_id {
+        Some(employee) => format!("This session runs as `{employee}`."),
+        None => "This session is unbound: it runs ungoverned, with no employee seat. `/session <employee>` binds it.".to_string(),
+    }
+}
+
 pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> Option<String> {
     let args = _args;
     let def = COMMAND_REGISTRY.iter().find(|d| {
@@ -785,33 +817,18 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
         // ── Session ──────────────────────────────────────────────────
         "new" => {
             let mut msg = String::from("🔄 **Starting a new session.** Previous conversation cleared.");
-            // A resume pin routes this chat at another chat's transcript;
-            // `/new` means "give me a fresh conversation", so the pin has to go
-            // or the next turn would reload the session the user just left.
-            if let Some(pins) = &ctx.session_pins
-                && let Some(cleared) = pins.clear(ctx.session_key)
+            if let Some(gateway) = ctx.gateway
+                && let Some(store) = gateway.get_persistent_sessions()
             {
-                tracing::info!(
-                    platform = ctx.platform,
-                    channel = ctx.channel_id,
-                    user = ctx.user_id,
-                    cleared_session_id = %cleared,
-                    "Gateway /new: cleared the /resume pin for this chat"
-                );
-                msg.push_str(&format!("\nCleared the `/resume` pin on `{}`.", cleared));
+                // GW-5: close by the row's session key. The old code passed the
+                // conversation id, which matches no row, so nothing was closed.
+                if let Some(entry) = store.entry_for_source(ctx.platform, ctx.user_id, ctx.channel_id) {
+                    let _ = store.close_session(&entry.session_key);
+                }
+                let _ = store.create_session(ctx.platform, ctx.user_id, ctx.channel_id);
             }
-            if let Some(gateway) = ctx.gateway {
-                let store = gateway.get_session_store();
-                if let Some(session) = store.find_session(ctx.platform, ctx.user_id, ctx.channel_id)
-                {
-                    let old_id = session.session_id.clone();
-                    let _ = store.close_session(&old_id);
-                    msg.push_str(&format!("\nClosed session: `{}`", old_id));
-                }
-                if let Ok(new_session) = store.create_session(ctx.platform, ctx.user_id, ctx.channel_id)
-                {
-                    msg.push_str(&format!("\nNew session ID: `{}`", new_session.session_id));
-                }
+            if let Some(conversation) = start_fresh_conversation(ctx) {
+                msg.push_str(&format!("\nNew conversation ID: `{conversation}`"));
             }
             msg
         }
@@ -829,15 +846,11 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     let entry = store.entry_for_source(ctx.platform, ctx.user_id, ctx.channel_id);
                     match (args.trim(), entry) {
                         ("", Some(entry)) => {
-                            let emp = entry
-                                .employee_id
-                                .clone()
-                                .unwrap_or_else(|| "premiere".to_string());
-                            msg.push_str(&format!("This session runs as `{emp}`."));
+                            msg.push_str(&session_seat_line(entry.employee_id.as_deref()));
                         }
                         ("", None) => {
                             msg.push_str(
-                                "No session entry yet — it will bind to `premiere` on first message.",
+                                "No session entry yet — the first message creates it unbound, with no employee seat.",
                             );
                         }
                         (requested, Some(entry)) => {
@@ -848,9 +861,16 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                                 msg.push_str(&refusal);
                             } else {
                                 match store.bind_employee(&entry.session_key, requested) {
-                                    Ok(Some(_)) => msg.push_str(&format!(
-                                        "Bound this session to `{requested}` — the next turn runs as that employee."
-                                    )),
+                                    Ok(Some(_)) => {
+                                        // GW-6: a seat change starts a fresh transcript. The
+                                        // old one stays stored under its id for `/resume`.
+                                        if entry.employee_id.as_deref() != Some(requested) {
+                                            start_fresh_conversation(ctx);
+                                        }
+                                        msg.push_str(&format!(
+                                            "Bound this session to `{requested}` — the next turn runs as that employee, on a fresh conversation."
+                                        ));
+                                    }
                                     Ok(None) => msg.push_str(
                                         "Session entry vanished before binding — retry.",
                                     ),
@@ -1084,6 +1104,8 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                     }
                     Ok(stored) => {
                         pins.set(ctx.session_key, &stored.session_id);
+                        // GW-6: persisted too, so a restart keeps the resumed transcript.
+                        persist_conversation(ctx, &stored.session_id);
                         tracing::info!(
                             platform = ctx.platform,
                             channel = ctx.channel_id,
@@ -2287,6 +2309,18 @@ pub fn telegram_bot_commands() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unbound_chat_is_never_reported_as_the_premiere() {
+        // GW-9: the premiere is not a fallback seat, so an unbound chat says so.
+        assert_eq!(
+            session_seat_line(Some("dispatcher")),
+            "This session runs as `dispatcher`."
+        );
+        let unbound = session_seat_line(None);
+        assert!(unbound.contains("unbound"));
+        assert!(!unbound.contains("premiere"));
+    }
+
     use super::*;
 
     /// The canonical name and arguments of a command that must resolve.

@@ -87,6 +87,12 @@ pub struct CronScheduler {
     observer: Option<Arc<dyn crate::observer::Observer>>,
 }
 
+/// A seat's effective budget, with its window usage or the read error.
+type SeatBudgetState = (
+    crate::org::seat_budgets::EffectiveBudget,
+    Result<(i64, f64), String>,
+);
+
 impl CronScheduler {
     pub fn new(db: Arc<CronDb>, agent: Arc<OperantAgent>) -> Self {
         Self {
@@ -420,20 +426,20 @@ impl CronScheduler {
 
     /// iter-678: the effective budget + window usage for a seat, when the
     /// budget stores are mounted. `None` = ungoverned (no budget consulted
-    /// at all) — the dark-mergeable default. Store errors degrade to
-    /// ungoverned (fail-open, the bylaws invariant: metering must never
-    /// refuse a run because the meter could not be read).
-    fn seat_budget_state(
-        &self,
-        seat_id: &str,
-    ) -> Option<(crate::org::seat_budgets::EffectiveBudget, (i64, f64))> {
+    /// at all) — the dark-mergeable default. A usage read error comes back
+    /// as `Err`, and the caller decides by mode (GW-8: a hard cap refuses,
+    /// soft mode runs). A budget-override read error still degrades to the
+    /// default budget (AD-009 residual).
+    fn seat_budget_state(&self, seat_id: &str) -> Option<SeatBudgetState> {
         let budgets = self.seat_budgets.as_ref()?;
         let store = self.usage_store.as_ref()?;
         let seat_override = budgets.get(seat_id).ok().flatten();
         let effective =
             crate::org::seat_budgets::resolve_budget(seat_override.as_ref(), &self.default_budget)?;
         let since = crate::org::seat_budgets::window_start(&effective.window);
-        let usage = store.employee_window_usage(seat_id, &since).ok()?;
+        let usage = store
+            .employee_window_usage(seat_id, &since)
+            .map_err(|e| e.to_string());
         Some((effective, usage))
     }
 
@@ -450,7 +456,17 @@ impl CronScheduler {
     /// socialization turns consult the same posture a cron run does.
     /// `None` = the turn may run. Soft mode and ungoverned seats never refuse.
     fn budget_refusal_for_seat(&self, seat_id: &str) -> Option<String> {
-        let (budget, (tokens_used, usd_used)) = self.seat_budget_state(seat_id)?;
+        let (budget, usage) = self.seat_budget_state(seat_id)?;
+        // GW-8: a hard cap whose spend cannot be read is refused, not run uncapped.
+        let (tokens_used, usd_used) = match usage {
+            Ok(usage) => usage,
+            Err(err) if budget.mode == "hard" => {
+                return Some(format!(
+                    "budget for seat `{seat_id}` could not be read ({err}) — the run was not executed"
+                ));
+            }
+            Err(_) => return None,
+        };
         let (used, remaining, unit) = if budget.basis == "usd" {
             (usd_used, budget.cap - usd_used, "USD")
         } else {
@@ -478,6 +494,13 @@ impl CronScheduler {
     fn bind_seat_run(&self, seat_id: &str, session_key: &str, base_prompt: &str) -> String {
         self.agent.set_session_id(session_key.to_string());
         self.agent.set_seat_id(seat_id.to_string());
+        // GW-2: a seat run reads and writes its own seat's bank, never the
+        // scope the last chat turn left on the shared agent.
+        if let Some(p) = self.agent.memory_provider() {
+            p.set_scope(&crate::memory_wire::MemoryScope::Seat {
+                identity: seat_id.to_string(),
+            });
+        }
         // G+1: seat charters live in Holon job descriptions now; the
         // personal scheduler injects no charter.
         let charter: Option<String> = None;
@@ -580,6 +603,10 @@ impl CronScheduler {
                 {
                     warn!("cron usage drain failed for {}: {e} (fail-open)", source_id);
                 }
+                // GW-1: the run's spend is charged to the seat it ran under.
+                if let Err(e) = store.record_seat_spend(seat_id, in_delta + out_delta, cost_delta) {
+                    warn!("cron seat spend failed for {}: {e} (fail-open)", source_id);
+                }
             }
             Err(e) => {
                 warn!(
@@ -628,8 +655,8 @@ impl CronScheduler {
         // `None`, prompt byte-identical.
         let mut seat_envelope: Option<crate::agent::SeatBudgetEnvelope> = None;
         let prompt = match self.seat_budget_state(&seat_id) {
-            None => prompt,
-            Some((budget, (tokens_used, usd_used))) => {
+            None | Some((_, Err(_))) => prompt,
+            Some((budget, Ok((tokens_used, usd_used)))) => {
                 let (_used, remaining, unit) = if budget.basis == "usd" {
                     (usd_used, budget.cap - usd_used, "USD")
                 } else {
@@ -1128,6 +1155,64 @@ mod tests {
         }
     }
 
+    /// GW-2: a provider that records each seat the shared agent is scoped to.
+    #[derive(Default)]
+    struct ScopeRecorder {
+        seats: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::memory_provider::MemoryProvider for ScopeRecorder {
+        fn name(&self) -> &str {
+            "scope-recorder"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&self, _session_id: &str) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn set_scope(&self, scope: &crate::memory_wire::MemoryScope) {
+            if let crate::memory_wire::MemoryScope::Seat { identity } = scope {
+                self.seats.lock().unwrap().push(identity.clone());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_seat_run_sets_its_own_seat_as_the_memory_scope() {
+        // GW-2: a cron or socialization run reads and writes its seat's bank,
+        // not whatever scope the last chat turn left on the shared agent.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder = Arc::new(ScopeRecorder::default());
+        let db =
+            Arc::new(crate::database::Database::init(dir.path().join("agent.sqlite")).expect("db"));
+        let agent = Arc::new(
+            crate::agent::OperantAgent::new(
+                crate::agent::AgentConfig::default(),
+                Box::new(crate::agent::clients::openai::OpenAIModelClient::new(
+                    crate::client::OpenAIClient::new(crate::client::ClientConfig::default()),
+                )),
+                crate::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
+                db,
+            )
+            .with_memory_provider(recorder.clone()),
+        );
+        let cron_db =
+            Arc::new(super::CronDb::init(dir.path().join("cron.sqlite")).expect("cron db"));
+        let scheduler = super::CronScheduler::new(cron_db, agent);
+
+        scheduler.bind_seat_run("dispatcher", "cron_session", "prompt");
+
+        assert_eq!(
+            *recorder.seats.lock().unwrap(),
+            vec!["dispatcher".to_string()]
+        );
+    }
+
     fn spend_window_for(scheduler: &super::CronScheduler, seat_id: &str, tokens: u64) {
         let store = scheduler.usage_store.clone().expect("store");
         let source = crate::gateway_session::SessionSource {
@@ -1145,6 +1230,64 @@ mod tests {
         store
             .update_tokens(&entry.session_key, tokens, 0, 0, 0, 0.0)
             .expect("spend");
+        store
+            .record_seat_spend(seat_id, tokens, 0.0)
+            .expect("seat spend ledger");
+    }
+
+    /// GW-8: break the meter. The usage roll-up reads the `seat_spend` ledger,
+    /// so dropping that table makes every read fail.
+    fn break_the_usage_meter(dir: &std::path::Path) {
+        rusqlite::Connection::open(dir.join("sessions.sqlite"))
+            .expect("open sessions db")
+            .execute_batch("DROP TABLE seat_spend")
+            .expect("drop usage table");
+    }
+
+    #[test]
+    fn budget_gate_refuses_a_hard_cap_whose_spend_cannot_be_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_id = crate::org::worklog::derive_employee_id("job_budget_probe");
+        let scheduler = scheduler_with_budgets(
+            dir.path(),
+            crate::config::BudgetSettings::default(),
+            Some(crate::org::seat_budgets::SeatBudget {
+                employee_id: seat_id,
+                basis: None,
+                window: None,
+                cap: 50.0,
+                mode: Some("hard".to_string()),
+            }),
+        );
+        break_the_usage_meter(dir.path());
+
+        let Some(reason) = scheduler.budget_gate_block(&test_job()) else {
+            panic!("an unreadable hard cap must refuse, not run uncapped");
+        };
+        assert!(reason.contains("could not be read"), "got: {reason}");
+    }
+
+    #[test]
+    fn budget_gate_soft_mode_still_runs_when_the_meter_is_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seat_id = crate::org::worklog::derive_employee_id("job_budget_probe");
+        let scheduler = scheduler_with_budgets(
+            dir.path(),
+            crate::config::BudgetSettings::default(),
+            Some(crate::org::seat_budgets::SeatBudget {
+                employee_id: seat_id,
+                basis: None,
+                window: None,
+                cap: 50.0,
+                mode: Some("soft".to_string()),
+            }),
+        );
+        break_the_usage_meter(dir.path());
+
+        assert!(
+            scheduler.budget_gate_block(&test_job()).is_none(),
+            "soft mode never refuses, even when the meter is unreadable"
+        );
     }
 
     #[test]

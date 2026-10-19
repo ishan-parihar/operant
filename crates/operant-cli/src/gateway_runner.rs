@@ -147,6 +147,7 @@ async fn drain_turn_usage_into_store(
     map: &TurnUsageMap,
     key: ThreadKey,
     session_key: &str,
+    seat: Option<&str>,
 ) {
     let Some(usage) = map.lock().await.remove(&key) else {
         return;
@@ -163,6 +164,16 @@ async fn drain_turn_usage_into_store(
         usage.cost_usd,
     ) {
         tracing::warn!(%session_key, %e, "Wave-4 metering write failed (fail-open)");
+    }
+    // GW-1: the spend is charged to the seat the turn started under.
+    if let Some(seat) = seat
+        && let Err(e) = store.record_seat_spend(
+            seat,
+            usage.input_tokens + usage.output_tokens,
+            usage.cost_usd,
+        )
+    {
+        tracing::warn!(%session_key, %e, "seat spend ledger write failed (fail-open)");
     }
 }
 
@@ -693,11 +704,6 @@ impl SessionPins {
     pub fn get(&self, session_key: &str) -> Option<String> {
         self.pins.lock().ok()?.get(session_key).cloned()
     }
-
-    /// Drop the pin for `session_key`, returning to the id derived from the key.
-    pub fn clear(&self, session_key: &str) -> Option<String> {
-        self.pins.lock().ok()?.remove(session_key)
-    }
 }
 
 /// Compact human-readable duration for the stopped-early operator notice
@@ -1034,8 +1040,18 @@ impl MessageHandler for GatewayMessageHandler {
         // already keyed on `session_id`, so re-pointing that one value is the
         // whole of resume. The reload then fires on its own, because
         // `current_session_id` no longer matches.
-        let (session_id, resumed) = match self.session_pins.get(&session_key) {
-            Some(pinned) => (pinned, true),
+        // GW-6/GW-7: a conversation pinned in memory (`/resume`) or persisted on
+        // the session row (`/new`, a seat change, `/resume` across a restart)
+        // overrides the derivation. The row is read once per turn.
+        let persisted = {
+            let gw_guard = self.gateway.lock().await;
+            gw_guard
+                .as_ref()
+                .and_then(|gw| gw.get_persistent_sessions())
+                .and_then(|store| store.conversation_id(&session_key).ok().flatten())
+        };
+        let (session_id, resumed) = match self.session_pins.get(&session_key).or(persisted) {
+            Some(conversation) => (conversation, true),
             None => (derived_session_id.clone(), false),
         };
         if resumed {
@@ -1043,7 +1059,7 @@ impl MessageHandler for GatewayMessageHandler {
                 session_key = %session_key,
                 session_id = %session_id,
                 derived_session_id = %derived_session_id,
-                "Gateway turn is continuing a /resume-pinned session"
+                "Gateway turn is running on a pinned conversation"
             );
         }
 
@@ -1313,7 +1329,9 @@ impl MessageHandler for GatewayMessageHandler {
                     .and_then(|gw| gw.get_persistent_sessions())
                     .and_then(|store| {
                         store
-                            .valid_summary(&employee_id, &session_key, self.summary_ttl_minutes)
+                            // GW-7: a roll belongs to a transcript, so it is keyed by the
+                            // conversation id. A `/resume` onto another transcript reads none.
+                            .valid_summary(&employee_id, &session_id, self.summary_ttl_minutes)
                             .ok()
                             .flatten()
                     })
@@ -1366,11 +1384,35 @@ impl MessageHandler for GatewayMessageHandler {
                         gw_guard
                             .as_ref()
                             .and_then(|gw| gw.get_persistent_sessions())
-                            .and_then(|store| store.employee_window_usage(employee_id, &since).ok())
+                            .map(|store| {
+                                store
+                                    .employee_window_usage(employee_id, &since)
+                                    .map_err(|e| e.to_string())
+                            })
                     };
                     match usage {
                         None => query,
-                        Some((tokens_used, usd_used)) => {
+                        // GW-8: an unreadable meter cannot show that a hard cap
+                        // is unspent, so a hard cap refuses. Soft mode runs the
+                        // turn and only loses the injected remainder.
+                        Some(Err(err)) if budget.mode == "hard" => {
+                            return Ok(OutgoingMessage::new(
+                                message.channel_id.clone(),
+                                format!(
+                                    "🛑 The budget for `{employee_id}` could not be read ({err}), \
+                                     so the turn was not run. Retry shortly."
+                                ),
+                            ));
+                        }
+                        Some(Err(err)) => {
+                            tracing::warn!(
+                                seat = %employee_id,
+                                error = %err,
+                                "budget usage unreadable — soft mode, running the turn"
+                            );
+                            query
+                        }
+                        Some(Ok((tokens_used, usd_used))) => {
                             let (used, remaining, unit) = if budget.basis == "usd" {
                                 (usd_used, budget.cap - usd_used, "USD")
                             } else {
@@ -1531,7 +1573,14 @@ impl MessageHandler for GatewayMessageHandler {
                 let meter_key = store_session_key
                     .clone()
                     .unwrap_or_else(|| session_key.clone());
-                drain_turn_usage_into_store(&store, &self.turn_usage, usage_key, &meter_key).await;
+                drain_turn_usage_into_store(
+                    &store,
+                    &self.turn_usage,
+                    usage_key,
+                    &meter_key,
+                    bound_employee.as_deref(),
+                )
+                .await;
             }
         }
         match run_result {
@@ -1601,7 +1650,7 @@ impl MessageHandler for GatewayMessageHandler {
                         .and_then(|gw| gw.get_persistent_sessions())
                         .and_then(|store| {
                             store
-                                .valid_summary(employee_id, &session_key, self.summary_ttl_minutes)
+                                .valid_summary(employee_id, &session_id, self.summary_ttl_minutes)
                                 .ok()
                                 .flatten()
                         });
@@ -1631,9 +1680,7 @@ impl MessageHandler for GatewayMessageHandler {
                         .await
                         .as_ref()
                         .and_then(|gw| gw.get_persistent_sessions())
-                        .map(|store| {
-                            store.upsert_summary(employee_id, &session_key, &roll, tokens)
-                        });
+                        .map(|store| store.upsert_summary(employee_id, &session_id, &roll, tokens));
                     match upserted {
                         Some(Ok(())) => {}
                         Some(Err(e)) => tracing::warn!(
@@ -5178,7 +5225,14 @@ mod tests {
             u.cost_usd = 0.025;
         }
 
-        drain_turn_usage_into_store(&store, &map, key, &entry.session_key).await;
+        drain_turn_usage_into_store(
+            &store,
+            &map,
+            key,
+            &entry.session_key,
+            Some("dp-the-program"),
+        )
+        .await;
 
         // The map is drained (no leak into the next turn).
         assert!(

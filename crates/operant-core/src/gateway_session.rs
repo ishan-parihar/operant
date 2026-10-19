@@ -442,11 +442,25 @@ fn ensure_employee_binding(conn: &Connection) -> Result<(), Error> {
             )));
         }
     }
+    // GW-6/GW-7: the conversation a chat's turns run on (`conversation_id`).
+    // NULL = the derived id, so every existing row keeps its transcript.
+    match conn.execute(
+        "ALTER TABLE gateway_sessions ADD COLUMN conversation_id TEXT",
+        [],
+    ) {
+        Ok(_) => {}
+        Err(e) if e.to_string().contains("duplicate column") => {}
+        Err(e) => {
+            return Err(Error::Agent(format!(
+                "Failed to init gateway session DB: {e}"
+            )));
+        }
+    }
     Ok(())
 }
 
-/// The binding a NEW session gets when none was chosen explicitly: the
-/// premiere (ORGANISM-ARCHITECTURE §2, owner ruling).
+/// The binding a NEW session gets when none was chosen explicitly: none. A
+/// new session starts unbound (G+1: no cast, no premiere default).
 fn default_employee_binding() -> Option<String> {
     // G+1: no cast, no premiere — an unbound session is ungoverned. A
     // Holon-bound session sets its employee id at the binding surface.
@@ -646,6 +660,7 @@ impl PersistentSessionStore {
         )
         .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {}", e)))?;
         ensure_employee_binding(&conn)?;
+        Self::ensure_seat_spend(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -655,6 +670,23 @@ impl PersistentSessionStore {
 
         store.load_from_db()?;
         Ok(store)
+    }
+
+    /// GW-1: the per-turn spend ledger the budget window reads. Created once;
+    /// existing rows are not backfilled, so a window starts clean on upgrade.
+    /// Counting the lifetime totals of old rows is the defect this replaces.
+    fn ensure_seat_spend(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS seat_spend (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                tokens INTEGER NOT NULL,
+                cost_usd REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS seat_spend_window ON seat_spend (employee_id, recorded_at);",
+        )
+        .map_err(|e| Error::Agent(format!("Failed to init seat spend ledger: {e}")))
     }
 
     /// Create from an existing connection (for testing).
@@ -707,6 +739,7 @@ impl PersistentSessionStore {
         )
         .map_err(|e| Error::Agent(format!("Failed to init gateway session DB: {}", e)))?;
         ensure_employee_binding(&conn)?;
+        Self::ensure_seat_spend(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -958,8 +991,7 @@ impl PersistentSessionStore {
         }
 
         // Create new session
-        // §2: a NEW session binds to the premiere unless a `/session new`
-        // rebind overrides it later.
+        // G+1: a NEW session starts unbound until `/session <employee>` binds it.
         let entry = SessionEntry {
             session_key: session_key.clone(),
             session_id: format!(
@@ -1217,10 +1249,10 @@ impl PersistentSessionStore {
         let conn = self.lock_conn()?;
         let row = conn
             .query_row(
-                "SELECT COALESCE(SUM(total_tokens), 0),
-                        COALESCE(SUM(estimated_cost_usd), 0.0)
-                 FROM gateway_sessions
-                 WHERE employee_id = ?1 AND updated_at >= ?2",
+                "SELECT COALESCE(SUM(tokens), 0),
+                        COALESCE(SUM(cost_usd), 0.0)
+                 FROM seat_spend
+                 WHERE employee_id = ?1 AND recorded_at >= ?2",
                 params![employee_id, since_rfc3339],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
             )
@@ -1305,6 +1337,63 @@ impl PersistentSessionStore {
         drop(entries);
         self.save_entry(&entry)?;
         Ok(Some(entry))
+    }
+
+    /// A fresh transcript id for a chat's new conversation (`/new`, a seat
+    /// change). The `gw_` prefix matches the derived ids, so the rest of the
+    /// gateway treats it the same way.
+    pub fn fresh_conversation_id() -> String {
+        format!("gw_{}", Uuid::new_v4().simple())
+    }
+
+    /// The conversation id a chat's turns run on, when one was set. `None` =
+    /// the derived id.
+    pub fn conversation_id(&self, session_key: &str) -> Result<Option<String>, Error> {
+        let conn = self.lock_conn()?;
+        match conn.query_row(
+            "SELECT conversation_id FROM gateway_sessions WHERE session_key = ?1",
+            params![session_key],
+            |row| row.get::<_, Option<String>>(0),
+        ) {
+            Ok(id) => Ok(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(Error::Agent(format!("Failed to read conversation id: {e}"))),
+        }
+    }
+
+    /// Point a chat's row at a conversation id. The row is what survives a
+    /// restart; `save_entry` never writes this column.
+    pub fn set_conversation_id(
+        &self,
+        session_key: &str,
+        conversation_id: &str,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE gateway_sessions SET conversation_id = ?2 WHERE session_key = ?1",
+            params![session_key, conversation_id],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to set conversation id: {e}")))?;
+        Ok(())
+    }
+
+    /// GW-1: meter one turn's spend against the seat it started under. The
+    /// budget window reads this ledger, so a rebind mid-turn cannot move the
+    /// spend, and a window rolls by `recorded_at`, not by a lifetime total.
+    pub fn record_seat_spend(
+        &self,
+        employee_id: &str,
+        tokens: u64,
+        cost_usd: f64,
+    ) -> Result<(), Error> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO seat_spend (employee_id, recorded_at, tokens, cost_usd)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![employee_id, now_rfc3339(), tokens as i64, cost_usd],
+        )
+        .map_err(|e| Error::Agent(format!("Failed to record seat spend: {e}")))?;
+        Ok(())
     }
 
     #[expect(
@@ -2051,6 +2140,15 @@ mod tests {
             .update_tokens(&entry_c.session_key, 1000, 0, 0, 0, 1.0)
             .unwrap();
 
+        // GW-1: the window reads the seat-spend ledger, written per turn.
+        store
+            .record_seat_spend("dp-the-program", 150, 0.10)
+            .unwrap();
+        store
+            .record_seat_spend("dp-the-program", 250, 0.20)
+            .unwrap();
+        store.record_seat_spend("hrmaster", 1000, 1.0).unwrap();
+
         let long_ago = "1970-01-01T00:00:00+00:00".to_string();
         let (tokens, usd) = store
             .employee_window_usage("dp-the-program", &long_ago)
@@ -2226,6 +2324,55 @@ mod tests {
         assert_eq!(store.session_count(), 2);
         let all = store.list_sessions(None);
         assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn a_conversation_id_survives_a_save_of_its_row() {
+        // GW-6: the id lives on the row, so a later save of the entry keeps it.
+        let store = test_store();
+        let source = test_source("telegram", "123", "456", "dm");
+        let entry = store.get_or_create_session(&source, false).unwrap();
+        assert_eq!(store.conversation_id(&entry.session_key).unwrap(), None);
+
+        let fresh = PersistentSessionStore::fresh_conversation_id();
+        store
+            .set_conversation_id(&entry.session_key, &fresh)
+            .unwrap();
+        store
+            .bind_employee(&entry.session_key, "dispatcher")
+            .unwrap();
+
+        assert_eq!(
+            store.conversation_id(&entry.session_key).unwrap(),
+            Some(fresh)
+        );
+    }
+
+    #[test]
+    fn a_rebind_does_not_move_spend_and_the_window_rolls() {
+        // GW-1: spend belongs to the seat it was recorded under, and a window
+        // counts only the spend recorded since its start.
+        let store = test_store();
+        let source = test_source("telegram", "u9", "c9", "dm");
+        let entry = store.get_or_create_session(&source, false).unwrap();
+        store.bind_employee(&entry.session_key, "seat-a").unwrap();
+        store.record_seat_spend("seat-a", 100, 0.5).unwrap();
+        store.bind_employee(&entry.session_key, "seat-b").unwrap();
+
+        let epoch = "1970-01-01T00:00:00+00:00";
+        assert_eq!(
+            store.employee_window_usage("seat-a", epoch).unwrap(),
+            (100, 0.5)
+        );
+        assert_eq!(
+            store.employee_window_usage("seat-b", epoch).unwrap(),
+            (0, 0.0)
+        );
+        let later = "2999-01-01T00:00:00+00:00";
+        assert_eq!(
+            store.employee_window_usage("seat-a", later).unwrap(),
+            (0, 0.0)
+        );
     }
 
     #[test]
