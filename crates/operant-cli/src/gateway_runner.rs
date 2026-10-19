@@ -4227,10 +4227,28 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
                         .as_deref()
                         .filter(|u| !u.trim().is_empty())
                     {
-                        tracing::info!("endpoint rotated from .env; updating the live client");
-                        handler_for_turn
-                            .agent
-                            .set_endpoint(base_url, rotated.api_key.as_deref());
+                        // Retarget ONLY on a change. `set_endpoint` with no
+                        // key empties a pool-backed client's credentials, so
+                        // calling it every turn for an endpoint that did not
+                        // change would leave the agent with no credential at
+                        // all and the next request would fail with "no
+                        // available keys".
+                        let current = handler_for_turn.agent.base_url();
+                        if current.as_deref() != Some(base_url) {
+                            tracing::info!("endpoint rotated from .env; updating the live client");
+                            // Pass the key the client is USING when the file
+                            // does not carry one: a `.env` with only a base
+                            // URL (the key lives in `operant.toml`) would
+                            // otherwise empty the pool and the agent would
+                            // have no credential at all.
+                            let key = rotated
+                                .api_key
+                                .as_deref()
+                                .filter(|k| !k.trim().is_empty())
+                                .map(str::to_string)
+                                .or_else(|| handler_for_turn.agent.current_api_key());
+                            handler_for_turn.agent.set_endpoint(base_url, key.as_deref());
+                        }
                     }
 
                     // ── 5.7 Turn state: mark pending ─────────────────────────────

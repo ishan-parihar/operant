@@ -48,6 +48,14 @@ impl ModelClient for OpenAIModelClient {
         self.inner.set_api_key(api_key.unwrap_or(""));
     }
 
+    fn base_url(&self) -> Option<String> {
+        Some(self.inner.base_url())
+    }
+
+    fn current_api_key(&self) -> Option<String> {
+        Some(self.inner.effective_api_key())
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<crate::client::ChatResponse> {
         let tools = if request.tools.is_empty() {
             None

@@ -43,6 +43,19 @@ pub struct PooledModelClient {
     /// gateway); there the call passes straight through. For a remote host an
     /// empty pool keeps the actionable "run `operant setup`" error.
     keyless_ok: Arc<std::sync::atomic::AtomicBool>,
+    /// The id of the pool credential the client last selected.
+    ///
+    /// A runtime rotation replaces the credential the client is ACTUALLY
+    /// using, not one chosen by source label. The pool's seeds are deduped
+    /// by value (`add_seed` skips an identical value), and at startup
+    /// `config.client.api_key` already holds the environment's value — so
+    /// the `env:`-sourced seed is usually SKIPPED and the credential in use
+    /// is the config-sourced one. Replacing "the env one" would therefore
+    /// find nothing, and adding a new credential would put it BEHIND the
+    /// stale primary under `FillFirst`, so the rotation would still not
+    /// take effect. Tracking the credential actually in use is the only
+    /// reliable anchor.
+    last_credential_id: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl PooledModelClient {
@@ -57,6 +70,7 @@ impl PooledModelClient {
             pool,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             keyless_ok: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_credential_id: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -69,6 +83,19 @@ impl PooledModelClient {
 
     fn passthrough(&self) -> bool {
         self.pool.is_empty() && self.keyless_ok.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record the pool credential the client just selected.
+    ///
+    /// This is the anchor a runtime rotation replaces. The pool's seeds are
+    /// deduped by value, so the credential in use is usually the
+    /// config-sourced one even when the value came from the environment —
+    /// and the selection strategy (`FillFirst` by default) decides which
+    /// one that is.
+    fn remember_credential(&self, cred: &PooledCredential) {
+        if let Ok(mut slot) = self.last_credential_id.lock() {
+            *slot = Some(cred.id.clone());
+        }
     }
 
     /// Extract a provider-supplied recovery timestamp from the error, when
@@ -171,6 +198,7 @@ impl PooledModelClient {
             let Some(cred) = self.pool.select() else {
                 break; // no available key left
             };
+            self.remember_credential(&cred);
             self.inner.set_api_key(&cred.value);
             match self.inner.chat(request.clone()).await {
                 Ok(value) => return Ok(value),
@@ -226,6 +254,7 @@ impl ModelClient for PooledModelClient {
             let Some(cred) = self.pool.select() else {
                 break; // no available key left
             };
+            self.remember_credential(&cred);
             self.inner.set_api_key(&cred.value);
             match self.inner.chat_streaming(request.clone()).await {
                 Ok(stream) => {
@@ -287,9 +316,82 @@ impl ModelClient for PooledModelClient {
     }
 
     fn set_api_key(&self, api_key: &str) {
-        // Forward so the agent-loop rotation (last-resort path) also swaps
-        // the runtime key through this wrapper.
+        // "Use this key NOW", and nothing else.
+        //
+        // The pool is deliberately NOT touched here. The agent-loop
+        // rotation path (`try_rotate_credential`) selects a DIFFERENT
+        // existing credential from the pool and calls this with its value,
+        // and the pooled client's own request loop sets the key from the
+        // pool before every request. If this method rewrote a pool
+        // credential's value, the agent-loop rotation would replace the
+        // benched credential's secret with the next key's secret and leave
+        // the pool holding a duplicate — on every 401 and every 429.
+        //
+        // Replacing a credential's SECRET is a different operation, and it
+        // has its own method: `rotate_credential_value`.
         self.inner.set_api_key(api_key);
+    }
+
+    fn rotate_credential_value(&self, api_key: &str) {
+        // "Use this key now" as well as "store it in the pool", so the
+        // request that follows carries the new secret.
+        self.inner.set_api_key(api_key);
+
+        let rotated = api_key.trim();
+        if rotated.is_empty() {
+            return;
+        }
+
+        // The pool already knows this value: it is one of the pool's own
+        // credentials, so there is nothing to replace. Replacing anyway
+        // would give two credentials the same secret.
+        if self.pool.list().iter().any(|c| c.value == rotated) {
+            return;
+        }
+
+        // Replace the credential the client is ACTUALLY using. The pool's
+        // seeds are deduped by value, and at startup
+        // `config.client.api_key` already holds the environment's value —
+        // so the `env:`-sourced seed is usually skipped and the credential
+        // in use is the config-sourced one. Choosing by source label would
+        // find nothing; adding a new credential would put it BEHIND the
+        // stale primary under `FillFirst`. The credential actually
+        // selected is the only reliable anchor.
+        let last_id = self
+            .last_credential_id
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Some(id) = last_id
+            && self.pool.get(&id).is_some_and(|c| c.value != rotated)
+        {
+            // Replace the value in place: the id, the source and the
+            // pool's ordering stay, so the failure bookkeeping and the
+            // rotation order are unaffected.
+            self.pool.replace_value(&id, rotated);
+            return;
+        }
+
+        // The pool has no credential in use yet (nothing was ever selected,
+        // or the selected one already holds this value). Fall back to the
+        // FIRST credential: under `FillFirst` that is the one the next
+        // request will pick, so replacing it is what makes the rotation
+        // take effect. A pool with NO credentials at all used to fail with
+        // "no available keys" before the inner client was ever tried, so
+        // this is the case where a rotation rescues a gateway that had no
+        // working key.
+        if let Some(first) = self.pool.list().into_iter().next() {
+            if first.value != rotated {
+                self.pool.replace_value(&first.id, rotated);
+            }
+            return;
+        }
+        self.pool.add(PooledCredential::new(
+            "rotated",
+            crate::credential_pool::AuthType::ApiKey,
+            rotated,
+            "env:rotated",
+        ));
     }
 
     fn set_endpoint(&self, base_url: &str, api_key: Option<&str>) {
@@ -312,6 +414,14 @@ impl ModelClient for PooledModelClient {
             std::sync::atomic::Ordering::Relaxed,
         );
         self.inner.set_endpoint(base_url, api_key);
+    }
+
+    fn base_url(&self) -> Option<String> {
+        self.inner.base_url()
+    }
+
+    fn current_api_key(&self) -> Option<String> {
+        self.inner.current_api_key()
     }
 }
 
@@ -374,6 +484,16 @@ mod tests {
         results: Vec<Outcome>,
         call_count: AtomicUsize,
         seen_keys: Arc<std::sync::Mutex<Vec<String>>>,
+        /// The key in force when each REQUEST was made.
+        ///
+        /// `seen_keys` records every `set_api_key` CALL, which is not the
+        /// same thing: the pooled client sets the key on the inner client
+        /// and then again from the pool before the request. A rotation test
+        /// has to assert on the key the request carried, so that is
+        /// recorded separately.
+        request_keys: Arc<std::sync::Mutex<Vec<String>>>,
+        /// The key currently set on this client.
+        current_key: Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl ScriptedClient {
@@ -386,8 +506,31 @@ mod tests {
                 results,
                 call_count: AtomicUsize::new(0),
                 seen_keys,
+                request_keys: Arc::new(std::sync::Mutex::new(Vec::new())),
+                current_key: Arc::new(std::sync::Mutex::new(None)),
             })
         }
+    }
+
+    /// A scripted client plus the buffer of keys the REQUESTS carried.
+    ///
+    /// The keys a request carried are the thing a rotation test has to
+    /// assert on: the pooled client sets the key on the inner client and
+    /// then again from the pool, so the set-call log has one more entry
+    /// than the request log and the two differ in order.
+    fn scripted_with_request_keys(
+        results: Vec<Outcome>,
+        seen_keys: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> (Arc<dyn ModelClient>, Arc<std::sync::Mutex<Vec<String>>>) {
+        let request_keys = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client = Arc::new(ScriptedClient {
+            results,
+            call_count: AtomicUsize::new(0),
+            seen_keys,
+            request_keys: request_keys.clone(),
+            current_key: Arc::new(std::sync::Mutex::new(None)),
+        });
+        (client, request_keys)
     }
 
     #[async_trait]
@@ -397,12 +540,26 @@ mod tests {
         }
 
         fn set_api_key(&self, api_key: &str) {
+            if let Ok(mut slot) = self.current_key.lock() {
+                *slot = Some(api_key.to_string());
+            }
             if let Ok(mut keys) = self.seen_keys.lock() {
                 keys.push(api_key.to_string());
             }
         }
 
+        fn current_api_key(&self) -> Option<String> {
+            self.current_key.lock().ok().and_then(|k| k.clone())
+        }
+
         async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+            // Record the key in force at request time, before the scripted
+            // outcome runs.
+            if let Some(key) = self.current_key.lock().ok().and_then(|k| k.clone())
+                && let Ok(mut keys) = self.request_keys.lock()
+            {
+                keys.push(key);
+            }
             let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
             match self.results.get(idx) {
                 Some(Outcome::Ok(r)) => Ok(r.clone()),
@@ -441,6 +598,47 @@ mod tests {
                 "test",
             ));
         }
+        pool
+    }
+
+    /// A pool shaped like the one the gateway builds: one env-sourced key
+    /// and one config-sourced key.
+    fn pool_with_env_and_config(env_key: &str, config_key: &str) -> Arc<CredentialPool> {
+        let pool = Arc::new(CredentialPool::new("mock"));
+        pool.add(PooledCredential::new(
+            "OPENAI_API_KEY",
+            AuthType::ApiKey,
+            env_key,
+            "env:OPENAI_API_KEY",
+        ));
+        pool.add(PooledCredential::new(
+            "primary",
+            AuthType::ApiKey,
+            config_key,
+            "config (client.api_key)",
+        ));
+        pool
+    }
+
+    /// The pool the gateway ACTUALLY builds when the key comes from the
+    /// environment.
+    ///
+    /// `apply_string_option_override` overwrites `config.client.api_key`
+    /// with `OPENAI_API_KEY` at startup, so the config-sourced seed holds
+    /// the environment's value. `add_seed` then DEDUPES by value, so the
+    /// `env:`-sourced seed is skipped and the pool holds ONE credential:
+    /// the config-sourced one, carrying the environment's value.
+    ///
+    /// This is the shape on the common path, and it is why a rotation
+    /// cannot look for "the env credential" — there is not one.
+    fn pool_with_deduped_env_value(env_value: &str) -> Arc<CredentialPool> {
+        let pool = Arc::new(CredentialPool::new("mock"));
+        pool.add(PooledCredential::new(
+            "primary",
+            AuthType::ApiKey,
+            env_value,
+            "config (client.api_key)",
+        ));
         pool
     }
 
@@ -484,6 +682,302 @@ mod tests {
         assert!(pooled.pool.is_empty() && pooled.passthrough());
         pooled.set_endpoint("https://api.openai.com/v1", None);
         assert!(!pooled.passthrough());
+    }
+
+    /// RT-6c: a key rotated at runtime must be the key the NEXT request
+    /// sends.
+    ///
+    /// The pool selects a credential and calls `inner.set_api_key(&cred.value)`
+    /// before every request, so a key set only on the inner client is
+    /// overwritten by the pool's startup-seeded value on the very next turn.
+    /// The rotation must therefore reach the POOL.
+    #[tokio::test]
+    async fn a_rotated_key_is_the_key_the_next_request_sends() {
+        let seen = recording();
+        let (client, request_keys) = scripted_with_request_keys(
+            vec![
+                Outcome::Ok(chat_response("mock")),
+                Outcome::Ok(chat_response("mock")),
+            ],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(
+            client,
+            pool_with_env_and_config("old-env-key", "config-key"),
+        );
+
+        // Before the rotation, the pool's first credential is used.
+        pooled.chat(request()).await.expect("chat before rotation");
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["old-env-key"],
+            "before the rotation the pool's env key is used"
+        );
+
+        // Rotate, exactly as the gateway's per-turn `.env` reload does.
+        pooled.rotate_credential_value("rotated-key");
+
+        // The NEXT request must carry the rotated key, not the pool's old one.
+        pooled.chat(request()).await.expect("chat after rotation");
+        let keys = request_keys.lock().unwrap().clone();
+        assert_eq!(
+            keys,
+            vec!["old-env-key", "rotated-key"],
+            "the rotation must reach the pool, or the next request reverts to the old key"
+        );
+    }
+
+    /// A rotation must not discard the keys the user put in `operant.toml`.
+    /// Only the env-sourced credential is replaced.
+    /// The production shape: ONE credential, named "primary", whose source
+    /// is the config seed but whose VALUE came from the environment.
+    ///
+    /// This is what the gateway actually builds when the key comes from
+    /// `.env`: `apply_env_overrides` copies `OPENAI_API_KEY` into
+    /// `client.api_key`, the "primary" seed already holds that value, and
+    /// `add_seed` dedupes by value, so the `env:`-seeded credential is
+    /// DROPPED. A rotation that looks for "the env credential" finds
+    /// nothing here — and one that ADDS a credential puts it behind the
+    /// stale primary under `FillFirst`, so the rotation still does not
+    /// take effect. Only replacing the credential actually in use works.
+    #[tokio::test]
+    async fn a_rotation_reaches_the_single_credential_the_gateway_builds() {
+        let seen = recording();
+        let (client, request_keys) = scripted_with_request_keys(
+            vec![
+                Outcome::Ok(chat_response("mock")),
+                Outcome::Ok(chat_response("mock")),
+            ],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(client, pool_with_deduped_env_value("old-env-key"));
+        assert_eq!(pooled.pool.len(), 1, "the env seed is deduped away");
+
+        // Before the rotation the pool's only credential is used.
+        pooled.chat(request()).await.expect("chat before rotation");
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["old-env-key"],
+            "before the rotation the startup-seeded key is used"
+        );
+
+        pooled.rotate_credential_value("rotated-key");
+
+        pooled.chat(request()).await.expect("chat after rotation");
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["old-env-key", "rotated-key"],
+            "the rotation must reach the credential in use"
+        );
+        // The pool must not have grown a duplicate.
+        assert_eq!(pooled.pool.len(), 1, "the rotation must not add a key");
+    }
+
+    /// A rotation that happens BEFORE any request has run still has to
+    /// reach the pool: the first credential is the one `FillFirst` will
+    /// pick.
+    #[tokio::test]
+    async fn a_rotation_before_any_request_reaches_the_first_credential() {
+        let seen = recording();
+        let (client, request_keys) =
+            scripted_with_request_keys(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, pool_with_deduped_env_value("old-env-key"));
+
+        pooled.rotate_credential_value("rotated-key");
+
+        pooled.chat(request()).await.expect("chat after rotation");
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["rotated-key"],
+            "the first request must carry the rotated key"
+        );
+        assert_eq!(pooled.pool.len(), 1, "the rotation must not add a key");
+    }
+
+    /// The agent-loop rotation path calls `set_api_key` with a credential it
+    /// just selected FROM the pool. That must not overwrite the pool: the
+    /// benched credential would take the next key's value, and the pool
+    /// would end up holding a duplicate.
+    #[tokio::test]
+    async fn a_key_the_pool_already_holds_does_not_change_the_pool() {
+        let pool = pool_with(&["k1", "k2"]);
+        let seen = recording();
+        let client = ScriptedClient::new(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, pool);
+
+        // Exactly what `try_rotate_credential` does after `pool.select()`.
+        let selected = pooled.pool.select().expect("a credential is selected");
+        pooled.set_api_key(&selected.value);
+
+        let values: Vec<String> = pooled.pool.list().into_iter().map(|c| c.value).collect();
+        assert_eq!(
+            values,
+            vec!["k1".to_string(), "k2".to_string()],
+            "the pool must be unchanged: a selected key is already in it"
+        );
+    }
+
+    /// An internal pool rotation (a 429 or a 401 moving to the next
+    /// credential) changes WHICH credential is selected, and nothing else.
+    /// No credential's secret may change, and the pool must not grow.
+    ///
+    /// This is the reason `set_api_key` and `rotate_credential_value` are
+    /// separate methods: overloading one of them would rewrite the benched
+    /// credential's secret on every 401 and every 429.
+    #[tokio::test]
+    async fn an_internal_pool_rotation_changes_no_credential_value() {
+        let seen = recording();
+        let (client, request_keys) = scripted_with_request_keys(
+            vec![Outcome::RateLimited, Outcome::Ok(chat_response("mock"))],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(client, pool_with(&["k1", "k2"]));
+
+        pooled.chat(request()).await.expect("chat rotates on 429");
+
+        let values: Vec<String> = pooled.pool.list().into_iter().map(|c| c.value).collect();
+        assert_eq!(
+            values,
+            vec!["k1".to_string(), "k2".to_string()],
+            "the rotation moved to k2; it must not rewrite k1's secret"
+        );
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["k1", "k2"],
+            "the rotation switched credentials"
+        );
+    }
+
+    /// A retarget that carries NO key must not leave the client with no
+    /// credential.
+    ///
+    /// `set_endpoint` drops every pool credential and re-seeds only when a
+    /// key is present. A `.env` that carries only a base URL (the key lives
+    /// in `operant.toml`) reaches the retarget with no key, and the next
+    /// request would fail with "no available keys". The caller therefore
+    /// hands the client back the key it is already using — this pins that
+    /// the pool survives such a retarget.
+    #[tokio::test]
+    async fn a_retarget_with_the_current_key_keeps_the_pool_usable() {
+        let seen = recording();
+        let (client, request_keys) = scripted_with_request_keys(
+            vec![
+                Outcome::Ok(chat_response("mock")),
+                Outcome::Ok(chat_response("mock")),
+            ],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(client, pool_with(&["k1"]));
+
+        // The client is using k1; the caller reads it back and hands it over.
+        pooled.chat(request()).await.expect("first chat");
+        let current = pooled
+            .current_api_key()
+            .expect("the current key is readable");
+        assert_eq!(current, "k1");
+
+        pooled.set_endpoint("http://new.example/v1", Some(&current));
+
+        assert!(
+            !pooled.pool.is_empty(),
+            "the retarget must leave the client with a credential"
+        );
+        pooled
+            .chat(request())
+            .await
+            .expect("chat after the retarget");
+        assert_eq!(
+            request_keys.lock().unwrap().as_slice(),
+            ["k1", "k1"],
+            "the request after the retarget must still carry the key"
+        );
+    }
+
+    /// The agent-loop rotation path, exactly: use k1, invalidate it, select
+    /// k2, and ask the client to switch to k2.
+    ///
+    /// The client must not rewrite k1's secret. If `set_api_key` also
+    /// replaced the pool credential the client was using, k1 would take
+    /// k2's value here and the pool would hold two copies of k2 with k1's
+    /// real secret destroyed — on every 401 and every 429.
+    #[tokio::test]
+    async fn the_agent_loop_rotation_does_not_rewrite_the_benched_credential() {
+        let seen = recording();
+        let (client, _request_keys) = scripted_with_request_keys(
+            vec![
+                Outcome::Ok(chat_response("mock")),
+                Outcome::Ok(chat_response("mock")),
+            ],
+            seen.clone(),
+        );
+        let pooled = PooledModelClient::new(client, pool_with(&["k1", "k2"]));
+
+        // A request runs, so k1 is the credential in use.
+        pooled.chat(request()).await.expect("first chat");
+
+        // `try_rotate_credential`: invalidate the active credential, select
+        // the next one, and switch the client to it.
+        let active = pooled.pool.list().into_iter().next().expect("a credential");
+        pooled
+            .pool
+            .invalidate(&active.id, None, Some("rotated"), None, false);
+        let next = pooled
+            .pool
+            .select()
+            .expect("the next credential is selected");
+        assert_eq!(next.value, "k2", "the rotation moves to the second key");
+        pooled.set_api_key(&next.value);
+
+        let values: Vec<String> = pooled.pool.list().into_iter().map(|c| c.value).collect();
+        assert_eq!(
+            values,
+            vec!["k1".to_string(), "k2".to_string()],
+            "k1's secret must survive the rotation to k2"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rotation_keeps_the_config_sourced_keys() {
+        let pool = pool_with_env_and_config("old-env-key", "config-key");
+        let seen = recording();
+        let client = ScriptedClient::new(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, pool);
+
+        pooled.rotate_credential_value("rotated-key");
+
+        let values: Vec<String> = pooled.pool.list().into_iter().map(|c| c.value).collect();
+        assert!(
+            values.contains(&"rotated-key".to_string()),
+            "the rotated key must be in the pool: {values:?}"
+        );
+        assert!(
+            values.contains(&"config-key".to_string()),
+            "the config-sourced key must survive the rotation: {values:?}"
+        );
+        assert!(
+            !values.contains(&"old-env-key".to_string()),
+            "the old env key must be gone: {values:?}"
+        );
+    }
+
+    /// A pool with NO credentials used to fail with "no available keys"
+    /// before the inner client was ever tried, so a rotation could not
+    /// rescue a gateway that had no working key. It must now.
+    #[tokio::test]
+    async fn a_rotation_rescues_a_pool_with_no_credentials() {
+        let seen = recording();
+        let (client, request_keys) =
+            scripted_with_request_keys(vec![Outcome::Ok(chat_response("mock"))], seen.clone());
+        let pooled = PooledModelClient::new(client, Arc::new(CredentialPool::new("mock")));
+        assert!(pooled.pool.is_empty());
+
+        pooled.rotate_credential_value("rotated-key");
+
+        pooled
+            .chat(request())
+            .await
+            .expect("the rotated key must make the request work");
+        assert_eq!(request_keys.lock().unwrap().as_slice(), ["rotated-key"]);
     }
 
     #[tokio::test]

@@ -217,7 +217,7 @@ impl OpenAIClient {
 
     /// Effective API key: the runtime override (credential-pool rotation)
     /// if set, else the configured key, else a stable fallback.
-    fn effective_api_key(&self) -> String {
+    pub(crate) fn effective_api_key(&self) -> String {
         if let Ok(slot) = self.api_key_override.read()
             && let Some(key) = slot.as_deref().filter(|k| !k.is_empty())
         {

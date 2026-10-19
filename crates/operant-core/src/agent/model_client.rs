@@ -150,8 +150,38 @@ pub trait ModelClient: Send + Sync {
     /// implementation is a no-op (safe for clients that don't support dynamic
     /// key switching). Clients that store the key as a field should override
     /// this to update it.
+    ///
+    /// This means "use this key now" and nothing more. It does NOT change
+    /// any stored credential: the pool's own rotation path calls it with a
+    /// credential it just selected, and rewriting the pool there would
+    /// destroy the benched credential's secret. To REPLACE a credential's
+    /// secret — a key the operator rotated in `.env` — use
+    /// [`rotate_credential_value`](Self::rotate_credential_value).
     fn set_api_key(&self, _api_key: &str) {
         // Default no-op — not all clients store the key directly
+    }
+
+    /// Replace the credential this client is currently USING with a new
+    /// secret.
+    ///
+    /// This is the operation a runtime credential rotation needs: the
+    /// operator changed the key, so the client's own stored secret is
+    /// stale, and a client that re-reads its credential from a pool (or
+    /// from the process environment) would otherwise put the old secret
+    /// back on the wire.
+    ///
+    /// It is deliberately NOT `set_api_key`. The pool's internal rotation
+    /// path calls `set_api_key` with a DIFFERENT existing credential to
+    /// switch to; if that also rewrote a pool credential's value, the
+    /// benched credential would lose its secret and the pool would end up
+    /// holding a duplicate. The two operations have different meanings and
+    /// get different methods.
+    ///
+    /// The default implementation is a no-op: a client that holds its key
+    /// directly and is not pool-backed has nothing to replace.
+    fn rotate_credential_value(&self, _api_key: &str) {
+        // Default no-op — only a pool-backed client has a stored credential
+        // to replace.
     }
 
     /// Retarget the client at another OpenAI-compatible endpoint at runtime
@@ -159,6 +189,26 @@ pub trait ModelClient: Send + Sync {
     /// `None` for a keyless endpoint. Default no-op: wrappers forward it,
     /// concrete clients that cannot be retargeted ignore it.
     fn set_endpoint(&self, _base_url: &str, _api_key: Option<&str>) {}
+
+    /// The endpoint the client is currently using.
+    ///
+    /// A caller that wants to retarget only on a CHANGE needs to know the
+    /// current value: `set_endpoint` with no key EMPTIES a pool-backed
+    /// client's credentials, so calling it every turn for an endpoint that
+    /// did not change would break the agent.
+    fn base_url(&self) -> Option<String> {
+        None
+    }
+
+    /// The credential the client is currently using.
+    ///
+    /// A caller that retargets the endpoint needs to hand the client back
+    /// the key it is already using when the new endpoint's key is not
+    /// known: `set_endpoint` with no key empties a pool-backed client's
+    /// credentials, and an agent with no credential cannot make a request.
+    fn current_api_key(&self) -> Option<String> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

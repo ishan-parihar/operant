@@ -33,12 +33,47 @@ impl DotenvReload {
     }
 }
 
+/// The `.env` file the per-turn reload reads.
+///
+/// This MUST be the same file the startup loader reads, or the rotation
+/// watches a file nobody else does. The startup loader
+/// (`CliConfig::load` → `CliConfig::default`) reads
+/// `<config_dir>/.env`, where `config_dir` is `HERMES_HOME` or
+/// `~/.operant`. The reload used to read a CWD-relative `.env` instead,
+/// so in the documented setup — the key in `~/.operant/.env` — the
+/// rotation silently did nothing unless the gateway's working directory
+/// happened to be `~/.operant`.
+///
+/// The order is:
+///   1. `OPERANT_ENV_FILE` — the explicit override.
+///   2. `HERMES_ENV_FILE` — the legacy name for the same override.
+///   3. `<operant_home>/.env` — the documented location, and the one the
+///      startup loader reads.
+///   4. `.env` in the current working directory — the last resort, for a
+///      project-local file.
+pub fn dotenv_path() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("OPERANT_ENV_FILE")
+        && !path.trim().is_empty()
+    {
+        return std::path::PathBuf::from(path);
+    }
+    if let Ok(path) = std::env::var("HERMES_ENV_FILE")
+        && !path.trim().is_empty()
+    {
+        return std::path::PathBuf::from(path);
+    }
+    let home = crate::platform::operant_home().join(".env");
+    if home.exists() {
+        return home;
+    }
+    std::path::PathBuf::from(".env")
+}
+
 /// Reload environment variables from a `.env` file before each agent turn.
 ///
-/// Reads the file at `OPERANT_ENV_FILE` (legacy `HERMES_ENV_FILE` also
-/// honored for migration; or `.env` in the working directory) and sets each
-/// `KEY=VALUE` pair into the process environment, enabling credential
-/// rotation without restarting the long-lived gateway daemon.
+/// Reads the file at [`dotenv_path`] and sets each `KEY=VALUE` pair into
+/// the process environment, enabling credential rotation without
+/// restarting the long-lived gateway daemon.
 ///
 /// Returns the credential and endpoint the file carries, so the caller can
 /// push them into the running client. The returned values are the file's
@@ -48,9 +83,7 @@ impl DotenvReload {
 /// client has not seen yet.
 pub fn reload_dotenv() -> DotenvReload {
     let mut rotated = DotenvReload::default();
-    let path = std::env::var("OPERANT_ENV_FILE")
-        .or_else(|_| std::env::var("HERMES_ENV_FILE"))
-        .unwrap_or_else(|_| ".env".to_string());
+    let path = dotenv_path();
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return rotated,
@@ -157,6 +190,54 @@ mod tests {
             "the rotated endpoint must be reported to the caller"
         );
         assert!(!rotated.is_empty());
+    }
+
+    /// The reload must read the file the STARTUP LOADER reads, or the
+    /// rotation watches a file nobody else does.
+    ///
+    /// The startup loader reads `<config_dir>/.env`, where `config_dir` is
+    /// `HERMES_HOME` or `~/.operant`. The reload used to read a
+    /// CWD-relative `.env`, so in the documented setup — the key in
+    /// `~/.operant/.env` — the per-turn rotation silently did nothing.
+    #[test]
+    fn the_reload_reads_the_documented_env_file() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "operant_dotenv_home_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join(".env"), "OPENAI_API_KEY=home-key\n").expect("write env file");
+
+        let previous_home = std::env::var("HERMES_HOME").ok();
+        let previous_file = std::env::var("OPERANT_ENV_FILE").ok();
+        // SAFETY: test-only env mutation, serialized by ENV_LOCK.
+        unsafe {
+            std::env::set_var("HERMES_HOME", &dir);
+            std::env::remove_var("OPERANT_ENV_FILE");
+        }
+
+        let rotated = reload_dotenv();
+
+        match previous_home {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+        match previous_file {
+            Some(v) => unsafe { std::env::set_var("OPERANT_ENV_FILE", v) },
+            None => unsafe { std::env::remove_var("OPERANT_ENV_FILE") },
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            rotated.api_key.as_deref(),
+            Some("home-key"),
+            "the reload must read the documented env file"
+        );
     }
 
     /// A `.env` with no credential in it reports nothing, so the caller

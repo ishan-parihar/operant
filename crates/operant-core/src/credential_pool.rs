@@ -396,6 +396,25 @@ impl CredentialPool {
         inner.credentials.get(id).cloned()
     }
 
+    /// Replace a credential's value, keeping its id, name, source and
+    /// bookkeeping.
+    ///
+    /// A rotation changes the SECRET, not the credential's identity: the
+    /// pool's ordering, its failure state and its cooldown all belong to
+    /// the entry, and replacing the entry wholesale would reset them. This
+    /// is the operation a runtime rotation needs.
+    ///
+    /// Returns `true` when the credential existed and was updated.
+    pub fn replace_value(&self, id: &str, value: &str) -> bool {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let Some(cred) = inner.credentials.get_mut(id) else {
+            return false;
+        };
+        cred.value = value.to_string();
+        info!(provider = %self.provider, id = %id, "Replaced credential value in pool");
+        true
+    }
+
     /// Remove a credential from the pool by id.
     ///
     /// Returns the removed credential, or `None` if it was not found.

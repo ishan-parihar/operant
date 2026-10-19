@@ -912,8 +912,24 @@ impl TuiApp {
                 agent.set_api_key(key);
             }
             if let Some(base_url) = rotated.base_url.as_deref().filter(|u| !u.trim().is_empty()) {
-                tracing::info!("endpoint rotated from .env; updating the live client");
-                agent.set_endpoint(base_url, rotated.api_key.as_deref());
+                // Retarget ONLY on a change. `set_endpoint` with no key
+                // empties a pool-backed client's credentials, so calling it
+                // every turn for an endpoint that did not change would
+                // leave the agent with no credential at all.
+                if agent.base_url().as_deref() != Some(base_url) {
+                    tracing::info!("endpoint rotated from .env; updating the live client");
+                    // Pass the key the client is USING when the file does
+                    // not carry one: a `.env` with only a base URL (the key
+                    // lives in `operant.toml`) would otherwise empty the
+                    // pool.
+                    let key = rotated
+                        .api_key
+                        .as_deref()
+                        .filter(|k| !k.trim().is_empty())
+                        .map(str::to_string)
+                        .or_else(|| agent.current_api_key());
+                    agent.set_endpoint(base_url, key.as_deref());
+                }
             }
         }
         // (plan 04) watchdog repair: the agent task was aborted after the

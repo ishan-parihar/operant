@@ -502,6 +502,22 @@ impl ModelClient for FallbackModelClient {
     fn set_api_key(&self, api_key: &str) {
         self.inner.set_api_key(api_key);
     }
+
+    fn rotate_credential_value(&self, api_key: &str) {
+        // Forward so a runtime credential rotation reaches the pooled
+        // client underneath, which is where the credential is stored.
+        self.inner.rotate_credential_value(api_key);
+    }
+
+    fn base_url(&self) -> Option<String> {
+        // Only the primary is retargeted; fallback providers keep their own
+        // endpoints, so the primary's is the one that answers.
+        self.inner.base_url()
+    }
+
+    fn current_api_key(&self) -> Option<String> {
+        self.inner.current_api_key()
+    }
 }
 
 #[cfg(test)]

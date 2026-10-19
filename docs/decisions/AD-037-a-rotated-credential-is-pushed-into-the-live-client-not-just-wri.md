@@ -1,7 +1,7 @@
 ---
 ID: "AD-037"
-Title: "A rotated credential is pushed into the live client, not just written into the environment"
-Status: "Active"
+Title: "A rotated credential replaces the stored secret, and the two rotation operations are separate"
+Status: "Superseded by AD-038"
 Date: "2026-10-19"
 Description: "The gateway's per-turn .env reload wrote the new key into the process environment, where nothing read it back, so credential rotation did not work at all; the reload now reports the value and the gateway applies it to the running client"
 ---
@@ -9,6 +9,15 @@ Description: "The gateway's per-turn .env reload wrote the new key into the proc
 # AD-037: A rotated credential is pushed into the live client, not just written into the environment
 
 Immutable once numbered: a correction is a new record that supersedes this one.
+
+> **SUPERSEDED by AD-038 (iter-986).** The claim this record made — "a key
+> rotated in `.env` now takes effect on the next turn" — was FALSE when
+> published. The rotation did not reach the credential pool, which
+> re-selects the startup-seeded key before every request, and the reload
+> read a CWD-relative `.env` rather than the documented
+> `~/.operant/.env`. Both are fixed in AD-038. The diagnosis in this
+> record — that the rotation did not work at all — was correct, and the
+> seams it identified are the ones AD-038 builds on.
 
 ## Context
 

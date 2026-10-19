@@ -494,6 +494,24 @@ impl OperantAgent {
         self.client.set_endpoint(base_url, api_key);
     }
 
+    /// The endpoint the agent's client is currently using.
+    ///
+    /// A caller retargeting on a CHANGE needs this: `set_endpoint` with no
+    /// key empties a pool-backed client's credentials, so calling it every
+    /// turn for an endpoint that did not change would break the agent.
+    pub fn base_url(&self) -> Option<String> {
+        self.client.base_url()
+    }
+
+    /// The credential the agent's client is currently using.
+    ///
+    /// A caller that retargets the endpoint needs this: handing the client
+    /// back the key it is already using keeps its credentials when the new
+    /// endpoint's key is not known.
+    pub fn current_api_key(&self) -> Option<String> {
+        self.client.current_api_key()
+    }
+
     /// Swap the running client's credential without rebuilding it.
     ///
     /// The client captured its key when it was constructed, so a key
@@ -501,9 +519,14 @@ impl OperantAgent {
     /// request path on its own — the reload wrote the process environment
     /// and the running agent kept using the key it was built with. This
     /// is the seam the gateway's per-turn `.env` reload uses.
+    ///
+    /// This REPLACES the stored credential's secret, not just the runtime
+    /// key: a pool-backed client re-reads its credential from the pool
+    /// before every request, so a key set only on the inner client would
+    /// be overwritten on the next turn.
     pub fn set_api_key(&self, api_key: &str) {
         tracing::info!("Agent credential rotated at runtime");
-        self.client.set_api_key(api_key);
+        self.client.rotate_credential_value(api_key);
     }
 
     #[expect(
