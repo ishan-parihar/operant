@@ -161,9 +161,21 @@ pub struct NodeDetail {
 pub fn node_detail(node_id: &str, skills_dir: &Path, memory_dir: &Path) -> Option<NodeDetail> {
     if node_id.starts_with("memory:") {
         node_detail_memory(node_id, memory_dir)
-    } else {
+    } else if is_skill_node_path(node_id) {
         node_detail_skill(node_id, skills_dir)
+    } else {
+        None
     }
+}
+
+/// A skill node id is a relative path under `skills_dir`, made of plain
+/// segments only. `..`, `.`, and absolute ids are refused so a crafted id
+/// cannot reach outside the skills tree (KB-1).
+fn is_skill_node_path(node_id: &str) -> bool {
+    !node_id.is_empty()
+        && Path::new(node_id)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 /// Delete a node from the learning graph.
@@ -173,8 +185,13 @@ pub fn node_detail(node_id: &str, skills_dir: &Path, memory_dir: &Path) -> Optio
 pub fn delete_node(node_id: &str, skills_dir: &Path, memory_dir: &Path) -> MutationResult {
     if node_id.starts_with("memory:") {
         delete_memory_node(node_id, memory_dir)
-    } else {
+    } else if is_skill_node_path(node_id) {
         delete_skill_node(node_id, skills_dir)
+    } else {
+        MutationResult {
+            ok: false,
+            message: format!("'{}' is not a valid skill id", node_id),
+        }
     }
 }
 
@@ -190,8 +207,13 @@ pub fn edit_node(
 ) -> MutationResult {
     if node_id.starts_with("memory:") {
         edit_memory_node(node_id, content, memory_dir)
-    } else {
+    } else if is_skill_node_path(node_id) {
         edit_skill_node(node_id, content, skills_dir)
+    } else {
+        MutationResult {
+            ok: false,
+            message: format!("'{}' is not a valid skill id", node_id),
+        }
     }
 }
 
@@ -1085,6 +1107,29 @@ mod tests {
         assert!(!result.ok);
         assert!(result.message.contains("not found"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_skill_node_id_cannot_escape_skills_dir() {
+        // KB-1: `learning_manage delete ../outside` renamed a sibling of the
+        // skills dir into `.archive`. The id must be refused before any path join.
+        let base = tmp_dir("escape");
+        let skills = base.join("skills");
+        let outside = base.join("outside");
+        fs::create_dir_all(&skills).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("SKILL.md"), "keep").unwrap();
+
+        assert!(!delete_node("../outside", &skills, &skills).ok);
+        assert!(!edit_node("../outside", "pwned", &skills, &skills).ok);
+        assert!(node_detail("../outside", &skills, &skills).is_none());
+        assert!(!delete_node("/etc", &skills, &skills).ok);
+        assert_eq!(
+            fs::read_to_string(outside.join("SKILL.md")).unwrap(),
+            "keep"
+        );
+        assert!(outside.is_dir());
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

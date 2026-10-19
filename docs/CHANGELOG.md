@@ -97,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-958 — the knowledge-base tools stay inside their directories (KB-1, KB-2).** `learning_manage` delete and edit, and `skill_manage` write, delete, and view, used a model-supplied name as a path with no containment check, so `../../.ssh` moved a directory outside the skills tree. Skill ids and names are now plain path segments, and a `category` gets the same rules as a `name`. The approval gate and the security scan on skill writes are not changed here (KB-3, KB-4).
+
 - **iter-954 — `/session <employee>` checks the Holon roster in org mode (AD-004).** In org mode an id that is not on the roster is refused, and nothing is bound. An unreadable roster is refused too. Personal mode binds as before. `/tasks` now describes the agents menu it opens; it said "autonomous task ledger".
 
 - **iter-955 — a bearer token that is not header-safe is an error, not a panic (RT-20).** The Home Assistant `get_headers` and Spotify `headers` builders now return `Result`, and each of their callers returns `ToolResult::error`. The LinkedIn `api_headers` returns `anyhow::Result`, and its request path, 401 retry, and image upload propagate it. A token with a control character from config now fails the tool call with a message instead of aborting it.

@@ -1058,9 +1058,19 @@ fn collect_reference_children(skill_dir: &Path, ref_dir: &Path) -> Vec<SkillMeta
     out
 }
 
+/// `name` is a relative path of plain segments: no `..`, `.`, root, or empty
+/// segment. Lookups refuse anything else, because `Path::join` with an
+/// absolute or `..` name would step outside the skills tree (KB-2).
+fn is_plain_relative_path(name: &str) -> bool {
+    !name.is_empty()
+        && Path::new(name)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Find a skill by name across all skill directories.
 fn find_skill(skills_dir: &Path, name: &str) -> Option<PathBuf> {
-    if !skills_dir.exists() {
+    if !skills_dir.exists() || !is_plain_relative_path(name) {
         return None;
     }
     // Direct lookup
@@ -1700,6 +1710,12 @@ impl SkillManageTool {
             );
         };
         if let Some(err) = Self::validate_name(&parsed.name) {
+            return ToolResult::error("skill_manage", err);
+        }
+        // The category becomes a directory component, so it gets the same rules.
+        if let Some(cat) = &parsed.category
+            && let Some(err) = Self::validate_name(cat)
+        {
             return ToolResult::error("skill_manage", err);
         }
         // Nested paths (meta-skill children) and category are mutually
@@ -2443,6 +2459,22 @@ mod tests {
     #[test]
     fn test_validate_name_ok() {
         assert!(SkillManageTool::validate_name("my-skill_1").is_none());
+    }
+
+    #[test]
+    fn test_find_skill_refuses_name_outside_skills_dir() {
+        // KB-2: `find_skill` joined the raw name, so `../outside` resolved to a
+        // sibling of the skills dir and write/delete acted on it.
+        let base = tempfile::tempdir().unwrap();
+        let skills = base.path().join("skills");
+        let outside = base.path().join("outside");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("SKILL.md"), "keep").unwrap();
+
+        assert!(find_skill(&skills, "../outside").is_none());
+        assert!(find_skill(&skills, "/").is_none());
+        assert!(find_skill(&skills, "").is_none());
     }
 
     #[test]
