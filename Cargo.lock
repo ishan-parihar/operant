@@ -4084,6 +4084,7 @@ dependencies = [
  "operant-providers",
  "operant-tools",
  "parking_lot",
+ "rand 0.8.7",
  "regex",
  "reqwest",
  "rusqlite",

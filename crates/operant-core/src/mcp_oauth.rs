@@ -633,38 +633,14 @@ impl TokenStorage {
 // PKCE Helpers
 // ---------------------------------------------------------------------------
 
-#[expect(
-    clippy::expect_used,
-    reason = "Unix reads /dev/urandom, present on every supported Unix host; the non-Unix fallback is RT-19"
-)]
-/// Generate a PKCE code verifier (128 random bytes, base64url-encoded).
+/// Generate a PKCE code verifier (64 random bytes, base64url-encoded: 86 chars,
+/// inside RFC 7636's 43–128 range). `thread_rng` is a CSPRNG seeded by the OS on
+/// every target, so the verifier stays unpredictable off Unix as well.
 fn generate_code_verifier() -> String {
-    let mut bytes = vec![0u8; 64];
-    use std::io::Read;
-    // Use /dev/urandom on Unix, or a fallback
-    #[cfg(unix)]
-    {
-        let mut f = std::fs::File::open("/dev/urandom").expect("Failed to open /dev/urandom");
-        f.read_exact(&mut bytes)
-            .expect("Failed to read /dev/urandom");
-    }
-    #[cfg(not(unix))]
-    {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-        // Simple pseudo-random fallback for non-Unix (e.g., Windows)
-        let mut state = seed;
-        for byte in bytes.iter_mut() {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            *byte = (state >> 32) as u8;
-        }
-    }
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
+    use rand::RngCore;
+    let mut bytes = [0u8; 64];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Compute the PKCE code challenge (S256 method).
