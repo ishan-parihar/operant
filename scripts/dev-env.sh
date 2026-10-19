@@ -23,19 +23,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_DIR="${LOCAL_DIR:-$(dirname "$SCRIPT_DIR")/local}"
 ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.24.4"
 
-# libclang (extracted from libclang1-19 deb, no root needed)
-# Prefer the symlink the provisioner makes for a system libclang: bindgen globs
-# for 'libclang.so' and 'libclang-*.so.*', and a distro that ships only
-# libclang.so.N.N satisfies neither, so pointing LIBCLANG_PATH straight at
-# /usr/lib fails even when libclang is installed.
-if [ -z "$LIBCLANG_PATH" ] && [ -e "$LOCAL_DIR/libclang/libclang.so" ]; then
-  LIBCLANG_PATH="$LOCAL_DIR/libclang"
+# libclang. One resolution for every build script, in
+# scripts/libclang-resolve.sh. The old inline version fell through to
+# "$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu" — a directory that
+# exists only after the Debian .deb fallback ran — and only printed a
+# warning, so the build died two minutes later inside bindgen with a message
+# that named neither the cause nor the fix. It also trusted a dangling
+# `local/libclang/libclang.so` symlink, which passes a plain existence test
+# and then fails to load.
+if ! . "$(dirname "${BASH_SOURCE[0]}")/libclang-resolve.sh"; then
+  echo "[dev-env] ERROR: no loadable libclang found." >&2
+  echo "[dev-env]        run scripts/provision-build-deps.sh, or set" >&2
+  echo "[dev-env]        LIBCLANG_PATH to a directory holding libclang.so." >&2
+  exit 1
 fi
-export LIBCLANG_PATH="${LIBCLANG_PATH:-$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu}"
-if ! ls "$LIBCLANG_PATH"/libclang.so >/dev/null 2>&1 && ! ls "$LIBCLANG_PATH"/libclang-*.so.* >/dev/null 2>&1; then
-  echo "[dev-env] WARN: no libclang under LIBCLANG_PATH=$LIBCLANG_PATH" >&2
-  echo "[dev-env]       run scripts/provision-build-deps.sh first." >&2
-fi
+_resolved_libclang="$(resolve_libclang "$LOCAL_DIR")"
+export LIBCLANG_PATH="$_resolved_libclang"
 
 # ONNX Runtime (prebuilt tarball from microsoft/onnxruntime releases)
 export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$ORT_DIR/lib}"

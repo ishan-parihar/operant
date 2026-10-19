@@ -14,19 +14,29 @@
 # this could fail outright.
 set -e
 
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 # Root of the locally-provisioned dependency tree (libclang, ONNX Runtime, the
 # synthetic alsa.pc, the linker libs). Same variable name dev-env.sh uses, so
 # `LOCAL_DIR=... ./scripts/check.sh ...` means the same thing to both.
 LOCAL_DIR="${LOCAL_DIR:-/home/z/my-project/local}"
 ORT_DIR="$LOCAL_DIR/onnxruntime-linux-x64-1.24.4"
 
-# libclang path resolution
-if [ -d "$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu" ]; then
-    export LIBCLANG_PATH="$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu"
-elif [ -f "/usr/lib/libclang.so" ]; then
-    export LIBCLANG_PATH=/usr/lib
-elif [ -f "/usr/lib/llvm21/lib/libclang.so" ]; then
-    export LIBCLANG_PATH=/usr/lib/llvm21/lib
+# libclang path resolution. One resolver, shared with dev-env.sh and
+# provision-build-deps.sh, so the three scripts cannot drift apart again
+# (they did: this one found /usr/lib, dev-env.sh found nothing, and the
+# build failed in bindgen two minutes later). The old chain also hardcoded
+# llvm21, so a box with a different LLVM version fell through to no
+# LIBCLANG_PATH at all.
+# shellcheck source=scripts/libclang-resolve.sh
+. "$DIR/libclang-resolve.sh"
+if LIBCLANG_PATH="$(resolve_libclang "$LOCAL_DIR")"; then
+    export LIBCLANG_PATH
+else
+    echo "[check] ERROR: no loadable libclang found." >&2
+    echo "[check]        run scripts/provision-build-deps.sh, or set" >&2
+    echo "[check]        LIBCLANG_PATH to a directory holding libclang.so." >&2
+    exit 1
 fi
 
 # ORT_LIB_LOCATION path resolution
@@ -76,7 +86,6 @@ if [ -d "$LOCAL_DIR/lib" ]; then
     export RUSTFLAGS="-L native=$LOCAL_DIR/lib"
 fi
 
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR/.."
 
 # memory-wire persistent-latest (user-ordered): advance the branch-tracking

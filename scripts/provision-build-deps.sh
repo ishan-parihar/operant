@@ -20,14 +20,27 @@ mkdir -p "$LOCAL_DIR"
 # pointing at such a directory fails even though libclang is installed. Prefer a
 # system libclang, linked under a name bindgen will find, before falling back to
 # the Debian .deb (which also needs dpkg-deb, absent on non-Debian systems).
+#
+# The link is REPAIRED, not just created. A link whose target the box later
+# removed (a libclang upgrade) stays behind as a dangling symlink: it passes
+# a plain existence test, so the old script left it alone, and the build then
+# died in bindgen with "No such file or directory" on a path that looked
+# present. The resolver in scripts/libclang-resolve.sh rejects a dangling
+# link for the same reason.
+# shellcheck source=scripts/libclang-resolve.sh
+. "$SCRIPT_DIR/libclang-resolve.sh"
 LINK_DIR="$LOCAL_DIR/libclang"
 mkdir -p "$LINK_DIR"
-# Prefer the plain name bindgen globs, then any versioned variant.
+# Prefer the plain name bindgen globs, then any versioned variant, then the
+# '/usr/lib/llvm-N/lib' layout a flat search misses.
 SYS_LIBCLANG=""
-for cand in /usr/lib/libclang.so /usr/lib/libclang.so.*.* /usr/lib/*/libclang.so.*.*; do
-  if [ -e "$cand" ]; then SYS_LIBCLANG="$cand"; break; fi
-done
+if LIB_CLANG_TARGET="$(libclang_link_target "$LOCAL_DIR")"; then
+  SYS_LIBCLANG="$LIB_CLANG_TARGET"
+fi
 if [ -n "$SYS_LIBCLANG" ]; then
+  if [ -L "$LINK_DIR/libclang.so" ] && [ ! -e "$LINK_DIR/libclang.so" ]; then
+    echo "[provision] repairing a dangling libclang link"
+  fi
   ln -sf "$SYS_LIBCLANG" "$LINK_DIR/libclang.so"
   echo "[provision] using system libclang: $SYS_LIBCLANG"
 elif [ ! -e "$LINK_DIR/libclang.so" ] && [ ! -f "$LOCAL_DIR/libclang_extract/usr/lib/x86_64-linux-gnu/libclang-19.so.19" ]; then
