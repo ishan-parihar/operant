@@ -1,5 +1,12 @@
-<!-- genome:zone records sha=6d994216bc7f -->
-(no records)
+<!-- genome:zone records sha=f5810108dc9c -->
+**Decisions** (4)
+
+| ID | Title | Status | Description |
+|---|---|---|---|
+| AD-001 | Body runs write no sessions row; attribution lives in the trajectory | Active | Body runs write no sessions row; attribution lives in the trajectory |
+| AD-002 | The TUI org view reads the Holon read API in-process, not by shelling out | Active | The TUI org view reads the Holon read API in-process, not by shelling out |
+| AD-003 | The TUI keeps the default operant home; HERMES_HOME belongs to the Holon driver | Active | The TUI keeps the default operant home; HERMES_HOME belongs to the Holon driver |
+| AD-004 | Org mode validates /session employee ids against the Holon roster before binding | Active | Org mode validates /session employee ids against the Holon roster before binding |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

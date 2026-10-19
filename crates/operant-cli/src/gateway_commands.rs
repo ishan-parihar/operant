@@ -725,6 +725,25 @@ fn open_stored_transcript(
 /// Plugin commands: when the command name is not found in the built-in
 /// [`COMMAND_REGISTRY`], this function falls through to the plugin command
 /// registry via [`operant_core::plugins::handle_plugin_command`].
+/// Org mode checks a `/session <emp>` id against the Holon roster before the
+/// bind, so an id no employee backs is refused instead of bound. Returns the
+/// refusal to show, or `None` when the bind may proceed. Personal mode always
+/// proceeds.
+fn unknown_org_employee(config: &AppConfig, requested: &str) -> Option<String> {
+    if !config.holon.enabled {
+        return None;
+    }
+    match crate::cmd_org::roster_has_employee(config, requested) {
+        Ok(true) => None,
+        Ok(false) => Some(format!(
+            "`{requested}` is not on the Holon roster — nothing bound. List the ids with `operant org holon roster`."
+        )),
+        Err(e) => Some(format!(
+            "Could not read the Holon roster, so nothing was bound: {e}"
+        )),
+    }
+}
+
 pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> Option<String> {
     let args = _args;
     let def = COMMAND_REGISTRY.iter().find(|d| {
@@ -822,19 +841,21 @@ pub fn handle_command(cmd_name: &str, _args: &str, ctx: &CommandContext<'_>) -> 
                             );
                         }
                         (requested, Some(entry)) => {
-                            // G+1: no local registry to validate against —
-                            // the id is a name the seat policy (personal
-                            // seats) or Holon (org mode) resolves. Bind it.
-                            // G+1: no local registry — the id resolves at
-                            // the policy (personal) or Holon (org) seam.
-                            match store.bind_employee(&entry.session_key, requested) {
-                                Ok(Some(_)) => msg.push_str(&format!(
-                                    "Bound this session to `{requested}` — the next turn runs as that employee."
-                                )),
-                                Ok(None) => msg.push_str(
-                                    "Session entry vanished before binding — retry.",
-                                ),
-                                Err(e) => msg.push_str(&format!("Could not bind: {e}")),
+                            // Org mode checks the id against the Holon roster
+                            // first. Personal mode binds the name; the seat
+                            // policy resolves it.
+                            if let Some(refusal) = unknown_org_employee(ctx.config, requested) {
+                                msg.push_str(&refusal);
+                            } else {
+                                match store.bind_employee(&entry.session_key, requested) {
+                                    Ok(Some(_)) => msg.push_str(&format!(
+                                        "Bound this session to `{requested}` — the next turn runs as that employee."
+                                    )),
+                                    Ok(None) => msg.push_str(
+                                        "Session entry vanished before binding — retry.",
+                                    ),
+                                    Err(e) => msg.push_str(&format!("Could not bind: {e}")),
+                                }
                             }
                         }
                         (requested, None) => {
@@ -2588,5 +2609,18 @@ mod tests {
             own.contains("ungoverned"),
             "the chat's own seat has no policy row: {own}"
         );
+    }
+
+    #[test]
+    fn org_bind_refuses_an_id_off_the_roster() {
+        use crate::cmd_org::roster_tests::{org_config, org_home};
+        let dir = org_home(&["emp_a"]);
+        let config = org_config(dir.path());
+        assert!(unknown_org_employee(&config, "emp_a").is_none());
+        let refusal = unknown_org_employee(&config, "hrmaster").expect("refused");
+        assert!(refusal.contains("not on the Holon roster"), "{refusal}");
+        let mut personal = org_config(dir.path());
+        personal.holon.enabled = false;
+        assert!(unknown_org_employee(&personal, "hrmaster").is_none());
     }
 }

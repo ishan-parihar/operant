@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **iter-954 — a Holon body's trajectory names its run and employee (AD-001).** A Holon run's operant-side trajectory carries `holon_run_id` and `holon_employee` in its metadata, in the operant home's `trajectories/` file. The kernel's `trajectory.json` keeps its shape, and body runs still write no `sessions` row.
+
 - **iter-929 — context bust permission (plan 06 P1).** Each request gets a
   `BustPermission`, decided once in `build_messages`: `Natural` when the cache is
   cold anyway (model or system prompt changed, or the last request is older than
@@ -92,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **iter-949 — the unregistered `proxy_config` agent tool is removed.** Nothing registered it, and its writes went to `config.toml`, which no part of the CLI reads. Proxy settings are configured in `[proxy]` in `operant.toml`, applied at startup. The tool's test lock went with it: the web-search tests no longer need one. The selector error now names the valid service keys.
 
 ### Fixed
+
+- **iter-954 — `/session <employee>` checks the Holon roster in org mode (AD-004).** In org mode an id that is not on the roster is refused, and nothing is bound. An unreadable roster is refused too. Personal mode binds as before. `/tasks` now describes the agents menu it opens; it said "autonomous task ledger".
 
 - **iter-953 — the OAuth PKCE verifier comes from an OS-seeded CSPRNG on every target (RT-19).** On non-Unix targets the verifier came from a pseudo-random state seeded with the clock, so it could be predicted from roughly when it was generated. It now draws 64 bytes from `rand::thread_rng()` everywhere, and the `/dev/urandom` read and its `expect`s are gone.
 

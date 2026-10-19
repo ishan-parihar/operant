@@ -15,6 +15,7 @@ copied from each page's first heading.
 - [agentic-os/ORG-LAYER-DISPOSITION.md](agentic-os/ORG-LAYER-DISPOSITION.md) — Org layer disposition: keep, rewire, retire
 - [agentic-os/README.md](agentic-os/README.md) — Operant as an agentic OS, with Holon
 - [agentic-os/REMAINING-GAPS.md](agentic-os/REMAINING-GAPS.md) — Remaining implementation gaps (2026-10-16)
+- [audit/2026-10-19-holon-employee-sessions-in-the-tui-integration-panels-and-se.md](audit/2026-10-19-holon-employee-sessions-in-the-tui-integration-panels-and-se.md) — Holon employee sessions in the TUI: integration, panels, and session outline
 
 ## Parity, gap and integration audits
 

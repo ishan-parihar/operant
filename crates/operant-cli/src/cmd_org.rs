@@ -293,6 +293,15 @@ fn holon_api(config: &AppConfig) -> Result<operant_os::api::HolonApi> {
         .map_err(|e| anyhow::anyhow!("holon read API unavailable: {e}"))
 }
 
+/// Whether `employee` is on the Holon roster (`api_employees`). Only meaningful
+/// in org mode; the caller decides what personal mode does with the answer.
+pub(crate) fn roster_has_employee(config: &AppConfig, employee: &str) -> Result<bool> {
+    Ok(holon_api(config)?
+        .employees()?
+        .iter()
+        .any(|e| e.id == employee))
+}
+
 async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<()> {
     // Phase G: the archive touches only the OPERANT home — the read API
     // (and its live-instance gate) is irrelevant, and a not-yet-imported
@@ -564,5 +573,55 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         let cut: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{cut}…")
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod roster_tests {
+    use super::*;
+
+    /// A Holon home whose `work.db` publishes the read API (version 4) with one
+    /// roster row per id.
+    pub(crate) fn org_home(ids: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("execution").join("runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        let conn = rusqlite::Connection::open(runtime.join("work.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE api_meta (key TEXT, value TEXT);
+             INSERT INTO api_meta VALUES ('api_version', '4');
+             CREATE TABLE api_employees (id TEXT, name TEXT, title TEXT, department TEXT,
+                 manager_id TEXT, manager TEXT, status TEXT, driver TEXT, roles TEXT);",
+        )
+        .unwrap();
+        for id in ids {
+            conn.execute(
+                "INSERT INTO api_employees VALUES (?1, 'n', 't', 'd', NULL, NULL, 'active', 'operant', NULL)",
+                [id],
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    pub(crate) fn org_config(home: &std::path::Path) -> AppConfig {
+        let mut config = AppConfig::default();
+        config.holon.enabled = true;
+        config.holon.home = home.to_path_buf();
+        config
+    }
+
+    #[test]
+    fn roster_lookup_matches_published_ids_only() {
+        let dir = org_home(&["emp_a"]);
+        let config = org_config(dir.path());
+        assert!(roster_has_employee(&config, "emp_a").unwrap());
+        assert!(!roster_has_employee(&config, "hrmaster").unwrap());
+    }
+
+    #[test]
+    fn unreadable_roster_is_an_error_not_a_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(roster_has_employee(&org_config(dir.path()), "emp_a").is_err());
     }
 }

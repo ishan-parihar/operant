@@ -66,6 +66,17 @@ impl OperantAgent {
             session_id,
             &self.config.model,
         );
+        // AD-001: a Holon body's operant-side trajectory names its run and
+        // employee. The kernel's trajectory.json drops metadata by design; the
+        // kernel already holds the run row.
+        if crate::platform::is_holon_run() {
+            if let Ok(run_id) = std::env::var("HOLON_RUN_ID") {
+                trajectory = trajectory.set_metadata("holon_run_id", run_id);
+            }
+            if let Some(employee) = crate::platform::holon_employee() {
+                trajectory = trajectory.set_metadata("holon_employee", employee);
+            }
+        }
         trajectory.iterations = iterations;
         trajectory.tool_calls = tool_calls;
         trajectory.success = success;

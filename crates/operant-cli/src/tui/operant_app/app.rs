@@ -315,7 +315,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/steer", "Queue a steering message mid-run"),
     RegisteredCommand::public("/stop", "Stop the running turn"),
     RegisteredCommand::public("/subgoal", "Show the current subgoal"),
-    RegisteredCommand::public("/tasks", "Show the autonomous task ledger"),
+    RegisteredCommand::public("/tasks", "Open the agents menu (same as /agents)"),
     RegisteredCommand::public("/theme", "Show or switch the theme"),
     RegisteredCommand::public("/undo", "Rewind the last N turns"),
     RegisteredCommand::public("/verbose", "Toggle verbose reasoning display"),
