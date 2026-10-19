@@ -14,6 +14,7 @@ members = [
     "crates/operant-tools",
     "crates/operant-harness",
 ]
+exclude = ["vendor/ndarray-npy"]
 
 [workspace.package]
 version = "0.2.1"
@@ -121,3 +122,8 @@ codegen-units = 1
 [workspace.lints.clippy]
 clone_on_copy = "warn"
 needless_borrow = "warn"
+
+# RT-18: kokoro-tiny -> ndarray-npy 0.9 pins zip 2, and every zip below 9.0.0 is in RUSTSEC-2026-0367/0368/0369.
+# This patch keeps the same ndarray-npy API and bumps only its zip requirement; see vendor/ndarray-npy/README.md.
+[patch.crates-io]
+ndarray-npy = { path = "vendor/ndarray-npy" }

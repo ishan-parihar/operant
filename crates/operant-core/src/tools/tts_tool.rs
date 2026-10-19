@@ -1116,4 +1116,38 @@ mod tests {
             .await;
         assert!(!result.success);
     }
+
+    /// Model-backed check for BUGS RT-18: the cached Kokoro model and voices
+    /// load through the vendored ndarray-npy (zip 9), and the tool returns
+    /// audible speech. Run with `cargo test -p operant-core kokoro_speaks -- --ignored`.
+    #[tokio::test]
+    #[ignore = "needs the Kokoro model and voices in ~/.cache/kokoros"]
+    async fn kokoro_speaks_through_the_tool_with_the_cached_model() {
+        let tool = TtsTool::new();
+        let result = tool
+            .execute(
+                json!({"text": "Operant audio check.", "provider": "kokoro"}),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(result.success, "{:?}", result.error);
+        let content: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        let wav = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            content["audio"].as_str().unwrap(),
+        )
+        .unwrap();
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(wav)).unwrap();
+        let spec = reader.spec();
+        let samples: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+        let seconds = samples.len() as f32 / spec.sample_rate as f32;
+        let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+        eprintln!(
+            "kokoro live check: {seconds:.2}s at {} Hz, peak {peak}",
+            spec.sample_rate
+        );
+        assert_eq!(spec.sample_rate, 24_000);
+        assert!((0.8..8.0).contains(&seconds), "duration {seconds}s");
+        assert!(peak > 1_000, "silent output (peak {peak})");
+    }
 }
