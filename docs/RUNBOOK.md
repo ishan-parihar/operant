@@ -11,7 +11,9 @@ authority for the iteration loop itself is AGENTS.md ("START HERE").
 | scoped check (never `--workspace` mid-iteration) | `./scripts/check.sh check -p operant-core --lib` | scope to the crate you edited; workspace is the final gate only |
 | build (syncs memory-wire lock first) | `scripts/build.sh --release` | one sync code path; `--offline` skips the sync, `--strict` fails on sync failure |
 | clippy gate | `bash scripts/clippy-warning-gate.sh` | red at the pristine tip during peer W-zone work — prove your own delta is zero, don't fix the peer's (fleet rule 7) |
+| supply-chain gate | `bash scripts/supply-chain-gate.sh` | `cargo audit` against the committed lockfile; fails on any advisory the committed allowlist does not cover. `cargo-audit` is NOT on PATH — the script looks in `~/.cargo/bin`. `cargo-deny` is not installed, so the licence and duplicate-version policies in `deny.toml` stay unexecuted by design. |
 | test compile gate | `bash scripts/test-compile-gate.sh` | every kept crate's TEST targets compile |
+| build script tests | `bash scripts/tests/libclang_resolve_test.sh && bash scripts/tests/supply_chain_gate_test.sh` | the libclang resolver (three scripts resolving libclang three different ways broke the build) and the supply-chain gate's own fail-on-new-advisory contract |
 | format | `cargo fmt --all` | |
 
 ## Fleet protocol traps

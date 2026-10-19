@@ -108,7 +108,10 @@ if [[ ! -f "${ALLOWLIST_FILE}" ]]; then
   exit 1
 fi
 
-grep -vE '^\s*(#|$)' "${ALLOWLIST_FILE}" | LC_ALL=C sort -u > "${tmp_allow}"
+# `grep -v` exits 1 when it selects nothing, which `set -e` would read as a
+# script failure: an allowlist that is all comments aborts the gate before
+# it can report what it found. Same shape as the supply-chain gate.
+grep -vE '^\s*(#|$)' "${ALLOWLIST_FILE}" | LC_ALL=C sort -u > "${tmp_allow}" || true
 
 # `comm` compares using the collation of the ambient locale, but the inputs are
 # byte-sorted under LC_ALL=C, so it must run under the same locale to avoid

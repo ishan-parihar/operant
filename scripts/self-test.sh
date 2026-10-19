@@ -70,6 +70,18 @@ run_test "Run workspace tests" "./scripts/check.sh test --workspace 2>&1"
 # 3. Clippy
 run_test "Run clippy" "run_clippy"
 
+# 3b. Supply chain. `deny.toml` is the policy, but a policy nobody executes
+# is a comment (RT-10). cargo-audit runs against the committed lockfile and
+# fails on any advisory the committed allowlist does not cover. cargo-deny
+# is not installed here, so the licence and duplicate-version policies stay
+# unexecuted by design — see the header of deny.toml.
+run_test "Supply-chain advisories (scripts/supply-chain-gate.sh)" "bash scripts/supply-chain-gate.sh 2>&1"
+
+# 3c. The build scripts have their own regression tests: the libclang
+# resolver (three scripts resolving libclang three different ways broke the
+# build) and the supply-chain gate's own fail-on-new-advisory contract.
+run_test "Build script tests" "bash scripts/tests/libclang_resolve_test.sh && bash scripts/tests/supply_chain_gate_test.sh 2>&1"
+
 # 4. Formatting
 run_test "Check formatting" "./scripts/check.sh fmt --all 2>&1"
 
