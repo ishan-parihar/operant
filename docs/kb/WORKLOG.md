@@ -91,3 +91,4 @@ Append-only: `kb log "<entry>"` — one entry per unit of work.
 - **2026-10-19T12:20Z** · `claude-code` — iter-979 (test). The workspace run failed once in `live_tails_render_once_while_a_tool_is_reserved`: an unguarded test (`ctrl_t_no_longer_enters_copy_mode_and_alt_y_does`) sent Ctrl+T, which writes the process-wide reasoning override and races the render. The test now takes `reasoning_override_test_guard()` and clears the override. Verified: workspace 7113 passed, 0 failed, 24 ignored; clippy gate new=0 stale=0; operant-cli bin 3 of 3 passed.
 - **2026-10-19T21:01** · `omp` — Autonomous defect sweep, iters 980-992: 13 iterations, each a separate pushed commit
 - **2026-10-19T22:32** · `omp` — Autonomous defect sweep, iters 980-1002: 23 iterations, each a separate pushed commit
+- **2026-10-19T23:07** · `omp` — Autonomous defect sweep, iters 980-1008: 29 iterations, each a separate pushed commit
