@@ -66,9 +66,6 @@ impl App {
         };
         let initial_active_provider =
             super::super::provider::infer_provider_from_model(&config.agent.model);
-        let (bridge_state_tx, bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
-            crate::tui::bridge_state::BridgeConnectionState,
-        >();
         // P5-2: read before `config` moves into the struct literal.
         let terminal_scroll_mode = config.tui.terminal_scroll_mode;
         let show_tool_calls = config.tui.show_tool_calls;
@@ -168,9 +165,6 @@ impl App {
 
             failed_input_recovery: None,
             session_title: None,
-            bridge_state: crate::tui::bridge_state::BridgeConnectionState::Disconnected,
-            bridge_state_rx: Some(bridge_state_rx),
-            bridge_state_tx: Some(bridge_state_tx),
             core_mcp_manager: None,
             core_tool_registry: None,
             core_memory_provider: None,

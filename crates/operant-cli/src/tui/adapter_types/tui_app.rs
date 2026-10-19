@@ -318,16 +318,6 @@ impl TuiApp {
                     // wait for the next slash command, so the prompt right
                     // after a /model pick still went out on the OLD model.
                     Self::run_pending_agent_actions(&mut self.app, agent.as_ref()).await;
-                    // Poll bridge/gateway connection state updates from handler.
-                    if let Some(ref mut rx) = self.app.bridge_state_rx {
-                        while let Ok(state) = rx.try_recv() {
-                            self.app.bridge_state = state;
-                            self.app
-                                .transcript_version
-                                .set(self.app.transcript_version.get().wrapping_add(1));
-                        }
-                    }
-
                     // If a slash command set a pending shell command on a
                     // *previous* iteration, run it BEFORE processing the next
                     // input. (Slash commands set the field inside

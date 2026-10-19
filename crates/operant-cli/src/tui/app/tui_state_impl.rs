@@ -492,10 +492,12 @@ impl TuiState for App {
     }
 
     fn is_remote_mode(&self) -> bool {
-        matches!(
-            self.bridge_state,
-            crate::tui::bridge_state::BridgeConnectionState::Connected { .. }
-        )
+        // operant has no client/server ("bridge") mode: the gateway runs as
+        // a separate process and the TUI never connects to it. The
+        // vestigial bridge_state channel was removed in iter-984, so this
+        // is a constant rather than a read of a field that could never
+        // change.
+        false
     }
 
     fn is_canary(&self) -> bool {
@@ -524,12 +526,8 @@ impl TuiState for App {
     }
 
     fn server_display_name(&self) -> Option<String> {
-        match &self.bridge_state {
-            crate::tui::bridge_state::BridgeConnectionState::Connected { .. } => {
-                Some("bridge".to_string())
-            }
-            _ => None,
-        }
+        // No remote mode, so no server name. See `is_remote_mode`.
+        None
     }
 
     fn server_display_icon(&self) -> Option<String> {
@@ -544,12 +542,8 @@ impl TuiState for App {
     }
 
     fn connected_clients(&self) -> Option<usize> {
-        match &self.bridge_state {
-            crate::tui::bridge_state::BridgeConnectionState::Connected { peer_count, .. } => {
-                Some(*peer_count as usize)
-            }
-            _ => None,
-        }
+        // No remote mode, so no client count. See `is_remote_mode`.
+        None
     }
 
     fn status_notice(&self) -> Option<String> {
@@ -587,10 +581,8 @@ impl TuiState for App {
     }
 
     fn remote_startup_phase_active(&self) -> bool {
-        matches!(
-            self.bridge_state,
-            crate::tui::bridge_state::BridgeConnectionState::Connecting
-        )
+        // No remote mode, so no remote startup phase. See `is_remote_mode`.
+        false
     }
 
     fn animation_elapsed(&self) -> f32 {

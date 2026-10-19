@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **iter-984 — a broken MCP server no longer stops operant from starting (AD-036).** One unreachable MCP server (a stale URL, a binary that is not installed, a host that is down) aborted every command that builds the tool registry, so `operant tools list` exited 1 with a raw `Connection refused` and the agent could not start at all. The failure is now recorded, logged, and shown in the `/mcp` view as an `error` status with the reason; the rest of the registry still builds. The `/mcp` view now distinguishes connected, disconnected (never tried), and error (tried and failed).
+
+- **iter-981 — the build no longer dies in bindgen when libclang is missing or stale (AD-035).** Three build scripts resolved libclang three different ways, and the one `dev-env.sh` used fell through to a directory that does not exist and only warned — so the build failed two minutes later inside `espeak-rs-sys` with a message naming neither the cause nor the fix. One resolver now owns the choice for all three scripts, a symlink whose target the machine removed is rejected rather than trusted, a missing libclang is a startup error that names the fix, and the provisioner repairs a dangling link.
+
 ### Added
 
 - **iter-954 — a Holon body's trajectory names its run and employee (AD-001).** A Holon run's operant-side trajectory carries `holon_run_id` and `holon_employee` in its metadata, in the operant home's `trajectories/` file. The kernel's `trajectory.json` keeps its shape, and body runs still write no `sessions` row.

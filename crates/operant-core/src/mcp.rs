@@ -1675,6 +1675,18 @@ pub struct McpManager {
     servers: Arc<RwLock<HashMap<String, McpTransport>>>,
     /// Tracks tool names registered in ToolRegistry for incremental sync
     registered_tool_names: Arc<RwLock<Vec<String>>>,
+    /// The last connect failure per server name.
+    ///
+    /// A server that fails to connect is NOT inserted into `servers`, so
+    /// before this map existed the failure had nowhere to live: the caller
+    /// got an `Err` and either aborted the whole command on it or dropped
+    /// it, and the MCP view had no way to tell "not configured" from
+    /// "configured and broken". The message is kept so the TUI's
+    /// `McpViewStatus::Error` and its error detail row can name the cause.
+    ///
+    /// A successful connect clears the entry, so a server that was broken
+    /// and then fixed does not keep showing its old error.
+    connect_failures: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl Default for McpManager {
@@ -1682,6 +1694,7 @@ impl Default for McpManager {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             registered_tool_names: Arc::new(RwLock::new(Vec::new())),
+            connect_failures: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -1733,15 +1746,53 @@ impl McpManager {
             }
         };
         let client = McpClient::new(url, effective_token);
-        client.connect().await?;
+        if let Err(e) = client.connect().await {
+            self.record_connect_failure(&name, &e.to_string()).await;
+            return Err(e);
+        }
         let mut servers = self.servers.write().await;
         if servers.contains_key(&name) {
             return Err(crate::error::Error::Agent(format!(
                 "MCP server '{name}' is already connected"
             )));
         }
-        servers.insert(name, McpTransport::Http(client));
+        servers.insert(name.clone(), McpTransport::Http(client));
+        self.clear_connect_failure(&name).await;
         Ok(())
+    }
+
+    /// Record a connect failure so the failure is visible instead of lost.
+    ///
+    /// The message is the connect error's own text, so the TUI names the
+    /// cause (a refused connection, a missing binary, a bad URL) rather
+    /// than showing a bare "error".
+    async fn record_connect_failure(&self, name: &str, message: &str) {
+        tracing::warn!(
+            server = name,
+            error = message,
+            "MCP server failed to connect"
+        );
+        self.connect_failures
+            .write()
+            .await
+            .insert(name.to_string(), message.to_string());
+    }
+
+    /// Clear a recorded failure after a successful connect.
+    async fn clear_connect_failure(&self, name: &str) {
+        self.connect_failures.write().await.remove(name);
+    }
+
+    /// The last connect failure for a server, if it failed to connect.
+    ///
+    /// `None` means the server either connected or was never tried.
+    pub async fn connect_failure(&self, name: &str) -> Option<String> {
+        self.connect_failures.read().await.get(name).cloned()
+    }
+
+    /// Every recorded connect failure, keyed by server name.
+    pub async fn all_connect_failures(&self) -> HashMap<String, String> {
+        self.connect_failures.read().await.clone()
     }
 
     // iter-190: add_streamable_http_server was deleted — it was a duplicate
@@ -1758,11 +1809,15 @@ impl McpManager {
     ) -> Result<()> {
         let name = name.into();
         let client = McpStdioClient::new(command, args, env);
-        client.connect().await?;
+        if let Err(e) = client.connect().await {
+            self.record_connect_failure(&name, &e.to_string()).await;
+            return Err(e);
+        }
         self.servers
             .write()
             .await
-            .insert(name, McpTransport::Stdio(client));
+            .insert(name.clone(), McpTransport::Stdio(client));
+        self.clear_connect_failure(&name).await;
         Ok(())
     }
 
@@ -1775,11 +1830,15 @@ impl McpManager {
     ) -> Result<()> {
         let name = name.into();
         let client = McpSseClient::new(sse_url, auth_token);
-        client.connect().await?;
+        if let Err(e) = client.connect().await {
+            self.record_connect_failure(&name, &e.to_string()).await;
+            return Err(e);
+        }
         self.servers
             .write()
             .await
-            .insert(name, McpTransport::Sse(client));
+            .insert(name.clone(), McpTransport::Sse(client));
+        self.clear_connect_failure(&name).await;
         Ok(())
     }
 
@@ -1788,6 +1847,9 @@ impl McpManager {
         if let Some(transport) = self.servers.write().await.remove(name) {
             transport.disconnect().await?;
         }
+        // The server is gone, so its last failure is no longer about
+        // anything the user can act on.
+        self.connect_failures.write().await.remove(name);
         Ok(())
     }
 
@@ -1960,6 +2022,90 @@ mod tests {
     async fn test_mcp_manager_empty() {
         let manager = McpManager::new();
         assert!(manager.server_names().await.is_empty());
+    }
+
+    /// RT-32: a server that fails to connect must leave a record behind.
+    ///
+    /// Before this, a failed connect had nowhere to live: the caller got an
+    /// `Err` and either aborted the whole command on it or dropped it, and
+    /// the MCP view could not tell "not configured" from "configured and
+    /// broken". The message is the connect error's own text, so the view
+    /// names the cause.
+    #[tokio::test]
+    async fn a_failed_connect_records_the_failure_for_the_view() {
+        let manager = McpManager::new();
+        let err = manager
+            .add_stdio_server(
+                "broken",
+                "operant-mcp-test-binary-that-does-not-exist".to_string(),
+                vec![],
+                HashMap::new(),
+            )
+            .await
+            .expect_err("a missing binary must fail the connect");
+        assert!(!err.to_string().is_empty(), "the error must say something");
+
+        let failure = manager
+            .connect_failure("broken")
+            .await
+            .expect("the failure must be recorded");
+        assert!(
+            !failure.is_empty(),
+            "the recorded message must not be empty"
+        );
+        assert!(
+            manager.all_connect_failures().await.contains_key("broken"),
+            "the failure must appear in the snapshot the TUI reads"
+        );
+        // The server did not connect, so it is not in the connected map.
+        assert!(!manager.contains("broken").await);
+    }
+
+    /// A server that was never tried has no failure, so the view can tell
+    /// it apart from one that was tried and broke.
+    #[tokio::test]
+    async fn a_server_that_was_never_tried_has_no_failure() {
+        let manager = McpManager::new();
+        assert!(manager.connect_failure("never-tried").await.is_none());
+    }
+
+    /// A successful connect clears an earlier failure, so a server that was
+    /// broken and then fixed does not keep showing its old error.
+    #[tokio::test]
+    async fn a_successful_connect_clears_an_earlier_failure() {
+        let manager = McpManager::new();
+        let (client, _dir) = fake_stdio_client();
+        client.connect().await.expect("fake server connect");
+        // Record a failure for the same name, then connect for real.
+        manager
+            .add_stdio_server(
+                "flaky",
+                "operant-mcp-test-binary-that-does-not-exist".to_string(),
+                vec![],
+                HashMap::new(),
+            )
+            .await
+            .expect_err("the first connect fails");
+        assert!(manager.connect_failure("flaky").await.is_some());
+
+        // Re-adding the same name with a working server must clear it.
+        // `add_stdio_server` refuses a duplicate only for HTTP; stdio
+        // replaces, so the success path runs and clears the failure.
+        let (client2, _dir2) = fake_stdio_client();
+        let _ = client2;
+        manager
+            .add_stdio_server(
+                "flaky",
+                "python3".to_string(),
+                vec![_dir.join("fake_server.py").to_string_lossy().to_string()],
+                HashMap::new(),
+            )
+            .await
+            .expect("the second connect succeeds");
+        assert!(
+            manager.connect_failure("flaky").await.is_none(),
+            "a successful connect must clear the earlier failure"
+        );
     }
 
     #[tokio::test]

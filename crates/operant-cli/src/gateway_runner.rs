@@ -848,9 +848,6 @@ struct GatewayMessageHandler {
     /// but the runner never read it back.) Set after gateway construction
     /// via set_gateway() because the handler is created before the gateway.
     gateway: tokio::sync::Mutex<Option<Arc<Gateway>>>,
-    /// Sender for bridge connection state updates to the TUI.
-    bridge_state_tx:
-        tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>,
     /// Per-session resume overrides set by `/resume`. Shared with the dispatch
     /// loop's `CommandContext` so the command can pin a session this handler
     /// then honours.
@@ -1184,13 +1181,6 @@ impl MessageHandler for GatewayMessageHandler {
         if needs_reload {
             let mut current = self.current_session_id.lock().await;
             *current = Some(session_id.clone());
-            // Update bridge state to Connected with session info
-            let _ = self.bridge_state_tx.send(
-                crate::tui::bridge_state::BridgeConnectionState::Connected {
-                    session_url: format!("gateway://{}/{}", message.platform, message.channel_id),
-                    peer_count: 1,
-                },
-            );
         }
 
         // Long-term memory recall is injected by the agent itself inside
@@ -2417,13 +2407,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
     // attach the SAME MemoryManager + provider (BUGS.md D-5) — cron never
     // constructs its own memory backend.
 
-    // Create bridge state channel for TUI status updates
-    let (bridge_state_tx, _bridge_state_rx) =
-        tokio::sync::mpsc::unbounded_channel::<crate::tui::bridge_state::BridgeConnectionState>();
-
-    // Notify TUI that gateway is connecting
-    let _ = bridge_state_tx.send(crate::tui::bridge_state::BridgeConnectionState::Connecting);
-
     // Baseline for the per-turn endpoint check; nothing to apply yet.
     endpoint_changed_on_disk();
 
@@ -2432,7 +2415,6 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
         admins: app_config.gateway.admins.clone(),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
-        bridge_state_tx,
         session_pins: Arc::new(SessionPins::default()),
         exit_reasons: exit_reasons.clone(),
         turn_usage: turn_usage.clone(),
@@ -4839,9 +4821,6 @@ mod tests {
             operant_core::tools::ToolRegistry::new(std::time::Duration::from_secs(1)),
             agent_db.clone(),
         ));
-        let (bridge_state_tx, _bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
-            crate::tui::bridge_state::BridgeConnectionState,
-        >();
         let settings = operant_core::config::ContextInjectionSettings {
             enabled: true,
             feed_seat_map: std::collections::HashMap::from([(
@@ -4862,7 +4841,6 @@ mod tests {
             agent,
             current_session_id: tokio::sync::Mutex::new(None),
             gateway: tokio::sync::Mutex::new(None),
-            bridge_state_tx,
             session_pins: Arc::new(SessionPins::default()),
             exit_reasons: Arc::new(Mutex::new(std::collections::HashMap::new())),
             turn_usage: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -5028,15 +5006,11 @@ mod tests {
             operant_core::tools::ToolRegistry::new(Duration::from_secs(5)),
             db,
         ));
-        let (bridge_state_tx, _bridge_state_rx) = tokio::sync::mpsc::unbounded_channel::<
-            crate::tui::bridge_state::BridgeConnectionState,
-        >();
         Arc::new(GatewayMessageHandler {
             admins: vec![],
             agent,
             current_session_id: tokio::sync::Mutex::new(None),
             gateway: tokio::sync::Mutex::new(None),
-            bridge_state_tx,
             session_pins: Arc::new(SessionPins::default()),
             exit_reasons: ExitReasonMap::default(),
             turn_usage: TurnUsageMap::default(),

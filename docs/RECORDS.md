@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=bc96d40d9885 -->
-**Decisions** (35)
+<!-- genome:zone records sha=1bfe7c9fd932 -->
+**Decisions** (36)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -38,6 +38,7 @@
 | AD-033 | Advisory triage clears four by dependency moves; the YAML crate swap is reverted pending an owner decision | Active | Four advisories are cleared (atty, rustls-native-certs, chacha20, image defaults); serde_yaml stays at 0.9 because its only policy-compliant replacement changes manifest errors |
 | AD-034 | Warnings triage deletes dead TUI paths, wires the two real gaps, and records the rest as expected debt | Active | The production build of operant-cli is warning-free: 35 dead items are deleted, error annotations keep their error role, and every kept dead-code item carries a reason or an open BUGS row |
 | AD-035 | One libclang resolution for every build script, and a dangling link is not a libclang | Active | dev-env.sh, check.sh and provision-build-deps.sh each resolved libclang differently, and the one dev-env.sh used fell through to a directory that does not exist; a shared resolver now owns the choice, |
+| AD-036 | A failed MCP server is recorded, not fatal, and operant has no remote mode to bridge to | Active | A broken MCP server aborted every registry-building command, and the TUI's remote-client surface was a vestigial port with no implementation behind it; the failure is now recorded and shown, and the v |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

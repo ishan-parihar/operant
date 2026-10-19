@@ -1727,13 +1727,13 @@ impl App {
             };
             let result = tokio::task::block_in_place(|| {
                 handle.block_on(async {
-                    let server_names = core_manager.server_names().await;
                     let all_servers = core_manager.all_servers().await;
-                    (server_names, all_servers)
+                    let failures = core_manager.all_connect_failures().await;
+                    (all_servers, failures)
                 })
             });
 
-            let (server_names, all_servers) = result;
+            let (all_servers, failures) = result;
             return self
                 .config
                 .mcp
@@ -1786,10 +1786,22 @@ impl App {
                         vec![]
                     };
 
+                    // A server that is configured but whose last connect
+                    // attempt failed shows its error, not a bare
+                    // "disconnected". The manager records the failure
+                    // (iter-984); before that there was nowhere for it to
+                    // live, so the view could not tell a broken server from
+                    // one that was never tried.
+                    //
+                    // `server_names` and `all_servers` are the SAME map, so
+                    // the "connecting" arm this replaced was unreachable: a
+                    // server is either in the manager (connected) or not;
+                    // there is no in-between state to observe from a
+                    // snapshot.
                     let (status, error_message) = if connected {
                         (McpViewStatus::Connected, None)
-                    } else if server_names.contains(&server.name) {
-                        (McpViewStatus::Connecting, None)
+                    } else if let Some(message) = failures.get(&server.name) {
+                        (McpViewStatus::Error, Some(message.clone()))
                     } else {
                         (McpViewStatus::Disconnected, None)
                     };

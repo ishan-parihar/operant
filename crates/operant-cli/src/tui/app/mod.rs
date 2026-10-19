@@ -399,8 +399,6 @@ pub struct App {
     /// Plugin hint banners.
     /// Optional session title shown in the status bar.
     pub session_title: Option<String>,
-    /// Bridge/gateway connection state for status bar badge.
-    pub bridge_state: crate::tui::bridge_state::BridgeConnectionState,
     /// Live MCP manager snapshot source when available.
     /// (iter-208: stub mcp_manager field deleted — load_mcp_servers now reads
     /// from core_mcp_manager directly.)
@@ -641,19 +639,6 @@ pub struct App {
     >,
     /// State for the model-initiated ask-user question dialog.
     pub ask_user_dialog: crate::tui::ask_user_dialog::AskUserDialogState,
-
-    // ---- Bridge/gateway connection state -----------------------------------
-    /// Receiver for bridge connection state updates from gateway handler.
-    pub bridge_state_rx: Option<
-        tokio::sync::mpsc::UnboundedReceiver<crate::tui::bridge_state::BridgeConnectionState>,
-    >,
-    /// Sender for bridge connection state updates (given to gateway handler).
-    #[expect(
-        dead_code,
-        reason = "AD-034: the gateway runs out of process, so nothing sends through this sender"
-    )]
-    pub bridge_state_tx:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::tui::bridge_state::BridgeConnectionState>>,
 
     // ---- Context window & rate limit info ----------------------------------
     /// Total context window size for the current model (tokens).

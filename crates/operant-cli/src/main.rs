@@ -1252,7 +1252,21 @@ pub(crate) async fn build_registry(
             .filter(|server| server.enabled && !server.deferred)
         {
             if !mcp_manager.contains(&server.name).await {
-                connect_mcp_server(mcp_manager, server).await?;
+                // A server that cannot be reached is NOT fatal. One broken
+                // MCP server (a stale URL, a binary that is not installed, a
+                // host that is down) used to abort the whole command with
+                // `?`, so `operant tools list` and every registry-building
+                // command exited 1 and the agent could not start at all —
+                // for a tool the user may not even use. The failure is
+                // recorded in the manager (so the MCP view can show it) and
+                // reported here; the rest of the registry still builds.
+                if let Err(e) = connect_mcp_server(mcp_manager, server).await {
+                    tracing::warn!(
+                        server = %server.name,
+                        error = %e,
+                        "MCP server failed to connect; continuing without it"
+                    );
+                }
             }
         }
 

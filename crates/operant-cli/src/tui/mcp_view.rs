@@ -23,30 +23,36 @@ use crate::tui::vendor::style::theme;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpViewStatus {
     Connected,
-    Connecting,
     Disconnected,
+    /// The server is configured but its last connect attempt failed.
+    ///
+    /// Restored in iter-984: AD-034 removed this variant because the core
+    /// recorded no connect failure, so nothing could set it. The manager
+    /// now records the failure (`McpManager::connect_failure`), and this
+    /// is the status that shows it.
+    Error,
 }
 
 impl McpViewStatus {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Connected => "connected",
-            Self::Connecting => "connecting",
             Self::Disconnected => "disconnected",
+            Self::Error => "error",
         }
     }
     pub fn badge(&self) -> &'static str {
         match self {
             Self::Connected => "●",
-            Self::Connecting => "◌",
             Self::Disconnected => "○",
+            Self::Error => "✗",
         }
     }
     pub fn color(&self) -> Color {
         match self {
             Self::Connected => theme_colors::success(),
-            Self::Connecting => theme_colors::warning(),
             Self::Disconnected => theme::dim_color(),
+            Self::Error => theme_colors::error(),
         }
     }
 }
@@ -908,7 +914,7 @@ mod tests {
             make_server("fs-server", McpViewStatus::Connected, None),
             make_server(
                 "err-server",
-                McpViewStatus::Disconnected,
+                McpViewStatus::Error,
                 Some("connection refused"),
             ),
         ]);
@@ -932,7 +938,7 @@ mod tests {
         let mut state = McpViewState::new();
         state.open(vec![make_server(
             "broken",
-            McpViewStatus::Disconnected,
+            McpViewStatus::Error,
             Some("timeout: no response"),
         )]);
         state.error_expanded = true;
@@ -948,6 +954,40 @@ mod tests {
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
         assert!(content.contains("timeout") || content.contains("Error Detail"));
+    }
+
+    /// RT-32: a server that failed to connect shows the ERROR status, not
+    /// a bare "disconnected". Before the manager recorded connect failures,
+    /// there was nothing to distinguish a broken server from one that was
+    /// never tried, so the view could not show the error state at all.
+    #[test]
+    fn a_failed_server_renders_the_error_status_not_disconnected() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut state = McpViewState::new();
+        state.open(vec![make_server(
+            "broken",
+            McpViewStatus::Error,
+            Some("connection refused"),
+        )]);
+        terminal
+            .draw(|frame| {
+                render_mcp_view(&state, frame.area(), frame.buffer_mut());
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let content: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            content.contains("error"),
+            "the error status must be rendered: {content:?}"
+        );
+        assert!(
+            !content.contains("disconnected"),
+            "a failed server must not render as disconnected: {content:?}"
+        );
     }
 
     #[test]
