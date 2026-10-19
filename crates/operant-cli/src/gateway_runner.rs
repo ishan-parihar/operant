@@ -834,6 +834,9 @@ fn endpoint_changed_on_disk() -> Option<ConfigEndpoint> {
 /// no longer needs its own provider copy (audit gap F1, docs/AUDIT_2026-08-02.md).
 struct GatewayMessageHandler {
     agent: Arc<OperantAgent>,
+    /// `gateway.admins`. A turn from a sender outside this list is not retained
+    /// as memory (KB-6).
+    admins: Vec<String>,
     /// Tracks the currently-active session ID so we only reload
     /// conversation history when switching sessions (not on every
     /// message within the same session). This preserves prompt prefix
@@ -948,6 +951,31 @@ impl Drop for RunningSessionGuard<'_> {
     fn drop(&mut self) {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
+}
+
+/// The memory scope an unbound gateway turn starts in (KB-8). The owner's
+/// personal bank is reachable only from a sender named in `gateway.admins`;
+/// every other sender gets a bank of their own.
+fn unbound_scope_for(
+    admins: &[String],
+    platform: &str,
+    user_id: &str,
+) -> operant_core::memory_wire::MemoryScope {
+    use operant_core::memory_wire::MemoryScope;
+    if admins.iter().any(|admin| admin == user_id) {
+        MemoryScope::Personal
+    } else {
+        MemoryScope::Sender {
+            key: format!("{platform}:{user_id}"),
+        }
+    }
+}
+
+/// Whether a turn from `user_id` is retained as memory (KB-6). Only a named
+/// admin is retained: an empty admin list admits anyone, so its senders are not
+/// trusted to write memory.
+fn retains_turn_for(admins: &[String], user_id: &str) -> bool {
+    admins.iter().any(|admin| admin == user_id)
 }
 
 #[async_trait::async_trait]
@@ -1251,6 +1279,13 @@ impl MessageHandler for GatewayMessageHandler {
         // GW-3: every turn starts unseated; the binding below sets the seat
         // again only when this chat has an employee.
         self.agent.clear_seat_id();
+        // KB-8: every turn starts in its unbound scope, so a sender with no
+        // session row never inherits the previous turn's scope. A bound seat
+        // overrides it below.
+        let unbound_scope = unbound_scope_for(&self.admins, &message.platform, &message.user_id);
+        if let Some(p) = self.agent.memory_provider() {
+            p.set_scope(&unbound_scope);
+        }
         {
             let gw_guard = self.gateway.lock().await;
             if let Some(ref gw) = *gw_guard
@@ -1285,11 +1320,6 @@ impl MessageHandler for GatewayMessageHandler {
                             p.set_scope(&operant_core::memory_wire::MemoryScope::Seat {
                                 identity: emp,
                             })
-                        }
-                    } else {
-                        // Unbound = the owner's own turn: the personal bank.
-                        if let Some(p) = self.agent.memory_provider() {
-                            p.set_scope(&operant_core::memory_wire::MemoryScope::Personal)
                         }
                     }
                     self.agent.set_charter(None);
@@ -1518,15 +1548,20 @@ impl MessageHandler for GatewayMessageHandler {
         // iter-633: scope the turn inside its seat-budget envelope when one
         // is armed — the loop's iteration-boundary check reads the task-local.
         // Ungoverned turns (no envelope) take the byte-identical legacy call.
+        let retain = retains_turn_for(&self.admins, &message.user_id);
         let run_turn = |q: String| async move {
-            match seat_envelope {
-                Some(envelope) => {
-                    operant_core::agent::SEAT_BUDGET_ENVELOPE
-                        .scope(envelope, self.agent.run(q))
-                        .await
-                }
-                None => self.agent.run(q).await,
-            }
+            operant_core::agent::TURN_RETENTION
+                .scope(retain, async {
+                    match seat_envelope {
+                        Some(envelope) => {
+                            operant_core::agent::SEAT_BUDGET_ENVELOPE
+                                .scope(envelope, self.agent.run(q))
+                                .await
+                        }
+                        None => self.agent.run(q).await,
+                    }
+                })
+                .await
         };
         let mut run_result = run_turn(query.clone()).await;
         // Plan 06 P1: the context could not fit even after folding. Compact the
@@ -2394,6 +2429,7 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
 
     let handler = Arc::new(GatewayMessageHandler {
         agent,
+        admins: app_config.gateway.admins.clone(),
         current_session_id: tokio::sync::Mutex::new(None),
         gateway: tokio::sync::Mutex::new(None),
         bridge_state_tx,
@@ -4822,6 +4858,7 @@ mod tests {
             .expect("injector"),
         );
         let handler = GatewayMessageHandler {
+            admins: vec![],
             agent,
             current_session_id: tokio::sync::Mutex::new(None),
             gateway: tokio::sync::Mutex::new(None),
@@ -4995,6 +5032,7 @@ mod tests {
             crate::tui::bridge_state::BridgeConnectionState,
         >();
         Arc::new(GatewayMessageHandler {
+            admins: vec![],
             agent,
             current_session_id: tokio::sync::Mutex::new(None),
             gateway: tokio::sync::Mutex::new(None),
@@ -6321,6 +6359,44 @@ mod tool_progress_tests {
                 msg_id: "m2".into(),
                 body: "⚙️ b\n⚙️ c".into(),
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod turn_retention_tests {
+    use super::retains_turn_for;
+
+    #[test]
+    fn only_a_named_admin_has_its_turns_retained() {
+        // KB-6: an open bot (empty admin list) admits anyone, so it retains nothing.
+        assert!(retains_turn_for(&["42".to_string()], "42"));
+        assert!(!retains_turn_for(&["42".to_string()], "7"));
+        assert!(!retains_turn_for(&[], "42"));
+    }
+}
+
+#[cfg(test)]
+mod unbound_scope_tests {
+    use super::unbound_scope_for;
+    use operant_core::memory_wire::{MemoryScope, bank_for};
+
+    #[test]
+    fn only_a_named_admin_reaches_the_personal_bank() {
+        // KB-8: an unbound stranger recalls and retains in a bank of their own,
+        // and two strangers never share one.
+        let admins = vec!["owner".to_string()];
+        let personal = bank_for(&MemoryScope::Personal);
+
+        assert_eq!(
+            bank_for(&unbound_scope_for(&admins, "telegram", "owner")),
+            personal
+        );
+        let stranger = bank_for(&unbound_scope_for(&admins, "telegram", "stranger"));
+        assert_ne!(stranger, personal);
+        assert_ne!(
+            stranger,
+            bank_for(&unbound_scope_for(&admins, "telegram", "other"))
         );
     }
 }

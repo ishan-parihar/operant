@@ -53,6 +53,18 @@ tokio::task_local! {
     pub static SEAT_BUDGET_ENVELOPE: SeatBudgetEnvelope;
 }
 
+tokio::task_local! {
+    /// KB-6: whether the CURRENT turn's text may be stored as memory. A gateway
+    /// turn from a sender outside `gateway.admins` runs with this false.
+    pub static TURN_RETENTION: bool;
+}
+
+/// Whether the current turn may be retained as memory. Outside a gateway turn
+/// nothing scopes the flag, and the owner's own turns are retained.
+pub fn turn_retains() -> bool {
+    TURN_RETENTION.try_with(|retain| *retain).unwrap_or(true)
+}
+
 /// The text of the most recent user message, used as the relevance trigger
 /// for turn-triggered materialisation of deferred (MCP) tools.
 ///
@@ -1536,7 +1548,9 @@ impl OperantAgent {
                         // executor isn't available (e.g. no memory provider).
                         // KB-7: read the bank now, at enqueue, not when the worker runs.
                         let write_bank = self.memory_provider.as_ref().and_then(|p| p.write_bank());
-                        if let Ok(exec_guard) = self.memory_sync_executor.try_lock() {
+                        if turn_retains()
+                            && let Ok(exec_guard) = self.memory_sync_executor.try_lock()
+                        {
                             if let Some(executor) = exec_guard.as_ref() {
                                 executor.submit_sync_turn(&user_query, &result.content, write_bank);
                             } else if let Some(provider) = &self.memory_provider {
@@ -2837,4 +2851,21 @@ pub(super) fn guardrail_halt_reply(summary: &str) -> String {
         "I stopped this turn because a tool kept failing without making progress: {cause}\n\n\
          Tell me how you'd like to proceed, or send `continue` and I'll try a different approach."
     )
+}
+
+#[cfg(test)]
+mod turn_retention_tests {
+    use super::{TURN_RETENTION, turn_retains};
+
+    #[tokio::test]
+    async fn a_turn_outside_a_gateway_scope_is_retained_and_a_refused_one_is_not() {
+        // KB-6: the owner's own turns run unscoped and are retained; a gateway
+        // turn from a sender outside the admin list is scoped to not retain.
+        assert!(turn_retains());
+        TURN_RETENTION
+            .scope(false, async {
+                assert!(!turn_retains());
+            })
+            .await;
+    }
 }

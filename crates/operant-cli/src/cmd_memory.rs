@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use operant_core::config::AppConfig;
+use operant_core::memory_provider::MemoryProvider;
 use operant_core::memory_wire::MemoryWireProvider;
 use operant_core::platform::operant_home;
 
@@ -42,6 +43,9 @@ pub enum MemorySubcommand {
     Delete {
         /// Memory id
         id: String,
+        /// Skip confirmation prompt
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        confirm: bool,
     },
     /// Show memory statistics
     Stats,
@@ -75,7 +79,7 @@ pub async fn handle_memory_command(config: &AppConfig, cmd: MemorySubcommand) ->
         MemorySubcommand::Get { id } => cmd_get(&provider, &id),
         MemorySubcommand::Search { query } => cmd_search(&provider, &query),
         MemorySubcommand::Store { text } => cmd_store(&provider, &text),
-        MemorySubcommand::Delete { id } => cmd_delete(&provider, &id),
+        MemorySubcommand::Delete { id, confirm } => cmd_delete(&provider, &id, confirm),
         MemorySubcommand::Stats => cmd_stats(&provider),
         MemorySubcommand::Import { source } => cmd_import(&provider, &source),
         MemorySubcommand::Export { output } => cmd_export(&provider, output),
@@ -157,7 +161,29 @@ fn cmd_store(provider: &MemoryWireProvider, text: &str) -> Result<()> {
     }
 }
 
-fn cmd_delete(provider: &MemoryWireProvider, id: &str) -> Result<()> {
+/// Prints `prompt` and reads one line: true only for a typed `yes`. A
+/// destructive subcommand without `--confirm` asks through this (KB-19).
+fn confirm_yes_from(prompt: &str, input: &mut impl std::io::BufRead) -> Result<bool> {
+    print!("{prompt}Type 'yes' to confirm: ");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    let mut answer = String::new();
+    input
+        .read_line(&mut answer)
+        .context("reading confirmation")?;
+    Ok(answer.trim() == "yes")
+}
+
+fn cmd_delete(provider: &MemoryWireProvider, id: &str, confirm: bool) -> Result<()> {
+    if !confirm
+        && !confirm_yes_from(
+            &format!("Delete memory {id} from bank {:?}? ", provider.bank_id()),
+            &mut std::io::stdin().lock(),
+        )?
+    {
+        println!("Aborted — nothing deleted.");
+        return Ok(());
+    }
     if provider.delete_memory_by_id(id) {
         println!("Deleted memory {id}.");
     } else {
@@ -167,6 +193,9 @@ fn cmd_delete(provider: &MemoryWireProvider, id: &str) -> Result<()> {
 }
 
 fn cmd_stats(provider: &MemoryWireProvider) -> Result<()> {
+    if !provider.is_persistent() {
+        println!("Storage: in-memory (degraded): memories do not survive a restart (KB-14)");
+    }
     match provider.memory_bank_stats() {
         Some(stats) => {
             println!("Bank:    {:?}", provider.bank_id());
@@ -251,21 +280,17 @@ fn cmd_export(provider: &MemoryWireProvider, output: Option<String>) -> Result<(
 }
 
 fn cmd_clear(provider: &MemoryWireProvider, confirm: bool) -> Result<()> {
-    if !confirm {
-        print!(
-            "Delete EVERY memory in bank {:?}? This cannot be undone. Type 'yes' to confirm: ",
-            provider.bank_id()
-        );
-        use std::io::Write;
-        std::io::stdout().flush().ok();
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("reading confirmation")?;
-        if answer.trim() != "yes" {
-            println!("Aborted — nothing deleted.");
-            return Ok(());
-        }
+    if !confirm
+        && !confirm_yes_from(
+            &format!(
+                "Delete EVERY memory in bank {:?}? This cannot be undone. ",
+                provider.bank_id()
+            ),
+            &mut std::io::stdin().lock(),
+        )?
+    {
+        println!("Aborted — nothing deleted.");
+        return Ok(());
     }
     let rows = provider.list_page(usize::MAX, 0);
     let mut deleted = 0usize;
@@ -279,4 +304,17 @@ fn cmd_clear(provider: &MemoryWireProvider, confirm: bool) -> Result<()> {
         provider.bank_id()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use super::confirm_yes_from;
+
+    #[test]
+    fn only_a_typed_yes_confirms_a_destructive_memory_command() {
+        // KB-19: a bare Enter or a `y` must not delete the memory.
+        assert!(confirm_yes_from("", &mut "yes\n".as_bytes()).unwrap());
+        assert!(!confirm_yes_from("", &mut "\n".as_bytes()).unwrap());
+        assert!(!confirm_yes_from("", &mut "y\n".as_bytes()).unwrap());
+    }
 }

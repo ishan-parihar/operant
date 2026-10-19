@@ -238,6 +238,11 @@ pub trait MemoryProvider: Send + Sync {
     /// True when credentials / deps are present (no network calls).
     fn is_available(&self) -> bool;
 
+    /// False when writes land in a store that dies with the process (KB-14).
+    fn is_persistent(&self) -> bool {
+        true
+    }
+
     /// Connect, create tables, warm up.  Called once at startup.
     async fn initialize(&self, session_id: &str) -> Result<()>;
 

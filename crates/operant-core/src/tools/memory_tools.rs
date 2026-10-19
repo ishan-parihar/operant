@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
+use crate::memory_provider::MemoryProvider;
 use crate::schema::ToolSchema;
 use crate::tools::{OperantTool, ToolContext, ToolResult};
 
@@ -59,6 +60,40 @@ struct MemoryStoreArgs {
     tags: Option<Vec<String>>,
 }
 
+/// Bounds on one `memory_store` write (KB-12). A write over a bound is refused
+/// with the bound named, so the model can retry shorter, instead of storing it.
+const MAX_STORE_KEY_CHARS: usize = 128;
+const MAX_STORE_CONTENT_BYTES: usize = 8_000;
+const MAX_STORE_TAGS: usize = 16;
+const MAX_STORE_TAG_CHARS: usize = 64;
+
+/// The first bound `args` exceeds, as the message the tool returns.
+fn store_bound_violation(args: &MemoryStoreArgs) -> Option<String> {
+    if args.key.chars().count() > MAX_STORE_KEY_CHARS {
+        return Some(format!(
+            "key is longer than {MAX_STORE_KEY_CHARS} characters"
+        ));
+    }
+    if args.content.len() > MAX_STORE_CONTENT_BYTES {
+        return Some(format!(
+            "content is longer than {MAX_STORE_CONTENT_BYTES} bytes"
+        ));
+    }
+    let tags = args.tags.as_deref().unwrap_or_default();
+    if tags.len() > MAX_STORE_TAGS {
+        return Some(format!("more than {MAX_STORE_TAGS} tags"));
+    }
+    if tags
+        .iter()
+        .any(|tag| tag.chars().count() > MAX_STORE_TAG_CHARS)
+    {
+        return Some(format!(
+            "a tag is longer than {MAX_STORE_TAG_CHARS} characters"
+        ));
+    }
+    None
+}
+
 #[async_trait]
 impl OperantTool for MemoryStoreTool {
     fn name(&self) -> &str {
@@ -74,12 +109,23 @@ impl OperantTool for MemoryStoreTool {
     }
 
     async fn execute(&self, args: Value, _context: ToolContext) -> ToolResult {
+        // KB-3: an unattended review does not write persistent memory. The user
+        // saves a memory in a turn, where the approval prompt applies.
+        if crate::write_origin::is_background_review() {
+            return ToolResult::error(
+                "memory_store",
+                "Refused: background review does not write memory; the user saves it in a turn.",
+            );
+        }
         let args: MemoryStoreArgs = match serde_json::from_value(args) {
             Ok(a) => a,
             Err(e) => {
                 return ToolResult::error("memory_store", format!("Invalid arguments: {}", e));
             }
         };
+        if let Some(violation) = store_bound_violation(&args) {
+            return ToolResult::error("memory_store", format!("Refused: {violation}."));
+        }
 
         // W6 (audit O-22, invariant 4): a Holon run never writes the
         // personal memory store — the organization's memory is Holon's.
@@ -126,6 +172,7 @@ impl OperantTool for MemoryStoreTool {
                 serde_json::json!({
                     "key": args.key,
                     "stored": true,
+                    "persistent": provider.is_persistent(),
                     "timestamp": now
                 }),
             ),
@@ -387,5 +434,65 @@ mod tests {
 
         *ACTIVE_MEMORY_PROVIDER.write().await = None;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod store_bounds_tests {
+    use super::{MAX_STORE_CONTENT_BYTES, MemoryStoreArgs, store_bound_violation};
+
+    fn args(key: &str, content: &str, tags: Vec<String>) -> MemoryStoreArgs {
+        MemoryStoreArgs {
+            key: key.to_string(),
+            content: content.to_string(),
+            block_type: None,
+            tags: Some(tags),
+        }
+    }
+
+    #[test]
+    fn an_oversized_write_is_refused_and_a_bounded_one_is_not() {
+        // KB-12: an unbounded key, body, tag count or tag is refused by name.
+        assert!(store_bound_violation(&args("k", "short", vec![])).is_none());
+        let big = "x".repeat(MAX_STORE_CONTENT_BYTES + 1);
+        assert!(
+            store_bound_violation(&args("k", &big, vec![]))
+                .unwrap()
+                .contains("content")
+        );
+        assert!(
+            store_bound_violation(&args(&"k".repeat(129), "c", vec![]))
+                .unwrap()
+                .contains("key")
+        );
+        assert!(
+            store_bound_violation(&args("k", "c", vec!["t".into(); 17]))
+                .unwrap()
+                .contains("tags")
+        );
+        assert!(
+            store_bound_violation(&args("k", "c", vec!["t".repeat(65)]))
+                .unwrap()
+                .contains("tag is")
+        );
+    }
+}
+
+#[cfg(test)]
+mod background_review_memory_tests {
+    use super::{MemoryStoreTool, OperantTool, ToolContext};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn a_background_review_cannot_write_memory() {
+        // KB-3: the refusal names the review, so a missing provider cannot pass for it.
+        let args = json!({"key": "k", "content": "c"});
+        let result = crate::write_origin::scope_background_review(
+            MemoryStoreTool.execute(args, ToolContext::default()),
+        )
+        .await;
+        assert!(!result.success);
+        let refusal = result.error.unwrap_or_default();
+        assert!(refusal.contains("background review"), "{refusal}");
     }
 }

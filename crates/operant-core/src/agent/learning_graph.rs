@@ -350,7 +350,7 @@ fn edit_skill_node(name: &str, content: &str, skills_dir: &Path) -> MutationResu
         };
     }
 
-    match std::fs::write(&skill_md, content) {
+    match crate::memory::write_atomic(&skill_md, content) {
         Ok(()) => MutationResult {
             ok: true,
             message: format!("Updated skill '{}'", name),
@@ -400,10 +400,15 @@ fn read_memory_chunks(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Serializes the read-modify-write of a memory file within this process, so two
+/// edits cannot both read the old file and lose one (KB-15). Across processes
+/// the last write still wins.
+static MEMORY_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Write memory chunks back to a file, joined by `\n§\n`.
 fn write_memory_chunks(path: &Path, chunks: &[String]) -> Result<(), String> {
     let content = chunks.join("\n§\n");
-    std::fs::write(path, content + "\n")
+    crate::memory::write_atomic(path, &(content + "\n"))
         .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }
 
@@ -436,6 +441,7 @@ fn delete_memory_node(node_id: &str, memory_dir: &Path) -> MutationResult {
         };
     }
 
+    let _edit = MEMORY_FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut chunks = read_memory_chunks(&path);
     if index >= chunks.len() {
         return MutationResult {
@@ -499,6 +505,7 @@ fn edit_memory_node(node_id: &str, content: &str, memory_dir: &Path) -> Mutation
         };
     }
 
+    let _edit = MEMORY_FILE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut chunks = read_memory_chunks(&path);
     if index >= chunks.len() {
         return MutationResult {

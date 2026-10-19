@@ -851,6 +851,9 @@ fn is_permission_gated_tool(name: &str) -> bool {
             | "patch"
             | "process"
             | "browser"
+            | "memory_store"
+            | "skill_manage"
+            | "learning_manage"
     )
 }
 
@@ -1305,7 +1308,7 @@ mod stream;
 // iter-633: the per-turn seat-budget envelope + its task-local. The gateway
 // runner is the only setter — see run.rs for why this is task-local and not
 // a field on the agent (the shared InterruptFlag incident, 2026-10-05).
-pub use run::{SEAT_BUDGET_ENVELOPE, SeatBudgetEnvelope};
+pub use run::{SEAT_BUDGET_ENVELOPE, SeatBudgetEnvelope, TURN_RETENTION, turn_retains};
 
 #[cfg(test)]
 mod tests {
@@ -3156,6 +3159,10 @@ mod tests {
             "patch",
             "process",
             "browser",
+            // KB-3: knowledge writes are approved by the user, like file writes.
+            "memory_store",
+            "skill_manage",
+            "learning_manage",
         ] {
             assert!(
                 is_permission_gated_tool(name),

@@ -1319,6 +1319,10 @@ impl OperantAgent {
                                 "file_edit" | "patch" => "This modifies an existing file".to_string(),
                                 "process" => "This manages background processes".to_string(),
                                 "browser" => "This opens and interacts with a browser".to_string(),
+                                "memory_store" | "skill_manage" | "learning_manage" => {
+                                    "This changes what the agent remembers or how it behaves in later turns"
+                                        .to_string()
+                                }
                                 _ => "This tool may modify your system".to_string(),
                             },
                         )

@@ -290,10 +290,23 @@ fn validate_frontmatter(content: &str) -> Option<String> {
     None
 }
 
+/// The refusal for skill text that carries a secret value (KB-13). A skill is
+/// re-read on every turn and may be shared, so a key belongs in an environment
+/// variable, not in the file.
+fn secret_in_skill(text: &str) -> Option<String> {
+    (crate::redaction::redact_sensitive_text(text) != text).then(|| {
+        "The skill text contains a secret value; reference an environment variable instead."
+            .to_string()
+    })
+}
+
 /// Write `content` to `path`, then scan the skill directory (KB-4). A write the
 /// install policy refuses is rolled back: the previous bytes come back, or the
 /// file is removed when it did not exist before.
 fn write_screened(skill_dir: &Path, path: &Path, content: impl AsRef<[u8]>) -> Result<(), String> {
+    if let Some(msg) = secret_in_skill(&String::from_utf8_lossy(content.as_ref())) {
+        return Err(msg);
+    }
     let previous = fs::read(path).ok();
     fs::write(path, content).map_err(|e| format!("Failed to write: {}", e))?;
     screen_skill_write(skill_dir, || match &previous {
@@ -1169,6 +1182,17 @@ fn resolve_skill_target(skill_dir: &Path, file_path: &str) -> Result<PathBuf, St
             _ => {}
         }
     }
+    // KB-16: a symlink on the path can lead out of the skill directory, and a
+    // write through it lands there. No component may be a symlink.
+    let mut probe = skill_dir.to_path_buf();
+    for component in p.components() {
+        if let std::path::Component::Normal(name) = component {
+            probe.push(name);
+            if std::fs::symlink_metadata(&probe).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err("Symlinks are not allowed inside a skill directory.".into());
+            }
+        }
+    }
     Ok(target)
 }
 
@@ -1188,7 +1212,15 @@ fn collect_skill_files(skill_dir: &Path) -> Vec<String> {
             if name.starts_with('.') || name == "node_modules" {
                 continue;
             }
-            if path.is_dir() {
+            // KB-16: `file_type` does not follow a link, so a symlink is neither
+            // descended into (a loop, or a walk out of the skill) nor listed.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 walk(&path, base, out);
             } else if name != "SKILL.md"
                 && let Ok(rel) = path.strip_prefix(base)
@@ -1776,6 +1808,9 @@ impl SkillManageTool {
                 "skill_manage",
                 format!("A skill named '{}' already exists", parsed.name),
             );
+        }
+        if let Some(msg) = secret_in_skill(content) {
+            return ToolResult::error("skill_manage", msg);
         }
         if let Err(e) = fs::create_dir_all(&skill_dir) {
             return ToolResult::error("skill_manage", format!("Failed to create directory: {}", e));
@@ -3144,5 +3179,37 @@ mod tests {
         let (_dir, skills_dir) = setup_test_env();
         let tool = SkillManageTool::new(skills_dir);
         assert_eq!(tool.name(), "skill_manage");
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::secret_in_skill;
+
+    #[test]
+    fn a_skill_carrying_a_secret_value_is_refused_and_plain_text_is_not() {
+        // KB-13: the skill is re-read every turn, so a key value is refused.
+        assert!(secret_in_skill("use key sk-0123456789abcdef to call the API").is_some());
+        assert!(secret_in_skill("read $OPENAI_API_KEY from the environment").is_none());
+    }
+}
+
+#[cfg(test)]
+mod symlink_tests {
+    use super::resolve_skill_target;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_on_the_path_is_refused_and_a_plain_path_is_not() {
+        // KB-16: a link inside the skill directory cannot route a write outside it.
+        let root = tempfile::tempdir().unwrap();
+        let skill = root.path().join("skill");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, skill.join("link")).unwrap();
+
+        assert!(resolve_skill_target(&skill, "link/secret.txt").is_err());
+        assert!(resolve_skill_target(&skill, "notes/plain.txt").is_ok());
     }
 }

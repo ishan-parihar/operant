@@ -104,8 +104,10 @@ pub fn get_write_origin() -> String {
 /// Returns `true` when the current execution context is the background review
 /// agent fork. This is the primary guard-check used by the skill manager.
 pub fn is_background_review() -> bool {
-    let lock = WRITE_ORIGIN.read().unwrap_or_else(|e| e.into_inner());
-    *lock == "background_review"
+    // KB-3: read through `get_write_origin`, which prefers the task-local tier.
+    // The global-only read was blind inside `scope_background_review`, so the
+    // review's skill guard allowed every write.
+    get_write_origin() == "background_review"
 }
 
 /// Plan 012 alias: `current_origin()` mirrors hermes `write_approval.current_origin()`.
@@ -297,5 +299,20 @@ mod tests {
 
         let scoped_origin = review.await.unwrap_or_default();
         assert_eq!(scoped_origin, "background_review");
+    }
+}
+
+#[cfg(test)]
+mod task_scope_tests {
+    use super::{is_background_review, scope_background_review};
+
+    #[tokio::test]
+    async fn the_review_guard_sees_the_task_scoped_origin() {
+        // KB-3: `scope_background_review` is the production entry point, so the
+        // guard must read the origin it sets, not only the process-global tier.
+        scope_background_review(async {
+            assert!(is_background_review());
+        })
+        .await;
     }
 }

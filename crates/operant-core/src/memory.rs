@@ -12,6 +12,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+/// Replaces `path` with `content` in one step (KB-15): the bytes go to a temp
+/// file in the same directory, which is synced and renamed over `path`. A crash
+/// or a full disk leaves the old file whole, never a truncated one. The
+/// existing file's permissions carry over to the replacement.
+pub(crate) fn write_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        std::fs::set_permissions(tmp.path(), meta.permissions())?;
+    }
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 /// A memory block that can be injected into context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryBlock {
@@ -287,7 +304,7 @@ impl MemoryStore {
     pub fn write_memories(&self, memories: &HashMap<String, MemoryBlock>) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let content = Self::serialize_memories(memories);
-        std::fs::write(self.memory_path(), content)
+        write_atomic(&self.memory_path(), &content)
     }
 
     /// Read memories from MEMORY.md
@@ -436,7 +453,7 @@ impl MemoryStore {
     pub fn write_profiles(&self, profiles: &HashMap<String, UserProfile>) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let content = Self::serialize_profiles(profiles);
-        std::fs::write(self.user_path(), content)
+        write_atomic(&self.user_path(), &content)
     }
 
     /// Read profiles from USER.md
@@ -1321,5 +1338,33 @@ mod tests {
         assert!(output.contains("importance: 80"));
         assert!(output.contains("tags: geography,facts"));
         assert!(output.contains("test content"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod atomic_write_tests {
+    use super::write_atomic;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_replacement_leaves_no_temp_file_and_keeps_the_mode() {
+        // KB-15: the file is replaced whole, its mode survives, and no temp is left.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("MEMORY.md");
+        std::fs::write(&path, "old\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_atomic(&path, "new\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "no temp file left behind"
+        );
     }
 }

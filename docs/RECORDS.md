@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=ab629f43dba7 -->
-**Decisions** (18)
+<!-- genome:zone records sha=eb488a22381d -->
+**Decisions** (22)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -21,6 +21,10 @@
 | AD-016 | A TTS engine start that panics is a tool error, and the release profile unwinds | Active | The Kokoro engine starts on its own task, so an ONNX Runtime panic becomes a tool error, and the release profile unwinds instead of aborting |
 | AD-017 | ONNX Runtime is pinned to 1.24.4, and install refuses a library without API 24 | Active | The build and install scripts use ONNX Runtime 1.24.4, and install.sh refuses a runtime that does not serve API 24 |
 | AD-018 | The doctor reports tool availability from configuration, flags duplicate binaries, and loads the config once | Active | operant doctor marks a tool available only through its configuration or a present env var, reports TTS as unverified, flags a second operant on PATH, and loads the config once |
+| AD-019 | Gateway memory belongs to the named admins; other senders get their own bank | Active | A gateway turn is retained, and recalls the personal bank, only for a sender named in gateway.admins; any other unbound sender runs in a bank of its own |
+| AD-020 | Knowledge writes need the user's approval; an unattended review cannot write memory | Active | memory_store, skill_manage and learning_manage prompt for approval like file writes, and the background review refuses memory writes and runs its skill guard |
+| AD-021 | Stored knowledge is bounded, redacted, and written whole | Active | memory_store has size bounds, memory and skill text is redacted or refused for secrets, memory and skill files are replaced atomically, and skill paths refuse symlinks |
+| AD-022 | Degraded memory is reported, and memory delete confirms like memory clear | Active | A memory store that fell back to memory is reported in the tool result and in memory stats, and memory delete asks for confirmation as memory clear already did |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

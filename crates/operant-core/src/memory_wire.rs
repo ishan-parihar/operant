@@ -77,7 +77,14 @@ pub const DEFAULT_BANK: &str = "operant";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryScope {
     Personal,
-    Seat { identity: String },
+    Seat {
+        identity: String,
+    },
+    /// A gateway sender with no seat and no admin rights (KB-8). Keyed by a
+    /// digest of the sender, so no two senders share a bank.
+    Sender {
+        key: String,
+    },
 }
 
 /// (plan 11E) Derive the bank id for a scope. The seat identity is
@@ -100,6 +107,12 @@ pub fn bank_for(scope: &MemoryScope) -> String {
                 .take(32)
                 .collect();
             format!("emp:{cleaned}")
+        }
+        MemoryScope::Sender { key } => {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(key.as_bytes());
+            let hex: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+            format!("sender-{hex}")
         }
     }
 }
@@ -199,11 +212,17 @@ impl<S: Store> MemoryWireProvider<S> {
         if user.trim().is_empty() && assistant.trim().is_empty() {
             return;
         }
-        let u = user.chars().take(USER_TURN_CHARS).collect::<String>();
-        let a = assistant
-            .chars()
-            .take(ASSISTANT_TURN_CHARS)
-            .collect::<String>();
+        // Memory outlives the session, so a secret in a turn is redacted before
+        // it is stored (KB-13).
+        let u = crate::redaction::redact_sensitive_text(
+            &user.chars().take(USER_TURN_CHARS).collect::<String>(),
+        );
+        let a = crate::redaction::redact_sensitive_text(
+            &assistant
+                .chars()
+                .take(ASSISTANT_TURN_CHARS)
+                .collect::<String>(),
+        );
         let content = format!("User: {u}\nAssistant: {a}");
         let svc = &self.service;
         guard("retain_turn", || svc.retain(bank, &content, None));
@@ -255,8 +274,10 @@ impl<S: Store> MemoryWireProvider<S> {
         // outlives any guard we could hold here.
         let bank = self.bank.read().map(|b| b.clone()).unwrap_or_default();
         let svc = &self.service;
+        // KB-13: a fact outlives the session, so a secret is redacted before storage.
+        let content = crate::redaction::redact_sensitive_text(content);
         guard("retain_fact", || {
-            svc.retain_tagged(&bank, content, None, tags)
+            svc.retain_tagged(&bank, &content, None, tags)
         })
     }
 
@@ -400,6 +421,10 @@ impl<S: Store + Send + Sync + 'static> crate::memory_provider::MemoryProvider
 {
     fn name(&self) -> &str {
         "memory_wire"
+    }
+
+    fn is_persistent(&self) -> bool {
+        self.persistent
     }
 
     /// (plan 06B) the trait seam routes to the concrete switch — the
@@ -988,5 +1013,60 @@ mod tests {
         );
         provider.set_scope(&seat);
         assert!(!provider.recall_text("zebra", 5).contains("zebra"));
+    }
+
+    #[tokio::test]
+    async fn a_secret_in_a_turn_or_a_fact_is_not_stored_in_clear() {
+        // KB-13: a provider token typed into chat or passed to memory_store is
+        // redacted before it is retained, so recall never returns it.
+        use crate::memory_provider::MemoryProvider as _;
+        let store = SqliteStore::open_in_memory().expect("open in-memory store");
+        let provider =
+            MemoryWireProvider::from_service(MemoryService::new(store), super::DEFAULT_BANK);
+        // The engine masks `sk-` and `ghp_` itself; `sk_live_` is caught only by
+        // operant's redactor, so this test fails if that layer is removed.
+        let token = "sk_live_0123456789abcdef";
+
+        provider
+            .sync_turn_in_bank(
+                None,
+                &format!("zebra key {token}"),
+                &format!("noted {token}"),
+            )
+            .await
+            .expect("sync");
+        provider.retain_fact(&format!("zebra fact {token}"), &[]);
+
+        let recalled = provider.recall_text("zebra", 5);
+        assert!(
+            recalled.contains("zebra key"),
+            "the turn was retained: {recalled}"
+        );
+        assert!(
+            recalled.contains("zebra fact"),
+            "the fact was retained: {recalled}"
+        );
+        assert!(
+            !recalled.contains(token),
+            "the token was stored in clear: {recalled}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::MemoryWireProvider;
+    use crate::memory_provider::MemoryProvider;
+
+    #[test]
+    fn a_store_that_cannot_open_its_file_reports_itself_in_memory() {
+        // KB-14: a sqlite path that cannot be opened degrades to an in-memory
+        // store, and the provider reports that, so the tool result can say so.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("memory_wire.sqlite")).unwrap();
+
+        let provider = MemoryWireProvider::new(dir.path().to_path_buf()).unwrap();
+
+        assert!(!provider.is_persistent());
     }
 }
