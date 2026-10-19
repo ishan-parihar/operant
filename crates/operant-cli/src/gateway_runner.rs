@@ -142,6 +142,36 @@ mod unattended_posture_tests {
 /// `estimated_cost_usd` — the columns Wave 4's budget rollup sums).
 /// Fail-open on telemetry (bylaws invariant): a metering write must never
 /// fail a turn, so the store error is swallowed and logged by the caller.
+/// The periodic sweep that drops idle gateway sessions.
+///
+/// A NAMED function at module scope, not an inline closure, so the wiring
+/// is a thing a reader can find and a test can drive. The period is a
+/// parameter so a test can run the REAL sweep on a real store instead of
+/// re-implementing the prune — a test that calls `prune_old_entries`
+/// directly proves the prune works, not that the gateway ever calls it,
+/// and that difference is the whole defect.
+async fn session_retention_sweep(
+    store: std::sync::Arc<operant_core::PersistentSessionStore>,
+    retention_days: u32,
+    period: std::time::Duration,
+) {
+    let mut ticker = tokio::time::interval(period);
+    // The first tick fires immediately; skip it so a just-started gateway
+    // does not prune before it has seen a single message.
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let removed = store.prune_old_entries(retention_days);
+        if removed > 0 {
+            tracing::info!(removed, retention_days, "Pruned idle gateway sessions");
+        }
+    }
+}
+
+/// How often the gateway sweeps its session store.
+const SESSION_RETENTION_SWEEP_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(6 * 60 * 60);
+
 async fn drain_turn_usage_into_store(
     store: &operant_core::gateway_session::PersistentSessionStore,
     map: &TurnUsageMap,
@@ -2156,7 +2186,24 @@ pub async fn start_gateway(app_config: &AppConfig) -> Result<String> {
             .and_then(|path| operant_core::PersistentSessionStore::open(path).ok())
             .map(std::sync::Arc::new);
     if let Some(store) = persistent_session_store.clone() {
-        gateway = gateway.with_persistent_sessions(store);
+        gateway = gateway.with_persistent_sessions(store.clone());
+        // The session store has grown without bound: `prune_old_entries`
+        // existed since it was written and was called ONLY from its own
+        // tests, so every conversation the gateway ever saw stayed in the
+        // database and in the in-memory map forever. This is the periodic
+        // caller it was missing.
+        //
+        // The task is detached (it dies with the process) and sweeps every
+        // 6 hours. A sweep is a cheap scan of the in-memory map plus one
+        // DELETE for the rows it removes.
+        let retention_days = app_config.gateway.session_retention_days;
+        if retention_days > 0 {
+            tokio::spawn(session_retention_sweep(
+                store,
+                retention_days,
+                SESSION_RETENTION_SWEEP_INTERVAL,
+            ));
+        }
     }
 
     let mcp_manager = McpManager::new();
@@ -4854,6 +4901,77 @@ mod tests {
 
     use super::*;
     use operant_core::config::GatewaySettings;
+
+    /// The gateway must actually SWEEP the session store.
+    ///
+    /// `prune_old_entries` existed since it was written and was called ONLY
+    /// from its own tests, so every conversation the gateway ever saw stayed
+    /// in the store forever — the prune existed and nothing called it.
+    ///
+    /// This test drives the REAL sweep — the same function the periodic task
+    /// runs — on a real store, and observes the session leave. It is
+    /// deliberately NOT a re-implementation: a test that calls
+    /// `prune_old_entries` directly proves the prune works, not that the
+    /// gateway calls it, and that is the difference this defect turned on.
+    /// Emptying the sweep body fails this test, and so does removing the
+    /// spawn that starts it.
+    #[tokio::test]
+    async fn the_gateway_sweep_prunes_idle_sessions() {
+        use operant_core::gateway_session::{PersistentSessionStore, SessionSource};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("sessions.db");
+        let store = std::sync::Arc::new(
+            PersistentSessionStore::open(db_path.to_str().expect("utf-8 path"))
+                .expect("open the store"),
+        );
+        let source = SessionSource {
+            platform: "telegram".to_string(),
+            chat_id: "c1".to_string(),
+            chat_name: None,
+            chat_type: "dm".to_string(),
+            user_id: Some("u1".to_string()),
+            user_name: None,
+            thread_id: None,
+            chat_topic: None,
+            user_id_alt: None,
+            chat_id_alt: None,
+            is_bot: false,
+            guild_id: None,
+            parent_chat_id: None,
+            message_id: None,
+            role_authorized: false,
+        };
+        store.get_or_create_session(&source, false).expect("create");
+        assert_eq!(store.session_count(), 1);
+
+        // Age the entry past the cutoff.
+        store
+            .set_session_activity("agent:main:telegram:dm:c1", "2000-01-01T00:00:00+00:00")
+            .expect("age the session");
+
+        // Run the REAL sweep on a fast period. The sweep skips its first
+        // tick, so the prune lands on the second one.
+        let handle = tokio::spawn(session_retention_sweep(
+            store.clone(),
+            30,
+            std::time::Duration::from_millis(10),
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if store.session_count() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the sweep must prune the idle session within the deadline");
+
+        handle.abort();
+        assert_eq!(store.session_count(), 0);
+    }
 
     /// iter-720 (plan-2026-10-09 §3): the REAL `record_feed` override's
     /// seat-map → `record_feed_item` → DB-row link had no test — the core

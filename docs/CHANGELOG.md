@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **iter-1015 — the gateway now prunes idle sessions.** The session store's `prune_old_entries` had been in the code since it was written, and its only callers were its own tests — so every conversation the gateway ever saw stayed in the database and the in-memory map forever. The gateway now sweeps every 6 hours, and `[gateway] session_retention_days` sets the horizon (default 90 days; 0 keeps them forever, the previous behaviour).
+
 - **iter-997 — the TUI visual corpus is now part of the local gate.** `_run.py verify` has a real exit code (1 on drift, 0 on pass), and it was in NO automated gate: `scripts/check.sh` forwards to cargo, and the corpus is a Python script. The corpus had been red for nine days and nothing ran it. `scripts/self-test.sh` runs it now, against the release binary it has already built.
 
 - **iter-988 — the release is deployed and a third operant is cleared from PATH.** `~/.cargo/bin/operant` needed libonnxruntime 1.20.1 and the runtime has 1.24.4, so every invocation of it failed with a version error; it is moved aside (not deleted). `operant doctor` now reports two copies on PATH instead of three.

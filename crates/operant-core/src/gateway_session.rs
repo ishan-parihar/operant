@@ -1229,6 +1229,34 @@ impl PersistentSessionStore {
         Err(Error::Agent(format!("Session not found: {}", session_key)))
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned lock: panic is the intended recovery"
+    )]
+    /// Set a session's last-activity timestamp.
+    ///
+    /// The counterpart to [`Self::update_activity`], which always sets the
+    /// timestamp to now. This one takes the timestamp, so a session can be
+    /// marked as last active at a given moment — which is how the retention
+    /// sweep is exercised against a session that really is idle.
+    ///
+    /// The session key is the `agent:main:<platform>:<chat_type>:<channel>`
+    /// form the store uses internally.
+    pub fn set_session_activity(&self, session_key: &str, updated_at: &str) -> Result<(), Error> {
+        let mut entries = self
+            .entries
+            .write()
+            .expect("session entries/config write lock poisoned — programmer error");
+        let Some(entry) = entries.get_mut(session_key) else {
+            return Err(Error::Agent(format!("Session not found: {session_key}")));
+        };
+        entry.updated_at = updated_at.to_string();
+        let entry = entry.clone();
+        drop(entries);
+        self.save_entry(&entry)?;
+        Ok(())
+    }
+
     /// Re-bind a session to a different cast employee (ORGANISM-ARCHITECTURE
     /// §2, the `/session new <employee>` surface). `None` is returned when no
     /// row exists for the key so the caller can say so honestly instead of
@@ -2432,6 +2460,52 @@ mod tests {
         assert_eq!(store.prune_old_entries(0), 0);
         // Entry should still exist
         assert_eq!(store.session_count(), 1);
+    }
+
+    /// The prune must actually remove an idle session — from the in-memory
+    /// map AND from the database.
+    ///
+    /// The defect this pins is NOT that the prune was wrong: it was that
+    /// nothing CALLED it. `prune_old_entries` existed since it was
+    /// written and its only callers were its own tests, so every
+    /// conversation the gateway ever saw stayed in the store forever. This
+    /// test is the unit-level proof that the function the periodic task
+    /// calls does what the task assumes.
+    ///
+    /// The session is aged by writing an old `updated_at` directly, because
+    /// the store's own clock is "now" and a 90-day-old session cannot be
+    /// produced any other way.
+    #[test]
+    fn the_prune_removes_an_idle_session_from_the_map_and_the_database() {
+        let store = test_store();
+        let source = test_source("telegram", "123", "456", "dm");
+        store.get_or_create_session(&source, false).unwrap();
+        assert_eq!(store.session_count(), 1);
+
+        // Age the entry past the cutoff.
+        store
+            .set_session_activity("agent:main:telegram:dm:456", "2000-01-01T00:00:00+00:00")
+            .expect("age the session");
+
+        let removed = store.prune_old_entries(30);
+        assert_eq!(removed, 1, "the idle session must be pruned");
+        assert_eq!(
+            store.session_count(),
+            0,
+            "the pruned session must be gone from the in-memory map"
+        );
+
+        // And from the database: the row is what the store reads back on
+        // the next startup.
+        let conn = store.lock_conn().expect("lock the connection");
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gateway_sessions WHERE session_key = ?1",
+                ["agent:main:telegram:dm:456"],
+                |r| r.get(0),
+            )
+            .expect("count the rows");
+        assert_eq!(rows, 0, "the pruned session must be gone from the database");
     }
 
     #[test]

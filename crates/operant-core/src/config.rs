@@ -1105,6 +1105,16 @@ pub struct GatewaySettings {
     /// parity). When reached, new sessions get a refusal reply while existing
     /// holders keep their slots. `None` = unlimited.
     pub max_concurrent_sessions: Option<usize>,
+    /// How long a gateway session is kept after its last activity, in days.
+    ///
+    /// The session store has grown without bound: `prune_old_entries`
+    /// existed since it was written and was called ONLY from tests, so
+    /// every conversation the gateway ever saw stayed in the database and
+    /// in the in-memory map forever. 0 = keep forever (the previous
+    /// behaviour). The default is 90 days: long enough that no operator
+    /// loses a conversation they still want, short enough that the store
+    /// does not grow without limit.
+    pub session_retention_days: u32,
 }
 
 impl Default for GatewaySettings {
@@ -1136,6 +1146,7 @@ impl Default for GatewaySettings {
             telegram_bot_username: None,
             telegram_dm_topics_enabled: false,
             max_concurrent_sessions: None,
+            session_retention_days: 90,
         }
     }
 }
