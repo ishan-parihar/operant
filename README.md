@@ -101,7 +101,7 @@ operant
 | **Browser** | Stealth **sourcehound** — the engine's own profile cookie jar and DevTools endpoint, driven over MCP and shared with the web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
 | **Models** | Any OpenAI-compatible endpoint (`base_url`), local llama.cpp, Ollama; fallback chains + token-bucket rate limiting |
-| **MCP** | Native client (stdio + HTTP, deferred loading); reconnect materializes tools mid-session. Operant is an MCP **client** — it consumes other servers' tools; it does not serve MCP itself |
+| **MCP** | Native client (stdio + HTTP, deferred loading) **and** server (`operant mcp serve` — stdio: `initialize` → `tools/list` → `tools/call`); reconnect materializes tools mid-session |
 | **Channels** | Telegram · Discord · Slack · WhatsApp · email · SMS · webhooks via the gateway (7 platforms) |
 | **Autonomy** | `operant autonomous` — a self-directed dev loop over `TODO.md` with test-command guardrails |
 | **Org governance** | Per-employee permission scoping — seat policies (`yolo`/`standard`/`scoped`/`lockdown`) with deny/allow globs, a TTL'd grant ledger, durable escalation queue (unattended cron runs ask-and-deny; a senior's `/approve` mints a grant), reporting lines, and one attributable worklog row per scheduled run |
@@ -259,7 +259,7 @@ Renders in your terminal's main buffer with a small live region at the bottom in
 | `operant setup` | Interactive setup wizard |
 | `operant tools list` | Inspect the enabled tool registry |
 | `operant skills list / install / audit` | Skill management (install a directory or URL) |
-| `operant mcp list / connect` | MCP servers; `/mcp r` in the TUI reconnects deferred servers |
+| `operant mcp list / add / test / serve` | MCP servers; `serve` runs Operant as an MCP server over stdio; `/mcp r` in the TUI reconnects deferred servers |
 | `operant memory query / export` | Search / export memory |
 | `operant sessions list` | Session history |
 | `operant model get / set` | Active model configuration |

@@ -468,13 +468,14 @@ operant/
 │   │   │   ├── memory_provider.rs # memory-wire + BuiltinProvider
 │   │   │   ├── context_management.rs # Tiered eviction + decay curve
 │   │   │   ├── aft_bridge.rs  # AFT subprocess + auto-update
-│   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/Webhook)
+│   │   │   ├── gateway/       # Platform adapters (Telegram/Discord/Slack/WhatsApp/Email/SMS/Webhook)
 │   │   │   ├── mcp.rs         # MCP client (HTTP + Stdio + SSE)
 │   │   │   └── config.rs      # AppConfig, BehaviorSettings, ToolSettings
 │   │   └── Cargo.toml         # Features: anthropic (memory-wire git-dep baked in; sourcehound is a spawned binary, not a dep)
 │   └── operant-cli/           # CLI + TUI
 │       ├── src/
 │       │   ├── main.rs        # CLI entry point, Clap enum, agent setup
+│       │   ├── mcp_serve.rs   # Operant as an MCP SERVER over stdio (`operant mcp serve`); the CLIENT lives in operant-core/src/mcp.rs
 │       │   ├── tui/           # 50+ TUI modules (app, render, prompt_input, dialogs)
 │       │   ├── gateway_runner.rs # Gateway mode agent handler
 │       │   ├── autonomous.rs  # Autonomous coding mode

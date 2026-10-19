@@ -28,7 +28,7 @@
 /models  Alias for /model
 /refresh-model-list  Refresh provider model catalogs
 /agents  Configure models for agent roles
-/todos  Show the session todo list as a card in the chat  +103 more
+/todos  Show the session todo list as a card in the chat  +102 more
 
 
 
