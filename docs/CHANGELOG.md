@@ -97,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-965 — an unbound chat no longer keeps the previous chat's employee seat (GW-3).** The agent is shared across chats, and the seat was set only by a bound turn, so an unbound turn after `/new` ran under the old employee's policy and budget gate. Every turn now clears the seat before the binding lookup (`agent/events.rs` `clear_seat_id`, `gateway_runner.rs`). The memory scope has the same gap when no session row matches; it stays open under KB-8.
+
 - **iter-964 — agent creation never overwrites, agent descriptions round-trip, and `/rewind` confirmation cancels on any other key (TUI-3, TUI-4, TUI-5).** Creating an agent refuses a path that already exists, including a dangling symlink, and names the file (`tui/agents_view.rs`). A multi-line description is saved as one JSON-quoted YAML scalar and read back whole (`tui/agents_view.rs`). Any key other than y or n cancels a pending `/rewind <n>` before the key is handled (`tui/app/key_handling.rs`).
 
 - **iter-963 — observe posture denies `holon_skill_invoke`, and `chair notify` fails when nothing is delivered (OS-4, OS-5).** A `skill` invoke writes the org ledger, so it is now in `OBSERVE_HOLON_DENY` (`operant-os/src/policy.rs`). `chair notify` returned 0 after every send failed. The send loop is now `deliver_to_chairs` (`cmd_org.rs`), which returns an error when `sent == 0 && failed > 0`. The kernel's missing retry (OS-5, Holon repo) is still open.

@@ -40,6 +40,7 @@ Working a `## Pending` row, one row per iteration:
 - Async memory writes carry their bank from enqueue; a scope change after queueing does not move the write (BUGS GW-4, KB-7, iter-962)
 - Skill writes are screened and rolled back when refused; skill names and descriptions are escaped in the system prefix; a Holon run's learning delete or edit is an annotation (BUGS KB-4, KB-5, KB-9, iter-962)
 - Observe posture denies `holon_skill_invoke`, which writes the org ledger (BUGS OS-4, iter-963)
+- Every turn starts unseated: an unbound chat no longer keeps the previous chat's employee seat (BUGS GW-3, iter-965; the test covers the seat accessor, not the consult in `stream.rs`)
 - A new agent never replaces an existing definition, dangling symlinks included; the error names the file (BUGS TUI-3, iter-964)
 - Agent descriptions round-trip through save and reload: a multi-line description is written as one JSON-quoted YAML scalar (BUGS TUI-4, iter-964)
 - Any key other than y or n cancels the `/rewind <n>` confirmation (BUGS TUI-5, iter-964)
@@ -52,7 +53,6 @@ Working a `## Pending` row, one row per iteration:
 - Unify the gateway's `agent.show_reasoning` with the TUI reasoning display mode
 - TUI red-team (BUGS.md TUI-2): `/resume` shows a transcript but does not retarget the agent (`crates/operant-cli/src/tui/app/channel_drains.rs:236-270`). Verify: a load also sets the agent's session id and the header title, with a test that the next turn uses the loaded id.
 - Seat red-team (BUGS.md GW-2): cron turns never set the memory scope (`crates/operant-core/src/cronjobs/scheduler.rs:478-481`). Verify: `bind_seat_run` sets the scope from the seat, with a test that a cron recall uses the seat's bank.
-- Seat red-team (BUGS.md GW-3): an unbound turn after `/new` keeps the previous employee's seat (`crates/operant-cli/src/gateway_runner.rs:1254-1276`). Verify: the unbound branch clears the seat, with a test that the next turn's consult uses no seat.
 - Holon red-team (BUGS.md OS-7): a reclaimed or cancelled run exits 0 and skips `finish` (`supervisor.rs:146-169, 192-193`). Verify: a non-`running` status is a non-zero exit with no self-submit, with a test for each status.
 - Holon red-team (BUGS.md OS-6): Ctrl-C or SIGTERM on `supervise` leaves the body running (`supervisor.rs:84, 110`). Verify: the supervisor forwards SIGTERM and SIGINT to the body group and kills it on exit, with a test.
 - Holon red-team (BUGS.md OS-9): `supervise --loop` never clears `errored` (`cmd_org.rs:502, 529, 547`). Verify: the idle back-off returns to 30 s after one successful tick, with a test.

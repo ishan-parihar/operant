@@ -1232,6 +1232,9 @@ impl MessageHandler for GatewayMessageHandler {
         // ("Session not found", and the DM tap could never fire).
         let mut bound_employee: Option<String> = None;
         let mut store_session_key: Option<String> = None;
+        // GW-3: every turn starts unseated; the binding below sets the seat
+        // again only when this chat has an employee.
+        self.agent.clear_seat_id();
         {
             let gw_guard = self.gateway.lock().await;
             if let Some(ref gw) = *gw_guard

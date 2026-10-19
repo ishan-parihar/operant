@@ -647,6 +647,16 @@ impl OperantAgent {
         }
     }
 
+    /// Drop the seat so the next turn runs unbound. The agent is shared across
+    /// chats, so a turn with no employee binding must not keep the seat the
+    /// previous chat left behind (BUGS GW-3).
+    pub fn clear_seat_id(&self) {
+        tracing::debug!("Agent bylaws seat cleared");
+        if let Ok(mut guard) = self.seat_id.write() {
+            *guard = None;
+        }
+    }
+
     /// The bound employee's charter (org system prompt), if the gateway set
     /// one. Appended to the frozen prefix — see [`Self::build_frozen_prefix`].
     #[expect(

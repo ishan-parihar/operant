@@ -1350,6 +1350,25 @@ mod tests {
     }
 
     #[test]
+    fn unbound_turn_after_a_seated_one_runs_unseated() {
+        // GW-3: the agent is shared across chats. A chat bound to an employee
+        // sets the seat; the next chat has no binding and must not inherit it.
+        let db = Database::init(std::env::temp_dir().join("test_seat_clear.sqlite")).unwrap();
+        let agent = OperantAgent::new(
+            AgentConfig::default(),
+            Box::new(OpenAIModelClient::new(OpenAIClient::new(
+                crate::client::ClientConfig::default(),
+            ))),
+            ToolRegistry::new(Duration::from_secs(1)),
+            Arc::new(db),
+        );
+        agent.set_seat_id("chief-of-staff");
+        assert_eq!(agent.seat_id().as_deref(), Some("chief-of-staff"));
+        agent.clear_seat_id();
+        assert_eq!(agent.seat_id(), None);
+    }
+
+    #[test]
     fn wave2_charter_rides_the_frozen_prefix_and_none_keeps_it_byte_identical() {
         // Wave 2 (ORGANISM-ARCHITECTURE §2): the bound employee's charter is
         // appended to the frozen prefix inside an explicit marker so the
