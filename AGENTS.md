@@ -462,7 +462,7 @@ operant/
 │   │   │   ├── tools/         # Tool registry + all tool implementations
 │   │   │   │   ├── builtin.rs # register_builtin_tools()
 │   │   │   │   ├── sourcehound.rs # web_search/scrape/extract/crawl + MCP seam (subprocess)
-│   │   │   │   ├── aft_tools.rs   # 15 AFT IDE tools
+│   │   │   │   ├── aft_tools.rs   # 21 AFT IDE tools
 │   │   │   │   └── memory_tools.rs # memory_* tools (memory-wire/builtin)
 │   │   │   ├── memory_wire.rs # MemoryWireProvider (in-process, catch_unwind)
 │   │   │   ├── memory_provider.rs # memory-wire + BuiltinProvider
@@ -482,14 +482,14 @@ operant/
 │       │   ├── config.rs      # CLI config
 │       │   ├── cmd_*.rs       # CLI subcommand handlers
 │       │   └── dashboard_server.rs # axum dashboard backend
-│       └── Cargo.toml         # Features: agent-runtime, gateway, channel-* (21 by default), hardware, plugins-wasm, anthropic, ci-all
+│       └── Cargo.toml         # Features: agent-runtime, browser-native, plugins-wasm, memory-postgres, rag-pdf, anthropic, ci-all
 ├── scripts/
 │   ├── dev-env.sh             # Source this before any cargo command
 │   ├── check.sh               # Wrapper that applies dev-env + cargo
 │   ├── self-test.sh           # Build + test + clippy + fmt sweep
 │   └── provision-build-deps.sh # One-time dependency provisioning
-├── Cargo.toml                 # Workspace members (17 crates, self-contained)
-├── operant.example.toml       # Config template (7 gateway platforms; 21 channel-* features default-on)
+├── Cargo.toml                 # Workspace members (12 crates, self-contained)
+├── operant.example.toml       # Config template (7 gateway platforms)
 ├── TODO.md                    # Autonomous-mode task ledger
 ├── BUGS.md                    # Open issues tracker
 └── AGENTS.md                  # THIS FILE
@@ -876,9 +876,11 @@ suggestions, tui
 - Session caching: `clear_history` only on session change (iter-49)
 - Anthropic `cache_control` breakpoints (iter-54)
 - 7 dead dialogs deleted (iter-58); every remaining overlay has a PRODUCTION
-  opener (verified iter-1002: 20 overlays, each opened from a non-test
-  call site — `commands.rs`, `key_handling.rs`, `channel_drains.rs`,
-  `import_config.rs`, `turn_state.rs` or `adapter_types/tui_app.rs`)
+  opener. `App::overlay_flags()` names **30** of them, and a full audit
+  (iter-1002) traced every one to a non-test call site in `commands.rs`,
+  `key_handling.rs`, `channel_drains.rs`, `import_config.rs`,
+  `turn_state.rs`, `agents_view.rs` or `adapter_types/tui_app.rs`. None is
+  test-only and none lacks an opener.
 
 #### TUI visual layer — architecture + working discipline (2026-10-13)
 
