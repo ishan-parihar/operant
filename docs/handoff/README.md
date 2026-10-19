@@ -16,7 +16,7 @@ Legacy one-off design/parity docs (`docs/HERMES_*`, `docs/ORGANISM-*`,
 never edit. Superseded docs live in `docs/archive/` with tombstones at their
 original paths.
 
-**On wake as a parallel agent:** `./scripts/kb feed --to <your-agent-id>` first —
+**On wake as a parallel agent:** `./scripts/genome feed --to <your-agent-id>` first —
 other agents may have left you blockers, answers, or handoffs — then
-`./scripts/kb doctor` for live claims and staleness. Claim before you work
-(`./scripts/kb claim <item>` on a workflow board, or `kb claim-register <row>`).
+`./scripts/genome doctor` for live claims and staleness. Claim before you work
+(`./scripts/genome claim <item>` on a workflow board, or `./scripts/genome claim-register <row>`).

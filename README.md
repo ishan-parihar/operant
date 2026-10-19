@@ -316,7 +316,7 @@ Work is planned in dated docs (`docs/plan-YYYY-MM-DD-*.md`) with executed rows
 marked in place, and every user-visible change lands in
 [`docs/CHANGELOG.md`](docs/CHANGELOG.md) in the same iteration.
 
-Architecture, porting notes, and parity decisions live in [`AGENTS.md`](AGENTS.md) and [`docs/`](docs/) (audits, BUGS, CHANGELOG, TODO). The map of the one-off audit and design pages is [`docs/PAGE-INDEX.md`](docs/PAGE-INDEX.md).
+Architecture, porting notes, and parity decisions live in [`AGENTS.md`](AGENTS.md) and [`docs/`](docs/) (audits, BUGS, CHANGELOG, TODO). Which document owns which question is [`docs/INDEX.md`](docs/INDEX.md); the map of the one-off audit and design pages is [`docs/PAGE-INDEX.md`](docs/PAGE-INDEX.md).
 
 ---
 

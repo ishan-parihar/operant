@@ -54,5 +54,5 @@ One autonomous agent works `TODO.md`. These rules cover that loop and anyone who
 | supersede a doc | `./scripts/genome archive <path> --reason "<why>"` (tombstone + INDEX row; nothing is deleted) |
 | regenerate state | `./scripts/genome handoff --write` |
 
-Role→path map: `kb.toml`. Routing table (which doc answers what): AGENTS.md
+Role→path map: `genome.toml`. Routing table (which doc answers what): AGENTS.md
 "Documentation Bylaws (bylaws)".
