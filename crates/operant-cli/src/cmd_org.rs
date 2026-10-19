@@ -514,57 +514,71 @@ async fn handle_holon_action(config: &AppConfig, action: HolonAction) -> Result<
                     "no employee to serve: pass --employee or set [holon] supervise_employees"
                 );
             }
-            let mut errored = false;
-            loop {
-                // one pass: every configured employee in order — the kernel
-                // enforces the employee's own max_concurrency on the claim;
-                // [holon] max_concurrent_runs is the daemon-side budget for
-                // the parallel mount
-                let mut ran = false;
-                for emp in &employees {
-                    // sequential pass: the kernel enforces the employee's own
-                    // max_concurrency on the claim; [holon] max_concurrent_runs
-                    // is the daemon-side budget for the parallel mount
-                    match operant_os::supervisor::supervise_one(
-                        &home,
-                        bin.as_deref(),
-                        emp,
-                        stage.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(true) => ran = true,
-                        Ok(false) => {}
-                        Err(e) => {
-                            eprintln!("supervise {emp}: {e}");
-                            // O-12: an error is NOT progress — a persistent
-                            // failure (missing holon, bad home) used to set
-                            // ran = true and spin with no sleep, re-spawning
-                            // the kernel in a tight loop. Errors back off.
-                            errored = true;
+            let passes = async {
+                loop {
+                    // O-9: an error backs off the next pass only — it is
+                    // per-pass state, not a flag that sticks for the process
+                    let mut errored = false;
+                    // one pass: every configured employee in order — the kernel
+                    // enforces the employee's own max_concurrency on the claim;
+                    // [holon] max_concurrent_runs is the daemon-side budget for
+                    // the parallel mount
+                    let mut ran = false;
+                    for emp in &employees {
+                        // sequential pass: the kernel enforces the employee's own
+                        // max_concurrency on the claim; [holon] max_concurrent_runs
+                        // is the daemon-side budget for the parallel mount
+                        match operant_os::supervisor::supervise_one(
+                            &home,
+                            bin.as_deref(),
+                            emp,
+                            stage.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(true) => ran = true,
+                            Ok(false) => {}
+                            Err(e) => {
+                                eprintln!("supervise {emp}: {e}");
+                                // O-12: an error is NOT progress — a persistent
+                                // failure (missing holon, bad home) used to set
+                                // ran = true and spin with no sleep, re-spawning
+                                // the kernel in a tight loop. Errors back off.
+                                errored = true;
+                            }
                         }
                     }
-                }
-                if !r#loop {
-                    // G1 live-day note: rc=0 with no output was opaque on the
-                    // workstation — "nothing to claim" is a real, common
-                    // answer (all held stages leased, none ready) and the
-                    // operator should see it said
-                    if !ran {
-                        println!(
-                            "nothing to claim{} — every ready stage for these \
+                    if !r#loop {
+                        // G1 live-day note: rc=0 with no output was opaque on the
+                        // workstation — "nothing to claim" is a real, common
+                        // answer (all held stages leased, none ready) and the
+                        // operator should see it said
+                        if !ran {
+                            println!(
+                                "nothing to claim{} — every ready stage for these \
                              employees is held or none is ready",
-                            stage.map(|s| format!(" at stage {s}")).unwrap_or_default()
-                        );
+                                stage.map(|s| format!(" at stage {s}")).unwrap_or_default()
+                            );
+                        }
+                        break;
                     }
-                    break;
+                    if errored {
+                        // O-12: back off on failure — a missing kernel must not
+                        // become a hot loop of prepare attempts
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    } else if !ran {
+                        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    }
                 }
-                if errored {
-                    // O-12: back off on failure — a missing kernel must not
-                    // become a hot loop of prepare attempts
-                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                } else if !ran {
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            };
+            // OS-6: a signalled supervisor stops here. Dropping the pass drops
+            // the body in flight, and its process group dies with it, so no
+            // body outlives its supervisor
+            tokio::select! {
+                () = passes => {}
+                signal = operant_os::supervisor::shutdown_signal() => {
+                    signal?;
+                    eprintln!("supervise: stopped by signal — the body in flight was killed");
                 }
             }
         }

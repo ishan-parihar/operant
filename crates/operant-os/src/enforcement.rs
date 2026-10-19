@@ -10,8 +10,9 @@
 //! - act: yolo with the document's deny list; the hardline blocklist still
 //!   fires first (infrastructure, not policy).
 //!
-//! No Holon run (no env var, no document) = no authority = today's behavior,
-//! byte-identical — invariant 5.
+//! No Holon run (no `HOLON_RUN_DIR`) = no authority = today's behavior,
+//! byte-identical — invariant 5. A Holon run whose `policy.json` is missing is
+//! refused, not waved through (OS-3): the kernel always writes the document.
 
 use std::sync::Arc;
 
@@ -31,14 +32,16 @@ pub fn holon_seat() -> String {
 
 /// The policy document for THIS run, when this is a Holon run at all.
 ///
-/// `None` = not a Holon run (personal mode, byte-identical) or a run the
-/// kernel launched before phase C (no policy.json yet) — same no-op.
+/// `None` = not a Holon run (personal mode, byte-identical). A Holon run with
+/// no `policy.json` is an `Err` (OS-3): fail closed, never an unfenced agent.
 pub fn run_policy() -> Option<crate::Result<PolicyDoc>> {
-    let dir = crate::run_env::holon_run_dir()?;
-    if !dir.join("policy.json").exists() {
-        return None;
-    }
-    Some(PolicyDoc::load(&dir))
+    policy_in(crate::run_env::holon_run_dir())
+}
+
+/// The policy for a run directory: `None` outside a Holon run, else the
+/// document `PolicyDoc::load` reads (a missing one is `PolicyMissing`).
+fn policy_in(run_dir: Option<std::path::PathBuf>) -> Option<crate::Result<PolicyDoc>> {
+    run_dir.map(|dir| PolicyDoc::load(&dir))
 }
 
 /// One run's policy, exposed to the agent loop's consult as this seat's row.
@@ -70,4 +73,23 @@ pub fn holon_authority(_home: &std::path::Path) -> crate::Result<Option<Arc<Seat
             policy,
         },
     )))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_holon_run_without_a_policy_document_is_refused_not_unfenced() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            policy_in(Some(dir.path().to_path_buf())),
+            Some(Err(crate::Error::PolicyMissing(_)))
+        ));
+    }
+
+    #[test]
+    fn outside_a_holon_run_there_is_no_policy() {
+        assert!(policy_in(None).is_none());
+    }
 }

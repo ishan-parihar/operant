@@ -53,6 +53,16 @@ pub fn native_tool_names() -> Vec<&'static str> {
     NATIVE_TOOLS.iter().map(|t| t.name.as_str()).collect()
 }
 
+/// OS-8: a JSON key becomes `--key` on the kernel's argv, so it must be a plain
+/// flag name: a letter, then letters, digits, `-` or `_`. Anything else (`--`,
+/// `-x`, `a=b`) could end option parsing or smuggle a second flag.
+fn is_flag_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Arguments whose values are free (possibly untrusted) text: they ride
 /// STDIN with `-`, never argv (O-09).
 fn is_stdin_arg(name: &str) -> bool {
@@ -191,6 +201,12 @@ impl NativeCliTool {
         let mut argv: Vec<String> = Vec::new();
         let mut stdin_text: Option<String> = None;
         for (key, val) in &obj {
+            if !is_flag_name(key) {
+                return ToolResult::error(
+                    self.def.name.clone(),
+                    format!("argument `{key}` is not a flag name"),
+                );
+            }
             if val.is_null() {
                 continue;
             }
@@ -258,7 +274,8 @@ impl NativeCliTool {
         cmd.args(&argv[1..])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -278,8 +295,9 @@ impl NativeCliTool {
         } else if let Some(stdin) = child.stdin.take() {
             drop(stdin); // no stdin: close it so the kernel does not wait
         }
-        // wait_with_output consumes the child: kill-on-timeout needs a
-        // handle kept out of the move. Take the pid's kill right first.
+        // wait_with_output consumes the child; dropping the timed-out future
+        // drops it, and kill_on_drop SIGKILLs it (OS-8), so a retry cannot
+        // race a still-running submit.
         let wait = child.wait_with_output();
         match tokio::time::timeout(std::time::Duration::from_secs(120), wait).await {
             Ok(Ok(out)) => {
@@ -322,6 +340,21 @@ pub async fn register_all(registry: &operant_core::tools::ToolRegistry) {
             .await
         {
             tracing::warn!(tool = %name, error = %e, "holon tool registration failed");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_flag_name;
+
+    #[test]
+    fn only_plain_names_become_flags() {
+        for ok in ["file", "run_id", "run-id", "a1"] {
+            assert!(is_flag_name(ok), "{ok} should be a flag name");
+        }
+        for bad in ["", "-", "--", "-x", "a=b", "1x", "a b", "x/../y"] {
+            assert!(!is_flag_name(bad), "{bad:?} must not become a flag");
         }
     }
 }
