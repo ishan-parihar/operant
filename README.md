@@ -101,8 +101,8 @@ operant
 | **Browser** | Stealth **sourcehound** — the engine's own profile cookie jar and DevTools endpoint, driven over MCP and shared with the web tools |
 | **Skills** | Directory import with recursive security scan · bundles · autoload · curator |
 | **Models** | Any OpenAI-compatible endpoint (`base_url`), local llama.cpp, Ollama; fallback chains + token-bucket rate limiting |
-| **MCP** | Native client (stdio + HTTP, deferred loading) **and** server; reconnect materializes tools mid-session |
-| **Channels** | Telegram · Discord · Slack · WhatsApp · email · webhooks via the gateway |
+| **MCP** | Native client (stdio + HTTP, deferred loading); reconnect materializes tools mid-session. Operant is an MCP **client** — it consumes other servers' tools; it does not serve MCP itself |
+| **Channels** | Telegram · Discord · Slack · WhatsApp · email · SMS · webhooks via the gateway (7 platforms) |
 | **Autonomy** | `operant autonomous` — a self-directed dev loop over `TODO.md` with test-command guardrails |
 | **Org governance** | Per-employee permission scoping — seat policies (`yolo`/`standard`/`scoped`/`lockdown`) with deny/allow globs, a TTL'd grant ledger, durable escalation queue (unattended cron runs ask-and-deny; a senior's `/approve` mints a grant), reporting lines, and one attributable worklog row per scheduled run |
 | **Plugins** | WASM plugin tools + hermes-agent hook parity (before/after tool, turn, memory hooks) |
