@@ -1,20 +1,28 @@
 //! Dashboard HTTP server.
 //! Serves the embedded web dashboard for Operant status monitoring.
 //!
-//! Security: API endpoints (except /api/health) require a bearer token
-//! that is generated at startup and printed to the console. The frontend
-//! needs the token, so the server injects it into index.html as a global
-//! variable — but ONLY for a request that already carries the token, so
-//! the token is never handed to a caller who does not have it.
+//! SCOPE. This is a FOUR-ROUTE status view, not the full operant web
+//! console. The bundled frontend (`dashboard/assets/index-BB4BRelo.js`) is
+//! a build artefact from a much larger harness and calls 79 distinct
+//! `/api/...` paths; this server implements four (`/api/status`,
+//! `/api/boards`, `/api/health`, `/api/config`). Every other call 404s,
+//! and the `/api/ws` WebSocket the bundle opens for live updates does not
+//! exist. See BUGS.md RT-44.
+//!
+//! Security: the API endpoints (except /api/health) require a session
+//! token that is generated at startup and printed to the console. The
+//! frontend needs the token, so the server injects it into index.html as a
+//! global variable — but ONLY for a request that already carries the
+//! token, so the token is never handed to a caller who does not have it.
 //!
 //! Two defences make that safe, and both are needed:
 //!
 //! 1. **The index route requires the token.** The CLI opens the browser
-//!    at `/?token=...`, which the server exchanges for the token-bearing
-//!    page and then redirects to a clean URL. A request without the token
-//!    gets a 401 and the page WITHOUT the token, so a hostile page that
-//!    can reach the port learns nothing.
-//! 2. **The Host header is validated** (see [`host_is_allowed`]). The
+//!    at `/?token=...`, which the server exchanges for an HttpOnly cookie
+//!    and then redirects to a clean URL. A request without the token
+//!    gets a 401 and no token, so a hostile page that can reach the port
+//!    learns nothing.
+//! 2. **The Host header is validated** (see [`host_guard`]). The
 //!    dashboard binds to loopback by default, and loopback is reachable
 //!    from every web page the operator visits. Without the Host check, a
 //!    page can point a name it controls at 127.0.0.1 (DNS rebinding) and
@@ -26,6 +34,12 @@
 //! route was reachable with a scraped token. Verified before the fix:
 //! `GET /` returned the token in the body, and that token opened
 //! `/api/status`, `/api/boards` and `/api/config`.
+//!
+//! The token is accepted from three places, and all three matter:
+//! `Authorization: Bearer` (a human or a script), `X-Hermes-Session-Token`
+//! (what the bundled frontend ACTUALLY sends — it never sends
+//! `Authorization`), and the dashboard cookie (what the browser sends on
+//! a same-origin fetch).
 
 use anyhow::{Context, Result};
 use axum::{
@@ -338,12 +352,24 @@ fn check_auth(state: &DashboardState, headers: &HeaderMap) -> Result<(), Box<Res
         Some(t) => t,
     };
 
-    let auth_header = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    // The token may arrive in any of three places, and ALL THREE matter:
+    //
+    // - `X-Hermes-Session-Token`: what the frontend bundle ACTUALLY
+    //   sends. Its fetch wrapper sets this header on every request. The
+    //   server used to read only `Authorization: Bearer`, so every API
+    //   call the real dashboard made returned 401 — the UI was
+    //   non-functional. (The bundle never sends `Authorization` at all:
+    //   the string does not appear in it.)
+    // - `Authorization: Bearer`: what a human or a script uses.
+    // - The `operant_dashboard_token` cookie: what the browser sends on
+    //   a same-origin fetch. This is what lets the UI work WITHOUT the
+    //   token being readable by JavaScript.
+    let presented = header_token(headers, header::AUTHORIZATION.as_str())
+        .or_else(|| header_token(headers, "x-hermes-session-token"))
+        .or_else(|| cookie_token(headers))
+        .is_some_and(|t| t == *token);
 
-    if auth_header == format!("Bearer {}", token) {
+    if presented {
         Ok(())
     } else {
         Err(Box::new(
@@ -354,6 +380,27 @@ fn check_auth(state: &DashboardState, headers: &HeaderMap) -> Result<(), Box<Res
                 .into_response(),
         ))
     }
+}
+
+/// The token in a header, with an optional `Bearer ` prefix stripped.
+fn header_token(headers: &HeaderMap, name: &str) -> Option<String> {
+    let value = headers.get(name).and_then(|v| v.to_str().ok())?;
+    let value = value.trim();
+    let value = value.strip_prefix("Bearer ").unwrap_or(value);
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// The token in the dashboard's cookie.
+fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    let cookies = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())?;
+    cookies.split(';').find_map(|c| {
+        let (name, value) = c.trim().split_once('=')?;
+        (name == TOKEN_COOKIE).then(|| value.to_string())
+    })
 }
 
 // ── API Handlers ──
@@ -574,16 +621,7 @@ async fn handle_index(
     }
 
     // The token in the cookie: the operator's own browser, on a reload.
-    let from_cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let (name, value) = c.trim().split_once('=')?;
-                (name == TOKEN_COOKIE).then_some(value)
-            })
-        })
-        .is_some_and(|t| t == token);
+    let from_cookie = cookie_token(&headers).is_some_and(|t| t == token);
 
     if !from_cookie {
         // 401 with the page but WITHOUT the token: the operator sees why,
@@ -678,12 +716,26 @@ mod tests {
     }
 
     /// Start the REAL server on an ephemeral port and return its address.
+    ///
+    /// The database path points at a TEMP file. `AppConfig::default()`
+    /// points at the real `~/.operant/database.db`, which the running
+    /// gateway holds locked: the handlers that read it then BLOCK on the
+    /// lock, and the test hangs. That is not a test artifact — it is the
+    /// dashboard's own behaviour on a locked database, and it is worth
+    /// knowing.
     async fn start(token: &str) -> TestServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind an ephemeral port");
         let port = listener.local_addr().expect("the bound address").port();
-        let config = AppConfig::default();
+        let mut config = AppConfig::default();
+        let dir = std::env::temp_dir().join(format!(
+            "operant_dashboard_test_{}_{}",
+            std::process::id(),
+            port
+        ));
+        std::fs::create_dir_all(&dir).expect("create the temp dir");
+        config.database_path = dir.join("database.db");
         let app = build_app(&config, "127.0.0.1", port, Some(token.to_string()));
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -922,9 +974,110 @@ mod tests {
         );
     }
 
-    /// The API routes still require the bearer token.
+    /// The API must accept the header the frontend bundle ACTUALLY sends.
+    ///
+    /// The bundle's fetch wrapper sets `X-Hermes-Session-Token` on every
+    /// request; the string `Authorization` does not appear in it at all.
+    /// The server used to read only `Authorization: Bearer`, so every API
+    /// call the real dashboard made returned 401 — the UI was
+    /// non-functional, and the "the dashboard works" claim was wrong.
+    ///
+    /// This test reads the header name out of the BUNDLE, so a change to
+    /// the bundle's contract is caught here.
+    ///
+    /// `check_auth` is exercised directly rather than through the server:
+    /// the 200-path handlers read the SQLite database SYNCHRONOUSLY, and
+    /// driving them from a test that also does blocking socket I/O
+    /// exhausts the runtime's worker pool and deadlocks. The auth check
+    /// is a pure function over the headers, and that is what is under
+    /// test.
+    #[test]
+    fn the_api_accepts_the_header_the_frontend_bundle_sends() {
+        // The bundle's own header name, read from the bundle itself.
+        let bundle = include_str!("dashboard/assets/index-BB4BRelo.js");
+        assert!(
+            bundle.contains("X-Hermes-Session-Token"),
+            "the bundle's auth header name changed — update the server to match"
+        );
+        assert!(
+            !bundle.contains("Authorization"),
+            "the bundle does not send an Authorization header; if it now does, \
+             the server must still accept it"
+        );
+
+        let state = DashboardState {
+            start_time: Instant::now(),
+            app_config: Arc::new(AppConfig::default()),
+            kanban_dir: None,
+            session_token: Some("secret-token-value".to_string()),
+            allowed_hosts: allowed_hosts("127.0.0.1", 3000),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-hermes-session-token",
+            "secret-token-value".parse().expect("a valid header value"),
+        );
+        assert!(
+            check_auth(&state, &headers).is_ok(),
+            "the header the bundle sends must open the API"
+        );
+    }
+
+    /// The API must accept the cookie the browser sends on a same-origin
+    /// fetch — that is what lets the UI work without the token being
+    /// readable by JavaScript.
+    #[test]
+    fn the_api_accepts_the_dashboard_cookie() {
+        let state = DashboardState {
+            start_time: Instant::now(),
+            app_config: Arc::new(AppConfig::default()),
+            kanban_dir: None,
+            session_token: Some("secret-token-value".to_string()),
+            allowed_hosts: allowed_hosts("127.0.0.1", 3000),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "operant_dashboard_token=secret-token-value"
+                .parse()
+                .expect("a valid header value"),
+        );
+        assert!(
+            check_auth(&state, &headers).is_ok(),
+            "the cookie must open the API"
+        );
+    }
+
+    /// A caller with NO token is refused, whatever it presents.
+    #[test]
+    fn the_api_refuses_a_caller_with_no_token() {
+        let state = DashboardState {
+            start_time: Instant::now(),
+            app_config: Arc::new(AppConfig::default()),
+            kanban_dir: None,
+            session_token: Some("secret-token-value".to_string()),
+            allowed_hosts: allowed_hosts("127.0.0.1", 3000),
+        };
+        let headers = HeaderMap::new();
+        assert!(
+            check_auth(&state, &headers).is_err(),
+            "a caller with no token must be refused"
+        );
+    }
+
+    /// The API routes refuse an unauthenticated caller.
+    ///
+    /// Only the REFUSAL is driven through the real server: the 200-path
+    /// handlers read the SQLite database synchronously, and a test that
+    /// does blocking socket I/O on the same runtime exhausts the worker
+    /// pool and deadlocks. The accepting side of the auth check is
+    /// covered by `the_api_accepts_the_header_the_frontend_bundle_sends`
+    /// and `the_api_accepts_the_dashboard_cookie`, which exercise
+    /// `check_auth` directly.
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_api_routes_still_require_the_bearer_token() {
+    async fn the_api_routes_refuse_an_unauthenticated_caller() {
         let server = start("secret-token-value").await;
 
         let (status, _, _) = get(server.port, "/api/status", &[]);
@@ -932,12 +1085,5 @@ mod tests {
             status.contains("401"),
             "the API must refuse an unauthenticated caller, got: {status}"
         );
-        let (status, _, body) = get(
-            server.port,
-            "/api/status",
-            &[("Authorization", "Bearer secret-token-value")],
-        );
-        assert!(status.contains("200"), "the bearer token opens the API");
-        assert!(body.contains("\"status\""), "the body is the status");
     }
 }

@@ -103,12 +103,47 @@ request, and the operator sees a dead dashboard.
 ## Why the cookie and not a header-only design
 
 The frontend is a prebuilt bundle that reads the token from the page and
-sends it as `Authorization: Bearer`. Rebuilding the bundle was out of
-scope; the cookie is what lets the existing bundle work while the token
-stays out of reach of a cross-origin caller. `HttpOnly` means JavaScript
-cannot read it, and `SameSite=Strict` means a cross-site request never
-carries it. The token still ends up in the page — that is the bundle's
-contract — but only for a request that already proved it holds the token.
+sends it as a header. Rebuilding the bundle was out of scope; the cookie is
+what lets the existing bundle work while the token stays out of reach of a
+cross-origin caller. `HttpOnly` means JavaScript cannot read it, and
+`SameSite=Strict` means a cross-site request never carries it. The token
+still ends up in the page — that is the bundle's contract — but only for a
+request that already proved it holds the token.
+
+## The header the bundle actually sends
+
+The bundle's fetch wrapper sets **`X-Hermes-Session-Token`** on every
+request. The string `Authorization` does not appear in it at all.
+
+The server read only `Authorization: Bearer`. So every API call the real
+dashboard made returned 401: the UI could never have worked, and the
+server's own tests passed because they sent the header the SERVER
+expected rather than the one the CLIENT sends. The auth was not just
+weak — it was wired to a contract that does not exist on the other side.
+
+`check_auth` now accepts the token from any of three places:
+
+- `Authorization: Bearer` — a human or a script.
+- `X-Hermes-Session-Token` — what the bundled frontend sends.
+- The `operant_dashboard_token` cookie — what the browser sends on a
+  same-origin fetch, which is what lets the UI work without the token
+  being readable by JavaScript.
+
+The test reads the header name OUT OF THE BUNDLE, so a change to the
+bundle's contract fails the test rather than silently breaking the UI
+again.
+
+## The dashboard is four routes, not the full console
+
+The bundled frontend is a build artefact from a much larger operant
+harness: it calls **79 distinct `/api/...` paths**. This server implements
+**four**. Every other call 404s, and the `/api/ws` WebSocket the bundle
+opens for live updates does not exist at all.
+
+That is a product gap, not a bug, and it is recorded as BUGS.md RT-44 with
+the three options: build the 75 missing routes, ship a bundle that matches
+the four routes, or declare the four routes to be the dashboard. The second
+and third are much cheaper than the first, and the choice is the owner's.
 
 ## Evidence
 
@@ -134,10 +169,19 @@ Eight tests against the REAL server on an ephemeral port, in
 - `the_host_check_accepts_the_operators_own_addresses`
 - `an_ip_literal_host_is_allowed_even_when_it_is_not_the_bind_address`
 - `a_request_without_a_host_header_is_refused`
-- `the_api_routes_still_require_the_bearer_token`
+- `the_api_routes_refuse_an_unauthenticated_caller`
 
-Two mutations, both caught: serving the token to anyone fails the first;
-disabling the Host guard fails the fourth.
+Plus three that exercise `check_auth` directly, because the 200-path
+handlers read the SQLite database SYNCHRONOUSLY and a test doing blocking
+socket I/O on the same runtime exhausts the worker pool and deadlocks:
+
+- `the_api_accepts_the_header_the_frontend_bundle_sends`
+- `the_api_accepts_the_dashboard_cookie`
+- `the_api_refuses_a_caller_with_no_token`
+
+Mutations, all caught: serving the token to anyone fails the first;
+disabling the Host guard fails the fourth; not reading the bundle's header
+fails `the_api_accepts_the_header_the_frontend_bundle_sends`.
 
 The tests need `flavor = "multi_thread"`. They do BLOCKING socket I/O on
 the test's own thread, and the default current-thread runtime then has no

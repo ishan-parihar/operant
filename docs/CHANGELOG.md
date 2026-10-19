@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **iter-998 — the dashboard's API now accepts the auth header the bundled frontend actually sends.** The frontend sets `X-Hermes-Session-Token` on every request and never sends `Authorization`; the server read only `Authorization: Bearer`, so every API call the real dashboard made returned 401 and the UI could never have worked. The token is now accepted as `Authorization: Bearer`, as `X-Hermes-Session-Token`, or as the dashboard cookie.
+
 - **iter-996 — the dashboard's session token is no longer served on an unauthenticated route.** The index page injected the token into its HTML and required no auth, so anyone who could reach the port could read the token and then call every "protected" API route with it. The index route now serves the token-bearing page only to a request that already holds the token (the CLI's browser launch exchanges it for an HttpOnly cookie), and a request with a foreign `Host` header is refused, which blocks DNS rebinding against the loopback-bound dashboard.
 
 ### Fixed
