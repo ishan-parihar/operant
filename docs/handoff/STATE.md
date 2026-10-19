@@ -32,3 +32,8 @@ Adopted 2026-10-17 (iter-901): roles mapped in `kb.toml`; `docs/plans/` and
 Wake routine: `./scripts/kb doctor` + `./scripts/kb feed --to <your-agent-id>`.
 
 Live claims: see `kb doctor`. Recent units of work: `docs/kb/WORKLOG.md`.
+
+<!-- genome:zone status sha=3c05967a2670 -->
+| status | items |
+|---|---|
+<!-- genome:end status -->

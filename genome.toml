@@ -29,3 +29,6 @@ archive = "docs/archive"
 [core]
 dated_pattern = "^(plan-\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}-)"
 pointer_ignore = "SKILL.md autonomous-status.toml"
+
+[card]
+status_into = "docs/handoff/STATE.md"
