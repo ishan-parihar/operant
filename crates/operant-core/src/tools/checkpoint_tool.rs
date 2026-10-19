@@ -1243,6 +1243,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// The REAL store's exclude file is rewritten with the store's own
+    /// path, so a store created before the list grew stops snapshotting
+    /// itself.
+    ///
+    /// This test runs against the LIVE store on this box (it only ADDS an
+    /// exclude entry; it does not touch the store's contents), because the
+    /// whole point is that an EXISTING store — one created in August,
+    /// before the exclusion was added — must be repaired rather than
+    /// left to keep the list it was born with.
+    #[test]
+    fn an_existing_store_gets_its_exclude_file_repaired() {
+        let store =
+            std::path::PathBuf::from(std::env::var("OPERANT_TEST_STORE").unwrap_or_else(|_| {
+                "/home/ishanp/.operant/checkpoints/store/cdb4ee2aea69cc6a".to_string()
+            }));
+        if !store.exists() {
+            return; // no live store on this box
+        }
+        let exclude = store.join("info").join("exclude");
+        let before = std::fs::read_to_string(&exclude).unwrap_or_default();
+
+        ensure_store(&store).expect("ensure the store");
+
+        let after = std::fs::read_to_string(&exclude).unwrap_or_default();
+        assert!(
+            after.contains("checkpoints/"),
+            "the repaired exclude must name the checkpoints directory, got:\n{after}"
+        );
+        assert!(
+            after.contains(&store.to_string_lossy().to_string()),
+            "the repaired exclude must name the store's own absolute path, got:\n{after}"
+        );
+        // The repair is what changed it.
+        assert!(
+            before != after || before.contains("checkpoints/"),
+            "the exclude file must have been rewritten"
+        );
+    }
+
     /// The shadow store must NOT snapshot itself.
     ///
     /// The store lives at `<operant home>/checkpoints/store/<hash>` and the
