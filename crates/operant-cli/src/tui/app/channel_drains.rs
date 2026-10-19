@@ -12,9 +12,9 @@
 //
 // `App::run` calls them in this order:
 //
-//   1. session_list        2. model_fetch         3. session_load
-//   4. user_questions      5. mcp_reconnect       6. agent_events
-//   7. permission_requests 8. run_complete
+//   1. session_list        2. model_fetch         3. user_questions
+//   4. mcp_reconnect       5. agent_events        6. permission_requests
+//   7. run_complete
 //
 // and the sequence is not alphabetical or numeric for a reason:
 //
@@ -28,10 +28,6 @@
 //     agent is blocked on, and it reads `permission_request.is_some()` as its
 //     own re-entrancy guard — a drain that ran before `agent_events` would see
 //     a half-applied turn.
-//   * `session_load` (3) after the session-list drain (1) because a
-//     `/resume` sets both: the browser list refresh and the message load are
-//     independent channels but one user action, and the load's
-//     `invalidate_transcript` must land after the list's panel reset.
 //   * `mcp_reconnect` (5) is where it is because it is the tick drain for the
 //     `/mcp r` dispatch immediately above it (iter-326): the dispatch arms the
 //     channel, and this is the first frame that can read it. Moving it earlier
@@ -227,47 +223,6 @@ impl App {
             true
         } else {
             false
-        }
-    }
-
-    /// 3. Drain background session-load results. Replace app.messages
-    ///    with the loaded (role, content) pairs.
-    pub(super) fn drain_session_load(&mut self) -> bool {
-        let Some(ref mut rx) = self.session_load_rx else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(msgs) => {
-                self.messages.clear();
-                use crate::tui::adapter_types::types::{Message, MessageContent, Role};
-                for (role, content) in msgs {
-                    let r = match role.as_str() {
-                        "user" => Role::User,
-                        "assistant" => Role::Assistant,
-                        _ => Role::System,
-                    };
-                    self.messages.push(Message {
-                        role: r,
-                        content: MessageContent::Text(content),
-                    });
-                }
-                self.invalidate_transcript();
-                self.debug_hub
-                    .publish(crate::tui::debug::TuiEvent::SessionLoad {
-                        session_id: self.session_title.clone().unwrap_or_default(),
-                        msg_count: self.messages.len(),
-                        at: crate::tui::debug::event_bus::now_secs(),
-                    });
-                self.session_load_rx = None;
-                self.set_status_notice("Session loaded.".to_string());
-                true
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                self.session_load_rx = None;
-                self.set_status_notice("Session load failed.".to_string());
-                true
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => false,
         }
     }
 

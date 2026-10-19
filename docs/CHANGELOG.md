@@ -97,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **iter-966 — `/resume` switches the agent, a failed shell-out restores the terminal (TUI-2, TUI-6 in part).** `/resume` used to load the transcript without retargeting the agent, so the next prompt went to the old session. It now sets the same pending switch as the branch browser, and the agent and the transcript move together (`tui/app/key_handling.rs`, `tui/app/commands.rs` tests). The separate load channel is removed, and the switch resets the header title. A shell-out whose binary fails to spawn now restores the terminal before it returns the error (`tui/adapter_types/tui_app.rs`). That last fix has no test yet.
+
 - **iter-965 — an unbound chat no longer keeps the previous chat's employee seat (GW-3).** The agent is shared across chats, and the seat was set only by a bound turn, so an unbound turn after `/new` ran under the old employee's policy and budget gate. Every turn now clears the seat before the binding lookup (`agent/events.rs` `clear_seat_id`, `gateway_runner.rs`). The memory scope has the same gap when no session row matches; it stays open under KB-8.
 
 - **iter-964 — agent creation never overwrites, agent descriptions round-trip, and `/rewind` confirmation cancels on any other key (TUI-3, TUI-4, TUI-5).** Creating an agent refuses a path that already exists, including a dangling symlink, and names the file (`tui/agents_view.rs`). A multi-line description is saved as one JSON-quoted YAML scalar and read back whole (`tui/agents_view.rs`). Any key other than y or n cancels a pending `/rewind <n>` before the key is handled (`tui/app/key_handling.rs`).

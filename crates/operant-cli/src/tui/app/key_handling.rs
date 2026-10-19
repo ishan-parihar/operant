@@ -683,10 +683,10 @@ impl App {
                         KeyCode::Up => self.session_browser.select_prev(),
                         KeyCode::Down => self.session_browser.select_next(),
                         KeyCode::Char('r') => self.session_browser.start_rename(),
-                        // Enter: load the selected session's messages from the
-                        // database and replace app.messages. The actual load
-                        // happens asynchronously in the run loop via
-                        // session_load_pending → session_load_rx.
+                        // Enter: switch the agent to the selected session. The
+                        // switch is applied by run_pending_agent_actions, which
+                        // retargets the agent and rebuilds the transcript from
+                        // it, so the two cannot diverge (TUI-2).
                         KeyCode::Enter => {
                             if let Some(entry) = self
                                 .session_browser
@@ -695,7 +695,7 @@ impl App {
                                 .cloned()
                             {
                                 self.session_browser.close();
-                                self.session_load_pending = Some(entry.id.clone());
+                                self.pending_switch_session = Some(entry.id.clone());
                                 self.status_message =
                                     Some(format!("Loading session '{}'…", entry.title));
                             }

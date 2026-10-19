@@ -232,10 +232,10 @@ pub struct App {
     /// draws it through `inline_interactive_state()`, and the key
     /// dispatcher routes to `handle_inline_interactive_key` FIRST.
     pub inline_interactive: Option<crate::tui::operant_app::tui_fns::InlineInteractiveState>,
-    /// (plan 04) Enter in the branch browser: switch the agent to that
-    /// session (a branch IS a session — the rewind fork makes one). Applied
-    /// by the run loop's drain (`set_session_id` + display rebuild), the
-    /// plan-03 pattern.
+    /// (plan 04) Enter in the branch browser or the /resume browser: switch
+    /// the agent to that session (a branch IS a session — the rewind fork
+    /// makes one). Applied by `run_pending_agent_actions` (`set_session_id` +
+    /// display rebuild), the plan-03 pattern.
     pub pending_switch_session: Option<String>,
 
     /// Pasted/dropped images waiting to be pinned into the persistent graphics
@@ -567,13 +567,6 @@ pub struct App {
     /// Receiver for background session-list results.
     pub session_list_rx:
         Option<tokio::sync::mpsc::Receiver<Vec<crate::tui::session_browser::SessionEntry>>>,
-    /// Session ID to load on the next run-loop iteration (set by /resume
-    /// Enter). The run loop spawns a background load_session task and stores
-    /// the receiver in session_load_rx.
-    pub session_load_pending: Option<String>,
-    /// Receiver for background session-message-load results. Each item is a
-    /// Vec of (role, content) pairs that will replace app.messages.
-    pub session_load_rx: Option<tokio::sync::mpsc::Receiver<Vec<(String, String)>>>,
     /// Credential store for provider API keys and OAuth tokens.
     pub auth_store: crate::tui::adapter_types::AuthStore,
     /// Connect-a-provider dialog (/connect command).
@@ -1157,22 +1150,6 @@ impl App {
                     let _ = tx.send(entries).await;
                 });
             }
-
-            // Spawn async session-message load when /resume picks a session.
-            // The background task calls history::load_session(id) and sends
-            // the Vec<(role, content)> back via session_load_rx.
-            if let Some(session_id) = self.session_load_pending.take() {
-                let (tx, rx) = tokio::sync::mpsc::channel(1);
-                self.session_load_rx = Some(rx);
-                tokio::spawn(async move {
-                    let msgs = crate::tui::adapter_types::history::load_session(session_id).await;
-                    let _ = tx.send(msgs).await;
-                });
-            }
-
-            // Drain background session-load results. Replace app.messages
-            // with the loaded (role, content) pairs.
-            self.drain_session_load();
 
             // Drain user-question requests from the clarify tool.
             self.drain_user_questions();

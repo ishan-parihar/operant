@@ -142,8 +142,6 @@ impl App {
             || self.model_picker_fetch_pending
             || self.session_list_rx.is_some()
             || self.session_list_pending
-            || self.session_load_rx.is_some()
-            || self.session_load_pending.is_some()
     }
 }
 

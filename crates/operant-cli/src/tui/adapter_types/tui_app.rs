@@ -1085,6 +1085,8 @@ impl TuiApp {
                 Self::rebuild_display_from_agent(app, conv);
                 app.tool_use_blocks.clear();
                 app.system_annotations.clear();
+                // TUI-2: the previous session's title must not label the new one.
+                app.session_title = None;
                 app.request_native_replay();
                 app.invalidate_transcript();
                 let short: String = session_id.chars().take(8).collect();
@@ -1264,7 +1266,10 @@ fn run_suspended_shell_command(
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
 
-    let result = cmd.spawn()?.wait();
+    // A spawn failure (the binary is missing or was replaced mid-session) is
+    // held until the terminal is restored below. Returning here would leave
+    // the terminal in cooked mode on the main screen (TUI-6).
+    let result = cmd.spawn().and_then(|mut child| child.wait());
 
     // 3. Re-enter alt screen + re-enable raw mode regardless of subprocess
     //    outcome. If we skip this, the TUI is permanently broken.

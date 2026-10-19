@@ -2243,6 +2243,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_drain_retargets_the_agent_to_the_picked_session() {
+        // TUI-2: a /resume pick moves the agent onto that session, so the next
+        // turn is written to and answered from it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agent = scripted_agent(&dir);
+
+        let mut app = make_app();
+        app.pending_switch_session = Some("s-42".to_string());
+        crate::tui::adapter_types::tui_app::TuiApp::run_pending_agent_actions(
+            &mut app,
+            Some(&agent),
+        )
+        .await;
+
+        assert_eq!(agent.session_id().as_deref(), Some("s-42"));
+        assert!(app.pending_switch_session.is_none());
+    }
+
+    #[tokio::test]
     async fn new_drain_mints_a_fresh_session_and_empties_the_context() {
         let dir = tempfile::tempdir().expect("tempdir");
         let agent = scripted_agent(&dir);

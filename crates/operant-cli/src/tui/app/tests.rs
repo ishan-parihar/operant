@@ -5304,3 +5304,26 @@ fn any_key_other_than_y_or_n_cancels_the_rewind_confirmation() {
     );
     assert!(app.pending_rewind.is_none(), "cancelling must not fork");
 }
+
+/// TUI-2: Enter in the /resume browser must retarget the agent, not only load
+/// the transcript. Otherwise the next prompt is written to the old session.
+#[test]
+fn resume_picks_the_session_the_agent_switches_to() {
+    use crate::tui::session_browser::SessionEntry;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = make_app();
+    app.session_browser.open(vec![SessionEntry {
+        id: "s-42".to_string(),
+        title: "old work".to_string(),
+        last_updated: "1h ago".to_string(),
+        message_count: 3,
+        cost_usd: 0.0,
+    }]);
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.pending_switch_session.as_deref(),
+        Some("s-42"),
+        "/resume must hand the picked session to the agent switch"
+    );
+}

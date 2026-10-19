@@ -59,33 +59,6 @@ pub async fn list_sessions_from_path(db_path: std::path::PathBuf) -> Vec<Session
     .unwrap_or_default()
 }
 
-/// Load a session's messages from the database. Returns an empty vec on
-/// error. Used by /resume to populate the transcript after the user
-/// picks a session.
-pub async fn load_session(session_id: String) -> Vec<(String, String)> {
-    load_session_from_path(default_db_path(), session_id).await
-}
-
-/// Same as `load_session` but takes an explicit db path (for testing).
-pub async fn load_session_from_path(
-    db_path: std::path::PathBuf,
-    session_id: String,
-) -> Vec<(String, String)> {
-    tokio::task::spawn_blocking(move || -> Vec<(String, String)> {
-        let db = match Database::init(db_path) {
-            Ok(d) => d,
-            Err(_) => return Vec::new(),
-        };
-        let msgs = match db.get_session_messages(&session_id) {
-            Ok(m) => m,
-            Err(_) => return Vec::new(),
-        };
-        msgs.into_iter().map(|m| (m.role, m.content)).collect()
-    })
-    .await
-    .unwrap_or_default()
-}
-
 fn default_db_path() -> std::path::PathBuf {
     // Match operant_core::platform::operant_home() / "operant.db"
     operant_core::platform::operant_home().join("operant.db")

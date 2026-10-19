@@ -64,11 +64,6 @@ pub enum TuiEvent {
         count: usize,
         at: f64,
     },
-    SessionLoad {
-        session_id: String,
-        msg_count: usize,
-        at: f64,
-    },
 
     // ── TUI-internal ─────────────────────────────────────────────────
     SlashCommand {
@@ -140,13 +135,6 @@ impl TuiEvent {
                 format!("ModelFetch(ok={ok}, {count} models)")
             }
             Self::SessionList { count, .. } => format!("SessionList({count})"),
-            Self::SessionLoad {
-                session_id,
-                msg_count,
-                ..
-            } => {
-                format!("SessionLoad({session_id}: {msg_count} msgs)")
-            }
             Self::SlashCommand {
                 name, args_preview, ..
             } => {
