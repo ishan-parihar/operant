@@ -287,7 +287,7 @@ const REGISTERED_COMMANDS: &[RegisteredCommand] = &[
     RegisteredCommand::public("/find", "Search the conversation (alias of /search)"),
     RegisteredCommand::public("/fresh", "Start a fresh session (alias of /new)"),
     RegisteredCommand::public("/goal", "Set the session goal"),
-    RegisteredCommand::public("/hooks", "Show configured hooks"),
+    RegisteredCommand::public("/hooks", "Show where shell hooks are managed"),
     RegisteredCommand::public("/import-config", "Import a provider config"),
     RegisteredCommand::public("/init", "Run the provider setup wizard"),
     RegisteredCommand::public("/journey", "Show the journey view"),

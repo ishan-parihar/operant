@@ -31,6 +31,10 @@ pub struct AppConfig {
     pub skills: SkillsSettings,
     pub gateway: GatewaySettings,
     pub plugins: PluginSettings,
+    /// `[keybindings]` is parsed so the file still loads, then ignored: the TUI
+    /// dispatch does not read overrides yet (RT-3). `load` warns once when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keybindings: Option<toml::Table>,
     pub tools: ToolSettings,
     pub tts: TtsSettings,
     pub memory: MemorySettings,
@@ -117,6 +121,7 @@ impl Default for AppConfig {
             skills: SkillsSettings::default(),
             gateway: GatewaySettings::default(),
             plugins: PluginSettings::default(),
+            keybindings: None,
             tools: ToolSettings::default(),
             tts: TtsSettings::default(),
             memory: MemorySettings::default(),
@@ -2105,6 +2110,12 @@ pub fn load_app_config(explicit: Option<&Path>) -> Result<LoadedConfig> {
     config.browser.warn_legacy_keys();
     // (plan 11C3) [memory] provider is accepted-and-ignored now.
     config.memory.warn_legacy_keys();
+    // (RT-3) [keybindings] is accepted-and-ignored until dispatch reads it.
+    if config.keybindings.is_some() {
+        eprintln!(
+            "warning: [keybindings] is ignored; the TUI does not read key overrides yet. Remove the table. `/keys` lists the bindings in effect."
+        );
+    }
 
     // O-26: [holon] paths arrive with `~` expanded exactly once.
     config.holon = config.holon.expand_tilde();
@@ -3435,5 +3446,23 @@ mod plugin_state_tests {
         };
         assert!(settings.is_enabled("fine"));
         assert!(!settings.is_enabled("blocked"));
+    }
+}
+
+#[cfg(test)]
+mod keybindings_tests {
+    use super::AppConfig;
+
+    #[test]
+    fn a_keybindings_table_still_loads_and_is_kept_for_the_warning() {
+        // RT-3: before this, `[keybindings]` failed the whole parse (deny_unknown_fields).
+        let config: AppConfig = toml::from_str("[keybindings]\nquit = \"ctrl-q\"\n").unwrap();
+        assert!(config.keybindings.is_some());
+        assert!(
+            toml::from_str::<AppConfig>("")
+                .unwrap()
+                .keybindings
+                .is_none()
+        );
     }
 }

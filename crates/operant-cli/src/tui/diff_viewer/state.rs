@@ -14,6 +14,8 @@ impl DiffViewerState {
             diff_type: DiffType::GitDiff,
             detail_scroll: 0,
             render_cache: HashMap::new(),
+            loading: false,
+            git_rx: None,
             visible: false,
             collapsed: Vec::new(),
         }
@@ -104,14 +106,52 @@ impl DiffViewerState {
     }
 
     fn reload_files(&mut self, project_root: &std::path::Path) {
-        self.files = match self.diff_type {
-            DiffType::GitDiff => load_git_diff(project_root),
-            DiffType::TurnDiff => self.turn_files.clone(),
-        };
         self.selected_file = 0;
         self.detail_scroll = 0;
         self.render_cache.clear();
-        self.collapsed = vec![false; self.files.len()];
+        match self.diff_type {
+            DiffType::GitDiff => {
+                // TUI-11: `git diff` runs on a worker thread, so a large repository
+                // does not stall the event loop. A new load replaces the receiver,
+                // so the result of an older load is dropped when it arrives.
+                self.files.clear();
+                self.collapsed.clear();
+                self.loading = true;
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.git_rx = Some(std::sync::Arc::new(std::sync::Mutex::new(rx)));
+                let root = project_root.to_path_buf();
+                std::thread::spawn(move || {
+                    let _ = tx.send(load_git_diff(&root));
+                });
+            }
+            DiffType::TurnDiff => {
+                self.git_rx = None;
+                self.loading = false;
+                self.files = self.turn_files.clone();
+                self.collapsed = vec![false; self.files.len()];
+            }
+        }
+    }
+
+    /// Takes the git diff once the worker has sent it. Returns true when the list changed.
+    pub fn drain_git_diff(&mut self) -> bool {
+        let Some(rx) = &self.git_rx else {
+            return false;
+        };
+        let received = rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .try_recv();
+        let files = match received {
+            Ok(files) => files,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        self.git_rx = None;
+        self.loading = false;
+        self.collapsed = vec![false; files.len()];
+        self.files = files;
+        true
     }
 }
 

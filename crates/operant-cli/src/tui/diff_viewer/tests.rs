@@ -308,3 +308,23 @@ fn diff_viewer_collapse_renders_without_panic() {
         .collect();
     assert!(content.contains("collapsed") || content.contains("Space"));
 }
+
+#[test]
+fn a_git_diff_is_read_off_the_loop_and_taken_once_it_arrives() {
+    // TUI-11: `open` returns before `git diff` finishes; `drain_git_diff` takes the result.
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = DiffViewerState::new();
+    state.open(dir.path());
+    assert!(state.loading);
+    assert!(state.files.is_empty());
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !state.drain_git_diff() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "git diff never arrived"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!state.loading);
+}

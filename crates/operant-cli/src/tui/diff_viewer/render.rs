@@ -49,6 +49,7 @@ pub fn render_diff_dialog(state: &mut DiffViewerState, area: Rect, buf: &mut Buf
         // wording and its own next action, because suggesting /review while a
         // turn diff is open is what makes the panel look broken.
         let (empty, hint) = match state.diff_type {
+            _ if state.loading => (" Reading the git diff…", ""),
             DiffType::GitDiff => (
                 " No git changes available.",
                 " Nothing differs from HEAD — stage or commit a change, then reopen /review.",

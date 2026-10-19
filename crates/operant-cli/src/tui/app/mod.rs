@@ -510,8 +510,6 @@ pub struct App {
     pub skills_view: crate::tui::skills_view::SkillsViewState,
     pub plugins_hub: crate::tui::plugins_hub::PluginsHubState,
     pub journey_view: crate::tui::journey_view::JourneyViewState,
-    /// Read-only hooks configuration browser.
-    pub hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState,
     /// Overage credit upsell banner.
     /// Desktop app upsell startup dialog.
     /// Startup error dialog for malformed settings.json or AGENTS.md.
@@ -1124,6 +1122,9 @@ impl App {
 
             // Drain the fork tree for the Ctrl+B branch browser.
             self.drain_branch_list();
+
+            // Drain the git diff read on a worker thread (TUI-11).
+            self.diff_viewer.drain_git_diff();
 
             // Drain background model-fetch results.
             self.drain_model_fetch();

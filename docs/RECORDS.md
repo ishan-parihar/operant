@@ -1,5 +1,5 @@
-<!-- genome:zone records sha=c872a7f94e57 -->
-**Decisions** (23)
+<!-- genome:zone records sha=242bf1cedf70 -->
+**Decisions** (26)
 
 | ID | Title | Status | Description |
 |---|---|---|---|
@@ -26,6 +26,9 @@
 | AD-021 | Stored knowledge is bounded, redacted, and written whole | Active | memory_store has size bounds, memory and skill text is redacted or refused for secrets, memory and skill files are replaced atomically, and skill paths refuse symlinks |
 | AD-022 | Degraded memory is reported, and memory delete confirms like memory clear | Active | A memory store that fell back to memory is reported in the tool result and in memory stats, and memory delete asks for confirmation as memory clear already did |
 | AD-023 | WASM plugins: enable state is config, plugins cannot replace built-ins, and HTTP stays off internal addresses | Active | The plugin enable state is a [plugins].disabled list in config, a plugin tool cannot take a built-in's name, a plugin's HTTP request cannot reach an internal address, and the memory plugin's tool sche |
+| AD-024 | A [keybindings] table loads and is warned about; dispatch does not read it yet | Active | A [keybindings] table in operant.toml is accepted and produces one warning, instead of failing the whole config load |
+| AD-025 | The settings.json hooks menu is removed; /hooks points to operant hooks | Active | The read-only settings.json hooks menu is removed because no runtime path reads or fires those hooks; /hooks names the command that manages shell hooks |
+| AD-026 | The git diff loads on a worker thread, and the viewer shows a reading state | Active | The git diff for the diff viewer is read on a worker thread and taken on the event-loop tick, so opening /diff does not stall the loop |
 <!-- genome:end records -->
 
 <!-- genome:zone idmap sha=a7a72b4c9dd0 -->

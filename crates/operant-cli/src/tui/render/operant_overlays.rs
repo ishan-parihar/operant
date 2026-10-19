@@ -60,7 +60,6 @@ use crate::tui::dialog_select::render_dialog_select;
 use crate::tui::dialogs::{render_mcp_approval_dialog, render_permission_dialog};
 use crate::tui::diff_viewer::render_diff_dialog;
 use crate::tui::export_dialog::render_export_dialog;
-use crate::tui::hooks_config_menu::render_hooks_config_menu;
 use crate::tui::import_config_dialog::render_import_config_dialog;
 use crate::tui::key_input_dialog::render_key_input_dialog;
 use crate::tui::mcp_view::render_mcp_view;
@@ -172,7 +171,6 @@ overlay_visible_guards!(
     is_visible_skills_view => skills_view,
     is_visible_plugins_hub => plugins_hub,
     is_visible_journey_view => journey_view,
-    is_visible_hooks_config_menu => hooks_config_menu,
     is_visible_import_config_dialog => import_config_dialog,
     is_visible_bypass_permissions_dialog => bypass_permissions_dialog,
     is_visible_ask_user_dialog => ask_user_dialog,
@@ -278,12 +276,6 @@ const OVERLAYS: &[Entry] = &[
         visible: is_visible_journey_view,
         paint: paint_journey_view,
         sink: Sink::Frame,
-    },
-    Entry {
-        name: "hooks_config_menu",
-        visible: is_visible_hooks_config_menu,
-        paint: paint_hooks_config_menu,
-        sink: Sink::Buffer,
     },
     Entry {
         name: "import_config_dialog",
@@ -494,10 +486,6 @@ fn paint_journey_view(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     crate::tui::journey_view::render_journey_view(frame, &app.journey_view, ctx.size);
 }
 
-fn paint_hooks_config_menu(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
-    render_hooks_config_menu(&app.hooks_config_menu, ctx.size, frame.buffer_mut());
-}
-
 fn paint_import_config_dialog(frame: &mut Frame, app: &App, ctx: &mut FrameCtx) {
     render_import_config_dialog(frame, &app.import_config_dialog, ctx.size);
 }
@@ -652,7 +640,6 @@ mod tests {
         ("skills_view", Sink::Frame),
         ("plugins_hub", Sink::Frame),
         ("journey_view", Sink::Frame),
-        ("hooks_config_menu", Sink::Buffer),
         ("import_config_dialog", Sink::Frame),
         ("bypass_permissions_dialog", Sink::Frame),
         ("ask_user_dialog", Sink::Buffer),

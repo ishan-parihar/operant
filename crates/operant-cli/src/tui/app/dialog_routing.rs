@@ -85,9 +85,6 @@ impl App {
         if self.journey_view.visible {
             return Some(DialogPriority::JourneyView);
         }
-        if self.hooks_config_menu.visible {
-            return Some(DialogPriority::HooksConfig);
-        }
         // The next three were gated inline in key_handling.rs but had no
         // representation here at all, so this chain did not describe the UI.
         // They are appended rather than woven into their semantic neighbours:

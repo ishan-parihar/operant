@@ -129,7 +129,6 @@ pub mod stats_dialog;
 pub mod terminal_setup;
 // (iter-211: feedback_survey module deleted — no telemetry backend, YAGNI)
 pub mod free_mode_dialog;
-pub mod hooks_config_menu;
 pub mod import_config_dialog;
 pub mod key_input_dialog;
 pub mod memory_file_selector;

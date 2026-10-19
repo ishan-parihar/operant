@@ -138,8 +138,6 @@ pub enum DialogPriority {
     SkillsView = 290,
     /// Journey view
     JourneyView = 300,
-    /// Hooks config menu
-    HooksConfig = 310,
     /// Theme picker. Gated inline in key_handling.rs but absent from
     /// dialog_priority() until now; see docs/ROADMAP-TUI-FLEET.md 6.1.
     ThemeScreen = 330,

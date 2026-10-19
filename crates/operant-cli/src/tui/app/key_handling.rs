@@ -874,18 +874,6 @@ impl App {
             return false;
         }
 
-        // Hooks config menu intercepts navigation and Esc
-        if self.hooks_config_menu.visible {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => self.hooks_config_menu.back(),
-                KeyCode::Enter => self.hooks_config_menu.enter(),
-                KeyCode::Up | KeyCode::Char('k') => self.hooks_config_menu.select_prev(),
-                KeyCode::Down | KeyCode::Char('j') => self.hooks_config_menu.select_next(),
-                _ => {}
-            }
-            return false;
-        }
-
         if self.diff_viewer.visible {
             self.handle_diff_viewer_key(key);
             return false;

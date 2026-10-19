@@ -27,7 +27,7 @@ impl App {
     /// `effort_picker` from `any_modal_open` in iter-227). Each entry is
     /// `(snapshot_key, is_visible)`. `permission_request` is tracked via
     /// `.is_some()` rather than a `.visible` flag.
-    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 32] {
+    pub(crate) fn overlay_flags(&self) -> [(&'static str, bool); 31] {
         [
             ("help_overlay", self.help_overlay.visible),
             (
@@ -46,7 +46,6 @@ impl App {
             ("skills_view", self.skills_view.visible),
             ("plugins_hub", self.plugins_hub.visible),
             ("journey_view", self.journey_view.visible),
-            ("hooks_config_menu", self.hooks_config_menu.visible),
             // (plan 05B) the unified inline picker replaced the legacy
             // model_picker overlay.
             ("inline_interactive", self.inline_interactive.is_some()),
@@ -471,7 +470,10 @@ impl App {
                 true
             }
             "hooks" => {
-                self.hooks_config_menu.open();
+                self.push_system_message(
+                    String::from("Operant runs no hooks from settings.json (RT-14). Shell hooks are managed with `operant hooks`."),
+                    SystemMessageStyle::Info,
+                );
                 true
             }
             "import-config" => {
@@ -1658,7 +1660,6 @@ impl App {
         self.skills_view.close();
         self.plugins_hub.close();
         self.journey_view.close();
-        self.hooks_config_menu.close();
         self.session_browser.close();
         self.session_branching.close();
         self.export_dialog.dismiss();

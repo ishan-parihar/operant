@@ -692,3 +692,5 @@ clock = false
 # all_proxy = "socks5://127.0.0.1:1080"
 # no_proxy = ["localhost", "127.0.0.1"]
 # services = []
+
+# [keybindings] is accepted and ignored until the TUI dispatch reads it (AD-024).

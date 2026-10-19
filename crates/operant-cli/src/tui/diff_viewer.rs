@@ -105,6 +105,11 @@ pub struct DiffViewerState {
     pub detail_scroll: u16,
     /// Rendered line cache: (file_index, terminal_width) → lines.
     render_cache: HashMap<(usize, u16), Vec<String>>,
+    /// True while `git diff` is read on a worker thread (TUI-11).
+    pub loading: bool,
+    /// The worker's result; `drain_git_diff` takes it on a tick. Shared with the
+    /// paint copy, which only reads `loading` and never drains.
+    git_rx: Option<std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<Vec<FileDiffStats>>>>>,
     /// Whether the dialog is open.
     pub visible: bool,
     /// Per-file collapsed state (indexed by file position in `files`).

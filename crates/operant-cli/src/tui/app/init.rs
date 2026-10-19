@@ -204,7 +204,6 @@ impl App {
             skills_view: crate::tui::skills_view::SkillsViewState::new(),
             plugins_hub: crate::tui::plugins_hub::PluginsHubState::new(),
             journey_view: crate::tui::journey_view::JourneyViewState::new(),
-            hooks_config_menu: crate::tui::hooks_config_menu::HooksConfigMenuState::new(),
             session_browser: SessionBrowserState::new(),
             session_branching: crate::tui::session_branching::SessionBranchingState::new(),
             export_dialog: ExportDialogState::new(),
