@@ -812,8 +812,12 @@ never to hide new ones).
 with hermes-agent's core functionality (excluding Python-specific plugins).
 
 ### 2 minor CLI stubs (not bugs, just incomplete features)
-- `operant cron run <id>` — prints "Manual execution via CLI is not yet implemented"
-- `operant dashboard --stop` — prints "kill the process" (stop via signal instead)
+- `operant cron run <id>` — with a real ID it marks the job triggered and
+  says "Manual execution via CLI is not yet implemented"; with a bad one it
+  says "Cron job '<id>' not found"
+- `operant dashboard server --stop` — prints "Dashboard stop not yet
+  implemented (kill the process)" (stop via signal instead). NOTE the
+  subcommand: the flag lives on `dashboard server`, not on `dashboard`.
 
 These are tracked, low-priority items. Do not "fix" them unless explicitly
 asked — the user has accepted them as documented gaps.
@@ -871,7 +875,11 @@ suggestions, tui
 ### TUI
 - Entry point works (`TuiApp::enter` → ratatui + crossterm)
 - Permission dialog system works (iter-20: real prompts instead of auto-approve)
-- TUI bridge routes events
+- Event routing: `AgentEvent`s arrive on `agent_event_rx` and are drained
+  by `App::drain_agent_events` (`tui/app/channel_drains.rs`). There is no
+  "TUI bridge" any more: the vestigial `bridge_state` machinery was deleted
+  in iter-985 (its receiver had no producer in the TUI process, and the
+  gateway's sender wrote into a discarded receiver in another process).
 - Prompt-cache stability: frozen prefix + volatile suffix (iter-39)
 - Session caching: `clear_history` only on session change (iter-49)
 - Anthropic `cache_control` breakpoints (iter-54)
