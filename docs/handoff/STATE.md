@@ -72,20 +72,20 @@ Live claims: see `genome doctor`. Recent units of work:
 |---|---|
 <!-- genome:end status -->
 
-<!-- genome:zone handoff sha=e64b4eb6f58c -->
+<!-- genome:zone handoff sha=f9a288491706 -->
 ## Handoff — 2026-10-19
 
-Repo branch `main`, HEAD `bfd94d5fb6bcf203ceda868d645f6fc1af8eb951`. Working tree dirty (6 paths).
+Repo branch `main`, HEAD `c57bee820cf83414615b93cdf6e56072eaaa495f`. Working tree dirty (1 paths).
 
 ## Open register rows
   (none)
 
 ## Recent worklog
-- **2026-10-19T11:40Z** · `claude-code` — iter-978 (fix). Warnings triage (AD-034): production build of operant-cli 35 → 0 warnings; clippy allowlist 47 → 24 entries (`seen=24 new=0 stale=0`). Deleted the turn-diff mode, the unused slash wrappers, `TurnState::Connecting`, 13 unreferenced `KeyAction` variants, `McpViewStatus::Error`, and four test-only duplicates. Wired: error annotations keep the error role (`error_annotation_keeps_the_error_role`, mutation-checked); `/rollback` status hint; `selected_session` replaces inline lookups. Open: RT-29 to RT-33. Verified: operant-cli bin 1602 passed, 0 failed, 7 ignored.
 - **2026-10-19T11:50Z** · `claude-code` — iter-978 (deploy). Release build of 53f9bb7a (`scripts/build.sh --offline --release`, 10m 27s, exit 0). Provenance: artifact 17:05:38 postdates the commit 16:54:59. Installed `~/.local/bin/operant` (temp file + `mv`); gateway restarted (PID 2703980); running exe md5 equals the installed file (`c76f3c88`). Live: TTS tool test passed on the same source (1.77 s); TUI-10 pty check passed; S1 and S2 tmux captures clean but not decisive (BUGS rows left open). CR-6 unchanged (needs sudo).
 - **2026-10-19T12:20Z** · `claude-code` — iter-979 (test). The workspace run failed once in `live_tails_render_once_while_a_tool_is_reserved`: an unguarded test (`ctrl_t_no_longer_enters_copy_mode_and_alt_y_does`) sent Ctrl+T, which writes the process-wide reasoning override and races the render. The test now takes `reasoning_override_test_guard()` and clears the override. Verified: workspace 7113 passed, 0 failed, 24 ignored; clippy gate new=0 stale=0; operant-cli bin 3 of 3 passed.
 - **2026-10-19T21:01** · `omp` — Autonomous defect sweep, iters 980-992: 13 iterations, each a separate pushed commit
 - **2026-10-19T22:32** · `omp` — Autonomous defect sweep, iters 980-1002: 23 iterations, each a separate pushed commit
+- **2026-10-19T23:07** · `omp` — Autonomous defect sweep, iters 980-1008: 29 iterations, each a separate pushed commit
 
 Regenerate with `genome handoff --write`.
 <!-- genome:end handoff -->
